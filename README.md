@@ -1,4 +1,4 @@
-# ai-workestrator (POC)
+# ai-workbench (POC)
 
 A working proof-of-concept for the threat model: **a LiteLLM proxy that holds
 only DUMMY credentials, while the real provider key is injected at the network
@@ -61,7 +61,7 @@ upstream. See [docs.microsandbox.dev secret-injection][1].
 ## Layout
 
 ```
-/home/node/Development/ai-workbench/ai-workestrator/    <-- this POC
+/home/node/Development/ai-workbench/    <-- this POC
 ├── README.md
 ├── .gitignore                      .env is gitignored, .env.example is committed
 ├── infra/
@@ -91,19 +91,16 @@ upstream. See [docs.microsandbox.dev secret-injection][1].
     └── run/                        pid files (gitignored)
 ```
 
-> **Path note.** The task asked for this POC at
-> `/home/node/Development/ai-workestrator/`. That path could not be
-> created: `/home/node/Development/` is owned by `root` with mode `0755`
-> in this environment, and the running user (`node`, uid 1000) cannot
-> create new entries there. The only writable sibling is
-> `/home/node/Development/ai-workbench/`, which already contains the
-> POC tree from a prior attempt. The POC therefore lives one directory
-> deeper than requested. See [Constraints](#constraints) below.
+> **Agents subdirectory.** `agents/odysseus/` is a pre-existing project
+> checked in as its own nested git repository (not a submodule — its
+> `.git/` directory is present). Its contents are intentionally not
+> committed in this repo; the directory is tracked via `agents/odysseus/.gitkeep`
+> only. `agents/pi/` is not yet present.
 
 ## How to run
 
 ```bash
-cd /home/node/Development/ai-workbench/ai-workestrator
+cd /home/node/Development/ai-workbench/
 
 # 1. One-time: generate .env from the template.
 bash scripts/setup-env.sh          # creates .env with random keys (mode 600)
@@ -172,7 +169,11 @@ visible cross-check:
 
 ## Constraints (why microsandbox isn't used)
 
-This host fails microsandbox's prerequisites:
+Nix is installed and working in this environment (single-user, no
+daemon — see [`.agents/skills/nix-usage/SKILL.md`](.agents/skills/nix-usage/SKILL.md)).
+The flake builds and `nix develop` produces a working dev shell.
+
+This host still fails microsandbox's prerequisites:
 
 1. **glibc.** `Microsandbox Linux releases require glibc 2.39 or newer,
    but this system has glibc 2.36.` (verbatim from the installer.)

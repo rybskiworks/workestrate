@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fake OpenAI-compatible provider for the ai-workestrator POC.
+"""Fake OpenAI-compatible provider for the ai-workbench POC.
 
 Listens on 127.0.0.1:8081. Logs every request's Authorization header
 and full body to var/log/fake-provider.log (and stderr). Returns a

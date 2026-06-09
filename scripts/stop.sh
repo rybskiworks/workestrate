@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop all ai-workestrator POC processes.
+# Stop all ai-workbench POC processes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,5 +18,5 @@ for name in fake-provider egress-proxy litellm; do
 done
 
 if [[ $stopped -eq 0 ]]; then
-  echo "no ai-workestrator processes were running"
+  echo "no ai-workbench processes were running"
 fi

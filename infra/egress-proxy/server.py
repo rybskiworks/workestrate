@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Egress proxy for the ai-workestrator POC (fallback for microsandbox).
+"""Egress proxy for the ai-workbench POC (fallback for microsandbox).
 
 This proxy is the functional stand-in for microsandbox's egress layer
 in the production design. It enforces three things:

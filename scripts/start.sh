@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the ai-workestrator POC.
+# Start the ai-workbench POC.
 #
 # Brings up, in order:
 #   1. fake-provider     (port 8081)  — the stand-in "real provider"
@@ -39,7 +39,7 @@ bash scripts/start-litellm.sh
 sleep 2
 
 echo
-echo "=== ai-workestrator POC started ==="
+echo "=== ai-workbench POC started ==="
 echo "  fake-provider  -> 127.0.0.1:8081  (logs: var/log/fake-provider.log)"
 echo "  egress-proxy   -> 127.0.0.1:8082  (logs: var/log/egress-proxy.log)"
 echo "  LiteLLM proxy  -> 127.0.0.1:4000  (logs: var/log/litellm.stdout.log)"

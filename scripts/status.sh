@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print the current status of the ai-workestrator POC.
+# Print the current status of the ai-workbench POC.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

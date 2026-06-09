@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end test of the ai-workestrator POC.
+# End-to-end test of the ai-workbench POC.
 #
 # This wraps scripts/run-tests.sh and adds the simple curl probes from
 # the task spec (LiteLLM /v1/models and a chat completion through LiteLLM)

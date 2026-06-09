@@ -30,3 +30,14 @@ venv/
 # Validation / proof artifacts
 proof/
 *.json.tmp
+
+# Rust toolchain bootstrapped when Nix is not available
+# (rustup + zig cc, see README.md)
+.toolchain/
+
+# Local scratch
+.tmp/
+
+# nix build outputs (if/when a flake is ever evaluated)
+result
+result-*
