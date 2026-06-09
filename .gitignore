@@ -1,0 +1,32 @@
+# Runtime / generated
+var/
+tmp/
+result*
+*.log
+*.pid
+*.sock
+.env
+.env.*
+!.env.example
+
+# Build / cache
+target/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Tooling
+.venv/
+venv/
+.microsandbox/
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Validation / proof artifacts
+proof/
+*.json.tmp

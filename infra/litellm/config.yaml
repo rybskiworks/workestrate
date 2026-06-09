@@ -1,0 +1,60 @@
+# LiteLLM proxy configuration for the ai-workestrator POC.
+#
+# Threat model
+# ------------
+# The LiteLLM process holds ONLY dummy/placeholder credentials. The real
+# provider key is never passed to the LiteLLM process, never mounted into
+# its filesystem, and never appears in its environment.
+#
+# The "egress boundary" (microsandbox's egress layer in production, or the
+# egress proxy in this POC fallback) substitutes the real key for the
+# placeholder ONLY when the destination host matches the allowlist.
+#
+# How os.environ/ substitution works in LiteLLM
+# ---------------------------------------------
+# LiteLLM resolves `os.environ/VAR_NAME` at startup by reading the named
+# environment variable. The value the process sees is whatever was set
+# in the environment that launched litellm. So if we set
+# `FAKE_PROVIDER_DUMMY_KEY=dummy-key-injected-at-egress` before launching
+# LiteLLM, the resolved value of `api_key` in this file is the dummy
+# placeholder string `dummy-key-injected-at-egress`. That is the only
+# value the LiteLLM process ever knows for this model.
+#
+# What talks to what
+# ------------------
+#   agent -> LiteLLM (port 4000)            : uses LITELLM_MASTER_KEY
+#   LiteLLM -> egress proxy (port 8082)     : uses dummy key
+#   egress proxy -> fake provider (port 8081): uses REAL key (substituted)
+#   anything else                          : denied by proxy allowlist
+
+model_list:
+  - model_name: fake-gpt
+    litellm_params:
+      # The model name as exposed by the upstream provider. The provider
+      # is OpenAI-compatible, so we can name it anything and the
+      # provider will accept it.
+      model: openai/fake-gpt-4o
+      # The base URL points at the egress proxy, NOT the provider.
+      # In production with microsandbox, this would point at the
+      # provider's real host; microsandbox's egress layer intercepts
+      # and rewrites. In the POC fallback, the proxy listens on 8082
+      # and forwards to the provider on 8081.
+      api_base: os.environ/FAKE_PROVIDER_API_BASE
+      # DUMMY key. The real key is never present in this process.
+      # The egress boundary substitutes the real key for this string
+      # when the destination is in the allowlist.
+      api_key: os.environ/FAKE_PROVIDER_DUMMY_KEY
+
+# No database. The POC uses in-memory mode; the original plan calls
+# for Postgres-backed persistent key/team storage, deferred.
+database_url: ""
+
+# Master key gates access to the proxy itself. Agents use this key
+# (or virtual keys derived from it) to talk to LiteLLM.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+# Disable telemetry and noisy startup banners for the POC.
+litellm_settings:
+  telemetry: False
+  drop_params: True
