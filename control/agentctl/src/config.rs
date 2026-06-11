@@ -1,71 +1,63 @@
-//! Paths and locations used across commands.
-//!
-//! `agentctl` runs from inside the project root (where the user invokes
-//! `cargo run -- ...` or, in production, the binary itself). All filesystem
-//! locations are resolved relative to a `project_root` that defaults to
-//! the current working directory. Each command can override it via the
-//! `AGENTCTL_ROOT` env var or a `--root` flag in the future.
+use anyhow::Result;
+use std::path::{Path, PathBuf};
 
-use std::path::PathBuf;
+pub fn project_root() -> Result<PathBuf> {
+    // 1. AGENTCTL_ROOT env var
+    if let Ok(root) = std::env::var("AGENTCTL_ROOT") {
+        return Ok(PathBuf::from(root));
+    }
 
-/// Resolve the project root.
-///
-/// Order of precedence:
-///   1. `AGENTCTL_ROOT` env var (if set and non-empty)
-///   2. `CARGO_MANIFEST_DIR` (when running via `cargo run` from a crate
-///      inside `control/agentctl`, this points at `control/agentctl`,
-///      so we walk up two levels to reach the project root)
-///   3. Current working directory
-pub fn project_root() -> PathBuf {
-    if let Ok(p) = std::env::var("AGENTCTL_ROOT") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
+    // 2. Walk up from CARGO_MANIFEST_DIR
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let mut path = PathBuf::from(manifest);
+        // CARGO_MANIFEST_DIR is control/agentctl/, go up 2 to repo root
+        if path.pop() && path.pop() {
+            return Ok(path);
         }
     }
-    if let Ok(p) = std::env::var("CARGO_MANIFEST_DIR") {
-        // CARGO_MANIFEST_DIR points at control/agentctl when run via
-        // `cargo run --manifest-path control/agentctl/Cargo.toml`.
-        let p = PathBuf::from(p);
-        if let Some(root) = p.parent().and_then(|p| p.parent()) {
-            return root.to_path_buf();
-        }
+
+    // 3. Current working directory
+    Ok(std::env::current_dir()?)
+}
+
+pub fn check_required_files(root: &Path) -> Result<Vec<(String, bool)>> {
+    let mut checks = Vec::new();
+
+    let paths = vec![
+        ("ai-workbench root", root.to_path_buf()),
+        (
+            "infra/litellm/config.yaml",
+            root.join("infra/litellm/config.yaml"),
+        ),
+        (
+            "infra/microsandbox/sdk-notes.md",
+            root.join("infra/microsandbox/sdk-notes.md"),
+        ),
+        ("profiles/litellm.md", root.join("profiles/litellm.md")),
+        ("profiles/agents/pi.md", root.join("profiles/agents/pi.md")),
+        (
+            "profiles/agents/odysseus.md",
+            root.join("profiles/agents/odysseus.md"),
+        ),
+        ("workspaces/", root.join("workspaces")),
+        ("var/", root.join("var")),
+        ("agents/pi (or flake input)", root.join("agents/pi")),
+        (
+            "agents/odysseus (or flake input)",
+            root.join("agents/odysseus"),
+        ),
+    ];
+
+    for (label, path) in paths {
+        let exists = if label.starts_with("agents/") {
+            // Agent check: local override OR flake input is OK.
+            // For now, just check local path. Flake input check is future work.
+            path.exists()
+        } else {
+            path.exists()
+        };
+        checks.push((label.to_string(), exists));
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+
+    Ok(checks)
 }
-
-/// `infra/litellm/config.yaml`
-pub fn litellm_config_path() -> PathBuf {
-    project_root().join("infra").join("litellm").join("config.yaml")
-}
-
-/// `infra/litellm/.env`
-pub fn env_file_path() -> PathBuf {
-    project_root().join("infra").join("litellm").join(".env")
-}
-
-/// `infra/litellm/.env.example`
-pub fn env_example_path() -> PathBuf {
-    project_root().join("infra").join("litellm").join(".env.example")
-}
-
-/// Agent definitions directory (created by `agentctl init`).
-pub fn agents_dir() -> PathBuf {
-    project_root().join("agents")
-}
-
-/// Per-agent workspaces (created by `agentctl init`).
-pub fn workspaces_dir() -> PathBuf {
-    project_root().join("workspaces")
-}
-
-/// Runtime state directory (created by `agentctl init`).
-pub fn var_dir() -> PathBuf {
-    project_root().join("var")
-}
-
-/// Scratch directory (created by `agentctl init`).
-pub fn tmp_dir() -> PathBuf {
-    project_root().join("tmp")
-}
-
-

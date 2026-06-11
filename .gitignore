@@ -1,43 +1,30 @@
-# Runtime / generated
-var/
-tmp/
-result*
-*.log
-*.pid
-*.sock
 .env
 .env.*
 !.env.example
 
-# Build / cache
-target/
-__pycache__/
-*.pyc
-.pytest_cache/
+var/*
+!var/.gitkeep
 
-# Tooling
-.venv/
-venv/
-.microsandbox/
+workspaces/*
+!workspaces/.gitkeep
 
-# OS / editor
-.DS_Store
-*.swp
-*.swo
-.idea/
-.vscode/
+# Optional mutable local checkouts of my forks.
+agents/pi/
+agents/odysseus/
+!agents/README.md
 
-# Validation / proof artifacts
-proof/
-*.json.tmp
-
-# Rust toolchain bootstrapped when Nix is not available
-# (rustup + zig cc, see README.md)
-.toolchain/
-
-# Local scratch
-.tmp/
-
-# nix build outputs (if/when a flake is ever evaluated)
 result
 result-*
+
+target/
+**/target/
+
+.direnv/
+.toolchain/
+
+*.qcow2
+*.img
+*.log
+
+__pycache__/
+*.pyc

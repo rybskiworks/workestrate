@@ -1,135 +1,82 @@
-//! `agentctl` — control plane CLI for the AI workestrator.
-//!
-//! See ../../README.md for the project description and ../../CLAUDE.md
-//! (if present) for the agent-development rules.
-//!
-//! The first three commands fully implemented are the ones called out
-//! as the first milestone of the plan:
-//!
-//!   * `agentctl init`                   — create the on-disk layout
-//!   * `agentctl providers check`        — validate .env contents
-//!   * `agentctl litellm print-plan`     — describe the LiteLLM sandbox
-//!
-//! Other subcommands are present as stubs that print "deferred" and
-//! exit 0, so the CLI surface matches the plan without claiming
-//! behavior that isn't implemented.
-
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod config;
-mod envfile;
-mod init;
-mod providers;
-mod litellm;
-mod postgres;
-mod sandbox;
 mod agents;
+mod config;
+mod litellm;
+mod microsandbox;
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "agentctl",
-    version,
-    about = "Control plane CLI for the AI workestrator",
-    long_about = None,
-)]
+use agents::AgentName;
+
+#[derive(Parser)]
+#[command(name = "agentctl")]
+#[command(about = "Control plane CLI for the AI workbench")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand)]
 enum Commands {
-    /// Create the on-disk layout (agents/, workspaces/, var/, tmp/).
-    Init,
-
-    /// Inspect and validate provider configuration.
-    Providers {
-        #[command(subcommand)]
-        action: ProvidersAction,
-    },
-
-    /// LiteLLM subcommands.
+    /// Runtime/config sanity check
+    Check,
+    /// LiteLLM sandbox commands
     Litellm {
         #[command(subcommand)]
         action: LitellmAction,
     },
-
-    /// Postgres-backed key/team storage (deferred).
-    Postgres {
+    /// Agent sandbox commands
+    Agent {
         #[command(subcommand)]
-        action: PostgresAction,
-    },
-
-    /// Sandbox driver (deferred; see `agentctl litellm print-plan`).
-    Sandbox {
-        #[command(subcommand)]
-        action: SandboxAction,
-    },
-
-    /// Agent definitions.
-    Agents {
-        #[command(subcommand)]
-        action: AgentsAction,
+        action: AgentAction,
     },
 }
 
-#[derive(Subcommand, Debug)]
-enum ProvidersAction {
-    /// Validate the .env contents against the expected provider shape.
-    Check,
-}
-
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand)]
 enum LitellmAction {
-    /// Print the planned LiteLLM sandbox (image, config, port, env in,
-    /// env out, egress allowlist). Does not start LiteLLM.
-    PrintPlan,
-}
-
-#[derive(Subcommand, Debug)]
-enum PostgresAction {
-    /// Print status of the postgres_16 instance.
-    Status,
-}
-
-#[derive(Subcommand, Debug)]
-enum SandboxAction {
-    /// Print the planned sandbox driver configuration.
+    /// Print the planned LiteLLM sandbox workload
     Plan,
 }
 
-#[derive(Subcommand, Debug)]
-enum AgentsAction {
-    /// List the agent definitions in agents/.
-    List,
+#[derive(Subcommand)]
+enum AgentAction {
+    /// Print the planned agent sandbox workload
+    Plan { name: AgentName },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let result: Result<u8, String> = match cli.command {
-        Commands::Init => init::run(),
-        Commands::Providers { action } => match action {
-            ProvidersAction::Check => providers::check(),
-        },
+
+    match cli.command {
+        Commands::Check => cmd_check().await,
         Commands::Litellm { action } => match action {
-            LitellmAction::PrintPlan => litellm::print_plan(),
+            LitellmAction::Plan => litellm::plan().await,
         },
-        Commands::Postgres { action } => match action {
-            PostgresAction::Status => postgres::status(),
+        Commands::Agent { action } => match action {
+            AgentAction::Plan { name } => agents::plan(name).await,
         },
-        Commands::Sandbox { action } => match action {
-            SandboxAction::Plan => sandbox::plan(),
-        },
-        Commands::Agents { action } => match action {
-            AgentsAction::List => agents::list(),
-        },
-    };
-    match result {
-        Ok(0) => {}
-        Ok(code) => std::process::exit(code as i32),
-        Err(e) => {
-            eprintln!("agentctl: error: {e}");
-            std::process::exit(2);
+    }
+}
+
+async fn cmd_check() -> Result<()> {
+    let root = config::project_root()?;
+    let checks = config::check_required_files(&root)?;
+    let mut all_ok = true;
+
+    for (label, ok) in checks {
+        let status = if ok { "[OK]" } else { "[MISSING]" };
+        println!("{} {}", status, label);
+        if !ok {
+            all_ok = false;
         }
     }
+
+    if all_ok {
+        println!("\nAll checks passed.");
+    } else {
+        println!("\nSome checks failed.");
+    }
+
+    Ok(())
 }

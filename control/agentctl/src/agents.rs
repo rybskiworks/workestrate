@@ -1,9 +1,17 @@
-//! Agent definitions. Deferred: the POC has no per-agent manifests; the
-//! plan calls for an `agents/` directory populated with TOML/YAML
-//! per-agent definitions (name, role, allowed models, key references).
+use anyhow::Result;
+use clap::ValueEnum;
 
-pub fn list() -> Result<u8, String> {
-    println!("agentctl agents list: deferred");
-    println!("  the agents/ directory is created by `agentctl init` and currently empty");
-    Ok(0)
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum AgentName {
+    Pi,
+    Odysseus,
+}
+
+pub async fn plan(name: AgentName) -> Result<()> {
+    let plan = match name {
+        AgentName::Pi => crate::microsandbox::build_pi_plan(),
+        AgentName::Odysseus => crate::microsandbox::build_odysseus_plan(),
+    };
+    println!("{}", plan);
+    Ok(())
 }

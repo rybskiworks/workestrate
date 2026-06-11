@@ -1,38 +1,5 @@
 {
   "nodes": {
-    "crane": {
-      "locked": {
-        "lastModified": 1780532242,
-        "narHash": "sha256-D+BsdpxmtUwtqGoY0IXPhHgTlmqgcZKCEo1oMyn7ep0=",
-        "owner": "ipetkov",
-        "repo": "crane",
-        "rev": "59a82a1222dd3b2080b5cc52a1a2e8d5f1b77f37",
-        "type": "github"
-      },
-      "original": {
-        "owner": "ipetkov",
-        "repo": "crane",
-        "type": "github"
-      }
-    },
-    "flake-utils": {
-      "inputs": {
-        "systems": "systems"
-      },
-      "locked": {
-        "lastModified": 1731533236,
-        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
-        "type": "github"
-      },
-      "original": {
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1780749050,
@@ -49,26 +16,43 @@
         "type": "github"
       }
     },
-    "root": {
-      "inputs": {
-        "crane": "crane",
-        "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
-      }
-    },
-    "systems": {
+    "odysseus": {
+      "flake": false,
       "locked": {
-        "lastModified": 1681028828,
-        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
-        "owner": "nix-systems",
-        "repo": "default",
-        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "lastModified": 1781046458,
+        "narHash": "sha256-N8xjCkYBgMXS5F5J9OxcMkBTpJ2siO/fYKuPfxXlKZ0=",
+        "owner": "georgrybski",
+        "repo": "odysseus",
+        "rev": "fc8e6366ddb627935af092ba81ea5faa5d05e1b3",
         "type": "github"
       },
       "original": {
-        "owner": "nix-systems",
-        "repo": "default",
+        "owner": "georgrybski",
+        "repo": "odysseus",
         "type": "github"
+      }
+    },
+    "pi": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1781044031,
+        "narHash": "sha256-H8LvE0mHVUZnUz9yMY0oUUYPVJtjmkg9bcoEEAC5VcE=",
+        "owner": "georgrybski",
+        "repo": "pi",
+        "rev": "9ccfcd7cfcacdf593c0b24929d1d847e6cdf6711",
+        "type": "github"
+      },
+      "original": {
+        "owner": "georgrybski",
+        "repo": "pi",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "odysseus": "odysseus",
+        "pi": "pi"
       }
     }
   },
