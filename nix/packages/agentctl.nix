@@ -1,13 +1,11 @@
 { pkgs
+, microsandbox
+, microsandbox-filesystem-patched
 , pi
 , odysseus
 }:
 
 let
-  # The agentctl crate ships a .cargo/config.toml that pins a linker
-  # to a path inside .toolchain/ (the project-local zig-based
-  # fallback). Inside the Nix sandbox that path does not exist, so
-  # we strip the config and let cargo pick up the system linker.
   src = pkgs.lib.cleanSourceWith {
     filter = path: type:
       let base = baseNameOf path; in
@@ -17,7 +15,7 @@ let
     src = ../../control/agentctl;
   };
 in
-pkgs.rustPlatform.buildRustPackage {
+(pkgs.rustPlatform.buildRustPackage {
   pname = "agentctl";
   version = "0.1.0";
 
@@ -27,7 +25,58 @@ pkgs.rustPlatform.buildRustPackage {
     lockFile = ../../control/agentctl/Cargo.lock;
   };
 
-  buildInputs = with pkgs; [ libcap_ng ];
+  # Allow microsandbox-filesystem's build.rs to find a pre-staged agentd
+  # under $MSB_HOME/bin/agentd so the Nix build avoids network downloads.
+  # The patch is applied directly to the vendored crate directory in
+  # preBuild (see below) because buildRustPackage with cargoLock does not
+  # forward `cargoPatches` to the vendored source.
+
+  nativeBuildInputs = with pkgs; [
+    makeWrapper
+    pkg-config
+  ];
+
+  buildInputs = with pkgs; [
+    libcap_ng
+  ];
+
+  preBuild = ''
+    mkdir -p vendor
+    ln -sfn "${microsandbox-filesystem-patched}" vendor/microsandbox-filesystem-0.5.6
+    cat > .cargo/config.toml <<'CARGO_CONFIG'
+    [patch.crates-io]
+    microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.5.6" }
+    CARGO_CONFIG
+
+    # Stage the Nix-managed Microsandbox runtime where the crate's build.rs
+    # expects it. build.rs resolves its install root via MSB_HOME (verbatim,
+    # no .microsandbox suffix) and skips downloading when bin/msb and
+    # lib/libkrunfw.so.5.2.1 exist and msb --version matches 0.5.6.
+    export MSB_HOME=$TMPDIR/.microsandbox
+    mkdir -p $MSB_HOME/bin $MSB_HOME/lib
+    cp ${microsandbox}/bin/msb $MSB_HOME/bin/msb
+
+    # Also stage the agentd guest-init binary used by microsandbox-filesystem.
+    cp ${microsandbox}/libexec/agentd $MSB_HOME/bin/agentd
+    chmod +x $MSB_HOME/bin/agentd
+
+    for f in ${microsandbox}/lib/libkrunfw.so*; do
+      if [ -f "$f" ] || [ -L "$f" ]; then
+        cp -P "$f" $MSB_HOME/lib/
+      fi
+    done
+  '';
+
+  postInstall = ''
+    # Force MSB_HOME to a persistent path at runtime. The dev shell sets a
+    # temporary MSB_HOME (e.g. /run/user/1000/ai-workbench-msb-$$) for offline
+    # cargo check builds only. At runtime, the SDK needs a stable MSB_HOME
+    # (~/.microsandbox) for cache/db/state. Using --run ensures shell expansion
+    # of $HOME happens at wrapper execution time, not at build time.
+    wrapProgram $out/bin/agentctl \
+      --set MSB_PATH "${microsandbox}/bin/msb" \
+      --run 'export MSB_HOME="$HOME/.microsandbox"'
+  '';
 
   doCheck = false;
 
@@ -36,3 +85,4 @@ pkgs.rustPlatform.buildRustPackage {
     mainProgram = "agentctl";
   };
 }
+)

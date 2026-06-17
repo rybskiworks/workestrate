@@ -16,7 +16,6 @@ Provider keys are only for LiteLLM.
 ## Configuration
 
 - `config.yaml` — proxy configuration
-- `.env.example` — environment variable template
 - `.env` — local secrets (gitignored, mode 0600)
 
 ## Milestone 1 Constraints
@@ -24,6 +23,7 @@ Provider keys are only for LiteLLM.
 - **No Postgres** — runs in-memory. Virtual keys, budgets, and spend tracking are future scope.
 - **No dashboards** — no UI, just the proxy.
 - **Env vars only** — no real keys committed to the repo.
+- **Real provider keys live inside the LiteLLM microVM** — agents authenticate to LiteLLM using `LITELLM_MASTER_KEY` in M1.
 
 ## Health Endpoints
 

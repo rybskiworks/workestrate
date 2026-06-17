@@ -15,7 +15,8 @@ Milestone 1 (M1) delivers:
 - Microsandbox SDK integration (0.5.6, `net` feature)
 - Sandbox plans for LiteLLM, Pi, and Odysseus
 - Verified `cargo check`, `cargo clippy`, `cargo fmt`
-- No runtime claims — this environment lacks KVM
+- No runtime-validated claims — this environment lacks KVM; `up`/`down` are
+  implemented and compile-checked only in M1.
 
 ## Runtime architecture
 
@@ -28,9 +29,11 @@ limits. Agents communicate with LiteLLM via a well-known host IP/port.
 
 ### agentctl
 
-Rust CLI built with Tokio and Clap. Commands: `check`, `litellm plan`,
-`agent plan <name>`. The plan commands print sandbox configurations built
-with `SandboxBuilder` and `NetworkPolicyBuilder`. No runtime execution yet.
+Rust CLI built with Tokio and Clap. Commands: `check`, `litellm {plan,up,down}`,
+`agent {plan,up,down} <name>`. The `plan` subcommands print sandbox configurations
+built with `SandboxBuilder` and `NetworkPolicyBuilder`. The `up`/`down` subcommands
+drive the Microsandbox runtime (compile-checked in M1; runtime-validated on a KVM
+host in M2).
 
 ### Microsandbox
 
@@ -47,18 +50,23 @@ in-memory storage; Postgres for virtual keys/spend tracking is deferred.
 ### Pi
 
 Coding agent from `github:georgrybski/pi`. Target package:
-`packages/coding-agent`. Expected to call LiteLLM via `OPENAI_BASE_URL`.
-Full integration is future work.
+`packages/coding-agent`. Expected to call LiteLLM through an OpenAI-compatible
+endpoint. Pi does not honor `OPENAI_BASE_URL`; it requires seeding
+`~/.pi/agent/models.json` with a custom provider pointing at LiteLLM. Full
+integration is future work.
 
 ### Odysseus
 
 Coding agent from `github:georgrybski/odysseus`. Expected to call LiteLLM
-via `OPENAI_BASE_URL`. Full integration is future work.
+through an OpenAI-compatible endpoint. Odysseus does not honor
+`OPENAI_BASE_URL`; it requires seeding `data/settings.json` with a custom
+provider pointing at LiteLLM. Full integration is future work.
 
 ### Nix
 
 Reproducible build environment. `nix develop` provides Rust toolchain,
-`just`, and build dependencies. `nix build .#agentctl` compiles the CLI.
+`just`, and build dependencies. `nix build .#agentctl` compiles the CLI and wraps it with `MSB_PATH` pointing at
+`.#microsandbox` so runtime commands find the Nix-managed daemon.
 
 ## Source model
 
@@ -69,10 +77,9 @@ Reproducible build environment. `nix develop` provides Rust toolchain,
 
 ## Secrets model
 
-LiteLLM holds a dummy provider key. The real key is injected at the network
-boundary by Microsandbox's egress layer (secret_env + header rewrite). This is
-documented from SDK source but not yet tested at runtime. Host secrets live in
-`infra/litellm/.env` (mode 0600, gitignored).
+LiteLLM holds the real provider keys inside its own microVM. Agents authenticate
+to LiteLLM using `LITELLM_MASTER_KEY` in milestone 1 (virtual keys are deferred
+to M4). The dummy-key egress rewrite is not implemented in M1.
 
 ## Egress model
 
@@ -85,7 +92,7 @@ performs secret injection (dummy key → real key) for allowed destinations.
 - Source code: tracked in git
 - Build artifacts: `control/agentctl/target/` (gitignored)
 - Runtime state: `var/log/`, `var/run/` (gitignored)
-- Secrets: `infra/litellm/.env` (gitignored, mode 0600)
+- Secrets: `.env.enc` (committed, SOPS-encrypted); decrypted at runtime via `run-with-secrets`
 - Agent overrides: `agents/*` (gitignored)
 
 ## Milestone 1 acceptance criteria
@@ -103,10 +110,14 @@ performs secret injection (dummy key → real key) for allowed destinations.
 
 ## Future milestones
 
-- **M2**: Runtime Microsandbox execution on KVM host; secret injection and
-egress policy tested end-to-end.
-- **M3**: Pi and Odysseus honor `OPENAI_BASE_URL`; agents run in microVMs
-and communicate with LiteLLM proxy.
+- **M2**: Runtime Microsandbox execution on a KVM host; secret injection and egress
+  policy tested end-to-end. The Microsandbox runtime daemon (`msb`) is now packaged
+  in Nix as `.#microsandbox`; runtime execution still requires a host with KVM.
+  The `up`/`down` subcommands are implemented in M1 and are compile-checked; M2
+  validates them on a host with `/dev/kvm`.
+- **M3**: Pi and Odysseus route through LiteLLM using their native configuration
+mechanisms (Pi's `models.json` provider config, Odysseus's `data/settings.json`
+/ `LLM_HOST`); agents run in microVMs and communicate with the LiteLLM proxy.
 - **M4**: Postgres-backed LiteLLM with virtual keys, per-agent spend tracking,
 and team isolation.
 - **M5**: Production deployment profiles, CI/CD, automated updates.
@@ -115,6 +126,7 @@ and team isolation.
 
 See `docs/gaps.md` for the full list. Key items:
 - Runtime testing blocked by missing KVM
-- Agent integration with LiteLLM (`OPENAI_BASE_URL`) is theoretical
+- Agent integration with LiteLLM requires native config seeding, not `OPENAI_BASE_URL`
 - Secret injection and egress enforcement are compile-checked but untested
-- `nix build .#agentctl` is best-effort in M1
+- `nix build .#agentctl` is available in M1 and is wired to the `.#microsandbox`
+  runtime via `MSB_PATH`; runtime execution still requires a host with KVM.

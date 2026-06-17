@@ -1,25 +1,49 @@
 # LiteLLM proxy — milestone 1, in-memory, no Postgres.
-# Env var syntax: os.environ/VAR_NAME  →  os.getenv("VAR_NAME")
-# Omit database_url to run in-memory; virtual keys/budgets are future scope.
-
+#
+# Endpoints below are user-provided and intentionally use the `anthropic/`
+# provider prefix for Kimi and MiniMax because both upstreams speak the
+# Anthropic Messages API. Do not change them to native LiteLLM provider
+# names (e.g. `openai/`, `minimax/`) — that would break message routing.
 model_list:
-  - model_name: openai-gpt
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: anthropic-claude
-    litellm_params:
-      model: anthropic/claude-sonnet-4-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: openrouter-default
+  - model_name: openrouter-gpt-4o
     litellm_params:
       model: openrouter/openai/gpt-4o
       api_key: os.environ/OPENROUTER_API_KEY
 
-litellm_settings:
-  drop_params: true
+  - model_name: kimi-for-coding
+    litellm_params:
+      # User-provided endpoint: https://api.kimi.com/coding is
+      # Anthropic-Messages-API compatible, so we route through the
+      # `anthropic/` provider and point it at that base URL.
+      model: anthropic/kimi-for-coding
+      api_base: https://api.kimi.com/coding
+      api_key: os.environ/KIMI_CODE_API_KEY
+
+  - model_name: minimax-coding
+    litellm_params:
+      # User-provided endpoint: https://api.minimax.io/anthropic is
+      # Anthropic-Messages-API compatible. LiteLLM's native `minimax/`
+      # provider is OpenAI-compatible and would not match this upstream,
+      # so we route through the `anthropic/` provider instead.
+      model: anthropic/MiniMax-M3
+      api_base: https://api.minimax.io/anthropic
+      api_key: os.environ/MINIMAX_CODING_API_KEY
+
+  - model_name: inception-mercury-2
+    litellm_params:
+      model: inception/mercury-2
+      api_base: https://api.inceptionlabs.ai/v1
+      api_key: os.environ/INCEPTION_API_KEY
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  # `default_model` is not a valid LiteLLM key. Use `completion_model` instead
+  # to set the default model for the `/v1/chat/completions` endpoint when a
+  # client does not specify one.
+  completion_model: minimax-coding
+
+# Drop unsupported params per provider instead of erroring out. Some upstream
+# providers reject fields the Anthropic/OpenAI spec does not define; `drop_params`
+# lets the proxy strip them and continue.
+litellm_settings:
+  drop_params: true

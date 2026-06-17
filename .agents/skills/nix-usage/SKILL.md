@@ -1,207 +1,162 @@
 ---
 name: nix-usage
 description: |
-  Nix-first toolchain and environment management for the ai-workbench repo.
-  Triggers on Nix, flake, dev shell, profile, or toolchain questions.
-  Does NOT cover general Nix tutorials or non-Nix toolchain issues.
+  Reference for the ai-workbench Nix flake, dev shell, Rust toolchain, and
+  Microsandbox runtime. Load when users ask about `nix develop`, `nix build`,
+  `nix flake check`, `nix run`, flake outputs, Nix PATH issues, building
+  `agentctl`, or why `msb` is downloaded at runtime. Does NOT cover general
+  Nix tutorials.
 ---
 
 # Nix-First Toolchain Management
 
-Nix is the mandatory entry point for all builds in the ai-workbench project.
-This skill defines how to operate Nix reliably inside the project's Docker
-development container. Nix is the only entry point. If Nix is broken, fix it.
+Nix is the only supported entry point for this project. All builds, dev
+tools, and the Rust toolchain come from the flake. If Nix is broken, fix it.
 
-## When to use this skill
+## Triggers
 
-Load or consult this skill when an agent is about to:
+Load this skill when:
 
-- Run `nix develop`, `nix build`, `nix shell`, `nix flake check`, or
+- Running or explaining `nix develop`, `nix build`, `nix flake check`, or
   `nix run` inside `/home/node/Development/ai-workbench/`.
-- Diagnose a broken or missing Nix installation in the container
-  (e.g. `nix: command not found`, dangling `~/.nix-profile`,
-  `nix shell` failing on `~/.nix-profile/bin/...`).
-- Repair the Nix user profile so `nix` is on `PATH`.
-- Build `agentctl` or any other flake output for the project
-  (`nix build .#agentctl`, `nix run .#agentctl`).
-- Debug a Rust/C build that needs a C compiler inside this container
-  (no system `gcc`/`cc` is installed).
-- Update or modify `flake.nix`, `flake.lock`, or anything under `nix/`.
-- Interpret Nix errors specific to this project's setup
-  (crane quirks, `.cargo/config.toml` linker filter, "Git tree ... is dirty"
-  warning, source-tracking errors for untracked files).
-- Add new package or dev-shell entries to the project flake.
+- Diagnosing Nix PATH/profile issues (`nix: command not found`, dangling
+  `~/.nix-profile`, missing `~/.nix-profile/bin/...`).
+- Building `agentctl` (`nix build .#agentctl`).
+- Explaining that `msb` is downloaded at runtime by the Microsandbox SDK.
+- Modifying `flake.nix`, `flake.lock`, or files under `nix/`.
 
-## Project context
+## Project Context
 
-- **Project**: ai-workbench — a Rust-based agent control plane
-  (`agentctl`) with Nix-driven reproducible builds. The `agentctl`
-  source lives in `control/agentctl/`; the LiteLLM proxy config and
-  helpers live in `infra/litellm/`; operational scripts live in
-  `scripts/`.
 - **Project root**: `/home/node/Development/ai-workbench/`
-- **Container**: Debian 12, single Docker container; this is the
-  environment the skill describes.
-- **User**: uid 1000 (`node`), no `sudo`, no root, no system package manager.
-- **Primary build path**: the project flake (`flake.nix` + `nix/`).
-- **Skill location**: this skill lives at
-  `.agents/skills/nix-usage/SKILL.md` inside the project root.
+- **Container**: Debian 12, single Docker container
+- **User**: `node` (uid 1000), no `sudo`, no root
+- **Source**: Rust `agentctl` lives in `control/agentctl/`
+- **Entry point**: the project flake (`flake.nix` + `nix/`)
 
 ## Environment Characteristics
 
-- **Container**: Debian 12, single Docker container.
-- **User**: uid 1000 (`node`), no `sudo`, no root, no system package manager.
-- **No system C compiler**: the base image does not ship `gcc`, `cc`, or
-  `pkg-config`. Anything that needs a C compiler must get it from Nix.
-- **Nix is single-user**: installed at `/nix`, no `nix-daemon`, no
-  multi-user setup. The store at `/nix/store` is pre-populated and
-  writable by the Nix CLI for normal operations.
-- **Nix CLI is at `/nix/var/nix/profiles/default/bin/nix`**. The user
-  profile is `~/.nix-profile`. PATH must include the profile bin
-  directory for `nix` to be on `$PATH`.
+- Single-user Nix at `/nix`, no daemon
+- No system C compiler, no `apt-get`, no `dpkg`
+- Nix CLI at `/nix/var/nix/profiles/default/bin/nix`
+- Profile symlink: `~/.nix-profile` → `/nix/var/nix/profiles/default`
+- PATH must include `~/.nix-profile/bin`
 
 ## Fixing a Broken Nix Profile
 
-The user profile is a symlink at `~/.nix-profile` that should point at
-`/nix/var/nix/profiles/default`. If it is dangling, all of `nix shell`,
-`nix develop`, and `nix build` will fail with errors about
-`/home/node/.nix-profile/bin` not existing.
-
-Repair steps (run as the unprivileged user, no sudo needed):
+Run as the unprivileged user (no `sudo`):
 
 ```bash
-# 1. Ensure the profile parent directory exists.
 mkdir -p ~/.nix-profile
-
-# 2. Re-create the symlink to the system default profile.
 ln -sfn /nix/var/nix/profiles/default ~/.nix-profile
-
-# 3. Put the profile on PATH for the current shell.
 export PATH="$HOME/.nix-profile/bin:$PATH"
-
-# 4. Verify.
-nix --version                 # should print "nix (Nix) 2.34.7" or similar
-nix shell nixpkgs#hello -c hello   # should print "Hello, world!"
+nix --version
+nix shell nixpkgs#hello -c hello
 ```
-
-If step 4 fails on `nix shell nixpkgs#hello -c hello` with a network
-error, the Nix cache is unreachable. Check `~/.config/nix/nix.conf` and
-the network, then retry.
 
 ## Verification Commands
 
-Run these in order. If any fails, jump to the matching fix below.
-
 ```bash
-# 1. Nix binary on PATH and runnable.
+# Nix itself
 nix --version
-
-# 2. Can evaluate and execute a one-shot shell from nixpkgs.
 nix shell nixpkgs#hello -c hello
 
-# 3. Can evaluate a flake (no build required).
+# Flake
 cd /home/node/Development/ai-workbench
 nix flake check --no-build
 
-# 4. Can enter a flake dev shell and find core tools.
-nix develop -c cargo --version   # cargo 1.95.0
-nix develop -c rustc --version   # rustc 1.95.0
-nix develop -c gcc --version     # gcc (GCC) 15.2.0
-nix develop -c just --version    # just 1.51.0
+# Dev shell tools
+nix develop -c cargo --version
+nix develop -c rustc --version
+nix develop -c gcc --version
+nix develop -c just --version
 
-# 5. Can build a flake package.
+# Package build
 nix build .#agentctl
-./result/bin/agentctl --version # agentctl 0.1.0
+./result/bin/agentctl --version
 ```
 
 ## Working With Flakes
 
-The project flake at
-`/home/node/Development/ai-workbench/flake.nix` provides:
+Current outputs:
 
-- `nix develop` — full dev shell (rustc, cargo, just, gcc, openssl, git, jq,
-  yq, curl, ripgrep, fd, cosign, postgresql_16, rust-analyzer, rustfmt,
-  clippy).
-- `nix build .#agentctl` — build the agentctl binary via crane.
-- `nix build .#default` — alias for the agentctl build.
-- `nix run .#agentctl` / `nix run .#default` — build and run.
-- `nix fmt` — run nixpkgs-fmt on all `.nix` files.
+- `devShells.x86_64-linux.default` — `nix develop`
+- `packages.x86_64-linux.agentctl` — `nix build .#agentctl`
 
-Flake inputs are pinned in `flake.lock`. Update with
-`nix flake update` (CI should not do this; the lock is intentional).
+There is NO `packages.default`, NO `nix fmt`, and NO `nix run .#default`.
 
-### Flake Hygiene Specific to This Project
+The dev shell (`nix/devshells/default.nix`) provides `cargo`, `clippy`,
+`gcc`, `just`, `pkg-config`, `rustc`, `rustfmt` in `nativeBuildInputs`,
+plus `git`, `libcap_ng`, and `openssl` in `buildInputs`.
 
-- **Source tracking**: Nix flakes read files via the parent git tree.
-  New source files must be `git add`-ed (or `git add -f` if `.gitignore`
-  excludes them) before `nix build` / `nix flake check` can see them.
-  The `control/agentctl` directory must be a regular tracked directory,
-  not a gitlink or submodule, or Nix will refuse to read it.
-- **`.cargo/config.toml`**: the project contains a legacy linker
-  configuration. The Nix build filters that file out (see
-  `nix/packages/agentctl.nix`) so cargo picks up Nix's bundled `cc`
-  wrapper instead. Do not delete the file from the source tree — the
-  filter handles it.
-- **`buildPackage` quirks**: crane's `crateNameFromCargoToml` helper
-  is brittle with relative `src` paths in some Nix versions. The
-  package passes `pname`, `version`, and `cargoToml` explicitly.
+Lock file inputs:
+
+- `nixpkgs` (github:NixOS/nixpkgs/nixos-unstable)
+- `pi` (github:georgrybski/pi, `flake=false`)
+- `odysseus` (github:georgrybski/odysseus, `flake=false`)
+
+`agents/pi/` is an optional gitignored local override; `agentctl check`
+reports it `[MISSING]` if absent. The locked `pi` input is what
+`nix build .#agentctl` actually uses.
+
+Update the lock only deliberately:
+
+```bash
+nix flake update
+```
+
+CI should NOT run `nix flake update`.
+
+## Flake Hygiene
+
+- **Git-tracked sources**: new files must be `git add`-ed before `nix build`
+  can see them.
+- **`.cargo/config.toml`**: the package derivation filters it out so cargo
+  uses Nix's `cc` wrapper. Do not delete it.
+- **Source filter**: the derivation excludes `target`, `result`, and
+  `result-`.
+- **Microsandbox build.rs**: writes to `$HOME/.microsandbox/bin`. The
+  derivation sets `HOME=$TMPDIR`. Outside the Nix sandbox, do the same.
+- **Runtime daemon**: `msb` and the kernel image are NOT bundled in the
+  Nix closure. The Microsandbox Rust SDK downloads them on first use.
 
 ## C Toolchain
 
-- The Nix dev shell provides `gcc 15.2.0` and `cc` (the gcc-wrapper)
-  via `nixpkgs.gcc`. No system compiler is required.
-- `pkg-config` and `openssl` are also in the dev shell; the
-  `openssl` package exposes both the `openssl` binary and the `lib`
-  / `dev` outputs needed by cargo crates that link against it.
-- If a Rust build script complains about a missing C compiler, you
-  are probably not inside the dev shell. Always run
-  `nix develop -c cargo build ...` rather than bare `cargo build`.
+- `gcc`, `pkg-config`, and `rustc`/`cargo` come from Nix.
+- `openssl` is in `buildInputs` for crates that link against it.
+- If a build complains about a missing C compiler, you are outside the dev
+  shell.
 
-## Anti-patterns to avoid
+## Anti-patterns
 
-1. **Using `.toolchain/` or rustup outside Nix** — The `.toolchain/`
-   directory is legacy and must be deleted or ignored. Never use it.
-2. **Running `cargo` directly without `nix develop -c`** — All cargo
-   and rustc invocations MUST go through `nix develop -c ...`. Running
-   `cargo` bare is an error state.
-3. **Installing system packages to "fix" missing deps** — Do not try
-   `apt-get install` or `dpkg`. Add missing packages to
-   `nix/devshells/default.nix` instead.
-4. **Bypassing the flake because "it's too slow" or "it doesn't work"** —
-   If the flake fails, diagnose and fix it. Do not work around it.
+- **NO bare `cargo` or `rustc`** — always use `nix develop` or
+  `nix develop -c ...`.
+- **NO `apt-get` / `dpkg`** — add packages to `nix/devshells/default.nix`.
+- **NO `rustup`** — the toolchain comes from Nix.
+- **NO bypassing the flake** because it is slow or seems broken — diagnose
+  and fix.
+- **NO `nix fmt`** — the project does not configure a formatter.
+- **NO `nix build .#default`** — there is no such output.
+- **NO expecting `msb` in the closure** — it is downloaded at runtime by the
+  SDK.
 
 ## Known Limitations
 
-- **Single-user Nix**: no daemon, no `nix-daemon` service to restart.
-  Killing the user session does not affect long-running builds
-  (Nix detaches them under `/nix/var/nix/builds`).
-- **No `sudo`**: nothing can be installed system-wide. Nix is the
-  only installer.
-- **Pre-populated store**: `/nix/store` is large and pre-populated.
-  It is not directly user-writable, but `nix build` can add to it
-  transparently. If you see `Read-only file system` while writing
-  into `/nix/store/...`, the Nix daemon is misbehaving — check
-  `/nix/var/log/nix` and run `nix doctor`.
-- **Git is dirty warning**: flake evaluation always warns
-  "Git tree ... is dirty" because `flake.nix`, `nix/`, and
-  `justfile` are uncommitted in the working tree. This is benign;
-  ignore it.
-- **Build sandbox can be slow on first run**: crane fetches the
-  nixpkgs vendor closure and compiles `cargo` itself before
-  compiling the crate. First `nix build .#agentctl` takes several
-  minutes; subsequent builds are cached.
+- Single-user Nix (no daemon). If you see write errors to `/nix/store`,
+  run `nix doctor`.
+- No `sudo`; system-wide changes are impossible.
+- Pre-populated `/nix/store`.
+- "Git tree is dirty" warnings are benign because `flake.nix` and `nix/`
+  are uncommitted.
 
-## How to Recognize Each Failure Mode
+## Failure Modes
 
 | Symptom | Cause | Fix |
-|---------|-------|-----|
+|---|---|---|
 | `nix: command not found` | PATH missing Nix profile | `export PATH=$HOME/.nix-profile/bin:$PATH` |
-| `nix shell ... : No such file or directory` for `~/.nix-profile/bin/...` | Dangling profile symlink | Run the profile repair (above) |
-| `error: Path 'X' ... is not tracked by Git` | New file added to flake but not staged | `git add X` |
-| `unable to infer crate name and version` | crane's auto-detection failed | Add `pname`/`version`/`cargoToml` to the crane call |
-| `linking with '.../.toolchain/ld_zigcc' failed` | You ran cargo outside nix develop | Enter `nix develop` first; the flake filters `.cargo/config.toml` |
-| `error: access to absolute path '...' is forbidden in pure evaluation mode` | Absolute path passed to a flake | Use a relative path or pass `--impure` |
-| `cargo: command not found` | Ran `cargo` outside `nix develop` | Prefix with `nix develop -c ...` |
-| `gcc: command not found` | Ran outside `nix develop` | Enter `nix develop` — there is no system gcc |
-
-</content>
+| `~/.nix-profile/bin/...` not found | Dangling profile symlink | Run the profile repair (above) |
+| `Path 'X' is not tracked by Git` | Untracked source file | `git add X` |
+| `linking with '.../.toolchain/...'` failed | Ran cargo outside `nix develop` | Use `nix develop -c cargo ...` |
+| `error: 'packages.x86_64-linux.default' is not a flake output` | Used `.#default` | Use `.#agentctl`; there is no default |
+| `cargo: command not found` / `gcc: command not found` | Outside dev shell | Run inside `nix develop` |
+| `msb: command not found` at runtime | SDK has not downloaded it yet | First use downloads it; check network or pre-stage |
+| Build error mentioning `$HOME/.microsandbox/bin` | build.rs writing outside sandbox | Set `HOME=$TMPDIR` (derivation already does this) |

@@ -1,0 +1,25 @@
+--- a/build.rs
++++ b/build.rs
+@@ -26,8 +26,22 @@ fn build_agentd(workspace_root: &Path, out_dir: &Path) {
+     {
+         let dest = out_dir.join(AGENTD_BINARY);
+         if dest.exists() {
+             return;
+         }
++
++        // Nix/offline build path: if a pre-staged agentd exists under
++        // $MSB_HOME/bin/agentd (the same root used by the SDK build.rs for
++        // msb/libkrunfw), copy it in and skip the network download.
++        if let Some(msb_home) = std::env::var_os("MSB_HOME") {
++            let staged = std::path::PathBuf::from(msb_home)
++                .join("bin")
++                .join(AGENTD_BINARY);
++            if staged.is_file() {
++                std::fs::copy(&staged, &dest)
++                    .expect("failed to copy agentd from MSB_HOME/bin/agentd");
++                return;
++            }
++        }
+ 
+         // In CI, prefer the locally-built agentd from workspace build/.
+         // Check both CI (standard) and GITHUB_ACTIONS (set inside maturin Docker containers

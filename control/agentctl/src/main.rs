@@ -7,6 +7,7 @@ mod litellm;
 mod microsandbox;
 
 use agents::AgentName;
+use config::CheckEntry;
 
 #[derive(Parser)]
 #[command(name = "agentctl")]
@@ -36,12 +37,36 @@ enum Commands {
 enum LitellmAction {
     /// Print the planned LiteLLM sandbox workload
     Plan,
+    /// Start the LiteLLM sandbox
+    Up,
+    /// Stop and remove the LiteLLM sandbox
+    Down,
 }
 
 #[derive(Subcommand)]
 enum AgentAction {
     /// Print the planned agent sandbox workload
     Plan { name: AgentName },
+    /// Start the agent sandbox
+    Up { name: AgentName },
+    /// Stop and remove the agent sandbox
+    Down { name: AgentName },
+}
+
+fn print_entry(entry: &CheckEntry) {
+    if entry.ok {
+        println!("[OK] {}", entry.label);
+        return;
+    }
+    if entry.optional {
+        // Optional checks (e.g. local `agents/pi` and `agents/odysseus`
+        // checkouts) are reported as warnings and never cause a non-zero
+        // exit. These directories are documented as optional local
+        // overrides; the agents are normally supplied via flake inputs.
+        println!("[MISSING] (optional) {}", entry.label);
+    } else {
+        println!("[MISSING] {}", entry.label);
+    }
 }
 
 #[tokio::main]
@@ -52,9 +77,13 @@ async fn main() -> Result<()> {
         Commands::Check => cmd_check().await,
         Commands::Litellm { action } => match action {
             LitellmAction::Plan => litellm::plan().await,
+            LitellmAction::Up => litellm::up().await,
+            LitellmAction::Down => litellm::down().await,
         },
         Commands::Agent { action } => match action {
             AgentAction::Plan { name } => agents::plan(name).await,
+            AgentAction::Up { name } => agents::up(name).await,
+            AgentAction::Down { name } => agents::down(name).await,
         },
     }
 }
@@ -62,21 +91,21 @@ async fn main() -> Result<()> {
 async fn cmd_check() -> Result<()> {
     let root = config::project_root()?;
     let checks = config::check_required_files(&root)?;
-    let mut all_ok = true;
 
-    for (label, ok) in checks {
-        let status = if ok { "[OK]" } else { "[MISSING]" };
-        println!("{} {}", status, label);
-        if !ok {
-            all_ok = false;
+    // Only non-optional missing artifacts cause a non-zero exit. Optional
+    // agent checkouts (agents/pi, agents/odysseus) are reported as warnings.
+    let mut all_required_ok = true;
+    for entry in &checks {
+        print_entry(entry);
+        if !entry.ok && !entry.optional {
+            all_required_ok = false;
         }
     }
 
-    if all_ok {
-        println!("\nAll checks passed.");
+    if all_required_ok {
+        println!("\nAll required checks passed.");
+        Ok(())
     } else {
-        println!("\nSome checks failed.");
+        Err(anyhow::anyhow!("Some required checks failed."))
     }
-
-    Ok(())
 }

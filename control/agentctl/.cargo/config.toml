@@ -1,2 +1,11 @@
+# Keep the default system linker. This file is used only in the dev shell;
+# the Nix production build filters it out and writes its own .cargo/config.toml.
 [target.x86_64-unknown-linux-gnu]
 linker = "cc"
+
+# The patched microsandbox-filesystem crate is symlinked into vendor/ by the
+# nix develop shellHook (from nix/devshells/default.nix). It provides the
+# offline-aware build.rs that reads $MSB_HOME/bin/agentd instead of downloading
+# agentd-x86_64 from GitHub.
+[patch.crates-io]
+microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.5.6" }

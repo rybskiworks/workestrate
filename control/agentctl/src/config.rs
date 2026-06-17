@@ -20,44 +20,83 @@ pub fn project_root() -> Result<PathBuf> {
     Ok(std::env::current_dir()?)
 }
 
-pub fn check_required_files(root: &Path) -> Result<Vec<(String, bool)>> {
-    let mut checks = Vec::new();
+/// One row in the `agentctl check` report.
+#[derive(Debug, Clone)]
+pub struct CheckEntry {
+    /// Human-readable label printed in the report.
+    pub label: String,
+    /// Whether the required artifact is present.
+    pub ok: bool,
+    /// When `true`, a missing artifact is reported as a warning and does
+    /// not cause the command to exit non-zero. Used for optional local
+    /// overrides such as `agents/pi` and `agents/odysseus` checkouts.
+    pub optional: bool,
+}
 
-    let paths = vec![
-        ("ai-workbench root", root.to_path_buf()),
-        (
+struct CheckSpec {
+    label: &'static str,
+    path: PathBuf,
+    optional: bool,
+}
+
+fn required(label: &'static str, path: PathBuf) -> CheckSpec {
+    CheckSpec {
+        label,
+        path,
+        optional: false,
+    }
+}
+
+fn optional(label: &'static str, path: PathBuf) -> CheckSpec {
+    CheckSpec {
+        label,
+        path,
+        optional: true,
+    }
+}
+
+/// Run the full set of sanity checks for the workbench layout.
+///
+/// `agents/pi` and `agents/odysseus` are documented as optional local
+/// overrides (the agents can also be supplied via flake inputs), so missing
+/// directories are reported as `[MISSING] (optional)` and do not fail the
+/// command. Any other missing artifact is fatal.
+pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
+    let specs: Vec<CheckSpec> = vec![
+        required("ai-workbench root", root.to_path_buf()),
+        required("flake.nix", root.join("flake.nix")),
+        required(
             "infra/litellm/config.yaml",
             root.join("infra/litellm/config.yaml"),
         ),
-        (
+        required(
             "infra/microsandbox/sdk-notes.md",
             root.join("infra/microsandbox/sdk-notes.md"),
         ),
-        ("profiles/litellm.md", root.join("profiles/litellm.md")),
-        ("profiles/agents/pi.md", root.join("profiles/agents/pi.md")),
-        (
+        required("profiles/litellm.md", root.join("profiles/litellm.md")),
+        required("profiles/agents/pi.md", root.join("profiles/agents/pi.md")),
+        required(
             "profiles/agents/odysseus.md",
             root.join("profiles/agents/odysseus.md"),
         ),
-        ("workspaces/", root.join("workspaces")),
-        ("var/", root.join("var")),
-        ("agents/pi (or flake input)", root.join("agents/pi")),
-        (
+        required("workspaces/", root.join("workspaces")),
+        required("var/", root.join("var")),
+        // Optional: Pi and Odysseus are typically supplied via flake
+        // inputs. A fresh clone may legitimately omit local
+        // `agents/<name>` checkouts.
+        optional("agents/pi (or flake input)", root.join("agents/pi")),
+        optional(
             "agents/odysseus (or flake input)",
             root.join("agents/odysseus"),
         ),
     ];
 
-    for (label, path) in paths {
-        let exists = if label.starts_with("agents/") {
-            // Agent check: local override OR flake input is OK.
-            // For now, just check local path. Flake input check is future work.
-            path.exists()
-        } else {
-            path.exists()
-        };
-        checks.push((label.to_string(), exists));
-    }
-
-    Ok(checks)
+    Ok(specs
+        .into_iter()
+        .map(|spec| CheckEntry {
+            label: spec.label.to_string(),
+            ok: spec.path.exists(),
+            optional: spec.optional,
+        })
+        .collect())
 }

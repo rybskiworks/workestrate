@@ -1,6 +1,13 @@
+# Plaintext dotenv files
 .env
 .env.*
 !.env.example
+!.env.enc
+
+# Local private keys / decrypted dumps
+.keys/
+*.agekey
+.secrets/
 
 var/*
 !var/.gitkeep
@@ -25,6 +32,10 @@ target/
 *.qcow2
 *.img
 *.log
+core
 
 __pycache__/
 *.pyc
+
+# Nix-generated patched crate (symlinked by nix develop)
+control/agentctl/vendor/

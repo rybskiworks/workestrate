@@ -24,11 +24,26 @@ Odysseus should call LiteLLM if it acts as an agent/client.
 
 **Important:** Odysseus does NOT honor `OPENAI_BASE_URL`. It uses `LLM_HOST` for local model discovery or `data/settings.json` for per-provider configuration.
 
+For LiteLLM, use `data/settings.json` (not `LLM_HOST`). Example snippet:
+```json
+{
+  "providers": {
+    "litellm": {
+      "base_url": "http://host.microsandbox.internal:4000/v1",
+      "api_key": "${LITELLM_MASTER_KEY}",
+      "model": "openai-gpt"
+    }
+  }
+}
+```
+
+`LLM_HOST` is only for local model servers (Ollama, LM Studio) and is not used in the LiteLLM routing path.
+
 ## Expected Environment
 - `APP_PORT=7000`
 - `AUTH_ENABLED=true`
 - `LOCALHOST_BYPASS=false` — do NOT enable in sandbox
-- `OPENAI_API_KEY` — LiteLLM-facing dummy key
+- `OPENAI_API_KEY` — set to `LITELLM_MASTER_KEY` in M1 (no virtual keys yet)
 
 ## Forbidden
 - Raw provider API keys in the Odysseus sandbox

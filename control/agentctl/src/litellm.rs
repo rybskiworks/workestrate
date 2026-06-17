@@ -5,3 +5,11 @@ pub async fn plan() -> Result<()> {
     println!("{}", plan);
     Ok(())
 }
+
+pub async fn up() -> Result<()> {
+    crate::microsandbox::up_litellm().await
+}
+
+pub async fn down() -> Result<()> {
+    crate::microsandbox::down_litellm().await
+}

@@ -15,3 +15,17 @@ pub async fn plan(name: AgentName) -> Result<()> {
     println!("{}", plan);
     Ok(())
 }
+
+pub async fn up(name: AgentName) -> Result<()> {
+    match name {
+        AgentName::Pi => crate::microsandbox::up_pi().await,
+        AgentName::Odysseus => crate::microsandbox::up_odysseus().await,
+    }
+}
+
+pub async fn down(name: AgentName) -> Result<()> {
+    match name {
+        AgentName::Pi => crate::microsandbox::down_pi().await,
+        AgentName::Odysseus => crate::microsandbox::down_odysseus().await,
+    }
+}
