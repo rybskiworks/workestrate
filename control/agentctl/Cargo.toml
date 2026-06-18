@@ -14,7 +14,7 @@ path = "src/main.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 microsandbox = { version = "=0.5.6", features = ["net"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 
 [profile.release]
 opt-level = 3

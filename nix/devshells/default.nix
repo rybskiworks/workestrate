@@ -2,6 +2,7 @@
 , microsandbox
 , microsandbox-filesystem-patched
 , agentctl
+, msb-wrapped
 , with-secrets
 , run-with-secrets
 , decrypt-env
@@ -20,7 +21,7 @@ pkgs.mkShell {
     git
     just
     libcap_ng
-    microsandbox
+    msb-wrapped
     openssl
     pkg-config
     run-with-secrets
@@ -37,20 +38,43 @@ pkgs.mkShell {
     echo "msb version: $(msb --version 2>/dev/null || echo 'not available')"
     echo "secrets workflow: docs/secrets.md"
 
-    # Stage Microsandbox runtime for offline cargo check
-    _msb_home="''${XDG_RUNTIME_DIR:-''${TMPDIR:-/tmp}}/ai-workbench-msb-$$"
+    # Stage Microsandbox runtime for offline cargo check.
+    # Use a persistent home cache instead of per-shell tmpfs to avoid
+    # "No space left on device" when cargo check repeatedly copies the runtime.
+    _msb_home="$HOME/.cache/ai-workbench-msb"
+    rm -rf "$_msb_home/bin" "$_msb_home/lib"
     mkdir -p "$_msb_home/bin" "$_msb_home/lib"
-    cp -f ${microsandbox}/bin/msb "$_msb_home/bin/msb"
-    chmod +x "$_msb_home/bin/msb"
-    cp -f ${microsandbox}/libexec/agentd "$_msb_home/bin/agentd"
-    chmod +x "$_msb_home/bin/agentd"
-    for f in ${microsandbox}/lib/libkrunfw.so*; do
-      if [ -f "$f" ] || [ -L "$f" ]; then
-        cp -P "$f" "$_msb_home/lib/"
+
+    # Best-effort cleanup of legacy per-shell tmpfs staging dirs left by
+    # earlier dev shell versions. Failures are ignored so they cannot break
+    # the hook.
+    for _old in /run/user/*/ai-workbench-msb-*; do
+      if [ -e "$_old" ]; then
+        rm -rf "$_old" 2>/dev/null || true
       fi
     done
+
+    ln -sfn ${microsandbox}/bin/msb "$_msb_home/bin/msb"
+    ln -sfn ${microsandbox}/libexec/agentd "$_msb_home/bin/agentd"
+
+    # libkrunfw may need to be a regular file for mmap. Copy the real shared
+    # objects and recreate any version/name symlinks pointing at the copies.
+    for f in ${microsandbox}/lib/libkrunfw.so*; do
+      if [ -f "$f" ] && [ ! -L "$f" ]; then
+        cp -f "$f" "$_msb_home/lib/$(basename "$f")"
+      fi
+    done
+    for f in ${microsandbox}/lib/libkrunfw.so*; do
+      if [ -L "$f" ]; then
+        _base=$(basename "$f")
+        _target=$(readlink "$f")
+        ln -sfn "$(basename "$_target")" "$_msb_home/lib/$_base"
+      fi
+    done
+
     export MSB_HOME="$_msb_home"
     export MSB_PATH="$_msb_home/bin/msb"
+
 
     _setup_vendor_link() {
       local repo_root vendor_dir vendor_link target

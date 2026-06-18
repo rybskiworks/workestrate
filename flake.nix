@@ -23,6 +23,19 @@
       microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix {};
       agentctl = pkgs.callPackage ./nix/packages/agentctl.nix { inherit microsandbox microsandbox-filesystem-patched pi odysseus; };
 
+      # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
+      # and other runtime commands look in ~/.microsandbox (where agentctl
+      # stores the SDK cache/db), not the per-shell build staging directory
+      # set by the dev shell's shellHook. $HOME is expanded at wrapper
+      # execution time, not at build time.
+      msb-wrapped = pkgs.runCommand "msb-wrapped" {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+      } ''
+        mkdir -p $out/bin
+        makeWrapper ${microsandbox}/bin/msb $out/bin/msb \
+          --run 'export MSB_HOME="$HOME/.microsandbox"'
+      '';
+
       with-secrets = pkgs.writeShellApplication {
         name = "with-secrets";
         runtimeInputs = [ pkgs.sops pkgs.jq ];
@@ -162,11 +175,11 @@
       };
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
-        inherit pkgs microsandbox microsandbox-filesystem-patched agentctl with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+        inherit pkgs microsandbox microsandbox-filesystem-patched agentctl msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
       };
 
       packages.${system} = {
-        inherit agentctl microsandbox microsandbox-filesystem-patched with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+        inherit agentctl microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
         default = agentctl;
       };
 

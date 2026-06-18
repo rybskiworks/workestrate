@@ -1,9 +1,9 @@
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use microsandbox::{
-    sandbox::{SandboxBuilder, SandboxHandle, SandboxStatus},
+    sandbox::{SandboxBuilder, SandboxHandle, SandboxStatus, exec::ExecEvent},
     NetworkPolicy, Sandbox,
 };
 
@@ -73,10 +73,19 @@ fn resolve_secret_value(templated: &str) -> Result<String> {
     Ok(result)
 }
 
+fn resolve_mount_host(root: &Path, host: &str) -> PathBuf {
+    if let Some(rest) = host.strip_prefix("${MSB_HOME}/") {
+        let home = std::env::var("HOME").expect("HOME not set");
+        PathBuf::from(home).join(".microsandbox").join(rest)
+    } else {
+        root.join(host)
+    }
+}
+
 fn apply_plan_mounts(builder: SandboxBuilder, root: &Path, plan: &SandboxPlan) -> SandboxBuilder {
     let mut b = builder;
     for m in &plan.mounts {
-        let host = root.join(&m.host);
+        let host = resolve_mount_host(root, &m.host);
         b = b.volume(&m.guest, |v| {
             let v = v.bind(host);
             if m.read_only {
@@ -123,7 +132,7 @@ async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
 
 fn ensure_mount_sources(root: &Path, plan: &SandboxPlan) -> Result<()> {
     for m in &plan.mounts {
-        let path = root.join(&m.host);
+        let path = resolve_mount_host(root, &m.host);
         if !path.exists() {
             if m.read_only {
                 anyhow::bail!("mount source does not exist: {}", path.display());
@@ -261,9 +270,11 @@ pub fn build_litellm_plan() -> SandboxPlan {
         image: Some("ghcr.io/berriai/litellm:main-stable".into()),
         workdir: Some("/app".into()),
         command: vec![
-            "litellm".into(),
+            "/app/.venv/bin/litellm".into(),
             "--config".into(),
             "/app/config.yaml".into(),
+            "--host".into(),
+            "0.0.0.0".into(),
         ],
         cpus: Some(2),
         memory_mib: Some(2048),
@@ -271,6 +282,11 @@ pub fn build_litellm_plan() -> SandboxPlan {
             EnvVar {
                 key: "PORT".into(),
                 value: "4000".into(),
+                is_secret: false,
+            },
+            EnvVar {
+                key: "LITELLM_LOCAL_MODEL_COST_MAP".into(),
+                value: "True".into(),
                 is_secret: false,
             },
             EnvVar {
@@ -305,11 +321,18 @@ pub fn build_litellm_plan() -> SandboxPlan {
             host: 4000,
             guest: 4000,
         }],
-        mounts: vec![MountPlan {
-            host: "infra/litellm/config.yaml".into(),
-            guest: "/app/config.yaml".into(),
-            read_only: true,
-        }],
+        mounts: vec![
+            MountPlan {
+                host: "${MSB_HOME}/sandboxes/litellm/logs".into(),
+                guest: "/var/log/litellm".into(),
+                read_only: false,
+            },
+            MountPlan {
+                host: "infra/litellm/config.yaml".into(),
+                guest: "/app/config.yaml".into(),
+                read_only: true,
+            },
+        ],
         network: NetworkPlan {
             default_deny: true,
             egress_rules: vec![
@@ -477,11 +500,17 @@ pub async fn up_litellm() -> Result<()> {
     let plan = build_litellm_plan();
     ensure_mount_sources(&root, &plan)?;
 
+    let logs_dir = std::env::var("HOME")
+        .map(PathBuf::from)
+        .expect("HOME not set")
+        .join(".microsandbox/sandboxes/litellm/logs");
+    std::fs::create_dir_all(&logs_dir)?;
+
     // NOTE: This policy must stay in sync with `build_litellm_plan().network`.
     //       If you change one, change the other.
     let policy = NetworkPolicy::builder()
         .default_deny()
-        .ingress(|i| i.tcp().port(4000).allow_host())
+        .ingress(|i| i.tcp().port(4000).allow_local())
         .egress(|e| e.udp().port(53).allow_host())
         .egress(|e| e.tcp().port(53).allow_host())
         .egress(|e| {
@@ -499,18 +528,77 @@ pub async fn up_litellm() -> Result<()> {
         .cpus(plan.cpus.unwrap_or(2))
         .memory(plan.memory_mib.unwrap_or(2048))
         .workdir(plan.workdir.as_deref().unwrap_or("/app"))
-        .entrypoint(plan.command.iter().map(String::as_str))
+        .entrypoint(["/bin/sh"])
         .port(4000, 4000)
         .network(|n| n.policy(policy))
         .detached(true);
 
     builder = apply_plan_envs(builder, &plan)?;
-
     builder = apply_plan_mounts(builder, &root, &plan);
     builder = apply_plan_secrets(builder, &plan)?;
 
     let sandbox = builder.replace().create().await?;
-    println!("Sandbox '{}' started", sandbox.name());
+    let sandbox_name = sandbox.name().to_string();
+
+    let mut exec_handle = sandbox
+        .exec_stream(
+            "/app/.venv/bin/litellm",
+            vec![
+                "--config".to_string(),
+                "/app/config.yaml".to_string(),
+                "--host".to_string(),
+                "0.0.0.0".to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start litellm process: {}", e))?;
+
+    match exec_handle.recv().await {
+        Some(ExecEvent::Started { pid }) => {
+            eprintln!("litellm process started (guest PID {})", pid);
+        }
+        Some(ExecEvent::Failed(err)) => {
+            let _ = sandbox.stop().await;
+            return Err(anyhow::anyhow!(
+                "litellm process failed to start: {:?}", err
+            ));
+        }
+        other => {
+            let _ = sandbox.stop().await;
+            return Err(anyhow::anyhow!(
+                "unexpected exec event waiting for litellm start: {:?}", other
+            ));
+        }
+    }
+
+    // Keep the SDK client alive and stream LiteLLM logs in the foreground.
+    // Dropping the handle would tear down the exec session and kill LiteLLM.
+    tokio::spawn(async move {
+        while let Some(event) = exec_handle.recv().await {
+            match event {
+                ExecEvent::Stdout(data) => {
+                    eprint!("{}", String::from_utf8_lossy(&data));
+                }
+                ExecEvent::Stderr(data) => {
+                    eprint!("{}", String::from_utf8_lossy(&data));
+                }
+                ExecEvent::Exited { code } => {
+                    eprintln!("litellm exited with code {}", code);
+                }
+                ExecEvent::Failed(err) => {
+                    eprintln!("litellm failed: {:?}", err);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    println!("Sandbox '{}' started (Ctrl-C to stop)", sandbox_name);
+    tokio::signal::ctrl_c().await?;
+    if let Err(e) = sandbox.stop().await {
+        eprintln!("failed to stop sandbox '{}': {}", sandbox_name, e);
+    }
+    println!("Sandbox '{}' stopped", sandbox_name);
     Ok(())
 }
 
@@ -558,7 +646,34 @@ pub async fn up_pi() -> Result<()> {
     builder = apply_plan_secrets(builder, &plan)?;
 
     let sandbox = builder.replace().create().await?;
-    println!("Sandbox '{}' started", sandbox.name());
+    let sandbox_name = sandbox.name().to_string();
+
+    let mut exec_handle = sandbox
+        .exec_stream("pi", vec!["--mode".to_string(), "rpc".to_string()])
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start pi process: {}", e))?;
+
+    match exec_handle.recv().await {
+        Some(ExecEvent::Started { pid }) => {
+            eprintln!("pi process started (guest PID {})", pid);
+        }
+        Some(ExecEvent::Failed(err)) => {
+            let _ = sandbox.stop().await;
+            return Err(anyhow::anyhow!(
+                "pi process failed to start: {:?}", err
+            ));
+        }
+        other => {
+            let _ = sandbox.stop().await;
+            return Err(anyhow::anyhow!(
+                "unexpected exec event waiting for pi start: {:?}", other
+            ));
+        }
+    }
+
+    sandbox.detach().await;
+
+    println!("Sandbox '{}' started", sandbox_name);
     Ok(())
 }
 
@@ -607,7 +722,43 @@ pub async fn up_odysseus() -> Result<()> {
     builder = apply_plan_secrets(builder, &plan)?;
 
     let sandbox = builder.replace().create().await?;
-    println!("Sandbox '{}' started", sandbox.name());
+    let sandbox_name = sandbox.name().to_string();
+
+    let mut exec_handle = sandbox
+        .exec_stream(
+            "uvicorn",
+            vec![
+                "app:app".to_string(),
+                "--host".to_string(),
+                "0.0.0.0".to_string(),
+                "--port".to_string(),
+                "7000".to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start odysseus process: {}", e))?;
+
+    match exec_handle.recv().await {
+        Some(ExecEvent::Started { pid }) => {
+            eprintln!("odysseus process started (guest PID {})", pid);
+        }
+        Some(ExecEvent::Failed(err)) => {
+            let _ = sandbox.stop().await;
+            return Err(anyhow::anyhow!(
+                "odysseus process failed to start: {:?}", err
+            ));
+        }
+        other => {
+            let _ = sandbox.stop().await;
+            return Err(anyhow::anyhow!(
+                "unexpected exec event waiting for odysseus start: {:?}", other
+            ));
+        }
+    }
+
+    sandbox.detach().await;
+
+    println!("Sandbox '{}' started", sandbox_name);
     Ok(())
 }
 
