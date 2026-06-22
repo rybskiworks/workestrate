@@ -1,4 +1,4 @@
-# ai-workbench
+# workestrator
 
 A local AI workbench that runs Pi and Odysseus coding agents inside
 Microsandbox microVMs, with LiteLLM as the unified LLM proxy. Everything
@@ -7,7 +7,7 @@ Nix flakes and SOPS-encrypted secrets.
 
 ## What is this
 
-`ai-workbench` is a single-host sandbox for experimenting with
+`workestrator` is a single-host sandbox for experimenting with
 LLM-driven coding agents without giving them direct network or host
 access. A small Rust CLI builds Microsandbox plans for one or more
 agent microVMs and a local LiteLLM proxy; the proxy terminates
@@ -38,8 +38,8 @@ before continuing.
    up legacy per-shell tmpfs dirs from earlier versions, and refreshes
    the `control/agentctl/vendor/microsandbox-filesystem-0.5.6` symlink.
    ```bash
-   git clone <repo-url> ai-workbench
-   cd ai-workbench
+   git clone <repo-url> workestrator
+   cd workestrator
    nix develop
    ```
 2. Verify the workbench layout:
@@ -134,15 +134,22 @@ Once the proxy is up, you can talk to it directly on the host:
 
 ```bash
 # List the configured models (pretty-printed with jq)
-nix develop -c with-secrets -- curl -sS http://127.0.0.1:4000/v1/models \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" | jq
+nix run .#with-secrets -- bash -c \
+  'curl -sS http://127.0.0.1:4000/v1/models \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY"' | jq
 
 # Smoke-test a chat completion (pretty-printed with jq)
-nix develop -c with-secrets -- curl -sS http://127.0.0.1:4000/v1/chat/completions \
+nix run .#with-secrets -- bash -c \
+  'curl -sS http://127.0.0.1:4000/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"chat","messages":[{"role":"user","content":"ping"}]}' | jq
+  -d "{\"model\":\"chat\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
 ```
+
+The `bash -c` wrapper with single quotes is required because `$LITELLM_MASTER_KEY`
+must be expanded by the inner shell (after `with-secrets` has decrypted it into
+the environment), not by the outer shell (where it is unset).  Without this
+wrapper the variable expands to empty and the request fails authentication.
 
 These curls run on the host and reach the proxy at `127.0.0.1:4000`. From
 inside the agent sandboxes, the same proxy is reached at
@@ -221,8 +228,13 @@ Common `just` recipes:
 | Recipe | What it does |
 |---|---|
 | `just check` | Run `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo check` for `control/agentctl` |
+| `just verify` | Full pre-merge gate: `just check` plus `cargo test` and `Cargo.lock` stability check |
+| `just verify-full` | Heaviest validation: `just verify` plus `nix build .#agentctl` |
 | `just build` | Build the `agentctl` binary |
-| `just fmt` | Format the Rust workspace |
+| `just fmt` | Format the Rust code |
+| `just fmt-check` | Check formatting without modifying files |
+| `just clippy` | Run Clippy with `-D warnings` |
+| `just test` | Run unit tests for `control/agentctl` |
 | `just agentctl …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just agentctl litellm plan`) |
 | `just plan` | Run `litellm plan`, `agent plan pi`, and `agent plan odysseus` via `cargo run` |
 | `just host-check` | Verify KVM, Nix, memory, and disk prerequisites |
@@ -230,6 +242,9 @@ Common `just` recipes:
 | `just setup-secrets init` | Run `setup-secrets init` from the dev shell |
 | `just vendor-unlock` | Replace the vendor symlink with a writable copy of the patched Microsandbox crate |
 | `just vendor-lock` | Remove the vendor copy so the dev shell recreates the symlink |
+
+> **Nix note:** New files must be `git add`-ed before `nix build` or `nix develop`
+> will see them. Nix flakes only include git-tracked files in the source tree.
 
 `control/agentctl/vendor/microsandbox-filesystem-0.5.6` is a Nix-managed
 symlink to `${microsandbox-filesystem-patched}` from the flake. The dev

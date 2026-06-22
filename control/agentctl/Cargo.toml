@@ -19,3 +19,16 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"

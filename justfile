@@ -3,11 +3,31 @@ check:
     cargo clippy --manifest-path control/agentctl/Cargo.toml -- -D warnings
     cargo check --manifest-path control/agentctl/Cargo.toml
 
+# Full pre-merge validation: format, lint, compile-check, test, and lock-file stability
+verify: check test
+    git diff --exit-code HEAD -- control/agentctl/Cargo.lock
+
+# Heaviest validation: verify plus Nix build
+verify-full: verify
+    nix build .#agentctl
+
 build:
     cargo build --release --manifest-path control/agentctl/Cargo.toml
 
 fmt:
     cargo fmt --manifest-path control/agentctl/Cargo.toml
+
+# Check formatting without modifying files
+fmt-check:
+    cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
+
+# Run Clippy with -D warnings (standalone)
+clippy:
+    cargo clippy --manifest-path control/agentctl/Cargo.toml -- -D warnings
+
+# Run unit tests
+test:
+    cargo test --manifest-path control/agentctl/Cargo.toml
 
 agentctl *args:
     cargo run --manifest-path control/agentctl/Cargo.toml -- {{args}}
