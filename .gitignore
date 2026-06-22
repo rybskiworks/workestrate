@@ -39,3 +39,6 @@ __pycache__/
 
 # Nix-generated patched crate (symlinked by nix develop)
 control/agentctl/vendor/
+
+# Temporary extraction / download cache
+.tmp/

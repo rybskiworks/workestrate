@@ -16,9 +16,11 @@ pkgs.mkShell {
     agentctl
     cargo
     clippy
+    curl
     decrypt-env
     gcc
     git
+    jq
     just
     libcap_ng
     msb-wrapped

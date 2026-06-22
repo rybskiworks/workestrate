@@ -16,10 +16,10 @@ pub async fn plan(name: AgentName) -> Result<()> {
     Ok(())
 }
 
-pub async fn up(name: AgentName) -> Result<()> {
+pub async fn up(name: AgentName, background: bool) -> Result<()> {
     match name {
-        AgentName::Pi => crate::microsandbox::up_pi().await,
-        AgentName::Odysseus => crate::microsandbox::up_odysseus().await,
+        AgentName::Pi => crate::microsandbox::up_pi(background).await,
+        AgentName::Odysseus => crate::microsandbox::up_odysseus(background).await,
     }
 }
 

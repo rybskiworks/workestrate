@@ -3,9 +3,34 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use microsandbox::{
-    sandbox::{SandboxBuilder, SandboxHandle, SandboxStatus, exec::ExecEvent},
+    sandbox::{exec::ExecEvent, SandboxBuilder, SandboxHandle, SandboxStatus},
     NetworkPolicy, Sandbox,
 };
+
+fn spawn_detached_service(name: &str, args: &[String]) -> Result<std::process::Child> {
+    let exe = std::env::current_exe()?;
+    let log_dir = std::env::var("HOME")
+        .map(PathBuf::from)
+        .expect("HOME not set")
+        .join(".microsandbox/sandboxes")
+        .join(name);
+    std::fs::create_dir_all(&log_dir)?;
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("agentctl.log"))?;
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(log_file.try_clone()?)
+        .stderr(log_file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    Ok(cmd.spawn()?)
+}
 
 fn env_var(name: &str) -> Result<String> {
     std::env::var(name).map_err(|e| anyhow::anyhow!("missing env var {}: {}", name, e))
@@ -448,6 +473,21 @@ pub fn build_odysseus_plan() -> SandboxPlan {
                 value: "false".into(),
                 is_secret: false,
             },
+            EnvVar {
+                key: "DATABASE_URL".into(),
+                value: "sqlite:///app/data/app.db".into(),
+                is_secret: false,
+            },
+            EnvVar {
+                key: "OPENAI_BASE_URL".into(),
+                value: "http://host.microsandbox.internal:4000/v1".into(),
+                is_secret: false,
+            },
+            EnvVar {
+                key: "OPENAI_MODEL".into(),
+                value: "chat".into(),
+                is_secret: false,
+            },
         ],
         secret_env: vec![
             // M1 auth: agents use the LiteLLM master key directly (no virtual keys yet).
@@ -472,6 +512,16 @@ pub fn build_odysseus_plan() -> SandboxPlan {
                 guest: "/app/data".into(),
                 read_only: false,
             },
+            MountPlan {
+                host: "${MSB_HOME}/sandboxes/odysseus/data".into(),
+                guest: "/data".into(),
+                read_only: false,
+            },
+            MountPlan {
+                host: "${MSB_HOME}/sandboxes/odysseus/data/settings.json".into(),
+                guest: "/app/data/settings.json".into(),
+                read_only: true,
+            },
         ],
         network: NetworkPlan {
             default_deny: true,
@@ -485,7 +535,16 @@ pub fn build_odysseus_plan() -> SandboxPlan {
     }
 }
 
-pub async fn up_litellm() -> Result<()> {
+pub async fn up_litellm(background: bool) -> Result<()> {
+    if background {
+        let child = spawn_detached_service("litellm", &["litellm".into(), "up".into()])?;
+        println!(
+            "Sandbox 'litellm' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/litellm/agentctl.log",
+            child.id()
+        );
+        return Ok(());
+    }
+
     require_env_vars(
         "agentctl litellm up",
         &[
@@ -617,7 +676,16 @@ pub async fn down_litellm() -> Result<()> {
     }
 }
 
-pub async fn up_pi() -> Result<()> {
+pub async fn up_pi(background: bool) -> Result<()> {
+    if background {
+        let child = spawn_detached_service("pi", &["agent".into(), "up".into(), "pi".into()])?;
+        println!(
+            "Sandbox 'pi' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/pi/agentctl.log",
+            child.id()
+        );
+        return Ok(());
+    }
+
     require_env_vars("agentctl agent up pi", &["LITELLM_MASTER_KEY"])?;
     let root = crate::config::project_root()?;
     let plan = build_pi_plan();
@@ -671,9 +739,32 @@ pub async fn up_pi() -> Result<()> {
         }
     }
 
-    sandbox.detach().await;
+    // Keep the SDK client alive and stream pi logs in the foreground.
+    // Dropping the handle would tear down the exec session and kill pi.
+    tokio::spawn(async move {
+        while let Some(event) = exec_handle.recv().await {
+            match event {
+                ExecEvent::Stdout(data) => {
+                    eprint!("{}", String::from_utf8_lossy(&data));
+                }
+                ExecEvent::Stderr(data) => {
+                    eprint!("{}", String::from_utf8_lossy(&data));
+                }
+                ExecEvent::Exited { code } => {
+                    eprintln!("pi exited with code {}", code);
+                }
+                ExecEvent::Failed(err) => {
+                    eprintln!("pi failed: {:?}", err);
+                }
+                _ => {}
+            }
+        }
+    });
 
-    println!("Sandbox '{}' started", sandbox_name);
+    println!("Sandbox '{}' started (Ctrl-C to stop)", sandbox_name);
+    tokio::signal::ctrl_c().await?;
+    let _ = sandbox.stop().await;
+    println!("Sandbox '{}' stopped", sandbox_name);
     Ok(())
 }
 
@@ -692,7 +783,44 @@ pub async fn down_pi() -> Result<()> {
     }
 }
 
-pub async fn up_odysseus() -> Result<()> {
+pub async fn up_odysseus(background: bool) -> Result<()> {
+    if background {
+        let child = spawn_detached_service(
+            "odysseus",
+            &["agent".into(), "up".into(), "odysseus".into()],
+        )?;
+        println!(
+            "Sandbox 'odysseus' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/odysseus/agentctl.log",
+            child.id()
+        );
+        return Ok(());
+    }
+
+    let data_dir = std::env::var("HOME")
+        .map(PathBuf::from)
+        .expect("HOME not set")
+        .join(".microsandbox/sandboxes/odysseus/data");
+    std::fs::create_dir_all(&data_dir)?;
+
+    // Odysseus uses `data/settings.json` for per-provider configuration.
+    // For milestone 1 the `${LITELLM_MASTER_KEY}` literal is acceptable
+    // because agentctl injects the real key via `OPENAI_API_KEY`. Odysseus
+    // may need the actual key injected here depending on its implementation.
+    let settings_path = data_dir.join("settings.json");
+    std::fs::write(
+        &settings_path,
+        r#"{
+  "providers": {
+    "litellm": {
+      "base_url": "http://host.microsandbox.internal:4000/v1",
+      "api_key": "${LITELLM_MASTER_KEY}",
+      "model": "chat"
+    }
+  }
+}
+"#,
+    )?;
+
     require_env_vars("agentctl agent up odysseus", &["LITELLM_MASTER_KEY"])?;
     let root = crate::config::project_root()?;
     let plan = build_odysseus_plan();
@@ -700,7 +828,7 @@ pub async fn up_odysseus() -> Result<()> {
 
     let policy = NetworkPolicy::builder()
         .default_deny()
-        .ingress(|i| i.tcp().port(7000).allow_host())
+        .ingress(|i| i.tcp().port(7000).allow_local())
         .egress(|e| e.udp().port(53).allow_host())
         .egress(|e| e.tcp().port(53).allow_host())
         .egress(|e| e.tcp().port(4000).allow_host())
@@ -756,9 +884,32 @@ pub async fn up_odysseus() -> Result<()> {
         }
     }
 
-    sandbox.detach().await;
+    // Keep the SDK client alive and stream odysseus logs in the foreground.
+    // Dropping the handle would tear down the exec session and kill odysseus.
+    tokio::spawn(async move {
+        while let Some(event) = exec_handle.recv().await {
+            match event {
+                ExecEvent::Stdout(data) => {
+                    eprint!("{}", String::from_utf8_lossy(&data));
+                }
+                ExecEvent::Stderr(data) => {
+                    eprint!("{}", String::from_utf8_lossy(&data));
+                }
+                ExecEvent::Exited { code } => {
+                    eprintln!("odysseus exited with code {}", code);
+                }
+                ExecEvent::Failed(err) => {
+                    eprintln!("odysseus failed: {:?}", err);
+                }
+                _ => {}
+            }
+        }
+    });
 
-    println!("Sandbox '{}' started", sandbox_name);
+    println!("Sandbox '{}' started (Ctrl-C to stop)", sandbox_name);
+    tokio::signal::ctrl_c().await?;
+    let _ = sandbox.stop().await;
+    println!("Sandbox '{}' stopped", sandbox_name);
     Ok(())
 }
 

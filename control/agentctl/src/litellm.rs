@@ -6,8 +6,8 @@ pub async fn plan() -> Result<()> {
     Ok(())
 }
 
-pub async fn up() -> Result<()> {
-    crate::microsandbox::up_litellm().await
+pub async fn up(background: bool) -> Result<()> {
+    crate::microsandbox::up_litellm(background).await
 }
 
 pub async fn down() -> Result<()> {

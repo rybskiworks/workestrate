@@ -38,7 +38,10 @@ enum LitellmAction {
     /// Print the planned LiteLLM sandbox workload
     Plan,
     /// Start the LiteLLM sandbox
-    Up,
+    Up {
+        #[arg(short, long)]
+        background: bool,
+    },
     /// Stop and remove the LiteLLM sandbox
     Down,
 }
@@ -48,7 +51,11 @@ enum AgentAction {
     /// Print the planned agent sandbox workload
     Plan { name: AgentName },
     /// Start the agent sandbox
-    Up { name: AgentName },
+    Up {
+        name: AgentName,
+        #[arg(short, long)]
+        background: bool,
+    },
     /// Stop and remove the agent sandbox
     Down { name: AgentName },
 }
@@ -77,12 +84,12 @@ async fn main() -> Result<()> {
         Commands::Check => cmd_check().await,
         Commands::Litellm { action } => match action {
             LitellmAction::Plan => litellm::plan().await,
-            LitellmAction::Up => litellm::up().await,
+            LitellmAction::Up { background } => litellm::up(background).await,
             LitellmAction::Down => litellm::down().await,
         },
         Commands::Agent { action } => match action {
             AgentAction::Plan { name } => agents::plan(name).await,
-            AgentAction::Up { name } => agents::up(name).await,
+            AgentAction::Up { name, background } => agents::up(name, background).await,
             AgentAction::Down { name } => agents::down(name).await,
         },
     }

@@ -4,22 +4,17 @@
 # provider prefix for Kimi and MiniMax because both upstreams speak the
 # Anthropic Messages API. Do not change them to native LiteLLM provider
 # names (e.g. `openai/`, `minimax/`) — that would break message routing.
+#
+# Client-facing models are exposed as role-based names (`chat`, `coding`,
+# `reasoning`). Each role has an internal fallback model used by
+# `router_settings.fallbacks` when the primary upstream is unavailable.
 model_list:
-  - model_name: openrouter-gpt-4o
+  - model_name: chat
     litellm_params:
       model: openrouter/openai/gpt-4o
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: kimi-for-coding
-    litellm_params:
-      # User-provided endpoint: https://api.kimi.com/coding is
-      # Anthropic-Messages-API compatible, so we route through the
-      # `anthropic/` provider and point it at that base URL.
-      model: anthropic/kimi-for-coding
-      api_base: https://api.kimi.com/coding
-      api_key: os.environ/KIMI_CODE_API_KEY
-
-  - model_name: minimax-coding
+  - model_name: chat-fallback
     litellm_params:
       # User-provided endpoint: https://api.minimax.io/anthropic is
       # Anthropic-Messages-API compatible. LiteLLM's native `minimax/`
@@ -29,18 +24,48 @@ model_list:
       api_base: https://api.minimax.io/anthropic
       api_key: os.environ/MINIMAX_CODING_API_KEY
 
-  - model_name: inception-mercury-2
+  - model_name: coding
+    litellm_params:
+      # User-provided endpoint: https://api.kimi.com/coding is
+      # Anthropic-Messages-API compatible, so we route through the
+      # `anthropic/` provider and point it at that base URL.
+      model: anthropic/kimi-for-coding
+      api_base: https://api.kimi.com/coding
+      api_key: os.environ/KIMI_CODE_API_KEY
+
+  - model_name: coding-fallback
+    litellm_params:
+      # User-provided endpoint: https://api.minimax.io/anthropic is
+      # Anthropic-Messages-API compatible. LiteLLM's native `minimax/`
+      # provider is OpenAI-compatible and would not match this upstream,
+      # so we route through the `anthropic/` provider instead.
+      model: anthropic/MiniMax-M3
+      api_base: https://api.minimax.io/anthropic
+      api_key: os.environ/MINIMAX_CODING_API_KEY
+
+  - model_name: reasoning
     litellm_params:
       model: inception/mercury-2
       api_base: https://api.inceptionlabs.ai/v1
       api_key: os.environ/INCEPTION_API_KEY
+
+  - model_name: reasoning-fallback
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   # `default_model` is not a valid LiteLLM key. Use `completion_model` instead
   # to set the default model for the `/v1/chat/completions` endpoint when a
   # client does not specify one.
-  completion_model: minimax-coding
+  completion_model: chat
+
+router_settings:
+  fallbacks:
+    - chat: [chat-fallback]
+    - coding: [coding-fallback]
+    - reasoning: [reasoning-fallback]
 
 # Drop unsupported params per provider instead of erroring out. Some upstream
 # providers reject fields the Anthropic/OpenAI spec does not define; `drop_params`

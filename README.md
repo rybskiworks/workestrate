@@ -124,33 +124,40 @@ nix run . -- litellm plan        # show the sandbox plan without secrets
 Once the proxy is up, you can talk to it directly on the host:
 
 ```bash
-# List the four configured models
-nix develop -c with-secrets -- curl -sS http://127.0.0.1:4000/v1/models -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+# List the configured models (pretty-printed with jq)
+nix develop -c with-secrets -- curl -sS http://127.0.0.1:4000/v1/models \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" | jq
 
-# Smoke-test a chat completion
+# Smoke-test a chat completion (pretty-printed with jq)
 nix develop -c with-secrets -- curl -sS http://127.0.0.1:4000/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"minimax-coding","messages":[{"role":"user","content":"ping"}]}'
+  -d '{"model":"chat","messages":[{"role":"user","content":"ping"}]}' | jq
 ```
 
 These curls run on the host and reach the proxy at `127.0.0.1:4000`. From
 inside the agent sandboxes, the same proxy is reached at
 `http://host.microsandbox.internal:4000`.
 
-The proxy is configured by `infra/litellm/config.yaml` and exposes:
+The proxy is configured by `infra/litellm/config.yaml` and exposes role-based
+model names. Each role maps to a primary upstream and a fallback alias:
 
-| Model name | Upstream | Provider routing | Why |
-|---|---|---|---|
-| `openrouter-gpt-4o` | `openrouter/openai/gpt-4o` | OpenRouter | Generic OpenAI-compatible routing |
-| `kimi-for-coding` | `anthropic/kimi-for-coding` at `https://api.kimi.com/coding` | Anthropic | Endpoint speaks the Anthropic Messages API |
-| `minimax-coding` | `anthropic/MiniMax-M3` at `https://api.minimax.io/anthropic` | Anthropic | Endpoint speaks the Anthropic Messages API |
-| `inception-mercury-2` | `inception/mercury-2` at `https://api.inceptionlabs.ai/v1` | OpenAI | Inception's native OpenAI-compatible API |
+| Role | Primary upstream | Fallback |
+|---|---|---|
+| `chat` | `openrouter/openai/gpt-4o` | `chat-fallback` |
+| `coding` | `anthropic/kimi-for-coding` at `https://api.kimi.com/coding` | `coding-fallback` |
+| `reasoning` | `inception/mercury-2` at `https://api.inceptionlabs.ai/v1` | `reasoning-fallback` |
+
+| Fallback alias | Upstream |
+|---|---|
+| `chat-fallback` | `anthropic/MiniMax-M3` at `https://api.minimax.io/anthropic` |
+| `coding-fallback` | `anthropic/MiniMax-M3` at `https://api.minimax.io/anthropic` |
+| `reasoning-fallback` | `openrouter/openai/gpt-4o` |
 
 Kimi and MiniMax are routed through the `anthropic/` provider because
 their endpoints speak the Anthropic Messages API, not OpenAI's.
 `general_settings.master_key` reads `os.environ/LITELLM_MASTER_KEY`,
-`general_settings.completion_model` is `minimax-coding`, and
+`general_settings.completion_model` is `chat`, and
 `litellm_settings.drop_params` is `true`.
 
 Egress is locked down to DNS (`tcp/53` and `udp/53`) to the host
