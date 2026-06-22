@@ -309,6 +309,10 @@ pub fn build_litellm_plan() -> SandboxPlan {
                 value: "4000".into(),
                 is_secret: false,
             },
+            // LiteLLM normally fetches its cost map from the LiteLLM GitHub
+            // repo on startup, which requires outbound egress to github.com
+            // and slows boot. The bundled local map (shipped in the image) is
+            // sufficient for our model set, so we skip the fetch.
             EnvVar {
                 key: "LITELLM_LOCAL_MODEL_COST_MAP".into(),
                 value: "True".into(),
@@ -535,6 +539,86 @@ pub fn build_odysseus_plan() -> SandboxPlan {
     }
 }
 
+/// Start `exec_program` with `exec_args` inside `sandbox`, stream its logs to
+/// stderr, and block until Ctrl-C — then stop the sandbox.
+///
+/// This is the shared foreground path used by `up_litellm`, `up_pi`, and
+/// `up_odysseus`. The service label is used in user-facing messages
+/// (e.g. "litellm", "pi", "odysseus").
+async fn run_service_foreground(
+    sandbox: &Sandbox,
+    sandbox_name: &str,
+    service_label: &str,
+    exec_program: &str,
+    exec_args: Vec<String>,
+    log_stop_errors: bool,
+) -> Result<()> {
+    let mut exec_handle = sandbox
+        .exec_stream(exec_program, exec_args)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start {} process: {}", service_label, e))?;
+
+    match exec_handle.recv().await {
+        Some(ExecEvent::Started { pid }) => {
+            eprintln!("{} process started (guest PID {})", service_label, pid);
+        }
+        Some(ExecEvent::Failed(err)) => {
+            let _ = sandbox.stop().await;
+            return Err(anyhow::anyhow!(
+                "{} process failed to start: {:?}",
+                service_label,
+                err
+            ));
+        }
+        other => {
+            let _ = sandbox.stop().await;
+            return Err(anyhow::anyhow!(
+                "unexpected exec event waiting for {} start: {:?}",
+                service_label,
+                other
+            ));
+        }
+    }
+
+    // The ExecHandle must outlive `sandbox` for the streaming session to stay
+    // open, so we move it into a background task. We intentionally do NOT use
+    // `Sandbox::detach()` here: the foreground path wants a clean stop on
+    // Ctrl-C, not a fire-and-forget background sandbox whose process group
+    // outlives this CLI invocation.
+    let drain_service = service_label.to_string();
+    tokio::spawn(async move {
+        while let Some(event) = exec_handle.recv().await {
+            match event {
+                ExecEvent::Stdout(data) => {
+                    eprint!("{}", String::from_utf8_lossy(&data));
+                }
+                ExecEvent::Stderr(data) => {
+                    eprint!("{}", String::from_utf8_lossy(&data));
+                }
+                ExecEvent::Exited { code } => {
+                    eprintln!("{} exited with code {}", drain_service, code);
+                }
+                ExecEvent::Failed(err) => {
+                    eprintln!("{} failed: {:?}", drain_service, err);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    println!("Sandbox '{}' started (Ctrl-C to stop)", sandbox_name);
+    tokio::signal::ctrl_c().await?;
+    if log_stop_errors {
+        if let Err(e) = sandbox.stop().await {
+            eprintln!("failed to stop sandbox '{}': {}", sandbox_name, e);
+        }
+    } else {
+        let _ = sandbox.stop().await;
+    }
+    println!("Sandbox '{}' stopped", sandbox_name);
+    Ok(())
+}
+
 pub async fn up_litellm(background: bool) -> Result<()> {
     if background {
         let child = spawn_detached_service("litellm", &["litellm".into(), "up".into()])?;
@@ -567,6 +651,11 @@ pub async fn up_litellm(background: bool) -> Result<()> {
 
     // NOTE: This policy must stay in sync with `build_litellm_plan().network`.
     //       If you change one, change the other.
+    //
+    // SDK policy builder note: `allow_host()` whitelists a single DNS name
+    // resolved by the relay, while `allow_local()` expands to Loopback,
+    // LinkLocal, and Host (the latter includes the microsandbox host bridge,
+    // needed for service-to-service traffic on `host.microsandbox.internal`).
     let policy = NetworkPolicy::builder()
         .default_deny()
         .ingress(|i| i.tcp().port(4000).allow_local())
@@ -599,66 +688,20 @@ pub async fn up_litellm(background: bool) -> Result<()> {
     let sandbox = builder.replace().create().await?;
     let sandbox_name = sandbox.name().to_string();
 
-    let mut exec_handle = sandbox
-        .exec_stream(
-            "/app/.venv/bin/litellm",
-            vec![
-                "--config".to_string(),
-                "/app/config.yaml".to_string(),
-                "--host".to_string(),
-                "0.0.0.0".to_string(),
-            ],
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to start litellm process: {}", e))?;
-
-    match exec_handle.recv().await {
-        Some(ExecEvent::Started { pid }) => {
-            eprintln!("litellm process started (guest PID {})", pid);
-        }
-        Some(ExecEvent::Failed(err)) => {
-            let _ = sandbox.stop().await;
-            return Err(anyhow::anyhow!(
-                "litellm process failed to start: {:?}", err
-            ));
-        }
-        other => {
-            let _ = sandbox.stop().await;
-            return Err(anyhow::anyhow!(
-                "unexpected exec event waiting for litellm start: {:?}", other
-            ));
-        }
-    }
-
-    // Keep the SDK client alive and stream LiteLLM logs in the foreground.
-    // Dropping the handle would tear down the exec session and kill LiteLLM.
-    tokio::spawn(async move {
-        while let Some(event) = exec_handle.recv().await {
-            match event {
-                ExecEvent::Stdout(data) => {
-                    eprint!("{}", String::from_utf8_lossy(&data));
-                }
-                ExecEvent::Stderr(data) => {
-                    eprint!("{}", String::from_utf8_lossy(&data));
-                }
-                ExecEvent::Exited { code } => {
-                    eprintln!("litellm exited with code {}", code);
-                }
-                ExecEvent::Failed(err) => {
-                    eprintln!("litellm failed: {:?}", err);
-                }
-                _ => {}
-            }
-        }
-    });
-
-    println!("Sandbox '{}' started (Ctrl-C to stop)", sandbox_name);
-    tokio::signal::ctrl_c().await?;
-    if let Err(e) = sandbox.stop().await {
-        eprintln!("failed to stop sandbox '{}': {}", sandbox_name, e);
-    }
-    println!("Sandbox '{}' stopped", sandbox_name);
-    Ok(())
+    run_service_foreground(
+        &sandbox,
+        &sandbox_name,
+        "litellm",
+        "/app/.venv/bin/litellm",
+        vec![
+            "--config".to_string(),
+            "/app/config.yaml".to_string(),
+            "--host".to_string(),
+            "0.0.0.0".to_string(),
+        ],
+        true,
+    )
+    .await
 }
 
 pub async fn down_litellm() -> Result<()> {
@@ -716,56 +759,15 @@ pub async fn up_pi(background: bool) -> Result<()> {
     let sandbox = builder.replace().create().await?;
     let sandbox_name = sandbox.name().to_string();
 
-    let mut exec_handle = sandbox
-        .exec_stream("pi", vec!["--mode".to_string(), "rpc".to_string()])
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to start pi process: {}", e))?;
-
-    match exec_handle.recv().await {
-        Some(ExecEvent::Started { pid }) => {
-            eprintln!("pi process started (guest PID {})", pid);
-        }
-        Some(ExecEvent::Failed(err)) => {
-            let _ = sandbox.stop().await;
-            return Err(anyhow::anyhow!(
-                "pi process failed to start: {:?}", err
-            ));
-        }
-        other => {
-            let _ = sandbox.stop().await;
-            return Err(anyhow::anyhow!(
-                "unexpected exec event waiting for pi start: {:?}", other
-            ));
-        }
-    }
-
-    // Keep the SDK client alive and stream pi logs in the foreground.
-    // Dropping the handle would tear down the exec session and kill pi.
-    tokio::spawn(async move {
-        while let Some(event) = exec_handle.recv().await {
-            match event {
-                ExecEvent::Stdout(data) => {
-                    eprint!("{}", String::from_utf8_lossy(&data));
-                }
-                ExecEvent::Stderr(data) => {
-                    eprint!("{}", String::from_utf8_lossy(&data));
-                }
-                ExecEvent::Exited { code } => {
-                    eprintln!("pi exited with code {}", code);
-                }
-                ExecEvent::Failed(err) => {
-                    eprintln!("pi failed: {:?}", err);
-                }
-                _ => {}
-            }
-        }
-    });
-
-    println!("Sandbox '{}' started (Ctrl-C to stop)", sandbox_name);
-    tokio::signal::ctrl_c().await?;
-    let _ = sandbox.stop().await;
-    println!("Sandbox '{}' stopped", sandbox_name);
-    Ok(())
+    run_service_foreground(
+        &sandbox,
+        &sandbox_name,
+        "pi",
+        "pi",
+        vec!["--mode".to_string(), "rpc".to_string()],
+        false,
+    )
+    .await
 }
 
 pub async fn down_pi() -> Result<()> {
@@ -852,65 +854,21 @@ pub async fn up_odysseus(background: bool) -> Result<()> {
     let sandbox = builder.replace().create().await?;
     let sandbox_name = sandbox.name().to_string();
 
-    let mut exec_handle = sandbox
-        .exec_stream(
-            "uvicorn",
-            vec![
-                "app:app".to_string(),
-                "--host".to_string(),
-                "0.0.0.0".to_string(),
-                "--port".to_string(),
-                "7000".to_string(),
-            ],
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to start odysseus process: {}", e))?;
-
-    match exec_handle.recv().await {
-        Some(ExecEvent::Started { pid }) => {
-            eprintln!("odysseus process started (guest PID {})", pid);
-        }
-        Some(ExecEvent::Failed(err)) => {
-            let _ = sandbox.stop().await;
-            return Err(anyhow::anyhow!(
-                "odysseus process failed to start: {:?}", err
-            ));
-        }
-        other => {
-            let _ = sandbox.stop().await;
-            return Err(anyhow::anyhow!(
-                "unexpected exec event waiting for odysseus start: {:?}", other
-            ));
-        }
-    }
-
-    // Keep the SDK client alive and stream odysseus logs in the foreground.
-    // Dropping the handle would tear down the exec session and kill odysseus.
-    tokio::spawn(async move {
-        while let Some(event) = exec_handle.recv().await {
-            match event {
-                ExecEvent::Stdout(data) => {
-                    eprint!("{}", String::from_utf8_lossy(&data));
-                }
-                ExecEvent::Stderr(data) => {
-                    eprint!("{}", String::from_utf8_lossy(&data));
-                }
-                ExecEvent::Exited { code } => {
-                    eprintln!("odysseus exited with code {}", code);
-                }
-                ExecEvent::Failed(err) => {
-                    eprintln!("odysseus failed: {:?}", err);
-                }
-                _ => {}
-            }
-        }
-    });
-
-    println!("Sandbox '{}' started (Ctrl-C to stop)", sandbox_name);
-    tokio::signal::ctrl_c().await?;
-    let _ = sandbox.stop().await;
-    println!("Sandbox '{}' stopped", sandbox_name);
-    Ok(())
+    run_service_foreground(
+        &sandbox,
+        &sandbox_name,
+        "odysseus",
+        "uvicorn",
+        vec![
+            "app:app".to_string(),
+            "--host".to_string(),
+            "0.0.0.0".to_string(),
+            "--port".to_string(),
+            "7000".to_string(),
+        ],
+        false,
+    )
+    .await
 }
 
 pub async fn down_odysseus() -> Result<()> {
