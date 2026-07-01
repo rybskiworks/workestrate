@@ -1,5 +1,5 @@
 {
-  description = "ai-workbench — local AI workbench for Pi/Odysseus through Microsandbox + LiteLLM";
+  description = "ai-workbench — local AI workbench for Pi/Odysseus/OpenCode through Microsandbox + LiteLLM";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -13,15 +13,22 @@
       url = "github:georgrybski/odysseus";
       flake = false;
     };
+
+    opencode = {
+      url = "github:georgrybski/opencode";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, pi, odysseus, ... }:
+  outputs = { self, nixpkgs, pi, odysseus, opencode, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {};
       microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix {};
-      agentctl = pkgs.callPackage ./nix/packages/agentctl.nix { inherit microsandbox microsandbox-filesystem-patched pi odysseus; };
+      agentctl = pkgs.callPackage ./nix/packages/agentctl.nix {
+        inherit microsandbox microsandbox-filesystem-patched;
+      };
 
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
       # and other runtime commands look in ~/.microsandbox (where agentctl
@@ -175,7 +182,8 @@
       };
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
-        inherit pkgs microsandbox microsandbox-filesystem-patched agentctl msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+        inherit pkgs microsandbox microsandbox-filesystem-patched agentctl msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets
+          pi odysseus opencode;
       };
 
       packages.${system} = {

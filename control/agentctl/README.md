@@ -8,12 +8,12 @@ Control plane CLI for the AI workbench.
 - `agentctl litellm plan` — print LiteLLM sandbox plan
 - `agentctl litellm up` — start the LiteLLM sandbox (M2: requires KVM)
 - `agentctl litellm down` — stop and remove the LiteLLM sandbox
-- `agentctl agent plan pi` — print Pi sandbox plan
-- `agentctl agent plan odysseus` — print Odysseus sandbox plan
-- `agentctl agent up pi` — start the Pi sandbox (M2: requires KVM)
-- `agentctl agent down pi` — stop and remove the Pi sandbox
-- `agentctl agent up odysseus` — start the Odysseus sandbox (M2: requires KVM)
-- `agentctl agent down odysseus` — stop and remove the Odysseus sandbox
+- `agentctl pi plan` — print Pi sandbox plan
+- `agentctl odysseus plan` — print Odysseus sandbox plan
+- `agentctl pi up` — start the Pi sandbox (M2: requires KVM)
+- `agentctl pi down` — stop and remove the Pi sandbox
+- `agentctl odysseus up` — start the Odysseus sandbox (M2: requires KVM)
+- `agentctl odysseus down` — stop and remove the Odysseus sandbox
 
 ## Build
 

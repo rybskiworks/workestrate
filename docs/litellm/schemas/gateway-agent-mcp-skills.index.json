@@ -1,0 +1,184 @@
+{
+  "schema_version": "1.0",
+  "upstream_sources": [
+    "https://docs.litellm.ai/docs/mcp",
+    "https://docs.litellm.ai/docs/skills",
+    "https://docs.litellm.ai/docs/a2a",
+    "https://docs.litellm.ai/docs/proxy/config_settings",
+    "https://docs.litellm.ai/docs/skills_gateway",
+    "https://docs.litellm.ai/docs/mcp_rest_api"
+  ],
+  "gateway_types": {
+    "mcp": {
+      "concept": "MCP (Model Context Protocol) Gateway — LiteLLM proxy exposes configured MCP servers and routes tool calls to them. Clients invoke MCP tools via /v1/chat/completions, /v1/responses (with server_url: \"litellm_proxy\"), or the direct /mcp-rest/tools/* REST API.",
+      "config_section": "Top-level `mcp_servers:` block in config.yaml (sibling to model_list). Aliases under `litellm_settings.mcp_aliases`. DB-storage toggles under `general_settings` (store_model_in_db, supported_db_objects, mcp_* keys). NOT under router_settings.",
+      "config_keys": [
+        {"full_path": "mcp_servers.<name>.url", "type": "string", "purpose": "MCP server URL (http/sse transports)", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.transport", "type": "string (sse|http|stdio)", "purpose": "Transport; defaults to sse", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.command", "type": "string", "purpose": "Required for stdio transport (launch command)", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.args", "type": "list[string]", "purpose": "Optional args for stdio", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.env", "type": "map[string,string]", "purpose": "Optional env vars for stdio process", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.description", "type": "string", "purpose": "Optional human description", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.auth_type", "type": "string (none|api_key|bearer_token|basic|authorization|token|oauth2|oauth2_token_exchange|aws_sigv4)", "purpose": "Auth scheme for upstream MCP server", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.auth_value", "type": "string", "purpose": "Credential value for auth_type", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.extra_headers", "type": "list[string]", "purpose": "Header names forwarded from client to MCP server", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.static_headers", "type": "map[string,string]", "purpose": "Static header key/value pairs sent to MCP server", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.spec_version", "type": "string", "purpose": "MCP spec version; defaults to 2025-06-18", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.allow_all_keys", "type": "boolean", "purpose": "Allow all keys (documented key)", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.authorization_url", "type": "string", "purpose": "OAuth override", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.token_url", "type": "string", "purpose": "OAuth override", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.registration_url", "type": "string", "purpose": "OAuth override", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.client_id", "type": "string", "purpose": "OAuth client id", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.client_secret", "type": "string", "purpose": "OAuth client secret", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.scopes", "type": "list[string]", "purpose": "OAuth scopes", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.aws_role_name", "type": "string", "purpose": "SigV4 IAM role to assume", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.aws_access_key_id", "type": "string", "purpose": "SigV4 access key", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.aws_secret_access_key", "type": "string", "purpose": "SigV4 secret key", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.aws_region_name", "type": "string", "purpose": "SigV4 region", "requires_db": false},
+        {"full_path": "mcp_servers.<name>.aws_service_name", "type": "string", "purpose": "SigV4 service; defaults to bedrock-agentcore", "requires_db": false},
+        {"full_path": "litellm_settings.mcp_aliases", "type": "dict[alias->server_name]", "purpose": "Map friendly aliases to MCP server names; only first alias per server used", "requires_db": false},
+        {"full_path": "general_settings.store_model_in_db", "type": "boolean", "purpose": "Enables DB storage of MCP servers (and other objects)", "requires_db": true},
+        {"full_path": "general_settings.supported_db_objects", "type": "list[string] e.g. [\"mcp\"]", "purpose": "Restricts DB storage to specific object types", "requires_db": true},
+        {"full_path": "general_settings.mcp_client_side_auth_header_name", "type": "string", "purpose": "Overrides default x-mcp-auth client-side auth header name", "requires_db": false},
+        {"full_path": "general_settings.enable_mcp_registry", "type": "boolean", "purpose": "Enable MCP registry (documented in config_settings reference)", "requires_db": "not documented in fetched source (inferred: registry implies persistence)"},
+        {"full_path": "general_settings.user_mcp_management_mode", "type": "string (restricted|view_all)", "purpose": "User MCP management mode", "requires_db": "not documented in fetched source (inferred: management implies DB)"},
+        {"full_path": "general_settings.mcp_internal_ip_ranges", "type": "list", "purpose": "Allowed internal IP ranges for MCP servers (SSRF guard)", "requires_db": false},
+        {"full_path": "general_settings.mcp_required_fields", "type": "list", "purpose": "Required fields for MCP server registration", "requires_db": "not documented in fetched source"},
+        {"full_path": "general_settings.mcp_trusted_proxy_ranges", "type": "list", "purpose": "Trusted proxy ranges for MCP", "requires_db": false},
+        {"full_path": "general_settings.require_end_user_mcp_access_defined", "type": "boolean", "purpose": "Require end-user MCP access to be explicitly defined", "requires_db": "not documented in fetched source (inferred: per-user access implies DB/virtual keys)"}
+      ],
+      "auth_types": [
+        "none",
+        "api_key",
+        "bearer_token",
+        "basic",
+        "authorization",
+        "token",
+        "oauth2",
+        "oauth2_token_exchange",
+        "aws_sigv4"
+      ],
+      "auth_types_note": "Verbatim from /docs/mcp auth_type table. The legacy broadcast header `x-mcp-auth` is DEPRECATED in favor of server-specific auth headers (auth_type/auth_value per mcp_servers entry). Override the client-side header name via general_settings.mcp_client_side_auth_header_name.",
+      "management_endpoints": [
+        {"path": "/mcp-rest/tools/list", "method": "GET", "purpose": "Direct REST API for listing MCP tools via curl without an LLM", "requires_db": "not documented on /docs/mcp_rest_api (verbatim negative finding — DB not mentioned on runtime REST API page)", "source_url": "https://docs.litellm.ai/docs/mcp_rest_api"},
+        {"path": "/mcp-rest/tools/call", "method": "POST", "purpose": "Direct REST API for calling MCP tools without an LLM", "requires_db": "not documented on /docs/mcp_rest_api (verbatim negative finding — DB not mentioned on runtime REST API page)", "source_url": "https://docs.litellm.ai/docs/mcp_rest_api"},
+        {"path": "/v1/mcp/server", "method": "GET", "purpose": "List MCP servers (get server_id / server_name) — read-only discovery", "requires_db": "not documented on /docs/mcp_rest_api (verbatim negative finding)", "source_url": "https://docs.litellm.ai/docs/mcp_rest_api"},
+        {"path": "/.well-known/oauth-protected-resource", "method": "GET", "purpose": "Resource metadata endpoint for OAuth discovery", "requires_db": false},
+        {"path": "/.well-known/oauth-authorization-server", "method": "GET", "purpose": "OAuth server metadata endpoint", "requires_db": false}
+      ],
+      "management_endpoints_note": "Runtime REST surface CONFIRMED verbatim on /docs/mcp_rest_api: GET /v1/mcp/server (read-only server discovery), GET /mcp-rest/tools/list, POST /mcp-rest/tools/call. These are separate from the JSON-RPC MCP transport at /mcp or /{server_name}/mcp. CRUD management endpoints (POST/PUT/PATCH/DELETE /mcp or /mcp/{id}) are NOT documented on /docs/mcp_rest_api (verbatim negative finding) — that page is a runtime tool-calling reference, not a management CRUD surface. store_model_in_db and the DB requirement for runtime-added MCP servers are documented on the sibling /docs/mcp Overview page (see p2-gateway-mcp.md), NOT on /docs/mcp_rest_api.",
+      "runtime_endpoints": [
+        {"path": "/v1/chat/completions", "method": "POST", "purpose": "LLM endpoint that consumes MCP tools (provider-agnostic)", "requires_db": false},
+        {"path": "/v1/responses", "method": "POST", "purpose": "LLM endpoint consuming MCP tools via server_url: \"litellm_proxy\" (literal value required, NOT the full proxy URL)", "requires_db": false}
+      ],
+      "tracing": "MCP tool calls routed through /v1/responses and /v1/chat/completions go through LiteLLM logging/callbacks. See /docs/mcp_troubleshoot. Trace ID propagation via X-LiteLLM-Trace-Id header is documented on the A2A page (cross-feature).",
+      "permissions": "Per-key/team MCP access control documented on /docs/mcp_control (MCP Permission Management) — deferred. general_settings.require_end_user_mcp_access_defined and user_mcp_management_mode govern user-level access. Per-key permissions require DB (virtual keys).",
+      "cost_tracking": "Documented on /docs/mcp_cost (MCP Cost Tracking) — deferred. Cost tracking generally requires DB (spend logs). general_settings.disable_spend_logs=true disables spend log writes.",
+      "budget_iteration_controls": "Not documented on the /docs/mcp Overview page. Iteration budgets are documented for A2A agents (/docs/a2a_iteration_budgets), not MCP. Marked: not documented in fetched source for MCP.",
+      "db_requirements": "Static mcp_servers config (in config.yaml mcp_servers: block) works WITHOUT a DB. Runtime-added servers (via management API) need general_settings.store_model_in_db=true. Fine-grained control via supported_db_objects: [\"mcp\"]. mcp_aliases and mcp_client_side_auth_header_name work without DB.",
+      "enterprise_requirements": "Not documented on the /docs/mcp Overview page. Enterprise features advertised in footer card only.",
+      "deprecations": ["x-mcp-auth (legacy broadcast client-side auth header) — DEPRECATED in favor of server-specific auth headers"],
+      "source_urls": [
+        "https://docs.litellm.ai/docs/mcp",
+        "https://docs.litellm.ai/docs/mcp_rest_api",
+        "https://docs.litellm.ai/docs/proxy/config_settings"
+      ]
+    },
+    "skills": {
+      "concept": "Skills Gateway — LiteLLM proxy exposes Anthropic-compatible /v1/skills endpoints for creating, managing, and using reusable Claude skills (SKILL.md format). LiteLLM follows the Anthropic Skills API. Sibling /docs/skills_gateway page documents the central registry (POST /claude-code/plugins, GET /public/skill_hub) — deferred from upstream extraction.",
+      "config_section": "No `skills:` or `litellm_settings.skills` config block documented on /docs/skills. Skills are managed via /v1/skills REST endpoints. Model-based routing uses standard model_list entries with anthropic models.",
+      "config_keys": [
+        {"full_path": "model_list[].model_name", "type": "string", "purpose": "Model group name (e.g. claude-sonnet, claude-team-a)", "requires_db": false},
+        {"full_path": "model_list[].litellm_params.model", "type": "string", "purpose": "Provider model string e.g. anthropic/claude-3-5-sonnet-20241022", "requires_db": false},
+        {"full_path": "model_list[].litellm_params.api_key", "type": "string (os.environ/VAR supported)", "purpose": "Anthropic API key (per-account for multi-account routing)", "requires_db": false},
+        {"full_path": "SKILL.md frontmatter.name", "type": "string", "purpose": "Required; lowercase, numbers, hyphens only; MUST match directory name", "requires_db": false},
+        {"full_path": "SKILL.md frontmatter.description", "type": "string", "purpose": "Required; brief description of skill", "requires_db": false},
+        {"full_path": "SKILL.md frontmatter.license", "type": "string e.g. MIT, Apache-2.0", "purpose": "Optional license identifier", "requires_db": false},
+        {"full_path": "SKILL.md frontmatter.allowed-tools", "type": "list[string]", "purpose": "Optional list of Claude tool identifiers (e.g. computer_20250124, text_editor_20250124)", "requires_db": false},
+        {"full_path": "SKILL.md frontmatter.metadata", "type": "map", "purpose": "Optional additional custom metadata", "requires_db": false}
+      ],
+      "auth_types": ["api_key (X-Api-Key header)", "model-based routing (per-account ANTHROPIC_API_KEY)"],
+      "auth_types_note": "Skills endpoints use Anthropic-style auth: X-Api-Key header OR model-based routing via model_list with anthropic models. No mcp-style auth_type enum.",
+      "management_endpoints": [
+        {"path": "/v1/skills", "method": "POST", "purpose": "Create a skill (upload ZIP or SKILL.md multipart form); requires ?beta=true query param", "requires_db": "not documented on /docs/skills (inferred: persistence likely needs DB)"},
+        {"path": "/v1/skills", "method": "GET", "purpose": "List skills (supports limit query param; SDK uses limit=20); requires ?beta=true", "requires_db": "not documented on /docs/skills (inferred: persistence likely needs DB)"},
+        {"path": "/v1/skills/{skill_id}", "method": "GET", "purpose": "Get a single skill's details; requires ?beta=true", "requires_db": "not documented on /docs/skills"},
+        {"path": "/v1/skills/{skill_id}", "method": "DELETE", "purpose": "Delete a skill (only when no versions exist); requires ?beta=true", "requires_db": "not documented on /docs/skills"},
+        {"path": "/claude-code/plugins", "method": "POST", "purpose": "Register a skill (Skills Gateway central registry)", "requires_db": "not documented on /docs/skills_gateway (verbatim negative finding)", "source_url": "https://docs.litellm.ai/docs/skills_gateway"},
+        {"path": "/claude-code/plugins", "method": "GET", "purpose": "List all skills (admin)", "requires_db": "not documented on /docs/skills_gateway (verbatim negative finding)", "source_url": "https://docs.litellm.ai/docs/skills_gateway"},
+        {"path": "/claude-code/plugins/{name}/enable", "method": "POST", "purpose": "Publish a skill (make public)", "requires_db": "not documented on /docs/skills_gateway (verbatim negative finding)", "source_url": "https://docs.litellm.ai/docs/skills_gateway"},
+        {"path": "/claude-code/plugins/{name}/disable", "method": "POST", "purpose": "Unpublish a skill", "requires_db": "not documented on /docs/skills_gateway (verbatim negative finding)", "source_url": "https://docs.litellm.ai/docs/skills_gateway"},
+        {"path": "/public/skill_hub", "method": "GET", "purpose": "List public skills (no auth required)", "requires_db": "not documented on /docs/skills_gateway (verbatim negative finding)", "source_url": "https://docs.litellm.ai/docs/skills_gateway"},
+        {"path": "/claude-code/marketplace.json", "method": "GET", "purpose": "Claude Code marketplace manifest (no auth required)", "requires_db": "not documented on /docs/skills_gateway (verbatim negative finding)", "source_url": "https://docs.litellm.ai/docs/skills_gateway"}
+      ],
+      "management_endpoints_note": "Six Skills Gateway central-registry endpoints CONFIRMED verbatim upstream on /docs/skills_gateway (POST/GET /claude-code/plugins, POST /claude-code/plugins/{name}/enable|disable, GET /public/skill_hub, GET /claude-code/marketplace.json). Auth: Authorization: Bearer $LITELLM_KEY required for /claude-code/plugins*; None for /public/skill_hub and /claude-code/marketplace.json. DB/persistence requirement is NOT documented on /docs/skills_gateway (verbatim negative finding — strings 'database'/'DB'/'Postgres' absent from page). The prior project-context claim that these 'require DB for persistence' remains an INFERENCE (runtime-registered skills plausibly lost on restart, but not stated upstream). /v1/skills endpoints are on the separate /docs/skills page (Anthropic Skills API).",
+      "runtime_endpoints": [
+        {"path": "/v1/skills", "method": "POST", "purpose": "Create skill (also serves as runtime/management)", "requires_db": "not documented"},
+        {"path": "/v1/skills", "method": "GET", "purpose": "List skills", "requires_db": "not documented"}
+      ],
+      "headers": [
+        "X-Api-Key: sk-1234",
+        "anthropic-version: 2023-06-01",
+        "anthropic-beta: skills-2025-10-02"
+      ],
+      "headers_note": "All /v1/skills requests require anthropic-beta: skills-2025-10-02 header AND ?beta=true query param. anthropic-version: 2023-06-01 also required.",
+      "tracing": "Feature support per /docs/skills: Cost Tracking ✅, Logging ✅, Load Balancing ✅. Logging via standard LiteLLM callbacks.",
+      "permissions": "Not documented on /docs/skills. Model-based routing (multi-account) via model_list provides per-account credential isolation.",
+      "cost_tracking": "Documented as supported ✅ on /docs/skills feature card. Requires DB for spend persistence (inferred).",
+      "budget_iteration_controls": "Not documented on /docs/skills.",
+      "db_requirements": "DB requirement NOT documented on /docs/skills (Anthropic /v1/skills page) NOR on /docs/skills_gateway (central registry page) — verbatim negative finding on both pages (strings 'database'/'DB'/'Postgres' absent). Skills storage backend is unconfirmed upstream. The prior project-context inference that runtime skill registration (/v1/skills and /claude-code/plugins registry) needs DB for persistence (skills lost on restart) remains an INFERENCE, now grounded in the verbatim negative finding that upstream is silent on persistence. Model-based routing (model_list with anthropic models) works without DB (verbatim on /docs/skills).",
+      "enterprise_requirements": "Not documented on /docs/skills (Enterprise advertised in footer card only).",
+      "supported_providers": ["anthropic"],
+      "source_urls": [
+        "https://docs.litellm.ai/docs/skills",
+        "https://docs.litellm.ai/docs/skills_gateway"
+      ]
+    },
+    "a2a_agents": {
+      "concept": "A2A (Agent-to-Agent) Agent Gateway — LiteLLM proxy exposes configured agents via the A2A protocol (JSON-RPC 2.0). Proxy routes A2A agents using a2a-sdk 1.x and serves either A2A 0.3 or 1.0 wire format per agent. Supported agent providers: A2A, Vertex AI Agent Engine, LangGraph, Azure AI Foundry, Bedrock AgentCore, Pydantic AI.",
+      "config_section": "Top-level `agents:` block in config.yaml (list of agent entries). Each entry has agent_name, agent_card_params, and optional litellm_params.",
+      "config_keys": [
+        {"full_path": "agents[].agent_name", "type": "string", "purpose": "Agent identifier (used in /a2a/{agent_id} path)", "requires_db": false},
+        {"full_path": "agents[].agent_card_params.name", "type": "string", "purpose": "Human-readable agent name (in agent card)", "requires_db": false},
+        {"full_path": "agents[].agent_card_params.url", "type": "string", "purpose": "Upstream agent URL (proxied agent card url field)", "requires_db": false},
+        {"full_path": "agents[].agent_card_params.protocolVersion", "type": "string (\"0.3\"|\"1.0\")", "purpose": "A2A protocol version; other values return HTTP 400 at registration", "requires_db": false},
+        {"full_path": "agents[].litellm_params.require_trace_id_on_calls_to_agent", "type": "boolean", "purpose": "Require trace id on inbound calls TO this agent", "requires_db": false},
+        {"full_path": "agents[].litellm_params.require_trace_id_on_calls_by_agent", "type": "boolean", "purpose": "Require trace id on outbound calls BY this agent (sub-agent identity propagation)", "requires_db": false}
+      ],
+      "auth_types": ["virtual_key (Authorization: Bearer sk-your-litellm-key)", "x-litellm-api-key header"],
+      "auth_types_note": "A2A uses LiteLLM virtual key auth (Authorization: Bearer sk-your-litellm-key or x-litellm-api-key header). Per-agent permission check: after virtual key auth, LiteLLM checks whether the calling key (and its team) is allowed to invoke the requested agent; HTTP 403 if not. Per-key/team permissions require DB (virtual keys).",
+      "management_endpoints": [
+        {"path": "/v1/agents", "method": "POST", "purpose": "Admin endpoint to register a new agent (used in trace-id-enforcement example)", "requires_db": "inferred true (persistence for runtime registration)"}
+      ],
+      "runtime_endpoints": [
+        {"path": "/a2a/{agent_id}", "method": "POST", "purpose": "Primary A2A endpoint (JSON-RPC 2.0); accepts any A2A method (message/send, message/stream, tasks/get, tasks/list, tasks/cancel, tasks/resubscribe, tasks/pushNotificationConfig/*, agent/getAuthenticatedExtendedCard)", "requires_db": false},
+        {"path": "/a2a/{agent_id}/message/send", "method": "POST", "purpose": "Alias for message/send only (JSON-RPC)", "requires_db": false},
+        {"path": "/v1/a2a/{agent_id}/message/send", "method": "POST", "purpose": "Alias for message/send only (JSON-RPC)", "requires_db": false},
+        {"path": "/a2a/{agent_id}/.well-known/agent.json", "method": "GET", "purpose": "Agent card discovery (proxy URL in url field)", "requires_db": false},
+        {"path": "/a2a/{agent_id}/.well-known/agent-card.json", "method": "GET", "purpose": "Agent card discovery (standard path)", "requires_db": false}
+      ],
+      "headers": [
+        "Authorization: Bearer sk-your-litellm-key",
+        "x-litellm-api-key",
+        "a2a-version: 1.0",
+        "X-LiteLLM-Trace-Id",
+        "X-LiteLLM-Agent-Id",
+        "x-litellm-trace-id",
+        "x-litellm-session-id",
+        "x-a2a-{agent_name_or_id}-{header} (forwarding custom headers)"
+      ],
+      "protocol_versions": ["0.3", "1.0"],
+      "protocol_versions_note": "Only \"0.3\" and \"1.0\" accepted; other values return HTTP 400 at registration. Proxied agent card defaults to 1.0 when unset; legacy message/send callers without a2a-version header receive 0.3-shaped responses. a2a-sdk>=1.1.0 required (included in proxy/proxy-dev dependency groups).",
+      "tracing": "X-LiteLLM-Trace-Id / x-litellm-trace-id / x-litellm-session-id headers. When require_trace_id_on_calls_to_agent or require_trace_id_on_calls_by_agent set, requests missing trace id rejected with HTTP 400. Sub-agent identity propagation supported. message/send and message/stream go through LiteLLM's A2A client (logging, guardrails, spend); other methods forwarded to upstream unchanged.",
+      "permissions": "Per-agent permission check after virtual key auth (HTTP 403 if key/team not allowed). Agent Permission Management on /docs/a2a_agent_permissions (deferred). Per-key/team permissions require DB.",
+      "cost_tracking": "Documented on /docs/a2a_cost_tracking (deferred). Feature card: Logging ✅, Load Balancing ✅, Streaming ✅, Iteration Budgets ✅. Cost tracking likely requires DB (inferred).",
+      "budget_iteration_controls": "Iteration Budgets ✅ (feature card). Documented on /docs/a2a_iteration_budgets (deferred). Likely requires DB for persistence (inferred).",
+      "db_requirements": "Static agents config (agents: block in config.yaml) works WITHOUT a DB — file-based registration. POST /v1/agents admin registration may require DB for persistence (unconfirmed — inferred). Per-key/team agent permissions require DB (virtual keys). Cost tracking and iteration budgets likely require DB (inferred). Trace ID enforcement works without DB. Load balancing across multiple agent deployments works without DB (static config).",
+      "enterprise_requirements": "Not documented on /docs/a2a Overview (Enterprise advertised in footer card only).",
+      "source_urls": [
+        "https://docs.litellm.ai/docs/a2a"
+      ]
+    }
+  },
+  "workestrator_relevance": "RECOMMENDATION for in-memory (no-DB) workestrator deployment: (1) MCP Gateway — YES, fully usable: define mcp_servers in config.yaml (HTTP/SSE/stdio), use mcp_aliases, mcp_client_side_auth_header_name, invoke via /v1/chat/completions or /v1/responses with server_url: \"litellm_proxy\", and /mcp-rest/tools/list|call plus GET /v1/mcp/server (DB requirement NOT documented on /docs/mcp_rest_api — verbatim negative finding; inferred no-DB). All auth types (api_key, bearer_token, basic, oauth2, aws_sigv4) work without DB. Avoid deprecated x-mcp-auth. Runtime-added MCP servers (management API) need store_model_in_db=true (DB) per /docs/mcp — unavailable. CRUD management endpoints are NOT documented on /docs/mcp_rest_api (verbatim negative finding). (2) Skills Gateway — NO for persistence: /v1/skills endpoints have unconfirmed DB requirement (inferred needs DB for persistence); POST /claude-code/plugins and GET /public/skill_hub (Skills Gateway central registry) — endpoints CONFIRMED verbatim on /docs/skills_gateway (plus GET /claude-code/plugins, POST /claude-code/plugins/{name}/enable|disable, GET /claude-code/marketplace.json); DB/persistence requirement NOT documented upstream (verbatim negative finding) — the project-context inference that runtime-registered skills need DB for persistence (lost on restart) remains an INFERENCE. Model-based routing (model_list with anthropic models) works without DB. Skip Skills gateway persistence for M1; revisit when Postgres added. (3) A2A Agent Gateway — YES for static agents: define agents in config.yaml agents: block, invoke via POST /a2a/{agent_id} (JSON-RPC), use protocolVersion 0.3 or 1.0, trace ID enforcement works without DB, load balancing across static deployments works without DB. POST /v1/agents admin registration, per-key/team permissions, cost tracking, and iteration budgets likely require DB (inferred) — unavailable."
+}

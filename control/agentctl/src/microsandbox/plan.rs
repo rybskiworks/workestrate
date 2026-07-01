@@ -1,6 +1,60 @@
 use std::fmt;
 
-#[derive(Debug, Clone)]
+use crate::microsandbox::secrets::{RemappedSecret, SecretDefinition};
+
+/// Network protocol for ingress/egress rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    Tcp,
+    Udp,
+}
+
+impl fmt::Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Protocol::Tcp => write!(f, "tcp"),
+            Protocol::Udp => write!(f, "udp"),
+        }
+    }
+}
+
+/// Network scope for ingress rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Local,
+    /// Public ingress (not yet used by any workload).
+    #[allow(dead_code)]
+    Public,
+}
+
+impl fmt::Display for Scope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Scope::Local => write!(f, "local"),
+            Scope::Public => write!(f, "public"),
+        }
+    }
+}
+
+/// Egress destination: host bridge or specific DNS domains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EgressTarget {
+    /// Host bridge networking (microsandbox host, including host.microsandbox.internal).
+    Host,
+    /// Specific DNS domains.
+    Domains(Vec<String>),
+}
+
+impl fmt::Display for EgressTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EgressTarget::Host => write!(f, "host"),
+            EgressTarget::Domains(hosts) => write!(f, "{}", hosts.join(", ")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxPlan {
     pub name: String,
     pub image: Option<String>,
@@ -9,37 +63,40 @@ pub struct SandboxPlan {
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
     pub env: Vec<EnvVar>,
-    pub secret_env: Vec<SecretEnv>,
+    pub secret_env: Vec<HostBoundSecret>,
     pub ports: Vec<PortMapping>,
     pub mounts: Vec<MountPlan>,
     pub network: NetworkPlan,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PortMapping {
     pub host: u16,
     pub guest: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountPlan {
     pub host: String,
     pub guest: String,
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct SecretEnv {
-    pub var: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostBoundSecret {
+    pub name: String,
     pub value: String,
-    pub allowed_host: String,
+    pub allowed_hosts: Vec<String>,
+    pub required: bool,
+    pub reject_placeholder: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvVar {
-    pub key: String,
+    pub name: String,
     pub value: String,
     pub is_secret: bool,
+    pub reject_placeholder: Option<String>,
 }
 
 impl fmt::Display for EnvVar {
@@ -49,11 +106,11 @@ impl fmt::Display for EnvVar {
         } else {
             self.value.as_str()
         };
-        write!(f, "{}={}", self.key, value)
+        write!(f, "{}={}", self.name, value)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkPlan {
     pub default_deny: bool,
     pub egress_rules: Vec<EgressRule>,
@@ -61,23 +118,23 @@ pub struct NetworkPlan {
     pub ingress_rules: Vec<IngressRule>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgressRule {
-    pub protocol: String,
-    pub port: Option<u16>,
-    pub allow_hosts: Vec<String>,
+    pub protocol: Protocol,
+    pub port: u16,
+    pub target: EgressTarget,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DenyDomainRule {
     pub domain_suffix: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngressRule {
-    pub protocol: String,
+    pub protocol: Protocol,
     pub port: u16,
-    pub scope: String,
+    pub scope: Scope,
 }
 
 impl fmt::Display for SandboxPlan {
@@ -102,10 +159,13 @@ impl fmt::Display for SandboxPlan {
             writeln!(f, "env: {}", e)?;
         }
         for se in &self.secret_env {
+            let req = if se.required { "required" } else { "optional" };
             writeln!(
                 f,
-                "secret_env: {} (value redacted, allowed: {})",
-                se.var, se.allowed_host
+                "secret_env: {} (value redacted, allowed: {}, {})",
+                se.name,
+                se.allowed_hosts.join(", "),
+                req
             )?;
         }
         for p in &self.ports {
@@ -124,9 +184,11 @@ impl fmt::Display for SandboxPlan {
             )?;
         }
         for rule in &self.network.egress_rules {
-            let port = rule.port.map(|p| format!(":{}", p)).unwrap_or_default();
-            let hosts = rule.allow_hosts.join(", ");
-            writeln!(f, "  egress: {}{} -> {}", rule.protocol, port, hosts)?;
+            writeln!(
+                f,
+                "  egress: {}:{} -> {}",
+                rule.protocol, rule.port, rule.target
+            )?;
         }
         for rule in &self.network.deny_rules {
             writeln!(f, "  egress: deny domain suffix {}", rule.domain_suffix)?;
@@ -135,287 +197,119 @@ impl fmt::Display for SandboxPlan {
     }
 }
 
-pub fn build_litellm_plan() -> SandboxPlan {
-    SandboxPlan {
-        name: "litellm".into(),
-        image: Some("ghcr.io/berriai/litellm:main-stable".into()),
-        workdir: Some("/app".into()),
-        command: vec![
-            "/app/.venv/bin/litellm".into(),
-            "--config".into(),
-            "/app/config.yaml".into(),
-            "--host".into(),
-            "0.0.0.0".into(),
-        ],
-        cpus: Some(2),
-        memory_mib: Some(2048),
-        env: vec![
-            EnvVar {
-                key: "PORT".into(),
-                value: "4000".into(),
-                is_secret: false,
-            },
-            // LiteLLM normally fetches its cost map from the LiteLLM GitHub
-            // repo on startup, which requires outbound egress to github.com
-            // and slows boot. The bundled local map (shipped in the image) is
-            // sufficient for our model set, so we skip the fetch.
-            EnvVar {
-                key: "LITELLM_LOCAL_MODEL_COST_MAP".into(),
-                value: "True".into(),
-                is_secret: false,
-            },
-            EnvVar {
-                key: "LITELLM_MASTER_KEY".into(),
-                value: "${LITELLM_MASTER_KEY}".into(),
-                is_secret: true,
-            },
-        ],
-        secret_env: vec![
-            SecretEnv {
-                var: "OPENROUTER_API_KEY".into(),
-                value: "${OPENROUTER_API_KEY}".into(),
-                allowed_host: "openrouter.ai".into(),
-            },
-            SecretEnv {
-                var: "KIMI_CODE_API_KEY".into(),
-                value: "${KIMI_CODE_API_KEY}".into(),
-                allowed_host: "api.kimi.com".into(),
-            },
-            SecretEnv {
-                var: "MINIMAX_CODING_API_KEY".into(),
-                value: "${MINIMAX_CODING_API_KEY}".into(),
-                allowed_host: "api.minimax.io".into(),
-            },
-            SecretEnv {
-                var: "INCEPTION_API_KEY".into(),
-                value: "${INCEPTION_API_KEY}".into(),
-                allowed_host: "api.inceptionlabs.ai".into(),
-            },
-        ],
-        ports: vec![PortMapping {
-            host: 4000,
-            guest: 4000,
-        }],
-        mounts: vec![
-            MountPlan {
-                host: "${MSB_HOME}/sandboxes/litellm/logs".into(),
-                guest: "/var/log/litellm".into(),
-                read_only: false,
-            },
-            MountPlan {
-                host: "infra/litellm/config.yaml".into(),
-                guest: "/app/config.yaml".into(),
-                read_only: true,
-            },
-        ],
-        network: NetworkPlan {
-            default_deny: true,
-            egress_rules: vec![
-                EgressRule {
-                    protocol: "tcp".into(),
-                    port: Some(53),
-                    allow_hosts: vec!["host".into()],
-                },
-                EgressRule {
-                    protocol: "udp".into(),
-                    port: Some(53),
-                    allow_hosts: vec!["host".into()],
-                },
-                EgressRule {
-                    protocol: "tcp".into(),
-                    port: Some(443),
-                    allow_hosts: vec![
-                        "openrouter.ai".into(),
-                        "api.kimi.com".into(),
-                        "api.minimax.io".into(),
-                        "api.inceptionlabs.ai".into(),
-                    ],
-                },
-            ],
-            deny_rules: vec![],
-            ingress_rules: vec![IngressRule {
-                protocol: "tcp".into(),
-                port: 4000,
-                scope: "local".into(),
-            }],
-        },
+impl EnvVar {
+    pub fn literal(name: &str, value: &str) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+            is_secret: false,
+            reject_placeholder: None,
+        }
+    }
+    pub fn secret(definition: &SecretDefinition) -> Self {
+        Self {
+            name: definition.env_var.into(),
+            value: format!("${{{}}}", definition.env_var),
+            is_secret: true,
+            reject_placeholder: definition.placeholder.map(|p| p.to_string()),
+        }
     }
 }
 
-pub fn build_pi_plan() -> SandboxPlan {
-    SandboxPlan {
-        name: "pi".into(),
-        image: Some("node:24-bookworm-slim".into()),
-        workdir: Some("/app".into()),
-        command: vec!["pi".into(), "--mode".into(), "rpc".into()],
-        cpus: Some(2),
-        memory_mib: Some(2048),
-        env: vec![
-            EnvVar {
-                key: "PI_OFFLINE".into(),
-                value: "1".into(),
-                is_secret: false,
-            },
-            EnvVar {
-                key: "PI_TELEMETRY".into(),
-                value: "0".into(),
-                is_secret: false,
-            },
-        ],
-        secret_env: vec![
-            // M1 auth: agents use the LiteLLM master key directly (no virtual keys yet).
-            SecretEnv {
-                var: "OPENAI_API_KEY".into(),
-                value: "${LITELLM_MASTER_KEY}".into(),
-                allowed_host: "host.microsandbox.internal".into(),
-            },
-        ],
-        ports: vec![],
-        mounts: vec![
-            MountPlan {
-                host: "agents/pi".into(),
-                guest: "/app".into(),
-                read_only: true,
-            },
-            MountPlan {
-                host: "workspaces/pi".into(),
-                guest: "/workspace".into(),
-                read_only: true,
-            },
-        ],
-        network: NetworkPlan {
-            default_deny: true,
-            egress_rules: vec![
-                EgressRule {
-                    protocol: "tcp".into(),
-                    port: Some(53),
-                    allow_hosts: vec!["host".into()],
-                },
-                EgressRule {
-                    protocol: "udp".into(),
-                    port: Some(53),
-                    allow_hosts: vec!["host".into()],
-                },
-                EgressRule {
-                    protocol: "tcp".into(),
-                    port: Some(4000),
-                    allow_hosts: vec!["host".into()],
-                },
-            ],
-            deny_rules: vec![DenyDomainRule {
-                domain_suffix: ".pi.dev".into(),
-            }],
-            ingress_rules: vec![],
-        },
+impl HostBoundSecret {
+    /// Direct binding — the secret is exposed under its own name.
+    /// All metadata comes from the definition.
+    pub fn from(definition: &SecretDefinition) -> Self {
+        Self {
+            name: definition.env_var.into(),
+            value: format!("${{{}}}", definition.env_var),
+            allowed_hosts: definition.hosts.iter().map(|h| h.to_string()).collect(),
+            required: definition.required,
+            reject_placeholder: definition.placeholder.map(|p| p.to_string()),
+        }
+    }
+
+    /// Remapped binding — the source secret is exposed under a different name.
+    pub fn remapped(mapping: &RemappedSecret) -> Self {
+        Self {
+            name: mapping.exposed_as.into(),
+            value: format!("${{{}}}", mapping.source.env_var),
+            allowed_hosts: mapping.source.hosts.iter().map(|h| h.to_string()).collect(),
+            required: mapping.source.required,
+            reject_placeholder: mapping.source.placeholder.map(|p| p.to_string()),
+        }
     }
 }
 
-pub fn build_odysseus_plan() -> SandboxPlan {
-    SandboxPlan {
-        name: "odysseus".into(),
-        image: Some("python:3.12-slim".into()),
-        workdir: Some("/app".into()),
-        command: vec![
-            "uvicorn".into(),
-            "app:app".into(),
-            "--host".into(),
-            "0.0.0.0".into(),
-            "--port".into(),
-            "7000".into(),
-        ],
-        cpus: Some(2),
-        memory_mib: Some(2048),
-        env: vec![
-            EnvVar {
-                key: "APP_PORT".into(),
-                value: "7000".into(),
-                is_secret: false,
+impl MountPlan {
+    pub fn readonly(host: impl Into<String>, guest: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            guest: guest.into(),
+            read_only: true,
+        }
+    }
+    pub fn readwrite(host: impl Into<String>, guest: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            guest: guest.into(),
+            read_only: false,
+        }
+    }
+}
+
+impl PortMapping {
+    pub fn same(port: u16) -> Self {
+        Self {
+            host: port,
+            guest: port,
+        }
+    }
+}
+
+impl EgressRule {
+    pub fn dns() -> Vec<Self> {
+        vec![
+            Self {
+                protocol: Protocol::Tcp,
+                port: 53,
+                target: EgressTarget::Host,
             },
-            EnvVar {
-                key: "AUTH_ENABLED".into(),
-                value: "true".into(),
-                is_secret: false,
+            Self {
+                protocol: Protocol::Udp,
+                port: 53,
+                target: EgressTarget::Host,
             },
-            EnvVar {
-                key: "LOCALHOST_BYPASS".into(),
-                value: "false".into(),
-                is_secret: false,
-            },
-            EnvVar {
-                key: "DATABASE_URL".into(),
-                value: "sqlite:///app/data/app.db".into(),
-                is_secret: false,
-            },
-            EnvVar {
-                key: "OPENAI_BASE_URL".into(),
-                value: "http://host.microsandbox.internal:4000/v1".into(),
-                is_secret: false,
-            },
-            EnvVar {
-                key: "OPENAI_MODEL".into(),
-                value: "chat".into(),
-                is_secret: false,
-            },
-        ],
-        secret_env: vec![
-            // M1 auth: agents use the LiteLLM master key directly (no virtual keys yet).
-            SecretEnv {
-                var: "OPENAI_API_KEY".into(),
-                value: "${LITELLM_MASTER_KEY}".into(),
-                allowed_host: "host.microsandbox.internal".into(),
-            },
-        ],
-        ports: vec![PortMapping {
-            host: 7000,
-            guest: 7000,
-        }],
-        mounts: vec![
-            MountPlan {
-                host: "agents/odysseus".into(),
-                guest: "/app".into(),
-                read_only: true,
-            },
-            MountPlan {
-                host: "workspaces/odysseus-data".into(),
-                guest: "/app/data".into(),
-                read_only: false,
-            },
-            MountPlan {
-                host: "${MSB_HOME}/sandboxes/odysseus/data".into(),
-                guest: "/data".into(),
-                read_only: false,
-            },
-            MountPlan {
-                host: "${MSB_HOME}/sandboxes/odysseus/data/settings.json".into(),
-                guest: "/app/data/settings.json".into(),
-                read_only: true,
-            },
-        ],
-        network: NetworkPlan {
-            default_deny: true,
-            egress_rules: vec![
-                EgressRule {
-                    protocol: "tcp".into(),
-                    port: Some(53),
-                    allow_hosts: vec!["host".into()],
-                },
-                EgressRule {
-                    protocol: "udp".into(),
-                    port: Some(53),
-                    allow_hosts: vec!["host".into()],
-                },
-                EgressRule {
-                    protocol: "tcp".into(),
-                    port: Some(4000),
-                    allow_hosts: vec!["host".into()],
-                },
-            ],
-            deny_rules: vec![],
-            ingress_rules: vec![IngressRule {
-                protocol: "tcp".into(),
-                port: 7000,
-                scope: "local".into(),
-            }],
-        },
+        ]
+    }
+    pub fn litellm_proxy() -> Self {
+        Self {
+            protocol: Protocol::Tcp,
+            port: 4000,
+            target: EgressTarget::Host,
+        }
+    }
+    pub fn https(domains: &[&str]) -> Self {
+        Self {
+            protocol: Protocol::Tcp,
+            port: 443,
+            target: EgressTarget::Domains(domains.iter().map(|d| d.to_string()).collect()),
+        }
+    }
+    pub fn agent_base() -> Vec<Self> {
+        let mut rules = Self::dns();
+        rules.push(Self::litellm_proxy());
+        rules.push(Self::https(&["github.com", "api.github.com"]));
+        rules
+    }
+}
+
+impl IngressRule {
+    pub fn local_tcp(port: u16) -> Self {
+        Self {
+            protocol: Protocol::Tcp,
+            port,
+            scope: Scope::Local,
+        }
     }
 }

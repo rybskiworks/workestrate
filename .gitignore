@@ -7,6 +7,7 @@
 # Local private keys / decrypted dumps
 .keys/
 *.agekey
+age.txt
 .secrets/
 
 var/*
@@ -15,10 +16,10 @@ var/*
 workspaces/*
 !workspaces/.gitkeep
 
-# Optional mutable local checkouts of my forks.
-agents/pi/
-agents/odysseus/
-!agents/README.md
+# Upstream agent repos and build outputs (gitignored — flake/local + build cache)
+agents/*/repo
+agents/*/build
+agents/*/.build-hash
 
 result
 result-*

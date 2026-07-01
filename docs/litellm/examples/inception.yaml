@@ -1,0 +1,57 @@
+# =============================================================================
+# inception.yaml
+# =============================================================================
+# Inception — diffusion LLMs (Mercury family). OpenAI-compatible API.
+#
+# VERIFIED FROM DOCS (providers/inception.md,
+#   source: https://docs.litellm.ai/docs/providers/inception):
+#   - Prefix: `inception/` (chat), `text-completion-inception/` (FIM).
+#   - Documented model strings (verbatim): `inception/mercury-2`,
+#     `text-completion-inception/mercury-edit-2`.
+#   - Required env var: `INCEPTION_API_KEY`.
+#   - api_base is NOT configurable — fixed at `https://api.inceptionlabs.ai/v1`
+#     (verbatim caveat: "`api_base` is NOT configurable — fixed at
+#     `https://api.inceptionlabs.ai/v1`.").
+#   - `reasoning_effort` accepts `instant` | `low` | `medium` | `high`
+#     (verbatim: "`instant` is Inception-specific for near real-time").
+#   - Verbatim proxy YAML:
+#       model_list:
+#         - model_name: mercury-2
+#           litellm_params:
+#             model: inception/mercury-2
+#             api_key: os.environ/INCEPTION_API_KEY
+#
+# TODO / UNCERTAIN:
+#   - The docs do NOT show `reasoning_effort` as a `litellm_params` YAML key;
+#     it is documented as a chat-API parameter. Passing it under
+#     `litellm_params` is INFERRED from standard LiteLLM passthrough behavior.
+#     Verify at runtime; if rejected, pass via `extra_body` instead.
+#   - `api_base` is intentionally OMITTED below because the docs state it is
+#     fixed and NOT configurable. Do NOT add an `api_base:` key here.
+#
+# REQUIRED ENV VARS:
+#   - INCEPTION_API_KEY
+#
+# SECRET HYGIENE: NEVER commit real API keys. Use `os.environ/<VAR>` indirection.
+#
+# WORKESTRATOR NOTES [PROJECT CONTEXT — NOT upstream docs]:
+#   - Not currently used in infra/litellm/config.yaml.
+#   - Inception-specific `reasoning_effort="instant"` for near real-time.
+#   - FIM via `text-completion-inception/mercury-edit-2` (32K context).
+# =============================================================================
+
+model_list:
+  - model_name: mercury-2                # alias (placeholder)
+    litellm_params:
+      model: inception/mercury-2         # VERIFIED prefix + verbatim model string
+      api_key: os.environ/INCEPTION_API_KEY  # VERIFIED required env var
+      # VERIFIED: reasoning_effort accepts "instant" (Inception-specific).
+      # INFERRED: placement under litellm_params (docs show it as a chat-API
+      # param, not a YAML key). If rejected at runtime, move to extra_body.
+      reasoning_effort: instant
+
+  # VERIFIED FIM path (verbatim prefix + model string):
+  - model_name: mercury-edit-2           # alias (placeholder)
+    litellm_params:
+      model: text-completion-inception/mercury-edit-2  # VERIFIED FIM prefix
+      api_key: os.environ/INCEPTION_API_KEY

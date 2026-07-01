@@ -59,13 +59,14 @@ The authoritative block on Pi telemetry domains is enforced by the sandbox netwo
 - Direct provider API calls
 
 ## Workspace
-- `agents/pi` mounted read-only at `/app`
-- `workspaces/pi` mounted read-only at `/workspace`
+- `agents/pi/repo` mounted read-only at `/app`
+- `workspaces/pi` mounted read-write at `/workspace`
 
 ## Egress
 - Default deny
 - Allow TCP/4000 to host (LiteLLM)
 - Allow DNS (UDP+TCP 53 to host)
+- Allow TCP/443 to github.com + api.github.com
 - Deny egress to `*.pi.dev` (telemetry domains, including subdomains)
 
 `PI_OFFLINE=1` and `PI_TELEMETRY=0` are set as defense-in-depth; the network-layer deny rule is the authoritative block on Pi telemetry egress.

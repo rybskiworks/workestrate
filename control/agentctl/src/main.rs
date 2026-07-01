@@ -1,63 +1,77 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod agents;
 mod config;
-mod litellm;
 mod microsandbox;
+mod workloads;
 
-use agents::AgentName;
 use config::CheckEntry;
 
 #[derive(Parser)]
 #[command(name = "agentctl")]
 #[command(about = "Control plane CLI for the AI workbench")]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+/// Actions available on every workload.
+#[derive(Subcommand)]
+enum WorkloadAction {
+    /// Start the sandbox
+    Up {
+        #[arg(short, long, help = "Start detached in background")]
+        background: bool,
+    },
+    /// Stop and remove the sandbox
+    Down,
+    /// Print the planned sandbox workload
+    Plan,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Runtime/config sanity check
     Check,
-    /// LiteLLM sandbox commands
+    /// Scaffold a new agent project
+    New {
+        /// Name for the new agent (e.g., "my-agent")
+        name: String,
+    },
+    /// LiteLLM proxy sandbox
     Litellm {
         #[command(subcommand)]
-        action: LitellmAction,
+        action: WorkloadAction,
     },
-    /// Agent sandbox commands
-    Agent {
+    /// Pi coding agent sandbox
+    Pi {
         #[command(subcommand)]
-        action: AgentAction,
+        action: WorkloadAction,
+    },
+    /// Odysseus agent sandbox
+    Odysseus {
+        #[command(subcommand)]
+        action: WorkloadAction,
+    },
+    /// OpenCode agent sandbox
+    Opencode {
+        #[command(subcommand)]
+        action: WorkloadAction,
     },
 }
 
-#[derive(Subcommand)]
-enum LitellmAction {
-    /// Print the planned LiteLLM sandbox workload
-    Plan,
-    /// Start the LiteLLM sandbox
-    Up {
-        #[arg(short, long)]
-        background: bool,
-    },
-    /// Stop and remove the LiteLLM sandbox
-    Down,
-}
-
-#[derive(Subcommand)]
-enum AgentAction {
-    /// Print the planned agent sandbox workload
-    Plan { name: AgentName },
-    /// Start the agent sandbox
-    Up {
-        name: AgentName,
-        #[arg(short, long)]
-        background: bool,
-    },
-    /// Stop and remove the agent sandbox
-    Down { name: AgentName },
+async fn dispatch(name: &str, action: WorkloadAction) -> Result<()> {
+    let workload =
+        workloads::get(name).ok_or_else(|| anyhow::anyhow!("unknown workload: {name}"))?;
+    match action {
+        WorkloadAction::Up { background } => microsandbox::up(workload.as_ref(), background).await,
+        WorkloadAction::Down => microsandbox::down(name).await,
+        WorkloadAction::Plan => {
+            println!("{}", workload.plan());
+            Ok(())
+        }
+    }
 }
 
 fn print_entry(entry: &CheckEntry) {
@@ -66,14 +80,61 @@ fn print_entry(entry: &CheckEntry) {
         return;
     }
     if entry.optional {
-        // Optional checks (e.g. local `agents/pi` and `agents/odysseus`
-        // checkouts) are reported as warnings and never cause a non-zero
-        // exit. These directories are documented as optional local
-        // overrides; the agents are normally supplied via flake inputs.
         println!("[MISSING] (optional) {}", entry.label);
     } else {
         println!("[MISSING] {}", entry.label);
     }
+}
+
+async fn cmd_new(name: &str) -> Result<()> {
+    let root = config::project_root()?;
+    let agent_dir = root.join("agents").join(name);
+
+    if agent_dir.exists() {
+        anyhow::bail!("agents/{} already exists", name);
+    }
+
+    // Create directory structure
+    std::fs::create_dir_all(agent_dir.join("repo"))?;
+    std::fs::create_dir_all(agent_dir.join("config"))?;
+    std::fs::write(agent_dir.join(".gitkeep"), "")?;
+
+    println!("Created agents/{}/", name);
+    println!(
+        "  agents/{}/repo/    — clone or create your agent source here",
+        name
+    );
+    println!(
+        "  agents/{}/config/  — agent-specific config files here",
+        name
+    );
+    println!();
+    println!("Next steps:");
+    println!(
+        "  1. Clone your agent: git clone <url> agents/{}/repo",
+        name
+    );
+    println!(
+        "  2. Build it:        cd agents/{}/repo && npm install && npm run build",
+        name
+    );
+    println!(
+        "     (or: cp -r agents/{}/repo agents/{}/build && cd agents/{}/build && <build-cmd>)",
+        name, name, name
+    );
+    println!("  3. Register in Rust:");
+    println!(
+        "     a. Create control/agentctl/src/workloads/{}.rs",
+        name.replace('-', "_")
+    );
+    println!("     b. Add to workloads/mod.rs registry");
+    println!("     c. Add a Commands variant in main.rs");
+    println!("  4. Test: nix develop -c cargo run -- {} plan", name);
+    println!();
+    println!("Or use a pre-built image (like LiteLLM):");
+    println!("  Set image: Some(\"your-image:tag\") and skip the source mount.");
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -82,16 +143,11 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Check => cmd_check().await,
-        Commands::Litellm { action } => match action {
-            LitellmAction::Plan => litellm::plan().await,
-            LitellmAction::Up { background } => litellm::up(background).await,
-            LitellmAction::Down => litellm::down().await,
-        },
-        Commands::Agent { action } => match action {
-            AgentAction::Plan { name } => agents::plan(name).await,
-            AgentAction::Up { name, background } => agents::up(name, background).await,
-            AgentAction::Down { name } => agents::down(name).await,
-        },
+        Commands::New { name } => cmd_new(&name).await,
+        Commands::Litellm { action } => dispatch("litellm", action).await,
+        Commands::Pi { action } => dispatch("pi", action).await,
+        Commands::Odysseus { action } => dispatch("odysseus", action).await,
+        Commands::Opencode { action } => dispatch("opencode", action).await,
     }
 }
 
@@ -99,8 +155,6 @@ async fn cmd_check() -> Result<()> {
     let root = config::project_root()?;
     let checks = config::check_required_files(&root)?;
 
-    // Only non-optional missing artifacts cause a non-zero exit. Optional
-    // agent checkouts (agents/pi, agents/odysseus) are reported as warnings.
     let mut all_required_ok = true;
     for entry in &checks {
         print_entry(entry);

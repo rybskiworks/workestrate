@@ -36,7 +36,7 @@ hold provider keys.
 
 ## ADR 0005: Agent repos are forked external repos
 
-Decision: Flake inputs pin my forks; `agents/pi` and `agents/odysseus` are
+Decision: Flake inputs pin my forks; `agents/<name>/repo` directories are
 optional ignored local overrides.
 
 Rationale: Forks allow applying workbench-specific patches without waiting for

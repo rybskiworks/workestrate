@@ -18,17 +18,17 @@ just check
 # Run the four milestone-1 commands
 cargo run --manifest-path control/agentctl/Cargo.toml -- check
 cargo run --manifest-path control/agentctl/Cargo.toml -- litellm plan
-cargo run --manifest-path control/agentctl/Cargo.toml -- agent plan pi
-cargo run --manifest-path control/agentctl/Cargo.toml -- agent plan odysseus
+cargo run --manifest-path control/agentctl/Cargo.toml -- pi plan
+cargo run --manifest-path control/agentctl/Cargo.toml -- odysseus plan
 ```
 
 ## What should pass
 
 - `just check` exits 0
 - All four `agentctl` commands exit 0
-- `agentctl check` reports `[OK]` for most entries; `[MISSING] agents/pi (or flake input)`
-  is expected because `agents/pi/` is an optional local override. Clone your Pi fork there
-  if you want the check to pass locally.
+- `agentctl check` reports `[OK]` for most entries; `[MISSING] agents/pi/repo (or flake input)`
+  is expected because `agents/pi/repo/` is an optional local override. Clone your Pi fork into
+  `agents/pi/repo` if you want the check to pass locally.
 
 ## What is NOT expected to work in M1
 

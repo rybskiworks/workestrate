@@ -15,8 +15,9 @@ Provider keys are only for LiteLLM.
 
 ## Configuration
 
-- `config.yaml` — proxy configuration
-- `.env` — local secrets (gitignored, mode 0600)
+- `config.yaml` — proxy configuration (parent; `include:`s `models.yaml`)
+- `models.yaml` — `model_list` (model definitions, with YAML anchors)
+- Secrets are managed via SOPS at the repo root (`.env.enc`) and injected via `run-with-secrets`. The LiteLLM microVM receives its secrets through the sandbox plan's `env()` and `secret_env()` calls.
 
 ## Milestone 1 Constraints
 
@@ -33,4 +34,4 @@ Provider keys are only for LiteLLM.
 
 ## Adding Models
 
-Add entries to `model_list` in `config.yaml`. Use `os.environ/VAR_NAME` for all secrets.
+Add entries to `model_list` in `models.yaml` (included by `config.yaml`). Use `os.environ/VAR_NAME` for all secrets.

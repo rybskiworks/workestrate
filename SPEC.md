@@ -30,7 +30,7 @@ limits. Agents communicate with LiteLLM via a well-known host IP/port.
 ### agentctl
 
 Rust CLI built with Tokio and Clap. Commands: `check`, `litellm {plan,up,down}`,
-`agent {plan,up,down} <name>`. The `plan` subcommands print sandbox configurations
+`<name> {plan,up,down}`. The `plan` subcommands print sandbox configurations
 built with `SandboxBuilder` and `NetworkPolicyBuilder`. The `up`/`down` subcommands
 drive the Microsandbox runtime (compile-checked in M1; runtime-validated on a KVM
 host in M2).
@@ -104,8 +104,8 @@ performs secret injection (dummy key → real key) for allowed destinations.
 - [x] `just check` passes
 - [x] `agentctl check` reports all required files present
 - [x] `agentctl litellm plan` prints a valid sandbox plan
-- [x] `agentctl agent plan pi` prints a valid sandbox plan
-- [x] `agentctl agent plan odysseus` prints a valid sandbox plan
+- [x] `agentctl pi plan` prints a valid sandbox plan
+- [x] `agentctl odysseus plan` prints a valid sandbox plan
 - [ ] Runtime sandbox execution (blocked: no KVM)
 
 ## Future milestones

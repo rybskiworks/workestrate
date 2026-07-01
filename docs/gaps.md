@@ -11,6 +11,7 @@
 - Odysseus does not honor `OPENAI_BASE_URL`. The `data/settings.json` approach is documented but untested.
 - Exact Pi RPC/headless handshake is unknown.
 - Exact Odysseus entrypoint customization for LiteLLM proxy mode is unknown.
+- Odysseus companion services (chromadb/searxng/ntfy) are not provisioned — see [docs/odysseus-full-capability.md](odysseus-full-capability.md).
 
 ## Unverified Microsandbox Behavior
 
@@ -40,7 +41,7 @@
 ## Documentation
 
 - Profile docs are based on upstream README/source inspection, not direct runtime verification.
-- `agents/pi/` is not present locally; Pi profile is based on upstream `georgrybski/pi` docs.
+- `agents/pi/repo/` is not present locally; Pi profile is based on upstream `georgrybski/pi` docs.
 
 ## Secrets Management
 

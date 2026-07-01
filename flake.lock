@@ -32,6 +32,22 @@
         "type": "github"
       }
     },
+    "opencode": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1782258396,
+        "narHash": "sha256-Tubr+Hqe7ArEKtG0pBYclmYOfMQL/oUSn85JW36+KHI=",
+        "owner": "georgrybski",
+        "repo": "opencode",
+        "rev": "cfddb2407cb6343aaa221a6aa72222b8fdd325d7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "georgrybski",
+        "repo": "opencode",
+        "type": "github"
+      }
+    },
     "pi": {
       "flake": false,
       "locked": {
@@ -52,6 +68,7 @@
       "inputs": {
         "nixpkgs": "nixpkgs",
         "odysseus": "odysseus",
+        "opencode": "opencode",
         "pi": "pi"
       }
     }

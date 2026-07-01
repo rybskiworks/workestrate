@@ -1,0 +1,52 @@
+# =============================================================================
+# disposable-local-proxy.yaml
+# Minimal in-memory single-model LiteLLM proxy. No Postgres, no Redis.
+# =============================================================================
+#
+# ANTI-HALLUCINATION GROUNDING:
+#   - Every key below is verified verbatim from
+#     docs/litellm/schemas/config-yaml.option-index.json (the on-disk corpus
+#     extracted from https://docs.litellm.ai/docs/proxy/config_settings).
+#   - `model_list` (top_level, list, required=true) — option-index.
+#   - `model_list[].model_name` / `model_list[].litellm_params` — option-index
+#     (model_list subsection).
+#   - `litellm_params.model`, `.api_base`, `.api_key` — option-index
+#     (model_list.litellm_params subsection; all type=string).
+#   - `general_settings.master_key` (string) — option-index; example shows
+#     `master_key: sk-1234`. os.environ/ form confirmed by p0-configs.md
+#     ("does os.getenv(...)").
+#   - `general_settings.completion_model` (string) — option-index.
+#   - `litellm_settings.drop_params` (bool) — option-index; example
+#     `drop_params: True`.
+#
+# PROJECT REALITY (workestrator): in-memory microsandbox, no DB/Redis, master_key
+# auth, config at infra/litellm/config.yaml. This file is a teaching minimal.
+#
+# SECRETS: master_key and api_key use os.environ/ indirection. NEVER commit real
+# secret values. Required env vars: LITELLM_MASTER_KEY, OPENROUTER_API_KEY.
+#
+# WORKESTRATOR-SPECIFIC: none beyond the os.environ/ convention (which is
+# upstream-documented). This is a generic minimal example.
+
+model_list:
+  # Single OpenRouter entry. Prefix `openrouter/` verified from
+  # docs/litellm/schemas/provider-fields.index.json (provider_name: OpenRouter,
+  # litellm_prefix: openrouter/, required_env_vars: [OPENROUTER_API_KEY]).
+  # Nested form `openrouter/<provider>/<model>` is the documented pattern.
+  - model_name: primary
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY  # REQUIRED env var; never inline the value
+
+general_settings:
+  # master_key: REQUIRED for proxy auth. os.environ/ form works in-memory
+  # (no DB needed). Verified: option-index general_settings.master_key.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # completion_model: default model group for /chat/completions when client
+  # omits model. Verified: option-index general_settings.completion_model.
+  completion_model: primary
+
+litellm_settings:
+  # drop_params: drops unsupported params before forwarding to provider.
+  # Verified: option-index litellm_settings.drop_params (ex: `drop_params: True`).
+  drop_params: true

@@ -1,0 +1,122 @@
+# =============================================================================
+# agent-mcp-skills-gateway.yaml
+# MCP + A2A static config that works WITHOUT a database (in-memory).
+# =============================================================================
+#
+# ANTI-HALLUCINATION GROUNDING:
+#   - All MCP / A2A / Skills keys verified verbatim from
+#     docs/litellm/schemas/gateway-agent-mcp-skills.index.json (extracted from
+#     https://docs.litellm.ai/docs/mcp, /docs/skills, /docs/a2a,
+#     /docs/proxy/config_settings).
+#   - mcp_servers block: top-level, sibling to model_list. Verified:
+#     gateway_types.mcp.config_section = "Top-level `mcp_servers:` block in
+#     config.yaml (sibling to model_list). Aliases under
+#     `litellm_settings.mcp_aliases`."
+#   - mcp_servers.<name>.url / .transport / .auth_type / .auth_value /
+#     .spec_version / .description: all requires_db=false (gateway index
+#     config_keys). auth_type enum verified: none|api_key|bearer_token|basic|
+#     authorization|token|oauth2|oauth2_token_exchange|aws_sigv4.
+#   - agents block: top-level `agents:` list. Verified:
+#     gateway_types.a2a_agents.config_section = "Top-level `agents:` block in
+#     config.yaml (list of agent entries). Each entry has agent_name,
+#     agent_card_params, and optional litellm_params." All agents[] keys
+#     (agent_name, agent_card_params.name/.url/.protocolVersion,
+#     litellm_params.require_trace_id_on_calls_to_agent /
+#     require_trace_id_on_calls_by_agent) require_db=false (gateway index).
+#   - mcp_aliases: verified under litellm_settings.mcp_aliases (option-index;
+#     ex: `mcp_aliases: {"github": "github_mcp_server"}`).
+#   - general_settings.master_key, completion_model, disable_spend_logs:
+#     option-index (general_settings).
+#
+# SKILLS PERSISTENCE — REQUIRES DB (deferred):
+#   - gateway_types.skills.management_endpoints_note states: "/v1/skills
+#     endpoints are Anthropic-compatible passthrough. POST /claude-code/plugins
+#     and GET /public/skill_hub ... require DB for persistence (skills registered
+#     at runtime are lost on restart)." Skills management endpoints are marked
+#     requires_db=true (inferred) in the gateway index.
+#   - THEREFORE this file does NOT include a skills: config block (none is
+#     documented — gateway_types.skills.config_section: "No `skills:` or
+#     `litellm_settings.skills` config block documented on /docs/skills. Skills
+#     are managed via /v1/skills REST endpoints."). Skills are runtime-only and
+#     need a DB to persist; in-memory they are lost on restart. [DEFERRED until
+#     workestrator adds a Postgres backend.]
+#
+# A2A AUTH NOTE: gateway_types.a2a_agents.auth_types_note states A2A uses LiteLLM
+#   virtual-key auth (Authorization: Bearer sk-... or x-litellm-api-key header)
+#   and that per-key/team permission checks REQUIRE DB (virtual keys). With
+#   master_key only (no DB), A2A endpoints are reachable with the master key but
+#   per-team/per-key agent permissions are NOT enforceable. [WORKESTRATOR NOTE]
+#
+# SECRETS: master_key and all auth_value / api_key values use os.environ/
+# indirection. NEVER commit real values. Required env vars: LITELLM_MASTER_KEY,
+# MCP_REMOTE_API_KEY, ANTHROPIC_API_KEY (for the skills-capable model).
+#
+# WORKESTRATOR-SPECIFIC: the choice to run MCP + A2A in-memory (no DB) is a
+# project decision. Sections marked [WORKESTRATOR NOTE] are project commentary.
+
+model_list:
+  # A model group backing the Skills gateway (Anthropic-compatible /v1/skills
+  # requires an anthropic model). Verified: gateway_types.skills.config_keys
+  # (model_list[].litellm_params.model e.g. anthropic/claude-3-5-sonnet-...).
+  # anthropic/ prefix verified from provider-fields.index.json (required_env_vars:
+  # [ANTHROPIC_API_KEY]).
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+# --- MCP servers (top-level block; works without DB) ---
+# Verified: gateway_types.mcp.config_section. All keys below require_db=false.
+mcp_servers:
+  # A remote MCP server over http transport. Verified keys:
+  #   .url, .transport (http|sse|stdio), .auth_type (enum), .auth_value,
+  #   .spec_version (defaults to 2025-06-18), .description.
+  remote_tools:
+    url: https://mcp.example.com/mcp
+    transport: http
+    # auth_type enum verified in gateway index. api_key => X-Api-Key style.
+    auth_type: api_key
+    # auth_value: credential for the upstream MCP server. os.environ/ form is
+    # used to avoid committing secrets. (Whether os.environ/ indirection is
+    # supported for mcp auth_value is NOT explicitly stated in the gateway index;
+    # treat as [inferred; verify against /docs/mcp] if it fails to resolve.)
+    auth_value: os.environ/MCP_REMOTE_API_KEY
+    spec_version: "2025-06-18"
+    description: Remote tool server (in-memory safe; no DB needed for routing).
+
+# --- A2A agents (top-level block; works without DB) ---
+# Verified: gateway_types.a2a_agents.config_section. All keys below
+# require_db=false. NOTE: per-key/team agent permissions require DB (see header).
+agents:
+  - agent_name: upstream-agent
+    # agent_card_params: verified keys .name, .url, .protocolVersion ("0.3"|"1.0").
+    agent_card_params:
+      name: Upstream Agent
+      url: https://a2a.example.com/agent
+      protocolVersion: "1.0"
+    # litellm_params: verified require_trace_id_on_calls_to_agent /
+    # require_trace_id_on_calls_by_agent (both boolean, require_db=false).
+    litellm_params:
+      require_trace_id_on_calls_to_agent: false
+      require_trace_id_on_calls_by_agent: false
+
+general_settings:
+  # master_key: REQUIRED. os.environ/ works in-memory. Verified:
+  # option-index general_settings.master_key.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # completion_model: default model group. Verified:
+  # option-index general_settings.completion_model.
+  completion_model: claude-sonnet
+  # disable_spend_logs: [WORKESTRATOR NOTE] set true to suppress spend-log write
+  # attempts against the nonexistent DB. Verified:
+  # option-index general_settings.disable_spend_logs (requires_db=true).
+  disable_spend_logs: true
+
+litellm_settings:
+  # mcp_aliases: map alias -> mcp_servers entry name. Verified:
+  # option-index litellm_settings.mcp_aliases (ex:
+  # `mcp_aliases: {"github": "github_mcp_server"}`).
+  mcp_aliases:
+    tools: remote_tools
+  # drop_params: Verified litellm_settings.drop_params (bool).
+  drop_params: true

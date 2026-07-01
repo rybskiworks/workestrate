@@ -1,8 +1,6 @@
 { pkgs
 , microsandbox
 , microsandbox-filesystem-patched
-, pi
-, odysseus
 }:
 
 let

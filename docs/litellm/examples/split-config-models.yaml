@@ -1,0 +1,44 @@
+# =============================================================================
+# split-config-models.yaml
+# Child model_list file included by split-config-parent.yaml.
+# =============================================================================
+#
+# ANTI-HALLUCINATION GROUNDING:
+#   - `model_list` (top_level, list, required=true) — verified verbatim from
+#     docs/litellm/schemas/config-yaml.option-index.json.
+#   - `model_list[].model_name`, `.litellm_params`, `.litellm_params.model`,
+#     `.litellm_params.api_key` — verified from option-index (model_list and
+#     model_list.litellm_params subsections).
+#   - Provider prefixes verified from
+#     docs/litellm/schemas/provider-fields.index.json:
+#       openrouter/  -> provider_name: OpenRouter, litellm_prefix: openrouter/,
+#                      required_env_vars: [OPENROUTER_API_KEY].
+#       openai/      -> provider_name: OpenAI-Compatible Endpoints,
+#                      litellm_prefix: openai/, required_env_vars: [OPENAI_API_KEY].
+#
+# INCLUDE MECHANISM (VERIFIED VERBATIM): the parent file uses the top-level
+# `include:` directive (a list of filenames) to merge this child file. The
+# upstream "File Management" page (/docs/proxy/config_management) confirms a
+# child file may contain ONLY a top-level `model_list:` with no wrapper — its
+# verbatim example child (model_config.yaml) contains exactly that. See
+# docs/litellm/extracted/p0-config_management.md.
+#
+# SECRETS: all api_key values use os.environ/ indirection. NEVER commit real
+# values. Required env vars: OPENROUTER_API_KEY, OPENAI_API_KEY.
+#
+# WORKESTRATOR-SPECIFIC: none. This is a generic child model_list.
+
+model_list:
+  - model_name: primary
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: primary-fallback
+    litellm_params:
+      # openai/ prefix + api_base is the documented OpenAI-compatible pattern.
+      # Verified: provider-fields.index.json openai/ entry (proxy_yaml_example).
+      # api_base MUST include /v1 postfix (caveat in openai/ entry).
+      model: openai/gpt-4o
+      api_base: https://api.example.com/v1
+      api_key: os.environ/OPENAI_API_KEY

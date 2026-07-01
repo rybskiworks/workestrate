@@ -1,0 +1,57 @@
+# =============================================================================
+# openrouter.yaml
+# =============================================================================
+# OpenRouter nested model-string pattern: openrouter/<provider>/<model>.
+#
+# VERIFIED FROM DOCS (providers/openrouter.md,
+#   source: https://docs.litellm.ai/docs/providers/openrouter):
+#   - Prefix: `openrouter/` — "LiteLLM supports ALL OpenRouter models, send
+#     `model=openrouter/<your-openrouter-model>` to send it to open router."
+#   - Documented example model strings (verbatim) use the nested form:
+#       openrouter/openai/gpt-4
+#       openrouter/anthropic/claude-2
+#       openrouter/meta-llama/llama-2-70b-chat
+#       openrouter/google/gemini-2.5-flash-image
+#   - Required env var: `OPENROUTER_API_KEY` (verbatim).
+#   - Optional env var: `OPENROUTER_API_BASE` — defaults to
+#     `https://openrouter.ai/api/v1` (verbatim).
+#
+# UNCERTAIN / INFERRED (marked, NOT verbatim from docs):
+#   - The docs page shows NO proxy YAML `config.yaml` / `model_list` example
+#     (verbatim caveat: "No proxy YAML config is shown on this page."). The
+#     YAML shape below is INFERRED from the standard LiteLLM pattern as the
+#     docs themselves suggest (provider-fields.index.json marks the proxy_yaml
+#     as "(inferred) YAML would follow standard pattern").
+#   - `openrouter/z-ai/glm-5.1` is structurally consistent with the documented
+#     nested format but is NOT verbatim on the page. See zai-glm.yaml for the
+#     GLM-5.1 routing rationale.
+#
+# REQUIRED ENV VARS:
+#   - OPENROUTER_API_KEY
+#
+# SECRET HYGIENE: NEVER commit real API keys. Use `os.environ/<VAR>` indirection.
+#
+# WORKESTRATOR NOTES [PROJECT CONTEXT — NOT upstream docs]:
+#   - The repo uses `openrouter/z-ai/glm-5.1`, `openrouter/qwen/...`, and
+#     `openrouter/nex/...` style strings — all structurally valid per the
+#     documented nested `openrouter/<provider>/<model>` pattern.
+#   - OpenRouter-specific pass-through params (`transforms`, `models`, `route`)
+#     are passed as args to `litellm.completion()`, not as litellm_params keys.
+# =============================================================================
+
+model_list:
+  - model_name: openai-gpt-4          # alias (placeholder)
+    litellm_params:
+      model: openrouter/openai/gpt-4  # VERIFIED nested format + verbatim example string
+      api_key: os.environ/OPENROUTER_API_KEY   # VERIFIED required env var
+
+  - model_name: anthropic-claude       # alias (placeholder)
+    litellm_params:
+      model: openrouter/anthropic/claude-2    # VERIFIED verbatim example string
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # INFERRED (not verbatim on docs page, but follows documented nested format):
+  - model_name: zai-glm-5.1           # alias (placeholder)
+    litellm_params:
+      model: openrouter/z-ai/glm-5.1  # INFERRED: nested format valid; `z-ai` is OpenRouter's namespace for Z.AI
+      api_key: os.environ/OPENROUTER_API_KEY

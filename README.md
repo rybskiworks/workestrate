@@ -1,6 +1,6 @@
 # workestrator
 
-A local AI workbench that runs Pi and Odysseus coding agents inside
+A local AI workbench that runs Pi, Odysseus, and OpenCode coding agents inside
 Microsandbox microVMs, with LiteLLM as the unified LLM proxy. Everything
 is driven from a single Rust CLI (`agentctl`) and orchestrated through
 Nix flakes and SOPS-encrypted secrets.
@@ -60,7 +60,7 @@ before continuing.
    ```
 6. Start an agent (for example Pi):
    ```bash
-   run-with-secrets agent up pi
+   run-with-secrets pi up
    ```
 
    Services run in the foreground by default (Ctrl-C stops them). To
@@ -86,7 +86,7 @@ that path.
    `setup-secrets init` will create a new age key and update
    `.sops.yaml` for you. If `.sops.yaml` already has a different
    recipient, the script will ask you to update it manually. The
-   command either uses the required env vars (if all five are set) or
+   command either uses the required env vars (if all are set) or
    opens `$EDITOR` (falling back to `nano`, `vi`, or `vim`) with a
    pre-filled buffer of required and optional keys from `.env.example`.
    `init` refuses to overwrite an existing `.env.enc`.
@@ -96,8 +96,11 @@ that path.
    | `LITELLM_MASTER_KEY` | Local LiteLLM proxy authentication (any `sk-…` string; `sk-change-me-local-only` is rejected) |
    | `OPENROUTER_API_KEY` | OpenRouter provider |
    | `KIMI_CODE_API_KEY` | Kimi for Coding provider |
+
+   | `NEURALWATT_API_KEY` | Neuralwatt provider |
    | `MINIMAX_CODING_API_KEY` | MiniMax Coding provider |
-   | `INCEPTION_API_KEY` | Inception Labs provider |
+   | `GITHUB_TOKEN` | GitHub Personal Access Token for agent sandboxes (git operations + API) |
+   | `ODYSSEUS_ADMIN_PASSWORD` | Odysseus admin login (required because `AUTH_ENABLED=true`; without it Odysseus auto-generates a random password printed to logs) |
 
    The optional keys `AI_WORKBENCH_WORKSPACES_DIR` and
    `AI_WORKBENCH_VAR_DIR` are reserved for future use and are not yet
@@ -143,7 +146,7 @@ nix run .#with-secrets -- bash -c \
   'curl -sS http://127.0.0.1:4000/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"chat\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
+  -d "{\"model\":\"coding\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
 ```
 
 The `bash -c` wrapper with single quotes is required because `$LITELLM_MASTER_KEY`
@@ -155,69 +158,92 @@ These curls run on the host and reach the proxy at `127.0.0.1:4000`. From
 inside the agent sandboxes, the same proxy is reached at
 `http://host.microsandbox.internal:4000`.
 
-The proxy is configured by `infra/litellm/config.yaml` and exposes role-based
-model names. Each role maps to a primary upstream and a fallback alias:
+The proxy is configured by `infra/litellm/config.yaml` (which `include:`s `models.yaml`) and exposes
+coding-tier model names. Each tier targets a different cost/capability
+point:
 
-| Role | Primary upstream | Fallback |
-|---|---|---|
-| `chat` | `openrouter/openai/gpt-4o` | `chat-fallback` |
-| `coding` | `anthropic/kimi-for-coding` at `https://api.kimi.com/coding` | `coding-fallback` |
-| `reasoning` | `inception/mercury-2` at `https://api.inceptionlabs.ai/v1` | `reasoning-fallback` |
+| Tier | Primary | Fallback chain | Use case |
+|---|---|---|---|
+| `coding` | Kimi K2.7 (`anthropic/kimi-for-coding`) | neural-kimi-k2.7-code → coding.free | Default coding work |
+| `coding.fast` | Qwen 3.6 35B fast (Neuralwatt) | neural-qwen3.6-35b → coding | Quick edits, autocomplete |
+| `coding.pro` | GLM-5.2 short (Neuralwatt) | neural-glm-5.2 → neural-kimi-k2.7-code | Complex refactoring, reasoning |
+| `coding.free` | Qwen 3 Coder free (OpenRouter) | neural-qwen3.6-35b-fast | Experimentation, no cost |
+| `coding.vision` | Kimi K2.6 (Neuralwatt) | neural-qwen3.6-35b → neural-kimi-k2.7-code | Vision + code |
+| `orchestrator` | GLM-5.2 (Neuralwatt, 1M ctx) | neural-glm-5.2-short → neural-qwen3.5-397b | Orchestration, long context |
+| `lead` | GLM-5.2 short (Neuralwatt) | neural-glm-5.2 → neural-kimi-k2.7-code | Lead agent reasoning |
+| `vision` | Kimi K2.6 (Neuralwatt) | neural-qwen3.6-35b | Vision-only tasks |
 
-| Fallback alias | Upstream |
-|---|---|
-| `chat-fallback` | `anthropic/MiniMax-M3` at `https://api.minimax.io/anthropic` |
-| `coding-fallback` | `anthropic/MiniMax-M3` at `https://api.minimax.io/anthropic` |
-| `reasoning-fallback` | `openrouter/openai/gpt-4o` |
+The `neural` umbrella alias and 11 `neural-*` direct-access aliases
+(map to individual Neuralwatt catalog models) are also available for
+agents that need to pin a specific model rather than a tier. The
+`orchestrator`, `lead`, `vision`, and `coding.vision` tiers are
+available for future agent wiring; no agent currently pins them.
 
-Kimi and MiniMax are routed through the `anthropic/` provider because
-their endpoints speak the Anthropic Messages API, not OpenAI's.
+The `minimax-m3` direct-access alias (MiniMax-M3 via the Anthropic Messages API at `api.minimax.io/anthropic`) is also available for agents that need to pin a specific model rather than a tier.
+
+Kimi is routed through the `anthropic/` provider because its endpoint
+speaks the Anthropic Messages API, not OpenAI's. All Neuralwatt models
+use the `openai/` prefix with `api_base: https://api.neuralwatt.com/v1`.
 `general_settings.master_key` reads `os.environ/LITELLM_MASTER_KEY`,
-`general_settings.completion_model` is `chat`, and
-`litellm_settings.drop_params` is `true`.
+`general_settings.disable_spend_logs` is `true`, and
+`litellm_settings.drop_params` is `true`. There is no
+`completion_model` default; clients must specify the model explicitly
+in every request.
 
 Egress is locked down to DNS (`tcp/53` and `udp/53`) to the host
-and `tcp/443` to the four upstream hosts above. Each upstream API key
-is bound to its destination via `allowed_host`; `LITELLM_MASTER_KEY`
-is exposed inside the proxy as a regular environment variable (passed
-via `env()`, not `secret_env()`); it remains a secret and is bound to
-the proxy host only.
+and `tcp/443` to `openrouter.ai`, `api.kimi.com`, `api.neuralwatt.com`, and `api.minimax.io`.
+All OpenRouter models use the same `openrouter.ai` egress host.
+Provider API keys (OpenRouter, Kimi, Neuralwatt, MiniMax) are host-bound via
+`secret_env()`; `LITELLM_MASTER_KEY` is passed as a plain environment
+variable via `env()` (not host-bound) because LiteLLM reads it from
+the process env at startup.
 
 ## Running agents
 
 ```bash
-run-with-secrets agent up pi          # start the Pi coding agent
-run-with-secrets agent up odysseus    # start the Odysseus coding agent
-run-with-secrets agent down pi        # stop
-nix run . -- agent plan pi            # show sandbox plan without secrets (or: agent plan odysseus)
+run-with-secrets pi up                # start the Pi coding agent
+run-with-secrets odysseus up          # start the Odysseus coding agent
+run-with-secrets opencode up          # start the OpenCode coding agent
+run-with-secrets pi down              # stop
+nix run . -- pi plan                  # show sandbox plan without secrets (or: odysseus plan, opencode plan)
 ```
 
-Note: `agents/pi` and `agents/odysseus` must be cloned into the
-`agents/` directory before `agent up` will work; `agentctl check`
+Note: `agents/pi/repo` and `agents/odysseus/repo` must be cloned into the
+`agents/` directory before `<name> up` will work; `agentctl check`
 reports them as `[MISSING] (optional)` and does not fail, but the
-corresponding `agent up` command requires the checkout to exist.
+corresponding `<name> up` command requires the checkout to exist.
 
 Agents reach the proxy at `http://host.microsandbox.internal:4000`.
-The agent's `OPENAI_API_KEY` is bound to `LITELLM_MASTER_KEY` for that
-host only, so an agent that exfiltrates the secret cannot reuse it
-against a different destination.
+Odysseus and OpenCode receive `OPENAI_API_KEY` (remapped from
+`LITELLM_MASTER_KEY`) host-bound to `host.microsandbox.internal`. Pi
+receives `LITELLM_MASTER_KEY` as a plain process env var (not
+host-bound) because Pi's `models.json` performs
+`${LITELLM_MASTER_KEY}` substitution at startup; host-bound secrets
+are not visible in the guest env and would leave the substitution
+empty. The authoritative security control for all agents is network
+segmentation (default-deny egress); an agent that exfiltrates the key
+can only reach the proxy (tcp/4000) and GitHub (tcp/443). Runtime
+enforcement is unverified in M1 (compile-checked only).
 
 The Pi sandbox plan sets `PI_OFFLINE=1` and `PI_TELEMETRY=0`, denies
-the `domain suffix .pi.dev`, mounts `agents/pi` and `workspaces/pi`,
-and allows DNS (`udp/53`, `tcp/53`) to the host and `tcp/4000` to the
-host for the LiteLLM proxy. The Odysseus sandbox plan runs
+the `domain suffix .pi.dev`, mounts `agents/pi/repo` and `workspaces/pi`,
+and allows DNS (`udp/53`, `tcp/53`) to the host, `tcp/4000` to the
+host for the LiteLLM proxy, and `tcp/443` to `github.com` and
+`api.github.com` for GitHub access. The Odysseus sandbox plan runs
 `python:3.12-slim` with
 `uvicorn app:app --host 0.0.0.0 --port 7000`, publishes `7000:7000`,
-mounts `agents/odysseus`, `workspaces/odysseus-data`,
+mounts `agents/odysseus/repo`, `workspaces/odysseus-data`,
 `~/.microsandbox/sandboxes/odysseus/data` → `/data` (persistent state),
-and `~/.microsandbox/sandboxes/odysseus/data/settings.json` →
-`/app/data/settings.json` (read-only, generated by `agentctl` at
-startup), and likewise allows DNS (`udp/53`, `tcp/53`) to the host and
-`tcp/4000` to the host for the LiteLLM proxy. Both plans bind
-`OPENAI_API_KEY` to `LITELLM_MASTER_KEY` for
-`host.microsandbox.internal`.
+and `agents/odysseus/config/settings.json` →
+`/app/data/settings.json` (read-only, tracked file), and likewise allows DNS (`udp/53`, `tcp/53`) to the host,
+`tcp/4000` to the host for the LiteLLM proxy, and `tcp/443` to
+`github.com` and `api.github.com` for GitHub access. Both plans bind
+`GITHUB_TOKEN` to `github.com` and `api.github.com`. Odysseus binds
+`OPENAI_API_KEY` (remapped from `LITELLM_MASTER_KEY`) to
+`host.microsandbox.internal`; Pi receives `LITELLM_MASTER_KEY` as a
+plain process env var instead (see above).
 
-`agents/pi` and `agents/odysseus` are optional local overrides and are
+`agents/pi/repo` and `agents/odysseus/repo` are optional local overrides and are
 expected to be absent on a fresh clone; `agentctl check` reports them
 as `[MISSING] (optional)` and does not fail.
 
@@ -228,7 +254,8 @@ Common `just` recipes:
 | Recipe | What it does |
 |---|---|
 | `just check` | Run `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo check` for `control/agentctl` |
-| `just verify` | Full pre-merge gate: `just check` plus `cargo test` and `Cargo.lock` stability check |
+| `just litellm-check` | Validate `infra/litellm/config.yaml` against the schema indexes |
+| `just verify` | Full pre-merge gate: `just check` plus `cargo test`, `just litellm-check`, and `Cargo.lock` stability check |
 | `just verify-full` | Heaviest validation: `just verify` plus `nix build .#agentctl` |
 | `just build` | Build the `agentctl` binary |
 | `just fmt` | Format the Rust code |
@@ -236,7 +263,7 @@ Common `just` recipes:
 | `just clippy` | Run Clippy with `-D warnings` |
 | `just test` | Run unit tests for `control/agentctl` |
 | `just agentctl …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just agentctl litellm plan`) |
-| `just plan` | Run `litellm plan`, `agent plan pi`, and `agent plan odysseus` via `cargo run` |
+| `just plan` | Run `litellm plan`, `pi plan`, `odysseus plan`, and `opencode plan` via `cargo run` |
 | `just host-check` | Verify KVM, Nix, memory, and disk prerequisites |
 | `just validate-secrets` | Exercise the SOPS/age workflow against ephemeral test values |
 | `just setup-secrets init` | Run `setup-secrets init` from the dev shell |
@@ -261,32 +288,44 @@ recreates the symlink from the flake input.
                         │            Host (Nix + /dev/kvm)             │
                         │                                              │
   user ─── agentctl ──▶ │  ┌────────────┐    ┌───────────────────────┐  │
-                        │  │  msb       │    │  litellm microVM      │  │
-                        │  │ (Nix store)│    │  :4000  (in-memory)   │  │
-                        │  └─────┬──────┘    └──────────┬────────────┘  │
-                        │        │  drives              │               │
-                        │   ┌────┴──────────┐  ┌────────┴──────────┐    │
-                        │   │ pi microVM    │  │ odysseus microVM  │    │
-                        │   │               │  │ :7000             │    │
-                        │   └──┬────────────┘  └────────┬──────────┘    │
-                        │      │      host.microsandbox.internal:4000   │
-                        │      │                       │                │
-                        └──────┼───────────────────────┼────────────────┘
-                               │                       │
-                               ▼                       ▼
-                  Upstream LLM providers (OpenRouter, Kimi, MiniMax, Inception)
+                         │  │  msb       │    │  litellm microVM      │  │
+                         │  │ (Nix store)│    │  :4000  (in-memory)   │  │
+                         │  └─────┬──────┘    └──────────┬────────────┘  │
+                         │        │  drives              │               │
+                         │   ┌────┴──────────┐  ┌────────┴──────────┐  ┌────────┴──────────┐
+                         │   │ pi microVM    │  │ odysseus microVM  │  │ opencode microVM  │
+                         │   │               │  │ :7000             │  │ :3000             │
+                         │   └──┬────────────┘  └────────┬──────────┘  └────────┬──────────┘
+                         │      │      host.microsandbox.internal:4000          │
+                         │      │                       │                       │
+                         └──────┼───────────────────────┼───────────────────────┼───────────────┘
+                                │                       │                       │
+                                ▼                       ▼                       ▼
+                     Upstream LLM providers (OpenRouter, Kimi, Neuralwatt, MiniMax)
 ```
 
 - The Microsandbox SDK is pinned to `microsandbox = "=0.5.6"` with the
   `net` feature.
 - Sandbox plans use a default-deny network policy; only the
   destinations listed above have explicit egress.
-- Secrets are bound to a specific egress destination via
-  `allowed_host`; the same value cannot be reused against another host.
+- `LITELLM_MASTER_KEY` is passed to Pi and to the LiteLLM proxy as a
+  plain process env var (`EnvVar::secret`, not host-bound) so Pi's
+  `${LITELLM_MASTER_KEY}` substitution in `models.json` resolves to the
+  actual key. Provider secrets (OpenRouter, Kimi, Neuralwatt) remain
+  host-bound in the LiteLLM proxy via `secret_env`.
+- The authoritative security control is network segmentation:
+  default-deny egress plus local-only ingress (`local_tcp(4000)` on the
+  LiteLLM proxy). An agent inside a VM cannot reach any external host
+except the explicitly-allowed ones (`openrouter.ai`, `api.kimi.com`,
+`api.neuralwatt.com`, `api.minimax.io`, `github.com`). The network policy — not
+  credential binding — is what prevents misuse of the key.
+- Runtime enforcement of egress and secret isolation is designed but
+  unverified in M1 (compile-checked only; requires a KVM host for
+  runtime testing).
 - LiteLLM runs in-memory; no Postgres, no virtual keys, no persistent
   spend tracking in M1.
-- Agents only ever see `OPENAI_API_KEY`, bound to the proxy's
-  `host.microsandbox.internal` and equal to `LITELLM_MASTER_KEY`.
+- Odysseus and OpenCode receive `OPENAI_API_KEY` (remapped from
+  `LITELLM_MASTER_KEY`) host-bound to `host.microsandbox.internal`.
 
 The top-level layout (already documented in
 [`agents/README.md`](agents/README.md) and
@@ -316,9 +355,9 @@ The top-level layout (already documented in
   shell (`exit` then `nix develop`) or run `just vendor-unlock` to
   materialise a real copy, then `just vendor-lock` to put the symlink
   back.
-- **`[MISSING] (optional)` for `agents/pi` / `agents/odysseus`.** This
-  is expected on a fresh clone. The agent checkouts are gitignored;
-  clone the agent repos there yourself only if you intend to run them.
+- **`[MISSING] (optional)` for `agents/pi/repo` / `agents/odysseus/repo` / `agents/opencode/repo`.** This
+is expected on a fresh clone. The agent checkouts are gitignored;
+clone the agent repos into `agents/<name>/repo` only if you intend to run them.
 - **"missing secrets" failures.** `agentctl` reports which wrapper to
   use; the fix is almost always to prefix the command with
   `run-with-secrets` so the SOPS-encrypted `.env.enc` is decrypted into
@@ -337,10 +376,10 @@ The top-level layout (already documented in
   `litellm up` with the new `.env.enc`.
 - **No Docker.** Microsandbox talks to KVM directly, so the host does
   not need Docker, `containerd`, or any other container runtime.
-- **Optional agent checkouts.** `agents/pi` and `agents/odysseus` are
-  gitignored. You only need the checkouts if you want to run the agents
-  themselves. (Flake inputs for the agent sources exist but are not yet
-  consumed by the build.)
+- **Optional agent checkouts.** `agents/pi/repo`, `agents/odysseus/repo`, and `agents/opencode/repo` are
+gitignored. You only need the checkouts if you want to run the agents
+themselves. (Flake inputs for the agent sources exist but are not yet
+consumed by the build.)
 - **Secrets discipline.** `.env.enc` is the only encrypted artifact in
   the repo and is restricted by `.sops.yaml` to a single recipient.
   Treat the age key file as the recovery seed for the entire workflow;

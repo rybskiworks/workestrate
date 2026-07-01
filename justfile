@@ -3,8 +3,13 @@ check:
     cargo clippy --manifest-path control/agentctl/Cargo.toml -- -D warnings
     cargo check --manifest-path control/agentctl/Cargo.toml
 
-# Full pre-merge validation: format, lint, compile-check, test, and lock-file stability
-verify: check test
+# Validate LiteLLM config.yaml against the schema indexes
+litellm-check:
+    python3 .agents/skills/validation-litellm-config-check/scripts/check_config.py \
+      --config infra/litellm/config.yaml --schemas-dir docs/litellm/schemas --mode in-memory
+
+# Full pre-merge validation: format, lint, compile-check, test, config validation, and lock-file stability
+verify: check test litellm-check
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
@@ -34,8 +39,9 @@ agentctl *args:
 
 plan:
     cargo run --manifest-path control/agentctl/Cargo.toml -- litellm plan
-    cargo run --manifest-path control/agentctl/Cargo.toml -- agent plan pi
-    cargo run --manifest-path control/agentctl/Cargo.toml -- agent plan odysseus
+    cargo run --manifest-path control/agentctl/Cargo.toml -- pi plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- odysseus plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- opencode plan
 
 # Check that the Debian/Linux host is ready to run the workbench
 host-check:

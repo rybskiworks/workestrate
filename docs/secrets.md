@@ -20,7 +20,7 @@ ai-workbench uses [SOPS](https://github.com/getsops/sops) with an [age](https://
    `setup-secrets init`:
    - Creates `~/.config/sops/age/ai-workbench-secrets.txt` (mode 0600) if missing.
     - Replaces the `age1PLACEHOLDER...` recipient in `.sops.yaml` with the actual public key.
-    - If all five required env vars (`LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `KIMI_CODE_API_KEY`, `MINIMAX_CODING_API_KEY`, `INCEPTION_API_KEY`) are set and non-empty, uses those values directly (non-interactive).
+    - If all four required env vars (`LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `KIMI_CODE_API_KEY`, `MINIMAX_CODING_API_KEY`) are set and non-empty, uses those values directly (non-interactive).
     - Otherwise, opens your default terminal editor (`$EDITOR`, or `nano`/`vi`/`vim` on the host) with a pre-filled buffer of all keys from `.env.example`. Fill in values, delete the `# setup-secrets: delete this line…` sentinel to confirm the save, and exit the editor. The buffer is validated; on errors, the file is re-opened with an `# ERROR:` annotation (up to 3 attempts).
     - Writes encrypted `.env.enc`.
 
@@ -51,8 +51,8 @@ decrypt `.env.enc` and run `agentctl` subcommands:
 ```bash
 nix develop
 run-with-secrets litellm up
-run-with-secrets agent up pi
-run-with-secrets agent up odysseus
+run-with-secrets pi up
+run-with-secrets odysseus up
 ```
 
 `run-with-secrets` always requires `.env.enc` to exist, so it is only for
@@ -61,7 +61,7 @@ secrets, use plain `nix run`:
 
 ```bash
 nix run . -- litellm plan
-nix run . -- agent plan pi
+nix run . -- pi plan
 ```
 
 For arbitrary commands inside the dev shell that need the same secrets:
@@ -128,14 +128,14 @@ The script:
 2. Copies `.sops.yaml` and rewrites the recipient to the test public key.
 3. Runs `setup-secrets init` with secrets supplied via env vars
    (`LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `KIMI_CODE_API_KEY`,
-   `MINIMAX_CODING_API_KEY`, `INCEPTION_API_KEY`).
-4. Decrypts with `decrypt-env` and asserts the five initial values appear.
-5. Runs `setup-secrets update` with one changed value and four preserved
+   `MINIMAX_CODING_API_KEY`).
+4. Decrypts with `decrypt-env` and asserts the four initial values appear.
+5. Runs `setup-secrets update` with one changed value and three preserved
    values, then re-decrypts and asserts the change took effect and the other
-   four were preserved.
+   three were preserved.
 6. Runs `write-env`, asserts `.env` was created with mode `0600` and contains
    the expected values, then removes the file.
-7. Runs `with-secrets env` and asserts all five secrets are exported to the
+7. Runs `with-secrets env` and asserts all four secrets are exported to the
    child process's environment.
 8. Runs `run-with-secrets --help` and asserts agentctl's help text appears
    (proving the decrypt+exec path works end-to-end).

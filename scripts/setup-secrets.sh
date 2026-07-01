@@ -113,7 +113,6 @@ build_prefilled_buffer() {
     for k in "${REQUIRED_KEYS[@]}"; do
       echo "#   - $k"
     done
-    echo "# LITELLM_MASTER_KEY must NOT be left as the placeholder ('sk-change-me-local-only')."
     echo "# Fill in real values, save, and exit your editor. The buffer is validated"
     echo "# and encrypted automatically. Delete the SENTINEL line below to confirm."
     echo ""
@@ -288,10 +287,7 @@ validate_buffer() {
           echo "[setup-secrets] error: $trimmed_key: value is empty or whitespace-only" >&2
           errors=$((errors + 1))
         fi
-        if [ "$trimmed_key" = "LITELLM_MASTER_KEY" ] && [ "$trimmed_value" = "sk-change-me-local-only" ]; then
-          echo "[setup-secrets] error: LITELLM_MASTER_KEY must be changed from the placeholder value" >&2
-          errors=$((errors + 1))
-        fi
+
       fi
     else
       warn_unparseable=1
@@ -356,19 +352,19 @@ print_summary() {
   log "REMINDER: back up $SOPS_AGE_KEY_FILE to a secure location. Without it, .env.enc cannot be decrypted."
 }
 
-# If all five required env vars are set and non-empty, write them to
+# If all required env vars are set and non-empty, write them to
 # $tmpfile (caller-provided, chmod 600) and return 0. Otherwise return 1.
 noninteractive_env_init() {
   local tmpfile="$1"
   local k v
-  for k in LITELLM_MASTER_KEY OPENROUTER_API_KEY KIMI_CODE_API_KEY MINIMAX_CODING_API_KEY INCEPTION_API_KEY; do
+  for k in "${REQUIRED_KEYS[@]}"; do
     v="${!k:-}"
     if [ -z "$v" ]; then
       return 1
     fi
   done
 
-  for k in LITELLM_MASTER_KEY OPENROUTER_API_KEY KIMI_CODE_API_KEY MINIMAX_CODING_API_KEY INCEPTION_API_KEY; do
+  for k in "${REQUIRED_KEYS[@]}"; do
     v="${!k:-}"
     # Trim value
     v="$(printf '%s' "$v" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
@@ -453,14 +449,28 @@ update_via_editor() {
   log "decrypting $SECRET_FILE"
   sops --config "$SOPS_CONFIG" decrypt --input-type dotenv --output-type dotenv "$SECRET_FILE" > "$tmp"
 
-  # Decide which non-interactive path to take, if any.
-  # 1. If stdin is not a TTY, read one line per required key from stdin
-  #    (empty = keep existing). This preserves the scriptable interface
-  #    used by tests and CI.
-  # 2. Else if LITELLM_MASTER_KEY env var is set, use it to replace the
-  #    existing LITELLM line and keep all other keys as-is.
+  # Decide which path to take:
+  # 1. If LITELLM_MASTER_KEY env var is set, do a targeted replace of just
+  #    that key, keeping all others unchanged. This works in both interactive
+  #    and scripted/CI contexts and has no ordering dependency on REQUIRED_KEYS.
+  # 2. Else if stdin is not a TTY, read one line per required key from stdin
+  #    (empty = keep existing). This preserves the scriptable interface.
   # 3. Else open the editor.
-  if [ ! -t 0 ]; then
+  if [ -n "${LITELLM_MASTER_KEY:-}" ]; then
+    local new_litellm
+    new_litellm="$(printf '%s' "$LITELLM_MASTER_KEY" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    if grep -qE "^LITELLM_MASTER_KEY=" "$tmp"; then
+      # Replace the existing line in place (escape sed metachars in the value)
+      local escaped_litellm
+      escaped_litellm="$(printf '%s' "$new_litellm" | sed -e 's/[\\&|]/\\&/g')"
+      sed -i "s|^LITELLM_MASTER_KEY=.*|LITELLM_MASTER_KEY=${escaped_litellm}|" "$tmp"
+    else
+      printf 'LITELLM_MASTER_KEY=%s\n' "$new_litellm" >> "$tmp"
+    fi
+    if ! validate_buffer "$tmp"; then
+      fail "LITELLM_MASTER_KEY env-var value failed validation; fix and retry"
+    fi
+  elif [ ! -t 0 ]; then
     local newtmp
     newtmp="$(mktemp)"
     chmod 600 "$newtmp"
@@ -481,20 +491,6 @@ update_via_editor() {
         fail "validation failed after 3 attempts"
       fi
     done
-  elif [ -n "${LITELLM_MASTER_KEY:-}" ]; then
-    local new_litellm
-    new_litellm="$(printf '%s' "$LITELLM_MASTER_KEY" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-    if grep -qE "^LITELLM_MASTER_KEY=" "$tmp"; then
-      # Replace the existing line in place (escape sed metachars in the value)
-      local escaped_litellm
-      escaped_litellm="$(printf '%s' "$new_litellm" | sed -e 's/[\\&|]/\\&/g')"
-      sed -i "s|^LITELLM_MASTER_KEY=.*|LITELLM_MASTER_KEY=${escaped_litellm}|" "$tmp"
-    else
-      printf 'LITELLM_MASTER_KEY=%s\n' "$new_litellm" >> "$tmp"
-    fi
-    if ! validate_buffer "$tmp"; then
-      fail "LITELLM_MASTER_KEY env-var value failed validation; fix and retry"
-    fi
   else
     local newtmp
     newtmp="$(mktemp)"
