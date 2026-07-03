@@ -6,6 +6,7 @@ mod microsandbox;
 mod workloads;
 
 use config::CheckEntry;
+use microsandbox::workload::Workload;
 
 #[derive(Parser)]
 #[command(name = "agentctl")]
@@ -61,12 +62,10 @@ enum Commands {
     },
 }
 
-async fn dispatch(name: &str, action: WorkloadAction) -> Result<()> {
-    let workload =
-        workloads::get(name).ok_or_else(|| anyhow::anyhow!("unknown workload: {name}"))?;
+async fn run<W: Workload>(workload: &W, action: WorkloadAction) -> Result<()> {
     match action {
-        WorkloadAction::Up { background } => microsandbox::up(workload.as_ref(), background).await,
-        WorkloadAction::Down => microsandbox::down(name).await,
+        WorkloadAction::Up { background } => microsandbox::up(workload, background).await,
+        WorkloadAction::Down => microsandbox::down(workload.name()).await,
         WorkloadAction::Plan => {
             println!("{}", workload.plan());
             Ok(())
@@ -144,10 +143,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Check => cmd_check().await,
         Commands::New { name } => cmd_new(&name).await,
-        Commands::Litellm { action } => dispatch("litellm", action).await,
-        Commands::Pi { action } => dispatch("pi", action).await,
-        Commands::Odysseus { action } => dispatch("odysseus", action).await,
-        Commands::Opencode { action } => dispatch("opencode", action).await,
+        Commands::Litellm { action } => run(&workloads::Litellm, action).await,
+        Commands::Pi { action } => run(&workloads::Pi, action).await,
+        Commands::Odysseus { action } => run(&workloads::Odysseus, action).await,
+        Commands::Opencode { action } => run(&workloads::Opencode, action).await,
     }
 }
 

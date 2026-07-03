@@ -44,14 +44,12 @@ pub enum EntrypointSpec {
 
 /// A sandbox workload. Each application (litellm, pi, odysseus, opencode, ...)
 /// implements this trait. The generic lifecycle in `runtime.rs` operates on
-/// `&dyn Workload`.
+/// `&W where W: Workload`.
 ///
 /// To add a new workload:
 /// 1. Create `workloads/<name>.rs` (struct + `impl Workload`)
 /// 2. Add `mod <name>;` + `pub use <name>::<Name>;` to `workloads/mod.rs`
-/// 3. Add a match arm to `workloads::get()`
-/// 4. Add a `Commands` variant in `main.rs`
-/// 5. Add a dispatch arm in `main()`
+/// 3. Add a `Commands` variant in `main.rs` and a `run(&workloads::<Name>, action)` arm in `main()`
 pub trait Workload: Send + Sync + std::fmt::Debug {
     /// Sandbox name (used for Sandbox::get, logging, user messages).
     fn name(&self) -> &str;

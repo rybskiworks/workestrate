@@ -331,7 +331,7 @@ pub(crate) async fn run_service_interactive(
 }
 
 /// Generic lifecycle: start any workload's sandbox.
-pub async fn up(workload: &dyn Workload, background: bool) -> Result<()> {
+pub async fn up<W: Workload>(workload: &W, background: bool) -> Result<()> {
     if background {
         let child = spawn_detached_service(workload.name(), &workload.detach_args())?;
         println!(
@@ -520,19 +520,25 @@ mod tests {
         assert_eq!(plan.network.egress_rules[0].protocol, Protocol::Tcp);
         assert_eq!(plan.network.egress_rules[0].port, 53);
         assert_eq!(plan.network.egress_rules[0].target, EgressTarget::Host);
-        let github_rule = plan
+        let github_rules: Vec<_> = plan
             .network
             .egress_rules
             .iter()
-            .find(|r| r.port == 443)
-            .expect("expected port 443 egress rule");
-        assert_eq!(github_rule.protocol, Protocol::Tcp);
-        match &github_rule.target {
-            EgressTarget::Domains(hosts) => {
-                assert!(hosts.contains(&"github.com".to_string()));
-                assert!(hosts.contains(&"api.github.com".to_string()));
-            }
-            EgressTarget::Host => panic!("expected domains, got host"),
+            .filter(|r| r.port == 443)
+            .collect();
+        assert_eq!(
+            github_rules.len(),
+            1,
+            "expected exactly one port 443 egress rule"
+        );
+        let github_rule = github_rules[0];
+        assert!(
+            matches!(github_rule.target, EgressTarget::Domains(_)),
+            "expected domains, got host"
+        );
+        if let EgressTarget::Domains(hosts) = &github_rule.target {
+            assert!(hosts.contains(&"github.com".to_string()));
+            assert!(hosts.contains(&"api.github.com".to_string()));
         }
     }
 

@@ -40,6 +40,7 @@ pkgs.mkShell {
     (python312.withPackages (ps: [ ps.pip ps."pip-tools" ]))
     run-with-secrets
     rustc
+    rust-analyzer
     rustfmt
     sops
     with-secrets
