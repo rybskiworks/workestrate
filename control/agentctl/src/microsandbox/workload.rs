@@ -49,7 +49,8 @@ pub enum EntrypointSpec {
 /// To add a new workload:
 /// 1. Create `workloads/<name>.rs` (struct + `impl Workload`)
 /// 2. Add `mod <name>;` + `pub use <name>::<Name>;` to `workloads/mod.rs`
-/// 3. Add a `Commands` variant in `main.rs` and a `run(&workloads::<Name>, action)` arm in `main()`
+/// 3. Add one entry to the `workloads!` macro in `main.rs`
+///    (the `Commands` variant and dispatch logic are generated from that entry)
 pub trait Workload: Send + Sync + std::fmt::Debug {
     /// Sandbox name (used for Sandbox::get, logging, user messages).
     fn name(&self) -> &str;

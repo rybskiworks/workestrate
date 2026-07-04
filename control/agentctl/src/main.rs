@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod config;
 mod microsandbox;
@@ -31,36 +31,47 @@ enum WorkloadAction {
     Plan,
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Runtime/config sanity check
-    Check,
-    /// Scaffold a new agent project
-    New {
-        /// Name for the new agent (e.g., "my-agent")
-        name: String,
-    },
-    /// LiteLLM proxy sandbox
-    Litellm {
-        #[command(subcommand)]
-        action: WorkloadAction,
-    },
-    /// Pi coding agent sandbox
-    Pi {
-        #[command(subcommand)]
-        action: WorkloadAction,
-    },
-    /// Odysseus agent sandbox
-    Odysseus {
-        #[command(subcommand)]
-        action: WorkloadAction,
-    },
-    /// OpenCode agent sandbox
-    Opencode {
-        #[command(subcommand)]
-        action: WorkloadAction,
-    },
+/// Single source of truth for sandbox workloads.
+/// Adding a workload = one entry here + workloads/<name>.rs + mod.rs wiring.
+macro_rules! workloads {
+    ($macro:ident) => {
+        $macro!(
+            Litellm, workloads::Litellm, "LiteLLM proxy sandbox";
+            Pi, workloads::Pi, "Pi coding agent sandbox";
+            Odysseus, workloads::Odysseus, "Odysseus agent sandbox";
+            Opencode, workloads::Opencode, "OpenCode agent sandbox";
+        );
+    };
 }
+
+macro_rules! define_commands_enum {
+    ($($name:ident, $ty:path, $doc:literal);* $(;)?) => {
+        #[derive(Subcommand)]
+        enum Commands {
+            /// Runtime/config sanity check
+            Check,
+            /// Scaffold a new agent project
+            New {
+                /// Name for the new agent (e.g., "my-agent")
+                name: String,
+            },
+            /// Generate shell completions
+            Completions {
+                #[arg(value_enum)]
+                shell: clap_complete::Shell,
+            },
+            $(
+                #[doc = $doc]
+                $name {
+                    #[command(subcommand)]
+                    action: WorkloadAction,
+                },
+            )*
+        }
+    };
+}
+
+workloads!(define_commands_enum);
 
 async fn run<W: Workload>(workload: &W, action: WorkloadAction) -> Result<()> {
     match action {
@@ -72,6 +83,21 @@ async fn run<W: Workload>(workload: &W, action: WorkloadAction) -> Result<()> {
         }
     }
 }
+
+macro_rules! define_dispatch {
+    ($($name:ident, $ty:path, $doc:literal);* $(;)?) => {
+        async fn dispatch_workload(command: Commands) -> Result<()> {
+            match command {
+                $(
+                    Commands::$name { action } => run(&$ty, action).await,
+                )*
+                _ => Err(anyhow::anyhow!("internal: non-workload command dispatched")),
+            }
+        }
+    };
+}
+
+workloads!(define_dispatch);
 
 fn print_entry(entry: &CheckEntry) {
     if entry.ok {
@@ -127,7 +153,7 @@ async fn cmd_new(name: &str) -> Result<()> {
         name.replace('-', "_")
     );
     println!("     b. Add to workloads/mod.rs registry");
-    println!("     c. Add a Commands variant in main.rs");
+    println!("     c. Add one entry to the `workloads!` macro in main.rs");
     println!("  4. Test: nix develop -c cargo run -- {} plan", name);
     println!();
     println!("Or use a pre-built image (like LiteLLM):");
@@ -143,10 +169,12 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Check => cmd_check().await,
         Commands::New { name } => cmd_new(&name).await,
-        Commands::Litellm { action } => run(&workloads::Litellm, action).await,
-        Commands::Pi { action } => run(&workloads::Pi, action).await,
-        Commands::Odysseus { action } => run(&workloads::Odysseus, action).await,
-        Commands::Opencode { action } => run(&workloads::Opencode, action).await,
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "agentctl", &mut std::io::stdout());
+            Ok(())
+        }
+        command => dispatch_workload(command).await,
     }
 }
 
@@ -167,5 +195,27 @@ async fn cmd_check() -> Result<()> {
         Ok(())
     } else {
         Err(anyhow::anyhow!("Some required checks failed."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_exposes_expected_subcommands() {
+        let cmd = Cli::command();
+        let names: Vec<_> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+        for expected in [
+            "check",
+            "new",
+            "completions",
+            "litellm",
+            "pi",
+            "odysseus",
+            "opencode",
+        ] {
+            assert!(names.contains(&expected), "missing subcommand: {expected}");
+        }
     }
 }
