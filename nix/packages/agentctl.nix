@@ -14,7 +14,7 @@ let
   };
 in
 (pkgs.rustPlatform.buildRustPackage {
-  pname = "agentctl";
+  pname = "workestrate";
   version = "0.1.0";
 
   inherit src;
@@ -71,7 +71,7 @@ in
     # cargo check builds only. At runtime, the SDK needs a stable MSB_HOME
     # (~/.microsandbox) for cache/db/state. Using --run ensures shell expansion
     # of $HOME happens at wrapper execution time, not at build time.
-    wrapProgram $out/bin/agentctl \
+    wrapProgram $out/bin/workestrate \
       --set MSB_PATH "${microsandbox}/bin/msb" \
       --run 'export MSB_HOME="$HOME/.microsandbox"'
   '';
@@ -80,7 +80,7 @@ in
 
   meta = {
     description = "Control plane CLI for the AI workbench";
-    mainProgram = "agentctl";
+    mainProgram = "workestrate";
   };
 }
 )

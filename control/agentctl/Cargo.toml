@@ -1,5 +1,5 @@
 [package]
-name = "agentctl"
+name = "workestrate"
 version = "0.1.0"
 edition = "2021"
 description = "Control plane CLI for the AI workbench (Rust + Microsandbox SDK)."
@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [[bin]]
-name = "agentctl"
+name = "workestrate"
 path = "src/main.rs"
 
 [dependencies]

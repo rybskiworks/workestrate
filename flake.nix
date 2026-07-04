@@ -26,12 +26,12 @@
       pkgs = nixpkgs.legacyPackages.${system};
       microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {};
       microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix {};
-      agentctl = pkgs.callPackage ./nix/packages/agentctl.nix {
+      workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
         inherit microsandbox microsandbox-filesystem-patched;
       };
 
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
-      # and other runtime commands look in ~/.microsandbox (where agentctl
+      # and other runtime commands look in ~/.microsandbox (where workestrate
       # stores the SDK cache/db), not the per-shell build staging directory
       # set by the dev shell's shellHook. $HOME is expanded at wrapper
       # execution time, not at build time.
@@ -82,7 +82,7 @@
 
       run-with-secrets = pkgs.writeShellApplication {
         name = "run-with-secrets";
-        runtimeInputs = [ pkgs.sops pkgs.jq agentctl ];
+        runtimeInputs = [ pkgs.sops pkgs.jq workestrate ];
         text = ''
           set -euo pipefail
 
@@ -97,7 +97,7 @@
           fi
 
           if [ "$#" -eq 0 ]; then
-            echo "usage: run-with-secrets <agentctl-args...>" >&2
+            echo "usage: run-with-secrets <workestrate-args...>" >&2
             echo "example: run-with-secrets litellm up" >&2
             exit 2
           fi
@@ -113,7 +113,7 @@
                 '
           )"
 
-          exec agentctl "$@"
+          exec workestrate "$@"
         '';
       };
 
@@ -182,18 +182,18 @@
       };
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
-        inherit pkgs microsandbox microsandbox-filesystem-patched agentctl msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets
+        inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets
           pi odysseus opencode;
       };
 
       packages.${system} = {
-        inherit agentctl microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
-        default = agentctl;
+        inherit workestrate microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+        default = workestrate;
       };
 
       apps.${system}.default = {
         type = "app";
-        program = "${agentctl}/bin/agentctl";
+        program = "${workestrate}/bin/workestrate";
       };
     };
 }

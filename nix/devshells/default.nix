@@ -1,7 +1,7 @@
 { pkgs
 , microsandbox
 , microsandbox-filesystem-patched
-, agentctl
+, workestrate
 , msb-wrapped
 , with-secrets
 , run-with-secrets
@@ -21,7 +21,7 @@
 pkgs.mkShell {
   packages = with pkgs; [
     age
-    agentctl
+    workestrate
     cargo
     clippy
     curl

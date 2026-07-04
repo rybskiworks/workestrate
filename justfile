@@ -14,7 +14,7 @@ verify: check test litellm-check
 
 # Heaviest validation: verify plus Nix build
 verify-full: verify
-    nix build .#agentctl
+    nix build .#workestrate
 
 build:
     cargo build --release --manifest-path control/agentctl/Cargo.toml
@@ -34,7 +34,7 @@ clippy:
 test:
     cargo test --manifest-path control/agentctl/Cargo.toml
 
-agentctl *args:
+workestrate *args:
     cargo run --manifest-path control/agentctl/Cargo.toml -- {{args}}
 
 plan:

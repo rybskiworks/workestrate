@@ -90,7 +90,7 @@ pub(crate) fn spawn_detached_service(name: &str, args: &[String]) -> Result<std:
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("agentctl.log"))?;
+        .open(log_dir.join("workestrate.log"))?;
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(args)
         .stdin(std::process::Stdio::null())
@@ -383,7 +383,7 @@ pub async fn up_service<W: Workload>(workload: &W, foreground: bool) -> Result<(
     if !foreground {
         let child = spawn_detached_service(workload.name(), &workload.detach_args())?;
         println!(
-            "Sandbox '{}' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/{}/agentctl.log",
+            "Sandbox '{}' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/{}/workestrate.log",
             workload.name(), child.id(), workload.name()
         );
         return Ok(());
@@ -407,11 +407,11 @@ pub async fn logs(name: &str) -> Result<()> {
     let path = home
         .join(".microsandbox/sandboxes")
         .join(name)
-        .join("agentctl.log");
+        .join("workestrate.log");
 
     if !path.exists() {
         anyhow::bail!(
-            "no logs found for '{}'; not started? run: agentctl {} up",
+            "no logs found for '{}'; not started? run: workestrate {} up",
             name,
             name
         );

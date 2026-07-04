@@ -9,7 +9,7 @@ use config::CheckEntry;
 use microsandbox::workload::Workload;
 
 #[derive(Parser)]
-#[command(name = "agentctl")]
+#[command(name = "workestrate")]
 #[command(about = "Control plane CLI for the AI workbench")]
 #[command(version)]
 struct Cli {
@@ -99,6 +99,8 @@ macro_rules! define_commands_enum {
             Completions {
                 #[arg(value_enum)]
                 shell: clap_complete::Shell,
+                #[arg(long = "for", value_name = "NAME", default_value = "workestrate", help = "Command name to generate completions for (e.g. workestrate, run-with-secrets)")]
+                for_name: String,
             },
             $(
                 #[doc = $doc]
@@ -223,9 +225,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Check => cmd_check().await,
         Commands::New { name } => cmd_new(&name).await,
-        Commands::Completions { shell } => {
+        Commands::Completions { shell, for_name } => {
             let mut cmd = Cli::command();
-            clap_complete::generate(shell, &mut cmd, "agentctl", &mut std::io::stdout());
+            clap_complete::generate(shell, &mut cmd, &for_name, &mut std::io::stdout());
             Ok(())
         }
         command => dispatch_workload(command).await,
