@@ -32,7 +32,7 @@ pkgs.mkShell {
     just
     libcap_ng
     msb-wrapped
-    nodejs_22
+    nodejs_24  # Node 24: pi's gondolin needs >=23.6; aligns with the node:24 sandbox images
     bun
     openssl
     pkg-config
