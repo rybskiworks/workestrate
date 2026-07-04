@@ -23,15 +23,15 @@
 
 ## Build and Packaging
 
-- `nix build .#agentctl` builds the CLI in M1 and wraps the resulting binary with
+- `nix build .#workestrate` builds the CLI in M1 and wraps the resulting binary with
   `MSB_PATH` pointing at the Nix-managed `msb` from `.#microsandbox`. The SDK's
   `build.rs` is satisfied at build time by staging `msb` and `libkrunfw.so.5.2.1` in
   `$MSB_HOME` (no network download), and at run time by `MSB_PATH`. So
-  `nix run .#agentctl -- litellm plan` (or `nix run . -- litellm plan`) works
+  `nix run .#workestrate -- litellm plan` (or `nix run . -- litellm plan`) works
   without `nix develop` and without a pre-existing `~/.microsandbox/`.
 - `microsandbox-filesystem`'s build.rs would normally download `agentd-x86_64` at
   compile time. We patch it to honor `$MSB_HOME/bin/agentd` and stage the binary
-  from `nix/packages/microsandbox.nix` so `nix build .#agentctl` works without
+  from `nix/packages/microsandbox.nix` so `nix build .#workestrate` works without
   network access in the Nix sandbox.
 - `Cargo.lock` is tracked; regenerating it after dependency changes is manual.
 

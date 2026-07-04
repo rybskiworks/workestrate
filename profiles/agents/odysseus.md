@@ -30,18 +30,14 @@ nix develop -c run-with-secrets odysseus up
 ```
 
 ## Background mode
-Both LiteLLM and Odysseus support a `-b` / `--background` flag that spawns a detached child process and exits immediately. The detached child keeps the sandbox alive and writes logs to `~/.microsandbox/sandboxes/<name>/agentctl.log`.
+Odysseus (a service workload) starts detached by default; `workestrate odysseus up` returns immediately and the sandbox keeps running in the background. Use `workestrate odysseus up --foreground` (or `-f`) to block until Ctrl-C. The detached service writes logs to `~/.microsandbox/sandboxes/<name>/workestrate.log`; tail with `workestrate odysseus logs`.
 
 ```bash
-nix develop -c run-with-secrets odysseus up -b
-nix develop -c run-with-secrets litellm up -b
+nix develop -c run-with-secrets odysseus up
+nix develop -c run-with-secrets litellm up
 ```
 
-**Important:** When started through `run-with-secrets`, the detached child is `agentctl` itself, so it does not inherit decrypted secrets. For M1 this is an accepted limitation. If you need secrets in a background sandbox, use the classic foreground-in-background approach:
-
-```bash
-nohup nix develop -c run-with-secrets odysseus up > odysseus.log 2>&1 &
-```
+**Note:** Detached mode works through `run-with-secrets` — the detached child inherits the parent's decrypted environment, so `run-with-secrets odysseus up` starts detached and works without `nohup`.
 
 ## Expected Integration
 Odysseus should call LiteLLM if it acts as an agent/client.
@@ -63,7 +59,7 @@ For LiteLLM, use `data/settings.json` (not `LLM_HOST`). Example snippet:
 
 The tracked file `agents/odysseus/config/settings.json` is the source of truth
 for provider config and is mounted read-only at `/app/data/settings.json`.
-Secrets are now managed via centralized secret definitions, which agentctl
+Secrets are now managed via centralized secret definitions, which workestrate
 injects at runtime — no literal `${LITELLM_MASTER_KEY}` substitution is needed
 in the tracked file.
 

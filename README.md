@@ -2,7 +2,7 @@
 
 A local AI workbench that runs Pi, Odysseus, and OpenCode coding agents inside
 Microsandbox microVMs, with LiteLLM as the unified LLM proxy. Everything
-is driven from a single Rust CLI (`agentctl`) and orchestrated through
+is driven from a single Rust CLI (`workestrate`) and orchestrated through
 Nix flakes and SOPS-encrypted secrets.
 
 ## What is this
@@ -54,20 +54,23 @@ before continuing.
    ```bash
    setup-secrets init
    ```
-5. Start the LiteLLM proxy:
+5. Start the LiteLLM proxy (starts detached; add `--foreground` to block):
    ```bash
    run-with-secrets litellm up
    ```
-6. Start an agent (for example Pi):
+6. Attach to an agent (for example Pi):
    ```bash
-   run-with-secrets pi up
+   run-with-secrets pi exec
    ```
 
-   Services run in the foreground by default (Ctrl-C stops them). To
-   background them, use `up -b`/`--background` when running `agentctl`
-   directly with secrets already in the environment; with
-   `run-with-secrets`, use `nohup ... &` because the detached child
-   cannot inherit decrypted secrets.
+   Services start detached by default: `workestrate <svc> up` returns
+   immediately and the sandbox keeps running in the background. Use
+   `workestrate <svc> up --foreground` (or `-f`) to block until Ctrl-C.
+   Tail a detached service's logs with `workestrate <svc> logs` (written to
+   `~/.microsandbox/sandboxes/<svc>/workestrate.log`). Detached mode works
+   through `run-with-secrets` — the detached child inherits the parent's
+   decrypted environment, so `run-with-secrets litellm up` starts detached
+   and works without `nohup`.
 
 ## Secrets setup
 
@@ -128,8 +131,9 @@ For the full threat model and wrapper reference, see
 Inside the dev shell:
 
 ```bash
-run-with-secrets litellm up      # start
+run-with-secrets litellm up      # start (detached by default)
 run-with-secrets litellm down    # stop
+run-with-secrets litellm logs    # tail the detached service's log
 nix run . -- litellm plan        # show the sandbox plan without secrets
 ```
 
@@ -200,16 +204,30 @@ the process env at startup.
 
 ## Running agents
 
+Workloads split into two kinds: **services** (litellm, odysseus) support
+`up`/`down`/`logs`/`plan`; **agents** (pi, opencode) support
+`exec`/`down`/`plan` (agents have no `up` or `logs` — you attach to them
+interactively with `exec`).
+
 ```bash
-run-with-secrets pi up                # start the Pi coding agent
-run-with-secrets odysseus up          # start the Odysseus coding agent
-run-with-secrets opencode up          # start the OpenCode coding agent
-run-with-secrets pi down              # stop
-nix run . -- pi plan                  # show sandbox plan without secrets (or: odysseus plan, opencode plan)
+# Services (start detached, tail with `logs`)
+run-with-secrets litellm up          # LiteLLM proxy
+run-with-secrets odysseus up         # Odysseus agent (service)
+run-with-secrets odysseus logs       # tail Odysseus's detached log
+
+# Agents (interactive TUI attach)
+run-with-secrets pi exec            # attach to the Pi coding agent
+run-with-secrets opencode exec      # attach to the OpenCode coding agent
+
+# Stop any workload
+run-with-secrets <name> down
+
+# Show a sandbox plan without secrets
+nix run . -- <name> plan            # e.g. pi plan, odysseus plan, litellm plan
 ```
 
 Note: `agents/pi/repo` and `agents/odysseus/repo` must be cloned into the
-`agents/` directory before `<name> up` will work; `agentctl check`
+`agents/` directory before `<name> up` will work; `workestrate check`
 reports them as `[MISSING] (optional)` and does not fail, but the
 corresponding `<name> up` command requires the checkout to exist.
 
@@ -244,7 +262,7 @@ and `agents/odysseus/config/settings.json` →
 plain process env var instead (see above).
 
 `agents/pi/repo` and `agents/odysseus/repo` are optional local overrides and are
-expected to be absent on a fresh clone; `agentctl check` reports them
+expected to be absent on a fresh clone; `workestrate check` reports them
 as `[MISSING] (optional)` and does not fail.
 
 ## Development workflow
@@ -256,13 +274,13 @@ Common `just` recipes:
 | `just check` | Run `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo check` for `control/agentctl` |
 | `just litellm-check` | Validate `infra/litellm/config.yaml` against the schema indexes |
 | `just verify` | Full pre-merge gate: `just check` plus `cargo test`, `just litellm-check`, and `Cargo.lock` stability check |
-| `just verify-full` | Heaviest validation: `just verify` plus `nix build .#agentctl` |
-| `just build` | Build the `agentctl` binary |
+| `just verify-full` | Heaviest validation: `just verify` plus `nix build .#workestrate` |
+| `just build` | Build the `workestrate` binary |
 | `just fmt` | Format the Rust code |
 | `just fmt-check` | Check formatting without modifying files |
 | `just clippy` | Run Clippy with `-D warnings` |
 | `just test` | Run unit tests for `control/agentctl` |
-| `just agentctl …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just agentctl litellm plan`) |
+| `just workestrate …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just workestrate litellm plan`) |
 | `just plan` | Run `litellm plan`, `pi plan`, `odysseus plan`, and `opencode plan` via `cargo run` |
 | `just host-check` | Verify KVM, Nix, memory, and disk prerequisites |
 | `just validate-secrets` | Exercise the SOPS/age workflow against ephemeral test values |
@@ -281,13 +299,35 @@ symlink into a real directory you can edit, with `chmod -R u+w`).
 Run `just vendor-lock` to delete the directory; the next `nix develop`
 recreates the symlink from the flake input.
 
+## Shell completions
+
+`workestrate` ships shell completions for bash, zsh, fish, elvish, and
+powershell. Install them for both `workestrate` and the `run-with-secrets`
+wrapper (same verb tree, different command name):
+
+```bash
+# bash
+workestrate completions bash > ~/.local/share/bash-completion/completions/workestrate
+workestrate completions bash --for run-with-secrets > ~/.local/share/bash-completion/completions/run-with-secrets
+
+# zsh
+workestrate completions zsh > ~/.zfunc/_workestrate
+workestrate completions zsh --for run-with-secrets > ~/.zfunc/_run-with-secrets
+
+# fish
+workestrate completions fish > ~/.config/fish/completions/workestrate.fish
+workestrate completions fish --for run-with-secrets > ~/.config/fish/completions/run-with-secrets.fish
+```
+
+Reload your shell (or `source` the completion file) afterwards.
+
 ## Architecture
 
 ```
                         ┌──────────────────────────────────────────────┐
                         │            Host (Nix + /dev/kvm)             │
                         │                                              │
-  user ─── agentctl ──▶ │  ┌────────────┐    ┌───────────────────────┐  │
+  user ─── workestrate ──▶ │  ┌────────────┐    ┌───────────────────────┐  │
                          │  │  msb       │    │  litellm microVM      │  │
                          │  │ (Nix store)│    │  :4000  (in-memory)   │  │
                          │  └─────┬──────┘    └──────────┬────────────┘  │
@@ -343,7 +383,7 @@ The top-level layout (already documented in
 - **Stale `~/.microsandbox`.** Safe to delete. The dev shell uses a
   persistent cache at `$HOME/.cache/ai-workbench-msb` for `cargo check`/
   `build.rs` and also cleans up legacy per-shell tmpfs dirs from earlier
-  versions; `nix build .#agentctl` instead runs the Nix-store `msb`
+  versions; `nix build .#workestrate` instead runs the Nix-store `msb`
   directly and the wrapper sets `MSB_HOME="$HOME/.microsandbox"`. The old
   `~/.microsandbox/bin/msb` path is no longer used at runtime.
 - **Port 4000 already in use.** Another process is bound to the
@@ -358,14 +398,14 @@ The top-level layout (already documented in
 - **`[MISSING] (optional)` for `agents/pi/repo` / `agents/odysseus/repo` / `agents/opencode/repo`.** This
 is expected on a fresh clone. The agent checkouts are gitignored;
 clone the agent repos into `agents/<name>/repo` only if you intend to run them.
-- **"missing secrets" failures.** `agentctl` reports which wrapper to
+- **"missing secrets" failures.** `workestrate` reports which wrapper to
   use; the fix is almost always to prefix the command with
   `run-with-secrets` so the SOPS-encrypted `.env.enc` is decrypted into
   the process environment.
 
 ## Important notes
 
-- **M1 scope.** Sandbox plans, the `agentctl` CLI, and the LiteLLM
+- **M1 scope.** Sandbox plans, the `workestrate` CLI, and the LiteLLM
   proxy are compile-checked and exercised against `nix build`. Running
   microVMs at runtime requires a host with `/dev/kvm`; this
   development container has none, so end-to-end agent runs have only

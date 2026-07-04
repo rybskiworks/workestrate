@@ -4,13 +4,13 @@
 
 ai-workbench is a local development environment for running AI coding agents
 (Pi, Odysseus) inside isolated Microsandbox microVMs. LiteLLM provides a
-unified proxy to multiple LLM providers. The control plane (`agentctl`) manages
+unified proxy to multiple LLM providers. The control plane (`workestrate`) manages
 sandbox definitions, plans, and health checks.
 
 ## Current milestone
 
 Milestone 1 (M1) delivers:
-- Compile-checked Rust control plane (`agentctl`)
+- Compile-checked Rust control plane (`workestrate`)
 - Nix flake for reproducible dev shell
 - Microsandbox SDK integration (0.5.6, `net` feature)
 - Sandbox plans for LiteLLM, Pi, and Odysseus
@@ -20,20 +20,22 @@ Milestone 1 (M1) delivers:
 
 ## Runtime architecture
 
-The host runs NixOS or Nix on Linux with KVM. `agentctl` builds sandbox
+The host runs NixOS or Nix on Linux with KVM. `workestrate` builds sandbox
 configurations using the Microsandbox Rust SDK. Each agent and LiteLLM runs in
 its own microVM with explicit network policies, secret injection, and resource
 limits. Agents communicate with LiteLLM via a well-known host IP/port.
 
 ## Components
 
-### agentctl
+### workestrate
 
-Rust CLI built with Tokio and Clap. Commands: `check`, `litellm {plan,up,down}`,
-`<name> {plan,up,down}`. The `plan` subcommands print sandbox configurations
-built with `SandboxBuilder` and `NetworkPolicyBuilder`. The `up`/`down` subcommands
-drive the Microsandbox runtime (compile-checked in M1; runtime-validated on a KVM
-host in M2).
+Rust CLI built with Tokio and Clap. Commands: `check`, plus per-workload subcommands. **Services** (litellm,
+odysseus) expose `{up,down,logs,plan}`; **agents** (pi, opencode) expose
+`{exec,down,plan}`. The `plan` subcommands print sandbox configurations
+built with `SandboxBuilder` and `NetworkPolicyBuilder`. The `up`/`down`
+subcommands drive the Microsandbox runtime (compile-checked in M1;
+runtime-validated on a KVM host in M2). Service `up` starts detached by
+default (`--foreground` to block); `logs` tails the detached service's log.
 
 ### Microsandbox
 
@@ -65,12 +67,12 @@ provider pointing at LiteLLM. Full integration is future work.
 ### Nix
 
 Reproducible build environment. `nix develop` provides Rust toolchain,
-`just`, and build dependencies. `nix build .#agentctl` compiles the CLI and wraps it with `MSB_PATH` pointing at
+`just`, and build dependencies. `nix build .#workestrate` compiles the CLI and wraps it with `MSB_PATH` pointing at
 `.#microsandbox` so runtime commands find the Nix-managed daemon.
 
 ## Source model
 
-- `agentctl` sources: `control/agentctl/src/`
+- `workestrate` sources: `control/agentctl/src/`
 - Flake inputs: `nixpkgs`, `pi` (GitHub fork), `odysseus` (GitHub fork)
 - Agent repos are optional local overrides in `agents/`, ignored by git
 - Profiles live in `profiles/agents/`
@@ -102,10 +104,10 @@ performs secret injection (dummy key → real key) for allowed destinations.
 - [x] `cargo clippy -- -D warnings` passes
 - [x] `cargo fmt -- --check` passes
 - [x] `just check` passes
-- [x] `agentctl check` reports all required files present
-- [x] `agentctl litellm plan` prints a valid sandbox plan
-- [x] `agentctl pi plan` prints a valid sandbox plan
-- [x] `agentctl odysseus plan` prints a valid sandbox plan
+- [x] `workestrate check` reports all required files present
+- [x] `workestrate litellm plan` prints a valid sandbox plan
+- [x] `workestrate pi plan` prints a valid sandbox plan
+- [x] `workestrate odysseus plan` prints a valid sandbox plan
 - [ ] Runtime sandbox execution (blocked: no KVM)
 
 ## Future milestones
@@ -128,5 +130,5 @@ See `docs/gaps.md` for the full list. Key items:
 - Runtime testing blocked by missing KVM
 - Agent integration with LiteLLM requires native config seeding, not `OPENAI_BASE_URL`
 - Secret injection and egress enforcement are compile-checked but untested
-- `nix build .#agentctl` is available in M1 and is wired to the `.#microsandbox`
+- `nix build .#workestrate` is available in M1 and is wired to the `.#microsandbox`
   runtime via `MSB_PATH`; runtime execution still requires a host with KVM.

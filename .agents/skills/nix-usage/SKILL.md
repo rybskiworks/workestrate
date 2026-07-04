@@ -4,7 +4,7 @@ description: |
   Reference for the ai-workbench Nix flake, dev shell, Rust toolchain, and
   Microsandbox runtime. Load when users ask about `nix develop`, `nix build`,
   `nix flake check`, `nix run`, flake outputs, Nix PATH issues, building
-  `agentctl`, or why `msb` is downloaded at runtime. Does NOT cover general
+  `workestrate`, or why `msb` is downloaded at runtime. Does NOT cover general
   Nix tutorials.
 ---
 
@@ -21,7 +21,7 @@ Load this skill when:
   `nix run` inside `/home/node/Development/ai-workbench/`.
 - Diagnosing Nix PATH/profile issues (`nix: command not found`, dangling
   `~/.nix-profile`, missing `~/.nix-profile/bin/...`).
-- Building `agentctl` (`nix build .#agentctl`).
+- Building `workestrate` (`nix build .#workestrate`).
 - Explaining that `msb` is downloaded at runtime by the Microsandbox SDK.
 - Modifying `flake.nix`, `flake.lock`, or files under `nix/`.
 
@@ -30,7 +30,7 @@ Load this skill when:
 - **Project root**: `/home/node/Development/ai-workbench/`
 - **Container**: Debian 12, single Docker container
 - **User**: `node` (uid 1000), no `sudo`, no root
-- **Source**: Rust `agentctl` lives in `control/agentctl/`
+- **Source**: Rust `workestrate` lives in `control/agentctl/`
 - **Entry point**: the project flake (`flake.nix` + `nix/`)
 
 ## Environment Characteristics
@@ -71,8 +71,8 @@ nix develop -c gcc --version
 nix develop -c just --version
 
 # Package build
-nix build .#agentctl
-./result/bin/agentctl --version
+nix build .#workestrate
+./result/bin/workestrate --version
 ```
 
 ## Working With Flakes
@@ -80,7 +80,7 @@ nix build .#agentctl
 Current outputs:
 
 - `devShells.x86_64-linux.default` — `nix develop`
-- `packages.x86_64-linux.agentctl` — `nix build .#agentctl`
+- `packages.x86_64-linux.workestrate` — `nix build .#workestrate`
 
 There is NO `packages.default`, NO `nix fmt`, and NO `nix run .#default`.
 
@@ -94,9 +94,9 @@ Lock file inputs:
 - `pi` (github:georgrybski/pi, `flake=false`)
 - `odysseus` (github:georgrybski/odysseus, `flake=false`)
 
-`agents/pi/` is an optional gitignored local override; `agentctl check`
+`agents/pi/` is an optional gitignored local override; `workestrate check`
 reports it `[MISSING]` if absent. The locked `pi` input is what
-`nix build .#agentctl` actually uses.
+`nix build .#workestrate` actually uses.
 
 Update the lock only deliberately:
 
@@ -156,7 +156,7 @@ CI should NOT run `nix flake update`.
 | `~/.nix-profile/bin/...` not found | Dangling profile symlink | Run the profile repair (above) |
 | `Path 'X' is not tracked by Git` | Untracked source file | `git add X` |
 | `linking with '.../.toolchain/...'` failed | Ran cargo outside `nix develop` | Use `nix develop -c cargo ...` |
-| `error: 'packages.x86_64-linux.default' is not a flake output` | Used `.#default` | Use `.#agentctl`; there is no default |
+| `error: 'packages.x86_64-linux.default' is not a flake output` | Used `.#default` | Use `.#workestrate`; there is no default |
 | `cargo: command not found` / `gcc: command not found` | Outside dev shell | Run inside `nix develop` |
 | `msb: command not found` at runtime | SDK has not downloaded it yet | First use downloads it; check network or pre-stage |
 | Build error mentioning `$HOME/.microsandbox/bin` | build.rs writing outside sandbox | Set `HOME=$TMPDIR` (derivation already does this) |

@@ -43,16 +43,16 @@ Non-interactive updates are supported in two ways:
 
 `init` refuses to overwrite an existing `.env.enc` — use `update` for changes.
 
-## Running `agentctl` commands with secrets
+## Running `workestrate` commands with secrets
 
-Inside the dev shell, `agentctl` is already on PATH. Use `run-with-secrets` to
-decrypt `.env.enc` and run `agentctl` subcommands:
+Inside the dev shell, `workestrate` is already on PATH. Use `run-with-secrets` to
+decrypt `.env.enc` and run `workestrate` subcommands:
 
 ```bash
 nix develop
-run-with-secrets litellm up
-run-with-secrets pi up
-run-with-secrets odysseus up
+run-with-secrets litellm up      # service: starts detached
+run-with-secrets odysseus up     # service: starts detached
+run-with-secrets pi exec         # agent: interactive TUI attach
 ```
 
 `run-with-secrets` always requires `.env.enc` to exist, so it is only for
@@ -77,10 +77,10 @@ Outside the dev shell you can also run:
 nix run .#with-secrets -- nix run . -- litellm up
 ```
 
-## How agentctl validates secrets
+## How workestrate validates secrets
 
 When you run `with-secrets nix run . -- litellm up`, the CLI validates that
-`LITELLM_MASTER_KEY` and the provider keys defined in `.env.example` are present. Agent `up` commands
+`LITELLM_MASTER_KEY` and the provider keys defined in `.env.example` are present. Service `up` and agent `exec` commands
 require `LITELLM_MASTER_KEY`. If a required secret is missing, the CLI prints
 a clear error and exits before starting any sandbox, so the failure is
 attributable to the missing secret rather than opaque sandbox-runtime output.
@@ -137,7 +137,7 @@ The script:
    the expected values, then removes the file.
 7. Runs `with-secrets env` and asserts all four secrets are exported to the
    child process's environment.
-8. Runs `run-with-secrets --help` and asserts agentctl's help text appears
+8. Runs `run-with-secrets --help` and asserts workestrate's help text appears
    (proving the decrypt+exec path works end-to-end).
 9. Cleans up the temp directory and prints a pass/fail summary.
 
