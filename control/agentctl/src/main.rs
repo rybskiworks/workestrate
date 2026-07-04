@@ -17,14 +17,27 @@ struct Cli {
     command: Commands,
 }
 
-/// Actions available on every workload.
+/// Actions available on service workloads (headless, detached by default).
 #[derive(Subcommand)]
-enum WorkloadAction {
-    /// Start the sandbox
+enum ServiceAction {
+    /// Start the sandbox (detached by default; --foreground to block)
     Up {
-        #[arg(short, long, help = "Start detached in background")]
-        background: bool,
+        #[arg(short, long, help = "Run in foreground (block until Ctrl-C)")]
+        foreground: bool,
     },
+    /// Stop and remove the sandbox
+    Down,
+    /// Tail the detached service's log file
+    Logs,
+    /// Print the planned sandbox workload
+    Plan,
+}
+
+/// Actions available on agent workloads (interactive TUI attach).
+#[derive(Subcommand)]
+enum AgentAction {
+    /// Attach to the sandbox interactively (TUI)
+    Exec,
     /// Stop and remove the sandbox
     Down,
     /// Print the planned sandbox workload
@@ -36,16 +49,43 @@ enum WorkloadAction {
 macro_rules! workloads {
     ($macro:ident) => {
         $macro!(
-            Litellm, workloads::Litellm, "LiteLLM proxy sandbox";
-            Pi, workloads::Pi, "Pi coding agent sandbox";
-            Odysseus, workloads::Odysseus, "Odysseus agent sandbox";
-            Opencode, workloads::Opencode, "OpenCode agent sandbox";
+            Litellm, workloads::Litellm, Service, "LiteLLM proxy sandbox";
+            Odysseus, workloads::Odysseus, Service, "Odysseus agent sandbox";
+            Pi, workloads::Pi, Agent, "Pi coding agent sandbox";
+            Opencode, workloads::Opencode, Agent, "OpenCode agent sandbox";
+        );
+    };
+    ($prefix:expr, $macro:ident) => {
+        $macro!(
+            $prefix,
+            Litellm, workloads::Litellm, Service, "LiteLLM proxy sandbox";
+            Odysseus, workloads::Odysseus, Service, "Odysseus agent sandbox";
+            Pi, workloads::Pi, Agent, "Pi coding agent sandbox";
+            Opencode, workloads::Opencode, Agent, "OpenCode agent sandbox";
         );
     };
 }
 
+macro_rules! kind_action {
+    (Service) => {
+        ServiceAction
+    };
+    (Agent) => {
+        AgentAction
+    };
+}
+
+macro_rules! kind_dispatch {
+    (Service) => {
+        dispatch_service
+    };
+    (Agent) => {
+        dispatch_agent
+    };
+}
+
 macro_rules! define_commands_enum {
-    ($($name:ident, $ty:path, $doc:literal);* $(;)?) => {
+    ($($name:ident, $ty:path, $kind:ident, $doc:literal);* $(;)?) => {
         #[derive(Subcommand)]
         enum Commands {
             /// Runtime/config sanity check
@@ -64,7 +104,7 @@ macro_rules! define_commands_enum {
                 #[doc = $doc]
                 $name {
                     #[command(subcommand)]
-                    action: WorkloadAction,
+                    action: kind_action!($kind),
                 },
             )*
         }
@@ -73,11 +113,23 @@ macro_rules! define_commands_enum {
 
 workloads!(define_commands_enum);
 
-async fn run<W: Workload>(workload: &W, action: WorkloadAction) -> Result<()> {
+async fn dispatch_service<W: Workload>(workload: &W, action: ServiceAction) -> Result<()> {
     match action {
-        WorkloadAction::Up { background } => microsandbox::up(workload, background).await,
-        WorkloadAction::Down => microsandbox::down(workload.name()).await,
-        WorkloadAction::Plan => {
+        ServiceAction::Up { foreground } => microsandbox::up_service(workload, foreground).await,
+        ServiceAction::Down => microsandbox::down(workload.name()).await,
+        ServiceAction::Logs => microsandbox::logs(workload.name()).await,
+        ServiceAction::Plan => {
+            println!("{}", workload.plan());
+            Ok(())
+        }
+    }
+}
+
+async fn dispatch_agent<W: Workload>(workload: &W, action: AgentAction) -> Result<()> {
+    match action {
+        AgentAction::Exec => microsandbox::exec_agent(workload).await,
+        AgentAction::Down => microsandbox::down(workload.name()).await,
+        AgentAction::Plan => {
             println!("{}", workload.plan());
             Ok(())
         }
@@ -85,11 +137,13 @@ async fn run<W: Workload>(workload: &W, action: WorkloadAction) -> Result<()> {
 }
 
 macro_rules! define_dispatch {
-    ($($name:ident, $ty:path, $doc:literal);* $(;)?) => {
+    ($($name:ident, $ty:path, $kind:ident, $doc:literal);* $(;)?) => {
         async fn dispatch_workload(command: Commands) -> Result<()> {
             match command {
                 $(
-                    Commands::$name { action } => run(&$ty, action).await,
+                    Commands::$name { action } => {
+                        kind_dispatch!($kind)((&$ty), action).await
+                    }
                 )*
                 _ => Err(anyhow::anyhow!("internal: non-workload command dispatched")),
             }
@@ -201,6 +255,7 @@ async fn cmd_check() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn cli_exposes_expected_subcommands() {
@@ -217,5 +272,87 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
         }
+    }
+
+    macro_rules! check_kind {
+        ($cmd:expr, $name:ident, $ty:path, $kind:ident, $doc:literal) => {{
+            let name_lc = stringify!($name).to_lowercase();
+            let sub = $cmd
+                .find_subcommand(&name_lc)
+                .unwrap_or_else(|| panic!("missing subcommand: {}", name_lc));
+            let action_names: HashSet<_> = sub
+                .get_subcommands()
+                .map(|s| s.get_name().to_string())
+                .collect();
+            match stringify!($kind) {
+                "Service" => {
+                    for expected in ["up", "down", "logs", "plan"] {
+                        assert!(
+                            action_names.contains(expected),
+                            "{} missing action: {}",
+                            name_lc,
+                            expected
+                        );
+                    }
+                    for unexpected in ["exec"] {
+                        assert!(
+                            !action_names.contains(unexpected),
+                            "{} should not have action: {}",
+                            name_lc,
+                            unexpected
+                        );
+                    }
+                }
+                "Agent" => {
+                    for expected in ["exec", "down", "plan"] {
+                        assert!(
+                            action_names.contains(expected),
+                            "{} missing action: {}",
+                            name_lc,
+                            expected
+                        );
+                    }
+                    for unexpected in ["up", "logs"] {
+                        assert!(
+                            !action_names.contains(unexpected),
+                            "{} should not have action: {}",
+                            name_lc,
+                            unexpected
+                        );
+                    }
+                }
+                other => panic!("unknown kind: {}", other),
+            }
+        }};
+    }
+
+    macro_rules! check_kinds_for_cmd {
+        ($cmd:expr, $($name:ident, $ty:path, $kind:ident, $doc:literal);* $(;)?) => {
+            $(
+                check_kind!($cmd, $name, $ty, $kind, $doc);
+            )*
+        };
+    }
+
+    #[test]
+    fn cli_workload_subcommands_match_registry_kinds() {
+        let cmd = Cli::command();
+        workloads!(cmd, check_kinds_for_cmd);
+    }
+
+    #[test]
+    fn detach_args_include_foreground() {
+        assert!(
+            workloads::Litellm
+                .detach_args()
+                .contains(&"--foreground".to_string()),
+            "litellm detach_args must contain --foreground"
+        );
+        assert!(
+            workloads::Pi
+                .detach_args()
+                .contains(&"--foreground".to_string()),
+            "pi detach_args must contain --foreground"
+        );
     }
 }

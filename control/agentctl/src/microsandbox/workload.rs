@@ -24,15 +24,6 @@ impl SandboxCommand {
     }
 }
 
-/// How to run the workload's exec command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecMode {
-    /// Stream stdout/stderr to the terminal; no stdin (headless service).
-    Headless,
-    /// Take over the terminal with a full TTY bridge (interactive TUI apps).
-    Interactive,
-}
-
 /// How to set the sandbox entrypoint.
 #[derive(Debug, Clone)]
 pub enum EntrypointSpec {
@@ -61,13 +52,12 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// Program and args to exec inside the sandbox.
     fn exec(&self) -> SandboxCommand;
 
-    /// Whether to run interactively (TUI) or headless. Default: Headless.
-    fn exec_mode(&self) -> ExecMode {
-        ExecMode::Headless
-    }
-
     /// Args to pass when re-exec'ing in background mode.
-    fn detach_args(&self) -> Vec<String>;
+    /// The child invokes `<name> up --foreground` so it blocks instead of
+    /// re-detaching forever.
+    fn detach_args(&self) -> Vec<String> {
+        vec![self.name().into(), "up".into(), "--foreground".into()]
+    }
 
     /// Optional pre-start hook (e.g., writing config files to persistent data dir).
     fn prepare(&self) -> Result<()> {

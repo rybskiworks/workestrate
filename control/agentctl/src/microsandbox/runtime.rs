@@ -1,7 +1,7 @@
 use super::env::resolve_templated_value;
 use super::mounts::{apply_plan_mounts, ensure_mount_sources};
 use super::plan::{EgressTarget, NetworkPlan, Protocol, SandboxPlan, Scope};
-use super::workload::{EntrypointSpec, ExecMode, SandboxCommand, Workload};
+use super::workload::{EntrypointSpec, SandboxCommand, Workload};
 use anyhow::Result;
 use microsandbox::sandbox::{exec::ExecEvent, SandboxBuilder, SandboxHandle, SandboxStatus};
 use microsandbox::{MicrosandboxError, NetworkPolicy, Sandbox};
@@ -330,17 +330,11 @@ pub(crate) async fn run_service_interactive(
     outcome
 }
 
-/// Generic lifecycle: start any workload's sandbox.
-pub async fn up<W: Workload>(workload: &W, background: bool) -> Result<()> {
-    if background {
-        let child = spawn_detached_service(workload.name(), &workload.detach_args())?;
-        println!(
-            "Sandbox '{}' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/{}/agentctl.log",
-            workload.name(), child.id(), workload.name()
-        );
-        return Ok(());
-    }
-
+/// Prepare, resolve, and create the sandbox plus the foreground config used
+/// to run the workload's real command.
+pub(crate) async fn build_sandbox<W: Workload>(
+    workload: &W,
+) -> Result<(Sandbox, ForegroundConfig)> {
     workload.prepare()?;
 
     let root = crate::config::project_root()?;
@@ -380,9 +374,60 @@ pub async fn up<W: Workload>(workload: &W, background: bool) -> Result<()> {
         command: workload.exec(),
         log_stop_errors: workload.log_stop_errors(),
     };
-    match workload.exec_mode() {
-        ExecMode::Headless => run_service_foreground(&sandbox, config).await,
-        ExecMode::Interactive => run_service_interactive(&sandbox, config).await,
+    Ok((sandbox, config))
+}
+
+/// Start a service workload. Detached by default; pass `foreground = true` to
+/// block until Ctrl-C.
+pub async fn up_service<W: Workload>(workload: &W, foreground: bool) -> Result<()> {
+    if !foreground {
+        let child = spawn_detached_service(workload.name(), &workload.detach_args())?;
+        println!(
+            "Sandbox '{}' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/{}/agentctl.log",
+            workload.name(), child.id(), workload.name()
+        );
+        return Ok(());
+    }
+
+    let (sandbox, config) = build_sandbox(workload).await?;
+    run_service_foreground(&sandbox, config).await
+}
+
+/// Attach to an agent workload interactively (TUI).
+pub async fn exec_agent<W: Workload>(workload: &W) -> Result<()> {
+    let (sandbox, config) = build_sandbox(workload).await?;
+    run_service_interactive(&sandbox, config).await
+}
+
+/// Tail the detached service's log file.
+pub async fn logs(name: &str) -> Result<()> {
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|_| anyhow::anyhow!("HOME not set"))?;
+    let path = home
+        .join(".microsandbox/sandboxes")
+        .join(name)
+        .join("agentctl.log");
+
+    if !path.exists() {
+        anyhow::bail!(
+            "no logs found for '{}'; not started? run: agentctl {} up",
+            name,
+            name
+        );
+    }
+
+    let status = std::process::Command::new("tail")
+        .args(["-n", "200", "-f", &path.to_string_lossy()])
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("tail exited with status: {}", status))
     }
 }
 

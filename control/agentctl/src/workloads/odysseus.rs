@@ -71,10 +71,6 @@ impl Workload for Odysseus {
         )
     }
 
-    fn detach_args(&self) -> Vec<String> {
-        vec![self.name().into(), "up".into()]
-    }
-
     fn log_stop_errors(&self) -> bool {
         false
     }

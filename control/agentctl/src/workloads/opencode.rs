@@ -1,6 +1,6 @@
 use crate::microsandbox::plan::*;
 use crate::microsandbox::secrets;
-use crate::microsandbox::workload::{ExecMode, SandboxCommand, Workload};
+use crate::microsandbox::workload::{SandboxCommand, Workload};
 
 #[derive(Debug)]
 pub struct Opencode;
@@ -11,10 +11,17 @@ impl Workload for Opencode {
     }
 
     fn plan(&self) -> SandboxPlan {
+        // A coding agent cannot operate without a project directory; if the host
+        // cwd is unavailable there is nothing useful to do but fail loudly.
+        #[allow(clippy::expect_used)]
+        let work_host = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .expect("failed to determine current working directory for /workspace mount");
+
         SandboxPlan {
             name: self.name().into(),
             image: Some("node:24-bookworm-slim".into()),
-            workdir: Some("/home/node".into()),
+            workdir: Some("/workspace".into()),
             command: {
                 let cmd = self.exec();
                 std::iter::once(cmd.binary).chain(cmd.arguments).collect()
@@ -35,7 +42,7 @@ impl Workload for Opencode {
             ports: vec![PortMapping::same(3000)],
             mounts: vec![
                 MountPlan::readonly(self.build_path(), "/app"),
-                MountPlan::readwrite("workspaces/opencode", "/workspace"),
+                MountPlan::readwrite(work_host, "/workspace"),
                 MountPlan::readonly(
                     self.config_path("opencode.jsonc"),
                     "/home/node/.config/opencode/opencode.jsonc",
@@ -56,14 +63,6 @@ impl Workload for Opencode {
 
     fn exec(&self) -> SandboxCommand {
         SandboxCommand::with_args("opencode", &[])
-    }
-
-    fn exec_mode(&self) -> ExecMode {
-        ExecMode::Interactive
-    }
-
-    fn detach_args(&self) -> Vec<String> {
-        vec![self.name().into(), "up".into()]
     }
 
     fn log_stop_errors(&self) -> bool {

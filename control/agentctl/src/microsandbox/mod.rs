@@ -6,4 +6,4 @@ pub mod secrets;
 pub mod workload;
 
 // Re-export lifecycle functions that callers need.
-pub use runtime::{down, up};
+pub use runtime::{down, exec_agent, logs, up_service};

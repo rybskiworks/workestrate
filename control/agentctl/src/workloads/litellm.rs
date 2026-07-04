@@ -62,9 +62,5 @@ impl Workload for Litellm {
         )
     }
 
-    fn detach_args(&self) -> Vec<String> {
-        vec![self.name().into(), "up".into()]
-    }
-
     // entrypoint defaults to Shell, no override needed
 }

@@ -1,6 +1,6 @@
 use crate::microsandbox::plan::*;
 use crate::microsandbox::secrets;
-use crate::microsandbox::workload::{ExecMode, SandboxCommand, Workload};
+use crate::microsandbox::workload::{SandboxCommand, Workload};
 use anyhow::Result;
 use std::path::Path;
 
@@ -63,14 +63,6 @@ impl Workload for Pi {
 
     fn exec(&self) -> SandboxCommand {
         SandboxCommand::with_args("node", &["/app/packages/coding-agent/dist/cli.js"])
-    }
-
-    fn exec_mode(&self) -> ExecMode {
-        ExecMode::Interactive
-    }
-
-    fn detach_args(&self) -> Vec<String> {
-        vec![self.name().into(), "up".into()]
     }
 
     fn log_stop_errors(&self) -> bool {
