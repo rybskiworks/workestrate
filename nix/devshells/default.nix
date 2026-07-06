@@ -198,6 +198,7 @@ pkgs.mkShell {
         rm -rf "$build_dir"
         cp -r "$repo_dir" "$build_dir"
         chmod -R u+w "$build_dir"
+        rm -rf "$build_dir/.git" "$build_dir/node_modules" "$build_dir/.deps"
 
         if (cd "$build_dir" && eval "$build_cmd"); then
           touch "$stamp"
@@ -215,18 +216,18 @@ pkgs.mkShell {
 
       # Pi: TypeScript monorepo, needs npm install + build
       _build_if_needed "pi" \
-        "npm ci && npm run build" \
+        "NODE_ENV=development npm ci --ignore-scripts && npm run build" \
         "package-lock.json"
 
       # Odysseus: Python app with JS UI. Vendor cp312 deps into build/.deps
       # so the python:3.12-slim microVM imports them via PYTHONPATH=/app/.deps.
       _build_if_needed "odysseus" \
-        'npm install && REQ=$([ -f requirements.lock ] && echo requirements.lock || echo requirements.txt) && python3.12 -m pip install --break-system-packages --target ./.deps -r "$REQ"' \
+        'REQ=$([ -f requirements.lock ] && echo requirements.lock || echo requirements.txt) && python3.12 -m pip install --only-binary=:all: --break-system-packages --target ./.deps -r "$REQ"' \
         "requirements.txt"
 
       # OpenCode: TypeScript/Bun project
       _build_if_needed "opencode" \
-        "bun install" \
+        "HUSKY=0 bun install" \
         "bun.lock"
 
       unset -f _build_if_needed
