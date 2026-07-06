@@ -74,13 +74,41 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         EntrypointSpec::Shell
     }
 
-    /// Where to find the built agent code (agents/<name>/build).
+    /// Where to find the built agent code. Defaults to agents/<name>/build;
+    /// override per-agent with WORKESTRATE_<NAME>_BUILD (NAME uppercased,
+    /// '-' → '_') — used by the nix wrapper to point at a store path.
     fn build_path(&self) -> String {
-        format!("agents/{}/build", self.name())
+        let key = format!(
+            "WORKESTRATE_{}_BUILD",
+            self.name().to_ascii_uppercase().replace('-', "_")
+        );
+        if let Ok(p) = std::env::var(key) {
+            p
+        } else {
+            format!("agents/{}/build", self.name())
+        }
     }
 
     /// Convention: config files live at agents/<name>/config/<filename>
     fn config_path(&self, filename: &str) -> String {
         format!("agents/{}/config/{}", self.name(), filename)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::microsandbox::workload::Workload;
+    use crate::workloads::Pi;
+
+    #[test]
+    fn build_path_reads_per_agent_env_override() {
+        let pi = Pi;
+        // Override set → returns the env value.
+        std::env::set_var("WORKESTRATE_PI_BUILD", "/tmp/test-pi-build");
+        assert_eq!(pi.build_path(), "/tmp/test-pi-build");
+        // Override removed → falls back to agents/<name>/build.
+        std::env::remove_var("WORKESTRATE_PI_BUILD");
+        assert_eq!(pi.build_path(), "agents/pi/build");
     }
 }
