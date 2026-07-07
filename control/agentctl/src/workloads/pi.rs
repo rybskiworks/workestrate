@@ -22,7 +22,10 @@ impl Workload for Pi {
 
         SandboxPlan {
             name: self.name().into(),
-            image: Some("node:24-bookworm-slim".into()),
+            // nix-built image (dockerTools.buildLayeredImage); provides nix glibc
+            // 2.42 matching the pi-bun binary's PT_INTERP (node:24-bookworm-slim
+            // ships glibc 2.36 → crash). Load via: just load-pi-image.
+            image: Some("workestrator-pi:latest".into()),
             workdir: Some("/work".into()),
             command: {
                 let cmd = self.exec();

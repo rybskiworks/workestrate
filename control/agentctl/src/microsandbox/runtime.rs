@@ -473,6 +473,15 @@ mod tests {
     }
 
     #[test]
+    fn pi_plan_uses_nix_built_image() {
+        // The pi-bun binary's PT_INTERP points at nix glibc 2.42; the sandbox
+        // image must be the nix-built `workestrator-pi:latest` (loaded via
+        // `just load-pi-image`), NOT node:24-bookworm-slim (glibc 2.36 → crash).
+        let plan = Pi.plan();
+        assert_eq!(plan.image.as_deref(), Some("workestrator-pi:latest"));
+    }
+
+    #[test]
     fn odysseus_network_plan_converts_without_error() {
         let plan = Odysseus.plan();
         let result = network_plan_to_policy(&plan.network);

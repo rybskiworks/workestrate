@@ -41,6 +41,12 @@
       # runtime embedded). Reuses the npm-built pi tree + `bun build --compile`.
       pi-bun-built = pkgs.callPackage ./nix/packages/pi-bun.nix { pi-built = pi-built; };
 
+      # Nix-built Docker image for the pi sandbox (dockerTools.buildLayeredImage).
+      # Provides nix glibc 2.42 matching the pi-bun binary's PT_INTERP; replaces
+      # node:24-bookworm-slim (glibc 2.36) which crashed the bun binary.
+      # Load into microsandbox with `just load-pi-image`.
+      pi-image = pkgs.callPackage ./nix/packages/pi-image.nix {};
+
       # Reusable wrapper around workestrate that bakes WORKESTRATE_PI_BUILD
       # (pointing at the given pi build) into the environment, so `nix run .` /
       # `.#workestrator` runs the pi sandbox without extra env. Wraps the
@@ -228,6 +234,7 @@
         # Both from one source, one npmDepsHash. Local dev: `just dev-build-pi`.
         pi = pi-built;
         pi-bun = pi-bun-built;
+        pi-image = pi-image;
         default = workestrate;
       };
 

@@ -101,3 +101,10 @@ dev-build-pi:
 # manual export/unset needed.
 dev-run-pi *args:
     WORKESTRATE_PI_BUILD=agents/pi/build run-with-secrets pi {{args}}
+
+# Build and load the nix pi image into microsandbox (run once or after a nixpkgs bump).
+# The image provides nix glibc 2.42 matching the pi-bun binary's PT_INTERP.
+load-pi-image:
+    nix build .#pi-image --out-link /tmp/pi-image.tar
+    nix develop -c msb load -i /tmp/pi-image.tar -t workestrator-pi:latest
+    nix develop -c msb image ls

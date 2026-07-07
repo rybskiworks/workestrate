@@ -234,5 +234,15 @@ pkgs.mkShell {
     }
     _build_agents
     unset -f _build_agents
+
+    # Check pi image is loaded (lightweight — skip silently if msb unavailable).
+    # The nix-built workestrator-pi image must be loaded into microsandbox
+    # (`just load-pi-image`) so the pi-bun binary finds its glibc 2.42
+    # interpreter at runtime.
+    if command -v msb >/dev/null 2>&1; then
+      if ! msb image ls 2>/dev/null | grep -q workestrator-pi; then
+        echo "ai-workbench: pi image not loaded. Run: just load-pi-image" >&2
+      fi
+    fi
   '';
 }
