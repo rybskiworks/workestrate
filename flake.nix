@@ -59,7 +59,7 @@
       # microsandbox. Driven by the attrset — no hardcoded image names.
       load-images = pkgs.writeShellApplication {
         name = "load-images";
-        runtimeInputs = [ microsandbox pkgs.gzip ];
+        runtimeInputs = [ msb-wrapped pkgs.gzip ];
         text = let
           names = builtins.attrNames workload-images;
           load-one = name: ''
