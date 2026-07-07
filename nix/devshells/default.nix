@@ -9,6 +9,7 @@
 , write-env
 , setup-secrets
 , pi
+, pi-bun-built
 , odysseus
 , opencode
 }:
@@ -90,6 +91,10 @@ pkgs.mkShell {
     export MSB_HOME="$_msb_home"
     export MSB_PATH="$_msb_home/bin/msb"
 
+    # Canonical pi build: the standalone Bun binary from `.#pi-bun`.
+    # Dev-workestrate reads WORKESTRATE_PI_BUILD so it mounts the bun binary
+    # at /app/bin/pi instead of needing agents/pi/build from the shellHook.
+    export WORKESTRATE_PI_BUILD="${pi-bun-built}"
 
     _setup_vendor_link() {
       local repo_root vendor_dir vendor_link target
@@ -213,11 +218,6 @@ pkgs.mkShell {
           echo "ai-workbench: You can retry: rm -rf agents/$name/build && nix develop" >&2
         fi
       }
-
-      # Pi: TypeScript monorepo, needs npm install + build
-      _build_if_needed "pi" \
-        "NODE_ENV=development npm ci --ignore-scripts && npm run build" \
-        "package-lock.json"
 
       # Odysseus: Python app with JS UI. Vendor cp312 deps into build/.deps
       # so the python:3.12-slim microVM imports them via PYTHONPATH=/app/.deps.

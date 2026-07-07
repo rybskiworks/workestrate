@@ -41,6 +41,20 @@
       # runtime embedded). Reuses the npm-built pi tree + `bun build --compile`.
       pi-bun-built = pkgs.callPackage ./nix/packages/pi-bun.nix { pi-built = pi-built; };
 
+      # Wrapper around workestrate that bakes WORKESTRATE_PI_BUILD (pointing at
+      # the canonical pi-bun standalone binary) into the environment, so `nix run
+      # .` / `.#workestrator` runs the bun-binary pi sandbox without extra env.
+      # Wraps the already-wrapped `${workestrate}/bin/workestrate` (which sets
+      # MSB_HOME via its postInstall wrapProgram); makeWrapper preserves that
+      # inner wrapper's env by exec'ing it, so MSB_HOME is retained.
+      workestrator = pkgs.runCommand "workestrator" {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+      } ''
+        mkdir -p $out/bin
+        makeWrapper ${workestrate}/bin/workestrate $out/bin/workestrate \
+          --set WORKESTRATE_PI_BUILD ${pi-bun-built}
+      '';
+
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
       # and other runtime commands look in ~/.microsandbox (where workestrate
       # stores the SDK cache/db), not the per-shell build staging directory
@@ -194,13 +208,13 @@
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
         inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets
-          odysseus opencode;
+          odysseus opencode pi-bun-built;
         # devshell populates agents/pi/repo from the canonical remote fork.
         pi = pi;
       };
 
       packages.${system} = {
-        inherit workestrate microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+        inherit workestrate workestrator microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
         # .#pi = npm/node JS tree (canonical remote fork).
         # .#pi-bun = standalone Bun binary (Bun runtime embedded).
         # Both from one source, one npmDepsHash. Local dev: `just dev-build-pi`.
@@ -211,7 +225,7 @@
 
       apps.${system}.default = {
         type = "app";
-        program = "${workestrate}/bin/workestrate";
+        program = "${workestrator}/bin/workestrate";
       };
     };
 }

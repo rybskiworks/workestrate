@@ -636,7 +636,12 @@ mod tests {
         let app_mount = plan.mounts.iter().find(|m| m.guest == "/app");
         assert!(app_mount.is_some(), "pi must have a /app mount (Pi code)");
         if let Some(m) = app_mount {
-            assert_eq!(m.host, "agents/pi/build");
+            // build_path respects WORKESTRATE_PI_BUILD when set (e.g. in the
+            // dev shell / .#workestrator wrapper), otherwise falls back to
+            // agents/pi/build.
+            let expected_host = std::env::var("WORKESTRATE_PI_BUILD")
+                .unwrap_or_else(|_| "agents/pi/build".to_string());
+            assert_eq!(m.host, expected_host);
             assert!(m.read_only, "/app mount must be readonly");
         }
         let data_mount = plan.mounts.iter().find(|m| m.guest == "/data");

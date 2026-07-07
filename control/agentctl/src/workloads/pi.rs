@@ -62,7 +62,13 @@ impl Workload for Pi {
     }
 
     fn exec(&self) -> SandboxCommand {
-        SandboxCommand::with_args("node", &["/app/packages/coding-agent/dist/cli.js"])
+        // /app/bin/pi is the self-contained Bun-compiled binary from the
+        // `.#pi-bun` derivation, mounted at /app via WORKESTRATE_PI_BUILD
+        // (see Workload::build_path). The Bun runtime is embedded, so no
+        // node/bun is needed inside the sandbox. The npm/node artifact
+        // (.#pi, exec'ing `node /app/packages/coding-agent/dist/cli.js`)
+        // remains a fallback if the bun binary misbehaves at runtime.
+        SandboxCommand::with_args("/app/bin/pi", &[])
     }
 
     fn log_stop_errors(&self) -> bool {
@@ -97,4 +103,18 @@ fn seed_models_json(state_dir: &Path, source: &Path) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::microsandbox::workload::Workload;
+    use crate::workloads::Pi;
+
+    #[test]
+    fn exec_targets_bun_standalone_binary() {
+        let pi = Pi;
+        let cmd = pi.exec();
+        assert_eq!(cmd.binary, "/app/bin/pi");
+        assert!(cmd.arguments.is_empty());
+    }
 }
