@@ -64,30 +64,12 @@
         "type": "github"
       }
     },
-    "pi-local": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1782133732,
-        "narHash": "sha256-mD0SaoQRREE0ImZGkKfXO8e9KjRqJT94GumSQlXm1Mw=",
-        "ref": "main",
-        "rev": "02540acd17fd82ab6f5afce6ee2901493cd4c032",
-        "revCount": 4669,
-        "type": "git",
-        "url": "file:./agents/pi/repo"
-      },
-      "original": {
-        "ref": "main",
-        "type": "git",
-        "url": "file:./agents/pi/repo"
-      }
-    },
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
         "odysseus": "odysseus",
         "opencode": "opencode",
-        "pi": "pi",
-        "pi-local": "pi-local"
+        "pi": "pi"
       }
     }
   },

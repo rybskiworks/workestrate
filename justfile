@@ -86,7 +86,11 @@ vendor-lock:
     rm -rf "$link"
     echo "Removed $link. Run 'nix develop' to recreate the Nix-managed symlink."
 
-# Rebuild .#pi from the local clone (relocks the path input if it changed)
-dev-pi:
-    nix flake lock --update-input pi-local
-    nix build .#pi
+# Build pi into agents/pi/build with native npm (hashless local dev loop).
+# workestrate falls back to agents/pi/build when WORKESTRATE_PI_BUILD is unset.
+# Requires the dev shell's npm/node (run inside `nix develop`).
+dev-build-pi:
+    rm -rf agents/pi/build
+    cp -r agents/pi/repo agents/pi/build
+    chmod -R u+w agents/pi/build
+    cd agents/pi/build && NODE_ENV=development npm ci --ignore-scripts && npm run build
