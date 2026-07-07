@@ -94,3 +94,10 @@ dev-build-pi:
     cp -r agents/pi/repo agents/pi/build
     chmod -R u+w agents/pi/build
     cd agents/pi/build && NODE_ENV=development npm ci --ignore-scripts && npm run build
+
+# Run pi from the local agents/pi/build (overrides the canonical bun path).
+# Overrides the dev-shell's exported WORKESTRATE_PI_BUILD for this one command,
+# pointing at the local agents/pi/build populated by `just dev-build-pi` — no
+# manual export/unset needed.
+dev-run-pi *args:
+    WORKESTRATE_PI_BUILD=agents/pi/build run-with-secrets pi {{args}}

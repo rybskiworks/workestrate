@@ -41,19 +41,27 @@
       # runtime embedded). Reuses the npm-built pi tree + `bun build --compile`.
       pi-bun-built = pkgs.callPackage ./nix/packages/pi-bun.nix { pi-built = pi-built; };
 
-      # Wrapper around workestrate that bakes WORKESTRATE_PI_BUILD (pointing at
-      # the canonical pi-bun standalone binary) into the environment, so `nix run
-      # .` / `.#workestrator` runs the bun-binary pi sandbox without extra env.
-      # Wraps the already-wrapped `${workestrate}/bin/workestrate` (which sets
-      # MSB_HOME via its postInstall wrapProgram); makeWrapper preserves that
-      # inner wrapper's env by exec'ing it, so MSB_HOME is retained.
-      workestrator = pkgs.runCommand "workestrator" {
+      # Reusable wrapper around workestrate that bakes WORKESTRATE_PI_BUILD
+      # (pointing at the given pi build) into the environment, so `nix run .` /
+      # `.#workestrator` runs the pi sandbox without extra env. Wraps the
+      # already-wrapped `${workestrate}/bin/workestrate` (which sets MSB_HOME
+      # via its postInstall wrapProgram); makeWrapper preserves that inner
+      # wrapper's env by exec'ing it, so MSB_HOME is retained.
+      workestrator-wrapper = { pi-build }: pkgs.runCommand "workestrator" {
         nativeBuildInputs = [ pkgs.makeWrapper ];
       } ''
         mkdir -p $out/bin
         makeWrapper ${workestrate}/bin/workestrate $out/bin/workestrate \
-          --set WORKESTRATE_PI_BUILD ${pi-bun-built}
+          --set WORKESTRATE_PI_BUILD ${pi-build}
       '';
+
+      # .#workestrator (default): canonical pi-bun standalone binary (Bun runtime
+      # embedded). Behavior unchanged from the previous inline wrapper.
+      workestrator = workestrator-wrapper { pi-build = pi-bun-built; };
+
+      # .#workestrator-node: npm/node fallback (the .#pi JS tree). One-command
+      # switch — no manual WORKESTRATE_PI_BUILD export needed.
+      workestrator-node = workestrator-wrapper { pi-build = pi-built; };
 
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
       # and other runtime commands look in ~/.microsandbox (where workestrate
@@ -214,7 +222,7 @@
       };
 
       packages.${system} = {
-        inherit workestrate workestrator microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+        inherit workestrate workestrator workestrator-node microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
         # .#pi = npm/node JS tree (canonical remote fork).
         # .#pi-bun = standalone Bun binary (Bun runtime embedded).
         # Both from one source, one npmDepsHash. Local dev: `just dev-build-pi`.
