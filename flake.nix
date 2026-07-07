@@ -47,6 +47,33 @@
       # Load into microsandbox with `just load-pi-image`.
       pi-image = pkgs.callPackage ./nix/packages/pi-image.nix {};
 
+      # Single source of truth for nix-built workload sandbox images. Adding a
+      # new workload's image = one entry here; the `load-images` script and
+      # the dev-shell check pick it up automatically. No per-image recipes.
+      workload-images = {
+        workestrator-pi = pkgs.callPackage ./nix/packages/pi-image.nix {};
+        # Future: workestrator-odysseus = ...; workestrator-opencode = ...;
+      };
+
+      # General loader: iterates `workload-images` and loads each into
+      # microsandbox. Driven by the attrset — no hardcoded image names.
+      load-images = pkgs.writeShellApplication {
+        name = "load-images";
+        runtimeInputs = [ microsandbox ];
+        text = let
+          names = builtins.attrNames workload-images;
+          load-one = name: ''
+            echo "Loading ${name}..."
+            nix build .#${name} --out-link /tmp/${name}.tar
+            msb load -i /tmp/${name}.tar -t ${name}:latest
+          '';
+        in pkgs.lib.concatMapStringsSep "\n" load-one names + ''
+          echo ""
+          echo "Loaded images:"
+          msb image ls
+        '';
+      };
+
       # Reusable wrapper around workestrate that bakes WORKESTRATE_PI_BUILD
       # (pointing at the given pi build) into the environment, so `nix run .` /
       # `.#workestrator` runs the pi sandbox without extra env. Wraps the
@@ -221,14 +248,15 @@
       };
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
-        inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets
+        inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets load-images
           odysseus opencode pi-bun-built;
         # devshell populates agents/pi/repo from the canonical remote fork.
         pi = pi;
+        imageNames = builtins.attrNames workload-images;
       };
 
-      packages.${system} = {
-        inherit workestrate workestrator workestrator-node microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+      packages.${system} = workload-images // {
+        inherit workestrate workestrator workestrator-node microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets load-images;
         # .#pi = npm/node JS tree (canonical remote fork).
         # .#pi-bun = standalone Bun binary (Bun runtime embedded).
         # Both from one source, one npmDepsHash. Local dev: `just dev-build-pi`.

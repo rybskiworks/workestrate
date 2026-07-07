@@ -8,6 +8,8 @@
 , decrypt-env
 , write-env
 , setup-secrets
+, load-images
+, imageNames
 , pi
 , pi-bun-built
 , odysseus
@@ -32,6 +34,7 @@ pkgs.mkShell {
     jq
     just
     libcap_ng
+    load-images
     msb-wrapped
     nodejs_24  # Node 24: pi's gondolin needs >=23.6; aligns with the node:24 sandbox images
     bun
@@ -235,14 +238,16 @@ pkgs.mkShell {
     _build_agents
     unset -f _build_agents
 
-    # Check pi image is loaded (lightweight — skip silently if msb unavailable).
-    # The nix-built workestrator-pi image must be loaded into microsandbox
-    # (`just load-pi-image`) so the pi-bun binary finds its glibc 2.42
-    # interpreter at runtime.
+    # Check workload images are loaded (lightweight — skip silently if msb
+    # unavailable). Driven by the `workload-images` attrset via `imageNames`
+    # — adding an image to the attrset automatically updates this check.
     if command -v msb >/dev/null 2>&1; then
-      if ! msb image ls 2>/dev/null | grep -q workestrator-pi; then
-        echo "ai-workbench: pi image not loaded. Run: just load-pi-image" >&2
-      fi
+      loaded=$(msb image ls 2>/dev/null || true)
+      for img in ${pkgs.lib.concatMapStringsSep " " (x: x) imageNames}; do
+        if ! echo "$loaded" | grep -q "$img"; then
+          echo "ai-workbench: image '$img' not loaded. Run: just load-images" >&2
+        fi
+      done
     fi
   '';
 }

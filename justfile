@@ -102,9 +102,8 @@ dev-build-pi:
 dev-run-pi *args:
     WORKESTRATE_PI_BUILD=agents/pi/build run-with-secrets pi {{args}}
 
-# Build and load the nix pi image into microsandbox (run once or after a nixpkgs bump).
-# The image provides nix glibc 2.42 matching the pi-bun binary's PT_INTERP.
-load-pi-image:
-    nix build .#pi-image --out-link /tmp/pi-image.tar
-    nix develop -c msb load -i /tmp/pi-image.tar -t workestrator-pi:latest
-    nix develop -c msb image ls
+# Build and load ALL nix-built workload images into microsandbox.
+# Driven by the `workload-images` attrset in flake.nix — adding an image
+# there = one entry; this recipe picks it up automatically. No per-image recipes.
+load-images:
+    nix develop -c load-images
