@@ -59,13 +59,13 @@
       # microsandbox. Driven by the attrset — no hardcoded image names.
       load-images = pkgs.writeShellApplication {
         name = "load-images";
-        runtimeInputs = [ microsandbox ];
+        runtimeInputs = [ microsandbox pkgs.gzip ];
         text = let
           names = builtins.attrNames workload-images;
           load-one = name: ''
             echo "Loading ${name}..."
-            nix build .#${name} --out-link /tmp/${name}.tar
-            msb load -i /tmp/${name}.tar -t ${name}:latest
+            nix build .#${name} --out-link /tmp/${name}.tar.gz
+            gunzip -c /tmp/${name}.tar.gz | msb load -t ${name}:latest
           '';
         in pkgs.lib.concatMapStringsSep "\n" load-one names + ''
           echo ""
