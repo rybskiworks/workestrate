@@ -30,6 +30,9 @@
         inherit microsandbox microsandbox-filesystem-patched;
       };
 
+      # Hermetic nix build of the pi agent monorepo (runtime tree mounted at /app).
+      pi-built = pkgs.callPackage ./nix/packages/pi.nix { inherit pi; };
+
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
       # and other runtime commands look in ~/.microsandbox (where workestrate
       # stores the SDK cache/db), not the per-shell build staging directory
@@ -187,7 +190,8 @@
       };
 
       packages.${system} = {
-        inherit workestrate microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+        inherit workestrate microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets pi-built;
+        pi = pi-built;
         default = workestrate;
       };
 

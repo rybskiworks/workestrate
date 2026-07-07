@@ -51,11 +51,11 @@
     "pi": {
       "flake": false,
       "locked": {
-        "lastModified": 1781044031,
-        "narHash": "sha256-H8LvE0mHVUZnUz9yMY0oUUYPVJtjmkg9bcoEEAC5VcE=",
+        "lastModified": 1782317646,
+        "narHash": "sha256-p1PWFs+j0pjAl+aep3vUqE7cFI+WIbh+GVGPAXbvY78=",
         "owner": "georgrybski",
         "repo": "pi",
-        "rev": "9ccfcd7cfcacdf593c0b24929d1d847e6cdf6711",
+        "rev": "371adcf37130629ffb9bbeed9f5548ce08ffa93b",
         "type": "github"
       },
       "original": {
