@@ -32,6 +32,7 @@
 #    (tui -> ai -> agent -> coding-agent) are chained manually in dependency
 #    order, matching the root `build` script.
 { pi
+, npmDepsHash
 , buildNpmPackage
 , nodejs_24
 , autoPatchelfHook
@@ -47,7 +48,7 @@ buildNpmPackage {
   src = pi;
 
   # Computed via `nix run nixpkgs#prefetch-npm-deps -- <src>/package-lock.json`.
-  npmDepsHash = "sha256-1EGs8lX8XoAnRtS+pw4lBRm24U/vtVB2loVRmZyd4Z8=";
+  npmDepsHash = npmDepsHash;
 
   # Skip the default `npm run build` (which chains generate-models +
   # generate-image-models + tsgo). The generate scripts delete committed

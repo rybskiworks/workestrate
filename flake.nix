@@ -9,6 +9,11 @@
       flake = false;
     };
 
+    pi-local = {
+      url = "git+file:./agents/pi/repo?ref=main";
+      flake = false;
+    };
+
     odysseus = {
       url = "github:georgrybski/odysseus";
       flake = false;
@@ -20,7 +25,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, pi, odysseus, opencode, ... }:
+  outputs = { self, nixpkgs, pi, pi-local, odysseus, opencode, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -31,7 +36,10 @@
       };
 
       # Hermetic nix build of the pi agent monorepo (runtime tree mounted at /app).
-      pi-built = pkgs.callPackage ./nix/packages/pi.nix { inherit pi; };
+      # pi.nix is parameterized by { pi, npmDepsHash } so each source carries its
+      # own lockfile hash. Local clone (agents/pi/repo) and remote fork differ.
+      pi-local-built  = pkgs.callPackage ./nix/packages/pi.nix { pi = pi-local; npmDepsHash = "sha256-QwnECZVri6w/3KdxITnnRkhtq1GIpzP08C/PF4fMmd4="; };
+      pi-remote-built = pkgs.callPackage ./nix/packages/pi.nix { pi = pi;       npmDepsHash = "sha256-1EGs8lX8XoAnRtS+pw4lBRm24U/vtVB2loVRmZyd4Z8="; };
 
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
       # and other runtime commands look in ~/.microsandbox (where workestrate
@@ -186,12 +194,19 @@
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
         inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets
-          pi odysseus opencode;
+          odysseus opencode;
+        # devshell populates agents/pi/repo from the LOCAL clone (default we use now).
+        pi = pi-local;
       };
 
       packages.${system} = {
-        inherit workestrate microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets pi-built;
-        pi = pi-built;
+        inherit workestrate microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets;
+        # .#pi = local clone (path:./agents/pi/repo) — default, what we use now.
+        # .#pi-remote = remote fork (github:georgrybski/pi). .#pi-local is the
+        # local build under its explicit name too. Both always buildable.
+        pi = pi-local-built;
+        pi-local = pi-local-built;
+        pi-remote = pi-remote-built;
         default = workestrate;
       };
 

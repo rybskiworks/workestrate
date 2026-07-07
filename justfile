@@ -85,3 +85,8 @@ vendor-lock:
     fi
     rm -rf "$link"
     echo "Removed $link. Run 'nix develop' to recreate the Nix-managed symlink."
+
+# Rebuild .#pi from the local clone (relocks the path input if it changed)
+dev-pi:
+    nix flake lock --update-input pi-local
+    nix build .#pi
