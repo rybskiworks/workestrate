@@ -37,6 +37,12 @@ subcommands drive the Microsandbox runtime (compile-checked in M1;
 runtime-validated on a KVM host in M2). Service `up` starts detached by
 default (`--foreground` to block); `logs` tails the detached service's log.
 
+The `.#workestrator` wrapper (`runCommand` + `makeWrapper`) bakes
+`WORKESTRATE_PI_BUILD` (pointing at the `.#pi-bun` standalone binary)
+into the environment, so `nix build .#workestrator && ./result/bin/workestrator …`
+runs the hermetic bun-binary pi sandbox without `nix develop`.
+`apps.default` points at this wrapped binary.
+
 ### Microsandbox
 
 MicroVM runtime. SDK version 0.5.6. Provides `Sandbox`, `SandboxBuilder`,
@@ -51,11 +57,28 @@ in-memory storage; Postgres for virtual keys/spend tracking is deferred.
 
 ### Pi
 
-Coding agent from `github:georgrybski/pi`. Target package:
-`packages/coding-agent`. Expected to call LiteLLM through an OpenAI-compatible
-endpoint. Pi does not honor `OPENAI_BASE_URL`; it requires seeding
-`~/.pi/agent/models.json` with a custom provider pointing at LiteLLM. Full
-integration is future work.
+Coding agent from `github:georgrybski/pi` (remote fork; single canonical
+source). Built two ways from one source, one `npmDepsHash`:
+
+- `.#pi-bun` (canonical) — `bun build --compile` produces a self-contained
+  standalone `pi` binary (~110 MB, Bun runtime embedded) at `$out/bin/pi`,
+  with runtime assets mirrored alongside. The pi sandbox execs `/app/bin/pi`;
+  no node/bun is needed inside the microVM at runtime.
+- `.#pi` (fallback) — hermetic `buildNpmPackage` of the monorepo runtime
+  tree, exec'ing `node` against the `packages/coding-agent` CLI (the
+  npm/node artifact, as opposed to the bun standalone binary).
+
+**Fork-carries-compat policy:** nix-build compatibility (patches, lockfile,
+committed catalogs) lives on the agent fork, not as nix-side patches in
+this repo. The flake consumes the fork verbatim. Local pi hacking uses
+`just dev-build-pi` (hashless native npm into `agents/pi/build`), not a
+nix override.
+
+Target package: `packages/coding-agent`. Expected to call LiteLLM through
+an OpenAI-compatible endpoint. Pi does not honor `OPENAI_BASE_URL`; it
+requires seeding `~/.pi/agent/models.json` with a custom provider pointing
+at LiteLLM. The bun-binary sandbox path is compile- and plan-verified but
+pending KVM runtime validation; `.#pi` (node) is the fallback.
 
 ### Odysseus
 
@@ -69,6 +92,11 @@ provider pointing at LiteLLM. Full integration is future work.
 Reproducible build environment. `nix develop` provides Rust toolchain,
 `just`, and build dependencies. `nix build .#workestrate` compiles the CLI and wraps it with `MSB_PATH` pointing at
 `.#microsandbox` so runtime commands find the Nix-managed daemon.
+`.#workestrator` wraps `.#workestrate` with `WORKESTRATE_PI_BUILD` baked
+in (pointing at `.#pi-bun`); `apps.default` is the wrapped binary. `.#pi`
+(npm/node) and `.#pi-bun` (standalone bun binary) are the two pi
+derivations from the remote fork. The dev shell pins `nodejs_24` (was
+`nodejs_22`).
 
 ## Source model
 

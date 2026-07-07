@@ -37,6 +37,10 @@ before continuing.
    `$HOME/.cache/ai-workbench-msb` for `cargo check`/`build.rs`, cleans
    up legacy per-shell tmpfs dirs from earlier versions, and refreshes
    the `control/agentctl/vendor/microsandbox-filesystem-0.5.6` symlink.
+   The dev shell pins `nodejs_24` (was `nodejs_22`; fixes pi's gondolin
+   `EBADENGINE`) and exports `WORKESTRATE_PI_BUILD` pointing at the
+   canonical `.#pi-bun` standalone binary, so dev-shell `workestrate pi
+   exec` mounts the bun binary at `/app/bin/pi`.
    ```bash
    git clone <repo-url> workestrator
    cd workestrator
@@ -226,6 +230,16 @@ run-with-secrets <name> down
 nix run . -- <name> plan            # e.g. pi plan, odysseus plan, litellm plan
 ```
 
+Pi runs in its sandbox as a **bun standalone binary** at `/app/bin/pi` —
+a self-contained executable with the Bun runtime embedded, so no node
+or bun is needed inside the microVM at runtime. The binary is produced
+by the `.#pi-bun` nix derivation and mounted at `/app` via
+`WORKESTRATE_PI_BUILD`. The `.#pi` derivation (npm/node, exec'ing `node
+/app/packages/coding-agent/dist/cli.js`) remains the runtime fallback if
+the bun binary misbehaves. The bun-binary path through the microVM is
+compile- and plan-verified but pending KVM runtime validation; `.#pi`
+(node) is the fallback.
+
 Note: `agents/pi/repo` and `agents/odysseus/repo` must be cloned into the
 `agents/` directory before `<name> up` will work; `workestrate check`
 reports them as `[MISSING] (optional)` and does not fail, but the
@@ -287,6 +301,7 @@ Common `just` recipes:
 | `just setup-secrets init` | Run `setup-secrets init` from the dev shell |
 | `just vendor-unlock` | Replace the vendor symlink with a writable copy of the patched Microsandbox crate |
 | `just vendor-lock` | Remove the vendor copy so the dev shell recreates the symlink |
+| `just dev-build-pi` | Build pi into `agents/pi/build` with native npm (hashless local dev loop); workestrate falls back to `agents/pi/build` when `WORKESTRATE_PI_BUILD` is unset. Requires the dev shell's npm/node (run inside `nix develop`). |
 
 > **Nix note:** New files must be `git add`-ed before `nix build` or `nix develop`
 > will see them. Nix flakes only include git-tracked files in the source tree.
@@ -298,6 +313,59 @@ modify the patched source, run `just vendor-unlock` (this expands the
 symlink into a real directory you can edit, with `chmod -R u+w`).
 Run `just vendor-lock` to delete the directory; the next `nix develop`
 recreates the symlink from the flake input.
+
+## Nix build integration
+
+Beyond the dev shell, the flake exposes hermetic agent derivations so a
+full `nix build` produces ready-to-run artifacts without `nix develop`:
+
+- `.#pi` — hermetic `buildNpmPackage` of the pi monorepo (npm-workspaces)
+  from the remote fork (`github:georgrybski/pi`). Output tree laid out so
+  `node $out/packages/coding-agent/dist/cli.js` resolves workspace siblings.
+  `dontNpmBuild` + a custom buildPhase skip `generate-models` (offline;
+  uses committed catalogs) and chain the four workspace builds in
+  dependency order. `libcap_ng` is included for gondolin/libkrun.
+- `.#pi-bun` — standalone Bun-compiled `pi` binary (~110 MB, Bun runtime
+  embedded). Reuses the `.#pi` tree and runs `bun build --compile` on the
+  bun entrypoint + image-resize worker, then mirrors upstream
+  `copy-binary-assets` (themes, package.json, export-html templates, photon
+  wasm) next to the binary so pi resolves package assets relative to
+  `process.execPath`. **This is the canonical pi artifact** mounted at
+  `/app` in the sandbox.
+- `.#workestrator` — `runCommand` + `makeWrapper` wrapper around
+  `.#workestrate` that bakes `WORKESTRATE_PI_BUILD=${pi-bun}` into the
+  environment, so `nix build .#workestrator && ./result/bin/workestrator pi exec`
+  runs the hermetic bun-binary pi sandbox with no `nix develop` and no
+  extra env. `apps.default` points at this wrapped binary.
+
+**Single canonical source.** Both `.#pi` and `.#pi-bun` build from one
+source (the remote fork) with one `npmDepsHash`. The old `-local`/`-remote`
+dual-output was collapsed: local pi hacking is **not** a nix override —
+use `just dev-build-pi` (hashless native npm into `agents/pi/build`),
+which workestrate picks up via the `agents/<name>/build` fallback when
+`WORKESTRATE_PI_BUILD` is unset.
+
+**Fork-carries-compat policy.** nix-build compatibility (patches,
+lockfile, committed catalogs) lives on the agent fork itself, not as
+nix-side patches in this repo. The flake consumes the fork verbatim.
+
+**Per-agent build-path override.** `Workload::build_path()` reads
+`WORKESTRATE_<NAME>_BUILD` (NAME uppercased, `-`→`_`) and falls back to
+`agents/<name>/build`. This is the mechanism the `.#workestrator` wrapper
+uses to point workestrate at the nix store path for pi; the same mechanism
+is available for future agent derivations (odysseus, opencode).
+
+**Dev shell.** `nix develop` exports `WORKESTRATE_PI_BUILD` (canonical
+bun pi) so dev-shell `workestrate` mounts the bun binary at `/app/bin/pi`.
+pi is no longer built by the shellHook `_build_agents` auto-build; the
+canonical artifact comes from the `.#pi-bun` derivation. odysseus and
+opencode still auto-build on `nix develop` (via `pip --only-binary=:all:`
+and `HUSKY=0 bun install` respectively) until their own derivations land.
+
+**Runtime caveat.** The bun binary in the microVM, `up`/`exec`/`logs`,
+and detached-mode + `run-with-secrets` env inheritance are compile- and
+plan-verified but pending KVM runtime validation. `.#pi` (node) is the
+fallback if the bun binary misbehaves at runtime.
 
 ## Shell completions
 
@@ -346,6 +414,11 @@ Reload your shell (or `source` the completion file) afterwards.
 
 - The Microsandbox SDK is pinned to `microsandbox = "=0.5.6"` with the
   `net` feature.
+- The pi microVM runs a **bun standalone binary** (`/app/bin/pi`, from
+  `.#pi-bun`) with the Bun runtime embedded; no node/bun is needed inside
+  the sandbox. `.#pi` (npm/node) is the fallback. The `.#workestrator`
+  wrapper bakes `WORKESTRATE_PI_BUILD` so `nix build .#workestrator` runs
+  hermetic.
 - Sandbox plans use a default-deny network policy; only the
   destinations listed above have explicit egress.
 - `LITELLM_MASTER_KEY` is passed to Pi and to the LiteLLM proxy as a

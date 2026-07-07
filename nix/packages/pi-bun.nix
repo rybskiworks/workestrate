@@ -28,7 +28,7 @@ stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
 
-    ca="$pi-built/packages/coding-agent"
+    ca="${pi-built}/packages/coding-agent"
     entry="$ca/dist/bun/cli.js"
     worker="$ca/src/utils/image-resize-worker.ts"
 
@@ -52,7 +52,7 @@ stdenv.mkDerivation {
     runHook preInstall
 
     bin="$out/bin"
-    ca="$pi-built/packages/coding-agent"
+    ca="${pi-built}/packages/coding-agent"
 
     # Mirror upstream `copy-binary-assets` so the binary can resolve package
     # assets relative to process.execPath (see config.ts getPackageDir()).
@@ -71,7 +71,7 @@ stdenv.mkDerivation {
     cp "$ca"/src/core/export-html/vendor/*.js "$bin/export-html/vendor/"
 
     # Photon wasm: photon.ts falls back to execDir/photon_rs_bg.wasm.
-    cp "$pi-built/node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm" "$bin/" 2>/dev/null || true
+    cp "${pi-built}/node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm" "$bin/" 2>/dev/null || true
 
     # docs/ and examples/ are referenced by some commands; ship them too.
     cp -r "$ca/docs" "$bin/docs" 2>/dev/null || true

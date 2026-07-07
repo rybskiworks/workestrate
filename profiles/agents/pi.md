@@ -1,8 +1,9 @@
 # Pi Sandbox Profile
 
 ## Source
-- Pinned fork: `github:georgrybski/pi`
-- Local override: `agents/pi/`
+- Pinned fork: `github:georgrybski/pi` (single canonical source for `.#pi` and `.#pi-bun`)
+- Local override: `agents/pi/` (populated from the flake input by the dev shell)
+- Local hacking: `just dev-build-pi` (hashless native npm into `agents/pi/build`)
 
 ## Repo Shape
 Full TypeScript monorepo (npm workspaces)
@@ -11,13 +12,19 @@ Full TypeScript monorepo (npm workspaces)
 `packages/coding-agent` — the shippable CLI
 
 ## Language / Runtime
-TypeScript, Node 22.19+ (upstream Dockerfile uses `node:24-bookworm-slim`)
+TypeScript. Built two ways: `.#pi-bun` (canonical — standalone Bun binary,
+Bun runtime embedded, no node/bun needed at runtime) and `.#pi` (npm/node
+fallback). Dev shell pins `nodejs_24` (was `nodejs_22`; fixes gondolin
+`EBADENGINE`). Upstream Dockerfile uses `node:24-bookworm-slim`.
 
 ## Base Image
 `node:24-bookworm-slim` with `bash ca-certificates git ripgrep`
 
 ## Binary
-`pi` → `dist/cli.js`
+- Canonical (`.#pi-bun`): `/app/bin/pi` — self-contained Bun-compiled binary
+  (Bun runtime embedded), with runtime assets (themes, export-html templates,
+  photon wasm) mirrored alongside.
+- Fallback (`.#pi`): `node /app/packages/coding-agent/dist/cli.js`.
 
 ## Modes
 - Interactive TUI (default)
@@ -59,7 +66,9 @@ The authoritative block on Pi telemetry domains is enforced by the sandbox netwo
 - Direct provider API calls
 
 ## Workspace
-- `agents/pi/repo` mounted read-only at `/app`
+- pi build tree mounted read-only at `/app` — canonical: the `.#pi-bun`
+  standalone binary (via `WORKESTRATE_PI_BUILD`); fallback: `agents/pi/build`
+  (via `just dev-build-pi`) when `WORKESTRATE_PI_BUILD` is unset.
 - `workspaces/pi` mounted read-write at `/workspace`
 
 ## Egress
@@ -72,7 +81,11 @@ The authoritative block on Pi telemetry domains is enforced by the sandbox netwo
 `PI_OFFLINE=1` and `PI_TELEMETRY=0` are set as defense-in-depth; the network-layer deny rule is the authoritative block on Pi telemetry egress.
 
 ## Status
-Profile-only in milestone 1
+- `.#pi` and `.#pi-bun` derivations land in M1 (compile- and plan-verified).
+- Bun-binary sandbox exec (`/app/bin/pi`) pending KVM runtime validation;
+  `.#pi` (node) is the fallback.
+- Fork-carries-compat: nix-build compat lives on the agent fork, not as
+  nix-side patches.
 
 ## Unknowns
 - Exact RPC/headless command handshake
