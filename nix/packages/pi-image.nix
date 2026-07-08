@@ -30,7 +30,7 @@ pkgs.dockerTools.buildLayeredImage {
   # pi-bun-built: the self-contained Bun-compiled pi binary + assets.
   # All three closures pull in nix glibc 2.42 transitively — matching pi-bun's
   # PT_INTERP exactly (same nixpkgs, same flake).
-  contents = [ pkgs.cacert pkgs.busybox pi-bun-built ];
+  contents = [ pkgs.cacert pkgs.busybox pi-bun-built pkgs.dockerTools.fakeNss ];
 
   extraCommands = ''
     # /tmp is needed by some bun internals and by tools that honor TMPDIR.
