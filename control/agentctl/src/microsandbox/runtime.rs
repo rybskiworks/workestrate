@@ -641,18 +641,14 @@ mod tests {
     #[test]
     fn pi_plan_has_expected_mounts() {
         let plan = Pi.plan();
-        assert_eq!(plan.mounts.len(), 3, "pi should have 3 mounts");
-        let app_mount = plan.mounts.iter().find(|m| m.guest == "/app");
-        assert!(app_mount.is_some(), "pi must have a /app mount (Pi code)");
-        if let Some(m) = app_mount {
-            // build_path respects WORKESTRATE_PI_BUILD when set (e.g. in the
-            // dev shell / .#workestrator wrapper), otherwise falls back to
-            // agents/pi/build.
-            let expected_host = std::env::var("WORKESTRATE_PI_BUILD")
-                .unwrap_or_else(|_| "agents/pi/build".to_string());
-            assert_eq!(m.host, expected_host);
-            assert!(m.read_only, "/app mount must be readonly");
-        }
+        assert_eq!(plan.mounts.len(), 2, "pi should have 2 mounts");
+        // /app is no longer mounted — the bun binary + assets are baked into
+        // the workestrator-pi image (the daemon can't bind-mount from
+        // /nix/store). /app/bin/pi resolves via the symlink in the image.
+        assert!(
+            plan.mounts.iter().all(|m| m.guest != "/app"),
+            "pi must NOT have a /app mount (binary baked into image)"
+        );
         let data_mount = plan.mounts.iter().find(|m| m.guest == "/data");
         assert!(
             data_mount.is_some(),

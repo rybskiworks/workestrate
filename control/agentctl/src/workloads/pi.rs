@@ -49,7 +49,10 @@ impl Workload for Pi {
             secret_env: vec![HostBoundSecret::from(&secrets::GITHUB_TOKEN)],
             ports: vec![],
             mounts: vec![
-                MountPlan::readonly(self.build_path(), "/app"),
+                // /app is no longer mounted — the bun binary + assets are baked
+                // into the workestrator-pi image (the daemon can't bind-mount
+                // from /nix/store). /app/bin/pi resolves via the symlink in the
+                // image (ln -s ${pi-bun-built}/bin app/bin).
                 MountPlan::readwrite("workspaces/pi-state", "/data"),
                 MountPlan::readwrite(work_host, "/work"),
             ],
@@ -66,11 +69,13 @@ impl Workload for Pi {
 
     fn exec(&self) -> SandboxCommand {
         // /app/bin/pi is the self-contained Bun-compiled binary from the
-        // `.#pi-bun` derivation, mounted at /app via WORKESTRATE_PI_BUILD
-        // (see Workload::build_path). The Bun runtime is embedded, so no
-        // node/bun is needed inside the sandbox. The npm/node artifact
-        // (.#pi, exec'ing `node /app/packages/coding-agent/dist/cli.js`)
-        // remains a fallback if the bun binary misbehaves at runtime.
+        // `.#pi-bun` derivation, baked into the `workestrator-pi` image via
+        // a symlink (ln -s ${pi-bun-built}/bin app/bin). The daemon can't
+        // bind-mount from /nix/store, so the binary lives inside the image.
+        // The Bun runtime is embedded, so no node/bun is needed inside the
+        // sandbox. The npm/node artifact (.#pi, exec'ing
+        // `node /app/packages/coding-agent/dist/cli.js`) remains a fallback
+        // if the bun binary misbehaves at runtime.
         SandboxCommand::with_args("/app/bin/pi", &[])
     }
 

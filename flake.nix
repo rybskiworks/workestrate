@@ -51,7 +51,7 @@
       # new workload's image = one entry here; the `load-images` script and
       # the dev-shell check pick it up automatically. No per-image recipes.
       workload-images = {
-        workestrator-pi = pkgs.callPackage ./nix/packages/pi-image.nix {};
+        workestrator-pi = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built; };
         # Future: workestrator-odysseus = ...; workestrator-opencode = ...;
       };
 
