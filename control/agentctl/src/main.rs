@@ -53,6 +53,7 @@ macro_rules! workloads {
             Odysseus, workloads::Odysseus, Service, "Odysseus agent sandbox";
             Pi, workloads::Pi, Agent, "Pi coding agent sandbox";
             Opencode, workloads::Opencode, Agent, "OpenCode agent sandbox";
+            Tempest, workloads::Tempest, Agent, "T3MP3ST offensive-security agent sandbox";
         );
     };
     ($prefix:expr, $macro:ident) => {
@@ -62,6 +63,7 @@ macro_rules! workloads {
             Odysseus, workloads::Odysseus, Service, "Odysseus agent sandbox";
             Pi, workloads::Pi, Agent, "Pi coding agent sandbox";
             Opencode, workloads::Opencode, Agent, "OpenCode agent sandbox";
+            Tempest, workloads::Tempest, Agent, "T3MP3ST offensive-security agent sandbox";
         );
     };
 }
@@ -271,6 +273,7 @@ mod tests {
             "pi",
             "odysseus",
             "opencode",
+            "tempest",
         ] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
         }

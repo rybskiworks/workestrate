@@ -42,6 +42,7 @@ plan:
     cargo run --manifest-path control/agentctl/Cargo.toml -- pi plan
     cargo run --manifest-path control/agentctl/Cargo.toml -- odysseus plan
     cargo run --manifest-path control/agentctl/Cargo.toml -- opencode plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- tempest plan
 
 # Check that the Debian/Linux host is ready to run the workbench
 host-check:

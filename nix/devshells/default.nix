@@ -14,6 +14,7 @@
 , pi-bun-built
 , odysseus
 , opencode
+, tempest
 }:
 
 # Agent source repos. These default to maintainer forks.
@@ -164,6 +165,7 @@ pkgs.mkShell {
       _setup_repo "pi" "${pi}"
       _setup_repo "odysseus" "${odysseus}"
       _setup_repo "opencode" "${opencode}"
+      _setup_repo "tempest" "${tempest}"
     }
     _setup_agent_repos
     unset -f _setup_agent_repos _setup_repo
@@ -232,6 +234,11 @@ pkgs.mkShell {
       _build_if_needed "opencode" \
         "HUSKY=0 bun install" \
         "bun.lock"
+
+      # T3MP3ST: TypeScript/Node offensive-security agent
+      _build_if_needed "tempest" \
+        "npm install && npm run build" \
+        "package-lock.json"
 
       unset -f _build_if_needed
     }

@@ -1,6 +1,6 @@
 # workestrator
 
-A local AI workbench that runs Pi, Odysseus, and OpenCode coding agents inside
+A local AI workbench that runs Pi, Odysseus, OpenCode, and T3MP3ST agents inside
 Microsandbox microVMs, with LiteLLM as the unified LLM proxy. Everything
 is driven from a single Rust CLI (`workestrate`) and orchestrated through
 Nix flakes and SOPS-encrypted secrets.
@@ -209,7 +209,7 @@ the process env at startup.
 ## Running agents
 
 Workloads split into two kinds: **services** (litellm, odysseus) support
-`up`/`down`/`logs`/`plan`; **agents** (pi, opencode) support
+`up`/`down`/`logs`/`plan`; **agents** (pi, opencode, tempest) support
 `exec`/`down`/`plan` (agents have no `up` or `logs` — you attach to them
 interactively with `exec`).
 
@@ -222,6 +222,7 @@ run-with-secrets odysseus logs       # tail Odysseus's detached log
 # Agents (interactive TUI attach)
 run-with-secrets pi exec            # attach to the Pi coding agent
 run-with-secrets opencode exec      # attach to the OpenCode coding agent
+run-with-secrets tempest exec       # attach to the T3MP3ST offensive-security agent
 
 # Stop any workload
 run-with-secrets <name> down
@@ -240,10 +241,11 @@ the bun binary misbehaves. The bun-binary path through the microVM is
 compile- and plan-verified but pending KVM runtime validation; `.#pi`
 (node) is the fallback.
 
-Note: `agents/pi/repo` and `agents/odysseus/repo` must be cloned into the
-`agents/` directory before `<name> up` will work; `workestrate check`
-reports them as `[MISSING] (optional)` and does not fail, but the
-corresponding `<name> up` command requires the checkout to exist.
+Note: `agents/pi/repo`, `agents/odysseus/repo`, `agents/opencode/repo`, and
+`agents/tempest/repo` must be cloned into the `agents/` directory before
+`<name> up` will work; `workestrate check` reports them as `[MISSING] (optional)`
+and does not fail, but the corresponding `<name> up` command requires the
+checkout to exist.
 
 Agents reach the proxy at `http://host.microsandbox.internal:4000`.
 Odysseus and OpenCode receive `OPENAI_API_KEY` (remapped from
@@ -275,9 +277,10 @@ and `agents/odysseus/config/settings.json` →
 `host.microsandbox.internal`; Pi receives `LITELLM_MASTER_KEY` as a
 plain process env var instead (see above).
 
-`agents/pi/repo` and `agents/odysseus/repo` are optional local overrides and are
-expected to be absent on a fresh clone; `workestrate check` reports them
-as `[MISSING] (optional)` and does not fail.
+`agents/pi/repo`, `agents/odysseus/repo`, `agents/opencode/repo`, and
+`agents/tempest/repo` are optional local overrides and are expected to be
+absent on a fresh clone; `workestrate check` reports them as `[MISSING] (optional)`
+and does not fail.
 
 ## Development workflow
 
@@ -295,7 +298,7 @@ Common `just` recipes:
 | `just clippy` | Run Clippy with `-D warnings` |
 | `just test` | Run unit tests for `control/agentctl` |
 | `just workestrate …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just workestrate litellm plan`) |
-| `just plan` | Run `litellm plan`, `pi plan`, `odysseus plan`, and `opencode plan` via `cargo run` |
+| `just plan` | Run all workload plans (litellm, pi, odysseus, opencode, tempest) via `cargo run` |
 | `just host-check` | Verify KVM, Nix, memory, and disk prerequisites |
 | `just validate-secrets` | Exercise the SOPS/age workflow against ephemeral test values |
 | `just setup-secrets init` | Run `setup-secrets init` from the dev shell |
@@ -332,6 +335,14 @@ full `nix build` produces ready-to-run artifacts without `nix develop`:
   wasm) next to the binary so pi resolves package assets relative to
   `process.execPath`. **This is the canonical pi artifact** mounted at
   `/app` in the sandbox.
+- `.#tempest-built` — hermetic `buildNpmPackage` of T3MP3ST from the
+  remote fork (`github:georgrybski/T3MP3ST`). Single-package TypeScript
+  app; `tsc` emits `dist/`. The tempest sandbox execs
+  `node dist/cli.js` from the image's working directory.
+- `.#tempest-image` — `dockerTools.buildLayeredImage` for the tempest
+  sandbox. Provides nodejs_24 + nmap + bind.dnsutils + the compiled
+  T3MP3ST tree + a baked `defaultProvider:"local"` config so T3MP3ST
+  uses the env-var-driven local LLM provider (no conf-store secrets).
 - `.#workestrator` — `runCommand` + `makeWrapper` wrapper around
   `.#workestrate` that bakes `WORKESTRATE_PI_BUILD=${pi-bun}` into the
   environment, so `nix build .#workestrator && ./result/bin/workestrator pi exec`
@@ -400,15 +411,15 @@ Reload your shell (or `source` the completion file) afterwards.
                          │  │ (Nix store)│    │  :4000  (in-memory)   │  │
                          │  └─────┬──────┘    └──────────┬────────────┘  │
                          │        │  drives              │               │
-                         │   ┌────┴──────────┐  ┌────────┴──────────┐  ┌────────┴──────────┐
-                         │   │ pi microVM    │  │ odysseus microVM  │  │ opencode microVM  │
-                         │   │               │  │ :7000             │  │ :3000             │
-                         │   └──┬────────────┘  └────────┬──────────┘  └────────┬──────────┘
-                         │      │      host.microsandbox.internal:4000          │
-                         │      │                       │                       │
-                         └──────┼───────────────────────┼───────────────────────┼───────────────┘
-                                │                       │                       │
-                                ▼                       ▼                       ▼
+                          │   ┌────┴──────────┐  ┌────────┴──────────┐  ┌────────┴──────────┐  ┌────────┴──────────┐
+                          │   │ pi microVM    │  │ odysseus microVM  │  │ opencode microVM  │  │ tempest microVM   │
+                          │   │               │  │ :7000             │  │ :3000             │  │ (offsec agent)    │
+                          │   └──┬────────────┘  └────────┬──────────┘  └────────┬──────────┘  └────────┬──────────┘
+                          │      │     host.microsandbox.internal:4000           │                      │
+                          │      │                        │                      │                      │
+                          └──────┼────────────────────────┼──────────────────────┼──────────────────────┼──────────────┘
+                                 │                        │                      │                      │
+                                 ▼                        ▼                      ▼                      ▼
                      Upstream LLM providers (OpenRouter, Kimi, Neuralwatt, MiniMax)
 ```
 
@@ -439,6 +450,13 @@ except the explicitly-allowed ones (`openrouter.ai`, `api.kimi.com`,
   spend tracking in M1.
 - Odysseus and OpenCode receive `OPENAI_API_KEY` (remapped from
   `LITELLM_MASTER_KEY`) host-bound to `host.microsandbox.internal`.
+- T3MP3ST (tempest) uses `default_deny: false` (broad egress) because it
+  is an offensive-security tool that scans arbitrary targets. It connects
+  to LiteLLM via the `local` provider (`TEMPEST_LOCAL_BASE_URL`), with
+  `TEMPEST_LOCAL_API_KEY` remapped from `LITELLM_MASTER_KEY`. The
+  `defaultProvider:"local"` config is baked into the image; no secrets
+  are stored in the T3MP3ST conf store. `T3MP3ST_HOST` is set to
+  `127.0.0.1` so the Express API server stays inside the microVM.
 
 The top-level layout (already documented in
 [`agents/README.md`](agents/README.md) and
@@ -468,7 +486,7 @@ The top-level layout (already documented in
   shell (`exit` then `nix develop`) or run `just vendor-unlock` to
   materialise a real copy, then `just vendor-lock` to put the symlink
   back.
-- **`[MISSING] (optional)` for `agents/pi/repo` / `agents/odysseus/repo` / `agents/opencode/repo`.** This
+- **`[MISSING] (optional)` for `agents/pi/repo` / `agents/odysseus/repo` / `agents/opencode/repo` / `agents/tempest/repo`.** This
 is expected on a fresh clone. The agent checkouts are gitignored;
 clone the agent repos into `agents/<name>/repo` only if you intend to run them.
 - **"missing secrets" failures.** `workestrate` reports which wrapper to
@@ -489,10 +507,12 @@ clone the agent repos into `agents/<name>/repo` only if you intend to run them.
   `litellm up` with the new `.env.enc`.
 - **No Docker.** Microsandbox talks to KVM directly, so the host does
   not need Docker, `containerd`, or any other container runtime.
-- **Optional agent checkouts.** `agents/pi/repo`, `agents/odysseus/repo`, and `agents/opencode/repo` are
-gitignored. You only need the checkouts if you want to run the agents
-themselves. (Flake inputs for the agent sources exist but are not yet
-consumed by the build.)
+- **Optional agent checkouts.** `agents/pi/repo`, `agents/odysseus/repo`,
+  `agents/opencode/repo`, and `agents/tempest/repo` are gitignored. You
+  only need the checkouts if you want to run the agents themselves. (Flake
+  inputs for the agent sources exist; pi and tempest are consumed by their
+  respective nix derivations, odysseus and opencode still use the dev-shell
+  auto-build.)
 - **Secrets discipline.** `.env.enc` is the only encrypted artifact in
   the repo and is restricted by `.sops.yaml` to a single recipient.
   Treat the age key file as the recovery seed for the entire workflow;

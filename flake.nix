@@ -18,9 +18,14 @@
       url = "github:georgrybski/opencode";
       flake = false;
     };
+
+    tempest = {
+      url = "github:georgrybski/T3MP3ST";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, pi, odysseus, opencode, ... }:
+  outputs = { self, nixpkgs, pi, odysseus, opencode, tempest, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -47,11 +52,28 @@
       # Load into microsandbox with `just load-pi-image`.
       pi-image = pkgs.callPackage ./nix/packages/pi-image.nix {};
 
+      # Hermetic nix build of the T3MP3ST offensive-security agent (single
+      # package, no workspaces). npmDepsHash is a placeholder until computed
+      # in a nix-capable environment via:
+      #   nix run nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json
+      tempest-built = pkgs.callPackage ./nix/packages/tempest.nix {
+        tempest = tempest;
+        npmDepsHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      };
+
+      # Nix-built Docker image for the T3MP3ST sandbox (dockerTools.buildLayeredImage).
+      # Provides nodejs_24 + nmap + dnsutils + the compiled T3MP3ST tree + the
+      # baked defaultProvider:"local" config. Load via `just load-images`.
+      tempest-image = pkgs.callPackage ./nix/packages/tempest-image.nix {
+        inherit tempest-built;
+      };
+
       # Single source of truth for nix-built workload sandbox images. Adding a
       # new workload's image = one entry here; the `load-images` script and
       # the dev-shell check pick it up automatically. No per-image recipes.
       workload-images = {
         workestrator-pi = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
+        tempest = pkgs.callPackage ./nix/packages/tempest-image.nix { inherit tempest-built; };
         # Future: workestrator-odysseus = ...; workestrator-opencode = ...;
       };
 
@@ -249,7 +271,7 @@
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
         inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets load-images
-          odysseus opencode pi-bun-built;
+          odysseus opencode pi-bun-built tempest;
         # devshell populates agents/pi/repo from the canonical remote fork.
         pi = pi;
         imageNames = builtins.attrNames workload-images;
@@ -263,6 +285,9 @@
         pi = pi-built;
         pi-bun = pi-bun-built;
         pi-image = pi-image;
+        # .#tempest = compiled T3MP3ST tree (dist/ + node_modules + package.json).
+        tempest = tempest-built;
+        tempest-image = tempest-image;
         default = workestrate;
       };
 

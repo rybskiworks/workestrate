@@ -22,6 +22,7 @@ agents/<name>/
 | Pi | `github:georgrybski/pi` | `github:earendil-works/pi` | — |
 | Odysseus | `github:georgrybski/odysseus` | `github:pewdiepie-archdaemon/odysseus` | `config/settings.json` |
 | OpenCode | `github:georgrybski/opencode` | `github:anomalyco/opencode` | `config/opencode.jsonc` |
+| T3MP3ST | `github:georgrybski/T3MP3ST` | `github:elder-plinius/T3MP3ST` | — |
 
 ## Overriding repos
 
@@ -31,7 +32,8 @@ Use Nix's `--override-input` to swap any agent repo:
 # Use official upstreams
 nix develop --override-input pi github:earendil-works/pi \
             --override-input odysseus github:pewdiepie-archdaemon/odysseus \
-            --override-input opencode github:anomalyco/opencode
+            --override-input opencode github:anomalyco/opencode \
+            --override-input tempest github:elder-plinius/T3MP3ST
 
 # Use your own fork
 nix develop --override-input opencode github:myorg/opencode

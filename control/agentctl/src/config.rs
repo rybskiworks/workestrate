@@ -99,6 +99,10 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
             "profiles/agents/opencode.md",
             root.join("profiles/agents/opencode.md"),
         ),
+        required(
+            "profiles/agents/tempest.md",
+            root.join("profiles/agents/tempest.md"),
+        ),
         required("workspaces/", root.join("workspaces")),
         required("var/", root.join("var")),
         required(
@@ -120,6 +124,8 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
         optional("agents/pi/build", root.join("agents/pi/build")),
         optional("agents/odysseus/build", root.join("agents/odysseus/build")),
         optional("agents/opencode/build", root.join("agents/opencode/build")),
+        optional("agents/tempest/repo", root.join("agents/tempest/repo")),
+        optional("agents/tempest/build", root.join("agents/tempest/build")),
     ];
 
     Ok(specs
@@ -176,11 +182,11 @@ mod tests {
         let tmp = std::env::temp_dir();
         let entries = check_required_files(&tmp).unwrap();
         let optional_entries: Vec<_> = entries.iter().filter(|e| e.optional).collect();
-        // Should have 6 optional entries (agents/*/repo + agents/*/build)
+        // Should have 8 optional entries (4 agents × repo + build)
         assert_eq!(
             optional_entries.len(),
-            6,
-            "expected 6 optional checks, got {}",
+            8,
+            "expected 8 optional checks, got {}",
             optional_entries.len()
         );
     }

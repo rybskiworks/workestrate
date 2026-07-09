@@ -2,10 +2,10 @@
 
 ## Purpose
 
-ai-workbench is a local development environment for running AI coding agents
-(Pi, Odysseus) inside isolated Microsandbox microVMs. LiteLLM provides a
-unified proxy to multiple LLM providers. The control plane (`workestrate`) manages
-sandbox definitions, plans, and health checks.
+ai-workbench is a local development environment for running AI agents
+(Pi, Odysseus, OpenCode, T3MP3ST) inside isolated Microsandbox microVMs.
+LiteLLM provides a unified proxy to multiple LLM providers. The control plane
+(`workestrate`) manages sandbox definitions, plans, and health checks.
 
 ## Current milestone
 
@@ -13,7 +13,7 @@ Milestone 1 (M1) delivers:
 - Compile-checked Rust control plane (`workestrate`)
 - Nix flake for reproducible dev shell
 - Microsandbox SDK integration (0.5.6, `net` feature)
-- Sandbox plans for LiteLLM, Pi, and Odysseus
+- Sandbox plans for LiteLLM, Pi, Odysseus, OpenCode, and T3MP3ST
 - Verified `cargo check`, `cargo clippy`, `cargo fmt`
 - No runtime-validated claims — this environment lacks KVM; `up`/`down` are
   implemented and compile-checked only in M1.
@@ -30,7 +30,7 @@ limits. Agents communicate with LiteLLM via a well-known host IP/port.
 ### workestrate
 
 Rust CLI built with Tokio and Clap. Commands: `check`, plus per-workload subcommands. **Services** (litellm,
-odysseus) expose `{up,down,logs,plan}`; **agents** (pi, opencode) expose
+odysseus) expose `{up,down,logs,plan}`; **agents** (pi, opencode, tempest) expose
 `{exec,down,plan}`. The `plan` subcommands print sandbox configurations
 built with `SandboxBuilder` and `NetworkPolicyBuilder`. The `up`/`down`
 subcommands drive the Microsandbox runtime (compile-checked in M1;
@@ -87,6 +87,25 @@ through an OpenAI-compatible endpoint. Odysseus does not honor
 `OPENAI_BASE_URL`; it requires seeding `data/settings.json` with a custom
 provider pointing at LiteLLM. Full integration is future work.
 
+### T3MP3ST (tempest)
+
+Offensive-security multi-agent framework from `github:georgrybski/T3MP3ST`
+(remote fork of `elder-plinius/T3MP3ST`). Built via `buildNpmPackage` (single
+TypeScript package; `tsc` emits `dist/`).
+
+- `.#tempest-built` — hermetic nix build of the T3MP3ST tree.
+- `.#tempest-image` — `dockerTools.buildLayeredImage` with nodejs_24 + nmap +
+  bind.dnsutils + the compiled tree + a baked `defaultProvider:"local"` config.
+
+T3MP3ST uses the `local` LLM provider, which reads all config from env vars
+(`TEMPEST_LOCAL_BASE_URL`, `TEMPEST_LOCAL_MODEL`, `TEMPEST_LOCAL_API_KEY`).
+`TEMPEST_LOCAL_API_KEY` is remapped from `LITELLM_MASTER_KEY`. The
+`defaultProvider:"local"` config is baked into the image so no secrets are
+stored in T3MP3ST's conf store. T3MP3ST execs `node dist/cli.js` (interactive
+CLI TUI, like Pi). Unlike other agents, tempest uses `default_deny: false`
+(broad egress) because it scans arbitrary targets. Compile- and plan-verified
+in M1; pending KVM runtime validation.
+
 ### Nix
 
 Reproducible build environment. `nix develop` provides Rust toolchain,
@@ -101,7 +120,8 @@ derivations from the remote fork. The dev shell pins `nodejs_24` (was
 ## Source model
 
 - `workestrate` sources: `control/agentctl/src/`
-- Flake inputs: `nixpkgs`, `pi` (GitHub fork), `odysseus` (GitHub fork)
+- Flake inputs: `nixpkgs`, `pi` (GitHub fork), `odysseus` (GitHub fork),
+  `opencode` (GitHub fork), `tempest` (GitHub fork)
 - Agent repos are optional local overrides in `agents/`, ignored by git
 - Profiles live in `profiles/agents/`
 
@@ -116,6 +136,10 @@ to M4). The dummy-key egress rewrite is not implemented in M1.
 Network policy uses `default_deny` with explicit allow rules for the real
 provider host. All other outbound traffic is blocked. The egress layer also
 performs secret injection (dummy key → real key) for allowed destinations.
+
+T3MP3ST (tempest) is an exception: it uses `default_deny: false` because it
+is an offensive-security tool that needs to reach arbitrary targets for
+scanning. The microVM boundary itself is the containment layer for tempest.
 
 ## Filesystem model
 
@@ -136,6 +160,8 @@ performs secret injection (dummy key → real key) for allowed destinations.
 - [x] `workestrate litellm plan` prints a valid sandbox plan
 - [x] `workestrate pi plan` prints a valid sandbox plan
 - [x] `workestrate odysseus plan` prints a valid sandbox plan
+- [x] `workestrate opencode plan` prints a valid sandbox plan
+- [x] `workestrate tempest plan` prints a valid sandbox plan
 - [ ] Runtime sandbox execution (blocked: no KVM)
 
 ## Future milestones
