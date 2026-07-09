@@ -231,6 +231,19 @@ workestrate <name> down
 nix run . -- <name> plan            # e.g. pi plan, odysseus plan, litellm plan
 ```
 
+### Secret loading
+
+`workestrate` loads secrets from `.env.enc` automatically before commands that need them (`exec`, `up`, `run`). Commands that don't need secrets (`plan`, `check`, `new`, `completions`) skip decryption entirely — they work on a fresh clone before `setup-secrets init` has been run.
+
+To run an arbitrary command with decrypted secrets:
+
+```bash
+workestrate run -- bash -c 'echo $LITELLM_MASTER_KEY'
+workestrate run -- bash    # interactive shell with secrets
+```
+
+The `run` subcommand decrypts `.env.enc` via `sops`, loads all keys into the process environment, then execs the given command.
+
 Pi runs in its sandbox as a **bun standalone binary** at `/app/bin/pi` —
 a self-contained executable with the Bun runtime embedded, so no node
 or bun is needed inside the microVM at runtime. The binary is produced
