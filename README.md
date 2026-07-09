@@ -60,11 +60,11 @@ before continuing.
    ```
 5. Start the LiteLLM proxy (starts detached; add `--foreground` to block):
    ```bash
-   run-with-secrets litellm up
+   workestrate litellm up
    ```
 6. Attach to an agent (for example Pi):
    ```bash
-   run-with-secrets pi exec
+   workestrate pi exec
    ```
 
    Services start detached by default: `workestrate <svc> up` returns
@@ -72,8 +72,8 @@ before continuing.
    `workestrate <svc> up --foreground` (or `-f`) to block until Ctrl-C.
    Tail a detached service's logs with `workestrate <svc> logs` (written to
    `~/.microsandbox/sandboxes/<svc>/workestrate.log`). Detached mode works
-   through `run-with-secrets` — the detached child inherits the parent's
-   decrypted environment, so `run-with-secrets litellm up` starts detached
+   through `workestrate` — the detached child inherits the parent's
+   decrypted environment, so `workestrate litellm up` starts detached
    and works without `nohup`.
 
 ## Secrets setup
@@ -81,9 +81,9 @@ before continuing.
 Secrets are stored in `.env.enc`, encrypted with SOPS using an
 age key that lives outside the repo at
 `$HOME/.config/sops/age/ai-workbench-secrets.txt`. The wrappers
-`setup-secrets`, `with-secrets`, `run-with-secrets`, `decrypt-env`, and
-`write-env` (provided by the flake) all default `SOPS_AGE_KEY_FILE` to
-that path.
+`setup-secrets`, `decrypt-env`, and `write-env` (provided by the flake)
+all default `SOPS_AGE_KEY_FILE` to that path. `workestrate` loads secrets
+internally before starting sandboxes or running commands.
 
 1. Generate the project age key and create `.env.enc` (one-time):
    ```bash
@@ -135,9 +135,9 @@ For the full threat model and wrapper reference, see
 Inside the dev shell:
 
 ```bash
-run-with-secrets litellm up      # start (detached by default)
-run-with-secrets litellm down    # stop
-run-with-secrets litellm logs    # tail the detached service's log
+workestrate litellm up      # start (detached by default)
+workestrate litellm down    # stop
+workestrate litellm logs    # tail the detached service's log
 nix run . -- litellm plan        # show the sandbox plan without secrets
 ```
 
@@ -145,12 +145,12 @@ Once the proxy is up, you can talk to it directly on the host:
 
 ```bash
 # List the configured models (pretty-printed with jq)
-nix run .#with-secrets -- bash -c \
+workestrate run -- bash -c \
   'curl -sS http://127.0.0.1:4000/v1/models \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY"' | jq
 
 # Smoke-test a chat completion (pretty-printed with jq)
-nix run .#with-secrets -- bash -c \
+workestrate run -- bash -c \
   'curl -sS http://127.0.0.1:4000/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
@@ -158,7 +158,7 @@ nix run .#with-secrets -- bash -c \
 ```
 
 The `bash -c` wrapper with single quotes is required because `$LITELLM_MASTER_KEY`
-must be expanded by the inner shell (after `with-secrets` has decrypted it into
+must be expanded by the inner shell (after `workestrate run` has decrypted it into
 the environment), not by the outer shell (where it is unset).  Without this
 wrapper the variable expands to empty and the request fails authentication.
 
@@ -215,17 +215,17 @@ interactively with `exec`).
 
 ```bash
 # Services (start detached, tail with `logs`)
-run-with-secrets litellm up          # LiteLLM proxy
-run-with-secrets odysseus up         # Odysseus agent (service)
-run-with-secrets odysseus logs       # tail Odysseus's detached log
+workestrate litellm up          # LiteLLM proxy
+workestrate odysseus up         # Odysseus agent (service)
+workestrate odysseus logs       # tail Odysseus's detached log
 
 # Agents (interactive TUI attach)
-run-with-secrets pi exec            # attach to the Pi coding agent
-run-with-secrets opencode exec      # attach to the OpenCode coding agent
-run-with-secrets tempest exec       # attach to the T3MP3ST offensive-security agent
+workestrate pi exec            # attach to the Pi coding agent
+workestrate opencode exec      # attach to the OpenCode coding agent
+workestrate tempest exec       # attach to the T3MP3ST offensive-security agent
 
 # Stop any workload
-run-with-secrets <name> down
+workestrate <name> down
 
 # Show a sandbox plan without secrets
 nix run . -- <name> plan            # e.g. pi plan, odysseus plan, litellm plan
@@ -374,28 +374,24 @@ opencode still auto-build on `nix develop` (via `pip --only-binary=:all:`
 and `HUSKY=0 bun install` respectively) until their own derivations land.
 
 **Runtime caveat.** The bun binary in the microVM, `up`/`exec`/`logs`,
-and detached-mode + `run-with-secrets` env inheritance are compile- and
+and detached-mode + internal secret loading are compile- and
 plan-verified but pending KVM runtime validation. `.#pi` (node) is the
 fallback if the bun binary misbehaves at runtime.
 
 ## Shell completions
 
 `workestrate` ships shell completions for bash, zsh, fish, elvish, and
-powershell. Install them for both `workestrate` and the `run-with-secrets`
-wrapper (same verb tree, different command name):
+powershell. Install them for `workestrate`:
 
 ```bash
 # bash
 workestrate completions bash > ~/.local/share/bash-completion/completions/workestrate
-workestrate completions bash --for run-with-secrets > ~/.local/share/bash-completion/completions/run-with-secrets
 
 # zsh
 workestrate completions zsh > ~/.zfunc/_workestrate
-workestrate completions zsh --for run-with-secrets > ~/.zfunc/_run-with-secrets
 
 # fish
 workestrate completions fish > ~/.config/fish/completions/workestrate.fish
-workestrate completions fish --for run-with-secrets > ~/.config/fish/completions/run-with-secrets.fish
 ```
 
 Reload your shell (or `source` the completion file) afterwards.
@@ -489,10 +485,10 @@ The top-level layout (already documented in
 - **`[MISSING] (optional)` for `agents/pi/repo` / `agents/odysseus/repo` / `agents/opencode/repo` / `agents/tempest/repo`.** This
 is expected on a fresh clone. The agent checkouts are gitignored;
 clone the agent repos into `agents/<name>/repo` only if you intend to run them.
-- **"missing secrets" failures.** `workestrate` reports which wrapper to
-  use; the fix is almost always to prefix the command with
-  `run-with-secrets` so the SOPS-encrypted `.env.enc` is decrypted into
-  the process environment.
+- **"missing secrets" failures.** `workestrate` loads secrets from
+  `.env.enc` automatically before starting sandboxes; ensure
+  `setup-secrets init` has been run and the age key is present at
+  `~/.config/sops/age/ai-workbench-secrets.txt`.
 
 ## Important notes
 

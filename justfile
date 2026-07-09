@@ -101,7 +101,7 @@ dev-build-pi:
 # pointing at the local agents/pi/build populated by `just dev-build-pi` — no
 # manual export/unset needed.
 dev-run-pi *args:
-    WORKESTRATE_PI_BUILD=agents/pi/build run-with-secrets pi {{args}}
+    WORKESTRATE_PI_BUILD=agents/pi/build workestrate pi {{args}}
 
 # Build and load ALL nix-built workload images into microsandbox.
 # Driven by the `workload-images` attrset in flake.nix — adding an image

@@ -116,7 +116,7 @@ pub(crate) fn apply_plan_secrets(
                 if s.required && value.trim().is_empty() {
                     anyhow::bail!(
                         "required secret '{}' is set but empty.\n\
-                         Set a real value via with-secrets or setup-secrets update.",
+                         Set a real value via setup-secrets update.",
                         s.name
                     );
                 }
@@ -134,7 +134,7 @@ pub(crate) fn apply_plan_secrets(
             Err(e) => {
                 return Err(anyhow::anyhow!(
                     "required secret '{}' is not set: {}\n\
-                     Set it in the environment or run via with-secrets",
+                     Set it in the environment or run setup-secrets update",
                     s.name,
                     e
                 ));
@@ -336,6 +336,10 @@ pub(crate) async fn build_sandbox<W: Workload>(
     workload: &W,
 ) -> Result<(Sandbox, ForegroundConfig)> {
     workload.prepare()?;
+
+    // Load secrets from .env.enc if not already in env.
+    // Only called for exec/up paths — plan/check never reach here.
+    crate::microsandbox::secrets_loader::load_secrets()?;
 
     let root = crate::config::project_root()?;
     let plan = workload.plan();

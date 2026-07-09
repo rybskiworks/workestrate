@@ -101,8 +101,14 @@ macro_rules! define_commands_enum {
             Completions {
                 #[arg(value_enum)]
                 shell: clap_complete::Shell,
-                #[arg(long = "for", value_name = "NAME", default_value = "workestrate", help = "Command name to generate completions for (e.g. workestrate, run-with-secrets)")]
+                #[arg(long = "for", value_name = "NAME", default_value = "workestrate", help = "Command name to generate completions for")]
                 for_name: String,
+            },
+            /// Run an arbitrary command with decrypted secrets
+            Run {
+                /// Command and arguments (after --)
+                #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 1..)]
+                command: Vec<String>,
             },
             $(
                 #[doc = $doc]
@@ -232,6 +238,7 @@ async fn main() -> Result<()> {
             clap_complete::generate(shell, &mut cmd, &for_name, &mut std::io::stdout());
             Ok(())
         }
+        Commands::Run { command } => cmd_run(&command).await,
         command => dispatch_workload(command).await,
     }
 }
@@ -256,6 +263,39 @@ async fn cmd_check() -> Result<()> {
     }
 }
 
+async fn cmd_run(command: &[String]) -> Result<()> {
+    if command.is_empty() {
+        anyhow::bail!(
+            "no command specified. Usage: workestrate run -- <command> [args...]"
+        );
+    }
+
+    // Load secrets from .env.enc (generic — all keys, no filtering).
+    crate::microsandbox::secrets_loader::load_secrets()?;
+
+    // exec the command (replaces the workestrate process).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&command[0])
+            .args(&command[1..])
+            .exec();
+        // exec() only returns on failure.
+        anyhow::bail!("failed to exec '{}': {}", command[0], err);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = std::process::Command::new(&command[0])
+            .args(&command[1..])
+            .status()?;
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +309,7 @@ mod tests {
             "check",
             "new",
             "completions",
+            "run",
             "litellm",
             "pi",
             "odysseus",

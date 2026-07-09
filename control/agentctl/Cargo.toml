@@ -15,6 +15,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 microsandbox = { version = "=0.5.6", features = ["net"] }
+serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 
 [profile.release]

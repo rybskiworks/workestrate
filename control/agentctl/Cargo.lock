@@ -6063,6 +6063,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "microsandbox",
+ "serde_json",
  "tokio",
 ]
 

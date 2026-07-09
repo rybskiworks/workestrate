@@ -73,6 +73,7 @@ in
     # of $HOME happens at wrapper execution time, not at build time.
     wrapProgram $out/bin/workestrate \
       --set MSB_PATH "${microsandbox}/bin/msb" \
+      --prefix PATH : ${pkgs.sops}/bin \
       --run 'export MSB_HOME="$HOME/.microsandbox"'
   '';
 

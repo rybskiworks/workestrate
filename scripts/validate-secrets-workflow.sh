@@ -2,7 +2,7 @@
 # validate-secrets-workflow.sh — validate ai-workbench sops/age secrets workflow end-to-end
 #
 # Purpose:
-#   Test the full secrets lifecycle (init, decrypt, write, run-with-secrets) in an
+#   Test the full secrets lifecycle (init, decrypt, write, workestrate run) in an
 #   isolated temp directory without mutating the user's real key or repo state.
 #
 # Exit codes:
@@ -245,49 +245,50 @@ assert_contains "$ENV_CONTENT" "ODYSSEUS_ADMIN_PASSWORD=$INIT_ODYSSEUS" "write-e
 rm -f "$WORKDIR/.env"
 pass "write-env: .env cleaned up"
 
-# PHASE 6: with-secrets / run-with-secrets
-# These wrappers source the decrypted dotenv (decrypt+source workaround, since
+# PHASE 6: workestrate run -- env
+# workestrate run decrypts .env.enc internally and loads it into the child
+# process environment (decrypt+source workaround, since
 # `sops exec-env` has no --input-type flag and mis-detects dotenv as JSON).
-log "=== PHASE 6: with-secrets -- env ==="
-phase="with-secrets-env"
+log "=== PHASE 6: workestrate run -- env ==="
+phase="workestrate-run-env"
 out="$WORKDIR/phase-${phase}.out"
 err="$WORKDIR/phase-${phase}.err"
-if run_in_workdir "with-secrets env" >"$out" 2>"$err"; then
-  pass "with-secrets env succeeded"
+if run_in_workdir "workestrate run -- env" >"$out" 2>"$err"; then
+  pass "workestrate run -- env succeeded"
 else
-  fail "with-secrets env failed (phase=$phase)"
+  fail "workestrate run -- env failed (phase=$phase)"
   echo "stdout:" >&2
   cat "$out" | redact >&2
   echo "stderr:" >&2
   cat "$err" | redact >&2
 fi
-assert_contains "$(cat "$out")" "LITELLM_MASTER_KEY=$UPDATE_LITELLM" "with-secrets: LITELLM_MASTER_KEY injected"
-assert_contains "$(cat "$out")" "OPENROUTER_API_KEY=$INIT_OPENROUTER" "with-secrets: OPENROUTER_API_KEY injected"
-assert_contains "$(cat "$out")" "KIMI_CODE_API_KEY=$INIT_KIMI" "with-secrets: KIMI_CODE_API_KEY injected"
-assert_contains "$(cat "$out")" "NEURALWATT_API_KEY=$INIT_NEURALWATT" "with-secrets: NEURALWATT_API_KEY injected"
-assert_contains "$(cat "$out")" "MINIMAX_CODING_API_KEY=$INIT_MINIMAX" "with-secrets: MINIMAX_CODING_API_KEY injected"
-assert_contains "$(cat "$out")" "GITHUB_TOKEN=$INIT_GITHUB" "with-secrets: GITHUB_TOKEN injected"
-assert_contains "$(cat "$out")" "ODYSSEUS_ADMIN_PASSWORD=$INIT_ODYSSEUS" "with-secrets: ODYSSEUS_ADMIN_PASSWORD injected"
+assert_contains "$(cat "$out")" "LITELLM_MASTER_KEY=$UPDATE_LITELLM" "workestrate run: LITELLM_MASTER_KEY injected"
+assert_contains "$(cat "$out")" "OPENROUTER_API_KEY=$INIT_OPENROUTER" "workestrate run: OPENROUTER_API_KEY injected"
+assert_contains "$(cat "$out")" "KIMI_CODE_API_KEY=$INIT_KIMI" "workestrate run: KIMI_CODE_API_KEY injected"
+assert_contains "$(cat "$out")" "NEURALWATT_API_KEY=$INIT_NEURALWATT" "workestrate run: NEURALWATT_API_KEY injected"
+assert_contains "$(cat "$out")" "MINIMAX_CODING_API_KEY=$INIT_MINIMAX" "workestrate run: MINIMAX_CODING_API_KEY injected"
+assert_contains "$(cat "$out")" "GITHUB_TOKEN=$INIT_GITHUB" "workestrate run: GITHUB_TOKEN injected"
+assert_contains "$(cat "$out")" "ODYSSEUS_ADMIN_PASSWORD=$INIT_ODYSSEUS" "workestrate run: ODYSSEUS_ADMIN_PASSWORD injected"
 
-log "=== PHASE 7: run-with-secrets --help (proves decrypt does not fail) ==="
+log "=== PHASE 7: workestrate --help (proves CLI loads) ==="
 # agentctl rejects a `--` separator and has no `env` subcommand, so we use
-# `--help` (a real, harmless agentctl flag) to prove the decrypt step works.
-# env-injection is already covered by Phase 6 (with-secrets env), which uses
+# `--help` (a real, harmless agentctl flag) to prove the CLI loads.
+# env-injection is already covered by Phase 6 (workestrate run -- env), which uses
 # the same decrypt+source code path.
-phase="run-with-secrets-help"
+phase="workestrate-help"
 out="$WORKDIR/phase-${phase}.out"
 err="$WORKDIR/phase-${phase}.err"
-if run_in_workdir "run-with-secrets --help" >"$out" 2>"$err"; then
-  pass "run-with-secrets --help succeeded (decrypt + agentctl exec)"
+if run_in_workdir "workestrate --help" >"$out" 2>"$err"; then
+  pass "workestrate --help succeeded"
 else
-  fail "run-with-secrets --help failed (phase=$phase)"
+  fail "workestrate --help failed (phase=$phase)"
   echo "stdout:" >&2
   cat "$out" | redact >&2
   echo "stderr:" >&2
   cat "$err" | redact >&2
 fi
-# Sanity: the agentctl help text appears, proving agentctl was actually exec'd.
-assert_contains "$(cat "$out")" "agentctl <COMMAND>" "run-with-secrets: agentctl was exec'd (help text present)"
+# Sanity: the workestrate help text appears, proving the CLI was invoked.
+assert_contains "$(cat "$out")" "workestrate" "workestrate: CLI help text present"
 
 # SUMMARY
 log "=== SUMMARY ==="

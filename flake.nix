@@ -131,80 +131,6 @@
           --run 'export MSB_HOME="$HOME/.microsandbox"'
       '';
 
-      with-secrets = pkgs.writeShellApplication {
-        name = "with-secrets";
-        runtimeInputs = [ pkgs.sops pkgs.jq ];
-        text = ''
-          set -euo pipefail
-
-          : "''${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/ai-workbench-secrets.txt}"
-          export SOPS_AGE_KEY_FILE
-
-          secret_file="''${SECRET_FILE:-.env.enc}"
-
-          if [ ! -f "$secret_file" ]; then
-            echo "error: secret file not found: $secret_file" >&2
-            exit 1
-          fi
-
-          if [ "$#" -eq 0 ]; then
-            echo "usage: with-secrets <command...>" >&2
-            echo "example: with-secrets nix run . -- litellm up" >&2
-            exit 2
-          fi
-
-          # sops exec-env cannot force dotenv input/output type, so we decrypt to
-          # JSON and use jq to emit safely shell-escaped export statements.
-          eval "$(
-            sops decrypt --input-type dotenv --output-type json "$secret_file" \
-              | jq -r '
-                  to_entries[]
-                  | select(.key | test("^[A-Za-z_][A-Za-z0-9_]*$"; "s"))
-                  | "export " + .key + "=" + (.value | @sh)
-                '
-          )"
-
-          exec "$@"
-        '';
-      };
-
-      run-with-secrets = pkgs.writeShellApplication {
-        name = "run-with-secrets";
-        runtimeInputs = [ pkgs.sops pkgs.jq workestrate ];
-        text = ''
-          set -euo pipefail
-
-          : "''${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/ai-workbench-secrets.txt}"
-          export SOPS_AGE_KEY_FILE
-
-          secret_file="''${SECRET_FILE:-.env.enc}"
-
-          if [ ! -f "$secret_file" ]; then
-            echo "error: secret file not found: $secret_file" >&2
-            exit 1
-          fi
-
-          if [ "$#" -eq 0 ]; then
-            echo "usage: run-with-secrets <workestrate-args...>" >&2
-            echo "example: run-with-secrets litellm up" >&2
-            exit 2
-          fi
-
-          # sops exec-env cannot force dotenv input/output type, so we decrypt to
-          # JSON and use jq to emit safely shell-escaped export statements.
-          eval "$(
-            sops decrypt --input-type dotenv --output-type json "$secret_file" \
-              | jq -r '
-                  to_entries[]
-                  | select(.key | test("^[A-Za-z_][A-Za-z0-9_]*$"; "s"))
-                  | "export " + .key + "=" + (.value | @sh)
-                '
-          )"
-
-          exec workestrate "$@"
-        '';
-      };
-
       decrypt-env = pkgs.writeShellApplication {
         name = "decrypt-env";
         runtimeInputs = [ pkgs.sops ];
@@ -270,7 +196,7 @@
       };
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
-        inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets load-images
+        inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped decrypt-env write-env setup-secrets load-images
           odysseus opencode pi-bun-built tempest;
         # devshell populates agents/pi/repo from the canonical remote fork.
         pi = pi;
@@ -278,7 +204,7 @@
       };
 
       packages.${system} = workload-images // {
-        inherit workestrate workestrator workestrator-node microsandbox microsandbox-filesystem-patched msb-wrapped with-secrets run-with-secrets decrypt-env write-env setup-secrets load-images;
+        inherit workestrate workestrator workestrator-node microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets load-images;
         # .#pi = npm/node JS tree (canonical remote fork).
         # .#pi-bun = standalone Bun binary (Bun runtime embedded).
         # Both from one source, one npmDepsHash. Local dev: `just dev-build-pi`.

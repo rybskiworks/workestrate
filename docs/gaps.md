@@ -45,4 +45,4 @@
 
 ## Secrets Management
 
-- Secrets are managed via SOPS + age. Encrypted `.env.enc` is committed; the private key lives at `~/.config/sops/age/ai-workbench-secrets.txt` and is never committed. The previous "set env vars manually" approach is replaced by `with-secrets` / `decrypt-env` / `write-env` (see `docs/secrets.md`). Manual plaintext `.env` files are no longer the supported path.
+- Secrets are managed via SOPS + age. Encrypted `.env.enc` is committed; the private key lives at `~/.config/sops/age/ai-workbench-secrets.txt` and is never committed. The previous "set env vars manually" approach is replaced by `workestrate` (which decrypts `.env.enc` internally), `decrypt-env`, and `write-env` (see `docs/secrets.md`). Manual plaintext `.env` files are no longer the supported path.

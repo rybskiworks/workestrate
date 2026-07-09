@@ -3,8 +3,6 @@
 , microsandbox-filesystem-patched
 , workestrate
 , msb-wrapped
-, with-secrets
-, run-with-secrets
 , decrypt-env
 , write-env
 , setup-secrets
@@ -43,12 +41,10 @@ pkgs.mkShell {
     pkg-config
     (python3.withPackages (p: [ p.pip ]))
     (python312.withPackages (ps: [ ps.pip ps."pip-tools" ]))
-    run-with-secrets
     rustc
     rust-analyzer
     rustfmt
     sops
-    with-secrets
     write-env
     setup-secrets
   ];

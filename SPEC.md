@@ -146,7 +146,7 @@ scanning. The microVM boundary itself is the containment layer for tempest.
 - Source code: tracked in git
 - Build artifacts: `control/agentctl/target/` (gitignored)
 - Runtime state: `var/log/`, `var/run/` (gitignored)
-- Secrets: `.env.enc` (committed, SOPS-encrypted); decrypted at runtime via `run-with-secrets`
+- Secrets: `.env.enc` (committed, SOPS-encrypted); decrypted at runtime by `workestrate` internally
 - Agent overrides: `agents/*` (gitignored)
 
 ## Milestone 1 acceptance criteria

@@ -17,7 +17,7 @@ Provider keys are only for LiteLLM.
 
 - `config.yaml` — proxy configuration (parent; `include:`s `models.yaml`)
 - `models.yaml` — `model_list` (model definitions, with YAML anchors)
-- Secrets are managed via SOPS at the repo root (`.env.enc`) and injected via `run-with-secrets`. The LiteLLM microVM receives its secrets through the sandbox plan's `env()` and `secret_env()` calls.
+- Secrets are managed via SOPS at the repo root (`.env.enc`) and loaded internally by `workestrate`. The LiteLLM microVM receives its secrets through the sandbox plan's `env()` and `secret_env()` calls.
 
 ## Milestone 1 Constraints
 

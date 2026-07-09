@@ -23,21 +23,21 @@ Python 3.12
 From the repo root:
 ```bash
 # Start the LiteLLM proxy first
-nix develop -c run-with-secrets litellm up
+nix develop -c workestrate litellm up
 
 # Start Odysseus in the foreground
-nix develop -c run-with-secrets odysseus up
+nix develop -c workestrate odysseus up
 ```
 
 ## Background mode
 Odysseus (a service workload) starts detached by default; `workestrate odysseus up` returns immediately and the sandbox keeps running in the background. Use `workestrate odysseus up --foreground` (or `-f`) to block until Ctrl-C. The detached service writes logs to `~/.microsandbox/sandboxes/<name>/workestrate.log`; tail with `workestrate odysseus logs`.
 
 ```bash
-nix develop -c run-with-secrets odysseus up
-nix develop -c run-with-secrets litellm up
+nix develop -c workestrate odysseus up
+nix develop -c workestrate litellm up
 ```
 
-**Note:** Detached mode works through `run-with-secrets` — the detached child inherits the parent's decrypted environment, so `run-with-secrets odysseus up` starts detached and works without `nohup`.
+**Note:** Detached mode works through `workestrate` — the detached child inherits the parent's decrypted environment, so `workestrate odysseus up` starts detached and works without `nohup`.
 
 ## Expected Integration
 Odysseus should call LiteLLM if it acts as an agent/client.

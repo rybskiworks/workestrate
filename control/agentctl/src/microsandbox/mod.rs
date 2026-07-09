@@ -3,6 +3,7 @@ mod mounts;
 pub mod plan;
 mod runtime;
 pub mod secrets;
+pub(crate) mod secrets_loader;
 pub mod workload;
 
 // Re-export lifecycle functions that callers need.
