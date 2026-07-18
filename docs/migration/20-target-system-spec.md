@@ -77,13 +77,13 @@ ai-workbench/
 │   │       └── nix-layered.nix
 │   ├── devshells/default.nix # tool-dev shell (reads config.reference/ only)
 │   └── packages/            # existing + new odysseus/opencode derivations
-├── config.reference/        # tracked, sanitized reference config
-│   ├── workestrate.toml     # reference workload definitions (placeholder secrets)
-│   ├── agents/               # reference agent config copies
-│   │   ├── pi/config/models.json
-│   │   ├── odysseus/config/settings.json
-│   │   └── opencode/config/opencode.jsonc
-│   └── infra/litellm/        # reference LiteLLM values
+├── config.reference/        # tracked, **synthetic** reference fixture
+│   ├── workestrate.toml     # minimal workloads exercising every recipe/policy feature
+│   ├── agents/               # synthetic agent config copies (used by seed_files fixture)
+│   │   ├── example-service/config/settings.json
+│   │   ├── example-agent/config/settings.json
+│   │   └── example-offensive/config/config.json
+│   └── infra/litellm/        # reference LiteLLM values (used by `just litellm-check`)
 │       ├── config.yaml
 │       └── models.yaml
 ├── scripts/                  # core tooling (setup-secrets.sh, host-check.sh)
@@ -684,12 +684,15 @@ fn discover_config() -> Result<Config> {
 
 On a fresh install with no registry, no config repos:
 - Falls back to `config.reference/workestrate.toml` (shipped with tool, tracked,
-  sanitized, placeholder secrets).
-- `workestrate plan` works (prints reference plan, no secrets needed).
-- `workestrate validate-config` works (validates reference config).
-- `workestrate pi exec` / `workestrate litellm up` REFUSE: required secrets are
-  placeholder values, rejected by `reject_if_placeholder` (`runtime.rs:10-22`).
-  Clear error: "no config repos registered; run `workestrate init <url>`."
+  **synthetic**).
+- `workestrate plan` works (prints the synthetic reference plan, no secrets needed).
+- `workestrate validate-config` works (validates the synthetic reference config).
+- `workestrate pi exec` / `workestrate litellm up` REFUSE if the workload is not
+  defined in the active config. With only the synthetic reference loaded, those
+  names do not exist; the user must add a config repo via
+  `workestrate config add <url> personal`.
+- The synthetic reference uses placeholder secrets; if a workload is present it
+  would be rejected by `reject_if_placeholder` (`runtime.rs:10-22`).
 
 ## 6. CLI surface
 

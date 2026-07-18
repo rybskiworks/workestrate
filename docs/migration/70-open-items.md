@@ -83,6 +83,16 @@ code); each new recipe must justify why it can't be expressed with existing
 vocabulary + parameters; periodic vocabulary audits; documented governance
 policy (inspired by NixOS module review process).
 
+### Git history still contains stripped secrets
+
+Root `.env.enc`, `.sops.yaml`, and the old `infra/litellm/` values were removed
+from the working tree in the final strip-down, but they remain in the git
+history of the `ai-workbench` repository. New clones receive the full history,
+including these files. This is acceptable because `.env.enc` is encrypted and
+`.sops.yaml` only contains a public age recipient, but it is a hygiene note:
+future rotations of the age key or secrets should not assume the files were
+permanently erased from git.
+
 ### Schema drift
 
 Core engine v0.6 changes the `SandboxPlan` schema; config repo pinned to v0.5

@@ -32,15 +32,21 @@ before continuing.
 
 ## Quick start
 
+A fresh clone ships a **synthetic reference config** in `config.reference/`. It
+lets you run `workestrate validate-config` and `workestrate example-service plan`
+immediately, but it does not contain real workloads like `pi` or `litellm` — those
+live in your personal config repo.
+
 1. Clone the repository and enter the dev shell. The shell hook stages
    `msb` and `agentd` from the Nix store, uses a persistent cache at
    `$HOME/.cache/ai-workbench-msb` for `cargo check`/`build.rs`, cleans
-   up legacy per-shell tmpfs dirs from earlier versions, and refreshes
-   the `control/agentctl/vendor/microsandbox-filesystem-0.5.6` symlink.
+   up legacy per-shell tmpfs dirs from earlier versions, and refreshes the
+   `control/agentctl/vendor/microsandbox-filesystem-0.5.6` symlink.
    The dev shell pins `nodejs_24` (was `nodejs_22`; fixes pi's gondolin
    `EBADENGINE`) and exports `WORKESTRATE_PI_BUILD` pointing at the
    canonical `.#pi-bun` standalone binary, so dev-shell `workestrate pi
-   exec` mounts the bun binary at `/app/bin/pi`.
+   exec` mounts the bun binary at `/app/bin/pi` (once a personal config repo
+   is registered).
    ```bash
    git clone <repo-url> workestrator
    cd workestrator
@@ -54,15 +60,21 @@ before continuing.
    ```bash
    just host-check
    ```
-4. Initialise encrypted secrets (one-time, see [Secrets setup](#secrets-setup)):
+4. Add your personal config repo (contains `workestrate.toml`, `.env.enc`,
+   `.sops.yaml`, `infra/litellm/`, `agents/*/config/`):
    ```bash
-   setup-secrets init
+   workestrate init
+   workestrate config add <your-config-repo-url> personal
    ```
-5. Start the LiteLLM proxy (starts detached; add `--foreground` to block):
+5. Initialise encrypted secrets (one-time, see [Secrets setup](#secrets-setup)):
+   ```bash
+   setup-secrets --config personal init
+   ```
+6. Start the LiteLLM proxy (starts detached; add `--foreground` to block):
    ```bash
    workestrate litellm up
    ```
-6. Attach to an agent (for example Pi):
+7. Attach to an agent (for example Pi):
    ```bash
    workestrate pi exec
    ```
@@ -78,25 +90,25 @@ before continuing.
 
 ## Secrets setup
 
-Secrets are stored in `.env.enc`, encrypted with SOPS using an
-age key that lives outside the repo at
-`$HOME/.config/sops/age/ai-workbench-secrets.txt`. The wrappers
-`setup-secrets`, `decrypt-env`, and `write-env` (provided by the flake)
-all default `SOPS_AGE_KEY_FILE` to that path. `workestrate` loads secrets
-internally before starting sandboxes or running commands.
+Secrets live in your **personal config repo** (`~/.local/share/workestrate/repos/personal/`):
+`.env.enc` (SOPS-encrypted) and `.sops.yaml` (SOPS recipient). The wrappers
+`setup-secrets`, `decrypt-env`, and `write-env` (provided by the flake) use an
+age key that lives outside all repos at
+`$HOME/.config/sops/age/ai-workbench-secrets.txt`. `workestrate` loads secrets
+from the active config repo before starting sandboxes or running commands.
 
-1. Generate the project age key and create `.env.enc` (one-time):
+1. Generate the project age key and create the config repo's `.env.enc` (one-time):
    ```bash
-   setup-secrets init
+   setup-secrets --config personal init
    ```
-   `.sops.yaml` currently contains the project's age recipient.
-   `setup-secrets init` will create a new age key and update
-   `.sops.yaml` for you. If `.sops.yaml` already has a different
-   recipient, the script will ask you to update it manually. The
-   command either uses the required env vars (if all are set) or
-   opens `$EDITOR` (falling back to `nano`, `vi`, or `vim`) with a
-   pre-filled buffer of required and optional keys from `.env.example`.
-   `init` refuses to overwrite an existing `.env.enc`.
+   The config repo's `.sops.yaml` contains the project's age recipient.
+   `setup-secrets init` will create a new age key and update `.sops.yaml`
+   for you. If `.sops.yaml` already has a different recipient, the script will
+   ask you to update it manually. The command either uses the required env vars
+   (if all are set) or opens `$EDITOR` (falling back to `nano`, `vi`, or `vim`)
+   with a pre-filled buffer of required and optional keys from
+   `workestrate generate-env-example`. `init` refuses to overwrite an existing
+   `.env.enc`.
 
    | Key | Used for |
    |---|---|
@@ -118,14 +130,14 @@ internally before starting sandboxes or running commands.
 
 2. Edit encrypted secrets later:
    ```bash
-   setup-secrets update
+   setup-secrets --config personal update
    ```
-   This decrypts `.env.enc`, opens the editor with current values
-   pre-filled, and re-encrypts on save. To rotate the master key
+   This decrypts the config repo's `.env.enc`, opens the editor with current
+   values pre-filled, and re-encrypts on save. To rotate the master key
    non-interactively, export `LITELLM_MASTER_KEY` and run
-   `setup-secrets update`. To update other values non-interactively,
-   pipe the plain values on stdin in the order of `REQUIRED_KEYS`
-   (one value per line, no `KEY=` prefix).
+   `setup-secrets --config personal update`. To update other values
+   non-interactively, pipe the plain values on stdin in the order of
+   `REQUIRED_KEYS` (one value per line, no `KEY=` prefix).
 
 For the full threat model and wrapper reference, see
 [docs/secrets.md](docs/secrets.md).
@@ -166,16 +178,16 @@ These curls run on the host and reach the proxy at `127.0.0.1:4000`. From
 inside the agent sandboxes, the same proxy is reached at
 `http://host.microsandbox.internal:4000`.
 
-The proxy is configured by `infra/litellm/config.yaml` (which `include:`s `models.yaml`) and exposes
-coding-tier model names. Each tier targets a different cost/capability
-point:
+The proxy is configured by the active config repo's `infra/litellm/config.yaml`
+(which `include:`s `models.yaml`) and exposes coding-tier model names. Each tier
+targets a different cost/capability point:
 
 | Tier | Primary | Fallback chain | Use case |
 |---|---|---|---|
 | `coding` | Kimi K2.7 (`anthropic/kimi-for-coding`) | neural-kimi-k2.7-code → coding.free | Default coding work |
 | `coding.fast` | Qwen 3.6 35B fast (Neuralwatt) | neural-qwen3.6-35b → coding | Quick edits, autocomplete |
 | `coding.pro` | GLM-5.2 short (Neuralwatt) | neural-glm-5.2 → neural-kimi-k2.7-code | Complex refactoring, reasoning |
-| `coding.free` | Qwen 3 Coder free (OpenRouter) | neural-qwen3.6-35b-fast | Experimentation, no cost |
+| `coding.free` | Qwen 3 Coder free (OpenRouter) | neural-qwen3.6-35b-fast → coding | Experimentation, no cost |
 | `coding.vision` | Kimi K2.6 (Neuralwatt) | neural-qwen3.6-35b → neural-kimi-k2.7-code | Vision + code |
 | `orchestrator` | GLM-5.2 (Neuralwatt, 1M ctx) | neural-glm-5.2-short → neural-qwen3.5-397b | Orchestration, long context |
 | `lead` | GLM-5.2 short (Neuralwatt) | neural-glm-5.2 → neural-kimi-k2.7-code | Lead agent reasoning |
@@ -208,14 +220,20 @@ the process env at startup.
 
 ## Running agents
 
-Workloads split into two kinds: **services** (litellm, odysseus) support
-`up`/`down`/`logs`/`plan`; **agents** (pi, opencode, tempest) support
+Workload names (`litellm`, `pi`, `odysseus`, `opencode`, `tempest`) are defined by
+your active config repo, not by the tool. A fresh clone only has the synthetic
+reference workloads (`example-service`, `example-agent`, `example-offensive`) in
+`config.reference/`. Register your personal config repo to access the real
+workloads.
+
+Workloads split into two kinds: **services** (e.g. `litellm`, `odysseus`) support
+`up`/`down`/`logs`/`plan`; **agents** (e.g. `pi`, `opencode`, `tempest`) support
 `exec`/`down`/`plan` (agents have no `up` or `logs` — you attach to them
 interactively with `exec`).
 
 ```bash
 # Services (start detached, tail with `logs`)
-workestrate litellm up          # LiteLLM proxy
+workestrate litellm up          # LiteLLM proxy (requires config repo defining litellm)
 workestrate odysseus up         # Odysseus agent (service)
 workestrate odysseus logs       # tail Odysseus's detached log
 
@@ -228,12 +246,26 @@ workestrate tempest exec       # attach to the T3MP3ST offensive-security agent
 workestrate <name> down
 
 # Show a sandbox plan without secrets
-nix run . -- <name> plan            # e.g. pi plan, odysseus plan, litellm plan
+nix run . -- <name> plan            # e.g. nix run . -- example-service plan
+```
+
+### Synthetic reference workloads
+
+On a fresh clone without a config repo, you can still exercise the machinery:
+
+```bash
+workestrate example-service plan
+workestrate example-agent plan
+workestrate example-offensive plan
+workestrate validate-config
 ```
 
 ### Secret loading
 
-`workestrate` loads secrets from `.env.enc` automatically before commands that need them (`exec`, `up`, `run`). Commands that don't need secrets (`plan`, `check`, `new`, `completions`) skip decryption entirely — they work on a fresh clone before `setup-secrets init` has been run.
+`workestrate` loads secrets from the active config repo's `.env.enc`
+automatically before commands that need them (`exec`, `up`, `run`). Commands
+that don't need secrets (`plan`, `check`, `new`, `completions`) skip decryption
+entirely — they work on a fresh clone before a config repo is registered.
 
 To run an arbitrary command with decrypted secrets:
 
@@ -302,7 +334,7 @@ Common `just` recipes:
 | Recipe | What it does |
 |---|---|
 | `just check` | Run `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo check` for `control/agentctl` |
-| `just litellm-check` | Validate `infra/litellm/config.yaml` against the schema indexes |
+| `just litellm-check` | Validate `config.reference/infra/litellm/config.yaml` against the schema indexes |
 | `just verify` | Full pre-merge gate: `just check` plus `cargo test`, `just litellm-check`, and `Cargo.lock` stability check |
 | `just verify-full` | Heaviest validation: `just verify` plus `nix build .#workestrate` |
 | `just build` | Build the `workestrate` binary |
@@ -311,7 +343,7 @@ Common `just` recipes:
 | `just clippy` | Run Clippy with `-D warnings` |
 | `just test` | Run unit tests for `control/agentctl` |
 | `just workestrate …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just workestrate litellm plan`) |
-| `just plan` | Run all workload plans (litellm, pi, odysseus, opencode, tempest) via `cargo run` |
+| `just plan` | Run synthetic workload plans (`example-service`, `example-agent`, `example-offensive`) via `cargo run` |
 | `just host-check` | Verify KVM, Nix, memory, and disk prerequisites |
 | `just validate-secrets` | Exercise the SOPS/age workflow against ephemeral test values |
 | `just setup-secrets init` | Run `setup-secrets init` from the dev shell |
@@ -522,10 +554,12 @@ clone the agent repos into `agents/<name>/repo` only if you intend to run them.
   inputs for the agent sources exist; pi and tempest are consumed by their
   respective nix derivations, odysseus and opencode still use the dev-shell
   auto-build.)
-- **Secrets discipline.** `.env.enc` is the only encrypted artifact in
-  the repo and is restricted by `.sops.yaml` to a single recipient.
-  Treat the age key file as the recovery seed for the entire workflow;
-  see [docs/secrets.md](docs/secrets.md) for the full threat model.
+- **Secrets discipline.** The user's personal config repo contains the
+  only encrypted artifact (`.env.enc`) and `.sops.yaml`. Treat the age key
+  file as the recovery seed for the entire workflow; see
+  [docs/secrets.md](docs/secrets.md) for the full threat model. The old root
+  `.env.enc` and `.sops.yaml` were stripped from the tool repo but remain in
+  git history.
 
 ## XDG configuration model (Phase 1)
 
@@ -561,10 +595,11 @@ workestrate pi plan
 1. `WORKESTRATE_CONFIG_DIR` env var (dev/testing override)
 2. Trusted project `./workestrate.toml` (if cwd is trusted)
 3. Registry single layer (`~/.local/share/workestrate/repos/<name>/workestrate.toml`)
-4. `config.reference/workestrate.toml` (shipped with tool, fallback)
+4. `config.reference/workestrate.toml` (shipped with tool, **synthetic fallback**)
 
-Fail-closed: with no config repos registered, the reference config is used
-(placeholder secrets — `plan` works, `up`/`exec` refuse).
+Fail-closed: with no config repos registered, the synthetic reference config is used
+(placeholder secrets — `example-service plan` works; `up`/`exec` for real workload names
+require a registered config repo).
 
 ### New commands
 
