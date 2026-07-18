@@ -237,3 +237,52 @@ golden-check:
 | 1 | `just verify` passes with XDG model. `workestrate config/init/source` commands work. Runtime on KVM host succeeds (HOST-KVM). Root `workestrate.toml` works as project layer. |
 | 2 | Core exports `lib.*`. Config-repo-flake builds images. Copier template works. (All HOST-NIX.) |
 | 3 | Fixture-repo merge tests pass. `plan --show-source` works. Multi-recipient SOPS works. Copier template finalized. |
+
+## Phase 3 implementation status (updated)
+
+**Status**: IMPLEMENTED (cargo-verified in-container; HOST-GATE items below)
+
+### Step 3.1: Merge engine — DONE
+- `control/agentctl/src/merge.rs`: security-aware merge engine with provenance tracking
+- Monotonic `default_deny` (once true, cannot be set false by later layer)
+- `default_deny = false` requires core entitlement (`DEFAULT_DENY_FALSE_ENTITLEMENT`)
+- Additive-union for `deny_rules` and `egress_rules` (dedup)
+- Additive-union for `secret_env` (dedup by secret name)
+- RFC 7396 for non-security fields (scalars last-wins, maps deep-merge, lists replace)
+- Egress hosts validated against `ALLOWED_EGRESS_HOSTS` at merge time (fail-closed)
+- Phase-1 "multi-layer merge lands in Phase 3" gate removed
+- Single-layer parity: one layer = byte-identical to Phase 1
+
+### Step 3.2: Fixture-repo tests — DONE
+- `control/agentctl/tests/fixtures/layering/{base,team,personal}/workestrate.toml`
+- `control/agentctl/tests/fixtures/layering/{hostile_default_deny,hostile_egress}/workestrate.toml`
+- 11 merge tests covering: happy path, scalar override, map deep-merge, list replace,
+  deny union, egress union, default_deny monotonicity, default_deny entitlement,
+  egress ceiling violation, single-layer parity, tempest entitlement
+
+### Step 3.3: `plan --show-source` — DONE
+- Global `--show-source` flag on `Cli` struct
+- Per-field provenance annotation (layer name in brackets)
+- Recipe expansions annotated with `[core]`
+- Default `plan` output unchanged (golden-check green)
+
+### Step 3.4: Multi-recipient SOPS layout — DONE (template only)
+- `templates/workestrator-config/.sops.yaml.jinja`: multi-recipient template
+  with per-path creation_rules (shared → both keys, personal-only → personal key)
+- SOPS validation: HOST-GATE (sops not available in this container for live testing)
+
+### Step 3.5: Copier template — DONE (template only)
+- `templates/workestrator-config/`: complete copier template
+  (copier.yml, workestrate.toml.jinja, .sops.yaml.jinja, .env.example, README.md,
+  optional flake.nix.jinja for inverted-dependency mode)
+- Template verification: HOST-GATE (copier not available in this container)
+
+### Step 3.6: Full validation — DONE
+- `just verify` passes: fmt, clippy, check, test (34 passed), litellm-check, golden-check (all 5 MATCH)
+- Cargo.lock stability: PASS (after revert)
+
+### HOST-GATE items for Phase 3
+- `copier copy templates/workestrator-config/ /tmp/test-config/` — verify template renders
+- `workestrate validate-config` against a copier-generated config repo
+- Multi-recipient SOPS workflow with two age keys (setup-secrets + decrypt)
+- `nix build` in a config repo with the inverted-dependency flake.nix
