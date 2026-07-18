@@ -1,6 +1,6 @@
 check:
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
-    cargo clippy --manifest-path control/agentctl/Cargo.toml -- -D warnings
+    cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
     cargo check --manifest-path control/agentctl/Cargo.toml
 
 # Validate LiteLLM config.yaml against the schema indexes
@@ -43,7 +43,7 @@ fmt-check:
 
 # Run Clippy with -D warnings (standalone)
 clippy:
-    cargo clippy --manifest-path control/agentctl/Cargo.toml -- -D warnings
+    cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
 
 # Run unit tests
 test:

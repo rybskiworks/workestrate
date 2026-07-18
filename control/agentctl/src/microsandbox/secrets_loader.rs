@@ -135,6 +135,7 @@ fn is_valid_env_name(name: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

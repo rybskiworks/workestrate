@@ -10,8 +10,7 @@ config_name:
 
 age_recipient:
   type: str
-  help: "Your age public key (age1...) for SOPS encryption"
-  help: "Generate with: age-keygen -o ~/.config/sops/age/workestrate.txt && age-keygen -y ~/.config/sops/age/workestrate.txt"
+  help: "Your age public key (age1...) for SOPS encryption. Generate with: age-keygen -o ~/.config/sops/age/workestrate.txt && age-keygen -y ~/.config/sops/age/workestrate.txt"
   default: age1PLACEHOLDER
 
 team_age_recipient:

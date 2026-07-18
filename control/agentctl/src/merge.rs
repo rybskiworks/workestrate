@@ -573,7 +573,7 @@ mod tests {
     #[test]
     fn single_layer_parity() -> Result<()> {
         let base = load_fixture("base", "base");
-        let direct: ConfigFile = toml::from_str(&std::fs::read_to_string(&fixture("base"))?)?;
+        let direct: ConfigFile = toml::from_str(&std::fs::read_to_string(fixture("base"))?)?;
 
         let (merged, _) = merge_layers(&[base])?;
         assert_eq!(merged, direct);
