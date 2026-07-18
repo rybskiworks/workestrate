@@ -1,9 +1,11 @@
+use serde::Deserialize;
 use std::fmt;
 
 use crate::microsandbox::secrets::{RemappedSecret, SecretDefinition};
 
 /// Network protocol for ingress/egress rules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Protocol {
     Tcp,
     Udp,
@@ -19,7 +21,8 @@ impl fmt::Display for Protocol {
 }
 
 /// Network scope for ingress rules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Scope {
     Local,
     /// Public ingress (not yet used by any workload).
@@ -37,7 +40,8 @@ impl fmt::Display for Scope {
 }
 
 /// Egress destination: host bridge or specific DNS domains.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EgressTarget {
     /// Host bridge networking (microsandbox host, including host.microsandbox.internal).
     Host,
@@ -54,7 +58,7 @@ impl fmt::Display for EgressTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SandboxPlan {
     pub name: String,
     pub image: Option<String>,
@@ -69,20 +73,20 @@ pub struct SandboxPlan {
     pub network: NetworkPlan,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct PortMapping {
     pub host: u16,
     pub guest: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct MountPlan {
     pub host: String,
     pub guest: String,
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct HostBoundSecret {
     pub name: String,
     pub value: String,
@@ -91,7 +95,7 @@ pub struct HostBoundSecret {
     pub reject_placeholder: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct EnvVar {
     pub name: String,
     pub value: String,
@@ -110,7 +114,7 @@ impl fmt::Display for EnvVar {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct NetworkPlan {
     pub default_deny: bool,
     pub egress_rules: Vec<EgressRule>,
@@ -118,19 +122,19 @@ pub struct NetworkPlan {
     pub ingress_rules: Vec<IngressRule>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct EgressRule {
     pub protocol: Protocol,
     pub port: u16,
     pub target: EgressTarget,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct DenyDomainRule {
     pub domain_suffix: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct IngressRule {
     pub protocol: Protocol,
     pub port: u16,
@@ -208,10 +212,10 @@ impl EnvVar {
     }
     pub fn secret(definition: &SecretDefinition) -> Self {
         Self {
-            name: definition.env_var.into(),
+            name: definition.env_var.clone(),
             value: format!("${{{}}}", definition.env_var),
             is_secret: true,
-            reject_placeholder: definition.placeholder.map(|p| p.to_string()),
+            reject_placeholder: definition.placeholder.clone(),
         }
     }
 }
@@ -221,22 +225,22 @@ impl HostBoundSecret {
     /// All metadata comes from the definition.
     pub fn from(definition: &SecretDefinition) -> Self {
         Self {
-            name: definition.env_var.into(),
+            name: definition.env_var.clone(),
             value: format!("${{{}}}", definition.env_var),
-            allowed_hosts: definition.hosts.iter().map(|h| h.to_string()).collect(),
+            allowed_hosts: definition.hosts.clone(),
             required: definition.required,
-            reject_placeholder: definition.placeholder.map(|p| p.to_string()),
+            reject_placeholder: definition.placeholder.clone(),
         }
     }
 
     /// Remapped binding — the source secret is exposed under a different name.
     pub fn remapped(mapping: &RemappedSecret) -> Self {
         Self {
-            name: mapping.exposed_as.into(),
+            name: mapping.exposed_as.clone(),
             value: format!("${{{}}}", mapping.source.env_var),
-            allowed_hosts: mapping.source.hosts.iter().map(|h| h.to_string()).collect(),
+            allowed_hosts: mapping.source.hosts.clone(),
             required: mapping.source.required,
-            reject_placeholder: mapping.source.placeholder.map(|p| p.to_string()),
+            reject_placeholder: mapping.source.placeholder.clone(),
         }
     }
 }

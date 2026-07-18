@@ -1,5 +1,9 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use crate::policy;
+use crate::recipes::EgressRecipeRef;
 
 pub fn project_root() -> Result<PathBuf> {
     // 1. AGENTCTL_ROOT env var
@@ -136,6 +140,278 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
             optional: spec.optional,
         })
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+// workestrate.toml schema
+// ---------------------------------------------------------------------------
+
+use crate::microsandbox::plan::{DenyDomainRule, IngressRule, MountPlan, PortMapping};
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct ImageSpec {
+    pub recipe: String,
+    #[serde(rename = "ref")]
+    pub reference: Option<String>,
+    pub name: Option<String>,
+    pub tag: Option<String>,
+    pub contents: Option<Vec<String>>,
+    pub binary: Option<BinarySpec>,
+    pub baked_files: Option<Vec<BakedFileSpec>>,
+    pub features: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct BinarySpec {
+    pub recipe: String,
+    pub src: String,
+    pub entrypoint: Option<String>,
+    pub worker: Option<String>,
+    pub npm_deps_hash: Option<String>,
+    pub install_layout: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct BakedFileSpec {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct EnvVarConfig {
+    pub name: String,
+    pub value: Option<String>,
+    pub secret: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct SecretEnvConfig {
+    pub secret: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct SeedFileConfig {
+    pub source: String,
+    pub target: String,
+    pub only_if_missing: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct LocalBuildConfig {
+    pub recipe: String,
+    pub source: String,
+    pub requirements_file: Option<String>,
+    pub target: Option<String>,
+    pub gating_file: Option<String>,
+    pub env_override: Option<String>,
+    pub fallback: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[allow(dead_code)]
+pub struct NetworkConfig {
+    pub default_deny: Option<bool>,
+    #[serde(default)]
+    pub egress: Vec<EgressRecipeRef>,
+    #[serde(default)]
+    pub deny: Vec<DenyDomainRule>,
+    #[serde(default)]
+    pub ingress: Vec<IngressRule>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct WorkloadConfig {
+    pub kind: String,
+    pub image: ImageSpec,
+    pub workdir: Option<String>,
+    pub cpus: Option<u8>,
+    pub memory_mib: Option<u32>,
+    pub command: Vec<String>,
+    pub log_stop_errors: Option<bool>,
+    #[serde(default)]
+    pub env: Vec<EnvVarConfig>,
+    #[serde(default)]
+    pub secret_env: Vec<SecretEnvConfig>,
+    #[serde(default)]
+    pub ports: Vec<PortMapping>,
+    #[serde(default)]
+    pub mounts: Vec<MountPlan>,
+    #[serde(default)]
+    pub seed_files: Vec<SeedFileConfig>,
+    pub local_build: Option<LocalBuildConfig>,
+    pub network: NetworkConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct SecretDefConfig {
+    pub env_var: Option<String>,
+    #[serde(default)]
+    pub hosts: Option<Vec<String>>,
+    pub required: Option<bool>,
+    pub placeholder: Option<String>,
+    pub source: Option<String>,
+    pub exposed_as: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct ConfigFile {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub secrets: HashMap<String, SecretDefConfig>,
+    #[serde(default)]
+    pub workloads: HashMap<String, WorkloadConfig>,
+}
+
+/// Load the active `workestrate.toml`.
+///
+/// Resolution order:
+/// 1. `$WORKESTRATE_CONFIG_DIR/workestrate.toml` if the env var is set.
+/// 2. `workestrate.toml` in the project root.
+/// 3. `config.reference/workestrate.toml` shipped with the tool.
+pub fn load_config() -> Result<ConfigFile> {
+    let load_from = |path: &Path| -> Result<ConfigFile> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("failed to read {}: {}", path.display(), e))?;
+        toml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("failed to parse {}: {}", path.display(), e))
+    };
+
+    if let Ok(dir) = std::env::var("WORKESTRATE_CONFIG_DIR") {
+        let path = PathBuf::from(dir).join("workestrate.toml");
+        if path.exists() {
+            return load_from(&path);
+        }
+    }
+
+    let root = project_root()?;
+
+    let project_path = root.join("workestrate.toml");
+    if project_path.exists() {
+        return load_from(&project_path);
+    }
+
+    let reference_path = root.join("config.reference").join("workestrate.toml");
+    if reference_path.exists() {
+        return load_from(&reference_path);
+    }
+
+    anyhow::bail!("workestrate.toml not found in any configured location")
+}
+
+/// Validate a loaded config against the policy.rs allowlists.
+pub fn validate_config(config: &ConfigFile) -> Result<()> {
+    // Egress hosts in https recipes must be in ALLOWED_EGRESS_HOSTS.
+    for (workload_name, workload) in &config.workloads {
+        for egress in &workload.network.egress {
+            if let EgressRecipeRef::Https { hosts } = egress {
+                for host in hosts {
+                    if !policy::ALLOWED_EGRESS_HOSTS.contains(&host.as_str()) {
+                        anyhow::bail!(
+                            "workload '{}' egress host '{}' is not in the core egress allowlist",
+                            workload_name,
+                            host
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Secret bindings must match SECRET_HOST_BINDINGS.
+    for (secret_name, secret) in &config.secrets {
+        if let Some(ref env_var) = secret.env_var {
+            let allowed_hosts = policy::SECRET_HOST_BINDINGS
+                .iter()
+                .find(|(key, _)| key == env_var)
+                .map(|(_, hosts)| *hosts);
+
+            match allowed_hosts {
+                Some(allowed_hosts) => {
+                    for host in secret.hosts.as_deref().unwrap_or(&[]) {
+                        if !allowed_hosts.contains(&host.as_str()) {
+                            anyhow::bail!(
+                                "secret '{}' host '{}' is not in the core binding allowlist for '{}'",
+                                secret_name,
+                                host,
+                                env_var
+                            );
+                        }
+                    }
+                }
+                None => {
+                    anyhow::bail!(
+                        "secret '{}' env_var '{}' has no core secret binding allowlist entry",
+                        secret_name,
+                        env_var
+                    );
+                }
+            }
+        }
+    }
+
+    // Package names in nix-layered images must be in ALLOWED_PACKAGES.
+    for (workload_name, workload) in &config.workloads {
+        if let Some(ref contents) = workload.image.contents {
+            for pkg in contents {
+                if !policy::ALLOWED_PACKAGES.contains(&pkg.as_str()) {
+                    anyhow::bail!(
+                        "workload '{}' package '{}' is not in the core package allowlist",
+                        workload_name,
+                        pkg
+                    );
+                }
+            }
+        }
+    }
+
+    // Only entitled workloads may use default_deny = false.
+    for (workload_name, workload) in &config.workloads {
+        if workload.network.default_deny == Some(false)
+            && !policy::DEFAULT_DENY_FALSE_ENTITLEMENT.contains(&workload_name.as_str())
+        {
+            anyhow::bail!(
+                "workload '{}' is not entitled to default_deny=false",
+                workload_name
+            );
+        }
+    }
+
+    // Secret references must be defined in the secrets section.
+    for (workload_name, workload) in &config.workloads {
+        for env in &workload.env {
+            if let Some(ref secret_name) = env.secret {
+                if !config.secrets.contains_key(secret_name) {
+                    anyhow::bail!(
+                        "workload '{}' env references undefined secret '{}'",
+                        workload_name,
+                        secret_name
+                    );
+                }
+            }
+        }
+        for se in &workload.secret_env {
+            if !config.secrets.contains_key(&se.secret) {
+                anyhow::bail!(
+                    "workload '{}' secret_env references undefined secret '{}'",
+                    workload_name,
+                    se.secret
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

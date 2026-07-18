@@ -3,6 +3,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 
 mod config;
 mod microsandbox;
+mod policy;
+mod recipes;
 mod workloads;
 
 use config::CheckEntry;
@@ -110,6 +112,8 @@ macro_rules! define_commands_enum {
                 #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 1..)]
                 command: Vec<String>,
             },
+            /// Validate active config against schema and policy allowlists
+            ValidateConfig,
             $(
                 #[doc = $doc]
                 $name {
@@ -239,6 +243,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Run { command } => cmd_run(&command).await,
+        Commands::ValidateConfig => cmd_validate_config().await,
         command => dispatch_workload(command).await,
     }
 }
@@ -263,11 +268,16 @@ async fn cmd_check() -> Result<()> {
     }
 }
 
+async fn cmd_validate_config() -> Result<()> {
+    let config = config::load_config()?;
+    config::validate_config(&config)?;
+    println!("workestrate.toml is valid.");
+    Ok(())
+}
+
 async fn cmd_run(command: &[String]) -> Result<()> {
     if command.is_empty() {
-        anyhow::bail!(
-            "no command specified. Usage: workestrate run -- <command> [args...]"
-        );
+        anyhow::bail!("no command specified. Usage: workestrate run -- <command> [args...]");
     }
 
     // Load secrets from .env.enc (generic — all keys, no filtering).
@@ -310,6 +320,7 @@ mod tests {
             "new",
             "completions",
             "run",
+            "validate-config",
             "litellm",
             "pi",
             "odysseus",

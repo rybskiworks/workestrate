@@ -53,7 +53,10 @@ impl Workload for Tempest {
                     name: "TEMPEST_LOCAL_API_KEY".into(),
                     value: format!("${{{}}}", secrets::LITELLM_MASTER_KEY.env_var),
                     is_secret: true,
-                    reject_placeholder: secrets::LITELLM_MASTER_KEY.placeholder.map(|p| p.to_string()),
+                    reject_placeholder: secrets::LITELLM_MASTER_KEY
+                        .placeholder
+                        .as_ref()
+                        .map(|p| p.to_string()),
                 },
                 // Loopback only — the Express API server (if started) stays
                 // inside the microVM and is never exposed to the host.
