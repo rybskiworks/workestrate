@@ -526,3 +526,74 @@ clone the agent repos into `agents/<name>/repo` only if you intend to run them.
   the repo and is restricted by `.sops.yaml` to a single recipient.
   Treat the age key file as the recovery seed for the entire workflow;
   see [docs/secrets.md](docs/secrets.md) for the full threat model.
+
+## XDG configuration model (Phase 1)
+
+workestrate supports a tool+XDG configuration model where the tool is
+decoupled from any workspace. Configuration lives in XDG-standard paths:
+
+| Layer | Path | Contents |
+|---|---|---|
+| **Registry** | `~/.config/workestrate/config.toml` | Tool settings, config-repo registry, ordered layers, trusted projects |
+| **Config repos** | `~/.local/share/workestrate/repos/<name>/` | `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
+| **State** | `~/.local/state/workestrate/` | `workspaces/`, `var/` (runtime state) |
+| **Sources** | `~/.local/share/workestrate/sources/<name>/` | Agent source checkouts + builds |
+
+### Quick start (XDG model)
+
+```bash
+# Initialize the registry (one-time)
+workestrate init
+
+# Add a personal config repo (local or remote)
+workestrate config add <url> personal
+
+# Trust the current project directory for project-layer config
+workestrate config trust $(pwd)
+
+# Verify
+workestrate check
+workestrate pi plan
+```
+
+### Config resolution order
+
+1. `WORKESTRATE_CONFIG_DIR` env var (dev/testing override)
+2. Trusted project `./workestrate.toml` (if cwd is trusted)
+3. Registry single layer (`~/.local/share/workestrate/repos/<name>/workestrate.toml`)
+4. `config.reference/workestrate.toml` (shipped with tool, fallback)
+
+Fail-closed: with no config repos registered, the reference config is used
+(placeholder secrets — `plan` works, `up`/`exec` refuse).
+
+### New commands
+
+| Command | Description |
+|---|---|
+| `workestrate init [url]` | Initialize the registry (optionally from a dotfiles URL) |
+| `workestrate config add <url> <name> [--ref main]` | Clone a config repo into the managed store |
+| `workestrate config update [name]` | Pull latest for a config repo (or all) |
+| `workestrate config list` | List registered config repos with rev + dirty status |
+| `workestrate config trust <dir>` | Trust a project directory for project-layer config |
+| `workestrate config untrust <dir>` | Remove trust from a project directory |
+| `workestrate source clone <name> [path]` | Clone agent source into the managed store |
+| `workestrate source build <name>` | Build agent from source (prints recipe instructions) |
+| `workestrate source list` | List agent source checkouts with status |
+| `workestrate source reset <name>` | Reset agent source to canonical |
+| `workestrate validate-config` | Validate active config against schema + policy allowlists |
+| `workestrate secrets-schema` | Print secret env_var names from config |
+| `workestrate generate-env-example` | Generate `.env.example` from config secrets section |
+| `workestrate --no-project-config <cmd>` | Disable project-layer config loading |
+
+### Secrets targeting
+
+`setup-secrets.sh` supports `--config <name>` to target a specific config
+repo's `.env.enc` and `.sops.yaml`:
+
+```bash
+setup-secrets --config personal init
+setup-secrets --config personal update
+```
+
+Without `--config`, it auto-detects a single registered config repo, or
+falls back to the repo root (backwards compat).
