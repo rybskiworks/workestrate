@@ -261,6 +261,7 @@ pub struct SecretDefConfig {
     pub placeholder: Option<String>,
     pub source: Option<String>,
     pub exposed_as: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

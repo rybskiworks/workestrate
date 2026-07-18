@@ -8,13 +8,28 @@ litellm-check:
     python3 .agents/skills/validation-litellm-config-check/scripts/check_config.py \
       --config infra/litellm/config.yaml --schemas-dir docs/litellm/schemas --mode in-memory
 
-# Full pre-merge validation: format, lint, compile-check, test, config validation, and lock-file stability
-verify: check test litellm-check
+# Full pre-merge validation: format, lint, compile-check, test, config validation, golden-check, and lock-file stability
+verify: check test litellm-check golden-check
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
 verify-full: verify
     nix build .#workestrate
+
+# Generate golden plan files for all workloads
+golden-generate:
+    @for name in litellm pi odysseus opencode tempest; do \
+        cargo run --manifest-path control/agentctl/Cargo.toml -- $$name plan \
+          > control/agentctl/tests/golden/$$name.plan.txt; \
+    done
+
+# Check golden plan parity
+golden-check:
+    @for name in litellm pi odysseus opencode tempest; do \
+        cargo run --manifest-path control/agentctl/Cargo.toml -- $$name plan \
+          | diff - control/agentctl/tests/golden/$$name.plan.txt \
+          || (echo "golden mismatch for $$name; run 'just golden-generate' to update" && exit 1); \
+    done
 
 build:
     cargo build --release --manifest-path control/agentctl/Cargo.toml

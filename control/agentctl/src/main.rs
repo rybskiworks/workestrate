@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
+use std::io::Write;
 
 mod config;
 mod microsandbox;
@@ -74,6 +75,14 @@ enum Commands {
     },
     /// Validate active config against schema and policy allowlists
     ValidateConfig,
+    /// Print the env_var names of all secrets defined in config
+    SecretsSchema,
+    /// Generate a .env.example from the config secrets section
+    GenerateEnvExample {
+        /// Write output to a file instead of stdout
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
     /// Typed subcommand for the LiteLLM proxy service
     Litellm {
         #[command(subcommand)]
@@ -170,38 +179,49 @@ async fn cmd_new(name: &str) -> Result<()> {
     }
 
     // Create directory structure
-    std::fs::create_dir_all(agent_dir.join("repo"))?;
-    std::fs::create_dir_all(agent_dir.join("config"))?;
-    std::fs::write(agent_dir.join(".gitkeep"), "")?;
+    let config_dir = agent_dir.join("config");
+    std::fs::create_dir_all(&config_dir)?;
+    std::fs::write(config_dir.join(".gitkeep"), "")?;
 
-    println!("Created agents/{}/", name);
-    println!(
-        "  agents/{}/repo/    — clone or create your agent source here",
-        name
+    // Append a default workload entry to workestrate.toml
+    let config_path = root.join("workestrate.toml");
+    let toml_entry = format!(
+        "\n[workloads.{}]\n\
+        kind = \"agent\"\n\
+        image = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\n\
+        workdir = \"/work\"\n\
+        cpus = 2\n\
+        memory_mib = 2048\n\
+        command = []\n\
+        log_stop_errors = false\n\n\
+        [[workloads.{}.mounts]]\n\
+        host = \"${{CWD}}\"\n\
+        guest = \"/work\"\n\
+        read_only = false\n\n\
+        [workloads.{}.network]\n\
+        default_deny = true\n\n\
+        [[workloads.{}.network.egress]]\n\
+        recipe = \"agent_base\"\n",
+        name, name, name, name
     );
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&config_path)?;
+    file.write_all(toml_entry.as_bytes())?;
+
+    println!("Created agents/{}/config/", name);
     println!(
-        "  agents/{}/config/  — agent-specific config files here",
+        "Appended [workloads.{}] to workestrate.toml with defaults.",
         name
     );
     println!();
-    println!("Next steps:");
-    println!(
-        "  1. Clone your agent: git clone <url> agents/{}/repo",
-        name
-    );
-    println!(
-        "  2. Build it:        cd agents/{}/repo && npm install && npm run build",
-        name
-    );
-    println!(
-        "     (or: cp -r agents/{}/repo agents/{}/build && cd agents/{}/build && <build-cmd>)",
-        name, name, name
-    );
-    println!("  3. Add a workload entry to workestrate.toml");
-    println!("  4. Test: cargo run -- {} plan", name);
+    println!("Edit workestrate.toml to configure:");
+    println!("  - Set image (recipe + ref, or recipe + contents for nix-layered)");
+    println!("  - Set command");
+    println!("  - Add env/secret_env/mounts as needed");
     println!();
-    println!("Or use a pre-built image (like LiteLLM):");
-    println!("  Set image = {{ recipe = 'registry', ref = 'your-image:tag' }} and skip the source mount.");
+    println!("Test: workestrate {} plan", name);
 
     Ok(())
 }
@@ -220,6 +240,10 @@ async fn main() -> Result<()> {
         }
         Commands::Run { command } => cmd_run(&command).await,
         Commands::ValidateConfig => cmd_validate_config().await,
+        Commands::SecretsSchema => cmd_secrets_schema().await,
+        Commands::GenerateEnvExample { output } => {
+            cmd_generate_env_example(output.as_deref()).await
+        }
         Commands::Litellm { action } => {
             let workload = ConfigWorkload::new("litellm")?;
             dispatch_service(&workload, action).await
@@ -289,6 +313,62 @@ async fn cmd_validate_config() -> Result<()> {
     Ok(())
 }
 
+async fn cmd_secrets_schema() -> Result<()> {
+    let config = config::load_config()?;
+    let mut names: Vec<&str> = config
+        .secrets
+        .values()
+        .filter_map(|s| s.env_var.as_deref())
+        .collect();
+    names.sort();
+    for name in names {
+        println!("{}", name);
+    }
+    Ok(())
+}
+
+async fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> {
+    let config = config::load_config()?;
+    let mut entries: Vec<(&str, &str)> = config
+        .secrets
+        .values()
+        .filter_map(|s| {
+            let env_var = s.env_var.as_deref()?;
+            let description = s.description.as_deref().unwrap_or("");
+            Some((env_var, description))
+        })
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut buf = String::new();
+    buf.push_str("# ai-workbench environment schema.\n");
+    buf.push_str("# This file is committed and safe to share.\n");
+    buf.push_str(
+        "# Real secrets live in .env.enc (encrypted) and are loaded by workestrate at runtime.\n",
+    );
+    for (env_var, description) in entries {
+        if !description.is_empty() {
+            buf.push_str(&format!("\n# {}\n", description));
+        } else {
+            buf.push('\n');
+        }
+        buf.push_str(&format!("{}=\n", env_var));
+    }
+    buf.push_str("\n# Optional local paths\n");
+    buf.push_str("AI_WORKBENCH_WORKSPACES_DIR=workspaces\n");
+    buf.push_str("AI_WORKBENCH_VAR_DIR=var\n");
+
+    match output {
+        Some(path) => {
+            std::fs::write(path, &buf)?;
+        }
+        None => {
+            print!("{}", buf);
+        }
+    }
+    Ok(())
+}
+
 async fn cmd_run(command: &[String]) -> Result<()> {
     if command.is_empty() {
         anyhow::bail!("no command specified. Usage: workestrate run -- <command> [args...]");
@@ -336,6 +416,8 @@ mod tests {
             "completions",
             "run",
             "validate-config",
+            "secrets-schema",
+            "generate-env-example",
             "litellm",
             "pi",
             "odysseus",
@@ -347,59 +429,54 @@ mod tests {
     }
 
     fn check_service_subcommands(cmd: &clap::Command, name: &str) {
-        match cmd.find_subcommand(name) {
-            Some(sub) => {
-                let action_names: HashSet<_> = sub
-                    .get_subcommands()
-                    .map(|s| s.get_name().to_string())
-                    .collect();
-                for expected in ["up", "down", "logs", "plan"] {
-                    assert!(
-                        action_names.contains(expected),
-                        "{} missing action: {}",
-                        name,
-                        expected
-                    );
-                }
-                for unexpected in ["exec"] {
-                    assert!(
-                        !action_names.contains(unexpected),
-                        "{} should not have action: {}",
-                        name,
-                        unexpected
-                    );
-                }
-            }
-            None => assert!(false, "missing subcommand: {name}"),
+        let sub = cmd.find_subcommand(name);
+        assert!(sub.is_some(), "missing subcommand: {name}");
+        let sub = sub.unwrap();
+        let action_names: HashSet<_> = sub
+            .get_subcommands()
+            .map(|s| s.get_name().to_string())
+            .collect();
+        for expected in ["up", "down", "logs", "plan"] {
+            assert!(
+                action_names.contains(expected),
+                "{} missing action: {}",
+                name,
+                expected
+            );
         }
+        assert!(
+            !action_names.contains("exec"),
+            "{} should not have action: exec",
+            name
+        );
     }
 
     fn check_agent_subcommands(cmd: &clap::Command, name: &str) {
-        match cmd.find_subcommand(name) {
-            Some(sub) => {
-                let action_names: HashSet<_> = sub
-                    .get_subcommands()
-                    .map(|s| s.get_name().to_string())
-                    .collect();
-                for expected in ["exec", "down", "plan"] {
-                    assert!(
-                        action_names.contains(expected),
-                        "{} missing action: {}",
-                        name,
-                        expected
-                    );
-                }
-                for unexpected in ["up", "logs"] {
-                    assert!(
-                        !action_names.contains(unexpected),
-                        "{} should not have action: {}",
-                        name,
-                        unexpected
-                    );
-                }
-            }
-            None => assert!(false, "missing subcommand: {name}"),
+        let sub = cmd.find_subcommand(name);
+        assert!(sub.is_some(), "missing subcommand: {name}");
+        let sub = sub.unwrap();
+        let action_names: HashSet<_> = sub
+            .get_subcommands()
+            .map(|s| s.get_name().to_string())
+            .collect();
+        for expected in ["exec", "down", "plan"] {
+            assert!(
+                action_names.contains(expected),
+                "{} missing action: {}",
+                name,
+                expected
+            );
         }
+        assert!(
+            !action_names.contains("up"),
+            "{} should not have action: up",
+            name
+        );
+        assert!(
+            !action_names.contains("logs"),
+            "{} should not have action: logs",
+            name
+        );
     }
 
     #[test]

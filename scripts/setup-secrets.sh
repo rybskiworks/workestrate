@@ -34,10 +34,9 @@ SOPS_CONFIG=".sops.yaml"
 SECRET_FILE=".env.enc"
 SCHEMA_FILE=".env.example"
 
-# Read required keys from .env.example (all non-empty keys that are not
-# obviously non-secret config paths).
+# Read required keys from workestrate config (replaces .env.example grep).
 REQUIRED_KEYS=(
-  $(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' .env.example \
+  $(workestrate secrets-schema 2>/dev/null || grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SCHEMA_FILE" \
     | grep -vE '^(AI_WORKBENCH_.*_DIR)=' \
     | cut -d= -f1 \
     | sort -u)
@@ -105,10 +104,20 @@ build_prefilled_buffer() {
   local tmpfile="$1"
   local example_file="${2:-$SCHEMA_FILE}"
 
+  # Generate example source from workestrate if available; fall back to .env.example.
+  local example_source
+  local example_label
+  if example_source="$(workestrate generate-env-example 2>/dev/null)"; then
+    example_label="workestrate generate-env-example"
+  else
+    example_source="$(cat "$example_file")"
+    example_label="$example_file"
+  fi
+
   {
     echo "# ai-workbench secrets (will be encrypted to $SECRET_FILE via sops)."
     echo "# Lines starting with '#' are ignored by sops and serve as instructions only."
-    echo "# Required keys (from $example_file):"
+    echo "# Required keys (from $example_label):"
     local k
     for k in "${REQUIRED_KEYS[@]}"; do
       echo "#   - $k"
@@ -117,7 +126,7 @@ build_prefilled_buffer() {
     echo "# and encrypted automatically. Delete the SENTINEL line below to confirm."
     echo ""
 
-    # Walk .env.example: keep comments/blanks, rewrite KEY=value to KEY=
+    # Walk the example source: keep comments/blanks, rewrite KEY=value to KEY=
     local line key value
     while IFS= read -r line || [ -n "$line" ]; do
       if [ -z "$line" ] || [[ "$line" =~ ^# ]]; then
@@ -129,7 +138,7 @@ build_prefilled_buffer() {
         # Unparseable line: keep as a comment so it survives the round-trip
         printf '# %s\n' "$line"
       fi
-    done < "$example_file"
+    done <<< "$example_source"
 
     echo "$SENTINEL_LINE"
   } > "$tmpfile"
@@ -144,7 +153,12 @@ build_update_buffer() {
 
   cp "$decrypted_tmpfile" "$output_tmpfile"
 
-  local example_file="$SCHEMA_FILE"
+  # Generate example source from workestrate if available; fall back to .env.example.
+  local example_source
+  if ! example_source="$(workestrate generate-env-example 2>/dev/null)"; then
+    example_source="$(cat "$SCHEMA_FILE")"
+  fi
+
   local line key
   while IFS= read -r line || [ -n "$line" ]; do
     if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
@@ -153,7 +167,7 @@ build_update_buffer() {
         printf '%s=\n' "$key" >> "$output_tmpfile"
       fi
     fi
-  done < "$example_file"
+  done <<< "$example_source"
 
   printf '%s\n' "$SENTINEL_LINE" >> "$output_tmpfile"
 }

@@ -4,6 +4,7 @@ schema_version = 1
 env_var = "LITELLM_MASTER_KEY"
 hosts = ["host.microsandbox.internal"]
 required = true
+description = "LiteLLM proxy authentication. Agents use this in milestone 1."
 
 [secrets.LITELLM_AUTH]
 source = "LITELLM_MASTER_KEY"
@@ -13,32 +14,38 @@ exposed_as = "OPENAI_API_KEY"
 env_var = "OPENROUTER_API_KEY"
 hosts = ["openrouter.ai"]
 required = true
+description = "Provider keys used by LiteLLM only. Agents never receive these."
 
 [secrets.KIMI_CODE_API_KEY]
 env_var = "KIMI_CODE_API_KEY"
 hosts = ["api.kimi.com"]
 required = true
+description = "Provider keys used by LiteLLM only. Agents never receive these."
 
 [secrets.NEURALWATT_API_KEY]
 env_var = "NEURALWATT_API_KEY"
 hosts = ["api.neuralwatt.com"]
 required = true
+description = "Neuralwatt provider key used by LiteLLM only."
 
 [secrets.MINIMAX_CODING_API_KEY]
 env_var = "MINIMAX_CODING_API_KEY"
 hosts = ["api.minimax.io"]
 required = true
+description = "MiniMax Coding provider key used by LiteLLM only."
 
 [secrets.GITHUB_TOKEN]
 env_var = "GITHUB_TOKEN"
 hosts = ["github.com", "api.github.com"]
 required = false
+description = "GitHub Personal Access Token for agent sandboxes (git operations + API)."
 
 [secrets.ODYSSEUS_ADMIN_PASSWORD]
 env_var = "ODYSSEUS_ADMIN_PASSWORD"
 hosts = []
 required = true
 placeholder = "change_me_before_first_boot"
+description = "Odysseus admin login password (AUTH_ENABLED is on by default)."
 
 [workloads.litellm]
 kind = "service"
