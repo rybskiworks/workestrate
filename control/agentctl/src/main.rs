@@ -247,20 +247,21 @@ fn print_entry(entry: &CheckEntry) {
 }
 
 async fn cmd_new(name: &str) -> Result<()> {
-    let root = config::project_root()?;
-    let agent_dir = root.join("agents").join(name);
+    // Resolve the active config directory (trusted project, registry, or env).
+    let config_dir = config::resolve_active_config_dir()?;
+    let agent_dir = config_dir.join("agents").join(name);
 
     if agent_dir.exists() {
-        anyhow::bail!("agents/{} already exists", name);
+        anyhow::bail!("agents/{} already exists in {}", name, config_dir.display());
     }
 
-    // Create directory structure
-    let config_dir = agent_dir.join("config");
-    std::fs::create_dir_all(&config_dir)?;
-    std::fs::write(config_dir.join(".gitkeep"), "")?;
+    // Create directory structure relative to the config repo.
+    let config_subdir = agent_dir.join("config");
+    std::fs::create_dir_all(&config_subdir)?;
+    std::fs::write(config_subdir.join(".gitkeep"), "")?;
 
-    // Append a default workload entry to workestrate.toml
-    let config_path = root.join("workestrate.toml");
+    // Append a default workload entry to the config repo's workestrate.toml.
+    let config_path = config_dir.join("workestrate.toml");
     let toml_entry = format!(
         "\n[workloads.{}]\n\
         kind = \"agent\"\n\
@@ -281,18 +282,24 @@ async fn cmd_new(name: &str) -> Result<()> {
         name, name, name, name
     );
 
+    // Create parent dir if needed, then open with create+append.
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut file = std::fs::OpenOptions::new()
         .append(true)
+        .create(true)
         .open(&config_path)?;
     file.write_all(toml_entry.as_bytes())?;
 
-    println!("Created agents/{}/config/", name);
     println!(
-        "Appended [workloads.{}] to workestrate.toml with defaults.",
-        name
+        "Created agents/{}/config/ in {}",
+        name,
+        config_dir.display()
     );
+    println!("Appended [workloads.{}] to {}", name, config_path.display());
     println!();
-    println!("Edit workestrate.toml to configure:");
+    println!("Edit {} to configure:", config_path.display());
     println!("  - Set image (recipe + ref, or recipe + contents for nix-layered)");
     println!("  - Set command");
     println!("  - Add env/secret_env/mounts as needed");
@@ -1278,5 +1285,119 @@ mod tests {
             "pi detach_args must contain --foreground"
         );
         Ok(())
+    }
+
+    #[test]
+    fn cmd_new_resolves_active_config_dir() -> Result<()> {
+        // Create a temp config repo with a minimal workestrate.toml
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-cmd-new-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
+
+        // Point WORKESTRATE_CONFIG_DIR at the temp repo
+        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+
+        // Verify resolve_active_config_dir returns the temp dir
+        let config_dir = config::resolve_active_config_dir()?;
+        assert_eq!(
+            config_dir, tmp,
+            "resolve_active_config_dir should return the WORKESTRATE_CONFIG_DIR path"
+        );
+
+        // Simulate what cmd_new does: create agent config dir + append to workestrate.toml
+        let agent_config = tmp.join("agents").join("test-agent").join("config");
+        std::fs::create_dir_all(&agent_config)?;
+        std::fs::write(agent_config.join(".gitkeep"), "")?;
+
+        let config_path = tmp.join("workestrate.toml");
+        let toml_entry = "\n[workloads.test-agent]\nkind = \"agent\"\n";
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&config_path)?;
+        use std::io::Write;
+        file.write_all(toml_entry.as_bytes())?;
+
+        // Restore env
+        match old {
+            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+        }
+
+        // Verify the agent config dir was created in the config repo
+        assert!(
+            agent_config.exists(),
+            "agent config dir should exist in config repo"
+        );
+
+        // Verify workestrate.toml was appended
+        let toml_content = std::fs::read_to_string(tmp.join("workestrate.toml"))?;
+        assert!(
+            toml_content.contains("[workloads.test-agent]"),
+            "workestrate.toml should contain the new workload entry"
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn cmd_new_no_config_repo_produces_clear_error() {
+        // Use a temp HOME so no registry exists and no project config is found.
+        let tmp_home = std::env::temp_dir().join(format!(
+            "workestrate-no-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp_home).ok();
+
+        let old_home = std::env::var("HOME").ok();
+        let old_config = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
+
+        std::env::set_var("HOME", &tmp_home);
+        std::env::set_var("XDG_CONFIG_HOME", tmp_home.join(".config"));
+        std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share"));
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+
+        let result = config::resolve_active_config_dir();
+
+        // Restore env
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_config {
+            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+        }
+        match old_no_project {
+            Some(v) => std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", v),
+            None => std::env::remove_var("WORKESTRATE_NO_PROJECT_CONFIG"),
+        }
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("XDG_DATA_HOME");
+
+        let _ = std::fs::remove_dir_all(&tmp_home);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no active config repo") || err.contains("workestrate init"),
+            "error should mention 'no active config repo' or 'workestrate init'; got: {err}"
+        );
     }
 }

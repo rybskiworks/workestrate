@@ -533,6 +533,53 @@ fn reference_config_path() -> Option<PathBuf> {
     None
 }
 
+/// Resolve the directory where new config entries should be written.
+///
+/// Resolution order (same spirit as load_config):
+/// 1. WORKESTRATE_CONFIG_DIR env var
+/// 2. Trusted project ./workestrate.toml (cwd)
+/// 3. Registry single layer (default config repo)
+/// 4. Error: no active config repo
+pub fn resolve_active_config_dir() -> Result<PathBuf> {
+    // 1. WORKESTRATE_CONFIG_DIR (must exist)
+    if let Ok(dir) = std::env::var("WORKESTRATE_CONFIG_DIR") {
+        let path = PathBuf::from(dir);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    // 2. Trusted project (cwd)
+    let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
+    if !skip_project {
+        let cwd = std::env::current_dir()?;
+        let project_path = cwd.join("workestrate.toml");
+        if project_path.exists() {
+            match load_registry()? {
+                Some(_) => {
+                    if is_trusted_project(&cwd) {
+                        return Ok(cwd);
+                    }
+                }
+                None => {
+                    return Ok(cwd);
+                }
+            }
+        }
+    }
+
+    // 3. Registry single layer
+    if let Ok(Some(registry)) = load_registry() {
+        if let Some(name) = registry.layers.first() {
+            return Ok(resolve_store_dir().join("repos").join(name));
+        }
+    }
+
+    anyhow::bail!(
+        "no active config repo; run 'workestrate init' or 'workestrate config add <url> <name>' first"
+    );
+}
+
 /// Validate a loaded config against the policy.rs allowlists.
 pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // Egress hosts in https recipes must be in ALLOWED_EGRESS_HOSTS.
