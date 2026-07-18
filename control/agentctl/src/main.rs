@@ -1154,6 +1154,29 @@ async fn cmd_run(command: &[String]) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
+    /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
+    /// previous state on drop.
+    struct TestConfigGuard;
+
+    impl TestConfigGuard {
+        fn new() -> Self {
+            let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("config");
+            std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
+            Self
+        }
+    }
+
+    impl Drop for TestConfigGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        }
+    }
 
     #[test]
     fn cli_exposes_expected_subcommands() {
@@ -1243,6 +1266,7 @@ mod tests {
 
     #[test]
     fn detach_args_include_foreground() -> Result<()> {
+        let _guard = TestConfigGuard::new();
         let litellm = ConfigWorkload::new("litellm")?;
         assert!(
             litellm.detach_args().contains(&"--foreground".to_string()),

@@ -552,9 +552,33 @@ fn build_secret_env(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
+    /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
+    /// previous state on drop.
+    struct TestConfigGuard;
+
+    impl TestConfigGuard {
+        fn new() -> Self {
+            let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("config");
+            std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
+            Self
+        }
+    }
+
+    impl Drop for TestConfigGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        }
+    }
 
     #[test]
     fn build_path_reads_per_agent_env_override() -> Result<()> {
+        let _guard = TestConfigGuard::new();
         let pi = ConfigWorkload::new("pi")?;
         // Override set → returns the env value.
         std::env::set_var("WORKESTRATE_PI_BUILD", "/tmp/test-pi-build");

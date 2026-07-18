@@ -6,7 +6,7 @@ check:
 # Validate LiteLLM config.yaml against the schema indexes
 litellm-check:
     python3 .agents/skills/validation-litellm-config-check/scripts/check_config.py \
-      --config infra/litellm/config.yaml --schemas-dir docs/litellm/schemas --mode in-memory
+      --config config.reference/infra/litellm/config.yaml --schemas-dir docs/litellm/schemas --mode in-memory
 
 # Full pre-merge validation: format, lint, compile-check, test, config validation, golden-check, and lock-file stability
 verify: check test litellm-check golden-check
@@ -18,15 +18,15 @@ verify-full: verify
 
 # Generate golden plan files for all workloads
 golden-generate:
-    @for name in litellm pi odysseus opencode tempest; do \
-        cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
+    @for name in example-service example-agent example-offensive; do \
+        WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
           > control/agentctl/tests/golden/$name.plan.txt; \
     done
 
 # Check golden plan parity
 golden-check:
-    @for name in litellm pi odysseus opencode tempest; do \
-        cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
+    @for name in example-service example-agent example-offensive; do \
+        WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
           | diff - control/agentctl/tests/golden/$name.plan.txt \
           || (echo "golden mismatch for $name; run 'just golden-generate' to update" && exit 1); \
     done
@@ -53,11 +53,9 @@ workestrate *args:
     cargo run --manifest-path control/agentctl/Cargo.toml -- {{args}}
 
 plan:
-    cargo run --manifest-path control/agentctl/Cargo.toml -- litellm plan
-    cargo run --manifest-path control/agentctl/Cargo.toml -- pi plan
-    cargo run --manifest-path control/agentctl/Cargo.toml -- odysseus plan
-    cargo run --manifest-path control/agentctl/Cargo.toml -- opencode plan
-    cargo run --manifest-path control/agentctl/Cargo.toml -- tempest plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- example-service plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- example-agent plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- example-offensive plan
 
 # Check that the Debian/Linux host is ready to run the workbench
 host-check:

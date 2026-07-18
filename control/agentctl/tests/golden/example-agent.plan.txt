@@ -1,0 +1,16 @@
+name: example-agent
+image: example-agent:latest
+workdir: /work
+command: node dist/cli.js
+cpus: 1
+memory: 512 MiB
+env: API_KEY=(redacted)
+secret_env: GITHUB_TOKEN (value redacted, allowed: github.com, api.github.com, optional)
+mount: workspaces/example-agent-state:/data
+network: default_deny=true
+  egress: tcp:53 -> host
+  egress: udp:53 -> host
+  egress: tcp:4000 -> host
+  egress: tcp:443 -> github.com, api.github.com
+  egress: deny domain suffix .example.dev
+

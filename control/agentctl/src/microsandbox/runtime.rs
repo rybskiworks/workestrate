@@ -456,9 +456,33 @@ mod tests {
     use super::super::plan::{EgressTarget, Protocol};
     use super::network_plan_to_policy;
     use crate::microsandbox::workload::{ConfigWorkload, Workload};
+    use std::path::PathBuf;
+
+    /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
+    /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
+    /// previous state on drop.
+    struct TestConfigGuard;
+
+    impl TestConfigGuard {
+        fn new() -> Self {
+            let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("config");
+            std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
+            Self
+        }
+    }
+
+    impl Drop for TestConfigGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        }
+    }
 
     #[test]
     fn litellm_network_plan_converts_without_error() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("litellm")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(
@@ -471,6 +495,7 @@ mod tests {
 
     #[test]
     fn pi_network_plan_converts_without_error() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("pi")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(result.is_ok(), "pi conversion failed: {:?}", result.err());
@@ -479,6 +504,7 @@ mod tests {
 
     #[test]
     fn pi_plan_uses_nix_built_image() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         // The pi-bun binary's PT_INTERP points at nix glibc 2.42; the sandbox
         // image must be the nix-built `workestrator-pi:latest` (loaded via
         // `just load-pi-image`), NOT node:24-bookworm-slim (glibc 2.36 → crash).
@@ -489,6 +515,7 @@ mod tests {
 
     #[test]
     fn odysseus_network_plan_converts_without_error() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("odysseus")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(
@@ -501,6 +528,7 @@ mod tests {
 
     #[test]
     fn odysseus_plan_includes_admin_password_secret() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("odysseus")?.plan();
         let has_admin_pw = plan
             .env
@@ -525,6 +553,7 @@ mod tests {
 
     #[test]
     fn odysseus_plan_has_expected_data_mount() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("odysseus")?.plan();
         assert_eq!(plan.mounts.len(), 2, "odysseus should have 2 mounts");
         let data_mount = plan.mounts.iter().find(|m| m.guest == "/data");
@@ -548,6 +577,7 @@ mod tests {
 
     #[test]
     fn odysseus_plan_uses_data_dir_env_and_drops_hardcoded_db_url() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("odysseus")?.plan();
         let has_data_dir = plan
             .env
@@ -567,6 +597,7 @@ mod tests {
 
     #[test]
     fn opencode_network_plan_converts_without_error() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("opencode")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(
@@ -579,6 +610,7 @@ mod tests {
 
     #[test]
     fn pi_plan_has_expected_egress() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("pi")?.plan();
         assert!(plan.network.default_deny);
         assert_eq!(plan.network.egress_rules.len(), 4);
@@ -610,6 +642,7 @@ mod tests {
 
     #[test]
     fn pi_plan_redirects_config_to_data_dir() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("pi")?.plan();
         let has_agent_dir = plan
             .env
@@ -629,6 +662,7 @@ mod tests {
 
     #[test]
     fn pi_plan_exposes_litellm_master_key_as_env_not_host_bound() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("pi")?.plan();
         // The key must be a process env var so `${LITELLM_MASTER_KEY}` in
         // models.json resolves; otherwise Pi sends no auth key and LiteLLM
@@ -654,6 +688,7 @@ mod tests {
 
     #[test]
     fn pi_plan_has_expected_mounts() -> anyhow::Result<()> {
+        let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("pi")?.plan();
         assert_eq!(plan.mounts.len(), 2, "pi should have 2 mounts");
         // /app is no longer mounted — the bun binary + assets are baked into

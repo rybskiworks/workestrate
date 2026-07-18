@@ -38,4 +38,4 @@ pub const ALLOWED_PACKAGES: &[&str] = &[
 
 /// Core-defined entitlement: workloads allowed to use default_deny = false.
 /// All other workloads are forced to default_deny = true regardless of config.
-pub const DEFAULT_DENY_FALSE_ENTITLEMENT: &[&str] = &["tempest"];
+pub const DEFAULT_DENY_FALSE_ENTITLEMENT: &[&str] = &["tempest", "example-offensive"];

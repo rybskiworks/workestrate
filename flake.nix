@@ -162,23 +162,12 @@
         inherit tempest-built;
       };
 
-      # Single source of truth for nix-built workload sandbox images. Names are
-      # discovered from config.reference/workestrate.toml; images are the same
-      # existing derivations so load-images and dev-shell checks keep working.
-      workload-images =
-        let
-          nixLayered = referenceConfig.nixLayeredImages;
-        in
-        builtins.listToAttrs (map (name: {
-          name = referenceConfig.workloads.${name}.image.name;
-          value =
-            if name == "pi" then
-              pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; }
-            else if name == "tempest" then
-              pkgs.callPackage ./nix/packages/tempest-image.nix { inherit tempest-built; }
-            else
-              throw "unknown nix-layered workload: ${name}";
-        }) nixLayered);
+      # Explicit workload images (not config-driven). config.reference is now
+      # synthetic; real deployments live in the user's personal config repo.
+      workload-images = {
+        workestrator-pi = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
+        tempest = pkgs.callPackage ./nix/packages/tempest-image.nix { inherit tempest-built; };
+      };
 
       # General loader: iterates `workload-images` and loads each into
       # microsandbox. Driven by the attrset — no hardcoded image names.

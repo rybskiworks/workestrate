@@ -82,12 +82,8 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
         required("ai-workbench root", root.to_path_buf()),
         required("flake.nix", root.join("flake.nix")),
         required(
-            "infra/litellm/config.yaml",
-            root.join("infra/litellm/config.yaml"),
-        ),
-        required(
-            "infra/litellm/models.yaml",
-            root.join("infra/litellm/models.yaml"),
+            "config.reference/workestrate.toml",
+            root.join("config.reference").join("workestrate.toml"),
         ),
         required(
             "infra/microsandbox/sdk-notes.md",
@@ -109,16 +105,6 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
         ),
         optional("workspaces/", root.join("workspaces")),
         optional("var/", root.join("var")),
-        required(
-            "agents/odysseus/config/settings.json",
-            root.join("agents/odysseus/config/settings.json"),
-        ),
-        required(
-            "agents/opencode/config/opencode.jsonc",
-            root.join("agents/opencode/config/opencode.jsonc"),
-        ),
-        optional(".env.enc", root.join(".env.enc")),
-        optional(".sops.yaml", root.join(".sops.yaml")),
         // Optional: agent repos are typically supplied via flake
         // inputs. A fresh clone may legitimately omit local
         // `agents/<name>/repo` checkouts.
@@ -704,12 +690,11 @@ mod tests {
         let tmp = std::env::temp_dir();
         let entries = check_required_files(&tmp).unwrap();
         let optional_entries: Vec<_> = entries.iter().filter(|e| e.optional).collect();
-        // Optional local overrides: 4 agent repos + 4 agent builds + workspaces/ + var/
-        // + .env.enc + .sops.yaml = 12.
+        // Optional local overrides: 4 agent repos + 4 agent builds + workspaces/ + var/ = 10.
         assert_eq!(
             optional_entries.len(),
-            12,
-            "expected 12 optional checks, got {}",
+            10,
+            "expected 10 optional checks, got {}",
             optional_entries.len()
         );
     }
