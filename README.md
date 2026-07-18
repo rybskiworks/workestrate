@@ -632,3 +632,75 @@ setup-secrets --config personal update
 
 Without `--config`, it auto-detects a single registered config repo, or
 falls back to the repo root (backwards compat).
+
+## Container / persistent local state
+
+workestrate stores its XDG state (registry, config repos, secrets, runtime
+state) in a gitignored `.workestrate/` directory inside the repo. This
+directory is bind-mountable for container persistence across restarts.
+
+### Layout
+
+```
+.workestrate/
+├── config/          → XDG_CONFIG_HOME
+│   ├── workestrate/
+│   │   └── config.toml   (registry: config repos, layers, trusted projects)
+│   └── sops/age/
+│       └── ai-workbench-secrets.txt  (age private key — NEVER commit)
+├── data/            → XDG_DATA_HOME
+│   └── workestrate/
+│       ├── repos/        (config repo clones)
+│       │   └── personal/ (workestrate.toml, .env.enc, .sops.yaml, ...)
+│       └── sources/      (agent source checkouts)
+└── state/           → XDG_STATE_HOME
+    └── workestrate/
+        ├── workspaces/   (per-agent scratch)
+        └── var/           (runtime logs, pidfiles)
+```
+
+### Activation
+
+**Option A: direnv (recommended)**
+```bash
+# .envrc is committed; direnv loads it automatically when you cd into the repo
+direnv allow
+```
+
+**Option B: manual sourcing**
+```bash
+source scripts/local-xdg.sh
+```
+
+**Option C: just recipe**
+```bash
+just local-setup
+```
+
+### Container bind-mount
+
+When running in a container, bind-mount the `.workestrate/` directory:
+```bash
+docker run -v $PWD/.workestrate:$PWD/.workestrate ...
+# or with your container runner's equivalent
+```
+
+Then source `scripts/local-xdg.sh` (or use direnv) inside the container.
+
+### One-time migration from container $HOME
+
+If you previously had workestrate state in `~/.local/share/workestrate/`
+(ephemeral container HOME), run:
+```bash
+bash scripts/migrate-xdg-to-repo.sh
+```
+
+This moves the personal config repo, registry, and SOPS age key into
+`.workestrate/` and cleans up the old dirs.
+
+### Security warning
+
+`.workestrate/` contains the age private key (`config/sops/age/`). This
+key can decrypt all secrets in `.env.enc`. **NEVER commit `.workestrate/`.**
+The `.gitignore` entry (`/.workestrate/`) is the guard. If you accidentally
+commit it, rotate the age key immediately.

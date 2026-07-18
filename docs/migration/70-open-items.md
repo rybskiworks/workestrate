@@ -180,3 +180,15 @@ recipients. All layers share the same secrets store.
 
 **Recommendation**: option (1) is simpler and sufficient for most use
 cases. Option (2) is over-engineered until a concrete need arises.
+
+## Environment note: container persistence
+
+workestrate XDG state (registry, config repos, secrets, runtime state) lives
+in a gitignored `.workestrate/` directory inside the repo. This directory is
+bind-mountable for container persistence. The `.envrc` (direnv) and
+`scripts/local-xdg.sh` export `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+`XDG_STATE_HOME`, and `SOPS_AGE_KEY_FILE` to point at `.workestrate/`
+subdirectories.
+
+**Warning**: `.workestrate/` contains the age private key. Never commit it.
+The `.gitignore` entry is the guard.
