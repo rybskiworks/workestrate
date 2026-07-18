@@ -1,129 +1,159 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Decrypt `.env.enc` via `sops` and load all secrets into the process
-/// environment. Generic — no key filtering, no per-command configuration.
+/// Decrypt `.env.enc` files across all resolved config layers via `sops` and load
+/// all secrets into the process environment. Secrets are merged per-key: later
+/// layers override earlier layers for the same key, with process env as the
+/// lowest precedence.
 ///
 /// Called conditionally by code paths that need secrets (build_sandbox,
 /// the `run` subcommand). NOT called for plan/check/new/completions.
-///
-/// Respects the `SECRET_FILE` env var override (defaults to `.env.enc`),
-/// and `SOPS_AGE_KEY_FILE` (defaults to ~/.config/sops/age/ai-workbench-secrets.txt).
 pub fn load_secrets() -> Result<()> {
-    // Resolve the active config directory to find .env.enc.
-    let config_dir = resolve_secrets_dir()?;
+    let layers = crate::config::resolve_secrets_layers()?;
+    let mut merged: HashMap<String, String> = HashMap::new();
+    let mut provenance: HashMap<String, String> = HashMap::new();
 
-    let secret_file = std::env::var("SECRET_FILE").unwrap_or_else(|_| ".env.enc".to_string());
-    let env_enc = config_dir.join(&secret_file);
+    // Load secret definitions to know which env vars are secrets.
+    let config = crate::config::load_config()?;
+    let secret_env_vars: HashSet<String> = config
+        .secrets
+        .values()
+        .filter_map(|s| s.env_var.as_deref().map(String::from))
+        .collect();
 
-    if !env_enc.exists() {
-        anyhow::bail!(
-            "no secrets store (.env.enc) found for the active config at '{}'\n\
-             Run `workestrate init`, `workestrate config add <url> <name>`, or\n\
-             `setup-secrets --config <name> init` to create one.",
-            config_dir.display()
-        );
-    }
-
-    // Default SOPS_AGE_KEY_FILE if not set (same default as the shell wrappers).
-    if std::env::var("SOPS_AGE_KEY_FILE").is_err() {
-        if let Some(home) = std::env::var_os("HOME") {
-            let key_path =
-                std::path::Path::new(&home).join(".config/sops/age/ai-workbench-secrets.txt");
-            std::env::set_var("SOPS_AGE_KEY_FILE", key_path);
+    // Process env as lowest precedence (only for defined secrets).
+    for env_var in &secret_env_vars {
+        if let Ok(val) = std::env::var(env_var) {
+            if !val.is_empty() {
+                merged.insert(env_var.clone(), val);
+                provenance.insert(env_var.clone(), "process_env".to_string());
+            }
         }
     }
 
-    let output = Command::new("sops")
-        .args(["decrypt", "--input-type", "dotenv", "--output-type", "json"])
-        .arg(&env_enc)
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                anyhow::anyhow!(
-                    "sops is required for secret decryption but was not found on PATH\n\
-                     Install sops, or enter the dev shell with `nix develop`."
-                )
-            } else {
-                anyhow::anyhow!("failed to run 'sops decrypt': {e}")
+    // Load from each layer (later = higher precedence).
+    for layer in &layers {
+        if layer.skip {
+            continue; // secrets = "none"
+        }
+        match decrypt_layer(layer) {
+            Ok(Some(values)) => {
+                for (key, value) in values {
+                    merged.insert(key.clone(), value);
+                    provenance.insert(key, layer.name.clone());
+                }
             }
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "sops decrypt failed for {} (config dir: {}):\n{stderr}",
-            env_enc.display(),
-            config_dir.display()
-        );
+            Ok(None) => {} // no .env.enc, OK
+            Err(e) => {
+                eprintln!(
+                    "WARNING: could not load secrets from layer '{}': {}",
+                    layer.name, e
+                );
+                // Continue with other layers
+            }
+        }
     }
 
-    let values: HashMap<String, String> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| anyhow::anyhow!("failed to parse sops JSON output: {e}"))?;
-
-    for (key, value) in values {
-        if is_valid_env_name(&key) {
+    // Set env vars from merged values.
+    for (key, value) in &merged {
+        if is_valid_env_name(key) {
             std::env::set_var(key, value);
+        }
+    }
+
+    // Store provenance for --show-source.
+    crate::merge::set_secret_provenance(Some(provenance));
+
+    // Check required secrets (fail-closed).
+    for secret_def in config.secrets.values() {
+        let required = secret_def.required.unwrap_or(true);
+        if !required {
+            continue;
+        }
+        if let Some(ref env_var) = secret_def.env_var {
+            let value = std::env::var(env_var).unwrap_or_default();
+            let is_empty = value.is_empty() || value.trim().is_empty();
+            let is_placeholder = secret_def
+                .placeholder
+                .as_ref()
+                .map(|p| value == *p)
+                .unwrap_or(false);
+            if is_empty || is_placeholder {
+                let layers_tried: Vec<String> = layers
+                    .iter()
+                    .filter(|l| !l.skip)
+                    .map(|l| l.name.clone())
+                    .collect();
+                anyhow::bail!(
+                    "required secret '{}' is not satisfied.\n\
+                     Layers tried: {}\n\
+                     Remediation: run 'setup-secrets --config <name> update',\n\
+                     set the env var directly, or add an age recipient to the\n\
+                     config repo's .sops.yaml.",
+                    env_var,
+                    layers_tried.join(", ")
+                );
+            }
         }
     }
 
     Ok(())
 }
 
-/// Resolve the directory where `.env.enc` should be found for the active config.
-///
-/// Mirrors the resolution order in `config::load_config()`:
-/// 1. `WORKESTRATE_CONFIG_DIR` env var
-/// 2. Trusted project `./workestrate.toml` (cwd)
-/// 3. Registry single layer: `resolve_store_dir()/repos/<name>/`
-/// 4. `config.reference/` (shipped with tool — no .env.enc expected)
-fn resolve_secrets_dir() -> Result<PathBuf> {
-    // 1. WORKESTRATE_CONFIG_DIR
-    if let Ok(dir) = std::env::var("WORKESTRATE_CONFIG_DIR") {
-        return Ok(PathBuf::from(dir));
+fn decrypt_layer(layer: &crate::config::SecretsLayer) -> Result<Option<HashMap<String, String>>> {
+    let env_enc = layer.dir.join(&layer.secrets_file);
+    if !env_enc.exists() {
+        return Ok(None); // no .env.enc, not an error
     }
 
-    // 2. Trusted project (cwd)
-    let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
-    if !skip_project {
-        let cwd = std::env::current_dir()?;
-        let project_path = cwd.join("workestrate.toml");
-        if project_path.exists() {
-            match crate::config::load_registry()? {
-                Some(_) => {
-                    if crate::config::is_trusted_project(&cwd) {
-                        return Ok(cwd);
-                    }
-                }
-                None => {
-                    return Ok(cwd);
-                }
-            }
+    // Resolve age key file.
+    let key_file = if let Some(ref custom) = layer.age_key_file {
+        custom.clone()
+    } else if let Ok(env_key) = std::env::var("SOPS_AGE_KEY_FILE") {
+        PathBuf::from(env_key)
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        PathBuf::from(home).join(".config/sops/age/ai-workbench-secrets.txt")
+    };
+
+    if !key_file.exists() {
+        anyhow::bail!("age key not found: {}", key_file.display());
+    }
+
+    // Set SOPS_AGE_KEY_FILE for this layer (save/restore).
+    let old_key = std::env::var("SOPS_AGE_KEY_FILE").ok();
+    std::env::set_var("SOPS_AGE_KEY_FILE", &key_file);
+
+    let result = Command::new("sops")
+        .args(["decrypt", "--input-type", "dotenv", "--output-type", "json"])
+        .arg(&env_enc)
+        .output();
+
+    // Restore env var.
+    match old_key {
+        Some(v) => std::env::set_var("SOPS_AGE_KEY_FILE", v),
+        None => std::env::remove_var("SOPS_AGE_KEY_FILE"),
+    }
+
+    let output = result.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!("sops not found on PATH")
+        } else {
+            anyhow::anyhow!("failed to run sops: {e}")
         }
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("sops decrypt failed for {}: {stderr}", env_enc.display());
     }
 
-    // 3. Registry single layer
-    if let Ok(Some(registry)) = crate::config::load_registry() {
-        if let Some(name) = registry.layers.first() {
-            return Ok(crate::config::resolve_store_dir().join("repos").join(name));
-        }
-    }
+    let values: HashMap<String, String> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| anyhow::anyhow!("failed to parse sops JSON: {e}"))?;
 
-    // 4. config.reference/ (fallback — no .env.enc expected here)
-    if let Ok(root) = crate::config::project_root() {
-        return Ok(root.join("config.reference"));
-    }
-
-    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
-        let mut path = PathBuf::from(manifest);
-        if path.pop() && path.pop() {
-            return Ok(path.join("config.reference"));
-        }
-    }
-
-    anyhow::bail!("could not resolve active config directory for secrets")
+    Ok(Some(values))
 }
 
 fn is_valid_env_name(name: &str) -> bool {
@@ -140,23 +170,124 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_env_enc_produces_actionable_error() {
-        // When no .env.enc exists in the resolved config dir, load_secrets
-        // should produce an actionable error mentioning setup-secrets.
-        // We point WORKESTRATE_CONFIG_DIR at a nonexistent dir to force
-        // the "no secrets store" path.
-        std::env::set_var(
-            "WORKESTRATE_CONFIG_DIR",
-            "/tmp/nonexistent-config-dir-12345",
+    fn merge_secrets_later_layer_wins_per_key() {
+        // Test the merge logic: later layer overrides per-key.
+        let mut merged: HashMap<String, String> = HashMap::new();
+        let mut provenance: HashMap<String, String> = HashMap::new();
+
+        // Layer 1 (team)
+        let team = HashMap::from([
+            ("KEY_A".to_string(), "team_a".to_string()),
+            ("KEY_B".to_string(), "team_b".to_string()),
+        ]);
+        for (k, v) in team {
+            merged.insert(k.clone(), v);
+            provenance.insert(k, "team".to_string());
+        }
+
+        // Layer 2 (personal) — overrides KEY_A only.
+        let personal = HashMap::from([("KEY_A".to_string(), "personal_a".to_string())]);
+        for (k, v) in personal {
+            merged.insert(k.clone(), v);
+            provenance.insert(k, "personal".to_string());
+        }
+
+        assert_eq!(merged.get("KEY_A"), Some(&"personal_a".to_string()));
+        assert_eq!(merged.get("KEY_B"), Some(&"team_b".to_string()));
+        assert_eq!(provenance.get("KEY_A"), Some(&"personal".to_string()));
+        assert_eq!(provenance.get("KEY_B"), Some(&"team".to_string()));
+    }
+
+    #[test]
+    fn process_env_lowest_precedence() {
+        // Process env is overridden by any layer.
+        let mut merged: HashMap<String, String> = HashMap::new();
+        let mut provenance: HashMap<String, String> = HashMap::new();
+
+        // Process env.
+        merged.insert("KEY".to_string(), "env_value".to_string());
+        provenance.insert("KEY".to_string(), "process_env".to_string());
+
+        // Layer overrides.
+        let layer = HashMap::from([("KEY".to_string(), "layer_value".to_string())]);
+        for (k, v) in layer {
+            merged.insert(k.clone(), v);
+            provenance.insert(k, "personal".to_string());
+        }
+
+        assert_eq!(merged.get("KEY"), Some(&"layer_value".to_string()));
+        assert_eq!(provenance.get("KEY"), Some(&"personal".to_string()));
+    }
+
+    #[test]
+    fn required_secret_unsatisfied_error_message() {
+        // Verify the error message format for unsatisfied required secrets.
+        let err_msg = format!(
+            "required secret '{}' is not satisfied.\n\
+             Layers tried: {}\n\
+             Remediation: run 'setup-secrets --config <name> update',\n\
+             set the env var directly, or add an age recipient to the\n\
+             config repo's .sops.yaml.",
+            "LITELLM_MASTER_KEY", "reference, team, personal"
         );
+        assert!(err_msg.contains("required secret"));
+        assert!(err_msg.contains("Layers tried"));
+        assert!(err_msg.contains("Remediation"));
+        assert!(err_msg.contains("setup-secrets"));
+    }
+
+    #[test]
+    fn missing_env_enc_produces_required_secret_error() {
+        // With multi-layer loading, a missing .env.enc is not an error per layer.
+        // The hard failure is an unsatisfied required secret.
+        let _lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let tmp =
+            std::env::temp_dir().join(format!("workestrate-secrets-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let config_content = "schema_version = 1\n\n[secrets.LITELLM_MASTER_KEY]\nenv_var = \"LITELLM_MASTER_KEY\"\nrequired = true\n";
+        std::fs::write(tmp.join("workestrate.toml"), config_content).unwrap();
+
+        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+
         let result = load_secrets();
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+
+        match old {
+            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+        }
+        std::fs::remove_dir_all(&tmp).unwrap();
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("no secrets store") && err.contains("setup-secrets"),
-            "error should mention 'no secrets store' and 'setup-secrets'; got: {err}"
+            err.contains("required secret")
+                && err.contains("Layers tried")
+                && err.contains("setup-secrets"),
+            "error should mention required secret, layers tried, and setup-secrets; got: {err}"
         );
+    }
+
+    #[test]
+    fn resolve_secrets_layers_uses_config_dir_override() -> Result<()> {
+        let _lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let tmp =
+            std::env::temp_dir().join(format!("workestrate-layers-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp)?;
+        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+
+        let layers = crate::config::resolve_secrets_layers()?;
+
+        match old {
+            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+        }
+        std::fs::remove_dir_all(&tmp)?;
+
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].name, "local");
+        assert_eq!(layers[0].dir, tmp);
+        Ok(())
     }
 }

@@ -204,6 +204,7 @@ impl Workload for ConfigWorkload {
         let plan = self.plan();
         let mut out = String::new();
         let default_source = "core";
+        let secret_prov = crate::merge::get_secret_provenance();
 
         let source_of = |key: &str| -> &str {
             self.provenance
@@ -276,10 +277,24 @@ impl Workload for ConfigWorkload {
         }
         let env_source = source_of(&format!("workloads.{}.env", self.name));
         for e in &plan.env {
-            write_line(&mut out, "", &format!("env: {}", e), env_source);
+            let source = if e.is_secret {
+                secret_prov
+                    .as_ref()
+                    .and_then(|p| p.get(&e.name))
+                    .map(|s| s.as_str())
+                    .unwrap_or("core")
+            } else {
+                env_source
+            };
+            write_line(&mut out, "", &format!("env: {}", e), source);
         }
         for se in &plan.secret_env {
             let se_source = source_of(&format!("workloads.{}.secret_env.{}", self.name, se.name));
+            let source = secret_prov
+                .as_ref()
+                .and_then(|p| p.get(&se.name))
+                .map(|s| s.as_str())
+                .unwrap_or(se_source);
             write_line(
                 &mut out,
                 "",
@@ -288,7 +303,7 @@ impl Workload for ConfigWorkload {
                     se.name,
                     se.allowed_hosts.join(", ")
                 ),
-                se_source,
+                source,
             );
         }
         let ports_source = source_of(&format!("workloads.{}.ports", self.name));
@@ -555,18 +570,21 @@ mod tests {
     use std::path::PathBuf;
 
     /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
-    /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
-    /// previous state on drop.
-    struct TestConfigGuard;
+    /// fixture and restores the previous state on drop. Holds a global lock so
+    /// env-var tests do not race when Cargo runs them in parallel.
+    struct TestConfigGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl TestConfigGuard {
         fn new() -> Self {
+            let lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
             let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests")
                 .join("fixtures")
                 .join("config");
             std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
-            Self
+            Self { _lock: lock }
         }
     }
 

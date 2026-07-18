@@ -328,6 +328,22 @@ pub struct ConfigRepoEntry {
     pub url: String,
     pub r#ref: Option<String>,
     pub rev: Option<String>,
+    #[serde(default)]
+    pub secrets: Option<String>, // "file" (default) | "none"
+    #[serde(default)]
+    pub secrets_file: Option<String>, // default ".env.enc"
+    #[serde(default)]
+    pub age_key_file: Option<String>, // default: SOPS_AGE_KEY_FILE env or default path
+}
+
+/// A resolved secrets layer for multi-layer secret loading.
+#[derive(Debug, Clone)]
+pub struct SecretsLayer {
+    pub name: String,
+    pub dir: PathBuf,
+    pub secrets_file: String,
+    pub age_key_file: Option<PathBuf>,
+    pub skip: bool, // secrets = "none"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -580,7 +596,100 @@ pub fn resolve_active_config_dir() -> Result<PathBuf> {
     );
 }
 
-/// Validate a loaded config against the policy.rs allowlists.
+/// Resolve all secrets layers in precedence order (lowest first).
+///
+/// Same resolution as `load_config()`, but returns layer directories for
+/// `.env.enc` loading.
+pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
+    let mut layers: Vec<SecretsLayer> = Vec::new();
+
+    // 1. WORKESTRATE_CONFIG_DIR env var: single override layer.
+    if let Ok(dir) = std::env::var("WORKESTRATE_CONFIG_DIR") {
+        let path = PathBuf::from(dir);
+        if path.exists() {
+            layers.push(SecretsLayer {
+                name: "local".to_string(),
+                dir: path,
+                secrets_file: ".env.enc".to_string(),
+                age_key_file: None,
+                skip: false,
+            });
+            return Ok(layers);
+        }
+    }
+
+    // 2. Reference config dir (shipped with the tool — no .env.enc expected,
+    //    but included so the layer list mirrors load_config()).
+    if let Some(path) = reference_config_path() {
+        if let Some(parent) = path.parent() {
+            layers.push(SecretsLayer {
+                name: "reference".to_string(),
+                dir: parent.to_path_buf(),
+                secrets_file: ".env.enc".to_string(),
+                age_key_file: None,
+                skip: false,
+            });
+        }
+    }
+
+    // 3. Registry layers in declared order, each with its own .env.enc.
+    let registry = load_registry()?;
+    if let Some(registry) = registry {
+        for name in &registry.layers {
+            let dir = resolve_store_dir().join("repos").join(name);
+            let entry = registry.configs.get(name);
+            let secrets_mode = entry.and_then(|e| e.secrets.as_deref()).unwrap_or("file");
+            let secrets_file = entry
+                .and_then(|e| e.secrets_file.as_deref())
+                .unwrap_or(".env.enc")
+                .to_string();
+            let age_key_file = entry
+                .and_then(|e| e.age_key_file.as_deref())
+                .map(expand_tilde);
+            layers.push(SecretsLayer {
+                name: name.clone(),
+                dir,
+                secrets_file,
+                age_key_file,
+                skip: secrets_mode == "none",
+            });
+        }
+    }
+
+    // 4. Trusted project dir (cwd) — may have .env.enc.
+    let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
+    if !skip_project {
+        let cwd = std::env::current_dir()?;
+        let project_path = cwd.join("workestrate.toml");
+        if project_path.exists() {
+            match load_registry()? {
+                Some(_) => {
+                    if is_trusted_project(&cwd) {
+                        layers.push(SecretsLayer {
+                            name: "project".to_string(),
+                            dir: cwd,
+                            secrets_file: ".env.enc".to_string(),
+                            age_key_file: None,
+                            skip: false,
+                        });
+                    }
+                }
+                None => {
+                    layers.push(SecretsLayer {
+                        name: "project".to_string(),
+                        dir: cwd,
+                        secrets_file: ".env.enc".to_string(),
+                        age_key_file: None,
+                        skip: false,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(layers)
+}
+
 pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // Egress hosts in https recipes must be in ALLOWED_EGRESS_HOSTS.
     for (workload_name, workload) in &config.workloads {
@@ -686,9 +795,15 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
+pub(crate) mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
+
+    /// Global lock for tests that mutate process env vars.
+    ///
+    /// Cargo runs unit tests in parallel by default, and tests that set
+    /// `WORKESTRATE_CONFIG_DIR` or similar env vars would otherwise race.
+    pub static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn project_root_with_agentctl_root_env() {

@@ -79,6 +79,33 @@ pub fn take_provenance() -> Option<Provenance> {
 }
 
 // ---------------------------------------------------------------------------
+// Secret provenance thread-local storage
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static SECRET_PROVENANCE: std::cell::RefCell<Option<Provenance>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Store the provenance for the most recent secret load.
+pub fn set_secret_provenance(provenance: Option<Provenance>) {
+    SECRET_PROVENANCE.with(|p| {
+        *p.borrow_mut() = provenance;
+    });
+}
+
+/// Take ownership of the stored secret provenance, leaving the thread-local empty.
+#[allow(dead_code)]
+pub fn take_secret_provenance() -> Option<Provenance> {
+    SECRET_PROVENANCE.with(|p| p.borrow_mut().take())
+}
+
+/// Clone the stored secret provenance without consuming it.
+pub fn get_secret_provenance() -> Option<Provenance> {
+    SECRET_PROVENANCE.with(|p| p.borrow().clone())
+}
+
+// ---------------------------------------------------------------------------
 // Merge helpers
 // ---------------------------------------------------------------------------
 

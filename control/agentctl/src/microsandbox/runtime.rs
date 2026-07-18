@@ -452,6 +452,7 @@ pub async fn down(name: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::super::plan::{EgressTarget, Protocol};
     use super::network_plan_to_policy;
@@ -460,17 +461,21 @@ mod tests {
 
     /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
     /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
-    /// previous state on drop.
-    struct TestConfigGuard;
+    /// previous state on drop. Holds a global lock so env-var tests do not race
+    /// when Cargo runs them in parallel.
+    struct TestConfigGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl TestConfigGuard {
         fn new() -> Self {
+            let lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
             let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests")
                 .join("fixtures")
                 .join("config");
             std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
-            Self
+            Self { _lock: lock }
         }
     }
 
