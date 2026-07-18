@@ -7,29 +7,97 @@ set +H
 # Usage:
 #   nix develop -c setup-secrets init
 #   nix develop -c setup-secrets update
+#   nix develop -c setup-secrets --config <name> init
+#   nix develop -c setup-secrets --config <name> update
 #
 # Secrets can be supplied via environment variables or interactive prompts.
 # Command-line argument support is intentionally omitted to avoid leaking
 # secrets into shell history.
 
-# Determine the repo root: prefer the directory holding this script
-# (works when invoked directly from a clone); fall back to the current
-# working directory (works when invoked via a Nix wrapper that copies
-# the script into /nix/store and exec's it from the user's CWD).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../.sops.yaml" ]; then
-  cd "$SCRIPT_DIR/.."
-elif [ -f "$PWD/.sops.yaml" ]; then
-  cd "$PWD"
+CONFIG_NAME=""
+ARGS=()
+
+# Parse --config <name> before the init/update subcommand.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "[setup-secrets] error: --config requires a name" >&2
+        exit 1
+      fi
+      CONFIG_NAME="$1"
+      shift
+      ;;
+    --config=*)
+      CONFIG_NAME="${1#--config=}"
+      shift
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Determine the target configuration directory.
+resolve_store_dir() {
+  echo "${XDG_DATA_HOME:-$HOME/.local/share}/workestrate"
+}
+
+resolve_config_dir() {
+  echo "${XDG_CONFIG_HOME:-$HOME/.config}/workestrate"
+}
+
+find_single_config_name() {
+  local reg
+  reg="$(resolve_config_dir)/config.toml"
+  if [ -f "$reg" ]; then
+    local names
+    names=$(grep -oE '^[[:space:]]*\[configs\.[^]]+\]' "$reg" 2>/dev/null | sed 's/.*\[configs\.//; s/\]//' | tr -d ' ' || true)
+    local count
+    count=$(echo "$names" | wc -w | tr -d ' ')
+    if [ "$count" -eq 1 ]; then
+      echo "$names"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+if [ -n "$CONFIG_NAME" ]; then
+  TARGET_DIR="$(resolve_store_dir)/repos/$CONFIG_NAME"
+elif [ -n "${WORKESTRATE_CONFIG_DIR:-}" ]; then
+  TARGET_DIR="$WORKESTRATE_CONFIG_DIR"
+elif single_name=$(find_single_config_name); then
+  TARGET_DIR="$(resolve_store_dir)/repos/$single_name"
 else
-  echo "[setup-secrets] error: could not locate repo root (.sops.yaml not found)" >&2
+  # Determine the repo root: prefer the directory holding this script
+  # (works when invoked directly from a clone); fall back to the current
+  # working directory (works when invoked via a Nix wrapper that copies
+  # the script into /nix/store and exec's it from the user's CWD).
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../.sops.yaml" ]; then
+    TARGET_DIR="$SCRIPT_DIR/.."
+  elif [ -f "$PWD/.sops.yaml" ]; then
+    TARGET_DIR="$PWD"
+  else
+    echo "[setup-secrets] error: could not locate repo root (.sops.yaml not found)" >&2
+    exit 1
+  fi
+fi
+
+if [ ! -d "$TARGET_DIR" ]; then
+  echo "[setup-secrets] error: target config directory does not exist: $TARGET_DIR" >&2
   exit 1
 fi
+
+cd "$TARGET_DIR"
+export WORKESTRATE_CONFIG_DIR="$TARGET_DIR"
 
 : "${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/ai-workbench-secrets.txt}"
 export SOPS_AGE_KEY_FILE
 
-KEY_DIR="$(dirname "$SOPS_AGE_KEY_FILE")"
 SOPS_CONFIG=".sops.yaml"
 SECRET_FILE=".env.enc"
 SCHEMA_FILE=".env.example"
@@ -571,4 +639,4 @@ main() {
   esac
 }
 
-main "$@"
+main "${ARGS[@]}"

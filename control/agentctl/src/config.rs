@@ -107,8 +107,8 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
             "profiles/agents/tempest.md",
             root.join("profiles/agents/tempest.md"),
         ),
-        required("workspaces/", root.join("workspaces")),
-        required("var/", root.join("var")),
+        optional("workspaces/", root.join("workspaces")),
+        optional("var/", root.join("var")),
         required(
             "agents/odysseus/config/settings.json",
             root.join("agents/odysseus/config/settings.json"),
@@ -117,8 +117,8 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
             "agents/opencode/config/opencode.jsonc",
             root.join("agents/opencode/config/opencode.jsonc"),
         ),
-        required(".env.enc", root.join(".env.enc")),
-        required(".sops.yaml", root.join(".sops.yaml")),
+        optional(".env.enc", root.join(".env.enc")),
+        optional(".sops.yaml", root.join(".sops.yaml")),
         // Optional: agent repos are typically supplied via flake
         // inputs. A fresh clone may legitimately omit local
         // `agents/<name>/repo` checkouts.
@@ -316,16 +316,14 @@ pub fn registry_path() -> PathBuf {
     xdg_config_dir().join("config.toml")
 }
 
-/// Config repo store: ~/.local/share/workestrate/repos/<name>/
-#[allow(dead_code)]
+/// Config repo store: resolve_store_dir()/repos/<name>/
 pub fn config_repo_dir(name: &str) -> PathBuf {
-    xdg_data_dir().join("repos").join(name)
+    resolve_store_dir().join("repos").join(name)
 }
 
-/// Source override store: ~/.local/share/workestrate/sources/<name>/
-#[allow(dead_code)]
+/// Source override store: resolve_store_dir()/sources/<name>/
 pub fn source_store_dir(name: &str) -> PathBuf {
-    xdg_data_dir().join("sources").join(name)
+    resolve_store_dir().join("sources").join(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +373,6 @@ pub fn load_registry() -> Result<Option<Registry>> {
     Ok(Some(registry))
 }
 
-#[allow(dead_code)]
 pub fn save_registry(registry: &Registry) -> Result<()> {
     let path = registry_path();
     if let Some(parent) = path.parent() {
@@ -418,7 +415,6 @@ fn expand_tilde(path: &str) -> PathBuf {
 // Trust gating
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 pub fn is_trusted_project(dir: &Path) -> bool {
     if let Ok(Some(registry)) = load_registry() {
         registry.trusted_projects.iter().any(|p| {
@@ -430,7 +426,6 @@ pub fn is_trusted_project(dir: &Path) -> bool {
     }
 }
 
-#[allow(dead_code)]
 pub fn trust_project(dir: &Path) -> Result<()> {
     let mut registry = load_registry()?.unwrap_or_default();
     let dir_str = dir.to_string_lossy().to_string();
@@ -443,7 +438,6 @@ pub fn trust_project(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn untrust_project(dir: &Path) -> Result<()> {
     let mut registry = load_registry()?.unwrap_or_default();
     let dir_str = dir.to_string_lossy().to_string();
@@ -677,11 +671,12 @@ mod tests {
         let tmp = std::env::temp_dir();
         let entries = check_required_files(&tmp).unwrap();
         let optional_entries: Vec<_> = entries.iter().filter(|e| e.optional).collect();
-        // Should have 8 optional entries (4 agents × repo + build)
+        // Optional local overrides: 4 agent repos + 4 agent builds + workspaces/ + var/
+        // + .env.enc + .sops.yaml = 12.
         assert_eq!(
             optional_entries.len(),
-            8,
-            "expected 8 optional checks, got {}",
+            12,
+            "expected 12 optional checks, got {}",
             optional_entries.len()
         );
     }
