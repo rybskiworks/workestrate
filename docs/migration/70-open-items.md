@@ -176,3 +176,32 @@ subdirectories.
 
 **Warning**: `.workestrate/` contains the age private key. Never commit it.
 The `.gitignore` entry is the guard.
+
+### setup-secrets.sh per-repo override alignment
+
+`setup-secrets.sh` currently targets the correct config repo directory via
+`--config <name>` but hardcodes `SECRET_FILE=.env.enc` and uses
+`SOPS_AGE_KEY_FILE` env only. The Rust `load_secrets()` honors per-repo
+`secrets_file` and `age_key_file` overrides from the registry
+(`[configs.<name>]` fields). The shell script should be updated to read
+these overrides from the registry when `--config <name>` is used, so that
+`setup-secrets --config team init` uses `team`'s `age_key_file` and
+`secrets_file` automatically.
+
+**Non-blocking**: users can set `SOPS_AGE_KEY_FILE` manually as a workaround.
+
+### sops+age integration tests in CI
+
+The 5 unit tests for secrets layering (`merge_secrets_later_layer_wins_per_key`,
+`process_env_lowest_precedence`, `required_secret_unsatisfied_error_message`,
+`missing_env_enc_produces_required_secret_error`,
+`resolve_secrets_layers_uses_config_dir_override`) test the merge logic
+without invoking the `sops` binary. The actual sops decrypt/encrypt
+behavior (per-repo `age_key_file`, undecryptable layer warning, multi-layer
+`.env.enc` loading) was verified empirically via `nix shell nixpkgs#sops
+nixpkgs#age` but is not covered by `cargo test`. A CI step that runs
+sops+age integration tests (similar to `scripts/validate-secrets-workflow.sh`)
+should be added to catch regressions in the sops integration.
+
+**Non-blocking**: the merge logic is tested; sops integration is stable
+and unlikely to regress without code changes to `decrypt_layer()`.

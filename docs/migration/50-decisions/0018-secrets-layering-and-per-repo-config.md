@@ -42,8 +42,14 @@ Implement per-key value merge across layers:
 - **Failure semantics**: undecryptable layer → WARNING naming the layer,
   continue with other layers. Required secret unsatisfied after all layers
   → hard fail naming the secret + layers tried + remediation.
-- **Provenance**: per-key tracking for `plan --show-source` (annotates each
-  secret env var with its value's source layer or `(from process env)`).
+- **Provenance**: per-key value provenance is tracked (which layer's
+  `.env.enc` supplied the winning value, or process-env fallback).
+  `plan --show-source` shows config-FIELD provenance (which layer's
+  `workestrate.toml` defined each env/secret_env entry); it does NOT
+  decrypt secrets or show value provenance (plan is side-effect-free and
+  works without secrets — the fail-closed reference fallback depends on
+  this). Secret-VALUE provenance is surfaced in secret-loading contexts
+  (`run`/`up`/`exec`), with redacted values.
 
 ## Consequences
 
@@ -55,8 +61,12 @@ Implement per-key value merge across layers:
   post-merge on the merged secret definitions, not on individual values.
   A layer can provide a different VALUE for `LITELLM_MASTER_KEY`, but the
   HOST BINDING (`host.microsandbox.internal`) is fixed in `policy.rs`.
-- `setup-secrets --config <name>` targets a specific repo's `.env.enc`,
-  honoring per-repo `secrets_file` and `age_key_file`.
+- `setup-secrets --config <name>` targets a specific repo's directory.
+  The Rust loader (`load_secrets()`) honors per-repo `secrets_file` and
+  `age_key_file` overrides from the registry. `setup-secrets.sh` currently
+  honors directory targeting only (per-repo file/key overrides require
+  `SOPS_AGE_KEY_FILE` set manually) — script alignment is a documented
+  follow-up (see 70-open-items.md).
 
 ## Rejected why
 
