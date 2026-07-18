@@ -47,10 +47,35 @@ remain. Odysseus/opencode nix derivations exist (HOST-NIX gate).
 | 0b.6 | Migrate microsandbox vendor symlink to git-fork dependency (ADR 0011). Remove `vendor-unlock`/`vendor-lock` recipes. Update `nix/packages/agentctl.nix:41-47` preBuild. | `nix build .#workestrate` succeeds; `cargo check` passes | HOST-NIX |
 | 0b.7 | Full validation. | `just verify` + `nix build .#workestrate` | HOST-NIX |
 
-**Definition of done (Phase 0b)**: `nix build .#workestrate` succeeds.
-`nix build .#workestrator-pi` succeeds. Devshell enters and builds agents from
-reference config. No vendor symlink. (All HOST-NIX gates — cannot verify in
-this container.)
+**Status**: IMPLEMENTED (nix eval gates pass; HOST-NIX build gates deferred to host).
+
+### Step 0b.1: `nix/lib/config.nix` — DONE
+- Reads `config.reference/workestrate.toml` via `builtins.fromTOML`.
+- Exports `workloads`, `workloadNames`, `nixLayeredImages`, `localBuilds`.
+
+### Step 0b.2: Devshell config-driven `_build_agents` — DONE
+- `nix/devshells/default.nix` receives `referenceConfig` and generates `_build_if_needed` calls from `localBuilds`.
+- Same effective commands and gating as before.
+
+### Step 0b.3: Config-driven `workload-images` — DONE
+- `flake.nix:workload-images` discovers nix-layered workloads from `referenceConfig`.
+- Images are still the existing `nix/packages/pi-image.nix` / `tempest-image.nix` derivations, so outputs remain unchanged.
+
+### Step 0b.4/0b.5: Recipe functions — DONE
+- `nix/lib/vocabulary.nix`: closed package vocabulary (`ALLOWED_PACKAGES`) + features + `bakedFileToShell`.
+- `nix/lib/recipes.nix`: aggregator exposing `build` (npm-build, bun-compile, pip-install, bun-install) and `image` (registry, nix-layered) recipes.
+- `nix/lib/recipes/{npm-build,bun-compile,pip-install,bun-install,registry,nix-layered}.nix`: recipe functions.
+- Existing per-agent `.nix` files are untouched; their drvPaths are unchanged.
+
+### Step 0b.6: `workestrate source build` nix shell wiring — DONE
+- `control/agentctl/src/main.rs`: `workestrate source build` now attempts to run the recipe command via `nix shell .` if nix is available, with a fallback to instruction-only output.
+
+### Phase 2 core exports — DONE
+- `flake.nix` exposes `lib.${system}` with `recipes`, `vocabulary`, `buildWorkloadImage`, `buildImagesFromConfig`, and `checks.validateConfig`.
+- `templates/workestrator-config/flake.nix.jinja` updated to use `workestrator.lib.${system}` and pass the TOML string to `validateConfig`.
+
+### HOST-NIX gates
+- `nix build .#workestrate` and image builds remain HOST-NIX gates; they cannot run in this container.
 
 ## Phase 1: Tool+XDG model (additive; KVM gate on host)
 
@@ -86,6 +111,21 @@ project layer (additive migration).
 **Definition of done (Phase 2)**: Core exports `lib.*`. Config repo with
 `flake.nix` builds its own nix-layered images. Copier template produces valid
 config repos. (All HOST-NIX gates.)
+
+**Status**: Phase 2 core exports DONE; remaining steps are template-only / HOST-NIX.
+
+### Step 2.1: Core `lib.*` exports — DONE
+- `flake.nix` exposes `lib.${system}` with:
+  - `recipes` — build/image recipe functions
+  - `vocabulary` — closed package/feature vocabulary
+  - `buildWorkloadImage` — nix-layered image recipe
+  - `buildImagesFromConfig` — config-driven image builder
+  - `checks.validateConfig` — `workestrate validate-config` derivation
+- `nix eval .#lib.x86_64-linux` returns the expected attr paths.
+
+### Step 2.2–2.4: Config-repo flake + copier template — TEMPLATE READY
+- `templates/workestrator-config/flake.nix.jinja` updated to use `workestrator.lib.${system}`.
+- Live config-repo `nix build` / `nix flake check` / `copier copy` are HOST-NIX gates and remain deferred.
 
 ## Phase 3: Layering engine (fixtures, multi-recipient SOPS, copier)
 

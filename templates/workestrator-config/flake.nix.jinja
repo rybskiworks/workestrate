@@ -14,14 +14,15 @@
       config = builtins.fromTOML (builtins.readFile ./workestrate.toml);
     in {
       # Build this repo's nix-layered images using core's exported recipes
-      packages.${system} = workestrator.lib.buildImagesFromConfig {
+      packages.${system} = workestrator.lib.${system}.buildImagesFromConfig {
         inherit pkgs config;
       };
 
       # Config-repo CI: validate against core's schema
-      checks.${system} = workestrator.lib.checks.validateConfig {
-        inherit pkgs config;
+      checks.${system} = workestrator.lib.${system}.checks.validateConfig {
+        inherit pkgs;
         workestrate = workestrator.packages.${system}.workestrate;
+        config = builtins.readFile ./workestrate.toml;
       };
     };
 }

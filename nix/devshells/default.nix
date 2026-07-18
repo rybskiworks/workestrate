@@ -13,12 +13,36 @@
 , odysseus
 , opencode
 , tempest
+, referenceConfig
 }:
 
 # Agent source repos. These default to maintainer forks.
 # Override with --override-input to use upstreams or your own forks:
 #   nix develop --override-input pi github:earendil-works/pi
 #   nix develop --override-input opencode github:anomalyco/opencode
+
+# Build commands derived from config.reference/workestrate.toml.
+# The devshell reads ONLY the reference config (tool-dev). Each workload
+# with a local_build recipe becomes one _build_if_needed invocation.
+let
+  localBuildNames = referenceConfig.localBuilds;
+
+  recipeCmd = lb:
+    if lb.recipe == "pip-install" then
+      let req = lb.requirements_file or "requirements.txt"; in
+      ''REQ=$([ -f requirements.lock ] && echo requirements.lock || echo ${req}) && python3.12 -m pip install --only-binary=:all: --break-system-packages --target ./.deps -r "$REQ"''
+    else if lb.recipe == "bun-install" then
+      "HUSKY=0 bun install"
+    else if lb.recipe == "npm-build" then
+      "npm install && npm run build"
+    else
+      throw "unknown local_build recipe: ${lb.recipe}";
+
+  buildAgentCommands = builtins.concatStringsSep "\n" (map (name:
+    let lb = referenceConfig.workloads.${name}.local_build; in
+    ''_build_if_needed "${name}" "${recipeCmd lb}" "${lb.gating_file or ""}"''
+  ) localBuildNames);
+in
 
 pkgs.mkShell {
   packages = with pkgs; [
@@ -220,21 +244,8 @@ pkgs.mkShell {
         fi
       }
 
-      # Odysseus: Python app with JS UI. Vendor cp312 deps into build/.deps
-      # so the python:3.12-slim microVM imports them via PYTHONPATH=/app/.deps.
-      _build_if_needed "odysseus" \
-        'REQ=$([ -f requirements.lock ] && echo requirements.lock || echo requirements.txt) && python3.12 -m pip install --only-binary=:all: --break-system-packages --target ./.deps -r "$REQ"' \
-        "requirements.txt"
-
-      # OpenCode: TypeScript/Bun project
-      _build_if_needed "opencode" \
-        "HUSKY=0 bun install" \
-        "bun.lock"
-
-      # T3MP3ST: TypeScript/Node offensive-security agent
-      _build_if_needed "tempest" \
-        "npm install && npm run build" \
-        "package-lock.json"
+      # Agent builds are driven by config.reference/workestrate.toml local_build.
+      ${buildAgentCommands}
 
       unset -f _build_if_needed
     }

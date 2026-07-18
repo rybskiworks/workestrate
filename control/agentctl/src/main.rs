@@ -673,12 +673,23 @@ fn build_command_string(name: &str, local_build: &config::LocalBuildConfig) -> S
                 .requirements_file
                 .as_deref()
                 .unwrap_or("requirements.txt");
-            format!("pip install --target {} -r {}", target, req)
+            format!(
+                "REQ=$([ -f requirements.lock ] && echo requirements.lock || echo {}) && python3.12 -m pip install --only-binary=:all: --break-system-packages --target ./{} -r \"$REQ\"",
+                req, target
+            )
         }
-        "npm-build" | "npm" => "npm ci && npm run build".to_string(),
-        "bun-install" | "bun" => "bun install && bun run build".to_string(),
+        "npm-build" | "npm" => "npm install && npm run build".to_string(),
+        "bun-install" | "bun" => "HUSKY=0 bun install && bun run build".to_string(),
         other => format!("{} build recipe for {}", other, name),
     }
+}
+
+fn nix_available() -> bool {
+    std::process::Command::new("nix")
+        .arg("--version")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 async fn cmd_source_build(name: &str) -> Result<()> {
@@ -694,7 +705,70 @@ async fn cmd_source_build(name: &str) -> Result<()> {
 
     let command = build_command_string(name, local_build);
     println!("Build command for {}: {}", name, command);
-    println!("Run inside nix develop: {}", command);
+
+    let env_var = format!("WORKESTRATE_{}_BUILD", name.to_uppercase());
+    let build_dir = match std::env::var(&env_var) {
+        Ok(path) => PathBuf::from(path),
+        Err(_) => config::source_store_dir(name).join("build"),
+    };
+
+    let repo_dir = config::source_store_dir(name).join("repo");
+    if repo_dir.exists() {
+        if build_dir.exists() {
+            std::fs::remove_dir_all(&build_dir)?;
+        }
+        if let Some(parent) = build_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let status = std::process::Command::new("cp")
+            .args([
+                "-r",
+                repo_dir.to_str().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "source repo path is not valid UTF-8: {}",
+                        repo_dir.display()
+                    )
+                })?,
+                build_dir.to_str().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "build directory path is not valid UTF-8: {}",
+                        build_dir.display()
+                    )
+                })?,
+            ])
+            .status()?;
+        if !status.success() {
+            anyhow::bail!(
+                "failed to copy source to build directory {}",
+                build_dir.display()
+            );
+        }
+    }
+
+    if !build_dir.exists() {
+        println!("Build directory {} does not exist.", build_dir.display());
+        println!("Run: workestrate source clone {}", name);
+        return Ok(());
+    }
+
+    if nix_available() {
+        println!("Running build in {} via nix shell...", build_dir.display());
+        let status = std::process::Command::new("nix")
+            .args(["shell", ".", "--command", "bash", "-c", &command])
+            .current_dir(&build_dir)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("nix shell build failed for {}", name);
+        }
+        println!("Build succeeded: {}", build_dir.display());
+    } else {
+        println!("Nix not available. To build manually, run:");
+        println!(
+            "  cd {} && nix develop --command bash -c '{}'",
+            build_dir.display(),
+            command
+        );
+    }
     Ok(())
 }
 

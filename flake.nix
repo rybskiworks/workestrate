@@ -29,6 +29,88 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+
+      # Config library: reads the tracked reference config from config.reference/
+      referenceConfig = import ./nix/lib/config.nix {};
+
+      # Per-system lib exports (Phase 2 core). The function takes pkgs so a
+      # config-repo flake can call it with its own nixpkgs.
+      libForSystem = { pkgs }:
+        let
+          recipesForPkgs = import ./nix/lib/recipes.nix { inherit pkgs; };
+        in
+        {
+          recipes = recipesForPkgs;
+          vocabulary = recipesForPkgs.vocab;
+          buildWorkloadImage = recipesForPkgs.image.nix-layered;
+
+          buildImagesFromConfig = { pkgs, config }:
+            let
+              recipesForPkgs = import ./nix/lib/recipes.nix { inherit pkgs; };
+
+              buildBinary = binary:
+                if binary.recipe == "bun-compile" then
+                  recipesForPkgs.build.bun-compile {
+                    src = binary.src;
+                    entrypoint = binary.entrypoint;
+                    worker = binary.worker;
+                  }
+                else if binary.recipe == "npm-build" then
+                  recipesForPkgs.build.npm-build {
+                    src = binary.src;
+                    npmDepsHash = binary.npm_deps_hash;
+                    installLayout = binary.install_layout or "app";
+                  }
+                else if binary.recipe == "pip-install" then
+                  recipesForPkgs.build.pip-install {
+                    source = binary.src;
+                    requirementsFile = binary.requirements_file or "requirements.txt";
+                    target = binary.target or ".deps";
+                  }
+                else if binary.recipe == "bun-install" then
+                  recipesForPkgs.build.bun-install {
+                    source = binary.src;
+                  }
+                else
+                  throw "unknown binary recipe: ${binary.recipe}";
+
+              workloads = config.workloads or {};
+              names = builtins.attrNames workloads;
+              nixLayered = builtins.filter (name:
+                (workloads.${name}.image.recipe or "") == "nix-layered"
+              ) names;
+            in
+            builtins.listToAttrs (map (name: {
+              name = workloads.${name}.image.name;
+              value = recipesForPkgs.image.nix-layered {
+                inherit (workloads.${name}.image) name tag;
+                contents = workloads.${name}.image.contents or [];
+                binary = if workloads.${name}.image ? binary then
+                  buildBinary workloads.${name}.image.binary
+                else
+                  null;
+                bakedFiles = workloads.${name}.image.baked_files or [];
+                features = workloads.${name}.image.features or [];
+              };
+            }) nixLayered);
+
+          checks.validateConfig = { pkgs, config, workestrate }:
+            let
+              # config is the TOML text (string). A config-repo flake can pass
+              # builtins.readFile ./workestrate.toml directly.
+              configFile = pkgs.writeText "workestrate.toml" config;
+            in
+            pkgs.runCommand "validate-config" {
+              nativeBuildInputs = [ workestrate ];
+              passAsFile = [ ];
+            } ''
+              mkdir -p $out
+              cp ${configFile} workestrate.toml
+              workestrate validate-config
+              touch $out/ok
+            '';
+        };
+
       microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {};
       microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix {};
       workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
@@ -80,13 +162,23 @@
         inherit tempest-built;
       };
 
-      # Single source of truth for nix-built workload sandbox images. Adding a
-      # new workload's image = one entry here; the `load-images` script and
-      # the dev-shell check pick it up automatically. No per-image recipes.
-      workload-images = {
-        workestrator-pi = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
-        tempest = pkgs.callPackage ./nix/packages/tempest-image.nix { inherit tempest-built; };
-      };
+      # Single source of truth for nix-built workload sandbox images. Names are
+      # discovered from config.reference/workestrate.toml; images are the same
+      # existing derivations so load-images and dev-shell checks keep working.
+      workload-images =
+        let
+          nixLayered = referenceConfig.nixLayeredImages;
+        in
+        builtins.listToAttrs (map (name: {
+          name = referenceConfig.workloads.${name}.image.name;
+          value =
+            if name == "pi" then
+              pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; }
+            else if name == "tempest" then
+              pkgs.callPackage ./nix/packages/tempest-image.nix { inherit tempest-built; }
+            else
+              throw "unknown nix-layered workload: ${name}";
+        }) nixLayered);
 
       # General loader: iterates `workload-images` and loads each into
       # microsandbox. Driven by the attrset — no hardcoded image names.
@@ -208,13 +300,16 @@
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
         inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped decrypt-env write-env setup-secrets load-images
-          odysseus opencode pi-bun-built tempest;
+          odysseus opencode pi-bun-built tempest referenceConfig;
         # devshell populates agents/pi/repo from the canonical remote fork.
         pi = pi;
         imageNames = builtins.attrNames workload-images;
       };
 
+      lib.${system} = libForSystem { inherit pkgs; };
+
       packages.${system} = workload-images // {
+        inherit workload-images;
         inherit workestrate workestrator workestrator-node microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets load-images;
         # .#pi = npm/node JS tree (canonical remote fork).
         # .#pi-bun = standalone Bun binary (Bun runtime embedded).
@@ -224,6 +319,8 @@
         pi-image = pi-image;
         # .#tempest = compiled T3MP3ST tree (dist/ + node_modules + package.json).
         tempest = tempest-built;
+        # .#tempest-built alias (named derivation; same output as .#tempest).
+        tempest-built = tempest-built;
         tempest-image = tempest-image;
         # .#odysseus-built = Odysseus Python app tree (.deps/ + source).
         odysseus-built = odysseus-built;
