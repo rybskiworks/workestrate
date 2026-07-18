@@ -203,10 +203,17 @@ impl Workload for ConfigWorkload {
     }
 
     fn prepare(&self) -> Result<()> {
-        let root = crate::config::project_root()?;
+        let root = crate::config::project_root()
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+        let state_dir = crate::config::resolve_state_dir();
         for seed in &self.workload.seed_files {
             let source = root.join(&seed.source);
-            let target = root.join(&seed.target);
+            let target =
+                if seed.target.starts_with("workspaces/") || seed.target.starts_with("var/") {
+                    state_dir.join(&seed.target)
+                } else {
+                    root.join(&seed.target)
+                };
             if seed.only_if_missing.unwrap_or(true) && target.exists() {
                 continue;
             }

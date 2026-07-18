@@ -1,0 +1,160 @@
+# LiteLLM proxy — model_list (child of config.yaml, included via `include:`).
+#
+# Tier structure (role-based):
+#   coding          Kimi K3 (OpenRouter, main) → Kimi K3 (Kimi Coding Plan) → NW kimi-k2.7-code → OR free coder
+#   coding.fast     Qwen 3.6 35B fast (Neuralwatt, cheapest+vision) → Qwen 3.6 35B → coding
+#   coding.pro      GLM-5.2 short (Neuralwatt, reasoning) → GLM-5.2 full → kimi-k2.7-code
+#   coding.free     Qwen 3 Coder free (OpenRouter) → Qwen 3.6 35B fast (Neuralwatt)
+#   coding.vision   Kimi K2.6 (Neuralwatt, vision+code) → Qwen 3.6 35B → kimi-k2.7-code
+#   orchestrator    GLM-5.2 (Neuralwatt, 1M ctx, reasoning) → GLM-5.2 short → Qwen 3.5 397B
+#   lead            GLM-5.2 short (Neuralwatt, reasoning) → GLM-5.2 → kimi-k2.7-code
+#   vision          Kimi K2.6 (Neuralwatt, vision) → Qwen 3.6 35B
+#
+# Direct-access: neural (umbrella) + neural-<id> (11 Neuralwatt catalog models)
+#                + openrouter-kimi-k3 (OpenRouter) + kimi-code-k3 (Kimi Coding Plan).
+#
+# NOTE: No YAML anchors/merge keys — each entry spells out litellm_params fully
+# (LiteLLM docs never use YAML anchors; the parser may not support merge keys).
+
+model_list:
+  # === coding (default: Kimi K3 via OpenRouter, main) ===
+  - model_name: coding
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k3
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # === openrouter-kimi-k3 (direct-select: Kimi K3 via OpenRouter) ===
+  - model_name: openrouter-kimi-k3
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k3
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # === kimi-code-k3 (direct-select: Kimi K3 via Kimi Coding Plan, Anthropic Messages API) ===
+  - model_name: kimi-code-k3
+    litellm_params:
+      model: anthropic/k3
+      api_base: https://api.kimi.com/coding
+      api_key: os.environ/KIMI_CODE_API_KEY
+
+  # === Neuralwatt tiers (OpenAI-compatible, api.neuralwatt.com/v1) ===
+  - model_name: coding.fast
+    litellm_params:
+      model: openai/qwen3.6-35b-fast
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: coding.pro
+    litellm_params:
+      model: openai/glm-5.2-short
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: coding.vision
+    litellm_params:
+      model: openai/kimi-k2.6
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: orchestrator
+    litellm_params:
+      model: openai/glm-5.2
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: lead
+    litellm_params:
+      model: openai/glm-5.2-short
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: vision
+    litellm_params:
+      model: openai/kimi-k2.6
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  # === OpenRouter (free tier) ===
+  - model_name: coding.free
+    litellm_params:
+      model: openrouter/qwen/qwen3-coder:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # === MiniMax-M3 (Anthropic Messages API, api.minimax.io/anthropic) ===
+  - model_name: minimax-m3
+    litellm_params:
+      model: anthropic/MiniMax-M3
+      api_base: https://api.minimax.io/anthropic
+      api_key: os.environ/MINIMAX_CODING_API_KEY
+
+  # === Neuralwatt direct-access (umbrella + 11 catalog models) ===
+  - model_name: neural
+    litellm_params:
+      model: openai/kimi-k2.7-code
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-kimi-k2.6
+    litellm_params:
+      model: openai/kimi-k2.6
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-kimi-k2.6-fast
+    litellm_params:
+      model: openai/kimi-k2.6-fast
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-glm-5.2
+    litellm_params:
+      model: openai/glm-5.2
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-glm-5.2-fast
+    litellm_params:
+      model: openai/glm-5.2-fast
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-glm-5.2-short
+    litellm_params:
+      model: openai/glm-5.2-short
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-glm-5.2-short-fast
+    litellm_params:
+      model: openai/glm-5.2-short-fast
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-qwen3.6-35b
+    litellm_params:
+      model: openai/qwen3.6-35b
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-qwen3.6-35b-fast
+    litellm_params:
+      model: openai/qwen3.6-35b-fast
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-qwen3.5-397b
+    litellm_params:
+      model: openai/qwen3.5-397b
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-qwen3.5-397b-fast
+    litellm_params:
+      model: openai/qwen3.5-397b-fast
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+  - model_name: neural-kimi-k2.7-code
+    litellm_params:
+      model: openai/kimi-k2.7-code
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY

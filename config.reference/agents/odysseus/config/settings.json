@@ -1,0 +1,9 @@
+{
+  "providers": {
+    "litellm": {
+      "base_url": "http://host.microsandbox.internal:4000/v1",
+      "api_key": "${LITELLM_MASTER_KEY}",
+      "model": "coding"
+    }
+  }
+}

@@ -147,7 +147,7 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
 // ---------------------------------------------------------------------------
 
 use crate::microsandbox::plan::{DenyDomainRule, IngressRule, MountPlan, PortMapping};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
@@ -274,12 +274,191 @@ pub struct ConfigFile {
     pub workloads: HashMap<String, WorkloadConfig>,
 }
 
+// ---------------------------------------------------------------------------
+// XDG path resolution
+// ---------------------------------------------------------------------------
+
+/// XDG config dir for workestrate: $XDG_CONFIG_HOME/workestrate/ or ~/.config/workestrate/
+pub fn xdg_config_dir() -> PathBuf {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            PathBuf::from(home).join(".config")
+        });
+    base.join("workestrate")
+}
+
+/// XDG data dir for workestrate: $XDG_DATA_HOME/workestrate/ or ~/.local/share/workestrate/
+pub fn xdg_data_dir() -> PathBuf {
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            PathBuf::from(home).join(".local").join("share")
+        });
+    base.join("workestrate")
+}
+
+/// XDG state dir for workestrate: $XDG_STATE_HOME/workestrate/ or ~/.local/state/workestrate/
+pub fn xdg_state_dir() -> PathBuf {
+    let base = std::env::var("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            PathBuf::from(home).join(".local").join("state")
+        });
+    base.join("workestrate")
+}
+
+/// Registry path: ~/.config/workestrate/config.toml
+pub fn registry_path() -> PathBuf {
+    xdg_config_dir().join("config.toml")
+}
+
+/// Config repo store: ~/.local/share/workestrate/repos/<name>/
+#[allow(dead_code)]
+pub fn config_repo_dir(name: &str) -> PathBuf {
+    xdg_data_dir().join("repos").join(name)
+}
+
+/// Source override store: ~/.local/share/workestrate/sources/<name>/
+#[allow(dead_code)]
+pub fn source_store_dir(name: &str) -> PathBuf {
+    xdg_data_dir().join("sources").join(name)
+}
+
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RegistrySettings {
+    pub default_context: Option<String>,
+    pub store_dir: Option<String>,
+    pub state_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigRepoEntry {
+    pub url: String,
+    pub r#ref: Option<String>,
+    pub rev: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustedProject {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Registry {
+    #[serde(default)]
+    pub settings: RegistrySettings,
+    #[serde(default)]
+    pub configs: HashMap<String, ConfigRepoEntry>,
+    #[serde(default)]
+    pub layers: Vec<String>,
+    #[serde(default)]
+    pub trusted_projects: Vec<TrustedProject>,
+}
+
+pub fn load_registry() -> Result<Option<Registry>> {
+    let path = registry_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow::anyhow!("failed to read registry {}: {}", path.display(), e))?;
+    let registry: Registry = toml::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("failed to parse registry {}: {}", path.display(), e))?;
+    Ok(Some(registry))
+}
+
+#[allow(dead_code)]
+pub fn save_registry(registry: &Registry) -> Result<()> {
+    let path = registry_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = toml::to_string_pretty(registry)
+        .map_err(|e| anyhow::anyhow!("failed to serialize registry: {}", e))?;
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
+pub fn resolve_state_dir() -> PathBuf {
+    if let Ok(Some(registry)) = load_registry() {
+        if let Some(ref state_dir) = registry.settings.state_dir {
+            return expand_tilde(state_dir);
+        }
+    }
+    xdg_state_dir()
+}
+
+pub fn resolve_store_dir() -> PathBuf {
+    if let Ok(Some(registry)) = load_registry() {
+        if let Some(ref store_dir) = registry.settings.store_dir {
+            return expand_tilde(store_dir);
+        }
+    }
+    xdg_data_dir()
+}
+
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        PathBuf::from(home).join(rest)
+    } else {
+        PathBuf::from(path)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trust gating
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)]
+pub fn is_trusted_project(dir: &Path) -> bool {
+    if let Ok(Some(registry)) = load_registry() {
+        registry.trusted_projects.iter().any(|p| {
+            let expanded = expand_tilde(&p.path);
+            expanded == dir || Path::new(&p.path) == dir
+        })
+    } else {
+        false
+    }
+}
+
+#[allow(dead_code)]
+pub fn trust_project(dir: &Path) -> Result<()> {
+    let mut registry = load_registry()?.unwrap_or_default();
+    let dir_str = dir.to_string_lossy().to_string();
+    if !registry.trusted_projects.iter().any(|p| p.path == dir_str) {
+        registry
+            .trusted_projects
+            .push(TrustedProject { path: dir_str });
+        save_registry(&registry)?;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn untrust_project(dir: &Path) -> Result<()> {
+    let mut registry = load_registry()?.unwrap_or_default();
+    let dir_str = dir.to_string_lossy().to_string();
+    registry.trusted_projects.retain(|p| p.path != dir_str);
+    save_registry(&registry)?;
+    Ok(())
+}
+
 /// Load the active `workestrate.toml`.
 ///
 /// Resolution order:
 /// 1. `$WORKESTRATE_CONFIG_DIR/workestrate.toml` if the env var is set.
-/// 2. `workestrate.toml` in the project root.
-/// 3. `config.reference/workestrate.toml` shipped with the tool.
+/// 2. `./workestrate.toml` in the current working directory if it is trusted.
+/// 3. Registry single layer: `resolve_store_dir()/repos/<name>/workestrate.toml`.
+/// 4. `config.reference/workestrate.toml` shipped with the tool.
 pub fn load_config() -> Result<ConfigFile> {
     let load_from = |path: &Path| -> Result<ConfigFile> {
         let content = std::fs::read_to_string(path)
@@ -295,19 +474,58 @@ pub fn load_config() -> Result<ConfigFile> {
         }
     }
 
-    let root = project_root()?;
-
-    let project_path = root.join("workestrate.toml");
-    if project_path.exists() {
-        return load_from(&project_path);
+    let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
+    if !skip_project {
+        let cwd = std::env::current_dir()?;
+        let project_path = cwd.join("workestrate.toml");
+        if project_path.exists() {
+            match load_registry()? {
+                Some(_) => {
+                    if is_trusted_project(&cwd) {
+                        return load_from(&project_path);
+                    }
+                    eprintln!("project config ./workestrate.toml found but not trusted; run 'workestrate config trust <dir>' to trust it");
+                }
+                None => {
+                    return load_from(&project_path);
+                }
+            }
+        }
     }
 
-    let reference_path = root.join("config.reference").join("workestrate.toml");
-    if reference_path.exists() {
-        return load_from(&reference_path);
+    if let Ok(Some(registry)) = load_registry() {
+        if registry.layers.len() > 1 {
+            anyhow::bail!("multi-layer merge lands in Phase 3");
+        }
+        if let Some(name) = registry.layers.first() {
+            let path = resolve_store_dir()
+                .join("repos")
+                .join(name)
+                .join("workestrate.toml");
+            if path.exists() {
+                return load_from(&path);
+            }
+        }
     }
 
-    anyhow::bail!("workestrate.toml not found in any configured location")
+    if let Ok(root) = project_root() {
+        let reference_path = root.join("config.reference").join("workestrate.toml");
+        if reference_path.exists() {
+            return load_from(&reference_path);
+        }
+    }
+
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let mut path = PathBuf::from(manifest);
+        if path.pop() && path.pop() {
+            let reference_path = path.join("config.reference").join("workestrate.toml");
+            if reference_path.exists() {
+                return load_from(&reference_path);
+            }
+        }
+    }
+
+    anyhow::bail!("no config found; run 'workestrate init' or set WORKESTRATE_CONFIG_DIR")
 }
 
 /// Validate a loaded config against the policy.rs allowlists.

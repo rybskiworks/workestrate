@@ -1,0 +1,358 @@
+schema_version = 1
+
+[secrets.LITELLM_MASTER_KEY]
+env_var = "LITELLM_MASTER_KEY"
+hosts = ["host.microsandbox.internal"]
+required = true
+description = "LiteLLM proxy authentication. Agents use this in milestone 1."
+
+[secrets.LITELLM_AUTH]
+source = "LITELLM_MASTER_KEY"
+exposed_as = "OPENAI_API_KEY"
+
+[secrets.OPENROUTER_API_KEY]
+env_var = "OPENROUTER_API_KEY"
+hosts = ["openrouter.ai"]
+required = true
+description = "Provider keys used by LiteLLM only. Agents never receive these."
+
+[secrets.KIMI_CODE_API_KEY]
+env_var = "KIMI_CODE_API_KEY"
+hosts = ["api.kimi.com"]
+required = true
+description = "Provider keys used by LiteLLM only. Agents never receive these."
+
+[secrets.NEURALWATT_API_KEY]
+env_var = "NEURALWATT_API_KEY"
+hosts = ["api.neuralwatt.com"]
+required = true
+description = "Neuralwatt provider key used by LiteLLM only."
+
+[secrets.MINIMAX_CODING_API_KEY]
+env_var = "MINIMAX_CODING_API_KEY"
+hosts = ["api.minimax.io"]
+required = true
+description = "MiniMax Coding provider key used by LiteLLM only."
+
+[secrets.GITHUB_TOKEN]
+env_var = "GITHUB_TOKEN"
+hosts = ["github.com", "api.github.com"]
+required = false
+description = "GitHub Personal Access Token for agent sandboxes (git operations + API)."
+
+[secrets.ODYSSEUS_ADMIN_PASSWORD]
+env_var = "ODYSSEUS_ADMIN_PASSWORD"
+hosts = []
+required = true
+placeholder = "change_me_before_first_boot"
+description = "Odysseus admin login password (AUTH_ENABLED is on by default)."
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "ghcr.io/berriai/litellm:v1.89.4" }
+workdir = "/app"
+cpus = 2
+memory_mib = 2048
+command = ["/app/.venv/bin/litellm", "--config", "/app/config/config.yaml", "--host", "0.0.0.0"]
+log_stop_errors = true
+
+[[workloads.litellm.env]]
+name = "PORT"
+value = "4000"
+
+[[workloads.litellm.env]]
+name = "LITELLM_LOCAL_MODEL_COST_MAP"
+value = "True"
+
+[[workloads.litellm.env]]
+name = "LITELLM_MASTER_KEY"
+secret = "LITELLM_MASTER_KEY"
+
+[[workloads.litellm.secret_env]]
+secret = "OPENROUTER_API_KEY"
+
+[[workloads.litellm.secret_env]]
+secret = "KIMI_CODE_API_KEY"
+
+[[workloads.litellm.secret_env]]
+secret = "NEURALWATT_API_KEY"
+
+[[workloads.litellm.secret_env]]
+secret = "MINIMAX_CODING_API_KEY"
+
+[[workloads.litellm.ports]]
+host = 4000
+guest = 4000
+
+[[workloads.litellm.mounts]]
+host = "${MSB_HOME}/sandboxes/litellm/logs"
+guest = "/var/log/litellm"
+read_only = false
+
+[[workloads.litellm.mounts]]
+host = "infra/litellm"
+guest = "/app/config"
+read_only = true
+
+[workloads.litellm.network]
+default_deny = true
+
+[[workloads.litellm.network.egress]]
+recipe = "dns"
+
+[[workloads.litellm.network.egress]]
+recipe = "https"
+hosts = ["openrouter.ai", "api.kimi.com", "api.neuralwatt.com", "api.minimax.io"]
+
+[[workloads.litellm.network.ingress]]
+protocol = "tcp"
+port = 4000
+scope = "local"
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "nix-layered", name = "workestrator-pi", tag = "latest", contents = ["cacert", "busybox", "fakeNss"], binary = { recipe = "bun-compile", src = "flake://pi", entrypoint = "packages/coding-agent/dist/bun/cli.js", worker = "packages/coding-agent/src/utils/image-resize-worker.ts" }, features = ["create_tmp"] }
+workdir = "/work"
+cpus = 2
+memory_mib = 2048
+command = ["/app/bin/pi"]
+log_stop_errors = false
+
+[[workloads.pi.env]]
+name = "PI_CODING_AGENT_DIR"
+value = "/data/agent"
+
+[[workloads.pi.env]]
+name = "PI_TELEMETRY"
+value = "0"
+
+[[workloads.pi.env]]
+name = "LITELLM_MASTER_KEY"
+secret = "LITELLM_MASTER_KEY"
+
+[[workloads.pi.secret_env]]
+secret = "GITHUB_TOKEN"
+
+[[workloads.pi.mounts]]
+host = "workspaces/pi-state"
+guest = "/data"
+read_only = false
+
+[[workloads.pi.mounts]]
+host = "${CWD}"
+guest = "/work"
+read_only = false
+
+[workloads.pi.network]
+default_deny = true
+
+[[workloads.pi.network.egress]]
+recipe = "agent_base"
+
+[[workloads.pi.network.deny]]
+domain_suffix = ".pi.dev"
+
+[[workloads.pi.seed_files]]
+source = "agents/pi/config/models.json"
+target = "workspaces/pi-state/agent/models.json"
+only_if_missing = true
+
+[workloads.odysseus]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 2
+memory_mib = 2048
+command = ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7000"]
+log_stop_errors = false
+
+[[workloads.odysseus.env]]
+name = "APP_PORT"
+value = "7000"
+
+[[workloads.odysseus.env]]
+name = "AUTH_ENABLED"
+value = "true"
+
+[[workloads.odysseus.env]]
+name = "LOCALHOST_BYPASS"
+value = "false"
+
+[[workloads.odysseus.env]]
+name = "ODYSSEUS_DATA_DIR"
+value = "/data"
+
+[[workloads.odysseus.env]]
+name = "OPENAI_BASE_URL"
+value = "http://host.microsandbox.internal:4000/v1"
+
+[[workloads.odysseus.env]]
+name = "OPENAI_MODEL"
+value = "coding"
+
+[[workloads.odysseus.env]]
+name = "PYTHONPATH"
+value = "/app/.deps"
+
+[[workloads.odysseus.env]]
+name = "ODYSSEUS_ADMIN_PASSWORD"
+secret = "ODYSSEUS_ADMIN_PASSWORD"
+
+[[workloads.odysseus.secret_env]]
+secret = "LITELLM_AUTH"
+
+[[workloads.odysseus.secret_env]]
+secret = "GITHUB_TOKEN"
+
+[[workloads.odysseus.ports]]
+host = 7000
+guest = 7000
+
+[[workloads.odysseus.mounts]]
+host = "${WORKESTRATE_ODYSSEUS_BUILD}"
+guest = "/app"
+read_only = true
+
+[[workloads.odysseus.mounts]]
+host = "workspaces/odysseus-state"
+guest = "/data"
+read_only = false
+
+[workloads.odysseus.network]
+default_deny = true
+
+[[workloads.odysseus.network.egress]]
+recipe = "agent_base"
+
+[[workloads.odysseus.network.egress]]
+recipe = "https"
+hosts = ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co"]
+
+[[workloads.odysseus.network.ingress]]
+protocol = "tcp"
+port = 7000
+scope = "local"
+
+[[workloads.odysseus.seed_files]]
+source = "agents/odysseus/config/settings.json"
+target = "workspaces/odysseus-state/settings.json"
+only_if_missing = true
+
+[workloads.odysseus.local_build]
+recipe = "pip-install"
+source = "flake://odysseus"
+requirements_file = "requirements.txt"
+target = ".deps"
+gating_file = "requirements.txt"
+env_override = "WORKESTRATE_ODYSSEUS_BUILD"
+fallback = "agents/odysseus/build"
+
+[workloads.opencode]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+workdir = "/workspace"
+cpus = 2
+memory_mib = 2048
+command = ["opencode"]
+log_stop_errors = false
+
+[[workloads.opencode.env]]
+name = "OPENAI_BASE_URL"
+value = "http://host.microsandbox.internal:4000/v1"
+
+[[workloads.opencode.env]]
+name = "OPENAI_MODEL"
+value = "coding"
+
+[[workloads.opencode.secret_env]]
+secret = "LITELLM_AUTH"
+
+[[workloads.opencode.secret_env]]
+secret = "GITHUB_TOKEN"
+
+[[workloads.opencode.ports]]
+host = 3000
+guest = 3000
+
+[[workloads.opencode.mounts]]
+host = "${WORKESTRATE_OPENCODE_BUILD}"
+guest = "/app"
+read_only = true
+
+[[workloads.opencode.mounts]]
+host = "${CWD}"
+guest = "/workspace"
+read_only = false
+
+[[workloads.opencode.mounts]]
+host = "agents/opencode/config/opencode.jsonc"
+guest = "/home/node/.config/opencode/opencode.jsonc"
+read_only = true
+
+[[workloads.opencode.mounts]]
+host = "${MSB_HOME}/sandboxes/opencode/state"
+guest = "/home/node/.local/share/opencode"
+read_only = false
+
+[workloads.opencode.network]
+default_deny = true
+
+[[workloads.opencode.network.egress]]
+recipe = "agent_base"
+
+[[workloads.opencode.network.ingress]]
+protocol = "tcp"
+port = 3000
+scope = "local"
+
+[workloads.opencode.local_build]
+recipe = "bun-install"
+source = "flake://opencode"
+gating_file = "bun.lock"
+env_override = "WORKESTRATE_OPENCODE_BUILD"
+fallback = "agents/opencode/build"
+
+[workloads.tempest]
+kind = "agent"
+image = { recipe = "nix-layered", name = "tempest", tag = "latest", contents = ["cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils"], binary = { recipe = "npm-build", src = "flake://tempest", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", install_layout = "app" }, baked_files = [{ path = "root/.config/t3mp3st/config.json", content = '{"defaultProvider":"local"}' }], features = ["create_tmp"] }
+workdir = "/work"
+cpus = 2
+memory_mib = 2048
+command = ["node", "dist/cli.js"]
+log_stop_errors = false
+
+[[workloads.tempest.env]]
+name = "TEMPEST_LOCAL_BASE_URL"
+value = "http://host.microsandbox.internal:4000/v1"
+
+[[workloads.tempest.env]]
+name = "TEMPEST_LOCAL_MODEL"
+value = "coding"
+
+[[workloads.tempest.env]]
+name = "TEMPEST_LOCAL_API_KEY"
+secret = "LITELLM_MASTER_KEY"
+
+[[workloads.tempest.env]]
+name = "T3MP3ST_HOST"
+value = "127.0.0.1"
+
+[[workloads.tempest.mounts]]
+host = "workspaces/tempest-state"
+guest = "/data"
+read_only = false
+
+[[workloads.tempest.mounts]]
+host = "${CWD}"
+guest = "/work"
+read_only = false
+
+[workloads.tempest.network]
+default_deny = false
+
+[workloads.tempest.local_build]
+recipe = "npm-build"
+source = "flake://tempest"
+gating_file = "package-lock.json"
+env_override = "WORKESTRATE_TEMPEST_BUILD"
+fallback = "sources/tempest/build"

@@ -9,6 +9,10 @@ fn resolve_mount_host(root: &Path, host: &str) -> Result<PathBuf> {
             .map(PathBuf::from)
             .map_err(|_| anyhow::anyhow!("HOME not set"))?;
         Ok(home.join(".microsandbox").join(rest))
+    } else if host.starts_with("workspaces/") || host.starts_with("var/") {
+        // Resolve to XDG state dir at runtime
+        let state_dir = crate::config::resolve_state_dir();
+        Ok(state_dir.join(host))
     } else {
         Ok(root.join(host))
     }

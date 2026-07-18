@@ -15,6 +15,9 @@ use microsandbox::workload::{ConfigWorkload, Workload};
 #[command(about = "Control plane CLI for the AI workbench")]
 #[command(version)]
 struct Cli {
+    #[arg(long, help = "Disable project-layer config loading")]
+    no_project_config: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -229,6 +232,9 @@ async fn cmd_new(name: &str) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.no_project_config {
+        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+    }
 
     match cli.command {
         Commands::Check => cmd_check().await,

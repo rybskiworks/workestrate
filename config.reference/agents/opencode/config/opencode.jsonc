@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/coding",
+  "provider": {
+    "openai": {
+      "models": {
+        "coding": { "name": "Coding (Kimi K2.7)" },
+        "coding.fast": { "name": "Fast (MiniMax M3)" },
+        "coding.pro": { "name": "Pro (GLM-5.1)" },
+        "coding.free": { "name": "Free (Qwen 3 Coder)" }
+      }
+    }
+  }
+}
