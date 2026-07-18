@@ -1,0 +1,35 @@
+schema_version = 1
+
+# Team overrides pi cpus to 2
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+workdir = "/work"
+cpus = 2
+memory_mib = 1024
+command = ["echo"]
+log_stop_errors = false
+
+[[workloads.pi.mounts]]
+host = "${CWD}"
+guest = "/work"
+read_only = false
+
+[workloads.pi.network]
+default_deny = true
+
+[[workloads.pi.network.egress]]
+recipe = "dns"
+
+[[workloads.pi.network.egress]]
+recipe = "github"
+
+# Team adds a deny rule
+[[workloads.pi.network.deny]]
+domain_suffix = ".evil.com"
+
+# Team adds a secret
+[secrets.GITHUB_TOKEN]
+env_var = "GITHUB_TOKEN"
+hosts = ["github.com", "api.github.com"]
+required = false

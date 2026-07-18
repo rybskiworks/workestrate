@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 mod config;
+mod merge;
 mod microsandbox;
 mod policy;
 mod recipes;
@@ -18,6 +19,9 @@ use microsandbox::workload::{ConfigWorkload, Workload};
 struct Cli {
     #[arg(long, help = "Disable project-layer config loading")]
     no_project_config: bool,
+
+    #[arg(long, global = true, help = "Show source layer for each plan field")]
+    show_source: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -169,24 +173,40 @@ enum Commands {
     Workload(Vec<String>),
 }
 
-async fn dispatch_service<W: Workload>(workload: &W, action: ServiceAction) -> Result<()> {
+async fn dispatch_service<W: Workload>(
+    workload: &W,
+    action: ServiceAction,
+    show_source: bool,
+) -> Result<()> {
     match action {
         ServiceAction::Up { foreground } => microsandbox::up_service(workload, foreground).await,
         ServiceAction::Down => microsandbox::down(workload.name()).await,
         ServiceAction::Logs => microsandbox::logs(workload.name()).await,
         ServiceAction::Plan => {
-            println!("{}", workload.plan());
+            if show_source {
+                println!("{}", workload.show_source());
+            } else {
+                println!("{}", workload.plan());
+            }
             Ok(())
         }
     }
 }
 
-async fn dispatch_agent<W: Workload>(workload: &W, action: AgentAction) -> Result<()> {
+async fn dispatch_agent<W: Workload>(
+    workload: &W,
+    action: AgentAction,
+    show_source: bool,
+) -> Result<()> {
     match action {
         AgentAction::Exec => microsandbox::exec_agent(workload).await,
         AgentAction::Down => microsandbox::down(workload.name()).await,
         AgentAction::Plan => {
-            println!("{}", workload.plan());
+            if show_source {
+                println!("{}", workload.show_source());
+            } else {
+                println!("{}", workload.plan());
+            }
             Ok(())
         }
     }
@@ -753,23 +773,23 @@ async fn main() -> Result<()> {
         Commands::Source { action } => cmd_source(action).await,
         Commands::Litellm { action } => {
             let workload = ConfigWorkload::new("litellm")?;
-            dispatch_service(&workload, action).await
+            dispatch_service(&workload, action, cli.show_source).await
         }
         Commands::Pi { action } => {
             let workload = ConfigWorkload::new("pi")?;
-            dispatch_agent(&workload, action).await
+            dispatch_agent(&workload, action, cli.show_source).await
         }
         Commands::Odysseus { action } => {
             let workload = ConfigWorkload::new("odysseus")?;
-            dispatch_service(&workload, action).await
+            dispatch_service(&workload, action, cli.show_source).await
         }
         Commands::Opencode { action } => {
             let workload = ConfigWorkload::new("opencode")?;
-            dispatch_agent(&workload, action).await
+            dispatch_agent(&workload, action, cli.show_source).await
         }
         Commands::Tempest { action } => {
             let workload = ConfigWorkload::new("tempest")?;
-            dispatch_agent(&workload, action).await
+            dispatch_agent(&workload, action, cli.show_source).await
         }
         Commands::Workload(mut args) => {
             if args.is_empty() {
@@ -781,11 +801,11 @@ async fn main() -> Result<()> {
             match workload.kind() {
                 "service" => {
                     let service_action = parse_service_action(&action, &args)?;
-                    dispatch_service(&workload, service_action).await
+                    dispatch_service(&workload, service_action, cli.show_source).await
                 }
                 "agent" => {
                     let agent_action = parse_agent_action(&action)?;
-                    dispatch_agent(&workload, agent_action).await
+                    dispatch_agent(&workload, agent_action, cli.show_source).await
                 }
                 other => anyhow::bail!("unknown workload kind '{}' for '{}'", other, name),
             }

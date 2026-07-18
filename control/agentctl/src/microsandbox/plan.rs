@@ -1,10 +1,10 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::microsandbox::secrets::{RemappedSecret, SecretDefinition};
 
 /// Network protocol for ingress/egress rules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
     Tcp,
@@ -21,7 +21,7 @@ impl fmt::Display for Protocol {
 }
 
 /// Network scope for ingress rules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     Local,
@@ -73,13 +73,13 @@ pub struct SandboxPlan {
     pub network: NetworkPlan,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct PortMapping {
     pub host: u16,
     pub guest: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MountPlan {
     pub host: String,
     pub guest: String,
@@ -129,12 +129,12 @@ pub struct EgressRule {
     pub target: EgressTarget,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DenyDomainRule {
     pub domain_suffix: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct IngressRule {
     pub protocol: Protocol,
     pub port: u16,

@@ -149,7 +149,7 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
 use crate::microsandbox::plan::{DenyDomainRule, IngressRule, MountPlan, PortMapping};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct ImageSpec {
     pub recipe: String,
@@ -163,7 +163,7 @@ pub struct ImageSpec {
     pub features: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct BinarySpec {
     pub recipe: String,
@@ -174,14 +174,14 @@ pub struct BinarySpec {
     pub install_layout: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct BakedFileSpec {
     pub path: String,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct EnvVarConfig {
     pub name: String,
@@ -189,13 +189,13 @@ pub struct EnvVarConfig {
     pub secret: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct SecretEnvConfig {
     pub secret: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct SeedFileConfig {
     pub source: String,
@@ -203,7 +203,7 @@ pub struct SeedFileConfig {
     pub only_if_missing: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct LocalBuildConfig {
     pub recipe: String,
@@ -215,7 +215,7 @@ pub struct LocalBuildConfig {
     pub fallback: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct NetworkConfig {
     pub default_deny: Option<bool>,
@@ -227,7 +227,7 @@ pub struct NetworkConfig {
     pub ingress: Vec<IngressRule>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct WorkloadConfig {
     pub kind: String,
@@ -251,7 +251,7 @@ pub struct WorkloadConfig {
     pub network: NetworkConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct SecretDefConfig {
     pub env_var: Option<String>,
@@ -264,7 +264,7 @@ pub struct SecretDefConfig {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct ConfigFile {
     pub schema_version: u32,
@@ -448,26 +448,50 @@ pub fn untrust_project(dir: &Path) -> Result<()> {
 
 /// Load the active `workestrate.toml`.
 ///
-/// Resolution order:
-/// 1. `$WORKESTRATE_CONFIG_DIR/workestrate.toml` if the env var is set.
-/// 2. `./workestrate.toml` in the current working directory if it is trusted.
-/// 3. Registry single layer: `resolve_store_dir()/repos/<name>/workestrate.toml`.
-/// 4. `config.reference/workestrate.toml` shipped with the tool.
+/// Resolution order (lowest to highest precedence):
+/// 1. Reference config (`config.reference/workestrate.toml`).
+/// 2. Registry layers (`registry.layers` ordered list, each a config repo).
+/// 3. Trusted project config (`./workestrate.toml` in cwd if trusted).
+/// 4. Local overrides (`./workestrate.local.toml` in cwd).
+///
+/// The `$WORKESTRATE_CONFIG_DIR` environment variable bypasses discovery and
+/// loads a single dev/testing layer directly.
 pub fn load_config() -> Result<ConfigFile> {
-    let load_from = |path: &Path| -> Result<ConfigFile> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("failed to read {}: {}", path.display(), e))?;
-        toml::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("failed to parse {}: {}", path.display(), e))
-    };
-
+    // 1. Dev/testing override: single layer, no merging.
     if let Ok(dir) = std::env::var("WORKESTRATE_CONFIG_DIR") {
         let path = PathBuf::from(dir).join("workestrate.toml");
         if path.exists() {
-            return load_from(&path);
+            let layer = crate::merge::Layer::load("local", &path)?;
+            let (merged, provenance) = crate::merge::merge_layers(&[layer])?;
+            crate::merge::set_provenance(Some(provenance));
+            validate_config(&merged)?;
+            return Ok(merged);
         }
     }
 
+    let mut layers: Vec<crate::merge::Layer> = Vec::new();
+
+    // 2. Reference config as the base layer.
+    if let Some(path) = reference_config_path() {
+        if path.exists() {
+            layers.push(crate::merge::Layer::load("reference", &path)?);
+        }
+    }
+
+    // 3. Registry layers.
+    if let Ok(Some(registry)) = load_registry() {
+        for name in &registry.layers {
+            let path = resolve_store_dir()
+                .join("repos")
+                .join(name)
+                .join("workestrate.toml");
+            if path.exists() {
+                layers.push(crate::merge::Layer::load(name, &path)?);
+            }
+        }
+    }
+
+    // 4. Trusted project layer.
     let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
     if !skip_project {
         let cwd = std::env::current_dir()?;
@@ -476,50 +500,51 @@ pub fn load_config() -> Result<ConfigFile> {
             match load_registry()? {
                 Some(_) => {
                     if is_trusted_project(&cwd) {
-                        return load_from(&project_path);
+                        layers.push(crate::merge::Layer::load("project", &project_path)?);
+                    } else {
+                        eprintln!("project config ./workestrate.toml found but not trusted; run 'workestrate config trust <dir>' to trust it");
                     }
-                    eprintln!("project config ./workestrate.toml found but not trusted; run 'workestrate config trust <dir>' to trust it");
                 }
                 None => {
-                    return load_from(&project_path);
+                    layers.push(crate::merge::Layer::load("project", &project_path)?);
                 }
             }
         }
     }
 
-    if let Ok(Some(registry)) = load_registry() {
-        if registry.layers.len() > 1 {
-            anyhow::bail!("multi-layer merge lands in Phase 3");
-        }
-        if let Some(name) = registry.layers.first() {
-            let path = resolve_store_dir()
-                .join("repos")
-                .join(name)
-                .join("workestrate.toml");
-            if path.exists() {
-                return load_from(&path);
-            }
-        }
+    // 5. Local overrides.
+    let local_path = std::env::current_dir()?.join("workestrate.local.toml");
+    if local_path.exists() {
+        layers.push(crate::merge::Layer::load("local", &local_path)?);
     }
 
+    if layers.is_empty() {
+        anyhow::bail!("no config found; run 'workestrate init' or set WORKESTRATE_CONFIG_DIR");
+    }
+
+    let (merged, provenance) = crate::merge::merge_layers(&layers)?;
+    crate::merge::set_provenance(Some(provenance));
+    validate_config(&merged)?;
+    Ok(merged)
+}
+
+fn reference_config_path() -> Option<PathBuf> {
     if let Ok(root) = project_root() {
-        let reference_path = root.join("config.reference").join("workestrate.toml");
-        if reference_path.exists() {
-            return load_from(&reference_path);
+        let path = root.join("config.reference").join("workestrate.toml");
+        if path.exists() {
+            return Some(path);
         }
     }
-
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let mut path = PathBuf::from(manifest);
         if path.pop() && path.pop() {
-            let reference_path = path.join("config.reference").join("workestrate.toml");
-            if reference_path.exists() {
-                return load_from(&reference_path);
+            let reference = path.join("config.reference").join("workestrate.toml");
+            if reference.exists() {
+                return Some(reference);
             }
         }
     }
-
-    anyhow::bail!("no config found; run 'workestrate init' or set WORKESTRATE_CONFIG_DIR")
+    None
 }
 
 /// Validate a loaded config against the policy.rs allowlists.
@@ -634,18 +659,26 @@ mod tests {
 
     #[test]
     fn project_root_with_agentctl_root_env() {
+        let old = std::env::var("AGENTCTL_ROOT").ok();
         std::env::set_var("AGENTCTL_ROOT", "/tmp");
         let result = project_root();
-        std::env::remove_var("AGENTCTL_ROOT");
+        match old {
+            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
+            None => std::env::remove_var("AGENTCTL_ROOT"),
+        }
         // /tmp doesn't have flake.nix, so this should error
         assert!(result.is_err(), "expected error when flake.nix missing");
     }
 
     #[test]
     fn project_root_rejects_missing_flake_nix() {
+        let old = std::env::var("AGENTCTL_ROOT").ok();
         std::env::set_var("AGENTCTL_ROOT", "/tmp/nonexistent-ai-workbench-test");
         let result = project_root();
-        std::env::remove_var("AGENTCTL_ROOT");
+        match old {
+            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
+            None => std::env::remove_var("AGENTCTL_ROOT"),
+        }
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(

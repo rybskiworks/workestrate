@@ -1,11 +1,11 @@
 use crate::microsandbox::plan::EgressRule;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Egress recipe reference as declared in config.
 ///
 /// Config may only reference named recipes; each is expanded by core into the
 /// concrete `EgressRule`s it represents.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "recipe", rename_all = "snake_case")]
 pub enum EgressRecipeRef {
     Dns,

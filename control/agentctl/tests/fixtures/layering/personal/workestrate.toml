@@ -1,0 +1,32 @@
+schema_version = 1
+
+# Personal overrides pi memory to 2048
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+workdir = "/work"
+cpus = 2
+memory_mib = 2048
+command = ["echo"]
+log_stop_errors = false
+
+[[workloads.pi.mounts]]
+host = "${CWD}"
+guest = "/work"
+read_only = false
+
+[workloads.pi.network]
+default_deny = true
+
+[[workloads.pi.network.egress]]
+recipe = "dns"
+
+[[workloads.pi.network.egress]]
+recipe = "github"
+
+[[workloads.pi.network.deny]]
+domain_suffix = ".evil.com"
+
+# Personal adds another deny rule (additive)
+[[workloads.pi.network.deny]]
+domain_suffix = ".tracker.io"
