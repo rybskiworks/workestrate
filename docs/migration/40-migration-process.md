@@ -143,7 +143,7 @@ Exhaustive table of every file/tool/doc that changes under the migration.
 | `scripts/host-check.sh` | KVM/Nix/memory/disk check | Unchanged (core tooling) | — |
 | `scripts/validate-secrets-workflow.sh` | Tests secrets lifecycle | Updated for `--config` flag + XDG paths | 1.6 |
 | `justfile` | `check`, `litellm-check`, `verify`, `verify-full`, `build`, `fmt`, `clippy`, `test`, `workestrate`, `plan`, `host-check`, `setup-secrets`, `validate-secrets`, `vendor-unlock`, `vendor-lock`, `dev-build-pi`, `dev-run-pi`, `load-images` | Add `golden-check`, `golden-generate`; remove `vendor-unlock`/`vendor-lock`; `litellm-check` path updated; add `init-dev` (dogfooding) | 0a.6, 0b.6, 1.10 |
-| `.gitignore` | `agents/*/repo`, `agents/*/build`, `agents/*/.build-hash` (20-22); `!.env.enc`, `!.env.example` (4-5) | Remove `!.env.enc`/`!.env.example` (no longer at root); add `config.d/` if any in-repo children (superseded by XDG but kept for compat) | 1.10 |
+| `.gitignore` | `agents/*/repo`, `agents/*/build`, `agents/*/.build-hash` (20-22); `!.env.enc`, `!.env.example` (4-5) | Remove `!.env.enc`/`!.env.example` (no longer at root); no `config.d/` entries expected under XDG model; remove if present from prior experiments | 1.10 |
 | `.agents/skills/validation-litellm-config-check/scripts/check_config.py` | `--config infra/litellm/config.yaml` | `--config` path resolves to active config repo's `infra/litellm/config.yaml` | 1.10 |
 | `README.md` | Path references to `.env.enc`, `infra/litellm/`, `agents/*/config/`, `workspaces/`, `var/` | Updated for XDG model; quick start updated for `workestrate init`; architecture diagram updated | 1.10 |
 | `SPEC.md` | Path references; M1 acceptance criteria | Updated for XDG model; milestone criteria updated | 1.10 |
