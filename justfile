@@ -19,16 +19,16 @@ verify-full: verify
 # Generate golden plan files for all workloads
 golden-generate:
     @for name in litellm pi odysseus opencode tempest; do \
-        cargo run --manifest-path control/agentctl/Cargo.toml -- $$name plan \
-          > control/agentctl/tests/golden/$$name.plan.txt; \
+        cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
+          > control/agentctl/tests/golden/$name.plan.txt; \
     done
 
 # Check golden plan parity
 golden-check:
     @for name in litellm pi odysseus opencode tempest; do \
-        cargo run --manifest-path control/agentctl/Cargo.toml -- $$name plan \
-          | diff - control/agentctl/tests/golden/$$name.plan.txt \
-          || (echo "golden mismatch for $$name; run 'just golden-generate' to update" && exit 1); \
+        cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
+          | diff - control/agentctl/tests/golden/$name.plan.txt \
+          || (echo "golden mismatch for $name; run 'just golden-generate' to update" && exit 1); \
     done
 
 build:
