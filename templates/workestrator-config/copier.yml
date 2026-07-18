@@ -1,0 +1,35 @@
+# Copier template for a new workestrator config repo.
+# Usage: copier copy templates/workestrator-config/ my-config-repo/
+#
+# Or from a remote: copier copy github:georgrybski/ai-workbench/templates/workestrator-config/ my-config-repo/
+
+config_name:
+  type: str
+  help: "Name for this config repo (e.g. personal, work, team)"
+  default: personal
+
+age_recipient:
+  type: str
+  help: "Your age public key (age1...) for SOPS encryption"
+  help: "Generate with: age-keygen -o ~/.config/sops/age/workestrate.txt && age-keygen -y ~/.config/sops/age/workestrate.txt"
+  default: age1PLACEHOLDER
+
+team_age_recipient:
+  type: str
+  help: "Team age public key (optional, for shared secrets). Leave blank if no team."
+  default: ""
+
+include_flake:
+  type: bool
+  help: "Include a flake.nix for inverted-dependency image builds (Phase 2)?"
+  default: false
+
+core_flake_url:
+  type: str
+  help: "URL of the workestrator core flake"
+  default: "github:georgrybski/ai-workbench"
+  when: "{{ include_flake }}"
+
+# Exclude files conditionally
+_exclude:
+  - "!include_flake"

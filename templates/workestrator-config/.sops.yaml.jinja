@@ -1,0 +1,27 @@
+# SOPS config for {{ config_name }} config repo.
+# Age recipients: personal{% if team_age_recipient %} + team{% endif %}.
+# Generate your age key: age-keygen -o ~/.config/sops/age/workestrate.txt
+# Get your public key:  age-keygen -y ~/.config/sops/age/workestrate.txt
+
+keys:
+  - &{{ config_name }} {{ age_recipient }}
+{% if team_age_recipient %}  - &team {{ team_age_recipient }}
+{% endif %}
+creation_rules:
+  # Shared secrets: encrypted to both personal + team (if team key set)
+  - path_regex: ^secrets/shared/.*\.enc$
+    key_groups:
+      - age:
+          - *{{ config_name }}{% if team_age_recipient %}
+          - *team{% endif %}
+  # Personal-only secrets: encrypted to personal key only
+  - path_regex: ^secrets/{{ config_name }}/.*\.enc$
+    key_groups:
+      - age:
+          - *{{ config_name }}
+  # Default .env.enc: encrypted to both (or personal only if no team)
+  - path_regex: ^\.env\.enc$
+    key_groups:
+      - age:
+          - *{{ config_name }}{% if team_age_recipient %}
+          - *team{% endif %}

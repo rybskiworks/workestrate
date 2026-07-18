@@ -1,0 +1,56 @@
+# workestrator-config: {{ config_name }}
+
+This is a workestrator configuration repo, generated from the
+`workestrator-config` copier template.
+
+## Structure
+
+```
+workestrate.toml     # workload definitions + secrets schema
+.env.enc             # SOPS-encrypted secrets (NOT committed until encrypted)
+.sops.yaml           # SOPS config (age recipients + creation rules)
+.env.example         # auto-generated schema (run `workestrate generate-env-example`)
+infra/litellm/       # LiteLLM config values (config.yaml, models.yaml)
+agents/*/config/     # agent config files (models.json, settings.json, etc.)
+```
+
+## Setup
+
+1. Generate your age key (if not already done):
+   ```bash
+   age-keygen -o ~/.config/sops/age/workestrate.txt
+   age-keygen -y ~/.config/sops/age/workestrate.txt  # print public key
+   ```
+
+2. Update `.sops.yaml` with your public key (replace `age1PLACEHOLDER`).
+
+3. Initialize secrets:
+   ```bash
+   workestrate setup-secrets --config {{ config_name }} init
+   ```
+
+4. Register this config repo with workestrate:
+   ```bash
+   workestrate config add <path-or-url> {{ config_name }}
+   ```
+
+5. Verify:
+   ```bash
+   workestrate validate-config
+   workestrate pi plan
+   ```
+
+## Updating from the template
+
+To pull in template improvements:
+```bash
+copier update
+```
+
+## Multi-recipient SOPS (team secrets)
+
+If a team age key was provided during template generation, `.sops.yaml`
+includes per-path creation rules:
+- `secrets/shared/*.enc` → encrypted to both personal + team keys
+- `secrets/{{ config_name }}/*.enc` → encrypted to personal key only
+- `.env.enc` → encrypted to both (or personal only if no team key)
