@@ -455,50 +455,53 @@ pub async fn down(name: &str) -> Result<()> {
 mod tests {
     use super::super::plan::{EgressTarget, Protocol};
     use super::network_plan_to_policy;
-    use crate::microsandbox::workload::Workload;
-    use crate::workloads::{Litellm, Odysseus, Pi};
+    use crate::microsandbox::workload::{ConfigWorkload, Workload};
 
     #[test]
-    fn litellm_network_plan_converts_without_error() {
-        let plan = Litellm.plan();
+    fn litellm_network_plan_converts_without_error() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("litellm")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(
             result.is_ok(),
             "litellm conversion failed: {:?}",
             result.err()
         );
+        Ok(())
     }
 
     #[test]
-    fn pi_network_plan_converts_without_error() {
-        let plan = Pi.plan();
+    fn pi_network_plan_converts_without_error() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("pi")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(result.is_ok(), "pi conversion failed: {:?}", result.err());
+        Ok(())
     }
 
     #[test]
-    fn pi_plan_uses_nix_built_image() {
+    fn pi_plan_uses_nix_built_image() -> anyhow::Result<()> {
         // The pi-bun binary's PT_INTERP points at nix glibc 2.42; the sandbox
         // image must be the nix-built `workestrator-pi:latest` (loaded via
         // `just load-pi-image`), NOT node:24-bookworm-slim (glibc 2.36 → crash).
-        let plan = Pi.plan();
+        let plan = ConfigWorkload::new("pi")?.plan();
         assert_eq!(plan.image.as_deref(), Some("workestrator-pi:latest"));
+        Ok(())
     }
 
     #[test]
-    fn odysseus_network_plan_converts_without_error() {
-        let plan = Odysseus.plan();
+    fn odysseus_network_plan_converts_without_error() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("odysseus")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(
             result.is_ok(),
             "odysseus conversion failed: {:?}",
             result.err()
         );
+        Ok(())
     }
 
     #[test]
-    fn odysseus_plan_includes_admin_password_secret() {
-        let plan = Odysseus.plan();
+    fn odysseus_plan_includes_admin_password_secret() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("odysseus")?.plan();
         let has_admin_pw = plan
             .env
             .iter()
@@ -517,11 +520,12 @@ mod tests {
             !in_secret_env,
             "ODYSSEUS_ADMIN_PASSWORD must not be host-bound (it is an internal admin credential)"
         );
+        Ok(())
     }
 
     #[test]
-    fn odysseus_plan_has_expected_data_mount() {
-        let plan = Odysseus.plan();
+    fn odysseus_plan_has_expected_data_mount() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("odysseus")?.plan();
         assert_eq!(plan.mounts.len(), 2, "odysseus should have 2 mounts");
         let data_mount = plan.mounts.iter().find(|m| m.guest == "/data");
         assert!(data_mount.is_some(), "odysseus must have a /data mount");
@@ -539,11 +543,12 @@ mod tests {
             plan.mounts.iter().all(|m| m.guest != "/app/data"),
             "odysseus must NOT mount /app/data (relocated to /data via ODYSSEUS_DATA_DIR)"
         );
+        Ok(())
     }
 
     #[test]
-    fn odysseus_plan_uses_data_dir_env_and_drops_hardcoded_db_url() {
-        let plan = Odysseus.plan();
+    fn odysseus_plan_uses_data_dir_env_and_drops_hardcoded_db_url() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("odysseus")?.plan();
         let has_data_dir = plan
             .env
             .iter()
@@ -557,22 +562,24 @@ mod tests {
             !has_db_url,
             "odysseus must NOT hardcode DATABASE_URL (let it default to $ODYSSEUS_DATA_DIR/app.db)"
         );
+        Ok(())
     }
 
     #[test]
-    fn opencode_network_plan_converts_without_error() {
-        let plan = crate::workloads::Opencode.plan();
+    fn opencode_network_plan_converts_without_error() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("opencode")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(
             result.is_ok(),
             "opencode conversion failed: {:?}",
             result.err()
         );
+        Ok(())
     }
 
     #[test]
-    fn pi_plan_has_expected_egress() {
-        let plan = Pi.plan();
+    fn pi_plan_has_expected_egress() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("pi")?.plan();
         assert!(plan.network.default_deny);
         assert_eq!(plan.network.egress_rules.len(), 4);
         assert_eq!(plan.network.egress_rules[0].protocol, Protocol::Tcp);
@@ -598,11 +605,12 @@ mod tests {
             assert!(hosts.contains(&"github.com".to_string()));
             assert!(hosts.contains(&"api.github.com".to_string()));
         }
+        Ok(())
     }
 
     #[test]
-    fn pi_plan_redirects_config_to_data_dir() {
-        let plan = Pi.plan();
+    fn pi_plan_redirects_config_to_data_dir() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("pi")?.plan();
         let has_agent_dir = plan
             .env
             .iter()
@@ -616,11 +624,12 @@ mod tests {
             !has_offline,
             "pi must not set PI_OFFLINE (egress policy handles security; tools ship in the image)"
         );
+        Ok(())
     }
 
     #[test]
-    fn pi_plan_exposes_litellm_master_key_as_env_not_host_bound() {
-        let plan = Pi.plan();
+    fn pi_plan_exposes_litellm_master_key_as_env_not_host_bound() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("pi")?.plan();
         // The key must be a process env var so `${LITELLM_MASTER_KEY}` in
         // models.json resolves; otherwise Pi sends no auth key and LiteLLM
         // rejects with "No connected db".
@@ -640,11 +649,12 @@ mod tests {
             !in_secret_env,
             "pi must NOT host-bind LITELLM_MASTER_KEY (host-bound secrets are not exposed as guest env vars)"
         );
+        Ok(())
     }
 
     #[test]
-    fn pi_plan_has_expected_mounts() {
-        let plan = Pi.plan();
+    fn pi_plan_has_expected_mounts() -> anyhow::Result<()> {
+        let plan = ConfigWorkload::new("pi")?.plan();
         assert_eq!(plan.mounts.len(), 2, "pi should have 2 mounts");
         // /app is no longer mounted — the bun binary + assets are baked into
         // the workestrator-pi image (the daemon can't bind-mount from
@@ -674,5 +684,6 @@ mod tests {
             plan.mounts.iter().all(|m| m.guest != "/workspace"),
             "pi must not mount /workspace (replaced by /work + /data)"
         );
+        Ok(())
     }
 }

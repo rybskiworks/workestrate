@@ -2553,6 +2553,8 @@ dependencies = [
 [[package]]
 name = "microsandbox-filesystem"
 version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75f7112c3fcb920b204d1e6fb8e6ce251bfe33690c17f8a56915dcfbf2897b9f"
 dependencies = [
  "libc",
  "microsandbox-utils",

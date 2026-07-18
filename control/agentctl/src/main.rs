@@ -5,10 +5,9 @@ mod config;
 mod microsandbox;
 mod policy;
 mod recipes;
-mod workloads;
 
 use config::CheckEntry;
-use microsandbox::workload::Workload;
+use microsandbox::workload::{ConfigWorkload, Workload};
 
 #[derive(Parser)]
 #[command(name = "workestrate")]
@@ -46,86 +45,64 @@ enum AgentAction {
     Plan,
 }
 
-/// Single source of truth for sandbox workloads.
-/// Adding a workload = one entry here + workloads/<name>.rs + mod.rs wiring.
-macro_rules! workloads {
-    ($macro:ident) => {
-        $macro!(
-            Litellm, workloads::Litellm, Service, "LiteLLM proxy sandbox";
-            Odysseus, workloads::Odysseus, Service, "Odysseus agent sandbox";
-            Pi, workloads::Pi, Agent, "Pi coding agent sandbox";
-            Opencode, workloads::Opencode, Agent, "OpenCode agent sandbox";
-            Tempest, workloads::Tempest, Agent, "T3MP3ST offensive-security agent sandbox";
-        );
-    };
-    ($prefix:expr, $macro:ident) => {
-        $macro!(
-            $prefix,
-            Litellm, workloads::Litellm, Service, "LiteLLM proxy sandbox";
-            Odysseus, workloads::Odysseus, Service, "Odysseus agent sandbox";
-            Pi, workloads::Pi, Agent, "Pi coding agent sandbox";
-            Opencode, workloads::Opencode, Agent, "OpenCode agent sandbox";
-            Tempest, workloads::Tempest, Agent, "T3MP3ST offensive-security agent sandbox";
-        );
-    };
+#[derive(Subcommand)]
+enum Commands {
+    /// Runtime/config sanity check
+    Check,
+    /// Scaffold a new agent project
+    New {
+        /// Name for the new agent (e.g., "my-agent")
+        name: String,
+    },
+    /// Generate shell completions
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+        #[arg(
+            long = "for",
+            value_name = "NAME",
+            default_value = "workestrate",
+            help = "Command name to generate completions for"
+        )]
+        for_name: String,
+    },
+    /// Run an arbitrary command with decrypted secrets
+    Run {
+        /// Command and arguments (after --)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 1..)]
+        command: Vec<String>,
+    },
+    /// Validate active config against schema and policy allowlists
+    ValidateConfig,
+    /// Typed subcommand for the LiteLLM proxy service
+    Litellm {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+    /// Typed subcommand for the Pi coding agent
+    Pi {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+    /// Typed subcommand for the Odysseus service
+    Odysseus {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+    /// Typed subcommand for the OpenCode agent
+    Opencode {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+    /// Typed subcommand for the T3MP3ST agent
+    Tempest {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+    /// Catch-all for config-defined workloads
+    #[command(external_subcommand)]
+    Workload(Vec<String>),
 }
-
-macro_rules! kind_action {
-    (Service) => {
-        ServiceAction
-    };
-    (Agent) => {
-        AgentAction
-    };
-}
-
-macro_rules! kind_dispatch {
-    (Service) => {
-        dispatch_service
-    };
-    (Agent) => {
-        dispatch_agent
-    };
-}
-
-macro_rules! define_commands_enum {
-    ($($name:ident, $ty:path, $kind:ident, $doc:literal);* $(;)?) => {
-        #[derive(Subcommand)]
-        enum Commands {
-            /// Runtime/config sanity check
-            Check,
-            /// Scaffold a new agent project
-            New {
-                /// Name for the new agent (e.g., "my-agent")
-                name: String,
-            },
-            /// Generate shell completions
-            Completions {
-                #[arg(value_enum)]
-                shell: clap_complete::Shell,
-                #[arg(long = "for", value_name = "NAME", default_value = "workestrate", help = "Command name to generate completions for")]
-                for_name: String,
-            },
-            /// Run an arbitrary command with decrypted secrets
-            Run {
-                /// Command and arguments (after --)
-                #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 1..)]
-                command: Vec<String>,
-            },
-            /// Validate active config against schema and policy allowlists
-            ValidateConfig,
-            $(
-                #[doc = $doc]
-                $name {
-                    #[command(subcommand)]
-                    action: kind_action!($kind),
-                },
-            )*
-        }
-    };
-}
-
-workloads!(define_commands_enum);
 
 async fn dispatch_service<W: Workload>(workload: &W, action: ServiceAction) -> Result<()> {
     match action {
@@ -150,22 +127,27 @@ async fn dispatch_agent<W: Workload>(workload: &W, action: AgentAction) -> Resul
     }
 }
 
-macro_rules! define_dispatch {
-    ($($name:ident, $ty:path, $kind:ident, $doc:literal);* $(;)?) => {
-        async fn dispatch_workload(command: Commands) -> Result<()> {
-            match command {
-                $(
-                    Commands::$name { action } => {
-                        kind_dispatch!($kind)((&$ty), action).await
-                    }
-                )*
-                _ => Err(anyhow::anyhow!("internal: non-workload command dispatched")),
-            }
+fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceAction> {
+    match action {
+        "up" => {
+            let foreground = args.iter().any(|a| a == "--foreground");
+            Ok(ServiceAction::Up { foreground })
         }
-    };
+        "down" => Ok(ServiceAction::Down),
+        "logs" => Ok(ServiceAction::Logs),
+        "plan" => Ok(ServiceAction::Plan),
+        other => anyhow::bail!("unknown service action: {}", other),
+    }
 }
 
-workloads!(define_dispatch);
+fn parse_agent_action(action: &str) -> Result<AgentAction> {
+    match action {
+        "exec" => Ok(AgentAction::Exec),
+        "down" => Ok(AgentAction::Down),
+        "plan" => Ok(AgentAction::Plan),
+        other => anyhow::bail!("unknown agent action: {}", other),
+    }
+}
 
 fn print_entry(entry: &CheckEntry) {
     if entry.ok {
@@ -215,17 +197,11 @@ async fn cmd_new(name: &str) -> Result<()> {
         "     (or: cp -r agents/{}/repo agents/{}/build && cd agents/{}/build && <build-cmd>)",
         name, name, name
     );
-    println!("  3. Register in Rust:");
-    println!(
-        "     a. Create control/agentctl/src/workloads/{}.rs",
-        name.replace('-', "_")
-    );
-    println!("     b. Add to workloads/mod.rs registry");
-    println!("     c. Add one entry to the `workloads!` macro in main.rs");
-    println!("  4. Test: nix develop -c cargo run -- {} plan", name);
+    println!("  3. Add a workload entry to workestrate.toml");
+    println!("  4. Test: cargo run -- {} plan", name);
     println!();
     println!("Or use a pre-built image (like LiteLLM):");
-    println!("  Set image: Some(\"your-image:tag\") and skip the source mount.");
+    println!("  Set image = {{ recipe = 'registry', ref = 'your-image:tag' }} and skip the source mount.");
 
     Ok(())
 }
@@ -244,7 +220,45 @@ async fn main() -> Result<()> {
         }
         Commands::Run { command } => cmd_run(&command).await,
         Commands::ValidateConfig => cmd_validate_config().await,
-        command => dispatch_workload(command).await,
+        Commands::Litellm { action } => {
+            let workload = ConfigWorkload::new("litellm")?;
+            dispatch_service(&workload, action).await
+        }
+        Commands::Pi { action } => {
+            let workload = ConfigWorkload::new("pi")?;
+            dispatch_agent(&workload, action).await
+        }
+        Commands::Odysseus { action } => {
+            let workload = ConfigWorkload::new("odysseus")?;
+            dispatch_service(&workload, action).await
+        }
+        Commands::Opencode { action } => {
+            let workload = ConfigWorkload::new("opencode")?;
+            dispatch_agent(&workload, action).await
+        }
+        Commands::Tempest { action } => {
+            let workload = ConfigWorkload::new("tempest")?;
+            dispatch_agent(&workload, action).await
+        }
+        Commands::Workload(mut args) => {
+            if args.is_empty() {
+                anyhow::bail!("no workload name given");
+            }
+            let name = args.remove(0);
+            let action = args.first().cloned().unwrap_or_else(|| "plan".to_string());
+            let workload = ConfigWorkload::new(&name)?;
+            match workload.kind() {
+                "service" => {
+                    let service_action = parse_service_action(&action, &args)?;
+                    dispatch_service(&workload, service_action).await
+                }
+                "agent" => {
+                    let agent_action = parse_agent_action(&action)?;
+                    dispatch_agent(&workload, agent_action).await
+                }
+                other => anyhow::bail!("unknown workload kind '{}' for '{}'", other, name),
+            }
+        }
     }
 }
 
@@ -307,6 +321,7 @@ async fn cmd_run(command: &[String]) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
@@ -331,85 +346,84 @@ mod tests {
         }
     }
 
-    macro_rules! check_kind {
-        ($cmd:expr, $name:ident, $ty:path, $kind:ident, $doc:literal) => {{
-            let name_lc = stringify!($name).to_lowercase();
-            let sub = $cmd
-                .find_subcommand(&name_lc)
-                .unwrap_or_else(|| panic!("missing subcommand: {}", name_lc));
-            let action_names: HashSet<_> = sub
-                .get_subcommands()
-                .map(|s| s.get_name().to_string())
-                .collect();
-            match stringify!($kind) {
-                "Service" => {
-                    for expected in ["up", "down", "logs", "plan"] {
-                        assert!(
-                            action_names.contains(expected),
-                            "{} missing action: {}",
-                            name_lc,
-                            expected
-                        );
-                    }
-                    for unexpected in ["exec"] {
-                        assert!(
-                            !action_names.contains(unexpected),
-                            "{} should not have action: {}",
-                            name_lc,
-                            unexpected
-                        );
-                    }
+    fn check_service_subcommands(cmd: &clap::Command, name: &str) {
+        match cmd.find_subcommand(name) {
+            Some(sub) => {
+                let action_names: HashSet<_> = sub
+                    .get_subcommands()
+                    .map(|s| s.get_name().to_string())
+                    .collect();
+                for expected in ["up", "down", "logs", "plan"] {
+                    assert!(
+                        action_names.contains(expected),
+                        "{} missing action: {}",
+                        name,
+                        expected
+                    );
                 }
-                "Agent" => {
-                    for expected in ["exec", "down", "plan"] {
-                        assert!(
-                            action_names.contains(expected),
-                            "{} missing action: {}",
-                            name_lc,
-                            expected
-                        );
-                    }
-                    for unexpected in ["up", "logs"] {
-                        assert!(
-                            !action_names.contains(unexpected),
-                            "{} should not have action: {}",
-                            name_lc,
-                            unexpected
-                        );
-                    }
+                for unexpected in ["exec"] {
+                    assert!(
+                        !action_names.contains(unexpected),
+                        "{} should not have action: {}",
+                        name,
+                        unexpected
+                    );
                 }
-                other => panic!("unknown kind: {}", other),
             }
-        }};
+            None => assert!(false, "missing subcommand: {name}"),
+        }
     }
 
-    macro_rules! check_kinds_for_cmd {
-        ($cmd:expr, $($name:ident, $ty:path, $kind:ident, $doc:literal);* $(;)?) => {
-            $(
-                check_kind!($cmd, $name, $ty, $kind, $doc);
-            )*
-        };
+    fn check_agent_subcommands(cmd: &clap::Command, name: &str) {
+        match cmd.find_subcommand(name) {
+            Some(sub) => {
+                let action_names: HashSet<_> = sub
+                    .get_subcommands()
+                    .map(|s| s.get_name().to_string())
+                    .collect();
+                for expected in ["exec", "down", "plan"] {
+                    assert!(
+                        action_names.contains(expected),
+                        "{} missing action: {}",
+                        name,
+                        expected
+                    );
+                }
+                for unexpected in ["up", "logs"] {
+                    assert!(
+                        !action_names.contains(unexpected),
+                        "{} should not have action: {}",
+                        name,
+                        unexpected
+                    );
+                }
+            }
+            None => assert!(false, "missing subcommand: {name}"),
+        }
     }
 
     #[test]
     fn cli_workload_subcommands_match_registry_kinds() {
         let cmd = Cli::command();
-        workloads!(cmd, check_kinds_for_cmd);
+        check_service_subcommands(&cmd, "litellm");
+        check_service_subcommands(&cmd, "odysseus");
+        check_agent_subcommands(&cmd, "pi");
+        check_agent_subcommands(&cmd, "opencode");
+        check_agent_subcommands(&cmd, "tempest");
     }
 
     #[test]
-    fn detach_args_include_foreground() {
+    fn detach_args_include_foreground() -> Result<()> {
+        let litellm = ConfigWorkload::new("litellm")?;
         assert!(
-            workloads::Litellm
-                .detach_args()
-                .contains(&"--foreground".to_string()),
+            litellm.detach_args().contains(&"--foreground".to_string()),
             "litellm detach_args must contain --foreground"
         );
+        let pi = ConfigWorkload::new("pi")?;
         assert!(
-            workloads::Pi
-                .detach_args()
-                .contains(&"--foreground".to_string()),
+            pi.detach_args().contains(&"--foreground".to_string()),
             "pi detach_args must contain --foreground"
         );
+        Ok(())
     }
 }

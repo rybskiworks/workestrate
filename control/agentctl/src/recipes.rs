@@ -6,7 +6,7 @@ use serde::Deserialize;
 /// Config may only reference named recipes; each is expanded by core into the
 /// concrete `EgressRule`s it represents.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "recipe", rename_all = "snake_case")]
 pub enum EgressRecipeRef {
     Dns,
     LitellmProxy,

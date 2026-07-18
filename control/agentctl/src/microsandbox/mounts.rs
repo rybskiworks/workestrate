@@ -90,7 +90,11 @@ mod tests {
     #[test]
     fn readwrite_mount_sources_are_auto_created() -> anyhow::Result<()> {
         let root = unique_root("rw");
-        let plan = minimal_plan(vec![MountPlan::readwrite("nested/state", "/data")]);
+        let plan = minimal_plan(vec![MountPlan {
+            host: "nested/state".into(),
+            guest: "/data".into(),
+            read_only: false,
+        }]);
 
         ensure_mount_sources(&root, &plan)?;
 
@@ -111,10 +115,11 @@ mod tests {
     #[test]
     fn readonly_mount_sources_must_exist() -> anyhow::Result<()> {
         let root = unique_root("ro");
-        let plan = minimal_plan(vec![MountPlan::readonly(
-            "missing/config.json",
-            "/app/config.json",
-        )]);
+        let plan = minimal_plan(vec![MountPlan {
+            host: "missing/config.json".into(),
+            guest: "/app/config.json".into(),
+            read_only: true,
+        }]);
 
         let result = ensure_mount_sources(&root, &plan);
         assert!(

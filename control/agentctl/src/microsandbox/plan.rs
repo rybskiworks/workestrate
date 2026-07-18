@@ -210,14 +210,6 @@ impl EnvVar {
             reject_placeholder: None,
         }
     }
-    pub fn secret(definition: &SecretDefinition) -> Self {
-        Self {
-            name: definition.env_var.clone(),
-            value: format!("${{{}}}", definition.env_var),
-            is_secret: true,
-            reject_placeholder: definition.placeholder.clone(),
-        }
-    }
 }
 
 impl HostBoundSecret {
@@ -245,31 +237,9 @@ impl HostBoundSecret {
     }
 }
 
-impl MountPlan {
-    pub fn readonly(host: impl Into<String>, guest: impl Into<String>) -> Self {
-        Self {
-            host: host.into(),
-            guest: guest.into(),
-            read_only: true,
-        }
-    }
-    pub fn readwrite(host: impl Into<String>, guest: impl Into<String>) -> Self {
-        Self {
-            host: host.into(),
-            guest: guest.into(),
-            read_only: false,
-        }
-    }
-}
+impl MountPlan {}
 
-impl PortMapping {
-    pub fn same(port: u16) -> Self {
-        Self {
-            host: port,
-            guest: port,
-        }
-    }
-}
+impl PortMapping {}
 
 impl EgressRule {
     pub fn dns() -> Vec<Self> {
@@ -308,12 +278,4 @@ impl EgressRule {
     }
 }
 
-impl IngressRule {
-    pub fn local_tcp(port: u16) -> Self {
-        Self {
-            protocol: Protocol::Tcp,
-            port,
-            scope: Scope::Local,
-        }
-    }
-}
+impl IngressRule {}
