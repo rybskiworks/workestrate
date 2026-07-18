@@ -61,6 +61,18 @@
         npmDepsHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
       };
 
+      # Hermetic nix build of the Odysseus Python app (runtime tree mounted at
+      # /app; PYTHONPATH=/app/.deps resolves pip-installed dependencies).
+      odysseus-built = pkgs.callPackage ./nix/packages/odysseus.nix {
+        odysseus = odysseus;
+      };
+
+      # Hermetic nix build of the OpenCode TypeScript/Bun app (runtime tree
+      # mounted at /app; workspace and external deps in node_modules).
+      opencode-built = pkgs.callPackage ./nix/packages/opencode.nix {
+        opencode = opencode;
+      };
+
       # Nix-built Docker image for the T3MP3ST sandbox (dockerTools.buildLayeredImage).
       # Provides nodejs_24 + nmap + dnsutils + the compiled T3MP3ST tree + the
       # baked defaultProvider:"local" config. Load via `just load-images`.
@@ -74,7 +86,6 @@
       workload-images = {
         workestrator-pi = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
         tempest = pkgs.callPackage ./nix/packages/tempest-image.nix { inherit tempest-built; };
-        # Future: workestrator-odysseus = ...; workestrator-opencode = ...;
       };
 
       # General loader: iterates `workload-images` and loads each into
@@ -214,6 +225,10 @@
         # .#tempest = compiled T3MP3ST tree (dist/ + node_modules + package.json).
         tempest = tempest-built;
         tempest-image = tempest-image;
+        # .#odysseus-built = Odysseus Python app tree (.deps/ + source).
+        odysseus-built = odysseus-built;
+        # .#opencode-built = OpenCode Bun/TypeScript app tree (node_modules + source).
+        opencode-built = opencode-built;
         default = workestrate;
       };
 
