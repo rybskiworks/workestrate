@@ -1,0 +1,104 @@
+# 60 — Glossary
+
+Canonical vocabulary for the workestrator tool+XDG migration. One-paragraph
+definitions.
+
+**Canonical (source)**
+The default agent source code, provided by a flake input (e.g.
+`github:georgrybski/pi` at `flake.nix:7-10`). Materialized by the devshell or
+by `workestrate source clone`. Contrasted with a **source override** (a
+user's local checkout that overrides the canonical source).
+
+**Source override**
+A user-cloned agent source checkout at a path different from the canonical
+flake input, selected via `WORKESTRATE_<NAME>_BUILD` env var (existing
+convention, `workload.rs:80-90`). Managed by `workestrate source
+clone/build/list/reset`. Stored at `~/.local/share/workestrate/sources/<name>/`.
+
+**Recipe**
+A named, versioned, reviewable unit of executable logic in core that config
+references by name. Four categories: **egress recipes** (`dns`,
+`litellm_proxy`, `github`, `agent_base`, `https`), **build recipes**
+(`npm-build`, `bun-compile`, `pip-install`, `bun-install`), **image recipes**
+(`registry`, `nix-layered`), and **features** (`create_tmp`). Recipes are a
+closed vocabulary — new recipes require core code review (ADR 0003).
+
+**Closed vocabulary**
+A bounded set of named items (recipes, packages, features) defined in core.
+Config can reference items by name but cannot define new ones. This is the
+config purity mechanism: config is data; all logic is named recipes in core.
+Precedents: Kustomize (no-templating by design), NixOS modules (typed
+options), devcontainer features (install scripts owned by feature).
+
+**Layer**
+A config source that participates in the merge order. Layers are ordered in
+the registry's `layers = [...]` array. Earlier layers are overridden by later
+ones (for non-security fields; security fields use security-aware merge, ADR
+0005). Layer sources: `config.reference/` (base), config repos (registry
+layers), trusted project (`./workestrate.toml`), local
+(`./workestrate.local.toml`).
+
+**Context (deferred)**
+A named layer-set (kubectl-context style) that selects which config repos to
+layer and in what order. **Deferred** until 3+ layers exist (ADR 0013). Phase
+3 ships a single ordered `layers` array; named contexts (`[[contexts.<name>]]`)
+are a future enhancement.
+
+**Registry**
+The user-level config file at `~/.config/workestrate/config.toml` that holds:
+tool settings, config-repo registry (name→url→ref→rev), ordered `layers` list,
+and `[trusted_projects]`. Tracked in the user's dotfiles repo. This is the
+"home" for config-repo references — where the homeless-registry recursion
+terminates. Modeled on kubeconfig (`~/.kube/config` holds cluster references).
+
+**Config repo**
+A git repository containing deployment-specific configuration: `workestrate.toml`
+(workload definitions + secrets schema), `.env.enc` (SOPS-encrypted secrets),
+`.sops.yaml` (SOPS config), `infra/litellm/` (LiteLLM values), `agents/*/config/`
+(agent config files). Cloned to `~/.local/share/workestrate/repos/<name>/` by
+`workestrate config add`. May optionally have its own `flake.nix` (inverted
+dependency, Phase 2).
+
+**Reference config**
+A sanitized, tracked copy of the config shipped with the tool at
+`config.reference/workestrate.toml`. Contains placeholder secrets (rejected at
+runtime by `reject_if_placeholder`, `runtime.rs:10-22`). Used as the fallback
+when no config repos are registered (fresh install, CI). `plan`/`check`/
+`validate-config` work with reference config; `up`/`exec` refuse (placeholder
+secrets).
+
+**Trusted project**
+A project directory explicitly approved for project-layer config loading.
+Listed in `[[trusted_projects]]` in the registry. `workestrate config trust
+<dir>` adds a project. Untrusted projects' `./workestrate.toml` is silently
+ignored. This is the `direnv allow` model (ADR 0014).
+
+**Purity invariant**
+The rule that config repos contain only declarative data + SOPS-encrypted
+secrets + static files. No executable logic (scripts, nix expressions,
+`extraCommands`). All logic is named recipes in core. Enforced by the config
+loader (deserializes TOML into typed structs; no `eval`/`exec` path). This is
+the security boundary for a sandboxing tool (ADR 0003).
+
+**Policy ceiling**
+The core-defined allowlist (`policy.rs`) that config cannot exceed. Comprises
+`ALLOWED_EGRESS_HOSTS`, `SECRET_HOST_BINDINGS`, `ALLOWED_PACKAGES`, and
+`DEFAULT_DENY_FALSE_ENTITLEMENT`. Enforced at `validate-config` (pre-flight),
+`plan` (fail-closed), and `apply_plan_secrets` (runtime). Config source
+provenance is irrelevant — the ceiling is checked against contents, not
+origin (ADR 0004).
+
+**Provenance**
+The attribution of each config field to the layer that set it. Displayed by
+`workestrate plan --show-source`. Labels: `[core]` (tool defaults),
+`[reference]` (config.reference/), `[<layer-name>]` (registry layer),
+`[project]` (trusted project), `[local]` (local overrides). Helps users
+understand "why does pi have egress to X?" across multiple layers.
+
+**Golden parity**
+The test strategy that verifies the data-driven config produces identical
+`SandboxPlan` output to the pre-migration hardcoded Rust. Golden files
+(`control/agentctl/tests/golden/<workload>.plan.txt`) use the `SandboxPlan`
+`Display` impl (`plan.rs:140-198`). `just golden-check` diffs current output
+against committed goldens. `workloads/*.rs` are deleted only after golden
+parity is proven (ADR 0001).
