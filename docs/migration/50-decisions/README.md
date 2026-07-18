@@ -21,3 +21,4 @@ Architecture Decision Records for the workestrator tool+XDG migration.
 | 0015 | Per-workload repos rejected | Accepted | Workload defs are ~20-line data entries; recipe vocabulary is the distribution unit |
 | 0016 | Additive migration / deferred repo strip-down | Accepted | Root `workestrate.toml` keeps working as project layer; migration is additive |
 | 0017 | Synthetic reference config and final strip-down | Accepted | `config.reference/` becomes synthetic fixture; root user files move to personal config repo; flake outputs stay explicit |
+| 0018 | Secrets layering + per-repo secrets config | Accepted | Per-key value merge across layers; per-repo secrets_file/age_key_file; process env lowest precedence |
