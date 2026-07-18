@@ -121,3 +121,9 @@ dev-run-pi *args:
 # there = one entry; this recipe picks it up automatically. No per-image recipes.
 load-images:
     nix develop -c load-images
+
+# Set up and verify repo-local XDG state
+local-setup:
+    @echo "Setting up repo-local XDG state..."
+    @source scripts/local-xdg.sh
+    @workestrate check

@@ -41,3 +41,6 @@ control/agentctl/vendor/
 
 # Temporary extraction / download cache
 .tmp/
+
+# Repo-local workestrate XDG state (contains age private key — NEVER commit)
+/.workestrate/
