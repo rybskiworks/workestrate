@@ -135,3 +135,38 @@ relevant ADRs:
 - Flux SOPS: https://fluxcd.io/flux/guides/mozilla-sops
 - sops-nix: https://github.com/Mic92/sops-nix
 - copier update: https://copier.readthedocs.io/en/stable/updating
+
+## Known limitations / future work
+
+### Multi-layer secrets resolution
+
+`secrets_loader.rs::resolve_secrets_dir()` currently uses the **first**
+(lowest-precedence) registry layer's directory to find `.env.enc`. This is
+correct for the shared-secrets model (a single root `.env.enc` encrypted
+to team+personal keys via multi-recipient SOPS), but wrong for a future
+per-layer-secrets model where each layer carries its own `.env.enc`.
+
+**Current behavior**: `resolve_secrets_dir()` walks the resolution chain
+(WORKESTRATE_CONFIG_DIR → trusted project → registry layers.first() →
+config.reference/) and returns the first match. For multi-layer configs,
+this means the lowest-precedence layer's `.env.enc` is used.
+
+**Acceptable for now**: in the shared-secrets model, there is only one
+`.env.enc` (at the personal or team config repo), encrypted to all
+recipients. All layers share the same secrets store.
+
+**Future resolution options** (when per-layer secrets are needed):
+
+1. **Highest-precedence layer wins**: `resolve_secrets_dir()` should
+   walk layers in reverse precedence order (personal → team → reference)
+   and return the first layer that has a `.env.enc`. This means the
+   personal layer's secrets override the team layer's secrets.
+
+2. **Merge secrets across layers**: load `.env.enc` from each layer that
+   has one, decrypt all, and merge the env vars (later layers override
+   earlier ones for the same key). This is more complex but allows
+   per-layer secret overrides. Requires a defined merge precedence for
+   secret values (same as config field merge: later wins).
+
+**Recommendation**: option (1) is simpler and sufficient for most use
+cases. Option (2) is over-engineered until a concrete need arises.
