@@ -27,7 +27,11 @@ well-defined precedence position relative to context layers.
    > `WORKESTRATE_CONTEXT` env > `[settings] default_context` > bare-layers
    backward-compat. Selected: preserves env-name contracts; composes with
    the existing merge engine and per-key secrets model; backward-compatible
-   (no contexts = current behavior).
+   (no contexts = current behavior). Deciding argument: contexts make each
+   stack an independent unit (own secrets, state, sandbox instances, ports),
+   so cross-domain interference is impossible by construction — whereas a
+   merged-union view must negotiate isolation per concern (secrets scoping,
+   state, ports) inside one config.
 3. **Multi-context batch** — resolve multiple contexts in one invocation
    and merge them. Rejected for now: complicates instance naming and port
    collision detection; no current use case. Deferred (see 70-open-items.md).

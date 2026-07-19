@@ -20,9 +20,27 @@ CONFIG_NAME=""
 GLOBAL_MODE=0
 ARGS=()
 
-# Parse --config <name> and --global before the init/update subcommand.
+# Parse --help, --config <name>, and --global before the init/update subcommand.
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --help|-h)
+      cat <<'EOF'
+setup-secrets — bootstrap or update ai-workbench encrypted secrets.
+
+Usage:
+  nix develop -c setup-secrets init
+  nix develop -c setup-secrets update
+  nix develop -c setup-secrets --config <name> init
+  nix develop -c setup-secrets --config <name> update
+  nix develop -c setup-secrets --global init
+  nix develop -c setup-secrets --global update
+
+Secrets can be supplied via environment variables or interactive prompts.
+Command-line argument support is intentionally omitted to avoid leaking
+secrets into shell history.
+EOF
+      exit 0
+      ;;
     --config)
       shift
       if [ "$#" -eq 0 ]; then
