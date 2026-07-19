@@ -385,10 +385,11 @@ pub(crate) async fn build_sandbox<W: Workload>(
 /// block until Ctrl-C.
 pub async fn up_service<W: Workload>(workload: &W, foreground: bool) -> Result<()> {
     if !foreground {
-        let child = spawn_detached_service(workload.name(), &workload.detach_args())?;
+        let instance = workload.sandbox_instance_name();
+        let child = spawn_detached_service(&instance, &workload.detach_args())?;
         println!(
             "Sandbox '{}' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/{}/workestrate.log",
-            workload.name(), child.id(), workload.name()
+            instance, child.id(), instance
         );
         return Ok(());
     }

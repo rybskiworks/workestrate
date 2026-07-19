@@ -23,6 +23,9 @@ struct Cli {
     #[arg(long, global = true, help = "Show source layer for each plan field")]
     show_source: bool,
 
+    #[arg(long, global = true, help = "Active context name")]
+    context: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -178,10 +181,13 @@ async fn dispatch_service<W: Workload>(
     action: ServiceAction,
     show_source: bool,
 ) -> Result<()> {
+    if let Some(name) = config::active_context_name() {
+        eprintln!("context: {}", name);
+    }
     match action {
         ServiceAction::Up { foreground } => microsandbox::up_service(workload, foreground).await,
-        ServiceAction::Down => microsandbox::down(workload.name()).await,
-        ServiceAction::Logs => microsandbox::logs(workload.name()).await,
+        ServiceAction::Down => microsandbox::down(&workload.sandbox_instance_name()).await,
+        ServiceAction::Logs => microsandbox::logs(&workload.sandbox_instance_name()).await,
         ServiceAction::Plan => {
             if show_source {
                 println!("{}", workload.show_source());
@@ -198,9 +204,12 @@ async fn dispatch_agent<W: Workload>(
     action: AgentAction,
     show_source: bool,
 ) -> Result<()> {
+    if let Some(name) = config::active_context_name() {
+        eprintln!("context: {}", name);
+    }
     match action {
         AgentAction::Exec => microsandbox::exec_agent(workload).await,
-        AgentAction::Down => microsandbox::down(workload.name()).await,
+        AgentAction::Down => microsandbox::down(&workload.sandbox_instance_name()).await,
         AgentAction::Plan => {
             if show_source {
                 println!("{}", workload.show_source());
@@ -837,6 +846,9 @@ async fn main() -> Result<()> {
     if cli.no_project_config {
         std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
     }
+    if let Some(ref ctx) = cli.context {
+        std::env::set_var("WORKESTRATE_CONTEXT", ctx);
+    }
 
     match cli.command {
         Commands::Check => cmd_check().await,
@@ -951,6 +963,22 @@ async fn cmd_check() -> Result<()> {
     } else {
         println!("Registry: {} [MISSING]", registry_path.display());
         all_ok = false;
+    }
+
+    // Active context
+    match config::resolve_active_context() {
+        Ok(ctx) => {
+            if let Some(ref name) = ctx.name {
+                println!("Active context: {} [OK]", name);
+            } else {
+                println!("Active context: (none — using bare layers)");
+            }
+            println!("  Layers: {:?}", ctx.layers);
+        }
+        Err(e) => {
+            println!("Active context: [ERROR] {}", e);
+            all_ok = false;
+        }
     }
 
     println!("\nXDG dirs:");
@@ -1375,7 +1403,10 @@ mod tests {
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
 
         std::env::set_var("HOME", &tmp_home);
-        std::env::set_var("XDG_CONFIG_HOME", tmp_home.join(".config"));
+        std::env::set_var(
+            "XDG_CONFIG_HOME",
+            tmp_home.join(".config").to_string_lossy().as_ref(),
+        );
         std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share"));
         std::env::remove_var("WORKESTRATE_CONFIG_DIR");
         std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");

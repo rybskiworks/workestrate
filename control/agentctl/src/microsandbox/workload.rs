@@ -43,6 +43,13 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// Sandbox name (used for Sandbox::get, logging, user messages).
     fn name(&self) -> &str;
 
+    /// Sandbox instance name (used for Sandbox::builder, log dirs, down).
+    /// Default: bare workload name. ConfigWorkload overrides to
+    /// `<context>-<workload>` when contexts are active.
+    fn sandbox_instance_name(&self) -> String {
+        self.name().to_string()
+    }
+
     /// Build the declarative sandbox plan.
     fn plan(&self) -> SandboxPlan;
 
@@ -166,6 +173,13 @@ impl Workload for ConfigWorkload {
         &self.name
     }
 
+    fn sandbox_instance_name(&self) -> String {
+        match crate::config::active_context_name() {
+            Some(ctx) => format!("{}-{}", ctx, self.name),
+            None => self.name.clone(),
+        }
+    }
+
     fn plan(&self) -> SandboxPlan {
         let egress_rules: Vec<EgressRule> = self
             .workload
@@ -181,7 +195,7 @@ impl Workload for ConfigWorkload {
         }
 
         SandboxPlan {
-            name: self.name.clone(),
+            name: self.sandbox_instance_name(),
             image: self.resolve_image(),
             workdir: self.workload.workdir.clone(),
             command: self.workload.command.clone(),
@@ -604,6 +618,35 @@ mod tests {
         // Override removed → falls back to agents/<name>/build.
         std::env::remove_var("WORKESTRATE_PI_BUILD");
         assert_eq!(pi.build_path(), "agents/pi/build");
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_instance_name_bare_when_no_context() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        // TestConfigGuard sets WORKESTRATE_CONFIG_DIR which bypasses the registry,
+        // so active_context_name() is None.
+        crate::config::set_active_context(None);
+        let pi = ConfigWorkload::new("pi")?;
+        assert_eq!(pi.sandbox_instance_name(), "pi");
+        assert_eq!(pi.name(), "pi");
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_instance_namespaced_when_context_active() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        let pi = ConfigWorkload::new("pi")?;
+        // Simulate an active context after creating the workload; load_config()
+        // resets the active context when WORKESTRATE_CONFIG_DIR is set.
+        crate::config::set_active_context(Some(crate::config::ActiveContext {
+            name: Some("personal".to_string()),
+            layers: vec!["personal".to_string()],
+        }));
+        assert_eq!(pi.sandbox_instance_name(), "personal-pi");
+        assert_eq!(pi.name(), "pi"); // bare name unchanged for CLI dispatch
+                                     // Clean up
+        crate::config::set_active_context(None);
         Ok(())
     }
 }
