@@ -241,11 +241,14 @@ pub struct NetworkConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct WorkloadConfig {
+    #[serde(default)]
     pub kind: String,
+    #[serde(default)]
     pub image: ImageSpec,
     pub workdir: Option<String>,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
+    #[serde(default)]
     pub command: Vec<String>,
     pub log_stop_errors: Option<bool>,
     #[serde(default)]
@@ -259,6 +262,7 @@ pub struct WorkloadConfig {
     #[serde(default)]
     pub seed_files: Vec<SeedFileConfig>,
     pub local_build: Option<LocalBuildConfig>,
+    #[serde(default)]
     pub network: NetworkConfig,
 }
 
@@ -278,6 +282,7 @@ pub struct SecretDefConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[allow(dead_code)]
 pub struct ConfigFile {
+    #[serde(default)]
     pub schema_version: u32,
     #[serde(default)]
     pub secrets: HashMap<String, SecretDefConfig>,
@@ -325,6 +330,11 @@ pub fn xdg_state_dir() -> PathBuf {
 /// Registry path: ~/.config/workestrate/config.toml
 pub fn registry_path() -> PathBuf {
     xdg_config_dir().join("config.toml")
+}
+
+/// Overrides path: $XDG_CONFIG_HOME/workestrate/overrides.toml
+pub fn overrides_path() -> PathBuf {
+    xdg_config_dir().join("overrides.toml")
 }
 
 /// Config repo store: resolve_store_dir()/repos/<name>/
@@ -417,6 +427,164 @@ pub fn save_registry(registry: &Registry) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to serialize registry: {}", e))?;
     std::fs::write(&path, content)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// User-global overrides
+// ---------------------------------------------------------------------------
+
+/// Known top-level ConfigFile fields (for unknown-field detection in overrides).
+const CONFIG_FIELDS: &[&str] = &["schema_version", "secrets", "workloads"];
+
+/// Known WorkloadConfig fields (for unknown-field detection in overrides).
+const WORKLOAD_FIELDS: &[&str] = &[
+    "kind",
+    "image",
+    "workdir",
+    "cpus",
+    "memory_mib",
+    "command",
+    "log_stop_errors",
+    "env",
+    "secret_env",
+    "ports",
+    "mounts",
+    "seed_files",
+    "local_build",
+    "network",
+];
+
+/// Load user-global override layers from overrides.toml.
+///
+/// Returns layers in precedence order: [global] first, then [configs.<name>]
+/// for each name in `context_layers` (in order). Missing overrides.toml →
+/// empty vec (silently absent).
+///
+/// LENIENT semantics:
+/// - Unknown config section ([configs.team] when team not in context) → skip + INFO log
+/// - Unknown workload section ([configs.team.workloads.nonexistent]) → skip + INFO log
+/// - Unknown field in a matched section → loud WARNING (probable typo)
+pub fn load_overrides(
+    overrides_path: &Path,
+    context_layers: &[String],
+    existing_workloads: &std::collections::HashSet<String>,
+) -> Result<Vec<crate::merge::Layer>> {
+    if !overrides_path.exists() {
+        return Ok(vec![]); // silently absent
+    }
+    let content = std::fs::read_to_string(overrides_path).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to read overrides {}: {}",
+            overrides_path.display(),
+            e
+        )
+    })?;
+    let raw: toml::Value = toml::from_str(&content).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to parse overrides {}: {}",
+            overrides_path.display(),
+            e
+        )
+    })?;
+
+    let mut layers = Vec::new();
+
+    // [global] section — applied to every context.
+    if let Some(global) = raw.get("global").and_then(|v| v.as_table()) {
+        let processed = process_override_section(global, "global", existing_workloads)?;
+        if !processed.is_empty() {
+            layers.push(crate::merge::Layer::from_string(
+                "global-override",
+                &processed,
+            )?);
+        }
+    }
+
+    // [configs.<name>] sections — only when name is in context_layers.
+    if let Some(configs) = raw.get("configs").and_then(|v| v.as_table()) {
+        for (name, value) in configs {
+            let table = match value.as_table() {
+                Some(t) => t,
+                None => continue,
+            };
+            if !context_layers.contains(name) {
+                eprintln!(
+                    "INFO: override section [configs.{}] has no matching config in this context, skipping",
+                    name
+                );
+                continue;
+            }
+            let section_path = format!("configs.{}", name);
+            let processed = process_override_section(table, &section_path, existing_workloads)?;
+            if !processed.is_empty() {
+                layers.push(crate::merge::Layer::from_string(
+                    &format!("configs.{}-override", name),
+                    &processed,
+                )?);
+            }
+        }
+    }
+
+    Ok(layers)
+}
+
+/// Process an override section: check unknown fields, filter unknown workloads,
+/// return the processed TOML string.
+fn process_override_section(
+    table: &toml::map::Map<String, toml::Value>,
+    section_path: &str,
+    existing_workloads: &std::collections::HashSet<String>,
+) -> Result<String> {
+    // Check unknown fields at ConfigFile level.
+    for key in table.keys() {
+        if !CONFIG_FIELDS.contains(&key.as_str()) {
+            eprintln!(
+                "WARNING: unknown field '{}' in override section [{}] (probable typo)",
+                key, section_path
+            );
+        }
+    }
+
+    // Clone the table for filtering.
+    let mut value = toml::Value::Table(table.clone());
+
+    // Process workloads sub-table: filter unknown workloads + check fields.
+    if let Some(workloads) = value.get_mut("workloads").and_then(|v| v.as_table_mut()) {
+        let unknown: Vec<String> = workloads
+            .keys()
+            .filter(|k| !existing_workloads.contains(k.as_str()))
+            .cloned()
+            .collect();
+        for k in &unknown {
+            eprintln!(
+                "INFO: override section [{}.workloads.{}] has no matching workload in this context, skipping",
+                section_path, k
+            );
+            workloads.remove(k);
+        }
+
+        // Check unknown fields in each remaining workload sub-table.
+        for (wl_name, wl_value) in workloads.iter() {
+            if let Some(wl_table) = wl_value.as_table() {
+                for key in wl_table.keys() {
+                    if !WORKLOAD_FIELDS.contains(&key.as_str()) {
+                        eprintln!(
+                            "WARNING: unknown field '{}' in override section [{}.workloads.{}] (probable typo)",
+                            key, section_path, wl_name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    toml::to_string(&value).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to serialize override section [{}]: {}",
+            section_path,
+            e
+        )
+    })
 }
 
 /// Resolve the active context.
@@ -562,8 +730,11 @@ pub fn untrust_project(dir: &Path) -> Result<()> {
 /// Resolution order (lowest to highest precedence):
 /// 1. Reference config (`config.reference/workestrate.toml`).
 /// 2. Registry layers (`registry.layers` ordered list, each a config repo).
-/// 3. Trusted project config (`./workestrate.toml` in cwd if trusted).
-/// 4. Local overrides (`./workestrate.local.toml` in cwd).
+/// 3. User-global overrides (`$XDG_CONFIG_HOME/workestrate/overrides.toml`):
+///    `[global]` is applied to every context, then `[configs.<name>]` for each
+///    active context layer.
+/// 4. Trusted project config (`./workestrate.toml` in cwd if trusted).
+/// 5. Local overrides (`./workestrate.local.toml` in cwd).
 ///
 /// The `$WORKESTRATE_CONFIG_DIR` environment variable bypasses discovery and
 /// loads a single dev/testing layer directly.
@@ -601,6 +772,20 @@ pub fn load_config() -> Result<ConfigFile> {
         if path.exists() {
             layers.push(crate::merge::Layer::load(name, &path)?);
         }
+    }
+
+    // 3.5. User-global overrides (between context layers and trusted project).
+    {
+        let existing_workloads: std::collections::HashSet<String> = layers
+            .iter()
+            .flat_map(|l| l.config.workloads.keys().cloned())
+            .collect();
+        let override_layers = load_overrides(
+            &overrides_path(),
+            &active_context.layers,
+            &existing_workloads,
+        )?;
+        layers.extend(override_layers);
     }
 
     // 4. Trusted project layer.
@@ -1314,6 +1499,272 @@ pub(crate) mod tests {
             err.contains("default_context") || err.contains("--context"),
             "error should mention default_context or --context: {err}"
         );
+        Ok(())
+    }
+
+    // --- User-global overrides tests ---
+
+    fn write_overrides(dir: &Path, content: &str) -> PathBuf {
+        let path = dir.join("overrides.toml");
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn load_overrides_missing_file_returns_empty() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let path = tmp.join("overrides.toml");
+        // File does NOT exist.
+        let layers = load_overrides(
+            &path,
+            &["personal".to_string()],
+            &std::collections::HashSet::new(),
+        )?;
+        assert!(
+            layers.is_empty(),
+            "missing overrides.toml should return empty vec"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn load_overrides_global_section_applied() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-global-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let path = write_overrides(&tmp, "[global.workloads.pi]\ncpus = 4\n");
+        let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
+        let layers = load_overrides(&path, &["personal".to_string()], &existing)?;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].name, "global-override");
+        let pi = layers[0].config.workloads.get("pi").unwrap();
+        assert_eq!(pi.cpus, Some(4));
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn load_overrides_configs_section_only_when_in_context() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-match-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let path = write_overrides(
+            &tmp,
+            "[configs.team.workloads.pi]\ncpus = 2\n\n[configs.other.workloads.pi]\ncpus = 8\n",
+        );
+        let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
+        // Only "team" is in context_layers; "other" should be skipped.
+        let layers = load_overrides(&path, &["team".to_string()], &existing)?;
+        assert_eq!(
+            layers.len(),
+            1,
+            "only the matching config section should produce a layer"
+        );
+        assert_eq!(layers[0].name, "configs.team-override");
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn load_overrides_unknown_workload_skipped() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-unknown-wl-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let path = write_overrides(
+            &tmp,
+            "[global.workloads.pi]\ncpus = 4\n\n[global.workloads.nonexistent]\ncpus = 8\n",
+        );
+        // Only "pi" exists; "nonexistent" should be skipped.
+        let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
+        let layers = load_overrides(&path, &[], &existing)?;
+        assert_eq!(layers.len(), 1);
+        let pi = layers[0].config.workloads.get("pi").unwrap();
+        assert_eq!(pi.cpus, Some(4));
+        // "nonexistent" should NOT be in the layer.
+        assert!(!layers[0].config.workloads.contains_key("nonexistent"));
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn load_overrides_most_specific_wins() -> Result<()> {
+        // [global.workloads.pi] cpus=4 is overridden by [configs.team.workloads.pi] cpus=2
+        // because configs.team-override comes AFTER global-override in the layer list.
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-specific-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let path = write_overrides(
+            &tmp,
+            "[global.workloads.pi]\ncpus = 4\n\n[configs.team.workloads.pi]\ncpus = 2\n",
+        );
+        let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
+        let layers = load_overrides(&path, &["team".to_string()], &existing)?;
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0].name, "global-override");
+        assert_eq!(layers[1].name, "configs.team-override");
+
+        // Merge: base (no cpus) + global (cpus=4) + configs.team (cpus=2) → cpus=2
+        let base = crate::merge::Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true",
+        )?;
+        let mut all = vec![base];
+        all.extend(layers);
+        let (merged, _) = crate::merge::merge_layers(&all)?;
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.cpus,
+            Some(2),
+            "configs.team override should win over global"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn load_overrides_policy_violation_default_deny_false_hard_fails() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-policy-dd-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        // Override sets default_deny=false on pi (not entitled).
+        let path = write_overrides(
+            &tmp,
+            "[global.workloads.pi.network]\ndefault_deny = false\n",
+        );
+        let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
+        let layers = load_overrides(&path, &[], &existing)?;
+        assert_eq!(layers.len(), 1);
+
+        // Base layer has pi with default_deny=true.
+        let base = crate::merge::Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true",
+        )?;
+        let mut all = vec![base];
+        all.extend(layers);
+        let result = crate::merge::merge_layers(&all);
+        assert!(
+            result.is_err(),
+            "override setting default_deny=false on non-entitled workload should hard-fail"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("monotonic-true") || err.contains("entitlement"),
+            "error should mention monotonic-true or entitlement: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn load_overrides_policy_violation_egress_host_hard_fails() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-policy-egress-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        // Override adds a non-allowlisted egress host.
+        let path = write_overrides(
+            &tmp,
+            "[[global.workloads.pi.network.egress]]\nrecipe = \"https\"\nhosts = [\"evil.com\"]\n",
+        );
+        let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
+        let layers = load_overrides(&path, &[], &existing)?;
+        assert_eq!(layers.len(), 1);
+
+        let base = crate::merge::Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true",
+        )?;
+        let mut all = vec![base];
+        all.extend(layers);
+        let result = crate::merge::merge_layers(&all);
+        assert!(
+            result.is_err(),
+            "override with non-allowlisted egress host should hard-fail"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("allowlist"),
+            "error should mention allowlist: {err}"
+        );
+        assert!(
+            err.contains("evil.com"),
+            "error should mention the host: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn load_overrides_global_applied_in_two_contexts() -> Result<()> {
+        // [global] should produce a layer regardless of which context is active.
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-two-ctx-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let path = write_overrides(&tmp, "[global.workloads.pi]\ncpus = 4\n");
+        let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
+
+        // Context 1: personal
+        let layers1 = load_overrides(&path, &["personal".to_string()], &existing)?;
+        assert_eq!(layers1.len(), 1);
+        assert_eq!(layers1[0].name, "global-override");
+
+        // Context 2: work
+        let layers2 = load_overrides(&path, &["team".to_string()], &existing)?;
+        assert_eq!(layers2.len(), 1);
+        assert_eq!(layers2[0].name, "global-override");
+
+        let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
     }
 }
