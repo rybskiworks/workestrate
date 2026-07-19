@@ -1,11 +1,23 @@
 # Reads a workestrate.toml config via builtins.fromTOML.
 # Default: config.reference/workestrate.toml (tracked, sanitized).
-{ configDir ? ../.. }:
+#
+# B14: the default configDir is a filtered builtins.path that copies ONLY
+# workestrate.toml into the store, not the entire repo (the previous
+# `configDir ? ../..` default copied 401M+ of agents/pi/repo/node_modules
+# on every eval). Callers may still pass an explicit configDir pointing at
+# a directory containing workestrate.toml. The filter ensures only the
+# TOML file is included; the directory name bounds the store path.
+{ configDir ?
+    builtins.path {
+      path = ../../config.reference;
+      filter = path: _type: baseNameOf path == "workestrate.toml";
+      name = "workestrate-config-reference";
+    } }:
 let
-  configPath = "${configDir}/config.reference/workestrate.toml";
+  configPath = "${configDir}/workestrate.toml";
   raw = builtins.fromTOML (builtins.readFile configPath);
 in {
-  inherit (raw) secrets;
+  secrets = raw.secrets or {};
   workloads = raw.workloads or {};
   workloadNames = builtins.attrNames (raw.workloads or {});
 

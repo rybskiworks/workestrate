@@ -132,7 +132,7 @@
       # Provides nix glibc 2.42 matching the pi-bun binary's PT_INTERP; replaces
       # node:24-bookworm-slim (glibc 2.36) which crashed the bun binary.
       # Load into microsandbox with `just load-pi-image`.
-      pi-image = pkgs.callPackage ./nix/packages/pi-image.nix {};
+      pi-image = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
 
       # Hermetic nix build of the T3MP3ST offensive-security agent (single
       # package, no workspaces). npmDepsHash is a placeholder until computed

@@ -25,15 +25,33 @@ rec
   # Safe baked_file → shell generation.
   # Path must be relative (no leading /), no ".." traversal.
   # Content is a string (no evaluation).
+  #
+  # C1: content is written to the Nix store at eval time via
+  # builtins.toFile, then copied into the target path at build time.
+  # The store path appears in the generated shell as a literal
+  # /nix/store/<hash>-baked-file-content string — only safe path
+  # characters — so config content can NEVER break out of the shell
+  # parser, regardless of what bytes it contains. This replaces the
+  # previous heredoc approach which could be subverted by content
+  # containing the WORKESTRATE_BAKED_EOF delimiter (after Nix
+  # multiline-string dedent, the closing delimiter was column-0 and
+  # any matching content line broke out, executing subsequent lines
+  # as shell at image build time). builtins.base64Of would also close
+  # this hole but is not available in Nix 2.35.1; the store-path
+  # approach is equivalently bullet-proof and adds no runtime dep.
   bakedFileToShell = { path, content }:
     assert builtins.isString path;
     assert builtins.substring 0 1 path != "/";
-    assert !builtins.match ".*\\.\\..*" path;  # no ".." anywhere
+    # Path traversal guard: reject any path containing a ".." component.
+    # (builtins.match returns null on no-match; the pre-existing
+    # `!builtins.match ...` form was a no-op — always errored — so the
+    # guard never fired. C1 fix: use explicit `== null` so the assert
+    # is actually exercised.)
+    assert builtins.match ".*\\.\\..*" path == null;
+    let contentFile = builtins.toFile "baked-file-content" content; in
     ''
       mkdir -p $(dirname ${path})
-      cat > ${path} <<'WORKESTRATE_BAKED_EOF'
-      ${content}
-      WORKESTRATE_BAKED_EOF
+      cp ${contentFile} ${path}
     '';
 
   # Resolve a list of package name strings to derivations.
