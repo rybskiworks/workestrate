@@ -101,6 +101,7 @@ ai-workbench/
 ### Complete annotated example
 
 ```toml
+# spec-test: skip
 # ~/.config/workestrate/config.toml
 # This file IS the user's dotfiles entry for workestrate.
 # Tracked in the user's dotfiles repo (chezmoi/yadm/stow/etc.).
@@ -182,6 +183,7 @@ The workload definition file. Lives in each config repo at
 ### Top-level fields
 
 ```toml
+# spec-test: skip
 schema_version = 1  # integer; workestrate checks compatibility on load
 
 [secrets.<NAME>]           # secret definition (replaces secrets.rs const)
@@ -301,12 +303,12 @@ guest = 4000
 [[workloads.litellm.mounts]]
 host = "${MSB_HOME}/sandboxes/litellm/logs"
 guest = "/var/log/litellm"
-rw = true
+read_only = false
 
 [[workloads.litellm.mounts]]
 host = "infra/litellm"           # config-relative path
 guest = "/app/config"
-rw = false
+read_only = true
 
 [workloads.litellm.network]
 default_deny = true
@@ -352,12 +354,12 @@ secret = "GITHUB_TOKEN"
 [[workloads.pi.mounts]]
 host = "workspaces/pi-state"     # state_dir-relative
 guest = "/data"
-rw = true
+read_only = false
 
 [[workloads.pi.mounts]]
 host = "${CWD}"                  # resolved at runtime to current working directory
 guest = "/work"
-rw = true
+read_only = false
 
 [workloads.pi.network]
 default_deny = true
@@ -429,12 +431,12 @@ guest = 7000
 [[workloads.odysseus.mounts]]
 host = "${WORKESTRATE_ODYSSEUS_BUILD}"  # resolved from env or local_build.fallback
 guest = "/app"
-rw = false
+read_only = true
 
 [[workloads.odysseus.mounts]]
 host = "workspaces/odysseus-state"
 guest = "/data"
-rw = true
+read_only = false
 
 [workloads.odysseus.network]
 default_deny = true
@@ -497,22 +499,22 @@ guest = 3000
 [[workloads.opencode.mounts]]
 host = "${WORKESTRATE_OPENCODE_BUILD}"
 guest = "/app"
-rw = false
+read_only = true
 
 [[workloads.opencode.mounts]]
 host = "${CWD}"
 guest = "/workspace"
-rw = true
+read_only = false
 
 [[workloads.opencode.mounts]]
 host = "agents/opencode/config/opencode.jsonc"  # config-relative
 guest = "/home/node/.config/opencode/opencode.jsonc"
-rw = false
+read_only = true
 
 [[workloads.opencode.mounts]]
 host = "${MSB_HOME}/sandboxes/opencode/state"
 guest = "/home/node/.local/share/opencode"
-rw = true
+read_only = false
 
 [workloads.opencode.network]
 default_deny = true
@@ -562,12 +564,12 @@ value = "127.0.0.1"
 [[workloads.tempest.mounts]]
 host = "workspaces/tempest-state"
 guest = "/data"
-rw = true
+read_only = false
 
 [[workloads.tempest.mounts]]
 host = "${CWD}"
 guest = "/work"
-rw = true
+read_only = false
 
 [workloads.tempest.network]
 default_deny = false   # broad egress for offensive tool (core entitlement required)
@@ -593,6 +595,26 @@ fallback = "sources/tempest/build"
 | `sources/...` | `store_dir`-relative | Rust CLI at runtime |
 | `agents/...` | Config-repo-relative | Rust CLI at runtime (agent configs moved to config repo) |
 | `infra/...` | Config-repo-relative | Rust CLI at runtime |
+
+### Mount `read_only` field
+
+Each `[[workloads.<name>.mounts]]` entry declares its access mode with the
+`read_only` boolean field (the schema field name; matches `MountPlan` in
+`plan.rs`). Polarity: `read_only = true` mounts the guest path read-only;
+`read_only = false` mounts it read-write. The legacy `rw` field name is NOT
+accepted by the deserializer.
+
+### Spec-example CI guard (`# spec-test: skip`)
+
+Every fenced `toml` block in this spec is exercised by
+`control/agentctl/tests/spec_examples_parse.rs`, which parses each block
+against the `ConfigFile` schema shape and asserts no deserialization errors.
+Blocks that are intentional fragments (registry files, field-reference
+skeletons, single-feature snippets, override-layer fragments) are marked
+with a leading `# spec-test: skip` comment and are skipped by the guard.
+A block without `schema_version` is also skipped automatically. To add a
+new full-config example, omit the skip marker and include
+`schema_version = 1`.
 
 ## 4. Recipe vocabulary reference
 
@@ -844,6 +866,7 @@ If set, the workload's `local_build.fallback` is overridden by the env value.
 ### baked_files rules
 
 ```toml
+# spec-test: skip
 [[workloads.<name>.image.baked_files]]
 path = "root/.config/t3mp3st/config.json"   # relative path inside image; no "/" prefix, no ".."
 content = '{"defaultProvider":"local"}'      # string content only; no evaluation
@@ -857,6 +880,7 @@ content = '{"defaultProvider":"local"}'      # string content only; no evaluatio
 ### features rules
 
 ```toml
+# spec-test: skip
 features = ["create_tmp"]
 ```
 
@@ -993,6 +1017,7 @@ core→config.
 The registry's `layers` array declares the merge order:
 
 ```toml
+# spec-test: skip
 layers = ["work", "personal"]
 ```
 
@@ -1037,6 +1062,7 @@ machine-local config overrides that apply across all contexts or to
 specific config repos.
 
 ```toml
+# spec-test: skip
 # Applied to every context
 [global]
 # Any ConfigFile field: schema_version, secrets, workloads

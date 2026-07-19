@@ -8,8 +8,13 @@ litellm-check:
     python3 .agents/skills/validation-litellm-config-check/scripts/check_config.py \
       --config config.reference/infra/litellm/config.yaml --schemas-dir docs/litellm/schemas --mode in-memory
 
-# Full pre-merge validation: format, lint, compile-check, test, config validation, golden-check, and lock-file stability
-verify: check test litellm-check golden-check
+# Parse every fenced toml block in docs/migration/20-target-system-spec.md
+# against the ConfigFile schema shape (WP4 / D1 standing guard).
+spec-examples:
+    cargo test --manifest-path control/agentctl/Cargo.toml --test spec_examples_parse
+
+# Full pre-merge validation: format, lint, compile-check, test, spec-examples, config validation, golden-check, and lock-file stability
+verify: check test spec-examples litellm-check golden-check
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
