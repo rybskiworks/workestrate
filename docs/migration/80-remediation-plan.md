@@ -1,8 +1,10 @@
 # 80 — Remediation Plan (Review Findings 2026-07)
 
-**Status:** PENDING USER APPROVAL — implementation blocked until approved.
+**Status:** IMPLEMENTED (WP1–WP5 merged; merge-gate verdict MET after
+independent verification ruled MET-WITH-CONDITIONS and the two conditions
+were closed — see "Merge-gate status" below).
 **Branch:** `migration/tool-model`
-**Authored:** 2026-07-19
+**Authored:** 2026-07-19; **status flipped:** 2026-07-19.
 **Supersedes:** none (complements ADR 0020 and the existing migration docs).
 
 ---
@@ -19,10 +21,30 @@ main-lead synthesis conducted against `migration/tool-model` @ `12e89b6`.
   confirmed; 1 misattribution (A8 — SOPS_AGE_KEY_FILE is bash-only and
   correct behavior, not a Rust-side bug).** Findings are reliable for
   execution without re-litigation.
-- **Verdict:** **NOT merge-ready as-is; merge-ready after WP1–WP5.** The
-  architecture is sound; the gap is enforcement and documentation.
+- **Verdict (at review time):** NOT merge-ready as-is; merge-ready after
+  WP1–WP5. The architecture is sound; the gap is enforcement and
+  documentation.
+- **Verdict (post-implementation):** MET. WP1–WP5 landed at commits
+  `279015b` `973bff3` `73cfd53` `05b6bb7` `89d1658`; the cargo-side
+  `just verify` was green (fmt OK; clippy clean; 91 main-bin tests + 2
+  spec-examples tests; 3 golden files MATCH; Cargo.lock stable); the
+  litellm-check recipe was hardened to work in non-devshell containers.
 
-### Merge-readiness gate (definition)
+### Merge-gate status
+
+| Condition (per "Merge-readiness gate" below) | State |
+|---|---|
+| WP1–WP5 implemented and green | **DONE** (commits `279015b` `973bff3` `73cfd53` `05b6bb7` `89d1658`) |
+| Trust-boundary + entitlement + spec-examples regression tests | **DONE** (24 new tests across WP1+WP5; spec_examples_parse.rs is WP4's standing guard) |
+| Spec-examples-parse-against-schema CI test | **DONE** (`89d1658`) |
+| Holistic trust-model README statement | DEFERRED to WP7 (does not block merge; ADR 0020 records the model and is referenced from README resolution-order section) |
+| No FIX-NOW item remains open | **DONE** |
+| Independent verification verdict | MET-WITH-CONDITIONS -> MET (the two conditions were: (a) litellm-check recipe portability — closed by `2498f6a`; (b) docs status flip — closed by this commit) |
+
+WP6–WP11 may land as immediate follow-ups on the same branch or a follow-on
+branch; they do not block merge but should be tracked.
+
+### Merge-readiness gate (definition, retained for the record)
 
 The branch merges when **all** of the following hold:
 
@@ -35,8 +57,35 @@ The branch merges when **all** of the following hold:
 4. **Holistic trust-model statement** documented in README (C11/C12/A1).
 5. **No FIX-NOW item remains open.**
 
-WP6–WP11 may land as immediate follow-ups on the same branch or a follow-on
-branch; they do not block merge but should be tracked.
+### WP1–WP5 status table (post-implementation)
+
+| WP | Severity | Status | Commit | Gates |
+|---|---|---|---|---|
+| WP1 — Trust-boundary and path validation | FIX-NOW | DONE | `279015b` | 22 new tests; A1/A2/C2/C3/C4/A18/A20 regressions green; clippy clean |
+| WP2 — Purity and Nix image correctness | FIX-NOW | DONE (HOST-NIX gated) | `73cfd53` | C1/B1/B2/B14 fixes; nix eval regressions deferred to host per env-honesty policy |
+| WP3 — Policy enforcement fix (entitlement order) | FIX-NOW | DONE | `05b6bb7` | A4 regression: entitled workload relaxes true→false from a higher layer |
+| WP4 — Spec/code reconciliation + CI guard | FIX-NOW | DONE | `89d1658` | rw→read_only sweep in spec; spec_examples_parse CI test (2 tests) green |
+| WP5 — New-user journey unblock (`workestrate check`) | FIX-NOW | DONE | `973bff3` | project_root_optional; cmd_check graceful-degradation; 2 integration tests green |
+
+Plus the post-implementation hardening commit:
+- `2498f6a` — `fix(just): litellm-check python fallback for non-devshell environments`. Closed the first independent-verification condition.
+
+WP6–WP11 status (queued, do not block merge):
+- WP6 (schema/semantic fixes: A3/A5/A6/C9/C10/E2), WP7 (trust-model docs: C11/C12/D7/D11/D12/D13), WP8 (setup-secrets alignment + missing commands: A7/E4/E5/E6/E7/E8/C13), WP9 (Nix image completeness: B3/B4/B5/B6/B10), WP10 (provenance/TOCTOU/registry robustness: A9/A17=C6/A11/A12/A16/A24), WP11 (production-path test coverage: A21) — all queued for follow-up.
+
+### Disk-pressure note (probe artifact, not a defect)
+
+During independent verification, impure path-style nix evals (e.g.,
+`nix eval --impure` against a `configDir ? ../..` default before WP2's
+`builtins.path` filter landed) copied large untracked trees —
+`target/` (Rust build artifacts) and `agents/*/build/` (per-workload
+build outputs, 100M+ each) — into the store, exhausting disk on a 7 GB
+container. This is a probe artifact: those trees are `.gitignore`d and
+are never referenced by tracked inputs. WP2's `builtins.path { filter
+= ...; }` fix (commit `73cfd53`) bounds the copy to tracked files only,
+so the issue does not reproduce on the post-WP2 branch. The note is
+retained here as a forensic marker for anyone reproducing verification
+against pre-WP2 pin.
 
 ### Why two-tier (merge-gate vs follow-up)
 

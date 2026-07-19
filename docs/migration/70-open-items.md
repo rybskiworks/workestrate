@@ -8,26 +8,34 @@ remediation plan is documented in
 [`80-remediation-plan.md`](80-remediation-plan.md); the four design-tension
 adjudications are recorded in [ADR 0020](50-decisions/0020-review-adjudications.md).
 
-**Per-WP status (all PENDING APPROVAL):**
+**Per-WP status (WP1-WP5 IMPLEMENTED; merge-gate MET):**
 
-| WP | Severity | Closes | Status |
-|---|---|---|---|
-| WP1 — Trust-boundary and path validation | FIX-NOW | A1, A2, C2, C3, C4, A20=C14, A18=C8 | pending approval |
-| WP2 — Purity and Nix image correctness | FIX-NOW | C1, B1, B2, B14 | pending approval |
-| WP3 — Policy enforcement fix (entitlement order) | FIX-NOW | A4 | pending approval |
-| WP4 — Spec/code reconciliation + CI guard | FIX-NOW | D1 | pending approval |
-| WP5 — New-user journey unblock (`workestrate check`) | FIX-NOW | E1 | pending approval (depends on USER-DECISION-1) |
-| WP6 — Schema and semantic fixes | FIX-SOON | A3, A5, A6, C9, C10, E2 | pending approval |
-| WP7 — Trust-model docs and escape-hatch warnings | FIX-SOON | C11, C12, D7, D11, D12, D13 | pending approval |
-| WP8 — Setup-secrets alignment + missing commands | FIX-SOON | A7, E4, E5, E6, E7, E8, C13 | pending approval |
-| WP9 — Nix image completeness | FIX-SOON | B3, B4, B5, B6, B10 | pending approval |
-| WP10 — Provenance, TOCTOU, registry robustness | FIX-SOON | A9, A17=C6, A11, A12, A16, A24 | pending approval |
-| WP11 — Production-path test coverage | FIX-SOON | A21 | pending approval |
-| WP12 — Backlog sweep | BACKLOG | see WP12 item list | trickle |
+| WP | Severity | Closes | Status | Commit |
+|---|---|---|---|---|
+| WP1 — Trust-boundary and path validation | FIX-NOW | A1, A2, C2, C3, C4, A20=C14, A18=C8 | DONE | `279015b` |
+| WP2 — Purity and Nix image correctness | FIX-NOW | C1, B1, B2, B14 | DONE (HOST-NIX gated) | `73cfd53` |
+| WP3 — Policy enforcement fix (entitlement order) | FIX-NOW | A4 | DONE | `05b6bb7` |
+| WP4 — Spec/code reconciliation + CI guard | FIX-NOW | D1 | DONE | `89d1658` |
+| WP5 — New-user journey unblock (`workestrate check`) | FIX-NOW | E1 | DONE (Decision 1 = standalone) | `973bff3` |
+| WP6 — Schema and semantic fixes | FIX-SOON | A3, A5, A6, C9, C10, E2 | queued | — |
+| WP7 — Trust-model docs and escape-hatch warnings | FIX-SOON | C11, C12, D7, D11, D12, D13 | queued | — |
+| WP8 — Setup-secrets alignment + missing commands | FIX-SOON | A7, E4, E5, E6, E7, E8, C13 | queued | — |
+| WP9 — Nix image completeness | FIX-SOON | B3, B4, B5, B6, B10 | queued | — |
+| WP10 — Provenance, TOCTOU, registry robustness | FIX-SOON | A9, A17=C6, A11, A12, A16, A24 | queued | — |
+| WP11 — Production-path test coverage | FIX-SOON | A21 | queued | — |
+| WP12 — Backlog sweep | BACKLOG | see WP12 item list | trickle | — |
 
-**Merge-readiness gate:** WP1-WP5 green + the trust-boundary / entitlement /
-spec-examples regression tests + the holistic trust-model README section + no
-open FIX-NOW item.
+Plus post-implementation hardening: `2498f6a` hardened the `just litellm-check`
+recipe so it works in containers without the devshell's PyYAML (closes the
+first independent-verification condition).
+
+**Merge-readiness gate:** MET. WP1-WP5 implemented and green; the
+trust-boundary, entitlement, and spec-examples regression tests land and pass;
+no FIX-NOW item remains open; the holistic trust-model README statement is
+deferred to WP7 (recorded in ADR 0020, referenced from README — does not
+block merge). Independent verification ruled MET-WITH-CONDITIONS; both
+conditions closed (litellm-check portability at `2498f6a`, docs flip in this
+update).
 
 ### Items the review found already-resolved
 
@@ -36,6 +44,17 @@ open FIX-NOW item.
   the blanket "IMPLEMENTED" Status line corrected to "PARTIALLY IMPLEMENTED",
   and ADR 0011 (vendor->git-fork) is now explicitly deferred here.
 - **D7** (ADR 0013 not marked superseded by ADR 0019): scheduled for WP7.
+
+### Verification environment fixes (post-WP5)
+
+- **litellm-check recipe portability** (`2498f6a`): the prior recipe was a
+  bare `python3 check_config.py` invocation, which failed in containers
+  whose python3 lacks PyYAML ("PyYAML is required but not installed", exit
+  2). The new recipe is a shebang-form bash block that tries direct python3
+  first, falls back to `nix develop -c python3` if PyYAML is missing, and
+  prints actionable install guidance if neither path is available. The
+  fallback matches the existing pattern used by `setup-secrets`,
+  `validate-secrets`, and `load-images`.
 
 ### New deferred items the review surfaced (not in WP1-WP11)
 
