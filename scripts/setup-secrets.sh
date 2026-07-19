@@ -9,15 +9,18 @@ set +H
 #   nix develop -c setup-secrets update
 #   nix develop -c setup-secrets --config <name> init
 #   nix develop -c setup-secrets --config <name> update
+#   nix develop -c setup-secrets --global init
+#   nix develop -c setup-secrets --global update
 #
 # Secrets can be supplied via environment variables or interactive prompts.
 # Command-line argument support is intentionally omitted to avoid leaking
 # secrets into shell history.
 
 CONFIG_NAME=""
+GLOBAL_MODE=0
 ARGS=()
 
-# Parse --config <name> before the init/update subcommand.
+# Parse --config <name> and --global before the init/update subcommand.
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --config)
@@ -33,12 +36,21 @@ while [ "$#" -gt 0 ]; do
       CONFIG_NAME="${1#--config=}"
       shift
       ;;
+    --global)
+      GLOBAL_MODE=1
+      shift
+      ;;
     *)
       ARGS+=("$1")
       shift
       ;;
   esac
 done
+
+if [ "$GLOBAL_MODE" -eq 1 ] && [ -n "$CONFIG_NAME" ]; then
+  echo "[setup-secrets] error: --global and --config are mutually exclusive" >&2
+  exit 1
+fi
 
 # Determine the target configuration directory.
 resolve_store_dir() {
@@ -65,7 +77,9 @@ find_single_config_name() {
   return 1
 }
 
-if [ -n "$CONFIG_NAME" ]; then
+if [ "$GLOBAL_MODE" -eq 1 ]; then
+  TARGET_DIR="$(resolve_config_dir)"
+elif [ -n "$CONFIG_NAME" ]; then
   TARGET_DIR="$(resolve_store_dir)/repos/$CONFIG_NAME"
 elif [ -n "${WORKESTRATE_CONFIG_DIR:-}" ]; then
   TARGET_DIR="$WORKESTRATE_CONFIG_DIR"
@@ -87,6 +101,10 @@ else
   fi
 fi
 
+if [ "$GLOBAL_MODE" -eq 1 ] && [ ! -d "$TARGET_DIR" ]; then
+  mkdir -p "$TARGET_DIR"
+fi
+
 if [ ! -d "$TARGET_DIR" ]; then
   echo "[setup-secrets] error: target config directory does not exist: $TARGET_DIR" >&2
   exit 1
@@ -95,11 +113,16 @@ fi
 cd "$TARGET_DIR"
 export WORKESTRATE_CONFIG_DIR="$TARGET_DIR"
 
+if [ "$GLOBAL_MODE" -eq 1 ]; then
+  SECRET_FILE=".env.local.enc"
+else
+  SECRET_FILE=".env.enc"
+fi
+
 : "${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/ai-workbench-secrets.txt}"
 export SOPS_AGE_KEY_FILE
 
 SOPS_CONFIG=".sops.yaml"
-SECRET_FILE=".env.enc"
 SCHEMA_FILE=".env.example"
 
 # Read required keys from workestrate config (replaces .env.example grep).

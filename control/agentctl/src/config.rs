@@ -953,7 +953,18 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
         }
     }
 
-    // 4. Trusted project dir (cwd) — may have .env.enc.
+    // 4. User-global secrets layer (.env.local.enc in XDG config dir).
+    // Applied per-key AFTER the context's domain layers, BEFORE project layers.
+    // Optional — missing file is handled gracefully by decrypt_layer().
+    layers.push(SecretsLayer {
+        name: "user-global".to_string(),
+        dir: xdg_config_dir(),
+        secrets_file: ".env.local.enc".to_string(),
+        age_key_file: None, // uses SOPS_AGE_KEY_FILE env or default
+        skip: false,
+    });
+
+    // 5. Trusted project dir (cwd) — may have .env.enc.
     let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
     if !skip_project {
         let cwd = std::env::current_dir()?;
@@ -1765,6 +1776,179 @@ pub(crate) mod tests {
         assert_eq!(layers2[0].name, "global-override");
 
         let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_secrets_layers_includes_user_global_after_context() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let tmp_home = std::env::temp_dir().join(format!(
+            "workestrate-secrets-global-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let config_dir = tmp_home.join(".config").join("workestrate");
+        let data_dir = tmp_home.join(".local").join("share").join("workestrate");
+        std::fs::create_dir_all(&config_dir)?;
+        std::fs::create_dir_all(&data_dir)?;
+
+        // Registry with a context and a config repo
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[configs.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\n",
+        )?;
+
+        // Config repo dir with a workestrate.toml (so the layer is loaded)
+        let repo_dir = data_dir.join("repos").join("personal");
+        std::fs::create_dir_all(&repo_dir)?;
+        std::fs::write(repo_dir.join("workestrate.toml"), "schema_version = 1\n")?;
+
+        // Create a dummy .env.local.enc in the XDG config dir
+        std::fs::write(config_dir.join(".env.local.enc"), "# dummy")?;
+
+        let old_home = std::env::var("HOME").ok();
+        let old_xdg_config = std::env::var("XDG_CONFIG_HOME").ok();
+        let old_xdg_data = std::env::var("XDG_DATA_HOME").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
+
+        std::env::set_var("HOME", &tmp_home);
+        std::env::set_var("XDG_CONFIG_HOME", tmp_home.join(".config"));
+        std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share"));
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        std::env::remove_var("WORKESTRATE_CONTEXT");
+
+        let layers = resolve_secrets_layers()?;
+
+        // Restore env
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_xdg_config {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match old_xdg_data {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+        match old_config_dir {
+            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+        }
+        match old_ctx {
+            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
+            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp_home);
+
+        // Expected layers: reference, personal (context layer), user-global
+        // (trusted project is not present because cwd has no workestrate.toml)
+        let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
+        assert!(
+            names.contains(&"personal"),
+            "context layer 'personal' should be present: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"user-global"),
+            "user-global layer should be present: {:?}",
+            names
+        );
+
+        // user-global should come AFTER personal (context layer)
+        let personal_idx = names.iter().position(|n| *n == "personal").unwrap();
+        let global_idx = names.iter().position(|n| *n == "user-global").unwrap();
+        assert!(
+            global_idx > personal_idx,
+            "user-global should come after context layers: {:?}",
+            names
+        );
+
+        // user-global should use .env.local.enc
+        let global_layer = layers.iter().find(|l| l.name == "user-global").unwrap();
+        assert_eq!(global_layer.secrets_file, ".env.local.enc");
+        assert!(!global_layer.skip, "user-global should not be skipped");
+
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_secrets_layers_user_global_silent_when_missing() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let tmp_home = std::env::temp_dir().join(format!(
+            "workestrate-secrets-global-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let config_dir = tmp_home.join(".config").join("workestrate");
+        let data_dir = tmp_home.join(".local").join("share").join("workestrate");
+        std::fs::create_dir_all(&config_dir)?;
+        std::fs::create_dir_all(&data_dir)?;
+
+        // Registry with a context
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[configs.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\n",
+        )?;
+
+        let repo_dir = data_dir.join("repos").join("personal");
+        std::fs::create_dir_all(&repo_dir)?;
+        std::fs::write(repo_dir.join("workestrate.toml"), "schema_version = 1\n")?;
+
+        // NO .env.local.enc — should still include the layer (decrypt handles missing file)
+        let old_home = std::env::var("HOME").ok();
+        let old_xdg_config = std::env::var("XDG_CONFIG_HOME").ok();
+        let old_xdg_data = std::env::var("XDG_DATA_HOME").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
+
+        std::env::set_var("HOME", &tmp_home);
+        std::env::set_var("XDG_CONFIG_HOME", tmp_home.join(".config"));
+        std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share"));
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        std::env::remove_var("WORKESTRATE_CONTEXT");
+
+        let layers = resolve_secrets_layers()?;
+
+        // Restore env
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_xdg_config {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match old_xdg_data {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+        match old_config_dir {
+            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+        }
+        match old_ctx {
+            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
+            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp_home);
+
+        // user-global layer should still be present (file is optional, layer is always added)
+        let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
+        assert!(
+            names.contains(&"user-global"),
+            "user-global layer should be present even when .env.local.enc is missing: {:?}",
+            names
+        );
+
         Ok(())
     }
 }
