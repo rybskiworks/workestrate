@@ -255,7 +255,60 @@ fn print_entry(entry: &CheckEntry) {
     }
 }
 
+/// Validate a workload name for `workestrate new`. Closes review finding A20.
+///
+/// Pattern: `^[a-z0-9][a-z0-9-]{0,62}$` — starts with an alphanumeric, allows
+/// lowercase letters / digits / hyphens, max 63 characters (DNS-label length).
+/// Rejects:
+/// - empty / overlong names
+/// - uppercase, underscores, dots, slashes, shell metacharacters
+/// - anything starting with a hyphen (would create a hidden dir or flag-like
+///   arg)
+///
+/// "Escape nothing — reject instead" is the policy: workload names flow into
+/// both filesystem paths and TOML keys, so the safe set is the intersection.
+fn validate_workload_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("workload name cannot be empty");
+    }
+    if name.len() > 63 {
+        anyhow::bail!(
+            "workload name cannot exceed 63 characters (got {}): '{}'",
+            name.len(),
+            name
+        );
+    }
+    let mut chars = name.chars();
+    let first_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !first_ok {
+        anyhow::bail!(
+            "workload name must start with [a-z0-9]; \
+             pattern: ^[a-z0-9][a-z0-9-]{{0,62}}$; got: '{name}'"
+        );
+    }
+    for c in chars {
+        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-' {
+            anyhow::bail!(
+                "workload name contains invalid character '{}' (allowed: [a-z0-9-]); \
+                 pattern: ^[a-z0-9][a-z0-9-]{{0,62}}$; got: '{}'",
+                c,
+                name
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn cmd_new(name: &str) -> Result<()> {
+    // WP1 / A20: validate the workload name BEFORE using it as a directory
+    // name or interpolating it into TOML. Reject everything that is not a
+    // safe lowercase-hyphen identifier; this prevents both path escape
+    // (`../pwned`) and TOML injection (`a]b` breaking out of the workload
+    // table).
+    validate_workload_name(name)?;
+
     // Resolve the active config directory (trusted project, registry, or env).
     let config_dir = config::resolve_active_config_dir()?;
     let agent_dir = config_dir.join("agents").join(name);
@@ -1188,7 +1241,7 @@ async fn cmd_run(command: &[String]) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unwrap_in_result)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
@@ -1437,5 +1490,63 @@ mod tests {
             err.contains("no active config repo") || err.contains("workestrate init"),
             "error should mention 'no active config repo' or 'workestrate init'; got: {err}"
         );
+    }
+
+    // ---- A20 regression: cmd_new rejects invalid workload names ----
+
+    #[test]
+    fn validate_workload_name_accepts_legitimate_names() {
+        for ok in [
+            "pi",
+            "opencode",
+            "example-agent",
+            "my-cool-workload",
+            "abc",
+            "a1b",
+            "a",
+            "0",
+            "1agent",
+            &"a".repeat(63),
+        ] {
+            validate_workload_name(ok)
+                .unwrap_or_else(|e| panic!("legitimate name '{ok}' rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_workload_name_rejects_hostile_inputs() {
+        // Each must fail. Categories: path escape, TOML injection,
+        // shell-meta, uppercase, underscore, leading-hyphen, overlong, empty.
+        let hostile = [
+            "../pwned",   // path escape
+            "/etc/pwned", // absolute path
+            "a]b",        // TOML table close-bracket injection
+            "a.b",        // dot (TOML nested-key separator)
+            "a b",        // whitespace
+            "a$b",        // shell meta
+            "a;b",        // shell meta
+            "Agent",      // uppercase
+            "my_agent",   // underscore (DNS-label style disallows)
+            "-leading",   // leading hyphen
+            "",           // empty
+            &"x".repeat(64), // overlong (64 > 63)
+        ];
+        for h in hostile {
+            let result = validate_workload_name(h);
+            assert!(
+                result.is_err(),
+                "hostile name '{h}' should be rejected, but was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_workload_name_trailing_hyphen_is_allowed_by_design() {
+        // The regex ^[a-z0-9][a-z0-9-]{0,62}$ permits trailing hyphens.
+        // DNS labels disallow them, but workestrate workload names are not
+        // DNS labels — they're filesystem path components and TOML keys.
+        // If a future decision tightens this, update both the regex and this
+        // test together.
+        validate_workload_name("foo-").expect("trailing hyphen is allowed");
     }
 }
