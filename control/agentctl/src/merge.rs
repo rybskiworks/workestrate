@@ -333,14 +333,14 @@ fn merge_network(
     if raw_network.contains_key("default_deny") {
         match layer.default_deny {
             Some(false) => {
-                if merged.default_deny == Some(true) {
-                    anyhow::bail!(
-                        "layer '{}' cannot set default_deny=false for workload '{}'; \
-                         an earlier layer set default_deny=true (monotonic-true invariant)",
-                        layer_ctx.name,
-                        name
-                    );
-                }
+                // WP3/A4: entitlement is checked BEFORE the monotonic-true
+                // invariant. Only entitled workloads (see
+                // `policy::DEFAULT_DENY_FALSE_ENTITLEMENT`) may hold or relax
+                // to `default_deny = false`; for them the monotonic-true
+                // invariant does NOT apply (entitlement is the explicit
+                // opt-out from `default_deny = true`). Non-entitled workloads
+                // can never reach `Some(false)` at all -- the bail below
+                // upholds the monotonic-true invariant as defense-in-depth.
                 if !policy::DEFAULT_DENY_FALSE_ENTITLEMENT.contains(&name) {
                     anyhow::bail!(
                         "workload '{}' is not entitled to default_deny=false (core entitlement: DEFAULT_DENY_FALSE_ENTITLEMENT)",
@@ -561,14 +561,81 @@ mod tests {
 
     #[test]
     fn default_deny_monotonic_true_blocks_false() {
+        // WP3/A4: after the entitlement-before-monotonic-true reorder, a
+        // non-entitled workload (pi) attempting to relax `true -> false`
+        // bails at the entitlement check. The monotonic-true invariant is
+        // upheld for non-entitled workloads by that entitlement check (they
+        // can never reach `Some(false)` at all).
         let base = load_fixture("base", "base");
         let hostile = load_fixture("hostile_default_deny", "hostile_default_deny");
 
         let err = merge_layers(&[base, hostile]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("monotonic-true"),
-            "error should mention monotonic-true: {msg}"
+            msg.contains("entitlement"),
+            "non-entitled pi should bail at the entitlement check: {msg}"
+        );
+    }
+
+    #[test]
+    fn entitled_workload_relaxes_default_deny_true_to_false() -> Result<()> {
+        // WP3/A4 regression (the headline test): a three-layer stack where
+        // base sets tempest default_deny=true, mid keeps true, top sets
+        // false. Because tempest is in DEFAULT_DENY_FALSE_ENTITLEMENT, the
+        // top layer must win -- the monotonic-true check must NOT fire for
+        // an entitled workload.
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.tempest]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.tempest.network]\ndefault_deny = true",
+        )?;
+        let mid = Layer::from_string(
+            "mid",
+            "schema_version = 1\n\n[workloads.tempest]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.tempest.network]\ndefault_deny = true",
+        )?;
+        let top = Layer::from_string(
+            "top",
+            "schema_version = 1\n\n[workloads.tempest]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.tempest.network]\ndefault_deny = false",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, mid, top])?;
+        let tempest = merged.workloads.get("tempest").unwrap();
+        assert_eq!(
+            tempest.network.default_deny,
+            Some(false),
+            "entitled workload should relax true->false from the top layer"
+        );
+        assert_eq!(
+            provenance.get("workloads.tempest.network.default_deny"),
+            Some(&"top".to_string()),
+            "provenance should attribute the relaxed value to the top layer"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_entitled_workload_cannot_relax_default_deny_true_to_false() {
+        // WP3/A4 regression: a non-entitled workload (pi) can never reach
+        // `default_deny = false`, even via a three-layer stack that first
+        // sets true then attempts to relax to false. The entitlement check
+        // (now first) bails at the top layer.
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network]\ndefault_deny = true",
+        ).unwrap();
+        let mid = Layer::from_string(
+            "mid",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network]\ndefault_deny = true",
+        ).unwrap();
+        let top = Layer::from_string(
+            "top",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network]\ndefault_deny = false",
+        ).unwrap();
+
+        let err = merge_layers(&[base, mid, top]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("entitlement"),
+            "non-entitled pi should bail at the entitlement check: {msg}"
         );
     }
 
