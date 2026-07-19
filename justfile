@@ -3,10 +3,29 @@ check:
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
     cargo check --manifest-path control/agentctl/Cargo.toml
 
-# Validate LiteLLM config.yaml against the schema indexes
+# Validate LiteLLM config.yaml against the schema indexes.
+# Tries direct python3 first (fast path, works inside `nix develop` or any env
+# where PyYAML is installed). Falls back to `nix develop -c python3` when bare
+# python3 lacks PyYAML (e.g., a minimal container outside the devshell). Errors
+# with actionable guidance when neither path is available. Closes the
+# "PyYAML is required but not installed" failure mode reported by independent
+# verification of `just verify` in a non-devshell container.
 litellm-check:
-    python3 .agents/skills/validation-litellm-config-check/scripts/check_config.py \
-      --config config.reference/infra/litellm/config.yaml --schemas-dir docs/litellm/schemas --mode in-memory
+    #!/usr/bin/env bash
+    set -euo pipefail
+    script=".agents/skills/validation-litellm-config-check/scripts/check_config.py"
+    args=(--config config.reference/infra/litellm/config.yaml --schemas-dir docs/litellm/schemas --mode in-memory)
+    if python3 -c 'import yaml' >/dev/null 2>&1; then
+        python3 "$script" "${args[@]}"
+    elif command -v nix >/dev/null 2>&1; then
+        # Slow path: borrow PyYAML from the nix devshell.
+        nix develop -c python3 "$script" "${args[@]}"
+    else
+        echo "ERROR: PyYAML is not available via python3 and 'nix' is not on PATH" >&2
+        echo "       to fall back to 'nix develop -c python3'." >&2
+        echo "Install PyYAML (pip install pyyaml) or run inside 'nix develop'." >&2
+        exit 1
+    fi
 
 # Parse every fenced toml block in docs/migration/20-target-system-spec.md
 # against the ConfigFile schema shape (WP4 / D1 standing guard).
