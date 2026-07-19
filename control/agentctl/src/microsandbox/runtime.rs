@@ -343,6 +343,13 @@ pub(crate) async fn build_sandbox<W: Workload>(
 
     let root = crate::config::project_root()?;
     let plan = workload.plan();
+
+    // Port collision detection: check against already-running workestrate sandboxes.
+    let state_dir = crate::config::resolve_state_dir();
+    let instance_name = workload.sandbox_instance_name();
+    let host_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
+    super::port_registry::check_port_collisions(&state_dir, &instance_name, &host_ports)?;
+
     ensure_mount_sources(&root, &plan)?;
 
     let policy = network_plan_to_policy(&plan.network)?;
@@ -372,6 +379,16 @@ pub(crate) async fn build_sandbox<W: Workload>(
     builder = apply_plan_secrets(builder, &plan)?;
 
     let sandbox = builder.replace().create().await?;
+
+    // Register the running sandbox for port collision tracking.
+    let context_name = crate::config::active_context_name();
+    super::port_registry::register_sandbox(
+        &state_dir,
+        &instance_name,
+        context_name.as_deref(),
+        workload.name(),
+        &host_ports,
+    )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
         service_label: workload.name().to_string(),
@@ -441,10 +458,15 @@ pub async fn down(name: &str) -> Result<()> {
     match Sandbox::get(name).await {
         Ok(handle) => {
             stop_and_remove(handle).await?;
+            let state_dir = crate::config::resolve_state_dir();
+            super::port_registry::unregister_sandbox(&state_dir, name)?;
             println!("Sandbox '{}' stopped and removed", name);
             Ok(())
         }
         Err(MicrosandboxError::SandboxNotFound(_)) => {
+            // Sandbox not running, but there may be a stale state file.
+            let state_dir = crate::config::resolve_state_dir();
+            super::port_registry::unregister_sandbox(&state_dir, name)?;
             println!("Sandbox '{}' not found", name);
             Ok(())
         }
