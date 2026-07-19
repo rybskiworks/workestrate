@@ -1,5 +1,74 @@
 # 70 — Open Items
 
+## Review findings (2026-07)
+
+A five-way parallel investigation (Rust core / Nix / security / docs / tooling)
+plus main-lead synthesis reviewed `migration/tool-model` @ `12e89b6`. The
+remediation plan is documented in
+[`80-remediation-plan.md`](80-remediation-plan.md); the four design-tension
+adjudications are recorded in [ADR 0020](50-decisions/0020-review-adjudications.md).
+
+**Per-WP status (all PENDING APPROVAL):**
+
+| WP | Severity | Closes | Status |
+|---|---|---|---|
+| WP1 — Trust-boundary and path validation | FIX-NOW | A1, A2, C2, C3, C4, A20=C14, A18=C8 | pending approval |
+| WP2 — Purity and Nix image correctness | FIX-NOW | C1, B1, B2, B14 | pending approval |
+| WP3 — Policy enforcement fix (entitlement order) | FIX-NOW | A4 | pending approval |
+| WP4 — Spec/code reconciliation + CI guard | FIX-NOW | D1 | pending approval |
+| WP5 — New-user journey unblock (`workestrate check`) | FIX-NOW | E1 | pending approval (depends on USER-DECISION-1) |
+| WP6 — Schema and semantic fixes | FIX-SOON | A3, A5, A6, C9, C10, E2 | pending approval |
+| WP7 — Trust-model docs and escape-hatch warnings | FIX-SOON | C11, C12, D7, D11, D12, D13 | pending approval |
+| WP8 — Setup-secrets alignment + missing commands | FIX-SOON | A7, E4, E5, E6, E7, E8, C13 | pending approval |
+| WP9 — Nix image completeness | FIX-SOON | B3, B4, B5, B6, B10 | pending approval |
+| WP10 — Provenance, TOCTOU, registry robustness | FIX-SOON | A9, A17=C6, A11, A12, A16, A24 | pending approval |
+| WP11 — Production-path test coverage | FIX-SOON | A21 | pending approval |
+| WP12 — Backlog sweep | BACKLOG | see WP12 item list | trickle |
+
+**Merge-readiness gate:** WP1-WP5 green + the trust-boundary / entitlement /
+spec-examples regression tests + the holistic trust-model README section + no
+open FIX-NOW item.
+
+### Items the review found already-resolved
+
+- **D8** (40-migration-process.md step 0b.6 status inaccuracy): FIXED in this
+  update cycle — the misleading "Step 0b.6" sub-section has been relabeled,
+  the blanket "IMPLEMENTED" Status line corrected to "PARTIALLY IMPLEMENTED",
+  and ADR 0011 (vendor->git-fork) is now explicitly deferred here.
+- **D7** (ADR 0013 not marked superseded by ADR 0019): scheduled for WP7.
+
+### New deferred items the review surfaced (not in WP1-WP11)
+
+The investigators surfaced the following items that are NOT addressed by any
+work package. They are deferred to backlog (per `80-remediation-plan.md`'s
+"OUT OF SCOPE" list) and tracked here.
+
+- **E16 backup/restore story** — `workestrate backup`/`restore` over the
+  registry + state dir. No data-loss risk in current single-operator model.
+- **E12 dynamic shell completions** — `clap_complete` integration. UX polish.
+- **E14 `workestrate uninstall`** — inverse of `init`. Useful but not
+  load-bearing; manual `rm` is acceptable.
+- **E13 `workestrate plan --all`** — convenience; the per-workload form works
+  today.
+- **E17 `workestrate config resolve --dump`** — whole-config resolution dump
+  for debugging. Referenced in WP7's README rewrite as a future aid.
+- **E18 multi-context batch** — explicitly deferred by ADR 0019; no current
+  use case. Confirmed deferred here.
+- **B8/B9/B11/B13** — Nix pure-eval and recipe polish; no acute impact on
+  headline agents (which use the per-agent `.nix` files, not the recipes,
+  until WP9 lands).
+- **A22 broad edge-test sweep** — WP11 covers the production-path gap;
+  broader edge tests land opportunistically with each bug fix.
+
+### ADR 0011 (vendor -> git-fork) — deferred to backlog
+
+The review confirmed (finding D8) that Phase 0b step 0b.6 (microsandbox
+vendor symlink -> git-fork dependency, ADR 0011) is NOT implemented despite
+the prior status line claiming Phase 0b IMPLEMENTED. The vendor symlink still
+exists in `nix/packages/agentctl.nix`. This is not blocking the cargo-verifiable
+or runtime path (the vendored crate builds) but should land before any pure-
+eval Nix build claim. Deferred to backlog; ADR 0011 stays Accepted.
+
 ## Pending user defaults
 
 These are decisions that genuinely need user input. Recommended defaults are

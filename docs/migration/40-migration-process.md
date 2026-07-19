@@ -47,7 +47,13 @@ remain. Odysseus/opencode nix derivations exist (HOST-NIX gate).
 | 0b.6 | Migrate microsandbox vendor symlink to git-fork dependency (ADR 0011). Remove `vendor-unlock`/`vendor-lock` recipes. Update `nix/packages/agentctl.nix:41-47` preBuild. | `nix build .#workestrate` succeeds; `cargo check` passes | HOST-NIX |
 | 0b.7 | Full validation. | `just verify` + `nix build .#workestrate` | HOST-NIX |
 
-**Status**: IMPLEMENTED (nix eval gates pass; HOST-NIX build gates deferred to host).
+**Status**: PARTIALLY IMPLEMENTED. Steps 0b.1-0b.5 + Phase 2 core exports + the
+`workestrate source build` nix-shell wiring (sub-section below) are DONE. Step 0b.6
+(microsandbox vendor -> git-fork dependency, ADR 0011) is NOT done — the vendor
+symlink still exists in `nix/packages/agentctl.nix`. ADR 0011 is deferred to backlog
+(see `70-open-items.md`). The sub-section previously labeled "Step 0b.6" described
+unrelated `source build` nix-shell wiring and has been relabeled below to remove the
+confusion surfaced by the 2026-07 review (finding D8).
 
 ### Step 0b.1: `nix/lib/config.nix` — DONE
 - Reads `config.reference/workestrate.toml` via `builtins.fromTOML`.
@@ -67,8 +73,11 @@ remain. Odysseus/opencode nix derivations exist (HOST-NIX gate).
 - `nix/lib/recipes/{npm-build,bun-compile,pip-install,bun-install,registry,nix-layered}.nix`: recipe functions.
 - Existing per-agent `.nix` files are untouched; their drvPaths are unchanged.
 
-### Step 0b.6: `workestrate source build` nix shell wiring — DONE
+### `workestrate source build` nix-shell wiring — DONE (was mislabeled 0b.6)
 - `control/agentctl/src/main.rs`: `workestrate source build` now attempts to run the recipe command via `nix shell .` if nix is available, with a fallback to instruction-only output.
+- **Note (2026-07 review, finding D8):** this sub-section was previously labeled
+  "Step 0b.6" but it does NOT implement table step 0b.6 (vendor->git-fork). Table
+  step 0b.6 / ADR 0011 remain outstanding; see Status above and `70-open-items.md`.
 
 ### Phase 2 core exports — DONE
 - `flake.nix` exposes `lib.${system}` with `recipes`, `vocabulary`, `buildWorkloadImage`, `buildImagesFromConfig`, and `checks.validateConfig`.
@@ -328,3 +337,33 @@ golden-check:
 - `workestrate validate-config` against a copier-generated config repo
 - Multi-recipient SOPS workflow with two age keys (setup-secrets + decrypt)
 - `nix build` in a config repo with the inverted-dependency flake.nix
+
+## Review and remediation (2026-07)
+
+**Status:** Review COMPLETED; remediation PENDING USER APPROVAL.
+
+A five-way parallel investigation (Rust core, Nix, security, docs coherence,
+tooling gaps) plus main-lead synthesis reviewed `migration/tool-model` @
+`12e89b6`. The main lead spot-verified the 10 highest-severity claims plus 7
+bonus claims by reading the cited code directly; 17 of 18 were confirmed.
+
+**Verdict:** NOT merge-ready as-is; merge-ready after WP1-WP5 of the
+remediation plan.
+
+- The full remediation plan with per-finding evidence, exact fix approach,
+  regression tests, effort, dependencies, and validation gates lives in
+  [`80-remediation-plan.md`](80-remediation-plan.md).
+- The four design-tension adjudications are recorded permanently as
+  [ADR 0020](50-decisions/0020-review-adjudications.md); ADR 0005 has an
+  addendum pointer to its two clarifications.
+- Per-WP pending-approval status is tracked in
+  [`70-open-items.md`](70-open-items.md) under "Review findings (2026-07)".
+
+**Merge-readiness gate** (per `80-remediation-plan.md`): WP1-WP5 green; the
+trust-boundary, entitlement-ordering, and spec-examples regression tests
+pass; the holistic trust-model statement is documented in the README; no
+FIX-NOW item remains open. WP6-WP11 are immediate follow-ups (same or
+follow-on branch); WP12 is standing backlog.
+
+The host-batched HOST-NIX and HOST-KVM gates run in one pass at the end so
+the host environment is not context-switched mid-remediation.
