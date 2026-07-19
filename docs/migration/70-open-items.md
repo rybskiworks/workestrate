@@ -51,11 +51,12 @@ or on a host with nix (HOST-NIX gates).
 These are intentionally deferred to later phases or until a trigger condition
 is met.
 
-### Contexts (named layer-sets)
+### Contexts (named layer-sets) — RESOLVED (ADR 0019)
 
-**Deferred until**: 3+ layers exist (ADR 0013). Phase 3 ships a single
-ordered `layers` array. Named contexts (`[[contexts.<name>]]` with
-`--context <name>` flag) are a future enhancement.
+**Status**: RESOLVED. Implemented in Phase 3.5 (ADR 0019). Registry gains
+`[contexts.<name>] layers = [...]`. Selection: `--context` flag >
+`WORKESTRATE_CONTEXT` env > `[settings] default_context` > bare-layers
+backward-compat.
 
 ### Team machinery
 
@@ -63,6 +64,33 @@ ordered `layers` array. Named contexts (`[[contexts.<name>]]` with
 layering engine with fixture-repo tests (base/team/personal). The actual team
 config repo, multi-recipient SOPS with a real team key, and team CI are
 deferred.
+
+### .local siblings for overrides
+
+**Deferred until**: a user needs project-local overrides that complement
+the user-global `overrides.toml`. Currently, project-local overrides use
+`./workestrate.local.toml` (trusted project layer). A matching
+`./overrides.local.toml` for user-global-style overrides at the project
+level is not implemented. The existing `workestrate.local.toml` covers
+the common case.
+
+### --port-offset escape hatch
+
+**Deferred until**: a user needs to run the same workload from two
+contexts simultaneously on the same host. Currently, port collisions
+between contexts produce a hard error with remediation (change the port
+in one config repo). A `--port-offset N` flag that shifts all host ports
+by N would allow side-by-side execution, but complicates ingress rules
+and is not needed for the current single-user, single-context-at-a-time
+model.
+
+### Multi-context batch
+
+**Deferred until**: a use case requires merging multiple contexts in one
+invocation. Currently, one invocation resolves exactly ONE context
+(ADR 0019). Multi-context batch would complicate instance naming
+(`<context>-<workload>` assumes one context) and port collision detection.
+No current use case; revisit if orchestration scenarios emerge.
 
 ### Per-workload packs
 

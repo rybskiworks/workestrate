@@ -133,6 +133,18 @@ rev = "789abc012def3456789abc012def456789abc012"
 
 layers = ["work", "personal"]
 
+# ─── Contexts (named layer-sets; Phase 3.5) ─────────────────────────────────
+# Named contexts allow switching between layer-sets without editing the
+# registry. Selection: --context flag > WORKESTRATE_CONTEXT env >
+# [settings] default_context > bare layers (backward compat when no
+# contexts are defined).
+
+[contexts.personal]
+layers = ["personal"]
+
+[contexts.work]
+layers = ["work", "personal"]
+
 # ─── Trusted projects (project-layer config trust gating) ──────────────────
 # `workestrate config trust <dir>` adds a project directory here.
 # Only trusted projects' ./workestrate.toml is loaded as a project layer.
@@ -157,6 +169,7 @@ path = "/home/node/Development/another-project"
 | `[configs.<name>]` | `ref` | string | `"main"` | Git ref to track |
 | `[configs.<name>]` | `rev` | string | (auto) | Pinned commit hash (updated by `config update`) |
 | `layers` | (array) | array of strings | `[]` | Ordered list of config-repo names to merge |
+| `[contexts.<name>]` | `layers` | array of strings | (required) | Ordered list of config-repo names for this context |
 | `[[trusted_projects]]` | `path` | string | (required) | Absolute path to a trusted project directory |
 
 ## 3. workestrate.toml full schema
@@ -635,11 +648,11 @@ Closed vocabulary — new packages added via core review (ADR 0003).
 ```
 1. Tool built-in defaults     (compiled into workestrate binary)
 2. Reference config           (config.reference/workestrate.toml, shipped with tool)
-3. Registry layers            (ordered `layers` in ~/.config/workestrate/config.toml;
-                               each layer is a config repo at ~/.local/share/workestrate/repos/<name>/)
-4. Trusted project config     (./workestrate.toml in cwd, IF cwd is in [trusted_projects])
-5. Local overrides             (./workestrate.local.toml in cwd, gitignored)
-6. Command-line flags         (--set key=value, if implemented)
+3. Context layers             (resolved context's `layers` array; see Context resolution below)
+4. User-global overrides      ($XDG_CONFIG_HOME/workestrate/overrides.toml: [global] then [configs.<name>])
+5. Trusted project config     (./workestrate.toml in cwd, IF cwd is in [trusted_projects])
+6. Local overrides             (./workestrate.local.toml in cwd, gitignored)
+7. Command-line flags         (--set key=value, if implemented)
 ```
 
 ### Config discovery (Rust CLI, `config.rs`)
@@ -679,6 +692,23 @@ fn discover_config() -> Result<Config> {
     Ok(config)
 }
 ```
+
+### Context resolution
+
+The active context is resolved per invocation:
+
+1. `--context <name>` CLI flag (sets `WORKESTRATE_CONTEXT` env)
+2. `WORKESTRATE_CONTEXT` env var
+3. `[settings] default_context` in the registry
+4. If NO contexts defined: bare `layers` array (backward compat — existing
+   registries work unchanged; golden-check stays byte-identical)
+
+One invocation resolves exactly ONE context. Its layers merge per the
+existing engine. Secrets merge per-key within the context.
+
+When contexts are defined, sandbox instance names become `<context>-<workload>`
+(bare names preserved when no contexts exist). This prevents port and state
+collisions between contexts.
 
 ### Fail-closed behavior (no config)
 
@@ -997,3 +1027,60 @@ deny: .pi.dev                                    [personal]
 Attribution labels: `[core]` (tool defaults), `[reference]` (config.reference/),
 `[<layer-name>]` (registry layer), `[project]` (trusted project),
 `[local]` (local overrides).
+
+## 12. User-global overrides + secrets
+
+### overrides.toml
+
+`$XDG_CONFIG_HOME/workestrate/overrides.toml` (optional) provides
+machine-local config overrides that apply across all contexts or to
+specific config repos.
+
+```toml
+# Applied to every context
+[global]
+# Any ConfigFile field: schema_version, secrets, workloads
+
+[global.workloads.pi]
+cpus = 4
+
+# Applied only when "team" is in the active context's layers
+[configs.team]
+
+[configs.team.workloads.pi]
+memory_mib = 4096
+```
+
+#### Precedence
+
+```
+reference < context layers < [global] < [configs.<name>] < trusted project < project local
+```
+
+Each section is a ConfigFile fragment merged as a layer by the same engine
++ security rules (monotonic `default_deny`, additive deny/egress unions,
+`policy.rs` ceiling).
+
+#### LENIENT semantics
+
+| Scenario | Behavior |
+|---|---|
+| Missing overrides.toml | Silently absent (no error) |
+| `[configs.team]` when team not in context | Skip + INFO log |
+| `[configs.team.workloads.nonexistent]` | Skip + INFO log |
+| Unknown field in matched section | Loud WARNING (probable typo) |
+| Override sets `default_deny=false` on non-entitled workload | Hard error (merge engine) |
+| Override adds non-allowlisted egress host | Hard error (merge engine) |
+
+### .env.local.enc
+
+`$XDG_CONFIG_HOME/workestrate/.env.local.enc` (optional) provides
+machine-local secret values applied per-key AFTER the context's domain
+layers, BEFORE project layers.
+
+```
+Secrets precedence: process env < reference < context layers < user-global .env.local.enc < trusted project < local
+```
+
+`setup-secrets --global init|update` targets this file (mutually exclusive
+with `--config`).
