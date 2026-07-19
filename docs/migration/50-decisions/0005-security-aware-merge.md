@@ -41,3 +41,26 @@ removing a deny rule.
 
 Uniform RFC 7396 creates a security hole in `default_deny` (the most critical
 security field).
+
+---
+
+## Addendum (2026-07-19, ADR 0020)
+
+Two clarifications recorded permanently in ADR 0020:
+
+1. **env union-by-name.** `workloads.<name>.env` is name-keyed and merges
+   union-by-name (last-write-wins per env-var key), NOT REPLACE. This
+   aligns env with `secret_env`'s union-by-secret-name pattern. The other
+   REPLACE lists (`ports`, `mounts`, `seed_files`, `local_build`,
+   `network.ingress`) stay REPLACE — they are list-of-rows where partial
+   replacement is ambiguous. (Closes review finding A3.)
+2. **Entitlement before monotonic-true.** In `merge_network`, the
+   `DEFAULT_DENY_FALSE_ENTITLEMENT` check runs BEFORE the monotonic-true
+   check. Entitled workloads (`tempest`, `example-offensive`) may relax
+   `default_deny` from `true` to `false` at a higher layer. Monotonic-true
+   remains defense-in-depth for non-entitled workloads. (Closes review
+   finding A4.)
+
+See ADR 0020 for full rationale. This ADR's original decision table is
+unchanged; this addendum clarifies two details that the original text
+left ambiguous.

@@ -22,11 +22,12 @@ Where earlier session rounds expressed options or wavered, the ADRs in
 2. `10-current-state.md` — verified current state with file:line citations.
 3. `20-target-system-spec.md` — the main spec of the migrated system.
 4. `30-security-model.md` — threat model, invariants, enforcement points.
-5. `40-migration-process.md` — phased process, per-file consequence sweep, gates.
-6. `50-decisions/README.md` — ADR index.
-7. `50-decisions/NNNN-*.md` — individual ADRs (0001–0016).
+5. `40-migration-process.md` — phased process, per-file consequence sweep, gates; review & remediation status.
+6. `50-decisions/README.md` — ADR index (0001–0020).
+7. `50-decisions/NNNN-*.md` — individual ADRs (0001–0020).
 8. `60-glossary.md` — canonical vocabulary.
 9. `70-open-items.md` — pending user defaults, KVM gates, residual risks.
+10. `80-remediation-plan.md` — review findings (2026-07) remediation plan, PENDING APPROVAL.
 
 ## Scope
 
