@@ -61,6 +61,38 @@ pub fn project_root() -> Result<PathBuf> {
     Ok(root)
 }
 
+/// Best-effort variant of [`project_root`] for the standalone-installed-tool
+/// model (review finding E1, WP5). Returns `None` instead of bailing when no
+/// workbench checkout can be located — letting callers like `cmd_check` and
+/// `find_reference_config` degrade gracefully.
+///
+/// Callers that genuinely require a workbench root (e.g. workload source /
+/// build resolution at sandbox-start time) should keep using [`project_root`]
+/// so the hard failure surfaces at the operation that needs it.
+pub fn project_root_optional() -> Option<PathBuf> {
+    // 1. AGENTCTL_ROOT env var
+    if let Ok(root) = std::env::var("AGENTCTL_ROOT") {
+        let p = PathBuf::from(root);
+        if p.join("flake.nix").exists() {
+            return Some(p);
+        }
+    }
+    // 2. Walk up from CARGO_MANIFEST_DIR (cargo run / cargo test).
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let mut path = PathBuf::from(manifest);
+        if path.pop() && path.pop() && path.join("flake.nix").exists() {
+            return Some(path);
+        }
+    }
+    // 3. Current working directory + flake.nix check.
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd.join("flake.nix").exists() {
+            return Some(cwd);
+        }
+    }
+    None
+}
+
 /// One row in the `agentctl check` report.
 #[derive(Debug, Clone)]
 pub struct CheckEntry {
@@ -1198,7 +1230,12 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unwrap_in_result)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unwrap_in_result
+    )]
     use super::*;
 
     /// Global lock for tests that mutate process env vars.

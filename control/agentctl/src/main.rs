@@ -1102,21 +1102,29 @@ async fn cmd_check() -> Result<()> {
     }
 
     println!("\nRequired files:");
-    if let Ok(root) = config::project_root() {
-        let checks = config::check_required_files(&root)?;
-        let mut had_missing_required = false;
-        for entry in &checks {
-            print_entry(entry);
-            if !entry.ok && !entry.optional {
-                had_missing_required = true;
+    // WP5 / E1: project_root_optional() returns None when workestrate is
+    // invoked outside a workbench checkout (the documented standalone-tool
+    // install path). Previously cmd_check hard-failed on this, breaking the
+    // first command after `nix profile install`. We now skip the
+    // workbench-layout checks with a note and let the registry / XDG /
+    // reference-config checks above stand on their own.
+    match config::project_root_optional() {
+        Some(root) => {
+            let checks = config::check_required_files(&root)?;
+            let mut had_missing_required = false;
+            for entry in &checks {
+                print_entry(entry);
+                if !entry.ok && !entry.optional {
+                    had_missing_required = true;
+                }
+            }
+            if had_missing_required {
+                all_ok = false;
             }
         }
-        if had_missing_required {
-            all_ok = false;
+        None => {
+            println!("  (not in a workbench checkout — skipped)");
         }
-    } else {
-        println!("  (could not resolve project root)");
-        all_ok = false;
     }
 
     if all_ok {
@@ -1128,7 +1136,11 @@ async fn cmd_check() -> Result<()> {
 }
 
 fn find_reference_config() -> Option<PathBuf> {
-    if let Ok(root) = config::project_root() {
+    // WP5 / E1: project_root_optional() returns None for standalone installs;
+    // we then fall through to the CARGO_MANIFEST_DIR probe (cargo run / test)
+    // and finally return None so cmd_check can print "(could not resolve
+    // reference config)" instead of bailing.
+    if let Some(root) = config::project_root_optional() {
         let path = root.join("config.reference").join("workestrate.toml");
         if path.exists() {
             return Some(path);
@@ -1241,7 +1253,12 @@ async fn cmd_run(command: &[String]) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unwrap_in_result)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
@@ -1518,17 +1535,17 @@ mod tests {
         // Each must fail. Categories: path escape, TOML injection,
         // shell-meta, uppercase, underscore, leading-hyphen, overlong, empty.
         let hostile = [
-            "../pwned",   // path escape
-            "/etc/pwned", // absolute path
-            "a]b",        // TOML table close-bracket injection
-            "a.b",        // dot (TOML nested-key separator)
-            "a b",        // whitespace
-            "a$b",        // shell meta
-            "a;b",        // shell meta
-            "Agent",      // uppercase
-            "my_agent",   // underscore (DNS-label style disallows)
-            "-leading",   // leading hyphen
-            "",           // empty
+            "../pwned",      // path escape
+            "/etc/pwned",    // absolute path
+            "a]b",           // TOML table close-bracket injection
+            "a.b",           // dot (TOML nested-key separator)
+            "a b",           // whitespace
+            "a$b",           // shell meta
+            "a;b",           // shell meta
+            "Agent",         // uppercase
+            "my_agent",      // underscore (DNS-label style disallows)
+            "-leading",      // leading hyphen
+            "",              // empty
             &"x".repeat(64), // overlong (64 > 63)
         ];
         for h in hostile {
@@ -1548,5 +1565,126 @@ mod tests {
         // If a future decision tightens this, update both the regex and this
         // test together.
         validate_workload_name("foo-").expect("trailing hyphen is allowed");
+    }
+
+    // ---- WP5 / E1 regression: graceful check outside a workbench checkout ----
+
+    #[test]
+    fn project_root_optional_returns_none_outside_workbench() {
+        let _lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let old_root = std::env::var("AGENTCTL_ROOT").ok();
+        let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
+        let tmp = std::env::temp_dir().join(format!(
+            "no-flake-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).ok();
+        std::env::set_var("AGENTCTL_ROOT", &tmp);
+        std::env::remove_var("CARGO_MANIFEST_DIR");
+
+        let result = config::project_root_optional();
+
+        match old_root {
+            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
+            None => std::env::remove_var("AGENTCTL_ROOT"),
+        }
+        match old_manifest {
+            Some(v) => std::env::set_var("CARGO_MANIFEST_DIR", v),
+            None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+        }
+
+        // The contract: project_root_optional NEVER returns a path that
+        // lacks flake.nix. It returns Some verified-path or None.
+        match result {
+            None => { /* expected when not in a workbench */ }
+            Some(p) => {
+                assert!(
+                    p.join("flake.nix").exists(),
+                    "project_root_optional returned '{:?}' which lacks flake.nix",
+                    p
+                );
+            }
+        }
+    }
+
+    /// E1 integration: simulate a fresh-install `workestrate check` from /tmp
+    /// with a tmp HOME and no workbench checkout. The check must NOT error
+    /// just because no workbench checkout is reachable; required-files prints
+    /// "(not in a workbench checkout — skipped)".
+    #[test]
+    fn cmd_check_degrades_gracefully_outside_workbench() -> Result<()> {
+        let _lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+
+        let tmp_home = std::env::temp_dir().join(format!(
+            "workestrate-e1-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp_home)?;
+
+        let old_home = std::env::var("HOME").ok();
+        let old_xdg_config = std::env::var("XDG_CONFIG_HOME").ok();
+        let old_xdg_data = std::env::var("XDG_DATA_HOME").ok();
+        let old_root = std::env::var("AGENTCTL_ROOT").ok();
+        let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
+        let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+
+        std::env::set_var("HOME", &tmp_home);
+        std::env::set_var(
+            "XDG_CONFIG_HOME",
+            tmp_home.join(".config").to_string_lossy().as_ref(),
+        );
+        std::env::set_var(
+            "XDG_DATA_HOME",
+            tmp_home
+                .join(".local")
+                .join("share")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        std::env::set_var("AGENTCTL_ROOT", &tmp_home);
+        std::env::remove_var("CARGO_MANIFEST_DIR");
+        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+
+        // cmd_check is async; run it on a fresh tokio runtime.
+        let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime for E1 test");
+        let result = rt.block_on(async { cmd_check().await });
+
+        for (k, v) in [
+            ("HOME", old_home),
+            ("XDG_CONFIG_HOME", old_xdg_config),
+            ("XDG_DATA_HOME", old_xdg_data),
+            ("AGENTCTL_ROOT", old_root),
+            ("CARGO_MANIFEST_DIR", old_manifest),
+            ("WORKESTRATE_NO_PROJECT_CONFIG", old_no_project),
+            ("WORKESTRATE_CONFIG_DIR", old_config_dir),
+        ] {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp_home);
+
+        // E1 contract: cmd_check must NOT error just because no workbench
+        // checkout is reachable. It may error for OTHER reasons (e.g. a
+        // missing required artifact) but not for project_root being absent.
+        if let Err(e) = &result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("flake.nix") && !msg.contains("project root"),
+                "E1 regression: cmd_check errored on project_root: {msg}"
+            );
+        }
+        Ok(())
     }
 }
