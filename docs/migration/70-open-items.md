@@ -180,6 +180,28 @@ invocation. Currently, one invocation resolves exactly ONE context
 (`<context>-<workload>` assumes one context) and port collision detection.
 No current use case; revisit if orchestration scenarios emerge.
 
+### Agent build-output relocation (sources store)
+
+**Status**: deferred — needs config-repo changes.
+
+The in-tree `agents/<name>/build` outputs (pi bun binary, odysseus `.deps/`,
+opencode `node_modules/`) are being relocated out of the flake-visible
+source tree into the managed sources store
+(`~/.local/share/workestrate/sources/<name>/`). This removes the last
+impurity vector from flake evaluation (an unfiltered `src = ./.` could
+previously copy `agents/*/build/` into the store — the 29 GB-per-eval
+incident's root cause; see `docs/nix-purity.md`).
+
+Relocation requires config-repo changes (the `source build` / `source clone`
+commands and the `WORKESTRATE_<NAME>_BUILD` resolution path must point at
+the sources store, not `agents/<name>/build`). Tracked here so the docs
+purity claim and the migration process stay aligned.
+
+**Note**: the tempest, opencode, and odysseus FOD hashes (`npmDepsHash` /
+`outputHash`) are HOST-GATE — they can only be computed and verified on a
+host with nix (this container has none). The `update-hashes` recipe
+(Track 1/2) is the supported path to populate them.
+
 ### Per-workload packs
 
 **Rejected** (ADR 0015). Workload definitions are ~20-line TOML entries in

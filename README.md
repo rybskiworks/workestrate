@@ -423,6 +423,17 @@ and detached-mode + internal secret loading are compile- and
 plan-verified but pending KVM runtime validation. `.#pi` (node) is the
 fallback if the bun binary misbehaves at runtime.
 
+## Derivation purity
+
+Nix derivations in this flake must stay pure at both eval time and build
+time. The rules, the motivating 29 GB-per-eval incident, the store-growth
+model, and the new-derivation checklist live in
+[docs/nix-purity.md](docs/nix-purity.md). The `just lint-nix` guard (backed
+by `scripts/check-nix-paths.sh`) runs inside `just verify` and forbids the
+common impurity patterns (`toString ./`, `getFlake`, `--impure`, bare
+`src = ./.`, unfiltered `cleanSourceWith`). Run `just gc` and
+`just store-audit` for store hygiene.
+
 ## Shell completions
 
 `workestrate` ships shell completions for bash, zsh, fish, elvish, and

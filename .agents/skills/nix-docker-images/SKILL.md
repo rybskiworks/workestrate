@@ -8,9 +8,9 @@ Build reproducible OCI container images with Nix instead of Dockerfiles. Use for
 
 All from `pkgs.dockerTools`:
 
-- `buildLayeredImage` — multi-layer image, best layer caching, recommended default
+- `streamLayeredImage` — **preferred default**, streams uncompressed tarball to stdout, avoids Nix store bloat
+- `buildLayeredImage` — multi-layer image, best layer caching, use only when store-side caching is explicitly wanted
 - `buildImage` — single-layer image, simpler but larger
-- `streamLayeredImage` — stream uncompressed tarball to stdout, avoids Nix store bloat
 - `pullImage` — fetch and pin an existing Docker Hub image by digest (migration tool)
 
 ## Pattern: minimal runtime image
@@ -18,7 +18,8 @@ All from `pkgs.dockerTools`:
 ```nix
 { pkgs }:
 
-pkgs.dockerTools.buildLayeredImage {
+# streamLayeredImage: preferred default, avoids store materialization
+pkgs.dockerTools.streamLayeredImage {
   name = "my-service";
   tag = "latest";
 
@@ -58,6 +59,7 @@ let
     installPhase = "cp -r dist $out";
   };
 in
+# buildLayeredImage: chosen here for layer caching across rebuilds
 pkgs.dockerTools.buildLayeredImage {
   name = "my-service";
   contents = [ pkgs.nodejs_22 myApp ];
@@ -134,9 +136,18 @@ Nix-built images produce standard OCI tarballs. To use with Microsandbox:
 
 The Nix image is orthogonal to Microsandbox's network policy — the sandbox plan controls egress/ingress, not the image.
 
+## When to prefer streamLayeredImage
+
+`streamLayeredImage` streams the image tarball to stdout and never
+materializes a large image path in the Nix store, so it is the right
+default for CI and `docker load` pipelines and matches the purity rules
+in [`docs/nix-purity.md`](../../../docs/nix-purity.md). `buildLayeredImage`
+is the exception, chosen when repeated rebuilds benefit from cached
+layers held in the store across runs.
+
 ## Best practices
 
-- Prefer `buildLayeredImage` over `buildImage` for better caching
+- Prefer `streamLayeredImage` as the default — it streams the tarball to stdout and avoids materializing a large image path in the Nix store. Use `buildLayeredImage` only when you explicitly want store-side layer caching across rebuilds.
 - Keep `contents` minimal — only what the runtime needs
 - Use `streamLayeredImage` in CI to avoid Nix store bloat
 - Pin nixpkgs in `flake.nix` for reproducibility

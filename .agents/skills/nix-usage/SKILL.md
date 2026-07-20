@@ -119,6 +119,38 @@ CI should NOT run `nix flake update`.
 - **Runtime daemon**: `msb` and the kernel image are NOT bundled in the
   Nix closure. The Microsandbox Rust SDK downloads them on first use.
 
+## Store hygiene
+
+- **Churn model.** Every impure eval copies the source closure into the
+  store; with dirty filters each edit produces a new content-addressed
+  path. The 29 GB-per-eval incident (see
+  [`docs/nix-purity.md`](../../../docs/nix-purity.md)) is the cautionary
+  tale: an unfiltered `src = ./.` copied `target/` and `agents/*/build/`
+  on every evaluation, accumulating ~1 GB/min until caught.
+
+- **GC cadence.** Run `just gc` regularly to collect unreachable store
+  paths; run `just store-audit` when the store feels large to audit
+  space consumption and find stale roots.
+
+  > **ASSUMPTION (Track 1/2):** recipe names `gc` and `store-audit` are
+  > pending — Track 1/2 own the exact recipe names and flags.
+
+- **Relocation paths.** `agents/<name>/build` outputs and
+  `CARGO_TARGET_DIR` are being relocated out of the flake-visible source
+  tree so they no longer pollute eval: `agents/<name>/build` → managed
+  sources store (`~/.local/share/workestrate/sources/<name>/`);
+  `CARGO_TARGET_DIR` → `~/.cache/ai-workbench/agentctl-target`.
+
+  > **ASSUMPTION (Track 1/2):** the relocation targets and the
+  > `CARGO_TARGET_DIR` path are pending — Track 1/2 own the final
+  > paths.
+
+- **The guard.** `just lint-nix` (backed by `scripts/check-nix-paths.sh`)
+  runs in `just verify` and forbids `toString ./`, `getFlake`,
+  `--impure`, bare `src = ./.`, and unfiltered `cleanSourceWith`. See
+  [`docs/nix-purity.md`](../../../docs/nix-purity.md) for the full rules
+  and the store-growth model.
+
 ## C Toolchain
 
 - `gcc`, `pkg-config`, and `rustc`/`cargo` come from Nix.
@@ -160,3 +192,4 @@ CI should NOT run `nix flake update`.
 | `cargo: command not found` / `gcc: command not found` | Outside dev shell | Run inside `nix develop` |
 | `msb: command not found` at runtime | SDK has not downloaded it yet | First use downloads it; check network or pre-stage |
 | Build error mentioning `$HOME/.microsandbox/bin` | build.rs writing outside sandbox | Set `HOME=$TMPDIR` (derivation already does this) |
+| Store grows ~1GB/min during edits | Impure source filter copying target/ or agents/*/build | Run `just gc` + `just store-audit`; fix the source filter per docs/nix-purity.md |
