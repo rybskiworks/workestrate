@@ -1,11 +1,13 @@
 use super::env::resolve_templated_value;
 use super::mounts::{apply_plan_mounts, ensure_mount_sources};
-use super::plan::{EgressTarget, NetworkPlan, Protocol, SandboxPlan, Scope};
+use super::plan::{EgressTarget, NetworkPlan, PortMapping, Protocol, SandboxPlan, Scope};
+use super::port_registry::SandboxInstanceRecord;
+use super::slots;
 use super::workload::{EntrypointSpec, SandboxCommand, Workload};
 use anyhow::Result;
 use microsandbox::sandbox::{exec::ExecEvent, SandboxBuilder, SandboxHandle, SandboxStatus};
 use microsandbox::{MicrosandboxError, NetworkPolicy, Sandbox};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn reject_if_placeholder(value: &str, placeholder: &Option<String>, label: &str) -> Result<()> {
     if let Some(ref ph) = placeholder {
@@ -184,6 +186,262 @@ pub(crate) struct ForegroundConfig {
     pub log_stop_errors: bool,
 }
 
+/// Resolved identity + flags for a single `up`/`exec` invocation (ADR 0021).
+///
+/// Built by the CLI layer from `--replace` / `--instance <id>` / `--new` /
+/// `--port-offset N` plus the active context. Consumed by [`build_sandbox`].
+pub(crate) struct InstanceSpec {
+    /// Singleton slot: `<workload>` or `<context>-<workload>`.
+    pub slot: String,
+    /// The sandbox name to create: `slot` (singleton) or `slot@<id>` (parallel).
+    pub instance: String,
+    /// Bare workload name (e.g. `litellm`). Used in user-facing messages.
+    pub workload: String,
+    /// Active context name, if any.
+    pub context: Option<String>,
+    /// `--port-offset N`. Added to every HOST port. 0 = no shift.
+    pub port_offset: u16,
+    /// `--replace`. If true, occupancy is torn down before create; otherwise
+    /// an occupied slot REFUSES (fail-closed default).
+    pub replace: bool,
+}
+
+/// Result of an occupancy probe against the state registry (no msb call).
+#[derive(Debug, Clone)]
+pub enum Occupancy {
+    /// No state record for the instance.
+    Free,
+    /// A state record exists; the named instance may still be running.
+    Occupied {
+        occupying_instance: String,
+        workload: String,
+        context: Option<String>,
+    },
+}
+
+/// Outcome of stopping one instance. Used by `down --instance`, `down
+/// --all-instances`, and `down --all`.
+#[derive(Debug, Clone)]
+pub struct DownResult {
+    pub instance: String,
+    pub status: DownStatus,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownStatus {
+    /// Sandbox was running and was stopped+removed cleanly.
+    Stopped,
+    /// No sandbox found (state record cleared if present).
+    NotFound,
+    /// msb returned a hard error during stop/remove.
+    Error,
+}
+
+/// One row of `workestrate ps` output. Pure: no msb calls.
+#[derive(Debug, Clone)]
+pub struct PsEntry {
+    pub instance: String,
+    pub workload: String,
+    pub context: Option<String>,
+    /// Effective host:guest port pairs (post-offset host). Legacy records
+    /// synthesize `{host: p, guest: p}` from the bare host-port list.
+    pub ports: Vec<PortMapping>,
+    /// RFC3339 timestamp the instance was registered, or empty for legacy.
+    pub created: String,
+    /// Best-effort staleness flag; populated by callers that can reach msb.
+    /// The pure [`ps`] function always sets this to `false`.
+    pub stale: bool,
+}
+
+/// The canonical refuse message (text mode). Pinned by ADR 0021 §2.
+///
+/// Note: the message references the occupying *instance name* (which is the
+/// slot for the singleton case, or `slot@id` for a parallel instance). The
+/// caller passes the workload's bare name so the suggested `down` command
+/// reads naturally (`workestrate litellm down`).
+pub fn format_refuse_message(workload: &str, occupying_instance: &str) -> String {
+    format!(
+        "instance '{instance}' is already running. \
+         Use --replace to replace it, --instance <id> for a parallel instance, \
+         or '{wl} down' to stop it first.",
+        instance = occupying_instance,
+        wl = workload,
+    )
+}
+
+/// Pure state-record occupancy probe. Does NOT call msb.
+///
+/// Returns `Occupied` when a state file exists for `instance` (regardless of
+/// whether the backing sandbox is still running). The async caller MUST
+/// further verify via `Sandbox::get` to distinguish truly-running from stale.
+pub fn occupancy_from_state(state_dir: &Path, instance: &str) -> Result<Occupancy> {
+    Ok(match super::port_registry::find_record(state_dir, instance)? {
+        Some(r) => Occupancy::Occupied {
+            occupying_instance: r.instance,
+            workload: r.workload,
+            context: r.context,
+        },
+        None => Occupancy::Free,
+    })
+}
+
+/// Pure listing for `workestrate ps`. Reads the registry state files; does
+/// NOT call msb (callers may post-process to populate `stale`).
+pub fn ps(state_dir: &Path) -> Result<Vec<PsEntry>> {
+    let records = super::port_registry::list_records(state_dir)?;
+    Ok(records
+        .into_iter()
+        .map(|r| {
+            let ports = if r.port_pairs.is_empty() {
+                r.ports
+                    .iter()
+                    .map(|&h| PortMapping { host: h, guest: h })
+                    .collect()
+            } else {
+                r.port_pairs
+            };
+            PsEntry {
+                instance: r.instance,
+                workload: r.workload,
+                context: r.context,
+                ports,
+                created: r.created_at,
+                stale: false,
+            }
+        })
+        .collect())
+}
+
+/// Compute the offset-shifted host port, failing on overflow past u16.
+fn offset_port(host: u16, offset: u16) -> Result<u16> {
+    host.checked_add(offset).ok_or_else(|| {
+        anyhow::anyhow!(
+            "port offset {} applied to host port {} overflows u16; \
+             reduce --port-offset",
+            offset, host
+        )
+    })
+}
+
+/// Current time as an RFC3339 UTC string. Best-effort: falls back to the
+/// Unix timestamp when SystemTime fails (should not happen in practice).
+fn current_rfc3339_utc() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Format as a stable RFC3339-ish UTC timestamp using a tiny ad-hoc
+    // formatter (no chrono dep). The format is `YYYY-MM-DDTHH:MM:SSZ`. This
+    // is good enough for `ps` display; callers needing finer precision can
+    // post-process. The date math is the standard days-from-civil algorithm
+    // (Howard Hinnant, http://howardhinnant.github.io/date_algorithms.html).
+    let days = (now / 86_400) as i64;
+    let secs = (now % 86_400) as u32;
+    let (y, m, d) = days_to_ymd(days);
+    let hh = secs / 3600;
+    let mm = (secs % 3600) / 60;
+    let ss = secs % 60;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, hh, mm, ss
+    )
+}
+
+/// Convert days-since-1970-01-01 to (year, month, day). Pure.
+fn days_to_ymd(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z / 146_097 } else { (z - 146_096) / 146_097 };
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m as u32, d as u32)
+}
+
+/// Occupancy gate for `up`/`exec`. When `spec.replace` is true, the existing
+/// sandbox at `spec.instance` is torn down (best-effort) and stale state is
+/// cleared. When false, the function REFUSES (returns Err) if any of:
+///   - msb reports the sandbox running, OR
+///   - a state record exists AND msb is unavailable (fail-closed).
+///
+/// Returns Ok(()) when the slot is free (or has been cleared by --replace).
+pub(crate) async fn check_occupied_or_replace(
+    spec: &InstanceSpec,
+    state_dir: &Path,
+) -> Result<()> {
+    if spec.replace {
+        match Sandbox::get(&spec.instance).await {
+            Ok(handle) => {
+                stop_and_remove(handle).await?;
+            }
+            Err(MicrosandboxError::SandboxNotFound(_)) => {
+                let _ = super::port_registry::unregister_sandbox(state_dir, &spec.instance);
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: could not verify sandbox '{}' via msb ({}); \
+                     proceeding with --replace and clearing any stale state",
+                    spec.instance, e
+                );
+                let _ = super::port_registry::unregister_sandbox(state_dir, &spec.instance);
+            }
+        }
+        return Ok(());
+    }
+
+    match Sandbox::get(&spec.instance).await {
+        Ok(_handle) => {
+            // Truly running — refuse. The handle drops without stopping;
+            // the existing sandbox keeps running (this is the desired
+            // fail-closed behavior).
+            anyhow::bail!("{}", format_refuse_message(&spec.workload, &spec.instance));
+        }
+        Err(MicrosandboxError::SandboxNotFound(_)) => {
+            // Not running. A state record, if any, is stale.
+            if matches!(
+                occupancy_from_state(state_dir, &spec.instance)?,
+                Occupancy::Occupied { .. }
+            ) {
+                eprintln!(
+                    "warning: state record for '{}' exists but msb reports the sandbox \
+                     is not running (stale record); refusing by default. \
+                     Use --replace to clear.",
+                    spec.instance
+                );
+                anyhow::bail!(
+                    "{}",
+                    format_refuse_message(&spec.workload, &spec.instance)
+                );
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // msb unavailable. Fall back to state-record verdict (fail-closed).
+            if matches!(
+                occupancy_from_state(state_dir, &spec.instance)?,
+                Occupancy::Occupied { .. }
+            ) {
+                eprintln!(
+                    "warning: could not verify sandbox '{}' via msb ({}); \
+                     treating state record as authoritative and refusing.",
+                    spec.instance, e
+                );
+                anyhow::bail!(
+                    "{}",
+                    format_refuse_message(&spec.workload, &spec.instance)
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
 pub(crate) async fn run_service_foreground(
     sandbox: &Sandbox,
     config: ForegroundConfig,
@@ -334,6 +592,7 @@ pub(crate) async fn run_service_interactive(
 /// to run the workload's real command.
 pub(crate) async fn build_sandbox<W: Workload>(
     workload: &W,
+    spec: &InstanceSpec,
 ) -> Result<(Sandbox, ForegroundConfig)> {
     workload.prepare()?;
 
@@ -342,19 +601,34 @@ pub(crate) async fn build_sandbox<W: Workload>(
     crate::microsandbox::secrets_loader::load_secrets()?;
 
     let root = crate::config::project_root()?;
-    let plan = workload.plan();
+    let mut plan = workload.plan();
+
+    // Override the plan name with the spec instance name so display matches
+    // the actual sandbox identity (slot for singleton, slot@id for parallel).
+    plan.name = spec.instance.clone();
+
+    // Compute offset-adjusted host ports (post-offset). `host_ports` is used
+    // both for collision checking and for the legacy `ports` field in the
+    // lifecycle state record.
+    let host_ports: Vec<u16> = plan
+        .ports
+        .iter()
+        .map(|p| offset_port(p.host, spec.port_offset))
+        .collect::<Result<Vec<u16>>>()?;
+
+    // Hoist state_dir before the occupancy check so it can be reused for
+    // collision detection and lifecycle registration below.
+    let state_dir = crate::config::resolve_state_dir();
+    check_occupied_or_replace(spec, &state_dir).await?;
 
     // Port collision detection: check against already-running workestrate sandboxes.
-    let state_dir = crate::config::resolve_state_dir();
-    let instance_name = workload.sandbox_instance_name();
-    let host_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
-    super::port_registry::check_port_collisions(&state_dir, &instance_name, &host_ports)?;
+    super::port_registry::check_port_collisions(&state_dir, &spec.instance, &host_ports)?;
 
     ensure_mount_sources(&root, &plan)?;
 
     let policy = network_plan_to_policy(&plan.network)?;
 
-    let mut builder = Sandbox::builder(&plan.name)
+    let mut builder = Sandbox::builder(&spec.instance)
         .image(plan.image.as_deref().unwrap_or("alpine:latest"))
         .cpus(plan.cpus.unwrap_or(2))
         .memory(plan.memory_mib.unwrap_or(2048))
@@ -371,23 +645,38 @@ pub(crate) async fn build_sandbox<W: Workload>(
     builder = builder.entrypoint(["/bin/sh", "-c", "tail -f /dev/null"]);
 
     for port in &plan.ports {
-        builder = builder.port(port.host, port.guest);
+        let host = offset_port(port.host, spec.port_offset)?;
+        builder = builder.port(host, port.guest);
     }
 
     builder = apply_plan_envs(builder, &plan)?;
     builder = apply_plan_mounts(builder, &root, &plan)?;
     builder = apply_plan_secrets(builder, &plan)?;
 
-    let sandbox = builder.replace().create().await?;
+    let builder = if spec.replace { builder.replace() } else { builder };
+    let sandbox = builder.create().await?;
 
-    // Register the running sandbox for port collision tracking.
-    let context_name = crate::config::active_context_name();
-    super::port_registry::register_sandbox(
+    // Register with full lifecycle metadata so `ps` and `down --all` work.
+    let port_pairs: Vec<PortMapping> = plan
+        .ports
+        .iter()
+        .map(|p| {
+            Ok(PortMapping {
+                host: offset_port(p.host, spec.port_offset)?,
+                guest: p.guest,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let created_at = current_rfc3339_utc();
+    super::port_registry::register_sandbox_lifecycle(
         &state_dir,
-        &instance_name,
-        context_name.as_deref(),
+        &spec.instance,
+        spec.context.as_deref(),
         workload.name(),
         &host_ports,
+        &port_pairs,
+        spec.port_offset,
+        &created_at,
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -398,11 +687,37 @@ pub(crate) async fn build_sandbox<W: Workload>(
     Ok((sandbox, config))
 }
 
+/// Build the default singleton InstanceSpec for `workload` in the active
+/// context. Used by the legacy no-flag entry points and as the base for the
+/// CLI flag-aware variants.
+fn default_spec<W: Workload>(workload: &W) -> InstanceSpec {
+    let context = crate::config::active_context_name();
+    let slot = slots::slot_for(workload.name(), context.as_deref());
+    let instance = slot.clone();
+    InstanceSpec {
+        slot,
+        instance,
+        workload: workload.name().to_string(),
+        context,
+        port_offset: 0,
+        replace: true, // LEGACY default: bare `up` replaces (back-compat).
+    }
+}
+
 /// Start a service workload. Detached by default; pass `foreground = true` to
 /// block until Ctrl-C.
 pub async fn up_service<W: Workload>(workload: &W, foreground: bool) -> Result<()> {
+    let spec = default_spec(workload);
+    up_service_with_spec(workload, &spec, foreground).await
+}
+
+pub async fn up_service_with_spec<W: Workload>(
+    workload: &W,
+    spec: &InstanceSpec,
+    foreground: bool,
+) -> Result<()> {
     if !foreground {
-        let instance = workload.sandbox_instance_name();
+        let instance = spec.instance.clone();
         let child = spawn_detached_service(&instance, &workload.detach_args())?;
         println!(
             "Sandbox '{}' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/{}/workestrate.log",
@@ -410,14 +725,21 @@ pub async fn up_service<W: Workload>(workload: &W, foreground: bool) -> Result<(
         );
         return Ok(());
     }
-
-    let (sandbox, config) = build_sandbox(workload).await?;
+    let (sandbox, config) = build_sandbox(workload, spec).await?;
     run_service_foreground(&sandbox, config).await
 }
 
 /// Attach to an agent workload interactively (TUI).
 pub async fn exec_agent<W: Workload>(workload: &W) -> Result<()> {
-    let (sandbox, config) = build_sandbox(workload).await?;
+    let spec = default_spec(workload);
+    exec_agent_with_spec(workload, &spec).await
+}
+
+pub async fn exec_agent_with_spec<W: Workload>(
+    workload: &W,
+    spec: &InstanceSpec,
+) -> Result<()> {
+    let (sandbox, config) = build_sandbox(workload, spec).await?;
     run_service_interactive(&sandbox, config).await
 }
 
@@ -474,8 +796,72 @@ pub async fn down(name: &str) -> Result<()> {
     }
 }
 
+/// Stop a single instance by name (state-dir-explicit). The legacy
+/// [`down`] wraps this with the resolved state dir for back-compat.
+pub async fn down_instance(state_dir: &Path, instance: &str) -> DownResult {
+    match down_one(state_dir, instance).await {
+        Ok(DownOutcome::Stopped) => DownResult {
+            instance: instance.to_string(),
+            status: DownStatus::Stopped,
+            message: None,
+        },
+        Ok(DownOutcome::NotFound) => DownResult {
+            instance: instance.to_string(),
+            status: DownStatus::NotFound,
+            message: None,
+        },
+        Err(e) => DownResult {
+            instance: instance.to_string(),
+            status: DownStatus::Error,
+            message: Some(e.to_string()),
+        },
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DownOutcome {
+    Stopped,
+    NotFound,
+}
+
+async fn down_one(state_dir: &Path, instance: &str) -> Result<DownOutcome> {
+    match Sandbox::get(instance).await {
+        Ok(handle) => {
+            stop_and_remove(handle).await?;
+            let _ = super::port_registry::unregister_sandbox(state_dir, instance);
+            Ok(DownOutcome::Stopped)
+        }
+        Err(MicrosandboxError::SandboxNotFound(_)) => {
+            let _ = super::port_registry::unregister_sandbox(state_dir, instance);
+            Ok(DownOutcome::NotFound)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Stop every instance whose workload matches `workload`. Used by
+/// `workestrate <wl> down --all-instances`.
+pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<DownResult>> {
+    let records = super::port_registry::list_records_for_workload(state_dir, workload)?;
+    let mut results = Vec::with_capacity(records.len());
+    for r in records {
+        results.push(down_instance(state_dir, &r.instance).await);
+    }
+    Ok(results)
+}
+
+/// Stop every workestrate-tracked instance. Used by `workestrate down --all`.
+pub async fn down_all(state_dir: &Path) -> Result<Vec<DownResult>> {
+    let records = super::port_registry::list_records(state_dir)?;
+    let mut results = Vec::with_capacity(records.len());
+    for r in records {
+        results.push(down_instance(state_dir, &r.instance).await);
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unwrap_in_result)]
 mod tests {
     use super::super::plan::{EgressTarget, Protocol};
     use super::network_plan_to_policy;
@@ -747,6 +1133,212 @@ mod tests {
             plan.mounts.iter().all(|m| m.guest != "/workspace"),
             "pi must not mount /workspace (replaced by /work + /data)"
         );
+        Ok(())
+    }
+
+    // ---- ADR 0021 instance-lifecycle tests ----
+
+    use super::{
+        current_rfc3339_utc, days_to_ymd, down_all_instances, format_refuse_message,
+        occupancy_from_state, ps, DownStatus, Occupancy,
+    };
+    use crate::microsandbox::plan::PortMapping;
+
+    fn unique_state_dir_runtime(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "workestrate-runtime-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos,
+        ))
+    }
+
+    #[test]
+    fn refuse_message_is_byte_identical_to_pinned_text() {
+        // The text below is pinned by ADR 0021 §2 and asserted by external
+        // tooling; do not rephrase without coordinating with the docs track.
+        let msg = format_refuse_message("litellm", "personal-litellm");
+        let expected = "instance 'personal-litellm' is already running. \
+         Use --replace to replace it, --instance <id> for a parallel instance, \
+         or 'litellm down' to stop it first.";
+        assert_eq!(msg, expected, "refuse message drifted from pinned text");
+    }
+
+    #[test]
+    fn refuse_message_for_parallel_instance_names_slot_at_id() {
+        let msg = format_refuse_message("litellm", "personal-litellm@canary");
+        assert!(
+            msg.contains("instance 'personal-litellm@canary' is already running"),
+            "refuse message must name the occupying instance verbatim: {msg}"
+        );
+    }
+
+    #[test]
+    fn occupancy_from_state_free_when_no_record() -> anyhow::Result<()> {
+        let dir = unique_state_dir_runtime("occ-free");
+        match occupancy_from_state(&dir, "absent")? {
+            Occupancy::Free => {}
+            other => panic!("expected Free, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn occupancy_from_state_occupied_when_record_present() -> anyhow::Result<()> {
+        let dir = unique_state_dir_runtime("occ-set");
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        match occupancy_from_state(&dir, "personal-litellm")? {
+            Occupancy::Occupied {
+                occupying_instance,
+                workload,
+                context,
+            } => {
+                assert_eq!(occupying_instance, "personal-litellm");
+                assert_eq!(workload, "litellm");
+                assert_eq!(context.as_deref(), Some("personal"));
+            }
+            other => panic!("expected Occupied, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn occupancy_from_state_free_for_corrupt_record() -> anyhow::Result<()> {
+        let dir = unique_state_dir_runtime("occ-corrupt");
+        let run_dir = dir.join("var").join("run");
+        std::fs::create_dir_all(&run_dir)?;
+        std::fs::write(run_dir.join("corrupt.json"), "not json")?;
+        match occupancy_from_state(&dir, "corrupt")? {
+            Occupancy::Free => {}
+            other => panic!("corrupt record should be treated as Free, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn ps_returns_empty_when_no_records() -> anyhow::Result<()> {
+        let dir = unique_state_dir_runtime("ps-empty");
+        let entries = ps(&dir)?;
+        assert!(entries.is_empty(), "expected empty ps list");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn ps_lists_lifecycle_records_with_port_pairs() -> anyhow::Result<()> {
+        let dir = unique_state_dir_runtime("ps-lifecycle");
+        let pairs = vec![
+            PortMapping { host: 14000, guest: 4000 },
+            PortMapping { host: 14001, guest: 4001 },
+        ];
+        crate::microsandbox::port_registry::register_sandbox_lifecycle(
+            &dir,
+            "personal-litellm@canary",
+            Some("personal"),
+            "litellm",
+            &[14000, 14001],
+            &pairs,
+            10000,
+            "2026-07-20T14:05:42Z",
+        )?;
+        let entries = ps(&dir)?;
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.instance, "personal-litellm@canary");
+        assert_eq!(e.workload, "litellm");
+        assert_eq!(e.context.as_deref(), Some("personal"));
+        assert_eq!(e.ports.len(), 2);
+        assert_eq!(e.ports[0].host, 14000);
+        assert_eq!(e.ports[0].guest, 4000);
+        assert_eq!(e.created, "2026-07-20T14:05:42Z");
+        assert!(!e.stale);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn ps_synthesizes_port_pairs_for_legacy_records() -> anyhow::Result<()> {
+        let dir = unique_state_dir_runtime("ps-legacy");
+        // Legacy record: only the bare host-port list; no port_pairs.
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "legacy-litellm",
+            None,
+            "litellm",
+            &[4000, 4001],
+        )?;
+        let entries = ps(&dir)?;
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.ports.len(), 2);
+        // Legacy: host==guest in the synthesized pairs.
+        assert_eq!(e.ports[0].host, 4000);
+        assert_eq!(e.ports[0].guest, 4000);
+        assert_eq!(e.ports[1].host, 4001);
+        assert_eq!(e.ports[1].guest, 4001);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn current_rfc3339_utc_ends_with_z_and_has_expected_length() {
+        // Sanity: format is YYYY-MM-DDTHH:MM:SSZ = 20 chars.
+        let ts = current_rfc3339_utc();
+        assert!(
+            ts.len() == 20 && ts.ends_with('Z'),
+            "unexpected rfc3339 shape: {ts}"
+        );
+    }
+
+    #[test]
+    fn days_to_ymd_known_epoch() {
+        // 1970-01-01 is day 0.
+        assert_eq!(days_to_ymd(0), (1970, 1, 1));
+        // 1970-01-02 is day 1.
+        assert_eq!(days_to_ymd(1), (1970, 1, 2));
+        // 1971-01-01 is day 365 (1970 was NOT a leap year).
+        assert_eq!(days_to_ymd(365), (1971, 1, 1));
+        // 2026-01-01: count of days from 1970-01-01.
+        // (20627 days; cross-checked against `date -d 2026-01-01 +%s` /86400.)
+        assert_eq!(days_to_ymd(20_627), (2026, 1, 1));
+    }
+
+    // down_all_instances without msb returns Error results (not panics); the
+    // records ARE listed and attempted. This guards the no-msb code path that
+    // tests in this container exercise.
+    #[tokio::test]
+    async fn down_all_instances_without_msb_returns_error_results() -> anyhow::Result<()> {
+        let dir = unique_state_dir_runtime("down-all-inst-no-msb");
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        let results = down_all_instances(&dir, "litellm").await?;
+        assert_eq!(results.len(), 1, "one record was attempted");
+        // Without msb, Sandbox::get errors with something transport-ish.
+        assert!(
+            matches!(results[0].status, DownStatus::Error),
+            "expected Error status when msb is unavailable; got {:?} ({:?})",
+            results[0].status,
+            results[0].message
+        );
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 }
