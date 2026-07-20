@@ -39,8 +39,9 @@ spec-examples:
     cargo test --manifest-path control/agentctl/Cargo.toml --test spec_examples_parse
 
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
-# config validation, golden-check, lock-file stability, AND nix-purity lint.
-verify: check test spec-examples litellm-check golden-check lint-nix store-audit
+# config validation, golden-check, schema drift, lock-file stability, AND
+# nix-purity lint.
+verify: check test spec-examples litellm-check golden-check schema-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
@@ -61,6 +62,22 @@ golden-check:
           | diff - control/agentctl/tests/golden/$name.plan.txt \
           || (echo "golden mismatch for $name; run 'just golden-generate' to update" && exit 1); \
     done
+
+# Regenerate the canonical JSON Schema for workestrate.toml from the
+# schemars-derived ConfigFile. Writes to schemas/workestrate.schema.json.
+# Run on a nix-capable host (the dev shell's RUSTFLAGS → libcap-ng OUT lib
+# dir is required to build the aws-lc-rs / parking_lot_core native crates).
+generate-schema:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --out schemas/workestrate.schema.json
+    @echo "schema written to schemas/workestrate.schema.json"
+
+# CI drift guard for schemas/workestrate.schema.json (ADR 0021 §8).
+# Invokes control/agentctl/tests/schema_drift.rs, which runs the built
+# `workestrate generate-schema` and diffs against the committed file.
+schema-check:
+    cargo test --manifest-path control/agentctl/Cargo.toml --test schema_drift
 
 build:
     cargo build --release --manifest-path control/agentctl/Cargo.toml
