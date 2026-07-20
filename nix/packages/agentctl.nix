@@ -4,10 +4,20 @@
 }:
 
 let
+  # `src` is filtered to keep the nix build hermetic: no in-tree build
+  # artifacts, no crash dumps, no locally-managed result symlinks, no stale
+  # vendor directory (the preBuild hook recreates `vendor/` as a symlink to
+  # the nix-managed patched crate, so any source-tree vendor/ is unused).
+  # Closing the nix-purity guard: every excluded basename here corresponds
+  # to an entry in `control/agentctl/.gitignore` so the working-tree state
+  # and the nix-source view agree.
   src = pkgs.lib.cleanSourceWith {
     filter = path: type:
       let base = baseNameOf path; in
-      !(base == "target" || base == "result" || base == "result-"
+      !(base == "target"
+        || base == "result" || base == "result-" || base == "result-man"
+        || base == "core" || pkgs.lib.hasPrefix "core." base
+        || base == "vendor"
         || (type == "regular" && base == "config.toml"
             && pkgs.lib.hasSuffix "/.cargo/config.toml" path));
     src = ../../control/agentctl;
