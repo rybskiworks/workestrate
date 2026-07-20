@@ -12,6 +12,16 @@
 //!
 //! This mirrors the `spec_examples_parse` guard from ADR 0020 Ruling 4.
 
+// Test harness: panic!/expect are the idiomatic way to fail a test, so the
+// crate-wide clippy denies are relaxed here (mirrors the `#[cfg(test)]`
+// module allow at the foot of `src/microsandbox/runtime.rs`).
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+
 use std::path::Path;
 use std::process::Command;
 
@@ -49,8 +59,8 @@ fn committed_schema_matches_generate_schema_output() {
         );
     }
 
-    let generated = String::from_utf8(output.stdout)
-        .expect("generate-schema stdout was not valid UTF-8");
+    let generated =
+        String::from_utf8(output.stdout).expect("generate-schema stdout was not valid UTF-8");
 
     let committed_path = committed_schema_path();
     let committed = std::fs::read_to_string(&committed_path).unwrap_or_else(|_| {

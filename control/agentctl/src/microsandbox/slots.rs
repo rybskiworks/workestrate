@@ -36,6 +36,11 @@ pub(crate) fn instance_name(slot: &str, instance_id: Option<&str>) -> String {
 
 /// Return the slot portion of an instance name (split at the first `@`).
 /// If the instance has no `@`, returns the whole string.
+//
+// Inverse of [`instance_name`]; retained for the ADR 0021 slot helpers surface
+// (the CLI currently round-trips slot/id through `resolve_instance_spec`
+// rather than re-deriving from the composed instance name).
+#[allow(dead_code)]
 pub(crate) fn slot_of_instance(instance: &str) -> &str {
     match instance.split_once('@') {
         Some((slot, _)) => slot,
@@ -44,6 +49,9 @@ pub(crate) fn slot_of_instance(instance: &str) -> &str {
 }
 
 /// Return the parallel-id portion of an instance name, if any.
+//
+// Inverse of [`instance_name`]; retained for the ADR 0021 slot helpers surface.
+#[allow(dead_code)]
 pub(crate) fn instance_id_of(instance: &str) -> Option<&str> {
     instance.split_once('@').map(|(_, id)| id)
 }
@@ -112,7 +120,12 @@ pub(crate) fn validate_instance_id(id: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unwrap_in_result)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
 mod tests {
     use super::*;
 
@@ -146,7 +159,10 @@ mod tests {
 
     #[test]
     fn slot_of_instance_parallel() {
-        assert_eq!(slot_of_instance("personal-litellm@canary"), "personal-litellm");
+        assert_eq!(
+            slot_of_instance("personal-litellm@canary"),
+            "personal-litellm"
+        );
     }
 
     #[test]
@@ -161,7 +177,15 @@ mod tests {
 
     #[test]
     fn validate_instance_id_accepts_valid_slugs() {
-        for ok in ["a", "canary", "canary-2", "blue-green", "abc123", "x-y-z", "0-abc"] {
+        for ok in [
+            "a",
+            "canary",
+            "canary-2",
+            "blue-green",
+            "abc123",
+            "x-y-z",
+            "0-abc",
+        ] {
             validate_instance_id(ok)
                 .unwrap_or_else(|e| panic!("legitimate id '{ok}' rejected: {e}"));
         }
@@ -201,7 +225,10 @@ mod tests {
     #[test]
     fn validate_instance_id_rejects_reserved_all() {
         let err = validate_instance_id("all").unwrap_err().to_string();
-        assert!(err.contains("reserved"), "expected 'reserved' in error: {err}");
+        assert!(
+            err.contains("reserved"),
+            "expected 'reserved' in error: {err}"
+        );
     }
 
     #[test]

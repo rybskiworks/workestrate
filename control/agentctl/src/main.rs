@@ -288,10 +288,8 @@ fn build_instance_spec(
     let id: Option<String> = if let Some(id) = instance_id {
         validate_instance_id(id)?;
         Some(id.to_string())
-    } else if let Some(n) = new_id {
-        Some(n.to_string())
     } else {
-        None
+        new_id.map(|n| n.to_string())
     };
 
     let instance = instance_name(&slot, id.as_deref());
@@ -327,13 +325,15 @@ async fn dispatch_service<W: Workload>(
         } => {
             let new_id = if new {
                 let state_dir = crate::config::resolve_state_dir();
-                Some(crate::microsandbox::port_registry::auto_allocate_integer_id(
-                    &state_dir,
-                    &crate::microsandbox::slots::slot_for(
-                        workload.name(),
-                        crate::config::active_context_name().as_deref(),
-                    ),
-                )?)
+                Some(
+                    crate::microsandbox::port_registry::auto_allocate_integer_id(
+                        &state_dir,
+                        &crate::microsandbox::slots::slot_for(
+                            workload.name(),
+                            crate::config::active_context_name().as_deref(),
+                        ),
+                    )?,
+                )
             } else {
                 None
             };
@@ -351,9 +351,7 @@ async fn dispatch_service<W: Workload>(
             all_instances,
         } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
         ServiceAction::Logs => crate::microsandbox::logs(&workload.sandbox_instance_name()).await,
-        ServiceAction::Plan { port_offset } => {
-            cmd_plan(workload, show_source, json, port_offset)
-        }
+        ServiceAction::Plan { port_offset } => cmd_plan(workload, show_source, json, port_offset),
     }
 }
 
@@ -377,13 +375,15 @@ async fn dispatch_agent<W: Workload>(
         } => {
             let new_id = if new {
                 let state_dir = crate::config::resolve_state_dir();
-                Some(crate::microsandbox::port_registry::auto_allocate_integer_id(
-                    &state_dir,
-                    &crate::microsandbox::slots::slot_for(
-                        workload.name(),
-                        crate::config::active_context_name().as_deref(),
-                    ),
-                )?)
+                Some(
+                    crate::microsandbox::port_registry::auto_allocate_integer_id(
+                        &state_dir,
+                        &crate::microsandbox::slots::slot_for(
+                            workload.name(),
+                            crate::config::active_context_name().as_deref(),
+                        ),
+                    )?,
+                )
             } else {
                 None
             };
@@ -400,9 +400,7 @@ async fn dispatch_agent<W: Workload>(
             instance,
             all_instances,
         } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
-        AgentAction::Plan { port_offset } => {
-            cmd_plan(workload, show_source, json, port_offset)
-        }
+        AgentAction::Plan { port_offset } => cmd_plan(workload, show_source, json, port_offset),
     }
 }
 
@@ -592,7 +590,10 @@ async fn cmd_down(
         let state_dir = crate::config::resolve_state_dir();
         let results = down_all_instances(&state_dir, workload_name).await?;
         if json {
-            println!("{}", serde_json::to_string_pretty(&down_results_json(&results))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&down_results_json(&results))?
+            );
         } else {
             print_down_results_text(&results);
         }
@@ -603,21 +604,27 @@ async fn cmd_down(
         let state_dir = crate::config::resolve_state_dir();
         let result = down_instance(&state_dir, &target).await;
         if json {
-            println!("{}", serde_json::to_string_pretty(&down_result_json(&result))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&down_result_json(&result))?
+            );
         } else {
-            print_down_results_text(&[result.clone()]);
+            print_down_results_text(std::slice::from_ref(&result));
         }
-        report_down_aggregate(&[result])
+        report_down_aggregate(std::slice::from_ref(&result))
     } else {
         // Singleton slot down (the legacy default).
         let state_dir = crate::config::resolve_state_dir();
         let result = down_instance(&state_dir, &slot).await;
         if json {
-            println!("{}", serde_json::to_string_pretty(&down_result_json(&result))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&down_result_json(&result))?
+            );
         } else {
-            print_down_results_text(&[result.clone()]);
+            print_down_results_text(std::slice::from_ref(&result));
         }
-        report_down_aggregate(&[result])
+        report_down_aggregate(std::slice::from_ref(&result))
     }
 }
 
@@ -658,11 +665,7 @@ fn cmd_plan<W: crate::microsandbox::workload::Workload>(
         if port_offset != 0 {
             for p in &mut plan.ports {
                 p.host = p.host.checked_add(port_offset).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "port offset {} overflows host port {}",
-                        port_offset,
-                        p.host
-                    )
+                    anyhow::anyhow!("port offset {} overflows host port {}", port_offset, p.host)
                 })?;
             }
         }
@@ -674,11 +677,7 @@ fn cmd_plan<W: crate::microsandbox::workload::Workload>(
         let mut plan = workload.plan();
         for p in &mut plan.ports {
             p.host = p.host.checked_add(port_offset).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "port offset {} overflows host port {}",
-                    port_offset,
-                    p.host
-                )
+                anyhow::anyhow!("port offset {} overflows host port {}", port_offset, p.host)
             })?;
         }
         print!("{}", plan);
@@ -693,7 +692,10 @@ async fn cmd_ps(json: bool) -> Result<()> {
     let state_dir = crate::config::resolve_state_dir();
     let entries = ps(&state_dir)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&ps_entries_json(&entries))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ps_entries_json(&entries))?
+        );
     } else {
         print_ps_text(&entries);
     }
@@ -725,7 +727,11 @@ fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) {
             e.workload,
             e.context.clone().unwrap_or_else(|| "-".into()),
             ports_str,
-            if e.created.is_empty() { "-" } else { &e.created },
+            if e.created.is_empty() {
+                "-"
+            } else {
+                &e.created
+            },
         );
     }
 }
@@ -767,7 +773,10 @@ async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
     let state_dir = crate::config::resolve_state_dir();
     let results = down_all(&state_dir).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&down_results_json(&results))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&down_results_json(&results))?
+        );
     } else {
         print_down_results_text(&results);
     }
@@ -2410,9 +2419,8 @@ mod tests {
 
     #[test]
     fn classify_error_refuse_occupied() {
-        let e = anyhow::anyhow!(
-            "instance 'personal-litellm' is already running. Use --replace ..."
-        );
+        let e =
+            anyhow::anyhow!("instance 'personal-litellm' is already running. Use --replace ...");
         let c = classify_error(&e);
         assert_eq!(c.kind, "refuse_occupied");
         assert_eq!(c.exit_code, 3);

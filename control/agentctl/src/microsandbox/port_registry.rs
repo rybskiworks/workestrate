@@ -85,6 +85,12 @@ pub fn check_port_collisions(state_dir: &Path, instance_name: &str, ports: &[u16
 ///
 /// Writes `${state_dir}/var/run/<instance>.json`. Called after the sandbox
 /// is successfully created.
+//
+// Retained as the minimal-registration entry point of the registry API;
+// the CLI currently routes through [`register_sandbox_lifecycle`], but this
+// simpler form is part of the ADR 0021 registry surface kept for callers
+// that don't need the full lifecycle metadata.
+#[allow(dead_code)]
 pub fn register_sandbox(
     state_dir: &Path,
     instance_name: &str,
@@ -113,6 +119,7 @@ pub fn register_sandbox(
 ///
 /// Writes `${state_dir}/var/run/<instance>.json` with the port pairs, offset,
 /// and RFC3339 created-at timestamp populated.
+#[allow(clippy::too_many_arguments)]
 pub fn register_sandbox_lifecycle(
     state_dir: &Path,
     instance_name: &str,
@@ -232,9 +239,9 @@ pub fn auto_allocate_integer_id(state_dir: &Path, slot: &str) -> Result<u32> {
     }
     let mut candidate = 2u32;
     while used.contains(&candidate) {
-        candidate = candidate
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("integer instance id space exhausted for slot '{}'", slot))?;
+        candidate = candidate.checked_add(1).ok_or_else(|| {
+            anyhow::anyhow!("integer instance id space exhausted for slot '{}'", slot)
+        })?;
     }
     Ok(candidate)
 }
@@ -244,6 +251,11 @@ pub fn auto_allocate_integer_id(state_dir: &Path, slot: &str) -> Result<u32> {
 /// Returns the list of instance names whose state files were removed.
 /// Used by `down --all-instances` to clean up state for instances that no
 /// longer have a backing sandbox.
+//
+// Part of the ADR 0021 registry surface; the live `down` paths currently
+// tear down state inline, but this bulk helper is retained for parity with
+// [`unregister_sandbox`] and future callers.
+#[allow(dead_code)]
 pub fn unregister_all_for_workload(state_dir: &Path, workload: &str) -> Result<Vec<String>> {
     let records = list_records_for_workload(state_dir, workload)?;
     let mut removed = Vec::with_capacity(records.len());
@@ -257,6 +269,10 @@ pub fn unregister_all_for_workload(state_dir: &Path, workload: &str) -> Result<V
 
 /// Remove every state file in the registry. Returns the list of instance names
 /// whose files were removed. Used by `down --all`.
+//
+// Part of the ADR 0021 registry surface; retained for parity with
+// [`unregister_sandbox`] and the `down --all` cleanup path.
+#[allow(dead_code)]
 pub fn unregister_all(state_dir: &Path) -> Result<Vec<String>> {
     let records = list_records(state_dir)?;
     let mut removed = Vec::with_capacity(records.len());
@@ -495,8 +511,14 @@ mod tests {
     fn register_lifecycle_round_trips_new_fields() -> Result<()> {
         let state_dir = unique_state_dir("lifecycle");
         let pairs = vec![
-            crate::microsandbox::plan::PortMapping { host: 14000, guest: 4000 },
-            crate::microsandbox::plan::PortMapping { host: 14001, guest: 4001 },
+            crate::microsandbox::plan::PortMapping {
+                host: 14000,
+                guest: 4000,
+            },
+            crate::microsandbox::plan::PortMapping {
+                host: 14001,
+                guest: 4001,
+            },
         ];
         register_sandbox_lifecycle(
             &state_dir,
@@ -532,7 +554,10 @@ mod tests {
             Some("personal"),
             "litellm",
             &[4000],
-            &[crate::microsandbox::plan::PortMapping { host: 4000, guest: 4000 }],
+            &[crate::microsandbox::plan::PortMapping {
+                host: 4000,
+                guest: 4000,
+            }],
             0,
             "2026-07-20T14:03:11Z",
         )?;
@@ -558,8 +583,7 @@ mod tests {
   "ports": [4000]
 }"#,
         )?;
-        let record = find_record(&state_dir, "legacy-litellm")?
-            .expect("legacy record must parse");
+        let record = find_record(&state_dir, "legacy-litellm")?.expect("legacy record must parse");
         assert_eq!(record.instance, "legacy-litellm");
         assert_eq!(record.ports, vec![4000]);
         assert!(record.port_pairs.is_empty());
@@ -593,7 +617,13 @@ mod tests {
     #[test]
     fn list_records_returns_all_valid() -> Result<()> {
         let state_dir = unique_state_dir("list-all");
-        register_sandbox(&state_dir, "personal-litellm", Some("personal"), "litellm", &[4000])?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
         register_sandbox(&state_dir, "personal-pi", Some("personal"), "pi", &[3000])?;
         register_sandbox_lifecycle(
             &state_dir,
@@ -601,12 +631,20 @@ mod tests {
             Some("personal"),
             "litellm",
             &[14000],
-            &[crate::microsandbox::plan::PortMapping { host: 14000, guest: 4000 }],
+            &[crate::microsandbox::plan::PortMapping {
+                host: 14000,
+                guest: 4000,
+            }],
             10000,
             "2026-07-20T14:05:42Z",
         )?;
         let records = list_records(&state_dir)?;
-        assert_eq!(records.len(), 3, "expected 3 records, got {}", records.len());
+        assert_eq!(
+            records.len(),
+            3,
+            "expected 3 records, got {}",
+            records.len()
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -614,7 +652,13 @@ mod tests {
     #[test]
     fn list_records_for_workload_filters_correctly() -> Result<()> {
         let state_dir = unique_state_dir("list-workload");
-        register_sandbox(&state_dir, "personal-litellm", Some("personal"), "litellm", &[4000])?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
         register_sandbox(&state_dir, "personal-pi", Some("personal"), "pi", &[3000])?;
         register_sandbox(
             &state_dir,
@@ -642,7 +686,13 @@ mod tests {
     fn auto_allocate_returns_2_when_no_parallel_instances() -> Result<()> {
         let state_dir = unique_state_dir("auto-empty");
         // Only the singleton record exists; no `slot@N` records.
-        register_sandbox(&state_dir, "personal-litellm", Some("personal"), "litellm", &[4000])?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
         let id = auto_allocate_integer_id(&state_dir, "personal-litellm")?;
         assert_eq!(id, 2);
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -652,9 +702,27 @@ mod tests {
     #[test]
     fn auto_allocate_skips_used_integer_ids() -> Result<()> {
         let state_dir = unique_state_dir("auto-skip");
-        register_sandbox(&state_dir, "personal-litellm", Some("personal"), "litellm", &[4000])?;
-        register_sandbox(&state_dir, "personal-litellm@2", Some("personal"), "litellm", &[14000])?;
-        register_sandbox(&state_dir, "personal-litellm@3", Some("personal"), "litellm", &[15000])?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm@2",
+            Some("personal"),
+            "litellm",
+            &[14000],
+        )?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm@3",
+            Some("personal"),
+            "litellm",
+            &[15000],
+        )?;
         let id = auto_allocate_integer_id(&state_dir, "personal-litellm")?;
         assert_eq!(id, 4, "expected 4 (next free after 2,3)");
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -664,7 +732,13 @@ mod tests {
     #[test]
     fn auto_allocate_ignores_non_integer_suffixes() -> Result<()> {
         let state_dir = unique_state_dir("auto-named");
-        register_sandbox(&state_dir, "personal-litellm", Some("personal"), "litellm", &[4000])?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
         // Named parallel instances don't consume the integer namespace.
         register_sandbox(
             &state_dir,
@@ -682,7 +756,13 @@ mod tests {
     #[test]
     fn unregister_all_for_workload_removes_only_matching() -> Result<()> {
         let state_dir = unique_state_dir("unregister-workload");
-        register_sandbox(&state_dir, "personal-litellm", Some("personal"), "litellm", &[4000])?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
         register_sandbox(
             &state_dir,
             "personal-litellm@canary",
@@ -704,7 +784,13 @@ mod tests {
     #[test]
     fn unregister_all_removes_every_record() -> Result<()> {
         let state_dir = unique_state_dir("unregister-all");
-        register_sandbox(&state_dir, "personal-litellm", Some("personal"), "litellm", &[4000])?;
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
         register_sandbox(&state_dir, "personal-pi", Some("personal"), "pi", &[3000])?;
         let removed = unregister_all(&state_dir)?;
         assert_eq!(removed.len(), 2);

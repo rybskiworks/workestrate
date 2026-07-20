@@ -191,6 +191,11 @@ pub(crate) struct ForegroundConfig {
 /// `--port-offset N` plus the active context. Consumed by [`build_sandbox`].
 pub(crate) struct InstanceSpec {
     /// Singleton slot: `<workload>` or `<context>-<workload>`.
+    //
+    // Carried for diagnostics/state-file parity; the runtime keys off
+    // `instance` (which is `slot` or `slot@<id>`), so `slot` itself is not
+    // read on the current hot path.
+    #[allow(dead_code)]
     pub slot: String,
     /// The sandbox name to create: `slot` (singleton) or `slot@<id>` (parallel).
     pub instance: String,
@@ -211,6 +216,12 @@ pub enum Occupancy {
     /// No state record for the instance.
     Free,
     /// A state record exists; the named instance may still be running.
+    //
+    // Fields carry the occupying identity for diagnostics/refuse messages;
+    // the live refuse path currently formats from separately-resolved args
+    // (see [`format_refuse_message`]), so these fields are read mainly by
+    // tests until the formatter is migrated to consume the enum directly.
+    #[allow(dead_code)]
     Occupied {
         occupying_instance: String,
         workload: String,
@@ -250,6 +261,11 @@ pub struct PsEntry {
     pub created: String,
     /// Best-effort staleness flag; populated by callers that can reach msb.
     /// The pure [`ps`] function always sets this to `false`.
+    //
+    // Surfaced to future `ps --json` / dashboard consumers; the current text
+    // renderer doesn't print it, so it's exercised by tests until the JSON
+    // view lands.
+    #[allow(dead_code)]
     pub stale: bool,
 }
 
@@ -275,14 +291,16 @@ pub fn format_refuse_message(workload: &str, occupying_instance: &str) -> String
 /// whether the backing sandbox is still running). The async caller MUST
 /// further verify via `Sandbox::get` to distinguish truly-running from stale.
 pub fn occupancy_from_state(state_dir: &Path, instance: &str) -> Result<Occupancy> {
-    Ok(match super::port_registry::find_record(state_dir, instance)? {
-        Some(r) => Occupancy::Occupied {
-            occupying_instance: r.instance,
-            workload: r.workload,
-            context: r.context,
+    Ok(
+        match super::port_registry::find_record(state_dir, instance)? {
+            Some(r) => Occupancy::Occupied {
+                occupying_instance: r.instance,
+                workload: r.workload,
+                context: r.context,
+            },
+            None => Occupancy::Free,
         },
-        None => Occupancy::Free,
-    })
+    )
 }
 
 /// Pure listing for `workestrate ps`. Reads the registry state files; does
@@ -318,7 +336,8 @@ fn offset_port(host: u16, offset: u16) -> Result<u16> {
         anyhow::anyhow!(
             "port offset {} applied to host port {} overflows u16; \
              reduce --port-offset",
-            offset, host
+            offset,
+            host
         )
     })
 }
@@ -342,16 +361,17 @@ fn current_rfc3339_utc() -> String {
     let hh = secs / 3600;
     let mm = (secs % 3600) / 60;
     let ss = secs % 60;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y, m, d, hh, mm, ss
-    )
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, hh, mm, ss)
 }
 
 /// Convert days-since-1970-01-01 to (year, month, day). Pure.
 fn days_to_ymd(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
-    let era = if z >= 0 { z / 146_097 } else { (z - 146_096) / 146_097 };
+    let era = if z >= 0 {
+        z / 146_097
+    } else {
+        (z - 146_096) / 146_097
+    };
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
     let y = yoe + era * 400;
@@ -370,10 +390,7 @@ fn days_to_ymd(days: i64) -> (i64, u32, u32) {
 ///   - a state record exists AND msb is unavailable (fail-closed).
 ///
 /// Returns Ok(()) when the slot is free (or has been cleared by --replace).
-pub(crate) async fn check_occupied_or_replace(
-    spec: &InstanceSpec,
-    state_dir: &Path,
-) -> Result<()> {
+pub(crate) async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) -> Result<()> {
     if spec.replace {
         match Sandbox::get(&spec.instance).await {
             Ok(handle) => {
@@ -413,10 +430,7 @@ pub(crate) async fn check_occupied_or_replace(
                      Use --replace to clear.",
                     spec.instance
                 );
-                anyhow::bail!(
-                    "{}",
-                    format_refuse_message(&spec.workload, &spec.instance)
-                );
+                anyhow::bail!("{}", format_refuse_message(&spec.workload, &spec.instance));
             }
             Ok(())
         }
@@ -431,10 +445,7 @@ pub(crate) async fn check_occupied_or_replace(
                      treating state record as authoritative and refusing.",
                     spec.instance, e
                 );
-                anyhow::bail!(
-                    "{}",
-                    format_refuse_message(&spec.workload, &spec.instance)
-                );
+                anyhow::bail!("{}", format_refuse_message(&spec.workload, &spec.instance));
             }
             Ok(())
         }
@@ -652,7 +663,11 @@ pub(crate) async fn build_sandbox<W: Workload>(
     builder = apply_plan_mounts(builder, &root, &plan)?;
     builder = apply_plan_secrets(builder, &plan)?;
 
-    let builder = if spec.replace { builder.replace() } else { builder };
+    let builder = if spec.replace {
+        builder.replace()
+    } else {
+        builder
+    };
     let sandbox = builder.create().await?;
 
     // Register with full lifecycle metadata so `ps` and `down --all` work.
@@ -693,6 +708,13 @@ pub(crate) async fn build_sandbox<W: Workload>(
 /// `replace: false` is the ADR 0021 fail-closed default — `up`/`exec` on an
 /// occupied slot REFUSES unless `--replace` is passed. The legacy
 /// `replace: true` behavior (silent replace) is opt-in via `--replace`.
+//
+// Retained for the legacy no-flag entry points ([`up_service`] / [`exec_agent`])
+// which the CLI no longer dispatches through directly (it resolves flags via
+// `resolve_instance_spec` and calls the `_with_spec` variants). Kept on the
+// migration branch so external/ scripted callers can still reach the simple
+// default-spec path; remove once the migration fully retires the legacy API.
+#[allow(dead_code)]
 fn default_spec<W: Workload>(workload: &W) -> InstanceSpec {
     let context = crate::config::active_context_name();
     let slot = slots::slot_for(workload.name(), context.as_deref());
@@ -709,6 +731,11 @@ fn default_spec<W: Workload>(workload: &W) -> InstanceSpec {
 
 /// Start a service workload. Detached by default; pass `foreground = true` to
 /// block until Ctrl-C.
+//
+// Legacy no-flag entry point; the CLI resolves flags and calls
+// [`up_service_with_spec`]. Retained on the migration branch for scripted /
+// external callers of the simple default-spec path.
+#[allow(dead_code)]
 pub async fn up_service<W: Workload>(workload: &W, foreground: bool) -> Result<()> {
     let spec = default_spec(workload);
     up_service_with_spec(workload, &spec, foreground).await
@@ -733,15 +760,17 @@ pub async fn up_service_with_spec<W: Workload>(
 }
 
 /// Attach to an agent workload interactively (TUI).
+//
+// Legacy no-flag entry point; the CLI resolves flags and calls
+// [`exec_agent_with_spec`]. Retained on the migration branch for scripted /
+// external callers of the simple default-spec path.
+#[allow(dead_code)]
 pub async fn exec_agent<W: Workload>(workload: &W) -> Result<()> {
     let spec = default_spec(workload);
     exec_agent_with_spec(workload, &spec).await
 }
 
-pub async fn exec_agent_with_spec<W: Workload>(
-    workload: &W,
-    spec: &InstanceSpec,
-) -> Result<()> {
+pub async fn exec_agent_with_spec<W: Workload>(workload: &W, spec: &InstanceSpec) -> Result<()> {
     let (sandbox, config) = build_sandbox(workload, spec).await?;
     run_service_interactive(&sandbox, config).await
 }
@@ -779,6 +808,13 @@ pub async fn logs(name: &str) -> Result<()> {
 }
 
 /// Generic lifecycle: stop and remove any sandbox by name.
+//
+// Legacy single-name teardown; the CLI's `down` subcommand routes through the
+// state-dir-explicit [`down_instance`] / [`down_all`] / [`down_all_instances`]
+// variants so it can clean parallel-instance state. Retained on the migration
+// branch as the resolved-state-dir convenience wrapper documented by
+// [`down_instance`].
+#[allow(dead_code)]
 pub async fn down(name: &str) -> Result<()> {
     match Sandbox::get(name).await {
         Ok(handle) => {
@@ -864,7 +900,12 @@ pub async fn down_all(state_dir: &Path) -> Result<Vec<DownResult>> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unwrap_in_result)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
 mod tests {
     use super::super::plan::{EgressTarget, Protocol};
     use super::network_plan_to_policy;
@@ -1244,8 +1285,14 @@ mod tests {
     fn ps_lists_lifecycle_records_with_port_pairs() -> anyhow::Result<()> {
         let dir = unique_state_dir_runtime("ps-lifecycle");
         let pairs = vec![
-            PortMapping { host: 14000, guest: 4000 },
-            PortMapping { host: 14001, guest: 4001 },
+            PortMapping {
+                host: 14000,
+                guest: 4000,
+            },
+            PortMapping {
+                host: 14001,
+                guest: 4001,
+            },
         ];
         crate::microsandbox::port_registry::register_sandbox_lifecycle(
             &dir,
