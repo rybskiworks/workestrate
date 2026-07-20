@@ -38,8 +38,9 @@ litellm-check:
 spec-examples:
     cargo test --manifest-path control/agentctl/Cargo.toml --test spec_examples_parse
 
-# Full pre-merge validation: format, lint, compile-check, test, spec-examples, config validation, golden-check, and lock-file stability
-verify: check test spec-examples litellm-check golden-check
+# Full pre-merge validation: format, lint, compile-check, test, spec-examples,
+# config validation, golden-check, lock-file stability, AND nix-purity lint.
+verify: check test spec-examples litellm-check golden-check lint-nix
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
@@ -234,3 +235,11 @@ for size, p in paths[:20]:
       | head -20 \
       || true
     echo "(empty above = no unbounded source copies; non-empty = investigate the cleanSourceWith filter)"
+
+
+# Lint nix code for purity violations: --impure flags, builtins.getFlake
+# with toString, bare builtins.path (no filter), cleanSourceWith without
+# an exclusion list, repo-root path literals in nix code. Active
+# enforcement of the anti-accumulation invariants — wired into `verify`.
+lint-nix:
+    ./scripts/check-nix-paths.sh
