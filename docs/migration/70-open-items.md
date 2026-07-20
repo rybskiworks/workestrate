@@ -305,15 +305,21 @@ See ADR 0018 for the full decision and rationale.
 
 ## Environment note: container persistence
 
-workestrate XDG state (registry, config repos, secrets, runtime state) lives
-in a gitignored `.workestrate/` directory inside the repo. This directory is
-bind-mountable for container persistence. The `.envrc` (direnv) and
-`scripts/local-xdg.sh` export `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
-`XDG_STATE_HOME`, and `SOPS_AGE_KEY_FILE` to point at `.workestrate/`
+workestrate XDG state (registry, config repos, encrypted secrets, runtime
+state) lives in a gitignored `.workestrate/` directory inside the repo. This
+directory is bind-mountable for container persistence. The `.envrc`
+(direnv) and `scripts/local-xdg.sh` export `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME`, and `XDG_STATE_HOME` to point at `.workestrate/`
 subdirectories.
 
-**Warning**: `.workestrate/` contains the age private key. Never commit it.
-The `.gitignore` entry is the guard.
+**The SOPS age private key is intentionally NOT placed under `.workestrate/`
+or anywhere in the repo** (the repo is agent-reachable via `${CWD}` mounts).
+It stays at `~/.config/sops/age/ai-workbench-secrets.txt` on the host.
+`workestrate` secret operations (`setup-secrets`, etc.) run on the host; in
+the container the key is absent and secret operations fail closed by design.
+
+**Warning**: `.workestrate/` contains the encrypted `.env.enc`, the registry,
+and config repos. Never commit it. The `.gitignore` entry is the guard.
 
 ### setup-secrets.sh per-repo override alignment
 

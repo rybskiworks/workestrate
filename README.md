@@ -706,12 +706,21 @@ If you previously had workestrate state in `~/.local/share/workestrate/`
 bash scripts/migrate-xdg-to-repo.sh
 ```
 
-This moves the personal config repo, registry, and SOPS age key into
-`.workestrate/` and cleans up the old dirs.
+This moves the personal config repo, registry, and runtime state into
+`.workestrate/` and cleans up the old dirs. The SOPS age key is
+intentionally NOT moved — it stays at `~/.config/sops/age/` on the host
+(see "Security warning" below).
 
-### Security warning
+### Security warning: age key location
 
-`.workestrate/` contains the age private key (`config/sops/age/`). This
-key can decrypt all secrets in `.env.enc`. **NEVER commit `.workestrate/`.**
-The `.gitignore` entry (`/.workestrate/`) is the guard. If you accidentally
-commit it, rotate the age key immediately.
+The SOPS age private key is **NEVER** in the bundle or anywhere under this
+repository (the repo is agent-reachable via `${CWD}` mounts, so a key inside
+it would be exposed to sandboxes). It stays at
+`~/.config/sops/age/ai-workbench-secrets.txt` on the host. `workestrate`
+secret operations (`setup-secrets`, `with-secrets`, `run-with-secrets`,
+`decrypt-env`, `write-env`) therefore run on the host; in the container
+the key is simply absent and secret operations fail closed by design.
+
+`.workestrate/` still contains the encrypted `.env.enc`, the registry, and
+config repos — **NEVER commit `.workestrate/`.** The `.gitignore` entry
+(`/.workestrate/`) is the guard.

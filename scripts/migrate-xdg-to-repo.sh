@@ -11,7 +11,6 @@ echo "Migrating workestrate XDG state to $TARGET/"
 
 # Create directory structure
 mkdir -p "$TARGET/config/workestrate"
-mkdir -p "$TARGET/config/sops/age"
 mkdir -p "$TARGET/data/workestrate/repos"
 mkdir -p "$TARGET/data/workestrate/sources"
 mkdir -p "$TARGET/state/workestrate/workspaces"
@@ -54,16 +53,10 @@ else
     echo "  No registry found at $OLD_REGISTRY"
 fi
 
-# Migrate sops age key
-OLD_KEY="$HOME/.config/sops/age/ai-workbench-secrets.txt"
-NEW_KEY="$TARGET/config/sops/age/ai-workbench-secrets.txt"
-if [ -f "$OLD_KEY" ]; then
-    echo "  Moving SOPS age key..."
-    mv "$OLD_KEY" "$NEW_KEY"
-    chmod 600 "$NEW_KEY"
-else
-    echo "  No SOPS age key found at $OLD_KEY (secrets may not be decryptable until you create one)"
-fi
+# NOTE: the SOPS age key is intentionally NOT migrated into the bundle.
+# It stays at $HOME/.config/sops/age/ai-workbench-secrets.txt on the host,
+# outside the repo (agent-reachable via ${CWD} mounts). See
+# scripts/local-xdg.sh and .envrc for the rationale.
 
 # Migrate state dir
 OLD_STATE="$HOME/.local/state/workestrate"
@@ -77,8 +70,8 @@ echo "  Cleaning up old XDG dirs..."
 rm -rf "$HOME/.local/share/workestrate"
 rm -rf "$HOME/.config/workestrate"
 rm -rf "$HOME/.local/state/workestrate"
-rmdir "$HOME/.config/sops/age" 2>/dev/null || true
-rmdir "$HOME/.config/sops" 2>/dev/null || true
+# NOTE: do NOT rmdir $HOME/.config/sops/age — the age key stays at the
+# host path by design (see comment above).
 
 # Update registry paths to point at new locations
 if [ -f "$NEW_REGISTRY" ]; then
