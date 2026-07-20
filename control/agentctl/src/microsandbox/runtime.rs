@@ -1,7 +1,6 @@
 use super::env::resolve_templated_value;
 use super::mounts::{apply_plan_mounts, ensure_mount_sources};
 use super::plan::{EgressTarget, NetworkPlan, PortMapping, Protocol, SandboxPlan, Scope};
-use super::port_registry::SandboxInstanceRecord;
 use super::slots;
 use super::workload::{EntrypointSpec, SandboxCommand, Workload};
 use anyhow::Result;
@@ -690,6 +689,10 @@ pub(crate) async fn build_sandbox<W: Workload>(
 /// Build the default singleton InstanceSpec for `workload` in the active
 /// context. Used by the legacy no-flag entry points and as the base for the
 /// CLI flag-aware variants.
+///
+/// `replace: false` is the ADR 0021 fail-closed default — `up`/`exec` on an
+/// occupied slot REFUSES unless `--replace` is passed. The legacy
+/// `replace: true` behavior (silent replace) is opt-in via `--replace`.
 fn default_spec<W: Workload>(workload: &W) -> InstanceSpec {
     let context = crate::config::active_context_name();
     let slot = slots::slot_for(workload.name(), context.as_deref());
@@ -700,7 +703,7 @@ fn default_spec<W: Workload>(workload: &W) -> InstanceSpec {
         workload: workload.name().to_string(),
         context,
         port_offset: 0,
-        replace: true, // LEGACY default: bare `up` replaces (back-compat).
+        replace: false,
     }
 }
 

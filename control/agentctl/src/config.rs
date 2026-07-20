@@ -192,7 +192,7 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
 use crate::microsandbox::plan::{DenyDomainRule, IngressRule, MountPlan, PortMapping};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct ImageSpec {
     pub recipe: String,
@@ -206,7 +206,7 @@ pub struct ImageSpec {
     pub features: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct BinarySpec {
     pub recipe: String,
@@ -217,14 +217,14 @@ pub struct BinarySpec {
     pub install_layout: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct BakedFileSpec {
     pub path: String,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct EnvVarConfig {
     pub name: String,
@@ -232,13 +232,13 @@ pub struct EnvVarConfig {
     pub secret: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct SecretEnvConfig {
     pub secret: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct SeedFileConfig {
     pub source: String,
@@ -246,7 +246,7 @@ pub struct SeedFileConfig {
     pub only_if_missing: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct LocalBuildConfig {
     pub recipe: String,
@@ -258,7 +258,7 @@ pub struct LocalBuildConfig {
     pub fallback: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct NetworkConfig {
     pub default_deny: Option<bool>,
@@ -270,7 +270,7 @@ pub struct NetworkConfig {
     pub ingress: Vec<IngressRule>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct WorkloadConfig {
     #[serde(default)]
@@ -298,7 +298,7 @@ pub struct WorkloadConfig {
     pub network: NetworkConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct SecretDefConfig {
     pub env_var: Option<String>,
@@ -311,7 +311,7 @@ pub struct SecretDefConfig {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct ConfigFile {
     #[serde(default)]
@@ -383,14 +383,14 @@ pub fn source_store_dir(name: &str) -> PathBuf {
 // Registry
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct RegistrySettings {
     pub default_context: Option<String>,
     pub store_dir: Option<String>,
     pub state_dir: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ConfigRepoEntry {
     pub url: String,
     pub r#ref: Option<String>,
@@ -413,18 +413,18 @@ pub struct SecretsLayer {
     pub skip: bool, // secrets = "none"
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TrustedProject {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct Context {
     #[serde(default)]
     pub layers: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct Registry {
     #[serde(default)]
     pub settings: RegistrySettings,

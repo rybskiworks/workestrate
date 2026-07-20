@@ -26,6 +26,12 @@ struct Cli {
     #[arg(long, global = true, help = "Active context name")]
     context: Option<String>,
 
+    /// Emit machine-readable JSON to stdout and an error envelope to stderr
+    /// on failure. Applies to: ps, plan, config list, down (per-instance
+    /// results), and the up/exec/down error envelope.
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -37,24 +43,79 @@ enum ServiceAction {
     Up {
         #[arg(short, long, help = "Run in foreground (block until Ctrl-C)")]
         foreground: bool,
+
+        /// Tear down any existing instance at this slot before starting
+        /// (destructive; the ADR 0021 explicit-replace escape hatch).
+        #[arg(long)]
+        replace: bool,
+
+        /// Target a parallel instance `<slot>@<id>`. Refuses if that exact
+        /// instance name is already running.
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+
+        /// Auto-allocate the lowest free integer id >= 2 and target
+        /// `<slot>@<id>`.
+        #[arg(long)]
+        new: bool,
+
+        /// Add N to every HOST port (guest ports unchanged).
+        #[arg(long, default_value_t = 0, value_name = "N")]
+        port_offset: u16,
     },
     /// Stop and remove the sandbox
-    Down,
+    Down {
+        /// Stop the parallel instance `<slot>@<id>`.
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+
+        /// Stop the singleton AND every parallel instance of this workload.
+        #[arg(long)]
+        all_instances: bool,
+    },
     /// Tail the detached service's log file
     Logs,
     /// Print the planned sandbox workload
-    Plan,
+    Plan {
+        /// Add N to every HOST port in the displayed plan (mirrors --port-offset on up).
+        #[arg(long, default_value_t = 0, value_name = "N")]
+        port_offset: u16,
+    },
 }
 
 /// Actions available on agent workloads (interactive TUI attach).
 #[derive(Subcommand)]
 enum AgentAction {
     /// Attach to the sandbox interactively (TUI)
-    Exec,
+    Exec {
+        /// Tear down any existing instance at this slot before starting.
+        #[arg(long)]
+        replace: bool,
+
+        /// Target a parallel instance `<slot>@<id>`.
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+
+        /// Auto-allocate the lowest free integer id >= 2.
+        #[arg(long)]
+        new: bool,
+
+        /// Add N to every HOST port (guest ports unchanged).
+        #[arg(long, default_value_t = 0, value_name = "N")]
+        port_offset: u16,
+    },
     /// Stop and remove the sandbox
-    Down,
+    Down {
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+        #[arg(long)]
+        all_instances: bool,
+    },
     /// Print the planned sandbox workload
-    Plan,
+    Plan {
+        #[arg(long, default_value_t = 0, value_name = "N")]
+        port_offset: u16,
+    },
 }
 
 /// Actions for managing config repositories and trust.
@@ -136,6 +197,23 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+    /// List running workestrate sandbox instances (reads the port registry).
+    /// Use --json for machine-readable output.
+    Ps,
+    /// Stop every running workestrate sandbox across all workloads/contexts.
+    /// Destructive; confirms unless --yes.
+    DownAll {
+        #[arg(long, help = "Skip the interactive confirmation")]
+        yes: bool,
+    },
+    /// Print the JSON Schema for workestrate.toml to stdout (or write to --out).
+    /// The schema is generated from the same serde/schemars types the config
+    /// loader uses (single source of truth; ADR 0021 §8).
+    GenerateSchema {
+        /// Write the schema to this path instead of stdout.
+        #[arg(short, long, value_name = "PATH")]
+        out: Option<std::path::PathBuf>,
+    },
     /// Manage config repositories and trusted projects
     Config {
         #[command(subcommand)]
@@ -176,25 +254,105 @@ enum Commands {
     Workload(Vec<String>),
 }
 
+/// Construct an InstanceSpec from the parsed CLI flags + the active context.
+///
+/// `workload_name` is the bare workload name (e.g. "litellm"). The slot is
+/// derived from the active context. `instance_id` (from --instance) is
+/// validated. `new_id` (from --new, already-allocated) is used as-is.
+///
+/// Mutually-exclusive flag groups (replace/instance/new) are validated here.
+fn build_instance_spec(
+    workload_name: &str,
+    replace: bool,
+    instance_id: Option<&str>,
+    new_id: Option<u32>,
+    port_offset: u16,
+) -> Result<crate::microsandbox::runtime::InstanceSpec> {
+    use crate::microsandbox::runtime::InstanceSpec;
+    use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
+
+    let exclusives = [replace, instance_id.is_some(), new_id.is_some()]
+        .iter()
+        .filter(|&&b| b)
+        .count();
+    if exclusives > 1 {
+        anyhow::bail!(
+            "--replace, --instance <id>, and --new are mutually exclusive; \
+             pass at most one"
+        );
+    }
+
+    let context = crate::config::active_context_name();
+    let slot = slot_for(workload_name, context.as_deref());
+
+    let id: Option<String> = if let Some(id) = instance_id {
+        validate_instance_id(id)?;
+        Some(id.to_string())
+    } else if let Some(n) = new_id {
+        Some(n.to_string())
+    } else {
+        None
+    };
+
+    let instance = instance_name(&slot, id.as_deref());
+
+    Ok(InstanceSpec {
+        slot,
+        instance,
+        workload: workload_name.to_string(),
+        context,
+        port_offset,
+        replace,
+    })
+}
+
 async fn dispatch_service<W: Workload>(
     workload: &W,
     action: ServiceAction,
     show_source: bool,
+    json: bool,
 ) -> Result<()> {
     if let Some(name) = config::active_context_name() {
-        eprintln!("context: {}", name);
+        if !json {
+            eprintln!("context: {}", name);
+        }
     }
     match action {
-        ServiceAction::Up { foreground } => microsandbox::up_service(workload, foreground).await,
-        ServiceAction::Down => microsandbox::down(&workload.sandbox_instance_name()).await,
-        ServiceAction::Logs => microsandbox::logs(&workload.sandbox_instance_name()).await,
-        ServiceAction::Plan => {
-            if show_source {
-                println!("{}", workload.show_source());
+        ServiceAction::Up {
+            foreground,
+            replace,
+            instance,
+            new,
+            port_offset,
+        } => {
+            let new_id = if new {
+                let state_dir = crate::config::resolve_state_dir();
+                Some(crate::microsandbox::port_registry::auto_allocate_integer_id(
+                    &state_dir,
+                    &crate::microsandbox::slots::slot_for(
+                        workload.name(),
+                        crate::config::active_context_name().as_deref(),
+                    ),
+                )?)
             } else {
-                println!("{}", workload.plan());
-            }
-            Ok(())
+                None
+            };
+            let spec = build_instance_spec(
+                workload.name(),
+                replace,
+                instance.as_deref(),
+                new_id,
+                port_offset,
+            )?;
+            crate::microsandbox::runtime::up_service_with_spec(workload, &spec, foreground).await
+        }
+        ServiceAction::Down {
+            instance,
+            all_instances,
+        } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
+        ServiceAction::Logs => crate::microsandbox::logs(&workload.sandbox_instance_name()).await,
+        ServiceAction::Plan { port_offset } => {
+            cmd_plan(workload, show_source, json, port_offset)
         }
     }
 }
@@ -203,20 +361,47 @@ async fn dispatch_agent<W: Workload>(
     workload: &W,
     action: AgentAction,
     show_source: bool,
+    json: bool,
 ) -> Result<()> {
     if let Some(name) = config::active_context_name() {
-        eprintln!("context: {}", name);
+        if !json {
+            eprintln!("context: {}", name);
+        }
     }
     match action {
-        AgentAction::Exec => microsandbox::exec_agent(workload).await,
-        AgentAction::Down => microsandbox::down(&workload.sandbox_instance_name()).await,
-        AgentAction::Plan => {
-            if show_source {
-                println!("{}", workload.show_source());
+        AgentAction::Exec {
+            replace,
+            instance,
+            new,
+            port_offset,
+        } => {
+            let new_id = if new {
+                let state_dir = crate::config::resolve_state_dir();
+                Some(crate::microsandbox::port_registry::auto_allocate_integer_id(
+                    &state_dir,
+                    &crate::microsandbox::slots::slot_for(
+                        workload.name(),
+                        crate::config::active_context_name().as_deref(),
+                    ),
+                )?)
             } else {
-                println!("{}", workload.plan());
-            }
-            Ok(())
+                None
+            };
+            let spec = build_instance_spec(
+                workload.name(),
+                replace,
+                instance.as_deref(),
+                new_id,
+                port_offset,
+            )?;
+            crate::microsandbox::runtime::exec_agent_with_spec(workload, &spec).await
+        }
+        AgentAction::Down {
+            instance,
+            all_instances,
+        } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
+        AgentAction::Plan { port_offset } => {
+            cmd_plan(workload, show_source, json, port_offset)
         }
     }
 }
@@ -225,21 +410,405 @@ fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceAction> 
     match action {
         "up" => {
             let foreground = args.iter().any(|a| a == "--foreground");
-            Ok(ServiceAction::Up { foreground })
+            let replace = args.iter().any(|a| a == "--replace");
+            let new = args.iter().any(|a| a == "--new");
+            let instance = parse_flag_value(args, "--instance");
+            let port_offset = parse_port_offset(args)?;
+            Ok(ServiceAction::Up {
+                foreground,
+                replace,
+                instance,
+                new,
+                port_offset,
+            })
         }
-        "down" => Ok(ServiceAction::Down),
+        "down" => {
+            let instance = parse_flag_value(args, "--instance");
+            let all_instances = args.iter().any(|a| a == "--all-instances");
+            Ok(ServiceAction::Down {
+                instance,
+                all_instances,
+            })
+        }
         "logs" => Ok(ServiceAction::Logs),
-        "plan" => Ok(ServiceAction::Plan),
+        "plan" => {
+            let port_offset = parse_port_offset(args)?;
+            Ok(ServiceAction::Plan { port_offset })
+        }
         other => anyhow::bail!("unknown service action: {}", other),
     }
 }
 
-fn parse_agent_action(action: &str) -> Result<AgentAction> {
+fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> {
     match action {
-        "exec" => Ok(AgentAction::Exec),
-        "down" => Ok(AgentAction::Down),
-        "plan" => Ok(AgentAction::Plan),
+        "exec" => {
+            let replace = args.iter().any(|a| a == "--replace");
+            let new = args.iter().any(|a| a == "--new");
+            let instance = parse_flag_value(args, "--instance");
+            let port_offset = parse_port_offset(args)?;
+            Ok(AgentAction::Exec {
+                replace,
+                instance,
+                new,
+                port_offset,
+            })
+        }
+        "down" => {
+            let instance = parse_flag_value(args, "--instance");
+            let all_instances = args.iter().any(|a| a == "--all-instances");
+            Ok(AgentAction::Down {
+                instance,
+                all_instances,
+            })
+        }
+        "plan" => {
+            let port_offset = parse_port_offset(args)?;
+            Ok(AgentAction::Plan { port_offset })
+        }
         other => anyhow::bail!("unknown agent action: {}", other),
+    }
+}
+
+/// Extract the value of `--flag <value>` or `--flag=value` from a Vec<String>
+/// (the workload catch-all args). Returns None if the flag is absent.
+fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        if a == flag {
+            if let Some(v) = iter.next() {
+                return Some(v.clone());
+            }
+        } else if let Some(rest) = a.strip_prefix(&format!("{}=", flag)) {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse `--port-offset <N>` (or `--port-offset=N`) from the workload
+/// catch-all args. Defaults to 0 when absent.
+fn parse_port_offset(args: &[String]) -> Result<u16> {
+    let Some(raw) = parse_flag_value(args, "--port-offset") else {
+        return Ok(0);
+    };
+    raw.parse::<u16>().map_err(|_| {
+        anyhow::anyhow!(
+            "invalid --port-offset value '{}' (expected u16 0..=65535)",
+            raw
+        )
+    })
+}
+
+// ---------------------------------------------------------------------------
+// JSON-output helpers (ps / down / plan / config list / generate-schema)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct DownResultJson {
+    instance: String,
+    status: &'static str,
+    message: Option<String>,
+}
+
+fn down_result_json(r: &crate::microsandbox::runtime::DownResult) -> DownResultJson {
+    // Inline conversion (avoids `expect()` on a 1->1 invariant; clippy
+    // `expect_used` is deny in this crate).
+    use crate::microsandbox::runtime::DownStatus;
+    DownResultJson {
+        instance: r.instance.clone(),
+        status: match r.status {
+            DownStatus::Stopped => "stopped",
+            DownStatus::NotFound => "not_found",
+            DownStatus::Error => "error",
+        },
+        message: r.message.clone(),
+    }
+}
+
+fn down_results_json(results: &[crate::microsandbox::runtime::DownResult]) -> Vec<DownResultJson> {
+    use crate::microsandbox::runtime::DownStatus;
+    results
+        .iter()
+        .map(|r| DownResultJson {
+            instance: r.instance.clone(),
+            status: match r.status {
+                DownStatus::Stopped => "stopped",
+                DownStatus::NotFound => "not_found",
+                DownStatus::Error => "error",
+            },
+            message: r.message.clone(),
+        })
+        .collect()
+}
+
+#[derive(serde::Serialize)]
+struct PsPortJson {
+    host: u16,
+    guest: u16,
+}
+
+#[derive(serde::Serialize)]
+struct PsEntryJson {
+    instance: String,
+    workload: String,
+    context: Option<String>,
+    ports: Vec<PsPortJson>,
+    created: String,
+}
+
+fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec<PsEntryJson> {
+    entries
+        .iter()
+        .map(|e| PsEntryJson {
+            instance: e.instance.clone(),
+            workload: e.workload.clone(),
+            context: e.context.clone(),
+            ports: e
+                .ports
+                .iter()
+                .map(|p| PsPortJson {
+                    host: p.host,
+                    guest: p.guest,
+                })
+                .collect(),
+            created: e.created.clone(),
+        })
+        .collect()
+}
+
+async fn cmd_down(
+    workload_name: &str,
+    instance_id: Option<&str>,
+    all_instances: bool,
+    json: bool,
+) -> Result<()> {
+    use crate::microsandbox::runtime::{down_all_instances, down_instance};
+    use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
+
+    let context = crate::config::active_context_name();
+    let slot = slot_for(workload_name, context.as_deref());
+
+    if all_instances {
+        let state_dir = crate::config::resolve_state_dir();
+        let results = down_all_instances(&state_dir, workload_name).await?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&down_results_json(&results))?);
+        } else {
+            print_down_results_text(&results);
+        }
+        report_down_aggregate(&results)
+    } else if let Some(id) = instance_id {
+        validate_instance_id(id)?;
+        let target = instance_name(&slot, Some(id));
+        let state_dir = crate::config::resolve_state_dir();
+        let result = down_instance(&state_dir, &target).await;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&down_result_json(&result))?);
+        } else {
+            print_down_results_text(&[result.clone()]);
+        }
+        report_down_aggregate(&[result])
+    } else {
+        // Singleton slot down (the legacy default).
+        let state_dir = crate::config::resolve_state_dir();
+        let result = down_instance(&state_dir, &slot).await;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&down_result_json(&result))?);
+        } else {
+            print_down_results_text(&[result.clone()]);
+        }
+        report_down_aggregate(&[result])
+    }
+}
+
+fn print_down_results_text(results: &[crate::microsandbox::runtime::DownResult]) {
+    use crate::microsandbox::runtime::DownStatus;
+    for r in results {
+        match r.status {
+            DownStatus::Stopped => println!("{}: stopped", r.instance),
+            DownStatus::NotFound => println!("{}: not found (state cleared)", r.instance),
+            DownStatus::Error => println!(
+                "{}: ERROR — {}",
+                r.instance,
+                r.message.as_deref().unwrap_or("(no detail)")
+            ),
+        }
+    }
+}
+
+fn report_down_aggregate(results: &[crate::microsandbox::runtime::DownResult]) -> Result<()> {
+    use crate::microsandbox::runtime::DownStatus;
+    let had_error = results
+        .iter()
+        .any(|r| matches!(r.status, DownStatus::Error));
+    if had_error {
+        anyhow::bail!("one or more instances failed to stop");
+    }
+    Ok(())
+}
+
+fn cmd_plan<W: crate::microsandbox::workload::Workload>(
+    workload: &W,
+    show_source: bool,
+    json: bool,
+    port_offset: u16,
+) -> Result<()> {
+    if json {
+        let mut plan = workload.plan();
+        if port_offset != 0 {
+            for p in &mut plan.ports {
+                p.host = p.host.checked_add(port_offset).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "port offset {} overflows host port {}",
+                        port_offset,
+                        p.host
+                    )
+                })?;
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+    } else if show_source {
+        println!("{}", workload.show_source());
+    } else if port_offset != 0 {
+        // Reuse the Display impl but shift host ports first.
+        let mut plan = workload.plan();
+        for p in &mut plan.ports {
+            p.host = p.host.checked_add(port_offset).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "port offset {} overflows host port {}",
+                    port_offset,
+                    p.host
+                )
+            })?;
+        }
+        print!("{}", plan);
+    } else {
+        println!("{}", workload.plan());
+    }
+    Ok(())
+}
+
+async fn cmd_ps(json: bool) -> Result<()> {
+    use crate::microsandbox::runtime::ps;
+    let state_dir = crate::config::resolve_state_dir();
+    let entries = ps(&state_dir)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&ps_entries_json(&entries))?);
+    } else {
+        print_ps_text(&entries);
+    }
+    Ok(())
+}
+
+fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) {
+    if entries.is_empty() {
+        println!("(no running workestrate instances)");
+        return;
+    }
+    // Stable column layout: INSTANCE | WORKLOAD | CONTEXT | PORTS | CREATED
+    println!(
+        "{:<32} {:<16} {:<12} {:<24} CREATED",
+        "INSTANCE", "WORKLOAD", "CONTEXT", "PORTS"
+    );
+    let mut sorted: Vec<_> = entries.iter().collect();
+    sorted.sort_by(|a, b| a.instance.cmp(&b.instance));
+    for e in sorted {
+        let ports_str = e
+            .ports
+            .iter()
+            .map(|p| format!("{}:{}", p.host, p.guest))
+            .collect::<Vec<_>>()
+            .join(",");
+        println!(
+            "{:<32} {:<16} {:<12} {:<24} {}",
+            e.instance,
+            e.workload,
+            e.context.clone().unwrap_or_else(|| "-".into()),
+            ports_str,
+            if e.created.is_empty() { "-" } else { &e.created },
+        );
+    }
+}
+
+async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
+    use crate::microsandbox::runtime::{down_all, DownStatus};
+    if !yes {
+        // Best-effort interactive confirm: read a single y/Y from stdin.
+        // Non-tty stdin → abort with a clear hint to pass --yes.
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            eprint!("This will stop EVERY running workestrate sandbox. Continue? [y/N] ");
+            let mut buf = String::new();
+            use std::io::Read;
+            std::io::stdin().read_to_string(&mut buf)?;
+            if !buf.trim().eq_ignore_ascii_case("y") {
+                if json {
+                    eprintln!(
+                        "{}",
+                        serde_json::to_string(&serde_json::json!({
+                            "error": {
+                                "kind": "aborted",
+                                "message": "down --all not confirmed"
+                            }
+                        }))?
+                    );
+                } else {
+                    eprintln!("aborted");
+                }
+                std::process::exit(1);
+            }
+        } else {
+            anyhow::bail!(
+                "down --all requires an interactive tty for confirmation; \
+                 pass --yes to skip"
+            );
+        }
+    }
+    let state_dir = crate::config::resolve_state_dir();
+    let results = down_all(&state_dir).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&down_results_json(&results))?);
+    } else {
+        print_down_results_text(&results);
+    }
+    let had_error = results
+        .iter()
+        .any(|r| matches!(r.status, DownStatus::Error));
+    if had_error {
+        anyhow::bail!("one or more instances failed to stop");
+    }
+    Ok(())
+}
+
+fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
+    let schema = schemars::schema_for!(crate::config::ConfigFile);
+    let json = serde_json::to_string_pretty(&schema)?;
+    match out {
+        Some(p) => {
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(p, format!("{}\n", json))?;
+            println!("wrote schema to {}", p.display());
+        }
+        None => println!("{}", json),
+    }
+    Ok(())
+}
+
+async fn cmd_config_list_json() -> Result<()> {
+    // The committed JSON shape is a stable object mapping layer info; this is
+    // a best-effort serialization of the in-memory Registry (or null when no
+    // registry exists).
+    match config::load_registry()? {
+        None => {
+            println!("null");
+            Ok(())
+        }
+        Some(registry) => {
+            println!("{}", serde_json::to_string_pretty(&registry)?);
+            Ok(())
+        }
     }
 }
 
@@ -893,8 +1462,37 @@ async fn cmd_source_reset(name: &str) -> Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() {
+    // Pre-scan argv for --json so we can format ANY error (incl. clap parse
+    // errors via Cli::parse()) as the JSON envelope when requested. The
+    // global --json on Cli does not help here because Cli::parse() calls
+    // process::exit on usage errors before we'd see the parsed value.
+    let json_mode = std::env::args().any(|a| a == "--json");
+
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            emit_error(
+                &anyhow::anyhow!("failed to build tokio runtime: {e}"),
+                json_mode,
+            );
+            std::process::exit(1);
+        }
+    };
+    let result = rt.block_on(async_main());
+    match result {
+        Ok(()) => {}
+        Err(e) => {
+            emit_error(&e, json_mode);
+            std::process::exit(classify_exit_code(&e));
+        }
+    }
+}
+
+async fn async_main() -> Result<()> {
     let cli = Cli::parse();
     if cli.no_project_config {
         std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
@@ -918,48 +1516,118 @@ async fn main() -> Result<()> {
         Commands::GenerateEnvExample { output } => {
             cmd_generate_env_example(output.as_deref()).await
         }
-        Commands::Config { action } => cmd_config(action).await,
+        Commands::Ps => cmd_ps(cli.json).await,
+        Commands::DownAll { yes } => cmd_down_all(yes, cli.json).await,
+        Commands::GenerateSchema { out } => cmd_generate_schema(out.as_deref()),
+        Commands::Config { action } => match action {
+            ConfigAction::List => {
+                if cli.json {
+                    cmd_config_list_json().await
+                } else {
+                    cmd_config(ConfigAction::List).await
+                }
+            }
+            other => cmd_config(other).await,
+        },
         Commands::Source { action } => cmd_source(action).await,
         Commands::Litellm { action } => {
             let workload = ConfigWorkload::new("litellm")?;
-            dispatch_service(&workload, action, cli.show_source).await
+            dispatch_service(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Pi { action } => {
             let workload = ConfigWorkload::new("pi")?;
-            dispatch_agent(&workload, action, cli.show_source).await
+            dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Odysseus { action } => {
             let workload = ConfigWorkload::new("odysseus")?;
-            dispatch_service(&workload, action, cli.show_source).await
+            dispatch_service(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Opencode { action } => {
             let workload = ConfigWorkload::new("opencode")?;
-            dispatch_agent(&workload, action, cli.show_source).await
+            dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Tempest { action } => {
             let workload = ConfigWorkload::new("tempest")?;
-            dispatch_agent(&workload, action, cli.show_source).await
+            dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Workload(mut args) => {
             if args.is_empty() {
                 anyhow::bail!("no workload name given");
             }
+            // Pull --json out of the raw args so it works in any position. The
+            // global --json on Cli does not see inside external_subcommand args.
+            let json = cli.json || args.iter().any(|a| a == "--json");
+            args.retain(|a| a != "--json");
+
             let name = args.remove(0);
             let action = args.first().cloned().unwrap_or_else(|| "plan".to_string());
             let workload = ConfigWorkload::new(&name)?;
             match workload.kind() {
                 "service" => {
                     let service_action = parse_service_action(&action, &args)?;
-                    dispatch_service(&workload, service_action, cli.show_source).await
+                    dispatch_service(&workload, service_action, cli.show_source, json).await
                 }
                 "agent" => {
-                    let agent_action = parse_agent_action(&action)?;
-                    dispatch_agent(&workload, agent_action, cli.show_source).await
+                    let agent_action = parse_agent_action(&action, &args)?;
+                    dispatch_agent(&workload, agent_action, cli.show_source, json).await
                 }
                 other => anyhow::bail!("unknown workload kind '{}' for '{}'", other, name),
             }
         }
     }
+}
+
+fn emit_error(e: &anyhow::Error, json_mode: bool) {
+    let classified = classify_error(e);
+    if json_mode {
+        let body = serde_json::json!({
+            "error": {
+                "kind": classified.kind,
+                "message": classified.message,
+            }
+        });
+        eprintln!(
+            "{}",
+            serde_json::to_string(&body).unwrap_or_else(|_| {
+                r#"{"error":{"kind":"serialize_failed","message":"see logs"}}"#.to_string()
+            })
+        );
+    } else {
+        eprintln!("error: {}", classified.message);
+    }
+}
+
+struct Classified {
+    kind: &'static str,
+    message: String,
+    exit_code: i32,
+}
+
+fn classify_error(err: &anyhow::Error) -> Classified {
+    let msg = err.to_string();
+    if msg.contains("is already running") {
+        Classified {
+            kind: "refuse_occupied",
+            message: msg,
+            exit_code: 3,
+        }
+    } else if msg.contains("port collision") {
+        Classified {
+            kind: "port_collision",
+            message: msg,
+            exit_code: 4,
+        }
+    } else {
+        Classified {
+            kind: "error",
+            message: msg,
+            exit_code: 1,
+        }
+    }
+}
+
+fn classify_exit_code(err: &anyhow::Error) -> i32 {
+    classify_error(err).exit_code
 }
 
 async fn cmd_check() -> Result<()> {
@@ -1686,5 +2354,133 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    // ---- ADR 0021 CLI flag-parsing tests ----
+
+    #[test]
+    fn parse_flag_value_supports_space_form() {
+        let args: Vec<String> = vec!["--instance".into(), "canary".into()];
+        assert_eq!(
+            parse_flag_value(&args, "--instance").as_deref(),
+            Some("canary")
+        );
+    }
+
+    #[test]
+    fn parse_flag_value_supports_equals_form() {
+        let args: Vec<String> = vec!["--instance=blue-green".into()];
+        assert_eq!(
+            parse_flag_value(&args, "--instance").as_deref(),
+            Some("blue-green")
+        );
+    }
+
+    #[test]
+    fn parse_flag_value_returns_none_when_absent() {
+        let args: Vec<String> = vec!["--replace".into()];
+        assert!(parse_flag_value(&args, "--instance").is_none());
+    }
+
+    #[test]
+    fn parse_port_offset_defaults_to_zero() -> Result<()> {
+        let args: Vec<String> = vec!["--replace".into()];
+        assert_eq!(parse_port_offset(&args)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_port_offset_reads_value() -> Result<()> {
+        let args: Vec<String> = vec!["--port-offset".into(), "10000".into()];
+        assert_eq!(parse_port_offset(&args)?, 10000);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_port_offset_rejects_non_numeric() {
+        let args: Vec<String> = vec!["--port-offset".into(), "huge".into()];
+        assert!(parse_port_offset(&args).is_err());
+    }
+
+    #[test]
+    fn parse_port_offset_rejects_overflow() {
+        let args: Vec<String> = vec!["--port-offset".into(), "70000".into()];
+        assert!(parse_port_offset(&args).is_err());
+    }
+
+    #[test]
+    fn classify_error_refuse_occupied() {
+        let e = anyhow::anyhow!(
+            "instance 'personal-litellm' is already running. Use --replace ..."
+        );
+        let c = classify_error(&e);
+        assert_eq!(c.kind, "refuse_occupied");
+        assert_eq!(c.exit_code, 3);
+    }
+
+    #[test]
+    fn classify_error_port_collision() {
+        let e = anyhow::anyhow!("port collision: port 4000 is already in use by ...");
+        let c = classify_error(&e);
+        assert_eq!(c.kind, "port_collision");
+        assert_eq!(c.exit_code, 4);
+    }
+
+    #[test]
+    fn classify_error_generic() {
+        let e = anyhow::anyhow!("something went wrong");
+        let c = classify_error(&e);
+        assert_eq!(c.kind, "error");
+        assert_eq!(c.exit_code, 1);
+    }
+
+    #[test]
+    fn cli_exposes_lifecycle_subcommands() {
+        let cmd = Cli::command();
+        let names: Vec<_> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+        for expected in ["ps", "down-all", "generate-schema"] {
+            assert!(names.contains(&expected), "missing subcommand: {expected}");
+        }
+    }
+
+    #[test]
+    fn service_up_exposes_lifecycle_flags() {
+        let cmd = Cli::command();
+        let up = cmd
+            .find_subcommand("litellm")
+            .and_then(|s| s.find_subcommand("up"))
+            .expect("litellm up must exist");
+        // get_long() returns the user-facing long flag name (clap hyphenates
+        // underscores: port_offset → port-offset). get_id() preserves the raw
+        // field identifier; the CLI surface is what we care about here.
+        let flag_names: Vec<_> = up
+            .get_arguments()
+            .filter_map(|a| a.get_long().map(|s| s.to_string()))
+            .collect();
+        for f in ["replace", "instance", "new", "port-offset", "foreground"] {
+            assert!(
+                flag_names.contains(&f.to_string()),
+                "litellm up missing flag: {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn service_down_exposes_lifecycle_flags() {
+        let cmd = Cli::command();
+        let down = cmd
+            .find_subcommand("litellm")
+            .and_then(|s| s.find_subcommand("down"))
+            .expect("litellm down must exist");
+        let flag_names: Vec<_> = down
+            .get_arguments()
+            .filter_map(|a| a.get_long().map(|s| s.to_string()))
+            .collect();
+        for f in ["instance", "all-instances"] {
+            assert!(
+                flag_names.contains(&f.to_string()),
+                "litellm down missing flag: {f}"
+            );
+        }
     }
 }

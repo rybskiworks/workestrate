@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Config may only reference named recipes; each is expanded by core into the
 /// concrete `EgressRule`s it represents.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "recipe", rename_all = "snake_case")]
 pub enum EgressRecipeRef {
     Dns,
