@@ -1,8 +1,629 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$comment": "PLACEHOLDER",
-  "x-placeholder-note": "Regenerate via `just generate-schema` on a nix-capable host. This file is the canonical JSON Schema for workestrate.toml, produced by `workestrate generate-schema` (schemars-derived from ConfigFile in control/agentctl/src/config.rs). The CI drift test in control/agentctl/tests/schema_drift.rs detects the `$comment: \"PLACEHOLDER\"` marker above and tolerates it; the first `just generate-schema` run replaces this whole file with the real schema and enforces strict drift from then on.",
   "title": "ConfigFile",
   "type": "object",
-  "properties": {}
+  "properties": {
+    "schema_version": {
+      "default": 0,
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "secrets": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/SecretDefConfig"
+      }
+    },
+    "workloads": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/WorkloadConfig"
+      }
+    }
+  },
+  "definitions": {
+    "BakedFileSpec": {
+      "type": "object",
+      "required": [
+        "content",
+        "path"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "BinarySpec": {
+      "type": "object",
+      "required": [
+        "recipe",
+        "src"
+      ],
+      "properties": {
+        "entrypoint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "install_layout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "npm_deps_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "src": {
+          "type": "string"
+        },
+        "worker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DenyDomainRule": {
+      "type": "object",
+      "required": [
+        "domain_suffix"
+      ],
+      "properties": {
+        "domain_suffix": {
+          "type": "string"
+        }
+      }
+    },
+    "EgressRecipeRef": {
+      "description": "Egress recipe reference as declared in config.\n\nConfig may only reference named recipes; each is expanded by core into the concrete `EgressRule`s it represents.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "recipe"
+          ],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "dns"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "recipe"
+          ],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "litellm_proxy"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "recipe"
+          ],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "github"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "recipe"
+          ],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "agent_base"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "hosts",
+            "recipe"
+          ],
+          "properties": {
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "https"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "EnvVarConfig": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "secret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ImageSpec": {
+      "type": "object",
+      "required": [
+        "recipe"
+      ],
+      "properties": {
+        "baked_files": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/BakedFileSpec"
+          }
+        },
+        "binary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BinarySpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contents": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "features": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "IngressRule": {
+      "type": "object",
+      "required": [
+        "port",
+        "protocol",
+        "scope"
+      ],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "protocol": {
+          "$ref": "#/definitions/Protocol"
+        },
+        "scope": {
+          "$ref": "#/definitions/Scope"
+        }
+      }
+    },
+    "LocalBuildConfig": {
+      "type": "object",
+      "required": [
+        "recipe",
+        "source"
+      ],
+      "properties": {
+        "env_override": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gating_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "requirements_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "MountPlan": {
+      "type": "object",
+      "required": [
+        "guest",
+        "host",
+        "read_only"
+      ],
+      "properties": {
+        "guest": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "read_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "NetworkConfig": {
+      "type": "object",
+      "properties": {
+        "default_deny": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "deny": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DenyDomainRule"
+          }
+        },
+        "egress": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EgressRecipeRef"
+          }
+        },
+        "ingress": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/IngressRule"
+          }
+        }
+      }
+    },
+    "PortMapping": {
+      "type": "object",
+      "required": [
+        "guest",
+        "host"
+      ],
+      "properties": {
+        "guest": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "host": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      }
+    },
+    "Protocol": {
+      "description": "Network protocol for ingress/egress rules.",
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    },
+    "Scope": {
+      "description": "Network scope for ingress rules.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "local"
+          ]
+        },
+        {
+          "description": "Public ingress (not yet used by any workload).",
+          "type": "string",
+          "enum": [
+            "public"
+          ]
+        }
+      ]
+    },
+    "SecretDefConfig": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env_var": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exposed_as": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hosts": {
+          "default": null,
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "placeholder": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SecretEnvConfig": {
+      "type": "object",
+      "required": [
+        "secret"
+      ],
+      "properties": {
+        "secret": {
+          "type": "string"
+        }
+      }
+    },
+    "SeedFileConfig": {
+      "type": "object",
+      "required": [
+        "source",
+        "target"
+      ],
+      "properties": {
+        "only_if_missing": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      }
+    },
+    "WorkloadConfig": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cpus": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "env": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EnvVarConfig"
+          }
+        },
+        "image": {
+          "default": {
+            "baked_files": null,
+            "binary": null,
+            "contents": null,
+            "features": null,
+            "name": null,
+            "recipe": "",
+            "ref": null,
+            "tag": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ImageSpec"
+            }
+          ]
+        },
+        "kind": {
+          "default": "",
+          "type": "string"
+        },
+        "local_build": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LocalBuildConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "log_stop_errors": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "memory_mib": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "mounts": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MountPlan"
+          }
+        },
+        "network": {
+          "default": {
+            "default_deny": null,
+            "deny": [],
+            "egress": [],
+            "ingress": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/NetworkConfig"
+            }
+          ]
+        },
+        "ports": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortMapping"
+          }
+        },
+        "secret_env": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SecretEnvConfig"
+          }
+        },
+        "seed_files": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SeedFileConfig"
+          }
+        },
+        "workdir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
 }
