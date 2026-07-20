@@ -151,3 +151,37 @@ local-setup:
     @echo "Setting up repo-local XDG state..."
     @source scripts/local-xdg.sh
     @workestrate check
+
+# Refresh all fixed-output derivation (FOD) dependency hashes for the agent
+# recipes. Run this whenever the agent source inputs change (flake.lock bumps
+# to tempest/opencode/odysseus) or after editing per-recipe lock/requirements
+# files.
+#
+# Each agent recipe uses lib.fakeHash as a placeholder until the real hash is
+# computed on a nix-capable host (the sandbox cannot reach the network for hash
+# computation; see HOST-GATE comments in nix/packages/{tempest,opencode,odysseus}.nix).
+#
+# Workflow:
+#   1. Run this recipe (it issues three nix commands and prints results).
+#   2. For each hash output, inline the sha256-... value into the matching file:
+#        tempest:   nix/packages/tempest.nix   (npmDepsHash)
+#        opencode:  nix/packages/opencode.nix  (bunDeps.outputHash)
+#        odysseus:  nix/packages/odysseus.nix  (pipDeps.outputHash)
+#   3. Re-run `nix build .#tempest .#opencode-built .#odysseus-built` to confirm.
+update-hashes:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== tempest: prefetch-npm-deps (buildNpmPackage internal FOD) ==="
+    nix run nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json
+    echo ""
+    echo "=== opencode-built: bunDeps FOD (first build fails with lib.fakeHash) ==="
+    echo "(copy the 'got:' sha256-... value into nix/packages/opencode.nix bunDeps.outputHash)"
+    nix build .#opencode-built --no-link 2>&1 | grep -E 'got:|specified:|error: hash' || true
+    echo ""
+    echo "=== odysseus-built: pipDeps FOD (first build fails with lib.fakeHash) ==="
+    echo "(copy the 'got:' sha256-... value into nix/packages/odysseus.nix pipDeps.outputHash)"
+    nix build .#odysseus-built --no-link 2>&1 | grep -E 'got:|specified:|error: hash' || true
+    echo ""
+    echo "Done. Inline each 'got:' sha256-... value into the matching nix/packages/*.nix"
+    echo "file (see HOST-GATE comments), then run:"
+    echo "  nix build .#tempest .#opencode-built .#odysseus-built"
