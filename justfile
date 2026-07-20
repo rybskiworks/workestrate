@@ -1,3 +1,9 @@
+# Relocate cargo's target dir out of the source tree (closes the
+# nix-purity anti-accumulation finding for target/). Evaluated at just-parse
+# time so the running user's $HOME / $XDG_CACHE_HOME are resolved. Recipes
+# that invoke cargo inherit this env automatically.
+export CARGO_TARGET_DIR := `echo "${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
+
 check:
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
@@ -185,3 +191,46 @@ update-hashes:
     echo "Done. Inline each 'got:' sha256-... value into the matching nix/packages/*.nix"
     echo "file (see HOST-GATE comments), then run:"
     echo "  nix build .#tempest .#opencode-built .#odysseus-built"
+
+
+# Collect nix store garbage and optimise (dedupe) the store. Run periodically
+# to reclaim disk from old generations / orphaned paths. Anti-accumulation
+# maintenance recipe — pairs with the CARGO_TARGET_DIR relocation and the
+# build-output deletions to keep the workbench footprint bounded.
+gc:
+    nix-collect-garbage --delete-old
+    nix store optimise
+
+# Passive store audit: report the top-20 store paths by size + flag any
+# *-source paths that reference the ai-workbench repo (those indicate an
+# impure path-style copy that should be bounded by a cleanSourceWith
+# filter — see scripts/check-nix-paths.sh for the active enforcement).
+store-audit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Top-20 store paths by size ==="
+    nix path-info --all --json 2>/dev/null \
+      | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception as e:
+    print(f"(could not read nix path-info: {e})"); sys.exit(0)
+paths = []
+for p, info in data.items():
+    try:
+        size = int(info.get("closureSize", info.get("size", 0)) or 0)
+    except Exception:
+        size = 0
+    paths.append((size, p))
+paths.sort(reverse=True)
+for size, p in paths[:20]:
+    print(f"{size:>14,d}  {p}")
+' || echo "(nix path-info failed — is nix available?)"
+    echo ""
+    echo "=== *-source paths referencing ai-workbench repo (impure-path probe) ==="
+    nix path-info --all 2>/dev/null \
+      | grep -E "ai-workbench.*-source$" \
+      | head -20 \
+      || true
+    echo "(empty above = no unbounded source copies; non-empty = investigate the cleanSourceWith filter)"

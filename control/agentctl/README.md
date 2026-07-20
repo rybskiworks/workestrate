@@ -48,3 +48,24 @@ nix develop -c cargo check
 nix develop -c cargo clippy -- -D warnings
 nix develop -c cargo fmt -- --check
 ```
+
+## Build artifact location (`CARGO_TARGET_DIR`)
+
+Cargo's `target/` directory is **relocated out of the source tree** to keep
+the repo small (a clean `cargo build` is ~5–25 GB) and to keep untracked
+build artifacts out of the nix store view.
+
+- **Default location:** `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target`
+- Set automatically by:
+  - the Nix dev shell (`nix/devshells/default.nix` shellHook), and
+  - every cargo recipe in the top-level `justfile`
+    (`export CARGO_TARGET_DIR :=` at the top of the file).
+- A legacy in-tree `control/agentctl/target/`, if present, is still ignored
+  by `control/agentctl/.gitignore` so bare `cargo` invocations outside the
+  dev shell do not accidentally commit artifacts.
+
+To override for a one-off build:
+
+```bash
+CARGO_TARGET_DIR=/tmp/my-build just build
+```

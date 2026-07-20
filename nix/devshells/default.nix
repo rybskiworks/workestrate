@@ -112,6 +112,14 @@ pkgs.mkShell {
       fi
     done
 
+    # Relocate cargo's target dir out of the source tree to keep the
+    # repo small (a clean `cargo build` is ~5-25 GB) and to prevent
+    # accidental commits / store copies. The justfile cargo recipes
+    # also set this env so bare `just` outside the devshell agrees.
+    # Closes the nix-purity anti-accumulation finding for target/.
+    export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
+    mkdir -p "$CARGO_TARGET_DIR"
+
     export MSB_HOME="$_msb_home"
     export MSB_PATH="$_msb_home/bin/msb"
 

@@ -171,6 +171,12 @@
 
       # General loader: iterates `workload-images` and loads each into
       # microsandbox. Driven by the attrset — no hardcoded image names.
+      #
+      # Anti-accumulation: uses `--no-link --print-out-paths` so no /tmp GC
+      # root is created. The previous `--out-link /tmp/<name>.tar.gz` form
+      # left a symlink + tarball in /tmp that survived across runs and was
+      # never garbage-collected by nix. The new form pipes the store path
+      # directly into `gunzip | msb load`, leaving no /tmp residue.
       load-images = pkgs.writeShellApplication {
         name = "load-images";
         runtimeInputs = [ msb-wrapped pkgs.gzip ];
@@ -178,8 +184,8 @@
           names = builtins.attrNames workload-images;
           load-one = name: ''
             echo "Loading ${name}..."
-            nix build .#${name} --out-link /tmp/${name}.tar.gz
-            gunzip -c /tmp/${name}.tar.gz | msb load -t ${name}:latest
+            out=$(nix build .#${name} --no-link --print-out-paths)
+            gunzip -c "$out" | msb load -t ${name}:latest
           '';
         in pkgs.lib.concatMapStringsSep "\n" load-one names + ''
           echo ""
