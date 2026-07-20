@@ -1175,10 +1175,8 @@ the duration of that `up`/`exec` invocation. **Guest ports are unchanged.**
 - `--port-offset` is only meaningful for workloads that publish ports. For
   agents (no `ports`), it is accepted but a no-op (INFO log).
 - `--port-offset` is per-invocation. The port-registry record stores the
-  effective offset so `down`/`logs`/`ps` can recover it without re-passing
-  the flag (ASSUMPTION (impl): the impl persists the offset in the
-  port-registry record; if it does not, `down --instance <id>` still works
-  by instance id and `ps` reports the effective host ports regardless).
+  effective offset (`port_offset: Option<u16>`; `None` for offset 0 / legacy
+  records) so `down`/`logs`/`ps` recover it without re-passing the flag.
 
 ### `ps` output
 
@@ -1245,12 +1243,12 @@ sandboxes are reported with `stale: true` and a remediation hint.
 
 `workestrate generate-schema` prints the JSON Schema for `workestrate.toml`
 to stdout, derived from the same `serde`/`schemars` types the config loader
-uses (single source of truth — ASSUMPTION (impl): the impl derives
-`JsonSchema` on `ConfigFile` and sub-structs; if it uses a hand-maintained
-schema, the drift guard below is the load-bearing piece).
+uses (single source of truth — `JsonSchema` is derived on `ConfigFile`
+and all sub-structs; `generate-schema` calls
+`schemars::schema_for!(crate::config::ConfigFile)`).
 
 - The generated schema is committed at
-  `control/agentctl/schema/workestrate.toml.json`.
+  `schemas/workestrate.schema.json`.
 - Regenerate via `just generate-schema`.
 - A CI drift guard (mirroring ADR 0020 Ruling 4's `spec_examples_parse`
   pattern) regenerates the schema in a temp file and diffs against the

@@ -172,8 +172,9 @@ via parallel instance slots (`<slot>@<id>`), which is the foundation of the
 blue-green config-change workflow. The shifted host port is checked against
 the port registry for collisions. The effective offset is persisted in the
 port-registry record so `down`/`logs`/`ps` recover it without re-passing
-the flag (ASSUMPTION (impl): persistence is recommended but not
-load-bearing; `down --instance <id>` works by id regardless).
+  the flag (resolved: the offset is persisted in the port-registry record's
+  `port_offset: Option<u16>` field; `down --instance <id>` also works by id
+  regardless).
 
 ### Multi-context batch
 
