@@ -1,0 +1,8 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "PLACEHOLDER",
+  "x-placeholder-note": "Regenerate via `just generate-schema` on a nix-capable host. This file is the canonical JSON Schema for workestrate.toml, produced by `workestrate generate-schema` (schemars-derived from ConfigFile in control/agentctl/src/config.rs). The CI drift test in control/agentctl/tests/schema_drift.rs detects the `$comment: \"PLACEHOLDER\"` marker above and tolerates it; the first `just generate-schema` run replaces this whole file with the real schema and enforces strict drift from then on.",
+  "title": "ConfigFile",
+  "type": "object",
+  "properties": {}
+}
