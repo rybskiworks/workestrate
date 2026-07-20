@@ -249,6 +249,69 @@ workestrate <name> down
 nix run . -- <name> plan            # e.g. nix run . -- example-service plan
 ```
 
+### Instance lifecycle: slots, parallel instances, refuse-on-occupied
+
+`up`/`exec` target a **slot** (the workload's sandbox identity). A slot is
+either a **singleton** (`<workload>`, or `<context>-<workload>` when a
+context is active) or a **parallel instance** (`<slot>@<id>`).
+
+**Occupied-slot behavior (BEHAVIOR CHANGE):** `up`/`exec` on an occupied
+slot **refuses** by default (was: silent replace). The error names the
+occupying instance and the escape flags. This makes destructive restarts
+explicit — an agent (or human) validating a config change can no longer
+accidentally nuke a running baseline by re-running `up`.
+
+```bash
+# Refuse-safe defaults
+workestrate litellm up                       # refuses if litellm slot is occupied
+workestrate litellm up --replace             # explicit recycle (was the old default)
+workestrate litellm up --instance canary --port-offset 10000   # parallel canary on :14000
+workestrate litellm up --new --port-offset 10000               # auto-named canary on :14000
+
+# Listing + teardown
+workestrate ps                               # list running instances for the active context
+workestrate ps --json                        # machine-readable (agents, CI)
+workestrate litellm down --instance canary   # stop one parallel instance
+workestrate litellm down --all-instances     # stop singleton + all parallel instances
+workestrate down --all                       # stop everything (confirms unless --yes)
+```
+
+`--port-offset N` shifts **host** ports by `+= N` (guest ports unchanged),
+so a parallel instance of a port-publishing workload does not collide with
+the singleton. See [docs/migration/20-target-system-spec.md §13](docs/migration/20-target-system-spec.md)
+and [ADR 0021](docs/migration/50-decisions/0021-instance-lifecycle-model.md).
+
+### Blue-green config changes
+
+The refuse-on-occupied default + `--new`/`--port-offset` make a safe
+blue-green workflow for an agent (or operator) modifying the project native.
+Example: validating a candidate LiteLLM `config.yaml` without touching the
+serving proxy.
+
+```bash
+# 1. Edit the candidate config in your config repo (or a working copy).
+# 2. Bring up a canary on an offset port alongside the live proxy.
+workestrate litellm up --new --port-offset 10000
+#    → live proxy stays on :4000; canary on :14000 (guest still :4000).
+
+# 3. Smoke-test the canary.
+workestrate run -- bash -c \
+  'curl -sS http://127.0.0.1:14000/v1/chat/completions \
+   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+   -H "Content-Type: application/json" \
+   -d "{\"model\":\"coding\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
+
+# 4a. Promote: stop the old singleton, start the new one on the singleton slot.
+workestrate litellm down                     # stop the old singleton
+workestrate litellm up --replace             # (slot is now free; --replace is belt-and-suspenders)
+# 4b. Or roll back: stop the canary, leave the singleton untouched.
+workestrate litellm down --all-instances     # or target the canary id from `ps`
+```
+
+This workflow is the reason `--port-offset` exists: it lets a canary and a
+live instance of the same workload coexist on the same host long enough to
+compare them.
+
 ### Synthetic reference workloads
 
 On a fresh clone without a config repo, you can still exercise the machinery:
@@ -629,6 +692,9 @@ require a registered config repo).
 | `workestrate validate-config` | Validate active config against schema + policy allowlists |
 | `workestrate secrets-schema` | Print secret env_var names from config |
 | `workestrate generate-env-example` | Generate `.env.example` from config secrets section |
+| `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes (instance records) |
+| `workestrate down --all [--yes]` | Stop every running workestrate sandbox (destructive; confirms unless `--yes`) |
+| `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` (schemars-derived; committed at `control/agentctl/schema/workestrate.toml.json`) |
 | `workestrate --no-project-config <cmd>` | Disable project-layer config loading |
 
 ### Secrets targeting

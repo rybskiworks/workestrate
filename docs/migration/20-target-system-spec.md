@@ -757,10 +757,10 @@ On a fresh install with no registry, no config repos:
 | `workestrate completions <shell>` | Generate shell completions | `main.rs:236-239` |
 | `workestrate run -- <cmd>` | Run arbitrary command with decrypted secrets | `main.rs:266-297` |
 | `workestrate <name> plan` | Print sandbox plan | `main.rs:131-135` |
-| `workestrate <name> up [--foreground]` | Start service (service kind) | `main.rs:126-136` |
-| `workestrate <name> down` | Stop and remove sandbox | `main.rs:129` |
-| `workestrate <name> logs` | Tail detached service log (service kind) | `main.rs:130` |
-| `workestrate <name> exec` | Attach interactively (agent kind) | `main.rs:138-147` |
+| `workestrate <name> up [--foreground] [--replace\|--instance <id>\|--new] [--port-offset N] [--json]` | Start service (service kind). Default: refuse if slot occupied (ADR 0021) | `main.rs:126-136` |
+| `workestrate <name> down [--instance <id>\|--all-instances]` | Stop and remove sandbox (singleton, named parallel instance, or all) | `main.rs:129` |
+| `workestrate <name> logs [--instance <id>]` | Tail detached service log (service kind) | `main.rs:130` |
+| `workestrate <name> exec [--replace\|--instance <id>\|--new] [--port-offset N] [--json]` | Attach interactively (agent kind). Default: refuse if slot occupied (ADR 0021) | `main.rs:138-147` |
 
 ### Hybrid CLI dispatch (ADR 0006)
 
@@ -812,6 +812,9 @@ enum Commands {
 | `workestrate secrets-schema` | Print REQUIRED_KEYS from config `secrets:` section (replaces `.env.example` grep) |
 | `workestrate generate-env-example` | Generate `.env.example` from config `secrets:` section |
 | `workestrate plan <name> [--show-source]` | Print plan (optionally with per-field provenance) |
+| `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes for the active context (or all contexts). `--json` emits the instance-record array (ADR 0021 §7) |
+| `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes` |
+| `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived; ADR 0021 §8). Committed copy at `control/agentctl/schema/workestrate.toml.json` |
 | `workestrate clean` | Remove `~/.local/state/workestrate/` contents (workspaces, var; NOT sources/repos) |
 
 ## 7. Source override model
@@ -1110,3 +1113,174 @@ Secrets precedence: process env < reference < context layers < user-global .env.
 
 `setup-secrets --global init|update` targets this file (mutually exclusive
 with `--config`).
+
+
+## 13. Instance lifecycle model (ADR 0021)
+
+### Slots, singletons, and parallel instances
+
+A workload's sandbox identity is a **slot**, not a bare name. A slot is one of:
+
+- **Singleton slot** — `<workload>` (no context active) or `<context>-<workload>`
+  (context active; ADR 0019). At most one sandbox may occupy a singleton slot.
+- **Parallel instance slot** — `<slot>@<id>`, where `<id>` is an instance slug.
+
+**Instance id slug rules:**
+
+- `^[a-z0-9][a-z0-9-]*$`, lowercase, length 1–32.
+- MUST NOT be `all` (reserved by `down --all` / `--all-instances`).
+- MUST NOT be purely numeric (avoid ambiguity with `--port-offset N`).
+- Case-normalized to lowercase on parse.
+
+Examples: `litellm`, `personal-litellm`, `litellm@canary`,
+`personal-litellm@canary`.
+
+### Refuse-on-occupied default
+
+`up` / `exec` on an occupied slot **refuses** with a non-zero exit and a
+remediation message naming the occupying instance and the escape flags. This
+is the fail-closed default (ADR 0021 §2).
+
+| Flag | Behavior on occupied slot |
+|---|---|
+| *(none)* | Refuse; print occupying instance + remediation; exit non-zero. |
+| `--replace` | Tear down the occupying instance; start fresh on the same slot. Destructive; explicit. |
+| `--instance <id>` | Target `<slot>@<id>`. If that parallel slot is occupied, refuse (recursively). |
+| `--new` | Synthesize a fresh random `<id>`; target `<slot>@<id>`. Guarantees a non-colliding parallel instance. |
+
+**BEHAVIOR CHANGE (migration note):** `up`/`exec` on an occupied slot
+previously performed a silent replace (`Sandbox::builder().replace()`). It now
+refuses. Existing scripts that relied on `up` as an idempotent restart must add
+`--replace` (or `down && up`). The refuse error envelope includes the exact
+`--replace` invocation in `remediation`.
+
+### `down` variants
+
+| Command | Behavior |
+|---|---|
+| `workestrate <name> down` | Stop the singleton slot's instance. Refuses (with names) if the slot has parallel instances. |
+| `workestrate <name> down --instance <id>` | Stop the parallel instance `<slot>@<id>`. |
+| `workestrate <name> down --all-instances` | Stop the singleton AND every parallel instance of `<name>`. Destructive; explicit. |
+| `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes`. |
+
+### `--port-offset` semantics
+
+`--port-offset N` (non-negative integer) shifts **host** ports by `+= N` for
+the duration of that `up`/`exec` invocation. **Guest ports are unchanged.**
+
+- For each `[[workloads.<name>.ports]]` entry, the published host port becomes
+  `host + N`; the guest port stays `guest`.
+- `N = 0` is the default (singleton behavior, no shift).
+- The shifted host port is checked against the port registry for collisions.
+- `--port-offset` is only meaningful for workloads that publish ports. For
+  agents (no `ports`), it is accepted but a no-op (INFO log).
+- `--port-offset` is per-invocation. The port-registry record stores the
+  effective offset so `down`/`logs`/`ps` can recover it without re-passing
+  the flag (ASSUMPTION (impl): the impl persists the offset in the
+  port-registry record; if it does not, `down --instance <id>` still works
+  by instance id and `ps` reports the effective host ports regardless).
+
+### `ps` output
+
+`workestrate ps` reads the port-registry state files at
+`${state_dir}/var/run/<instance>.json`. Stale state files from crashed
+sandboxes are reported with `stale: true` and a remediation hint.
+
+### JSON output shapes
+
+`--json` is accepted on: `ps`, `plan`, `validate-config`, `check`,
+`config list`, `source list`, and the refuse/error envelope for
+`up`/`exec`/`down`.
+
+**`workestrate ps --json`** — array of instance records:
+
+```jsonc
+// spec-test: skip
+[
+  {
+    "instance": "personal-litellm",
+    "workload": "litellm",
+    "context": "personal",
+    "slot": "personal-litellm",
+    "kind": "singleton",
+    "started_at": "2026-07-20T14:03:11Z",
+    "ports": [{"host": 4000, "guest": 4000}],
+    "stale": false
+  },
+  {
+    "instance": "personal-litellm@canary",
+    "workload": "litellm",
+    "context": "personal",
+    "slot": "personal-litellm",
+    "kind": "parallel",
+    "started_at": "2026-07-20T14:05:42Z",
+    "ports": [{"host": 14000, "guest": 4000}],
+    "port_offset": 10000,
+    "stale": false
+  }
+]
+```
+
+**Error / refuse envelope** (uniform across commands):
+
+```jsonc
+// spec-test: skip
+{
+  "kind": "refuse_occupied",
+  "message": "slot 'personal-litellm' is occupied by instance 'personal-litellm'",
+  "slot": "personal-litellm",
+  "occupying_instance": "personal-litellm",
+  "remediation": {
+    "replace": "workestrate litellm up --replace",
+    "instance": "workestrate litellm up --instance <id> [--port-offset N]",
+    "new": "workestrate litellm up --new [--port-offset N]",
+    "list": "workestrate ps --json"
+  }
+}
+```
+
+## 14. Config schema + taplo editor integration (ADR 0021)
+
+### `generate-schema`
+
+`workestrate generate-schema` prints the JSON Schema for `workestrate.toml`
+to stdout, derived from the same `serde`/`schemars` types the config loader
+uses (single source of truth — ASSUMPTION (impl): the impl derives
+`JsonSchema` on `ConfigFile` and sub-structs; if it uses a hand-maintained
+schema, the drift guard below is the load-bearing piece).
+
+- The generated schema is committed at
+  `control/agentctl/schema/workestrate.toml.json`.
+- Regenerate via `just generate-schema`.
+- A CI drift guard (mirroring ADR 0020 Ruling 4's `spec_examples_parse`
+  pattern) regenerates the schema in a temp file and diffs against the
+  committed copy. Drift fails `just verify`.
+- Config-repo CI may run `workestrate validate-config` (existing) OR validate
+  its `workestrate.toml` against the committed schema directly with any
+  JSON-Schema validator.
+
+### taplo `#:schema` wiring (user's config repo)
+
+Add a top-level schema pointer to `workestrate.toml`:
+
+```toml
+# spec-test: skip
+#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/control/agentctl/schema/workestrate.toml.json
+schema_version = 1
+# …rest of file
+```
+
+taplo (and any editor using taplo as the TOML language server — VS Code,
+Helix, Neovim via LSP) reads the `#:schema` comment and validates the file
+against the published schema in real time. For air-gapped / local-first
+workflows, reference a vendored copy:
+
+```toml
+# spec-test: skip
+#:schema ../vendor/workestrate.toml.json
+```
+
+The `#:schema` pointer is a taplo convention (not a TOML standard) and is
+ignored by the `workestrate` config loader — it is a comment. The
+`spec_examples_parse` guard (ADR 0020) skips `#`-prefixed lines, so the
+pointer does not interfere with the spec-code CI guard.

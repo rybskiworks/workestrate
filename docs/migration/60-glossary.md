@@ -102,3 +102,38 @@ The test strategy that verifies the data-driven config produces identical
 `Display` impl (`plan.rs:140-198`). `just golden-check` diffs current output
 against committed goldens. `workloads/*.rs` are deleted only after golden
 parity is proven (ADR 0001).
+
+**Instance**
+A single running sandbox for a workload, identified by an instance name (see
+**slot**). An instance is what `workestrate ps` lists and what `up`/`exec`
+creates. Tracked in the port registry at `${state_dir}/var/run/<instance>.json`.
+See ADR 0021.
+
+**Slot**
+A workload's sandbox identity, used as the collision key for instance
+placement. A slot is either a **singleton slot** (`<workload>` when no
+context is active, or `<context>-<workload>` when a context is active per
+ADR 0019) or a **parallel instance slot** (`<slot>@<id>`). At most one
+sandbox may occupy a singleton slot; parallel instance slots allow
+side-by-side execution. See ADR 0021.
+
+**Singleton (instance)**
+The instance occupying a workload's singleton slot (no `@<id>` suffix). At
+most one per slot. `workestrate <name> up` with no instance flags targets the
+singleton slot and refuses if it is occupied. See ADR 0021.
+
+**Parallel instance**
+An instance on a parallel instance slot, named `<slot>@<id>` (e.g.
+`litellm@canary`). Coexists with the singleton and with other parallel
+instances of the same workload. Created via `--instance <id>` or `--new`.
+Typically paired with `--port-offset N` to avoid host-port collisions. See
+ADR 0021.
+
+**Blue-green (config change workflow)**
+A safe mutation workflow for an agent (or operator) modifying the project:
+bring up the new revision on a parallel instance slot with `--new
+--port-offset N`, smoke-test it on the offset port, then atomically cut over
+by stopping the old instance (`down --instance <old>` or `up --replace` on
+the singleton). The refuse-on-occupied default makes this workflow native —
+the new revision comes up alongside the old one rather than destroying it.
+See ADR 0021.

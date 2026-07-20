@@ -162,15 +162,18 @@ the user-global `overrides.toml`. Currently, project-local overrides use
 level is not implemented. The existing `workestrate.local.toml` covers
 the common case.
 
-### --port-offset escape hatch
+### --port-offset escape hatch — RESOLVED (ADR 0021)
 
-**Deferred until**: a user needs to run the same workload from two
-contexts simultaneously on the same host. Currently, port collisions
-between contexts produce a hard error with remediation (change the port
-in one config repo). A `--port-offset N` flag that shifts all host ports
-by N would allow side-by-side execution, but complicates ingress rules
-and is not needed for the current single-user, single-context-at-a-time
-model.
+**Status**: RESOLVED. `--port-offset N` is implemented as part of the
+instance lifecycle model (ADR 0021 §5). It shifts **host** ports by `+= N`
+for a single `up`/`exec` invocation; **guest** ports are unchanged. It
+enables side-by-side execution of the same workload from the same context
+via parallel instance slots (`<slot>@<id>`), which is the foundation of the
+blue-green config-change workflow. The shifted host port is checked against
+the port registry for collisions. The effective offset is persisted in the
+port-registry record so `down`/`logs`/`ps` recover it without re-passing
+the flag (ASSUMPTION (impl): persistence is recommended but not
+load-bearing; `down --instance <id>` works by id regardless).
 
 ### Multi-context batch
 
@@ -239,6 +242,17 @@ breaks.
 **Mitigation**: `schema_version` field in `workestrate.toml`; `#[serde(default)]`
 for forward-compat; clear error messages on mismatch; copier update for template
 sync; CI tests config against latest core.
+
+**Schema-drift guard (ADR 0021 §8):** `workestrate generate-schema` emits the
+JSON Schema for `workestrate.toml` from the same `serde`/`schemars` types the
+loader uses; the schema is committed at
+`control/agentctl/schema/workestrate.toml.json`; a CI drift guard regenerates
+and diffs against the committed copy on every change (mirroring the
+`spec_examples_parse` guard from ADR 0020 Ruling 4). This closes the
+schema-layer drift class that `schema_version` alone cannot catch (a struct
+field added without a schema bump still drifts the schema). Config-repo CI
+may validate `workestrate.toml` against the committed schema directly, and
+editors may consume it via taplo `#:schema` (see spec §14).
 
 ### lib API drift (Phase 2)
 
