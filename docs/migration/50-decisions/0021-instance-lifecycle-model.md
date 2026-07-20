@@ -208,7 +208,7 @@ pointer to their `workestrate.toml`:
 
 ```toml
 # spec-test: skip
-#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/control/agentctl/schema/workestrate.toml.json
+#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json
 schema_version = 1
 # …rest of file
 ```
@@ -220,7 +220,7 @@ workflows, the same pointer can reference a vendored copy:
 
 ```toml
 # spec-test: skip
-#:schema ../vendor/workestrate.toml.json
+#:schema ../schemas/workestrate.schema.json
 ```
 
 The schema pointer is a taplo convention (not a TOML standard) and is

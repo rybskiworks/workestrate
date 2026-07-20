@@ -814,7 +814,7 @@ enum Commands {
 | `workestrate plan <name> [--show-source]` | Print plan (optionally with per-field provenance) |
 | `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes for the active context (or all contexts). `--json` emits the instance-record array (ADR 0021 §7) |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes` |
-| `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived; ADR 0021 §8). Committed copy at `control/agentctl/schema/workestrate.toml.json` |
+| `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived; ADR 0021 §8). Committed copy at `schemas/workestrate.schema.json` |
 | `workestrate clean` | Remove `~/.local/state/workestrate/` contents (workspaces, var; NOT sources/repos) |
 
 ## 7. Source override model
@@ -1263,7 +1263,7 @@ Add a top-level schema pointer to `workestrate.toml`:
 
 ```toml
 # spec-test: skip
-#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/control/agentctl/schema/workestrate.toml.json
+#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json
 schema_version = 1
 # …rest of file
 ```
@@ -1275,7 +1275,7 @@ workflows, reference a vendored copy:
 
 ```toml
 # spec-test: skip
-#:schema ../vendor/workestrate.toml.json
+#:schema ../schemas/workestrate.schema.json
 ```
 
 The `#:schema` pointer is a taplo convention (not a TOML standard) and is

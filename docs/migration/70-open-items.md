@@ -247,7 +247,7 @@ sync; CI tests config against latest core.
 **Schema-drift guard (ADR 0021 §8):** `workestrate generate-schema` emits the
 JSON Schema for `workestrate.toml` from the same `serde`/`schemars` types the
 loader uses; the schema is committed at
-`control/agentctl/schema/workestrate.toml.json`; a CI drift guard regenerates
+`schemas/workestrate.schema.json`; a CI drift guard regenerates
 and diffs against the committed copy on every change (mirroring the
 `spec_examples_parse` guard from ADR 0020 Ruling 4). This closes the
 schema-layer drift class that `schema_version` alone cannot catch (a struct
