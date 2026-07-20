@@ -1362,8 +1362,8 @@ mod tests {
         // 1971-01-01 is day 365 (1970 was NOT a leap year).
         assert_eq!(days_to_ymd(365), (1971, 1, 1));
         // 2026-01-01: count of days from 1970-01-01.
-        // (20627 days; cross-checked against `date -d 2026-01-01 +%s` /86400.)
-        assert_eq!(days_to_ymd(20_627), (2026, 1, 1));
+        // (20454 days; cross-checked against `date -d 2026-01-01 +%s` /86400.)
+        assert_eq!(days_to_ymd(20_454), (2026, 1, 1));
     }
 
     // down_all_instances without msb returns Error results (not panics); the
