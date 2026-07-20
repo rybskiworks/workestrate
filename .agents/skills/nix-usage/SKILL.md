@@ -132,18 +132,9 @@ CI should NOT run `nix flake update`.
   paths; run `just store-audit` when the store feels large to audit
   space consumption and find stale roots.
 
-  > **ASSUMPTION (Track 1/2):** recipe names `gc` and `store-audit` are
-  > pending — Track 1/2 own the exact recipe names and flags.
+  > **Confirmed:** `just gc` runs `nix-collect-garbage --delete-old` + `nix store optimise`; `just store-audit` reports the top-20 store paths by size and flags `*-source` paths referencing `ai-workbench`.
 
-- **Relocation paths.** `agents/<name>/build` outputs and
-  `CARGO_TARGET_DIR` are being relocated out of the flake-visible source
-  tree so they no longer pollute eval: `agents/<name>/build` → managed
-  sources store (`~/.local/share/workestrate/sources/<name>/`);
-  `CARGO_TARGET_DIR` → `~/.cache/ai-workbench/agentctl-target`.
-
-  > **ASSUMPTION (Track 1/2):** the relocation targets and the
-  > `CARGO_TARGET_DIR` path are pending — Track 1/2 own the final
-  > paths.
+- **Relocation paths.** `CARGO_TARGET_DIR` is relocated out of the flake-visible source tree to `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target` (set by the devshell shellHook and the top-level justfile). The relocation of `agents/<name>/build` outputs into the managed sources store (`~/.local/share/workestrate/sources/<name>/`) is **deferred** (needs config-repo changes; see `docs/migration/70-open-items.md`). Until then, `agents/<name>/build` remains the sanctioned in-tree dev zone, excluded from the flake source closure by `.gitignore` and the `agentctl.nix` `cleanSourceWith` filter.
 
 - **The guard.** `just lint-nix` (backed by `scripts/check-nix-paths.sh`)
   runs in `just verify` and forbids `toString ./`, `getFlake`,

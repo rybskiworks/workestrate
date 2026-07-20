@@ -71,11 +71,7 @@ every evaluation regardless of whether the build runs.
    `~/.cache/ai-workbench/agentctl-target`), so cargo artifacts never
    become part of the nix source closure.
 
-> **ASSUMPTION (Track 1/2):** the canonical `CARGO_TARGET_DIR` path
-> `~/.cache/ai-workbench/agentctl-target` is the value Track 1/2 are
-> wiring into the dev shell and any in-tree cargo recipe. If they settle
-> on a different path, update rule 8 and the cross-references in
-> `.agents/skills/nix-usage/SKILL.md` to match.
+> **Confirmed:** the canonical `CARGO_TARGET_DIR` is `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target` (default `~/.cache/ai-workbench/agentctl-target` when `XDG_CACHE_HOME` is unset). It is exported by the Nix devshell shellHook (`nix/devshells/default.nix`) and by the top-level `justfile` (`export CARGO_TARGET_DIR := ...` evaluated at just-parse time), so both `nix develop` sessions and bare `just` invocations relocate cargo artifacts out of the source tree.
 
 ## Why: the 29GB-per-eval incident
 
@@ -125,15 +121,12 @@ consume space until deduplication runs.
 
 - Run `just gc` regularly to collect unreachable store paths.
 
-> **ASSUMPTION (Track 1/2):** the `just gc` recipe name and its exact
-> behavior (which `nix store gc` / `nix-collect-garbage` flags it
-> passes) are owned by Track 1/2.
+> **Confirmed:** `just gc` runs `nix-collect-garbage --delete-old` followed by `nix store optimise` (dedupe). It reclaims unreachable store paths and deduplicates content-addressed copies (vectors (b) and (c) of the store-growth model).
 
 - Run `just store-audit` when the store feels large, to audit what is
   consuming space and find stale roots.
 
-> **ASSUMPTION (Track 1/2):** the `just store-audit` recipe name and
-> its exact behavior are owned by Track 1/2.
+> **Confirmed:** `just store-audit` reports the top-20 store paths by closure size (via `nix path-info --all --json` + a python reducer) and flags any `*-source` paths referencing `ai-workbench` (via `nix path-info --all | grep -E "ai-workbench.*-source$"`). Non-empty `*-source` output indicates an unbounded source copy that should be bounded by a `cleanSourceWith` filter.
 
 - `auto-optimise-store` is advisory: it deduplicates identical content
   but is **not** a substitute for the purity rules. It reduces vector
@@ -141,26 +134,23 @@ consume space until deduplication runs.
 
 ## Enforcement: `just lint-nix` (check-nix-paths.sh) in `just verify`
 
-Track 1/2 are adding a static guard: a `scripts/check-nix-paths.sh`
-script wired into `just verify` as the `lint-nix` recipe. The guard
-greps nix files for forbidden patterns and fails the gate on any match.
+`scripts/check-nix-paths.sh` is a static guard wired into `just verify`
+as the `lint-nix` recipe. The guard uses bash `case` patterns (not grep)
+to scan for forbidden patterns and fails the gate on any match.
 
-> **ASSUMPTION (Track 1/2):** the exact grep patterns and the file
-> scope (which globs `check-nix-paths.sh` scans) are owned by Track 1/2.
-> The list below is the intended forbidden set; if Track 1/2's
-> implementation differs, this doc should be updated to match the
-> script, not the other way around.
+> **Confirmed:** `scripts/check-nix-paths.sh` is a bash `case`-pattern guard (not grep) wired into `just verify` as the `lint-nix` recipe. It scans `*.nix` under `flake.nix`/`nix`/`templates` plus `*.sh` under `scripts/` and the `justfile`. Allowlist: lines containing `# allow: <reason>` are skipped.
 
-The guard forbids:
+The guard catches:
 
-- `toString ./` (bare repo-root path interpolation)
-- `getFlake` (self-referential flake fetching)
-- `--impure` (anywhere)
-- bare `src = ./.` (unfiltered repo-root source)
-- unfiltered `cleanSourceWith` without a `filter =`
-- `builtins.fetchGit` of mutable refs
+- `nix ... --impure` and `nix-shell ... --impure` invocations (in shell scripts, the justfile, and nix code)
+- `builtins.getFlake` combined with `toString` on the same line (impure self-referential flake fetching)
+- `builtins.path { ... }` without a `filter =` field in the following 15 lines (unbounded store copy)
+- `cleanSourceWith { ... }` without a `filter =` field in the following 15 lines (same problem via lib)
+- `../` (parent-directory) path literals in nix assignments, outside the bounded `src =` / `lockFile =` / `path =` escape-hatch fields
 
-The guard is a **static grep guard, not a full eval-purity prover**. It
+The guard does NOT catch `src = ./.` (current-dir literal): check 5 matches `../` only. Rule 1 above still forbids bare `src = ./.` — the guard is a static heuristic, not a prover, and rule 1 remains authoritative even when the guard passes.
+
+The guard is a **static heuristic, not a full eval-purity prover**. It
 catches the common impurity patterns but cannot prove a derivation is
 pure. The rules in "THE RULES" above remain authoritative even when the
 guard passes.
@@ -182,10 +172,7 @@ guard passes.
    placeholder, then run the `update-hashes` recipe to prefetch the
    real hash.
 
-   > **ASSUMPTION (Track 1/2):** the `update-hashes` recipe name and
-   > its mechanism (which `nix hash` / `nix-prefetch` invocation it
-   > wraps, and whether it handles `npmDepsHash` vs `outputHash`
-   > uniformly) are owned by Track 1/2.
+   > **Confirmed:** `just update-hashes` runs `nix run nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json` (tempest `npmDepsHash`) and `nix build .#opencode-built` / `.#odysseus-built --no-link` to surface the `got:` sha256 for opencode `bunDeps.outputHash` and odysseus `pipDeps.outputHash`. It prints the hashes; the operator manually inlines each `got:` value into the matching `nix/packages/*.nix` file (the recipe prints step-by-step instructions). It does not auto-rewrite the files.
 
 8. **Add a HOST-GATE note** if the build can only be verified on a host
    with nix. This container has no nix; any `nix build` claim here is
@@ -242,8 +229,7 @@ stdenv.mkDerivation {
 
 The `fakeHash` / `lib.fakeSha256` convention marks a hash as
 not-yet-prefetched: `hash = lib.fakeSha256; # TODO: replace via just update-hashes`.
-Running `just update-hashes` (Track 1/2) prefetches the real hash and
-rewrites the file.
+Running `just update-hashes` prefetches the real hash and prints it; the operator manually inlines the `got:` value into the matching `nix/packages/*.nix` file (the recipe prints step-by-step instructions).
 
 ### (b) Image recipe
 
@@ -307,9 +293,4 @@ produced by a proper FOD-backed derivation (`.#pi-bun`, etc.) or
 relocated out of the flake-visible source tree into the managed sources
 store.
 
-> **ASSUMPTION (Track 1/2):** the relocation of `agents/<name>/build`
-> outputs into the managed sources store
-> (`~/.local/share/workestrate/sources/<name>/`) and the
-> `CARGO_TARGET_DIR` relocation are Track 1/2 mechanics. The purity
-> rules above hold regardless of whether relocation has landed; the
-> rules require only that the source filters exclude these paths.
+> **Confirmed (partial):** the `CARGO_TARGET_DIR` relocation has landed (see rule 8). The relocation of `agents/<name>/build` outputs into the managed sources store (`~/.local/share/workestrate/sources/<name>/`) is **deferred** — it requires config-repo changes (the `source build`/`source clone` commands and `WORKESTRATE_<NAME>_BUILD` resolution path must point at the sources store). See `docs/migration/70-open-items.md` ("Agent build-output relocation"). Until relocation lands, `agents/<name>/build` remains the sanctioned in-tree dev zone (`just dev-build-pi` writes there), kept out of the flake source closure by `.gitignore` (`agents/*/build`) and the `agentctl.nix` `cleanSourceWith` filter (for the `control/agentctl` tree). The purity rules above hold regardless: the rules require only that the source filters exclude these paths, which they do.
