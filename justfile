@@ -40,7 +40,7 @@ spec-examples:
 
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # config validation, golden-check, lock-file stability, AND nix-purity lint.
-verify: check test spec-examples litellm-check golden-check lint-nix
+verify: check test spec-examples litellm-check golden-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
@@ -202,21 +202,34 @@ gc:
     nix-collect-garbage --delete-old
     nix store optimise
 
-# Passive store audit: report the top-20 store paths by size + flag any
-# *-source paths that reference the ai-workbench repo (those indicate an
-# impure path-style copy that should be bounded by a cleanSourceWith
-# filter — see scripts/check-nix-paths.sh for the active enforcement).
+# Passive store audit (informational, NON-BLOCKING). Reports the top-20
+# store paths by closure size + flags any *-source paths that reference the
+# ai-workbench repo (impure path-style copy probe). Wired into `verify` as
+# the FINAL step — never fails the gate, even when findings exist (those
+# are reported as warnings; investigate via the active `lint-nix` step).
+# Skips with a one-line note when nix is unavailable (e.g., this container).
+# This is the passive complement to the active `lint-nix`.
 store-audit:
     #!/usr/bin/env bash
-    set -euo pipefail
-    echo "=== Top-20 store paths by size ==="
+    # NOTE: deliberately NO `set -e` — this recipe MUST NOT fail the
+    # verify gate. `set -uo pipefail` catches unset-variable bugs during
+    # development + surfaces pipe failures via `$?` without aborting.
+    set -uo pipefail
+    if ! command -v nix >/dev/null 2>&1; then
+        echo "store-audit: SKIP (nix not on PATH — run on a nix-capable host for the audit)"
+        exit 0
+    fi
+    echo "=== store-audit: top-20 store paths by closure size ==="
+    # Each pipe is wrapped in `|| echo` so a daemon / DB / parse failure
+    # degrades to an informational message rather than aborting the recipe.
     nix path-info --all --json 2>/dev/null \
       | python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
 except Exception as e:
-    print(f"(could not read nix path-info: {e})"); sys.exit(0)
+    print(f"(could not read nix path-info: {e})")
+    sys.exit(0)
 paths = []
 for p, info in data.items():
     try:
@@ -227,14 +240,20 @@ for p, info in data.items():
 paths.sort(reverse=True)
 for size, p in paths[:20]:
     print(f"{size:>14,d}  {p}")
-' || echo "(nix path-info failed — is nix available?)"
+' 2>/dev/null || echo "(nix path-info failed unexpectedly — non-blocking)"
     echo ""
-    echo "=== *-source paths referencing ai-workbench repo (impure-path probe) ==="
-    nix path-info --all 2>/dev/null \
-      | grep -E "ai-workbench.*-source$" \
-      | head -20 \
-      || true
-    echo "(empty above = no unbounded source copies; non-empty = investigate the cleanSourceWith filter)"
+    echo "=== store-audit: *-source paths referencing ai-workbench repo (impure-path probe) ==="
+    matching=$(nix path-info --all 2>/dev/null | grep -E "ai-workbench.*-source$" | head -20 || true)
+    if [ -z "$matching" ]; then
+        echo "(none — no unbounded source copies detected)"
+    else
+        echo "WARNING: *-source path(s) reference ai-workbench (non-blocking):"
+        echo "$matching"
+        echo ""
+        echo "Investigate the cleanSourceWith filter if any of these are unexpected."
+    fi
+    # Safety net: always exit 0 so `verify` cannot fail on this step.
+    exit 0
 
 
 # Lint nix code for purity violations: --impure flags, builtins.getFlake
