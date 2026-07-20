@@ -5,6 +5,7 @@ pub(crate) mod port_registry;
 mod runtime;
 pub mod secrets;
 pub(crate) mod secrets_loader;
+pub mod slots;
 pub mod workload;
 
 // Re-export lifecycle functions that callers need.

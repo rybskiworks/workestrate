@@ -5,6 +5,7 @@ use crate::microsandbox::secrets::{RemappedSecret, SecretDefinition};
 
 /// Network protocol for ingress/egress rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
     Tcp,
@@ -22,6 +23,7 @@ impl fmt::Display for Protocol {
 
 /// Network scope for ingress rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     Local,
@@ -40,7 +42,8 @@ impl fmt::Display for Scope {
 }
 
 /// Egress destination: host bridge or specific DNS domains.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum EgressTarget {
     /// Host bridge networking (microsandbox host, including host.microsandbox.internal).
@@ -58,7 +61,8 @@ impl fmt::Display for EgressTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SandboxPlan {
     pub name: String,
     pub image: Option<String>,
@@ -74,19 +78,22 @@ pub struct SandboxPlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PortMapping {
     pub host: u16,
     pub guest: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MountPlan {
     pub host: String,
     pub guest: String,
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct HostBoundSecret {
     pub name: String,
     pub value: String,
@@ -95,7 +102,8 @@ pub struct HostBoundSecret {
     pub reject_placeholder: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct EnvVar {
     pub name: String,
     pub value: String,
@@ -114,7 +122,8 @@ impl fmt::Display for EnvVar {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NetworkPlan {
     pub default_deny: bool,
     pub egress_rules: Vec<EgressRule>,
@@ -122,7 +131,8 @@ pub struct NetworkPlan {
     pub ingress_rules: Vec<IngressRule>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct EgressRule {
     pub protocol: Protocol,
     pub port: u16,
@@ -130,11 +140,13 @@ pub struct EgressRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DenyDomainRule {
     pub domain_suffix: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IngressRule {
     pub protocol: Protocol,
     pub port: u16,
