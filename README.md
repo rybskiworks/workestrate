@@ -60,8 +60,16 @@ live in your personal config repo.
    ```bash
    just host-check
    ```
-4. Add your personal config repo (contains `workestrate.toml`, `.env.enc`,
-   `.sops.yaml`, `infra/litellm/`, `agents/*/config/`):
+4. Create or import your personal config repo (contains `workestrate.toml`,
+   `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/`):
+
+   **Create a new config repo** (recommended for first-time users):
+   ```bash
+   workestrate config new personal
+   cd personal
+   ```
+
+   **Import an existing config repo** (e.g. from a dotfiles backup):
    ```bash
    workestrate init
    workestrate config add <your-config-repo-url> personal
@@ -681,6 +689,7 @@ require a registered config repo).
 |---|---|
 | `workestrate init [url]` | Initialize the registry (optionally from a dotfiles URL) |
 | `workestrate config add <url> <name> [--ref main]` | Clone a config repo into the managed store |
+| `workestrate config new <name> [--path <dir>] [--age-recipient <key>] [--with-flake] [--no-register] [--no-git-init] [--from-reference \| --empty] [--json]` | Scaffold a new config repo with a minimal valid `workestrate.toml`, `.sops.yaml`, `.env.example`, README, and `.gitignore`. Auto-registers in the registry and runs `git init`. Writes `.copier-answers.yml` for future `copier update`. |
 | `workestrate config update [name]` | Pull latest for a config repo (or all) |
 | `workestrate config list` | List registered config repos with rev + dirty status |
 | `workestrate config trust <dir>` | Trust a project directory for project-layer config |
