@@ -18,15 +18,15 @@ agents/*/config/     # agent config files (models.json, settings.json, etc.)
 
 1. Generate your age key (if not already done):
    ```bash
-   age-keygen -o ~/.config/sops/age/workestrate.txt
-   age-keygen -y ~/.config/sops/age/workestrate.txt  # print public key
+   age-keygen -o ~/.config/sops/age/ai-workbench-secrets.txt
+   age-keygen -y ~/.config/sops/age/ai-workbench-secrets.txt  # print public key
    ```
 
 2. Update `.sops.yaml` with your public key (replace `age1PLACEHOLDER`).
 
 3. Initialize secrets:
    ```bash
-   workestrate setup-secrets --config {{ config_name }} init
+   setup-secrets --config {{ config_name }} init
    ```
 
 4. Register this config repo with workestrate:
@@ -46,6 +46,13 @@ To pull in template improvements:
 ```bash
 copier update
 ```
+
+## `.env.example` regeneration
+
+If `workestrate` is on your PATH when you run `copier copy` or `copier update`,
+the `.env.example` file is automatically regenerated from the live secrets
+schema via `workestrate generate-env-example`. If `workestrate` is not on PATH,
+the committed static `.env.example` is used as a fallback.
 
 ## Multi-recipient SOPS (team secrets)
 

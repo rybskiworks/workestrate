@@ -3,7 +3,7 @@
 # Phase 2 feature — optional.
 {
   inputs = {
-    workestrator.url = {{ core_flake_url }};
+    workestrator.url = "{{ core_flake_url }}";
     nixpkgs.follows = "workestrator/nixpkgs";
   };
 

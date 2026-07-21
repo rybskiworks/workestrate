@@ -10,7 +10,7 @@ config_name:
 
 age_recipient:
   type: str
-  help: "Your age public key (age1...) for SOPS encryption. Generate with: age-keygen -o ~/.config/sops/age/workestrate.txt && age-keygen -y ~/.config/sops/age/workestrate.txt"
+  help: "Your age public key (age1...) for SOPS encryption. Generate with: age-keygen -o ~/.config/sops/age/ai-workbench-secrets.txt && age-keygen -y ~/.config/sops/age/ai-workbench-secrets.txt"
   default: age1PLACEHOLDER
 
 team_age_recipient:
@@ -32,3 +32,9 @@ core_flake_url:
 # Exclude files conditionally
 _exclude:
   - "!include_flake"
+
+# Post-copy task: regenerate .env.example from the live secrets schema if
+# workestrate is on PATH. Falls back to the committed static .env.example
+# if workestrate is not available (keeps the template self-contained).
+_tasks:
+  - "if command -v workestrate >/dev/null 2>&1; then workestrate generate-env-example --output .env.example; fi"
