@@ -137,6 +137,60 @@ enum ConfigAction {
     Trust { dir: String },
     /// Remove trust from a project directory
     Untrust { dir: String },
+    /// Scaffold a new config repo locally (minimal valid workestrate.toml
+    /// + SOPS + README). Replaces the copier template for the
+    /// minimal-personal subset; writes a `.copier-answers.yml` sidecar so
+    /// `copier update` stays usable for richer features (team keys, flake).
+    New {
+        /// Name for the new config repo (e.g. "personal", "work").
+        name: String,
+
+        /// Destination directory (default: ./<name>).
+        #[arg(long, value_name = "DIR")]
+        path: Option<std::path::PathBuf>,
+
+        /// Age public recipient (age1...). If omitted, derived via
+        /// `age-keygen -y` from `--age-key-file` (default
+        /// `~/.config/sops/age/ai-workbench-secrets.txt`). Falls back to
+        /// `age1PLACEHOLDER` + warning if derivation fails.
+        #[arg(long, value_name = "KEY")]
+        age_recipient: Option<String>,
+
+        /// Override the age key file to derive the recipient from.
+        #[arg(long, value_name = "PATH")]
+        age_key_file: Option<std::path::PathBuf>,
+
+        /// Include a flake.nix for inverted-dependency image builds
+        /// (Phase 2).
+        #[arg(long)]
+        with_flake: bool,
+
+        /// URL of the workestrator core flake (only used with --with-flake).
+        #[arg(
+            long,
+            value_name = "URL",
+            default_value = "github:georgrybski/ai-workbench"
+        )]
+        core_flake_url: String,
+
+        /// Skip registering the new repo in the workestrate registry.
+        #[arg(long)]
+        no_register: bool,
+
+        /// Skip `git init` in the new directory.
+        #[arg(long)]
+        no_git_init: bool,
+
+        /// Seed workestrate.toml from config.reference/workestrate.toml
+        /// (full 5-workload fixture). Conflicts with --empty.
+        #[arg(long, conflicts_with = "empty")]
+        from_reference: bool,
+
+        /// Write only a minimal workestrate.toml (no secrets/sops/readme).
+        /// Conflicts with --from-reference.
+        #[arg(long, conflicts_with = "from_reference")]
+        empty: bool,
+    },
 }
 
 /// Actions for managing agent source checkouts.
@@ -967,6 +1021,23 @@ fn git_clone(url: &str, dest: &std::path::Path, branch: Option<&str>) -> Result<
     Ok(())
 }
 
+/// Initialize a new git repo at `dir` (no commit, mirrors `cargo new`).
+/// Used by `workestrate config new` to make the scaffold immediately
+/// committable. Returns a distinct error kind when the `git` binary is
+/// absent so the caller can warn-and-continue rather than fail the whole
+/// scaffold (the files are already written and valid).
+fn git_init(dir: &std::path::Path) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .arg("init")
+        .arg(dir)
+        .status()
+        .map_err(|e| anyhow::anyhow!("git binary not found: {}", e))?;
+    if !status.success() {
+        anyhow::bail!("git init failed in '{}'", dir.display());
+    }
+    Ok(())
+}
+
 fn git_rev_parse(repo: &std::path::Path) -> Result<String> {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -1027,6 +1098,11 @@ async fn cmd_config(action: ConfigAction) -> Result<()> {
         ConfigAction::List => cmd_config_list().await,
         ConfigAction::Trust { dir } => cmd_config_trust(&dir).await,
         ConfigAction::Untrust { dir } => cmd_config_untrust(&dir).await,
+        // `New` is dispatched directly in `async_main` so it can route the
+        // global `--json` flag. Reaching this arm would be a regression.
+        ConfigAction::New { .. } => {
+            anyhow::bail!("config new must be dispatched from async_main (--json routing)")
+        }
     }
 }
 
@@ -1067,6 +1143,318 @@ async fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
     Ok(())
 }
 
+/// `--json` output envelope for `workestrate config new`. Mirrors the
+/// shape of other JSON-emitting commands (registry, ps): a single
+/// pretty-printed object on stdout, errors on stderr.
+#[derive(serde::Serialize)]
+struct ConfigNewResult<'a> {
+    name: &'a str,
+    path: std::path::PathBuf,
+    files_written: Vec<String>,
+    git_initialized: bool,
+    registered: bool,
+    /// "flag" | "derived" | "placeholder"
+    age_recipient_source: &'a str,
+    age_recipient: &'a str,
+    next_steps: Vec<&'a str>,
+}
+
+/// Resolve `~` in a path string via `$HOME` (no `dirs` crate dep). Falls
+/// back to the literal path if `~/` prefix is absent or `$HOME` is unset.
+fn expand_tilde(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    p.to_path_buf()
+}
+
+/// Derive the age public recipient from a private key file via
+/// `age-keygen -y <keyfile>`. Returns `Ok(recipient)` on success.
+/// Returns `Err(message)` when either the `age-keygen` binary is missing
+/// or the key file does not exist (so the caller can fall back to the
+/// placeholder and surface a single, specific reason).
+fn derive_age_recipient(key_file: &std::path::Path) -> Result<String> {
+    if !key_file.exists() {
+        anyhow::bail!("age key file not found at {}", key_file.display());
+    }
+    let output = std::process::Command::new("age-keygen")
+        .arg("-y")
+        .arg(key_file)
+        .output()
+        .map_err(|e| anyhow::anyhow!("age-keygen binary not found: {}", e))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "age-keygen -y failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Walk up from `start` looking for `<root>/config.reference/workestrate.toml`.
+/// Used by `--from-reference` to seed the scaffold with the canonical
+/// 5-workload fixture. Returns the file path on success; bails with an
+/// actionable message if not found within 10 levels.
+fn find_reference_workestrate(start: &std::path::Path) -> Result<std::path::PathBuf> {
+    let mut cursor = start.to_path_buf();
+    for _ in 0..10 {
+        let candidate = cursor.join("config.reference").join("workestrate.toml");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        if !cursor.pop() {
+            break;
+        }
+    }
+    anyhow::bail!(
+        "could not locate config.reference/workestrate.toml by walking up from '{}'; \
+         run `workestrate config new --from-reference` from inside the ai-workbench checkout",
+        start.display()
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_config_new(
+    name: &str,
+    path: Option<&std::path::Path>,
+    age_recipient: Option<&str>,
+    age_key_file: Option<&std::path::Path>,
+    with_flake: bool,
+    core_flake_url: &str,
+    no_register: bool,
+    no_git_init: bool,
+    from_reference: bool,
+    empty: bool,
+    json_mode: bool,
+) -> Result<()> {
+    // Validate name first so an invalid name fails before touching the
+    // filesystem.
+    config::validate_config_name(name)?;
+
+    // Fail-fast: if we'd auto-register, check the registry now so we don't
+    // write files + git init only to bail at the registration step.
+    if !no_register {
+        if let Some(reg) = config::load_registry()? {
+            if reg.configs.contains_key(name) {
+                anyhow::bail!(
+                    "config repo '{}' already registered; use a different name or \
+                     'workestrate config update {}'",
+                    name,
+                    name
+                );
+            }
+        }
+    }
+
+    // Resolve destination directory.
+    let dest: std::path::PathBuf = match path {
+        Some(p) => p.to_path_buf(),
+        None => std::path::PathBuf::from(name),
+    };
+    if dest.exists() {
+        // Refuse if non-empty. An empty existing directory is OK (init in
+        // a pre-created dir); a populated one likely means we'd clobber.
+        let is_non_empty = std::fs::read_dir(&dest)
+            .map(|mut it| it.next().is_some())
+            .unwrap_or(false);
+        if is_non_empty {
+            anyhow::bail!(
+                "destination '{}' exists and is non-empty; refusing to overwrite \
+                 (remove it or pass a different --path)",
+                dest.display()
+            );
+        }
+    }
+
+    // Resolve age recipient: explicit flag → derived → placeholder.
+    let (recipient, recipient_source) = match age_recipient {
+        Some(r) => (r.to_string(), "flag"),
+        None => {
+            let key_file = age_key_file.map(|p| expand_tilde(p)).unwrap_or_else(|| {
+                expand_tilde(std::path::Path::new(scaffold::AGE_KEY_DEFAULT_PATH))
+            });
+            match derive_age_recipient(&key_file) {
+                Ok(r) => (r, "derived"),
+                Err(e) => {
+                    eprintln!(
+                        "warning: could not derive age recipient ({}); \
+                         wrote 'age1PLACEHOLDER'.\n\
+                         Set the real key with: edit .sops.yaml, OR re-run with \
+                         --age-recipient <key>.\n\
+                         Generate a key with: age-keygen -o ~/.config/sops/age/ai-workbench-secrets.txt",
+                        e
+                    );
+                    ("age1PLACEHOLDER".to_string(), "placeholder")
+                }
+            }
+        }
+    };
+
+    // Build the file set from the scaffold templates.
+    let vars = scaffold::ScaffoldVars {
+        config_name: name.to_string(),
+        age_recipient: recipient.clone(),
+        copier_src_path: scaffold::DEFAULT_COPIER_SRC_PATH.to_string(),
+        copier_vcs_ref: scaffold::DEFAULT_COPIER_VCS_REF.to_string(),
+        core_flake_url: if with_flake {
+            Some(core_flake_url.to_string())
+        } else {
+            None
+        },
+    };
+
+    let mut files: Vec<(String, String)> = if empty {
+        // Minimal: just workestrate.toml (hand-written, no secrets) + .gitignore.
+        vec![
+            (
+                "workestrate.toml".to_string(),
+                format!(
+                    "#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json\n\n\
+                     schema_version = 1\n\n\
+                     # workestrator config: {name}\\
+                     # Generated by `workestrate config new --empty`.\n\
+                     # Add [secrets.*] and [workloads.*] tables here.\n"
+                ),
+            ),
+            (
+                ".gitignore".to_string(),
+                scaffold::render(
+                    include_str!("scaffold/template/.gitignore"),
+                    &[],
+                )?,
+            ),
+        ]
+    } else {
+        scaffold::render_all(&vars)?
+            .into_iter()
+            .map(|(n, c)| (n.to_string(), c))
+            .collect()
+    };
+
+    // --from-reference overrides the workestrate.toml entry with the full
+    // 5-workload reference fixture.
+    if from_reference {
+        let cwd = std::env::current_dir()?;
+        let ref_path = find_reference_workestrate(&cwd)?;
+        let ref_content = std::fs::read_to_string(&ref_path)?;
+        let entry = files
+            .iter_mut()
+            .find(|(n, _)| n == "workestrate.toml")
+            .ok_or_else(|| {
+                anyhow::anyhow!("internal: workestrate.toml missing from scaffold file set")
+            })?;
+        entry.1 = ref_content;
+    }
+
+    // Create destination + write each file.
+    std::fs::create_dir_all(&dest)?;
+    for (rel, content) in &files {
+        let full = dest.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&full, content)?;
+    }
+
+    // git init (hard-error on non-zero status; warn-and-continue if binary missing).
+    let mut git_initialized = false;
+    if !no_git_init {
+        match git_init(&dest) {
+            Ok(()) => git_initialized = true,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("git binary not found") {
+                    eprintln!(
+                        "warning: git not installed; skipping `git init` in '{}'. \
+                         Re-run with --no-git-init to silence this.",
+                        dest.display()
+                    );
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    // Register in workestrate registry.
+    let mut registered = false;
+    if !no_register {
+        // The already-registered check ran above (fail-fast, before any
+        // filesystem writes).
+        let url = dest.canonicalize()?.to_string_lossy().to_string();
+        // Local-path repos get ref=None, rev=None. cmd_config_update
+        // recognizes this and skips the pull step.
+        config::register_config(name, &url, None, None)?;
+        registered = true;
+    }
+
+    // Build next-steps.
+    let mut next_steps: Vec<&str> = Vec::with_capacity(4);
+    if recipient_source == "placeholder" {
+        next_steps.push("edit .sops.yaml and replace age1PLACEHOLDER with your real age1... key");
+    }
+    next_steps.push("cd into the new directory and edit workestrate.toml");
+    if !no_register {
+        next_steps.push(
+            "to enable `workestrate config update`, push to a remote and edit the registry's url + ref",
+        );
+    }
+    next_steps.push("run `workestrate validate-config` from inside the new repo");
+
+    if json_mode {
+        let result = ConfigNewResult {
+            name,
+            path: dest.clone(),
+            files_written: files.iter().map(|(n, _)| n.clone()).collect(),
+            git_initialized,
+            registered,
+            age_recipient_source: recipient_source,
+            age_recipient: &recipient,
+            next_steps,
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    // Human-readable summary.
+    println!(
+        "Created workestrator-config '{}' in {}",
+        name,
+        dest.display()
+    );
+    println!();
+    println!("Files written:");
+    for (rel, _) in &files {
+        println!("  {}", rel);
+    }
+    if git_initialized {
+        println!();
+        println!(
+            "git initialized (no initial commit; `git add . && git commit -m init` when ready)"
+        );
+    }
+    if registered {
+        println!();
+        println!(
+            "Registered as a local-path config repo (no remote yet; `workestrate config update` will skip)."
+        );
+    }
+    println!();
+    println!(
+        "Age recipient: {} (source: {})",
+        recipient, recipient_source
+    );
+    println!();
+    println!("Next steps:");
+    for step in next_steps {
+        println!("  - {}", step);
+    }
+    Ok(())
+}
+
 async fn cmd_config_update(name: Option<&str>) -> Result<()> {
     let mut registry =
         config::load_registry()?.ok_or_else(|| anyhow::anyhow!("no config repos registered"))?;
@@ -1082,15 +1470,26 @@ async fn cmd_config_update(name: Option<&str>) -> Result<()> {
 
     for n in names {
         let dest = config::config_repo_dir(&n);
+        // Local-path repos (created via `config new`) have no pinned rev and
+        // typically no `origin` remote — `git pull` would fail. Skip them
+        // with a forward-looking hint instead.
+        let entry_ref = registry.configs.get(&n);
+        let is_local_path = entry_ref.is_some_and(|e| e.rev.is_none());
+        if is_local_path {
+            println!(
+                "config repo '{}' is a local path (no pinned rev); skipping update.\n\
+                 To enable updates, push to a remote and edit the registry entry's url + ref.",
+                n
+            );
+            continue;
+        }
         if git_is_dirty(&dest)? {
             anyhow::bail!(
                 "config repo '{}' has uncommitted changes; commit or stash first",
                 n
             );
         }
-        let git_ref = registry
-            .configs
-            .get(&n)
+        let git_ref = entry_ref
             .and_then(|e| e.r#ref.as_deref())
             .unwrap_or("main")
             .to_string();
@@ -1523,6 +1922,33 @@ async fn async_main() -> Result<()> {
                 } else {
                     cmd_config(ConfigAction::List).await
                 }
+            }
+            ConfigAction::New {
+                name,
+                path,
+                age_recipient,
+                age_key_file,
+                with_flake,
+                core_flake_url,
+                no_register,
+                no_git_init,
+                from_reference,
+                empty,
+            } => {
+                cmd_config_new(
+                    &name,
+                    path.as_deref(),
+                    age_recipient.as_deref(),
+                    age_key_file.as_deref(),
+                    with_flake,
+                    &core_flake_url,
+                    no_register,
+                    no_git_init,
+                    from_reference,
+                    empty,
+                    cli.json,
+                )
+                .await
             }
             other => cmd_config(other).await,
         },
