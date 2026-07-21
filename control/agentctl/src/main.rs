@@ -8,6 +8,7 @@ mod merge;
 mod microsandbox;
 mod policy;
 mod recipes;
+mod scaffold;
 
 use config::CheckEntry;
 use microsandbox::workload::{ConfigWorkload, Workload};
@@ -1053,22 +1054,9 @@ async fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
         (rev, short)
     };
 
-    let mut registry = config::load_registry()?.unwrap_or_default();
-    registry.configs.insert(
-        name.to_string(),
-        config::ConfigRepoEntry {
-            url: url.to_string(),
-            r#ref: Some(git_ref.to_string()),
-            rev: Some(rev),
-            secrets: None,
-            secrets_file: None,
-            age_key_file: None,
-        },
-    );
-    if registry.layers.is_empty() {
-        registry.layers.push(name.to_string());
-    }
-    config::save_registry(&registry)?;
+    // Insert/replace the registry entry. Delegates to config::register_config
+    // (shared with cmd_config_new's local-path registration).
+    config::register_config(name, url, Some(git_ref), Some(rev.as_str()))?;
     println!(
         "Registered config repo {} from {} at {} (rev {})",
         name,

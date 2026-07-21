@@ -461,6 +461,91 @@ pub fn save_registry(registry: &Registry) -> Result<()> {
     Ok(())
 }
 
+/// Insert/replace a config repo entry in the registry. If `layers` is empty,
+/// push `name` as the default layer (mirrors cmd_config_add's behavior).
+/// Shared by `cmd_config_add` (clone + register) and `cmd_config_new`
+/// (local path + register). For local-path scaffolds, pass `git_ref = None`
+/// and `rev = None` — `cmd_config_update` recognizes this as a local-path
+/// repo and skips the pull step.
+pub fn register_config(
+    name: &str,
+    url: &str,
+    git_ref: Option<&str>,
+    rev: Option<&str>,
+) -> Result<()> {
+    let mut registry = load_registry()?.unwrap_or_default();
+    registry.configs.insert(
+        name.to_string(),
+        ConfigRepoEntry {
+            url: url.to_string(),
+            r#ref: git_ref.map(|s| s.to_string()),
+            rev: rev.map(|s| s.to_string()),
+            secrets: None,
+            secrets_file: None,
+            age_key_file: None,
+        },
+    );
+    if registry.layers.is_empty() {
+        registry.layers.push(name.to_string());
+    }
+    save_registry(&registry)
+}
+
+/// Validate a config repo name for `workestrate config new`. Same safe-set
+/// as workload names: names flow into both filesystem paths (the registry
+/// store dir) and registry TOML keys, so the intersection `[a-z0-9-]` is
+/// the only safe charset.
+///
+/// Pattern: `^[a-z0-9][a-z0-9-]{0,62}$` — starts with an alphanumeric, allows
+/// lowercase letters / digits / hyphens, max 63 characters (DNS-label length).
+/// Rejects empty / overlong / uppercase / underscores / dots / slashes / shell
+/// metacharacters / leading hyphen.
+///
+/// "Escape nothing — reject instead" is the policy. This is a thin wrapper
+/// around [`validate_identifier`] shared with [`validate_workload_name`] in
+/// main.rs (mirrored here to keep config-domain logic in config.rs without a
+/// cross-module dependency from main.rs's validator).
+pub fn validate_config_name(name: &str) -> Result<()> {
+    validate_identifier(name, "config name")
+}
+
+/// Shared identifier validator. `label` is interpolated into error messages
+/// ("workload name ...", "config name ..."). Pattern:
+/// `^[a-z0-9][a-z0-9-]{0,62}$`.
+fn validate_identifier(name: &str, label: &str) -> Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("{label} cannot be empty");
+    }
+    if name.len() > 63 {
+        anyhow::bail!(
+            "{label} cannot exceed 63 characters (got {}): '{}'",
+            name.len(),
+            name
+        );
+    }
+    let mut chars = name.chars();
+    let first_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !first_ok {
+        anyhow::bail!(
+            "{label} must start with [a-z0-9]; \
+             pattern: ^[a-z0-9][a-z0-9-]{{0,62}}$; got: '{name}'"
+        );
+    }
+    for c in chars {
+        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-' {
+            anyhow::bail!(
+                "{label} contains invalid character '{}' (allowed: [a-z0-9-]); \
+                 pattern: ^[a-z0-9][a-z0-9-]{{0,62}}$; got: '{}'",
+                c,
+                name
+            );
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // User-global overrides
 // ---------------------------------------------------------------------------

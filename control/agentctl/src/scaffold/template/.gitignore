@@ -1,0 +1,9 @@
+# Encrypted secrets (SOPS) — committed, but the plaintext form is not.
+# .env.enc IS committed (it's encrypted); .env is NOT.
+.env
+
+# OS clutter
+.DS_Store
+
+# Editor clutter
+*.swp
