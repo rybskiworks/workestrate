@@ -2658,6 +2658,67 @@ mod tests {
         validate_workload_name("foo-").expect("trailing hyphen is allowed");
     }
 
+    // ---- config::validate_config_name (used by `workestrate config new`) ----
+
+    #[test]
+    fn validate_config_name_accepts_legitimate_names() {
+        for ok in [
+            "personal",
+            "work",
+            "team",
+            "prod",
+            "a",
+            "0",
+            "p1",
+            "my-config-2",
+        ] {
+            config::validate_config_name(ok)
+                .unwrap_or_else(|e| panic!("legitimate config name '{ok}' rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_config_name_rejects_hostile_inputs() {
+        // Same safe-set as validate_workload_name: config names flow into
+        // both filesystem paths and registry TOML keys, so the
+        // intersection [a-z0-9-] is the only safe charset.
+        let hostile = [
+            "../pwned",
+            "/etc/pwned",
+            "a]b",
+            "a.b",
+            "a b",
+            "Personal", // uppercase
+            "my_config",
+            "-leading",
+            "",
+            &"x".repeat(64),
+        ];
+        for h in hostile {
+            let result = config::validate_config_name(h);
+            assert!(
+                result.is_err(),
+                "hostile config name '{h}' should be rejected, but was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_config_name_error_mentions_config_name() {
+        // Error label is interpolated from the validator, not hardcoded —
+        // this catches a copy-paste regression where the workload-name
+        // message would leak through.
+        let err = config::validate_config_name("BAD").unwrap_err().to_string();
+        assert!(
+            err.contains("config name"),
+            "error should mention 'config name'; got: {err}"
+        );
+        assert!(
+            !err.contains("workload name"),
+            "error should NOT mention 'workload name'; got: {err}"
+        );
+    }
+
     // ---- WP5 / E1 regression: graceful check outside a workbench checkout ----
 
     #[test]

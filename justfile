@@ -41,7 +41,7 @@ spec-examples:
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # config validation, golden-check, schema drift, lock-file stability, AND
 # nix-purity lint.
-verify: check test spec-examples litellm-check golden-check schema-check lint-nix store-audit
+verify: check test spec-examples litellm-check golden-check schema-check scaffold-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
@@ -78,6 +78,14 @@ generate-schema:
 # `workestrate generate-schema` and diffs against the committed file.
 schema-check:
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_drift
+
+# CI drift guard for the `workestrate config new` scaffold. Invokes
+# control/agentctl/tests/scaffold_template.rs, which renders the embedded
+# scaffold templates via the real binary, runs `validate-config` on the
+# output, and (when `copier` is available) enforces byte-parity with the
+# copier template's minimal-personal render + copier-update interop.
+scaffold-check:
+    cargo test --manifest-path control/agentctl/Cargo.toml --test scaffold_template
 
 build:
     cargo build --release --manifest-path control/agentctl/Cargo.toml
