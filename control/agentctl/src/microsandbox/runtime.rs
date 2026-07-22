@@ -1363,12 +1363,62 @@ mod tests {
         assert_eq!(days_to_ymd(20_454), (2026, 1, 1));
     }
 
-    // down_all_instances without msb returns Error results (not panics); the
-    // records ARE listed and attempted. This guards the no-msb code path that
-    // tests in this container exercise.
+    /// RAII guard: point `MSB_HOME` at `path` for the duration of a test and
+    /// restore the prior value (or unset it) on drop. The microsandbox SDK
+    /// resolves its DB home from `MSB_HOME` inside `db::init_global`, which is
+    /// a process-global `OnceCell` — so the value MUST be set before the first
+    /// `Sandbox::get` in the process, and restored afterwards so other tests /
+    /// the devshell are not disturbed.
+    struct MsbHomeGuard {
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl MsbHomeGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let prior = std::env::var_os("MSB_HOME");
+            std::env::set_var("MSB_HOME", path);
+            Self { prior }
+        }
+    }
+
+    impl Drop for MsbHomeGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var("MSB_HOME", v),
+                None => std::env::remove_var("MSB_HOME"),
+            }
+        }
+    }
+
+    /// down_all_instances with an UNREACHABLE msb db must deterministically
+    /// surface DownStatus::Error for each attempted record (never panic, never
+    /// NotFound). The msb DB is made unreachable by pointing MSB_HOME at a path
+    /// under a regular file, so the SDK's `create_dir_all(<MSB_HOME>/db)` fails
+    /// with ENOTDIR and `Sandbox::get` errors out.
+    ///
+    /// The prior incarnation (`down_all_instances_without_msb_returns_error_results`)
+    /// was non-deterministic: it asserted Error but actually returned NotFound
+    /// whenever a real msb happened to be reachable in the test environment
+    /// (the devshell has one). Pinning MSB_HOME at an unwritable path fixes the
+    /// outcome to Error regardless of environment.
     #[tokio::test]
-    async fn down_all_instances_without_msb_returns_error_results() -> anyhow::Result<()> {
-        let dir = unique_state_dir_runtime("down-all-inst-no-msb");
+    async fn down_all_instances_returns_error_when_msb_db_unreachable() -> anyhow::Result<()> {
+        // `<tmp>/blocker` is a regular file, so `<MSB_HOME>/db` (=
+        // `<tmp>/blocker/db`) cannot be created → init_global fails →
+        // Sandbox::get returns a hard error.
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-msb-unreachable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("blocker"), b"x")?;
+        let _msb = MsbHomeGuard::set(&tmp.join("blocker"));
+
+        let dir = unique_state_dir_runtime("down-all-inst-msb-unreachable");
         crate::microsandbox::port_registry::register_sandbox(
             &dir,
             "personal-litellm",
@@ -1378,14 +1428,63 @@ mod tests {
         )?;
         let results = down_all_instances(&dir, "litellm").await?;
         assert_eq!(results.len(), 1, "one record was attempted");
-        // Without msb, Sandbox::get errors with something transport-ish.
         assert!(
             matches!(results[0].status, DownStatus::Error),
-            "expected Error status when msb is unavailable; got {:?} ({:?})",
+            "expected Error status when the msb db is unreachable; got {:?} ({:?})",
             results[0].status,
-            results[0].message
+            results[0].message,
         );
         let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// Positive control: with a writable, empty MSB_HOME the SDK opens its DB
+    /// fine and `down_all_instances` resolves to DownStatus::NotFound (msb
+    /// reachable, but no such sandbox is registered there).
+    ///
+    /// `#[ignore]`'d because the SDK pins its DB pool in a process-global
+    /// `OnceCell` on the first *successful* `init_global`. If this test and the
+    /// Error test both ran in one `cargo test` invocation, whichever
+    /// initialized first would fix the home for the whole process and the pair
+    /// would be non-deterministic (a writable pin makes the Error test see
+    /// NotFound). Keeping this `#[ignore]`'d means:
+    ///   - `cargo test`           → Error test runs alone (deterministic Error);
+    ///   - `cargo test --ignored` → this test runs alone (deterministic
+    ///                               NotFound), the Error test is skipped.
+    #[tokio::test]
+    #[ignore = "shares the SDK process-global DB pool with the Error test; run alone with --ignored"]
+    async fn down_all_instances_returns_notfound_when_msb_db_empty_but_openable(
+    ) -> anyhow::Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-msb-empty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let _msb = MsbHomeGuard::set(&tmp);
+
+        let dir = unique_state_dir_runtime("down-all-inst-msb-empty");
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        let results = down_all_instances(&dir, "litellm").await?;
+        assert_eq!(results.len(), 1, "one record was attempted");
+        assert!(
+            matches!(results[0].status, DownStatus::NotFound),
+            "expected NotFound when msb db is openable but empty; got {:?} ({:?})",
+            results[0].status,
+            results[0].message,
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
     }
 }
