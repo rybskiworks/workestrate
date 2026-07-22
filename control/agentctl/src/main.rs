@@ -1754,6 +1754,13 @@ fn render_migrate_summary_human(summary: &config::MigrateSummary) {
             m.src, m.dst, exists, bytes
         );
     }
+    if summary.partial {
+        println!("  WARNING:       partial failure — some entries could not be moved");
+        println!(
+            "  failed at:     {}",
+            summary.failed_at.as_deref().unwrap_or("(unknown)")
+        );
+    }
     if !summary.dry_run {
         println!(
             "  registry updated: {} (home_version: {})",
