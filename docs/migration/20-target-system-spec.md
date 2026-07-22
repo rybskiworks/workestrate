@@ -63,19 +63,25 @@ $WORKESTRATE_HOME/                    # default: ~/.workestrate; container: <rep
 The tool home is resolved per invocation in this order:
 
 1. `WORKESTRATE_HOME` env var (explicit override)
-2. Auto-discovery (walk-up from cwd, trust-gated — finds a `.workestrate/` in
-   a parent dir)
+2. Auto-discovery (walk-up from cwd, trust-gated — finds a `.workestrate/`
+   in a parent dir), but only when no `XDG_*_HOME` var is set; an explicit
+   XDG var is a deliberate legacy-layout signal that discovery must not
+   override
 3. Legacy XDG (read-only compat + deprecation note — reads old
    `XDG_CONFIG_HOME/workestrate/` etc. if present, does NOT write)
 4. Default: `~/.workestrate`
 
-The `home_version` field in `config.toml` tracks the home layout version for
-future migrations. `workestrate migrate-home` migrates a legacy XDG three-home
-layout (config/data/state split) into the single home. See ADR 0023.
+The `home_version` field in `config.toml` tracks the home layout version.
+`workestrate migrate-home` migrates a legacy XDG three-home layout
+(config/data/state split) into the single home, stamps `home_version = 2`,
+clears `store_dir`/`state_dir`, and rewrites `configs.<name>.url` fields
+pointing into the old layout to the new `dest/repos/<name>` path (remote
+URLs are left untouched). See ADR 0023.
 
-**ASSUMPTION (impl):** The `WORKESTRATE_CONFIG_DIR` env var is replaced by
-`WORKESTRATE_HOME` in the implementation. Legacy `WORKESTRATE_CONFIG_DIR` may
-be accepted as a deprecated alias.
+**Note:** `WORKESTRATE_CONFIG_DIR` remains as a dev/testing override that
+bypasses config layering and loads a single config layer directly (used by
+golden-check and tests). It is separate from `WORKESTRATE_HOME`, which
+resolves the tool home (registry, repos, sources, state).
 
 ### Tool repo (ai-workbench) — what stays
 

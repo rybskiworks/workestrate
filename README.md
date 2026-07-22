@@ -773,8 +773,8 @@ just local-setup
 The `.envrc` and `scripts/local-xdg.sh` set `WORKESTRATE_HOME` (one env var)
 to point at `.workestrate/`.
 
-**ASSUMPTION (impl):** the `.envrc`/`local-xdg.sh` collapse to
-`WORKESTRATE_HOME` is owned by the implementation track.
+**Implemented:** the `.envrc`/`local-xdg.sh` collapse to
+`WORKESTRATE_HOME` is complete (commit 6a6cece).
 
 ### Container bind-mount
 
@@ -800,8 +800,8 @@ home layout (`$WORKESTRATE_HOME`) and cleans up the old XDG dirs. The SOPS
 age key is intentionally NOT moved — it stays at `~/.config/sops/age/` on the
 host (see "Security warning" below).
 
-**ASSUMPTION (impl):** `migrate-xdg-to-repo.sh` is replaced by
-`workestrate migrate-home` in the implementation.
+**Implemented:** `migrate-xdg-to-repo.sh` is replaced by
+`workestrate migrate-home` (commit 7023a47).
 
 ### Security warning: age key location
 

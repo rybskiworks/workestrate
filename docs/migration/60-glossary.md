@@ -63,9 +63,9 @@ dependency, Phase 2).
 The single tool home directory for workestrate. Default `~/.workestrate`;
 container: `<repo>/.workestrate`. Contains `config.toml` (registry),
 `overrides.toml`, `secrets/`, `repos/`, `sources/`, `state/`, `cache/`.
-Resolution: `WORKESTRATE_HOME` env → auto-discovery (walk-up, trust-gated) →
-legacy XDG (read-only compat) → default. Precedents: `~/.kube`, `~/.docker`,
-`~/.cargo`. See ADR 0023.
+Resolution: `WORKESTRATE_HOME` env → auto-discovery (walk-up, trust-gated,
+only when no `XDG_*_HOME` is set) → legacy XDG (read-only compat) →
+default. Precedents: `~/.kube`, `~/.docker`, `~/.cargo`. See ADR 0023.
 
 **Bundle (repo-local home)**
 A `$WORKESTRATE_HOME` placed inside a repository (typically
@@ -76,7 +76,10 @@ point at it. See ADR 0023.
 **migrate-home**
 `workestrate migrate-home` — migrates a legacy XDG three-home layout
 (config/data/state split) into the single tool home. Idempotent; warns on
-conflicts. Emits a deprecation note when legacy XDG is detected.
+conflicts. Stamps `home_version = 2`, clears `store_dir`/`state_dir`, and
+rewrites `configs.<name>.url` fields pointing into the old layout (remote
+URLs are left untouched). Emits a deprecation note when legacy XDG is
+detected.
 
 **Reference config**
 A sanitized, tracked copy of the config shipped with the tool at

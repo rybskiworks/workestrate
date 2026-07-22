@@ -84,8 +84,10 @@ $WORKESTRATE_HOME/
 ### Resolution precedence
 
 1. `WORKESTRATE_HOME` env var (explicit override)
-2. Auto-discovery (walk-up from cwd, trust-gated — finds a `.workestrate/` in
-   a parent dir)
+2. Auto-discovery (walk-up from cwd, trust-gated — finds a `.workestrate/`
+   in a parent dir), **but only when no `XDG_*_HOME` var is set**. An
+   explicit XDG var is a deliberate legacy-layout signal that discovery
+   must not override (32 XDG-pinned tests depend on this invariant).
 3. Legacy XDG (read-only compat + deprecation note — reads old
    `XDG_CONFIG_HOME/workestrate/config.toml` etc. if present, does NOT write)
 4. Default (`~/.workestrate`)
@@ -93,8 +95,10 @@ $WORKESTRATE_HOME/
 ### `home_version` field
 
 A field in `config.toml` (e.g. `home_version = 1`) that tracks the home
-layout version for future layout migrations. Bumping the version signals that
-a `migrate-home` path exists to upgrade an older layout to the current one.
+layout version for future layout migrations. `workestrate migrate-home`
+stamps `home_version = 2` after consolidating into the single home.
+Bumping the version signals that a `migrate-home` path exists to upgrade
+an older layout to the current one.
 
 ### `workestrate migrate-home` command
 
@@ -102,7 +106,13 @@ Migrates a legacy XDG three-home layout into the single home layout. Moves
 `config/workestrate/config.toml` → `config.toml`,
 `data/workestrate/repos/` → `repos/`, etc. Idempotent; warns on conflicts
 (existing files at the target are not silently overwritten). Emits a
-deprecation note when legacy XDG paths are detected.
+deprecation note when legacy XDG paths are detected. After moving, the
+relocated registry at `dest/config.toml` has `store_dir`/`state_dir`
+cleared (derivation from the new home takes over), `home_version` stamped
+to `2`, and `configs.<name>.url` fields pointing into the old layout
+rewritten to the new `dest/repos/<name>` path. Remote URLs (`http://`,
+`https://`, `ssh://`, `git@`, `flake://`, or any `://` scheme) are left
+untouched.
 
 ### `.envrc` / `local-xdg.sh` collapse
 
@@ -111,6 +121,20 @@ The three XDG env vars collapse to ONE:
 ```
 export WORKESTRATE_HOME="$PWD/.workestrate"
 ```
+
+### Auto-discovery trust model
+
+Auto-discovery (precedence step 2) is trust-gated: the repo containing
+`.workestrate/config.toml` must be listed in `[[trusted_projects]]` in the
+**global base registry** (resolved via Env/LegacyXdg/Default only — never
+via discovery itself, so a hostile `.workestrate/` cannot self-trust).
+Discovered files are not self-trusting. First-time discovery from a fresh
+clone requires `workestrate config trust <repo>` or setting
+`WORKESTRATE_HOME`. An untrusted discovery prints a one-time warning and
+*stops* walking (does not keep looking higher), then falls through to
+LegacyXdg/Default. Discovery is recursion-safe: the trust check reads the
+base registry directly (`resolve_home_base_with_kind`), never recursing
+through `resolve_home_with_kind`.
 
 ### Precedent (live-verified)
 
@@ -164,6 +188,6 @@ co-location.
 
 ---
 
-**ASSUMPTION (impl):** The `.envrc` and `scripts/local-xdg.sh` collapse from
-three XDG vars to `WORKESTRATE_HOME` is owned by the implementation track.
-This ADR documents the intended end state.
+**Implemented:** The `.envrc` and `scripts/local-xdg.sh` collapse from
+three XDG vars to `WORKESTRATE_HOME` is complete (commit 6a6cece). Both
+files now export a single `WORKESTRATE_HOME="$PWD/.workestrate"`.

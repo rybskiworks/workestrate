@@ -347,9 +347,9 @@ the container the key is absent and secret operations fail closed by design.
 **Warning**: `.workestrate/` contains the encrypted `.env.enc`, the registry,
 and config repos. Never commit it. The `.gitignore` entry is the guard.
 
-**ASSUMPTION (impl):** The `.envrc`/`local-xdg.sh` collapse to
-`WORKESTRATE_HOME` and the `migrate-xdg-to-repo.sh` → `migrate-home` rename
-are owned by the implementation track.
+**Implemented:** The `.envrc`/`local-xdg.sh` collapse to
+`WORKESTRATE_HOME` (commit 6a6cece) and the `migrate-xdg-to-repo.sh` →
+`migrate-home` rename (commit 7023a47) are complete.
 
 ### setup-secrets.sh per-repo override alignment
 
