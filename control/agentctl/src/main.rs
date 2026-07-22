@@ -2767,6 +2767,10 @@ mod tests {
 
     #[test]
     fn cmd_new_resolves_active_config_dir() -> Result<()> {
+        // Hold the env-mutation lock for the whole body: this test mutates
+        // HOME / WORKESTRATE_CONFIG_DIR and must not race any other env-mutating
+        // test (would otherwise corrupt env reads and poison ENV_TEST_LOCK).
+        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
         // Create a temp config repo with a minimal workestrate.toml
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-cmd-new-test-{}-{}",
@@ -2830,6 +2834,8 @@ mod tests {
 
     #[test]
     fn cmd_new_no_config_repo_produces_clear_error() {
+        // Hold the env-mutation lock for the whole body (see note above).
+        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
         // Use a temp HOME so no registry exists and no project config is found.
         let tmp_home = std::env::temp_dir().join(format!(
             "workestrate-no-config-test-{}-{}",

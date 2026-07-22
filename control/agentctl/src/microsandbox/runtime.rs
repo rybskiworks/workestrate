@@ -1184,6 +1184,15 @@ mod tests {
         occupancy_from_state, ps, DownStatus, Occupancy,
     };
     use crate::microsandbox::plan::PortMapping;
+    // The msb / MSB_HOME-mutating tests below mutate the process-global
+    // MSB_HOME env var. They MUST run single-file with every other env-mutating
+    // test (notably the `config::tests` family, which serialize via
+    // `crate::config::tests::ENV_TEST_LOCK`): an unsynchronized `set_var` racing
+    // with a config test's env read panics that test while it holds
+    // ENV_TEST_LOCK, poisoning the mutex and cascading ~30 PoisonError failures.
+    // Acquiring ENV_TEST_LOCK (the SAME lock the config tests use) makes the
+    // whole env-mutating group mutually exclusive. `serial_test`'s separate
+    // group cannot help here because the config tests do not use it.
 
     fn unique_state_dir_runtime(label: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -1402,7 +1411,18 @@ mod tests {
     /// (the devshell has one). Pinning MSB_HOME at an unwritable path fixes the
     /// outcome to Error regardless of environment.
     #[tokio::test]
+    // ENV_TEST_LOCK (std::sync::Mutex) is held across the `.await` below. This
+    // is safe because #[tokio::test] uses a single-threaded current-thread
+    // runtime with no spawned tasks, so the await can never yield to a task
+    // that contends on the lock (no deadlock). The lock MUST span the await so
+    // no concurrent env-mutating test (config::tests) races this set_var/read.
+    #[allow(clippy::await_holding_lock)]
     async fn down_all_instances_returns_error_when_msb_db_unreachable() -> anyhow::Result<()> {
+        // Serialize with ALL env-mutating tests (see the ENV_TEST_LOCK note
+        // above) so this set_var(MSB_HOME) cannot race a config test's env read.
+        // Declared before `_msb` so the lock is released AFTER MsbHomeGuard
+        // restores MSB_HOME on drop (incl. panic).
+        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
         // `<tmp>/blocker` is a regular file, so `<MSB_HOME>/db` (=
         // `<tmp>/blocker/db`) cannot be created → init_global fails →
         // Sandbox::get returns a hard error.
@@ -1453,9 +1473,12 @@ mod tests {
     ///   - `cargo test --ignored` → this test runs alone (deterministic
     ///                               NotFound), the Error test is skipped.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see Error test
     #[ignore = "shares the SDK process-global DB pool with the Error test; run alone with --ignored"]
     async fn down_all_instances_returns_notfound_when_msb_db_empty_but_openable(
     ) -> anyhow::Result<()> {
+        // Serialize with ALL env-mutating tests (see the ENV_TEST_LOCK note above).
+        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-msb-empty-{}-{}",
             std::process::id(),
