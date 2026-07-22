@@ -1074,6 +1074,10 @@ pub(crate) struct MigrateSummary {
     pub moved: Vec<MovedEntry>,
     pub registry_updated: bool,
     pub home_version: Option<u32>,
+    /// Names of `configs.<name>` entries whose local `url` pointed into the
+    /// old layout and was rewritten to the new `repos/<name>` path. Empty in
+    /// dry-run (no editing happens) and when no local urls matched.
+    pub urls_rewritten: Vec<String>,
 }
 
 /// Source layout for a migration (paths read FROM, into `dest`).
@@ -1250,6 +1254,21 @@ fn detect_layout() -> &'static str {
     "xdg"
 }
 
+/// Detect whether a string looks like a remote URL (carries a scheme) rather
+/// than a local filesystem path. Used by [`run_migrate_home`] to avoid
+/// rewriting genuine remote git urls stored in `configs.<name>.url`.
+///
+/// Returns `true` for `http://`, `https://`, `ssh://`, `git@`, `flake://`, or
+/// anything else containing a `://` scheme separator.
+fn looks_like_remote_url(s: &str) -> bool {
+    s.starts_with("http://")
+        || s.starts_with("https://")
+        || s.starts_with("ssh://")
+        || s.starts_with("git@")
+        || s.starts_with("flake://")
+        || s.contains("://")
+}
+
 /// Run a `workestrate migrate-home` consolidation into a single home (ADR 0023).
 ///
 /// `from` is `"xdg"`, `"bundle"`, or `None` (auto-detect). `dest` is the
@@ -1285,6 +1304,7 @@ pub(crate) fn run_migrate_home(
             moved,
             registry_updated: false,
             home_version: None,
+            urls_rewritten: Vec::new(),
         });
     }
 
@@ -1318,6 +1338,7 @@ pub(crate) fn run_migrate_home(
     // the new home takes over) and stamp home_version = 2.
     let mut registry_updated = false;
     let mut home_version = None;
+    let mut urls_rewritten: Vec<String> = Vec::new();
     let reg_path = dest.join("config.toml");
     if reg_path.exists() {
         if let Some(mut reg) = std::fs::read_to_string(&reg_path)
@@ -1327,6 +1348,36 @@ pub(crate) fn run_migrate_home(
             reg.settings.store_dir = None;
             reg.settings.state_dir = None;
             reg.settings.home_version = Some(2);
+
+            // Rewrite `configs.<name>.url` fields that still point into the
+            // OLD layout that was just migrated. Only local filesystem paths
+            // are considered (remote URLs are left untouched). A url matches
+            // when it equals, or lives under, the old repo base
+            // `sources.repos_root/<name>`; it is then rewritten to the new
+            // `dest/repos/<name>` path.
+            for (name, entry) in reg.configs.iter_mut() {
+                if looks_like_remote_url(&entry.url) {
+                    continue;
+                }
+                let url_path = PathBuf::from(&entry.url);
+                let old_base = sources.repos_root.join(name);
+                // Prefer canonical comparison when both paths still resolve,
+                // else fall back to lexical (component-wise) matching. In a
+                // real run the old repo dir has already been moved, so both
+                // canonicalizations fail and we use the lexical branch.
+                let matches = match (url_path.canonicalize(), old_base.canonicalize()) {
+                    (Ok(u), Ok(b)) => u == b || u.starts_with(&b),
+                    _ => url_path == old_base || url_path.starts_with(&old_base),
+                };
+                if matches {
+                    entry.url = dest.join("repos").join(name).to_string_lossy().to_string();
+                    urls_rewritten.push(name.clone());
+                }
+            }
+            // Deterministic (alphabetical) output ordering regardless of
+            // HashMap iteration order.
+            urls_rewritten.sort();
+
             let toml_str = toml::to_string_pretty(&reg)
                 .map_err(|e| anyhow::anyhow!("failed to serialize migrated registry: {}", e))?;
             std::fs::write(&reg_path, toml_str)?;
@@ -1355,6 +1406,7 @@ pub(crate) fn run_migrate_home(
         moved,
         registry_updated,
         home_version,
+        urls_rewritten,
     })
 }
 
@@ -3273,6 +3325,71 @@ pub(crate) mod tests {
         assert!(!dest.join("data").exists());
         assert!(!dest.join("state").join("workestrate").exists());
         assert!(dest.join("state").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_home_rewrites_repo_url_pointing_into_old_layout() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = uniq_dir("mig-url");
+        let dest = root.join(".workestrate");
+        // Old bundle triplication under dest/{config,data}/workestrate.
+        let bcfg = dest.join("config").join("workestrate");
+        let bdata = dest.join("data").join("workestrate");
+        std::fs::create_dir_all(&bcfg)?;
+
+        // Old repo base for <personal> under the bundle layout:
+        // dest/data/workestrate/repos/personal
+        let old_repo = bdata.join("repos").join("personal");
+        std::fs::create_dir_all(&old_repo)?;
+        std::fs::write(old_repo.join("file.txt"), "repo")?;
+        // Simulate a git checkout so it looks like a real repo dir.
+        std::fs::create_dir_all(old_repo.join(".git"))?;
+        std::fs::write(old_repo.join(".git").join("HEAD"), "ref: refs/heads/main\n")?;
+
+        // Registry entry whose url points into the OLD layout.
+        let old_url = old_repo.to_string_lossy().to_string();
+        let toml_reg = format!(
+            "[settings]\nstore_dir = \"/old\"\n\
+             [configs.personal]\nurl = \"{}\"\nref = \"main\"\n",
+            old_url
+        );
+        std::fs::write(bcfg.join("config.toml"), toml_reg)?;
+
+        let summary = run_migrate_home(Some("bundle"), &dest, false, false)?;
+        assert!(summary.registry_updated);
+        assert_eq!(summary.from, "bundle");
+
+        // url rewritten to the new repo path.
+        assert!(
+            summary.urls_rewritten.contains(&"personal".to_string()),
+            "expected personal in urls_rewritten, got {:?}",
+            summary.urls_rewritten
+        );
+
+        // Reload the relocated registry and confirm the url was rewritten.
+        let new_reg_text = std::fs::read_to_string(dest.join("config.toml"))?;
+        let new_reg: Registry = toml::from_str(&new_reg_text)?;
+        let expected_new = dest.join("repos").join("personal");
+        let entry = new_reg
+            .configs
+            .get("personal")
+            .ok_or_else(|| anyhow::anyhow!("personal config missing after migrate"))?;
+        assert_eq!(
+            entry.url,
+            expected_new.to_string_lossy(),
+            "url should have been rewritten to the new repo path"
+        );
+        // store_dir cleared as before.
+        assert_eq!(new_reg.settings.store_dir, None);
+        assert_eq!(new_reg.settings.home_version, Some(2));
+
+        // The repo itself landed at the new path.
+        assert!(expected_new.join("file.txt").exists());
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())

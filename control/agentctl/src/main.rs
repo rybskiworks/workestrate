@@ -1738,6 +1738,12 @@ fn render_migrate_summary_human(summary: &config::MigrateSummary) {
                 None => "absent".to_string(),
             }
         );
+        let urls = if summary.urls_rewritten.is_empty() {
+            "(none)".to_string()
+        } else {
+            summary.urls_rewritten.join(", ")
+        };
+        println!("  URLs rewritten:  {}", urls);
     }
 }
 
