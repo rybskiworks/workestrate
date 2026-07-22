@@ -69,7 +69,24 @@
         "nixpkgs": "nixpkgs",
         "odysseus": "odysseus",
         "opencode": "opencode",
-        "pi": "pi"
+        "pi": "pi",
+        "tempest": "tempest"
+      }
+    },
+    "tempest": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783601494,
+        "narHash": "sha256-IHIxcol2posEmYeHvql8pZTqqjkdZzprAxUKLEZ7HWg=",
+        "owner": "georgrybski",
+        "repo": "T3MP3ST",
+        "rev": "ae32cf505174a422c55d7ca970f5f23816218f38",
+        "type": "github"
+      },
+      "original": {
+        "owner": "georgrybski",
+        "repo": "T3MP3ST",
+        "type": "github"
       }
     }
   },
