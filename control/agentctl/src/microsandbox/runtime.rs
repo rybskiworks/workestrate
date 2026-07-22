@@ -519,10 +519,7 @@ pub(crate) async fn run_service_foreground(
         }
     });
 
-    println!(
-        "Sandbox '{}' started (Ctrl-C to stop)",
-        config.sandbox_name
-    );
+    println!("Sandbox '{}' started (Ctrl-C to stop)", config.sandbox_name);
     if let Err(e) = tokio::signal::ctrl_c().await {
         // Even if the signal handler fails, attempt to stop the sandbox
         // before propagating the error.
