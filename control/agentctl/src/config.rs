@@ -419,49 +419,60 @@ fn is_dir_trusted_via_base_registry(dir: &Path) -> bool {
 /// Precedence (first match wins):
 /// 1. **Env** — `WORKESTRATE_HOME` (used verbatim, leading `~/` expanded).
 /// 2. **Discovered** — a `.workestrate/config.toml` in a *trusted* ancestor of
-///    the cwd. An untrusted discovery prints a one-time warning and *stops*
-///    walking (does not keep looking higher), then falls through.
+///    the cwd, but only when no `XDG_*_HOME` var is set; an explicit XDG var is
+///    a deliberate legacy-layout signal that discovery must not override. An
+///    untrusted discovery prints a one-time warning and *stops* walking (does
+///    not keep looking higher), then falls through.
 /// 3. **LegacyXdg** — any of `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`
 ///    set and non-empty (compatibility; emits a one-time migration note).
 /// 4. **Default** — `~/.workestrate`.
 pub fn resolve_home_with_kind() -> (PathBuf, HomeKind) {
-    // (a) Env
+    // (a) Env: WORKESTRATE_HOME
     if let Ok(value) = std::env::var("WORKESTRATE_HOME") {
         if !value.is_empty() {
             return (expand_tilde(&value), HomeKind::Env);
         }
     }
-    // (b) Discovery: walk up from cwd for .workestrate/config.toml.
-    if let Ok(cwd) = std::env::current_dir() {
-        let mut dir: &Path = &cwd;
-        loop {
-            let candidate = dir.join(".workestrate").join("config.toml");
-            if candidate.exists() {
-                if is_dir_trusted_via_base_registry(dir) {
-                    return (dir.join(".workestrate"), HomeKind::Discovered);
+
+    let xdg_explicit = xdg_var_set("XDG_CONFIG_HOME")
+        || xdg_var_set("XDG_DATA_HOME")
+        || xdg_var_set("XDG_STATE_HOME");
+
+    // (b) Discovery — only when XDG is NOT explicitly set. An explicit XDG
+    // var is a deliberate legacy-layout choice that discovery must not
+    // override (keeps XDG-pinned environments and tests working even when
+    // a trusted .workestrate/config.toml exists in an ancestor).
+    if !xdg_explicit {
+        if let Ok(cwd) = std::env::current_dir() {
+            let mut dir: &Path = &cwd;
+            loop {
+                let candidate = dir.join(".workestrate").join("config.toml");
+                if candidate.exists() {
+                    if is_dir_trusted_via_base_registry(dir) {
+                        return (dir.join(".workestrate"), HomeKind::Discovered);
+                    }
+                    // Untrusted: warn, STOP walking, fall through to (c)/(d).
+                    eprintln!(
+                        ".workestrate/config.toml found in {} but it is not a trusted project; \
+                         ignoring (run 'workestrate config trust <dir>' to trust it)",
+                        dir.display()
+                    );
+                    break;
                 }
-                // Untrusted: warn, STOP walking, fall through to (c)/(d).
-                eprintln!(
-                    ".workestrate/config.toml found in {} but it is not a trusted project; \
-                     ignoring (run 'workestrate config trust <dir>' to trust it)",
-                    dir.display()
-                );
-                break;
-            }
-            match dir.parent() {
-                Some(parent) => dir = parent,
-                None => break,
+                match dir.parent() {
+                    Some(parent) => dir = parent,
+                    None => break,
+                }
             }
         }
     }
+
     // (c) Legacy XDG
-    if xdg_var_set("XDG_CONFIG_HOME")
-        || xdg_var_set("XDG_DATA_HOME")
-        || xdg_var_set("XDG_STATE_HOME")
-    {
+    if xdg_explicit {
         emit_legacy_xdg_note();
         return (xdg_config_dir(), HomeKind::LegacyXdg);
     }
+
     // (d) Default
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     (PathBuf::from(home).join(".workestrate"), HomeKind::Default)
@@ -3067,6 +3078,59 @@ pub(crate) mod tests {
 
         let _ = std::fs::remove_dir_all(&base_home);
         let _ = std::fs::remove_dir_all(&project);
+        Ok(())
+    }
+
+    /// Precedence regression: an explicit XDG var must win over discovery even
+    /// when a *trusted* `.workestrate/config.toml` exists in the cwd. Without
+    /// this guarantee, discovery overrides a deliberately-pinned legacy layout
+    /// whenever a trusted project config is present in an ancestor.
+    #[test]
+    fn discovery_does_not_override_explicit_xdg() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let base_home = uniq_dir("rh-xdg-base");
+        let project = uniq_dir("rh-xdg-proj");
+        let xdg = uniq_dir("rh-xdg-explicit");
+        std::fs::create_dir_all(base_home.join(".workestrate"))?;
+        std::fs::create_dir_all(project.join(".workestrate"))?;
+        std::fs::create_dir_all(&xdg)?;
+
+        // Project-local config.toml so discovery WOULD notice it if it ran.
+        std::fs::write(
+            project.join(".workestrate").join("config.toml"),
+            "layers = []\n",
+        )?;
+
+        // Base registry at <HOME>/.workestrate trusts the project dir, so
+        // discovery would return Discovered if it were allowed to run.
+        let canonical_project = std::fs::canonicalize(&project)?;
+        let trust_toml = format!(
+            "[[trusted_projects]]\npath = \"{}\"\n",
+            canonical_project.display()
+        );
+        std::fs::write(
+            base_home.join(".workestrate").join("config.toml"),
+            trust_toml,
+        )?;
+
+        std::env::set_var("HOME", &base_home);
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        std::env::remove_var("WORKESTRATE_HOME");
+        std::env::set_current_dir(&project)?;
+
+        let (_home, kind) = resolve_home_with_kind();
+        assert_ne!(
+            kind,
+            HomeKind::Discovered,
+            "explicit XDG var must override discovery even for a trusted project"
+        );
+        assert_eq!(kind, HomeKind::LegacyXdg);
+
+        let _ = std::fs::remove_dir_all(&base_home);
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&xdg);
         Ok(())
     }
 
