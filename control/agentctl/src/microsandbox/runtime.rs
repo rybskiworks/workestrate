@@ -745,7 +745,7 @@ pub async fn up_service_with_spec<W: Workload>(
 ) -> Result<()> {
     if !foreground {
         let instance = spec.instance.clone();
-        let child = spawn_detached_service(&instance, &workload.detach_args())?;
+        let child = spawn_detached_service(&instance, &workload.detach_args(spec))?;
         println!(
             "Sandbox '{}' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/{}/workestrate.log",
             instance, child.id(), instance

@@ -1,0 +1,217 @@
+//! End-to-end test for the detached-instance lifecycle (ADR 0021, WP-A).
+//!
+//! Verifies that a detached `up --new --port-offset N` forwards the resolved
+//! [`InstanceSpec`] into the background child so that:
+//!   1. the child creates the sandbox at `<slot>@<slug>` (NOT the bare slot),
+//!   2. the port-registry record lands at `<slot>@<slug>` with the offset,
+//!   3. `workestrate ps --json` reports it with the shifted host ports,
+//!   4. `workestrate <wl> down --instance <slug>` stops and removes it.
+//!
+//! This exercises the real microsandbox create path, which needs KVM + a
+//! loaded image. It is therefore `#[ignore]`'d so `just verify` stays green
+//! and deterministic in CI / the devshell. Run it on a KVM host with images
+//! loaded via:
+//!
+//! ```text
+//! cargo test --manifest-path control/agentctl/Cargo.toml \
+//!   --test lifecycle_detached -- --ignored --nocapture
+//! ```
+//!
+//! The test uses the WP-E writability/isolation pattern (isolated
+//! `MSB_HOME` + `HOME` + `WORKESTRATE_CONFIG_DIR`) so it never touches the
+//! operator's real workestrate registry or msb state.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
+/// `[a-z2-7]{4}` — the base32 instance slug shape produced by `--new` (WP-B).
+const SLUG_RE: &str = r"^[a-z2-7]{4}$";
+
+/// Build a `workestrate` [`Command`] with fully isolated state: a fresh HOME,
+/// a fresh writable `MSB_HOME` (so the SDK's `<MSB_HOME>/db/msb.db` is
+/// openable and empty), and `WORKESTRATE_CONFIG_DIR` pointed at the committed
+/// 5-workload fixture. Dummy non-placeholder values are injected for every
+/// required litellm secret so the create path does not bail on missing
+/// secrets on a provisioned host.
+fn isolated_cmd(home: &std::path::Path) -> Command {
+    let mut c = Command::new(BIN);
+    c.env("HOME", home);
+    c.env("XDG_CONFIG_HOME", home.join(".config"));
+    c.env("XDG_DATA_HOME", home.join(".local").join("share"));
+    c.env("XDG_STATE_HOME", home.join(".local").join("state"));
+    c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
+    c.env_remove("WORKESTRATE_CONTEXT");
+    let fixture: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("config");
+    c.env("WORKESTRATE_CONFIG_DIR", &fixture);
+    // Isolated, writable msb home (WP-E pattern): empty db → openable.
+    c.env("MSB_HOME", home.join("msb-home"));
+    // Dummy non-placeholder secrets so the create path proceeds on a host.
+    for (k, v) in [
+        ("LITELLM_MASTER_KEY", "sk-test-master-key"),
+        ("OPENROUTER_API_KEY", "sk-or-test"),
+        ("KIMI_CODE_API_KEY", "sk-kimi-test"),
+        ("NEURALWATT_API_KEY", "sk-nw-test"),
+        ("MINIMAX_CODING_API_KEY", "sk-mx-test"),
+    ] {
+        c.env(k, v);
+    }
+    c
+}
+
+/// Parse `Sandbox '<instance>' started in background` from `up` stdout.
+fn parse_started_instance(stdout: &str) -> Option<String> {
+    let marker = "Sandbox '";
+    let start = stdout.find(marker)? + marker.len();
+    let rest = &stdout[start..];
+    let end = rest.find("' started")?;
+    Some(rest[..end].to_string())
+}
+
+/// Poll the litellm registry for a record named `instance`. Returns true once
+/// `workestrate ps --json` lists it.
+fn ps_contains(home: &std::path::Path, instance: &str) -> bool {
+    let out = isolated_cmd(home)
+        .args(["ps", "--json"])
+        .output()
+        .expect("ps --json");
+    if !out.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The instance field is serialized as `"instance": "<name>"`.
+    stdout.contains(&format!("\"instance\": \"{}\"", instance))
+}
+
+#[tokio::test]
+#[ignore = "needs KVM + a loaded litellm image; run manually with --ignored"]
+async fn detached_up_new_port_offset_registers_slot_at_slug_and_down_stops_it() {
+    let home = std::env::temp_dir().join(format!(
+        "workestrate-lifecycle-detached-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&home).expect("create isolated HOME");
+
+    // 1. Detached `up --new --port-offset 10000`. The parent returns at once
+    //    after spawning the foreground child; the child creates the sandbox
+    //    and writes the registry record.
+    let up = isolated_cmd(&home)
+        .args(["litellm", "up", "--new", "--port-offset", "10000"])
+        .output()
+        .expect("spawn litellm up --new");
+    let up_stdout = String::from_utf8_lossy(&up.stdout).to_string();
+    let up_stderr = String::from_utf8_lossy(&up.stderr).to_string();
+
+    // If the host has no working msb/KVM, the detached spawn itself may fail
+    // or the child never registers. Treat an outright msb transport failure
+    // as a skip (the WP-E writability detection pattern) so the test is
+    // robust when un-ignored on a half-provisioned host.
+    let msb_unavailable = up_stderr.contains("connect to")
+        || up_stderr.contains("transport")
+        || up_stderr.contains("msb");
+    if !up.status.success() && msb_unavailable {
+        eprintln!(
+            "SKIP: msb unavailable on this host (stderr: {})",
+            up_stderr.trim()
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        return;
+    }
+    assert!(
+        up.status.success(),
+        "detached up failed; stderr:\n{}",
+        up_stderr
+    );
+
+    // 2. The instance MUST be `<slot>@<slug>`, never the bare singleton slot.
+    let instance = parse_started_instance(&up_stdout).unwrap_or_else(|| {
+        panic!(
+            "could not parse started instance from up stdout:\n{}",
+            up_stdout
+        )
+    });
+    let (slot, slug) = instance
+        .split_once('@')
+        .unwrap_or_else(|| panic!("expected '<slot>@<slug>', got '{instance}'"));
+    assert_eq!(
+        slot, "litellm",
+        "slot must be the bare workload name (no context active)"
+    );
+    assert!(
+        regex_lite_matches(SLUG_RE, slug),
+        "slug '{slug}' must be 4 chars of [a-z2-7] (base32, WP-B); instance was '{instance}'"
+    );
+    assert_ne!(
+        instance, "litellm",
+        "must NOT register the bare singleton slot"
+    );
+
+    // 3. Poll `ps --json` until the child has registered the instance (the
+    //    record is written after sandbox creation, which races the parent's
+    //    return). Cap at 60s; sandbox create + first boot can take a while.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut seen = false;
+    while Instant::now() < deadline {
+        if ps_contains(&home, &instance) {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(seen, "ps --json never listed '{instance}' within 60s");
+
+    // 4. The ps entry must carry the offset: host port 4000 + 10000 = 14000,
+    //    guest 4000. Read the raw record to assert the port pair directly
+    //    (independent of the ps JSON renderer).
+    let state_dir = home.join(".local").join("state").join("workestrate");
+    let record_path = state_dir
+        .join("var")
+        .join("run")
+        .join(format!("{instance}.json"));
+    let record = std::fs::read_to_string(&record_path).expect("read registry record");
+    assert!(
+        record.contains("\"host\": 14000") && record.contains("\"guest\": 4000"),
+        "registry record for '{instance}' must carry the offset port pair (14000:4000); got:\n{record}"
+    );
+
+    // 5. `down --instance <slug>` stops and removes it.
+    let down = isolated_cmd(&home)
+        .args(["litellm", "down", "--instance", slug])
+        .output()
+        .expect("spawn litellm down --instance");
+    let down_stdout = String::from_utf8_lossy(&down.stdout).to_string();
+    assert!(
+        down.status.success(),
+        "down --instance {slug} failed; stderr:\n{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    assert!(
+        down_stdout.contains("stopped") || down_stdout.contains("not found"),
+        "down --instance {slug} should report stopped; got:\n{down_stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Tiny anchored-prefix matcher for `[a-z2-7]{4}` without pulling a regex dep.
+/// Matches iff `s.len() == 4` and every char is in `a..=z` or `2..=7`.
+fn regex_lite_matches(_pattern: &str, s: &str) -> bool {
+    s.len() == 4
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
+}

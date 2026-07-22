@@ -61,11 +61,42 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// Program and args to exec inside the sandbox.
     fn exec(&self) -> SandboxCommand;
 
-    /// Args to pass when re-exec'ing in background mode.
-    /// The child invokes `<name> up --foreground` so it blocks instead of
-    /// re-detaching forever.
-    fn detach_args(&self) -> Vec<String> {
-        vec![self.name().into(), "up".into(), "--foreground".into()]
+    /// Args to pass when re-exec'ing in detached (background) mode.
+    ///
+    /// Reconstructs the CLI from `spec` so the detached child re-enters the
+    /// `up --foreground` path with the SAME identity and flags the parent
+    /// resolved:
+    ///   - `--replace` (when `spec.replace`),
+    ///   - `--instance <id>` for a parallel instance — the **bare id**, not
+    ///     `slot@id` (the child re-derives the slot from its own context),
+    ///   - `--port-offset <N>` when the offset is nonzero.
+    ///
+    /// `--new` is intentionally NOT forwarded: the parent has already
+    /// materialized the slug into `spec.instance`, so the child must target
+    /// that concrete instance rather than allocate a fresh one. The child
+    /// re-parses these args via the existing `parse_service_action` /
+    /// `parse_agent_action` path; no child-side change is required.
+    fn detach_args(&self, spec: &crate::microsandbox::runtime::InstanceSpec) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            self.name().to_string(),
+            "up".to_string(),
+            "--foreground".to_string(),
+        ];
+        if spec.replace {
+            args.push("--replace".to_string());
+        }
+        // Forward the parallel-instance id only when this is NOT the singleton
+        // (instance == slot, no `@`). instance_id_of splits on the first `@`;
+        // slots never contain `@`, so this is unambiguous.
+        if let Some(id) = crate::microsandbox::slots::instance_id_of(&spec.instance) {
+            args.push("--instance".to_string());
+            args.push(id.to_string());
+        }
+        if spec.port_offset != 0 {
+            args.push("--port-offset".to_string());
+            args.push(spec.port_offset.to_string());
+        }
+        args
     }
 
     /// Optional pre-start hook (e.g., writing config files to persistent data dir).
