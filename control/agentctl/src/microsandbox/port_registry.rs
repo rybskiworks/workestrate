@@ -254,7 +254,12 @@ pub fn auto_allocate_slug(state_dir: &Path, slot: &str) -> Result<String> {
 /// Testable core of [`auto_allocate_slug`]: takes an explicit retry budget and
 /// a `draw` closure (so tests can inject deterministic candidate sequences)
 /// but is otherwise identical to the public entry point.
-fn auto_allocate_slug_with<F>(state_dir: &Path, slot: &str, retries: u32, mut draw: F) -> Result<String>
+fn auto_allocate_slug_with<F>(
+    state_dir: &Path,
+    slot: &str,
+    retries: u32,
+    mut draw: F,
+) -> Result<String>
 where
     F: FnMut() -> Result<String>,
 {
@@ -746,9 +751,14 @@ mod tests {
     fn random_slug_is_4_chars_of_base32_alphabet() -> Result<()> {
         for _ in 0..256 {
             let s = random_slug()?;
-            assert_eq!(s.len(), SLUG_LEN, "slug must be exactly {SLUG_LEN} chars: {s}");
+            assert_eq!(
+                s.len(),
+                SLUG_LEN,
+                "slug must be exactly {SLUG_LEN} chars: {s}"
+            );
             assert!(
-                s.bytes().all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)),
+                s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)),
                 "slug '{s}' contains a char outside [a-z2-7]"
             );
         }
@@ -768,7 +778,8 @@ mod tests {
         let slug = auto_allocate_slug(&state_dir, "personal-litellm")?;
         assert_eq!(slug.len(), SLUG_LEN);
         assert!(
-            slug.bytes().all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)),
+            slug.bytes()
+                .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)),
             "slug '{slug}' outside [a-z2-7]"
         );
         crate::microsandbox::slots::validate_instance_id(&slug)
@@ -797,7 +808,10 @@ mod tests {
             })
         };
         let slug = auto_allocate_slug_with(&state_dir, "personal-litellm", SLUG_MAX_RETRIES, draw)?;
-        assert_eq!(slug, "mnxy", "must skip the colliding draw and return the fresh one");
+        assert_eq!(
+            slug, "mnxy",
+            "must skip the colliding draw and return the fresh one"
+        );
         assert_eq!(calls, 2);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
