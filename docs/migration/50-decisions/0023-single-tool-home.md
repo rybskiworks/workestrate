@@ -191,3 +191,13 @@ co-location.
 **Implemented:** The `.envrc` and `scripts/local-xdg.sh` collapse from
 three XDG vars to `WORKESTRATE_HOME` is complete (commit 6a6cece). Both
 files now export a single `WORKESTRATE_HOME="$PWD/.workestrate"`.
+
+**WP-F5 (clobber guard + partial-failure reporting):** `workestrate
+migrate-home` now scans every planned destination path (not just
+`config.toml`) before moving and refuses — listing all pre-existing
+destinations — unless `--force` is passed. A pre-flight pass verifies
+every source exists and every destination parent is writable before any
+move begins. The migration remains non-transactional: if a move fails
+mid-loop, entries already moved stay moved, and the summary reports
+`partial: true` with `failed_at` naming the destination that could not be
+moved and `moved` listing the entries that succeeded up to that point.

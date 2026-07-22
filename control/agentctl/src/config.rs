@@ -1089,6 +1089,12 @@ pub(crate) struct MovedEntry {
 }
 
 /// Structured summary of a `workestrate migrate-home` run (ADR 0023).
+///
+/// The migration is **non-transactional**: if a move fails mid-loop, the
+/// entries already moved are not rolled back. In that case `partial` is
+/// `true`, `failed_at` names the destination that could not be moved, and
+/// `moved` lists the entries that succeeded up to that point. The remaining
+/// planned entries (not in `moved`) were skipped.
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct MigrateSummary {
     pub from: String,
@@ -1101,6 +1107,15 @@ pub(crate) struct MigrateSummary {
     /// old layout and was rewritten to the new `repos/<name>` path. Empty in
     /// dry-run (no editing happens) and when no local urls matched.
     pub urls_rewritten: Vec<String>,
+    /// True when the migration moved some entries but aborted mid-loop (see
+    /// `failed_at`). The move is NOT transactional: entries already moved stay
+    /// moved. Always `false` on full success and in dry-run mode.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
+    /// Destination path of the entry whose move failed when `partial` is true.
+    /// `None` on full success and in dry-run mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_at: Option<String>,
 }
 
 /// Source layout for a migration (paths read FROM, into `dest`).
@@ -1328,6 +1343,8 @@ pub(crate) fn run_migrate_home(
             registry_updated: false,
             home_version: None,
             urls_rewritten: Vec::new(),
+            partial: false,
+            failed_at: None,
         });
     }
 
@@ -1339,18 +1356,97 @@ pub(crate) fn run_migrate_home(
         );
     }
 
+    // Clobber guard: scan ALL planned dst paths (overrides.toml,
+    // secrets/.env.local.enc, every repos/<name>, sources/<name>,
+    // state/<name>). The config.toml primary check above is the fast-path
+    // refusal; this catches every other pre-existing destination. --force
+    // overrides.
+    let existing_dsts: Vec<String> = planned
+        .iter()
+        .filter(|(_, dst)| dst.exists())
+        .map(|(_, dst)| dst.display().to_string())
+        .collect();
+    if !existing_dsts.is_empty() && !force {
+        anyhow::bail!(
+            "destination {} already contains {} existing entr{}; \
+             pass --force to overwrite:\n  {}",
+            dest.display(),
+            existing_dsts.len(),
+            if existing_dsts.len() == 1 { "y" } else { "ies" },
+            existing_dsts.join("\n  ")
+        );
+    }
+
     std::fs::create_dir_all(dest)?;
     std::fs::create_dir_all(dest.join("secrets"))?;
     std::fs::create_dir_all(dest.join("state"))?;
     std::fs::create_dir_all(dest.join("repos"))?;
     std::fs::create_dir_all(dest.join("sources"))?;
 
+    // Pre-flight: verify every src exists and every dst parent is writable
+    // before moving anything. This catches the common failure modes (missing
+    // source, unwritable destination parent) up front so we don't move half
+    // the tree and then discover a problem.
+    for (src, dst) in &planned {
+        if !src.exists() {
+            anyhow::bail!(
+                "pre-flight: source {} does not exist (planned move to {})",
+                src.display(),
+                dst.display()
+            );
+        }
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+            // Writability check: create then remove a probe file in the parent.
+            let probe = parent.join(format!(".mig-write-probe-{}", std::process::id()));
+            match std::fs::write(&probe, b"") {
+                Ok(_) => {
+                    let _ = std::fs::remove_file(&probe);
+                }
+                Err(e) => {
+                    anyhow::bail!(
+                        "pre-flight: destination parent {} is not writable: {}",
+                        parent.display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    // Execute moves. Non-transactional: on mid-loop failure, entries already
+    // moved stay moved; we return a partial summary instead of propagating the
+    // error so the caller knows what succeeded.
     let mut moved: Vec<MovedEntry> = Vec::new();
     for (src, dst) in &planned {
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        move_entry(src, dst)?;
+        if let Err(e) = move_entry(src, dst) {
+            let moved_so_far = moved.len();
+            let remaining = planned.len() - moved_so_far - 1;
+            eprintln!(
+                "warning: migrate-home failed moving {} -> {}: {} \
+                 (moved {} entr{}, {} remaining, non-transactional)",
+                src.display(),
+                dst.display(),
+                e,
+                moved_so_far,
+                if moved_so_far == 1 { "y" } else { "ies" },
+                remaining
+            );
+            return Ok(MigrateSummary {
+                from: layout.to_string(),
+                dest: dest.display().to_string(),
+                dry_run: false,
+                moved,
+                registry_updated: false,
+                home_version: None,
+                urls_rewritten: Vec::new(),
+                partial: true,
+                failed_at: Some(dst.display().to_string()),
+            });
+        }
         moved.push(MovedEntry {
             src: src.display().to_string(),
             dst: dst.display().to_string(),
@@ -1430,6 +1526,8 @@ pub(crate) fn run_migrate_home(
         registry_updated,
         home_version,
         urls_rewritten,
+        partial: false,
+        failed_at: None,
     })
 }
 
@@ -3466,6 +3564,134 @@ pub(crate) mod tests {
 
         // The repo itself landed at the new path.
         assert!(expected_new.join("file.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_home_refuses_when_dest_repo_pre_exists() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = uniq_dir("mig-clobber");
+        std::fs::create_dir_all(&root)?;
+        let _ = build_xdg_layout(&root)?;
+        let dest = root.join("dest");
+
+        // Pre-create TWO dst paths that would be clobbered.
+        std::fs::create_dir_all(dest.join("repos").join("personal"))?;
+        std::fs::write(
+            dest.join("repos").join("personal").join("stale.txt"),
+            "stale",
+        )?;
+        std::fs::create_dir_all(dest.join("sources").join("foo"))?;
+        std::fs::write(dest.join("sources").join("foo").join("stale.txt"), "stale")?;
+
+        let err = run_migrate_home(Some("xdg"), &dest, false, false).unwrap_err();
+        let msg = format!("{err:#}");
+        eprintln!("TEST_A_REFUSAL_MSG:\n{msg}");
+        assert!(
+            msg.contains("already contains"),
+            "expected clobber refusal, got: {msg}"
+        );
+        assert!(
+            msg.contains("repos/personal"),
+            "expected existing dst repos/personal listed in refusal, got: {msg}"
+        );
+        assert!(
+            msg.contains("sources/foo"),
+            "expected existing dst sources/foo listed in refusal, got: {msg}"
+        );
+        // The stale files must be untouched (refusal happens before any move).
+        assert!(dest
+            .join("repos")
+            .join("personal")
+            .join("stale.txt")
+            .exists());
+        assert!(dest.join("sources").join("foo").join("stale.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_home_force_overrides_clobber_guard() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = uniq_dir("mig-force");
+        std::fs::create_dir_all(&root)?;
+        let _ = build_xdg_layout(&root)?;
+        let dest = root.join("dest");
+
+        // Pre-create a dst repo dir that would be clobbered.
+        std::fs::create_dir_all(dest.join("repos").join("personal"))?;
+        std::fs::write(
+            dest.join("repos").join("personal").join("stale.txt"),
+            "stale",
+        )?;
+
+        let summary = run_migrate_home(Some("xdg"), &dest, false, true)?;
+        assert!(
+            !summary.partial,
+            "force should complete without partial failure"
+        );
+        assert!(summary.failed_at.is_none());
+        // The moved repo content overwrites the stale file.
+        assert!(dest
+            .join("repos")
+            .join("personal")
+            .join("file.txt")
+            .exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_home_partial_failure_reports_partial_and_failed_at() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = uniq_dir("mig-partial");
+        std::fs::create_dir_all(&root)?;
+        let _ = build_xdg_layout(&root)?;
+        let dest = root.join("dest");
+
+        // Plant a regular FILE at dest/repos/personal where the src is a
+        // DIRECTORY. --force bypasses the clobber guard; the pre-flight
+        // passes (src exists, dst parent dest/repos/ is writable) but the
+        // actual move of the repos/personal dir onto a file path fails.
+        std::fs::create_dir_all(dest.join("repos"))?;
+        std::fs::write(dest.join("repos").join("personal"), "BLOCKER")?;
+
+        let summary = run_migrate_home(Some("xdg"), &dest, false, true)?;
+        eprintln!(
+            "TEST_C_PARTIAL: partial={} failed_at={:?} moved_len={}",
+            summary.partial,
+            summary.failed_at,
+            summary.moved.len()
+        );
+        assert!(
+            summary.partial,
+            "expected partial=true on mid-loop failure, got partial={}",
+            summary.partial
+        );
+        assert!(
+            summary
+                .failed_at
+                .as_deref()
+                .is_some_and(|s| s.contains("personal")),
+            "expected failed_at to contain 'personal', got {:?}",
+            summary.failed_at
+        );
+        // Some entries before repos/personal should have moved (registry,
+        // overrides, secrets come first in plan_moves ordering).
+        assert!(
+            !summary.moved.is_empty(),
+            "expected at least one moved entry before the failure"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
