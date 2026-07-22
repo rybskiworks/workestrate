@@ -1050,6 +1050,301 @@ pub fn untrust_project(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// migrate-home (ADR 0023): consolidate legacy layouts into a single home
+// ---------------------------------------------------------------------------
+
+/// One moved file/dir recorded by [`run_migrate_home`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct MovedEntry {
+    pub src: String,
+    pub dst: String,
+}
+
+/// Structured summary of a `workestrate migrate-home` run (ADR 0023).
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct MigrateSummary {
+    pub from: String,
+    pub dest: String,
+    pub dry_run: bool,
+    pub moved: Vec<MovedEntry>,
+    pub registry_updated: bool,
+    pub home_version: Option<u32>,
+}
+
+/// Source layout for a migration (paths read FROM, into `dest`).
+struct MigrateSources {
+    registry: PathBuf,
+    overrides: PathBuf,
+    secrets: PathBuf,
+    repos_root: PathBuf,
+    sources_root: PathBuf,
+    state_root: PathBuf,
+    /// Old subtrees to clean up after a successful in-place move (bundle only).
+    cleanup_dirs: Vec<PathBuf>,
+}
+
+/// Resolve the source layout. `dest` is the destination single-home dir.
+///
+/// - `from == "xdg"`: legacy `XDG_*_HOME` dirs.
+/// - `from == "bundle"`: the old `.workestrate/{config,data,state}/workestrate/`
+///   triplication rooted at `dest`'s parent (in-place bundle).
+fn resolve_migrate_sources(from: &str, dest: &Path) -> Result<MigrateSources> {
+    match from {
+        "xdg" => Ok(MigrateSources {
+            registry: xdg_config_dir().join("config.toml"),
+            overrides: xdg_config_dir().join("overrides.toml"),
+            secrets: xdg_config_dir().join(".env.local.enc"),
+            repos_root: xdg_data_dir().join("repos"),
+            sources_root: xdg_data_dir().join("sources"),
+            state_root: xdg_state_dir(),
+            cleanup_dirs: Vec::new(),
+        }),
+        "bundle" => {
+            // In-place bundle: dest == <bundle_root>/.workestrate, so the old
+            // triplication lives directly under dest as {config,data,state}/workestrate.
+            Ok(MigrateSources {
+                registry: dest.join("config").join("workestrate").join("config.toml"),
+                overrides: dest
+                    .join("config")
+                    .join("workestrate")
+                    .join("overrides.toml"),
+                secrets: dest
+                    .join("config")
+                    .join("workestrate")
+                    .join(".env.local.enc"),
+                repos_root: dest.join("data").join("workestrate").join("repos"),
+                sources_root: dest.join("data").join("workestrate").join("sources"),
+                state_root: dest.join("state").join("workestrate"),
+                cleanup_dirs: vec![
+                    dest.join("config"),
+                    dest.join("data"),
+                    dest.join("state"),
+                ],
+            })
+        }
+        other => anyhow::bail!(
+            "unknown --from value '{}' (expected \"xdg\" or \"bundle\")",
+            other
+        ),
+    }
+}
+
+/// Recursively copy an entry (file/dir/symlink). Cross-filesystem fallback for
+/// [`move_entry`].
+fn copy_entry_recursive(src: &Path, dst: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(src)?;
+    if meta.is_dir() {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            copy_entry_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(src)?;
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink(&target, dst);
+            if !dst.exists() && !std::fs::symlink_metadata(dst).is_ok() {
+                std::fs::copy(src, dst)?;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::copy(src, dst)?;
+        }
+    } else {
+        std::fs::copy(src, dst)?;
+    }
+    Ok(())
+}
+
+/// Move a filesystem entry, falling back to recursive copy + delete when a
+/// simple `rename` fails (e.g. crossing a filesystem boundary).
+fn move_entry(src: &Path, dst: &Path) -> Result<()> {
+    if std::fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    copy_entry_recursive(src, dst)?;
+    let meta = std::fs::symlink_metadata(src)
+        .map_err(|e| anyhow::anyhow!("stat moved source {}: {}", src.display(), e))?;
+    if meta.is_dir() {
+        std::fs::remove_dir_all(src)?;
+    } else {
+        std::fs::remove_file(src)?;
+    }
+    Ok(())
+}
+
+/// Collect the planned (src, dst) moves for a given source layout + dest.
+fn plan_moves(sources: &MigrateSources, dest: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
+    if sources.registry.exists() {
+        moves.push((sources.registry.clone(), dest.join("config.toml")));
+    }
+    if sources.overrides.exists() {
+        moves.push((sources.overrides.clone(), dest.join("overrides.toml")));
+    }
+    if sources.secrets.exists() {
+        moves.push((sources.secrets.clone(), dest.join("secrets").join(".env.local.enc")));
+    }
+    if sources.repos_root.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&sources.repos_root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let p = entry.path();
+                moves.push((p, dest.join("repos").join(name)));
+            }
+        }
+    }
+    if sources.sources_root.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&sources.sources_root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let p = entry.path();
+                moves.push((p, dest.join("sources").join(name)));
+            }
+        }
+    }
+    if sources.state_root.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&sources.state_root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let p = entry.path();
+                moves.push((p, dest.join("state").join(name)));
+            }
+        }
+    }
+    moves
+}
+
+/// Auto-detect the source layout when `--from` is omitted.
+///
+/// Prefers "bundle" when a `.workestrate/config/workestrate/config.toml` exists
+/// in the cwd, otherwise treats the source as the legacy XDG layout.
+fn detect_layout() -> &'static str {
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd
+            .join(".workestrate")
+            .join("config")
+            .join("workestrate")
+            .join("config.toml")
+            .exists()
+        {
+            return "bundle";
+        }
+    }
+    "xdg"
+}
+
+/// Run a `workestrate migrate-home` consolidation into a single home (ADR 0023).
+///
+/// `from` is `"xdg"`, `"bundle"`, or `None` (auto-detect). `dest` is the
+/// destination single-home dir. In dry-run mode nothing is moved; the returned
+/// [`MigrateSummary`] lists the planned moves. On a real run the registry at
+/// `dest/config.toml` has `store_dir`/`state_dir` cleared and `home_version`
+/// set to `Some(2)`.
+pub(crate) fn run_migrate_home(
+    from: Option<&str>,
+    dest: &Path,
+    dry_run: bool,
+    force: bool,
+) -> Result<MigrateSummary> {
+    let layout: &str = match from {
+        Some(s) => s,
+        None => detect_layout(),
+    };
+    let sources = resolve_migrate_sources(layout, dest)?;
+    let planned = plan_moves(&sources, dest);
+
+    if dry_run {
+        let moved = planned
+            .iter()
+            .map(|(src, dst)| MovedEntry {
+                src: src.display().to_string(),
+                dst: dst.display().to_string(),
+            })
+            .collect();
+        return Ok(MigrateSummary {
+            from: layout.to_string(),
+            dest: dest.display().to_string(),
+            dry_run: true,
+            moved,
+            registry_updated: false,
+            home_version: None,
+        });
+    }
+
+    // Refuse to clobber an existing home unless --force.
+    if dest.join("config.toml").exists() && !force {
+        anyhow::bail!(
+            "destination {} already contains config.toml; pass --force to overwrite",
+            dest.display()
+        );
+    }
+
+    std::fs::create_dir_all(dest)?;
+    std::fs::create_dir_all(dest.join("secrets"))?;
+    std::fs::create_dir_all(dest.join("state"))?;
+    std::fs::create_dir_all(dest.join("repos"))?;
+    std::fs::create_dir_all(dest.join("sources"))?;
+
+    let mut moved: Vec<MovedEntry> = Vec::new();
+    for (src, dst) in &planned {
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        move_entry(src, dst)?;
+        moved.push(MovedEntry {
+            src: src.display().to_string(),
+            dst: dst.display().to_string(),
+        });
+    }
+
+    // Update the relocated registry: drop store_dir/state_dir (derivation from
+    // the new home takes over) and stamp home_version = 2.
+    let mut registry_updated = false;
+    let mut home_version = None;
+    let reg_path = dest.join("config.toml");
+    if reg_path.exists() {
+        if let Some(mut reg) = std::fs::read_to_string(&reg_path)
+            .ok()
+            .and_then(|c| toml::from_str::<Registry>(&c).ok())
+        {
+            reg.settings.store_dir = None;
+            reg.settings.state_dir = None;
+            reg.settings.home_version = Some(2);
+            let toml_str = toml::to_string_pretty(&reg)
+                .map_err(|e| anyhow::anyhow!("failed to serialize migrated registry: {}", e))?;
+            std::fs::write(&reg_path, toml_str)?;
+            registry_updated = true;
+            home_version = Some(2);
+        }
+    }
+
+    // Best-effort cleanup of now-empty old subtrees (bundle in-place).
+    for dir in &sources.cleanup_dirs {
+        if dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(dir) {
+                eprintln!(
+                    "warning: could not remove old subtree {}: {}",
+                    dir.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    Ok(MigrateSummary {
+        from: layout.to_string(),
+        dest: dest.display().to_string(),
+        dry_run: false,
+        moved,
+        registry_updated,
+        home_version,
+    })
+}
+
 /// Load the active `workestrate.toml`.
 ///
 /// Resolution order (lowest to highest precedence):
