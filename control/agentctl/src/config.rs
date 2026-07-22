@@ -351,6 +351,22 @@ fn emit_legacy_xdg_note() {
     });
 }
 
+/// One-time stderr warning when an untrusted `.workestrate/config.toml` is found
+/// during discovery. `resolve_home_with_kind` is called many times per command
+/// (cmd_check, registry_path, store/state resolution, ...); without this guard
+/// the warning would print once per call.
+static DISCOVERY_WARN: std::sync::Once = std::sync::Once::new();
+
+fn emit_untrusted_discovery_warn(dir: &Path) {
+    DISCOVERY_WARN.call_once(|| {
+        eprintln!(
+            ".workestrate/config.toml found in {} but it is not a trusted project; \
+             ignoring (run 'workestrate config trust <dir>' to trust it)",
+            dir.display()
+        );
+    });
+}
+
 fn xdg_var_set(name: &str) -> bool {
     std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false)
 }
@@ -451,12 +467,8 @@ pub fn resolve_home_with_kind() -> (PathBuf, HomeKind) {
                     if is_dir_trusted_via_base_registry(dir) {
                         return (dir.join(".workestrate"), HomeKind::Discovered);
                     }
-                    // Untrusted: warn, STOP walking, fall through to (c)/(d).
-                    eprintln!(
-                        ".workestrate/config.toml found in {} but it is not a trusted project; \
-                         ignoring (run 'workestrate config trust <dir>' to trust it)",
-                        dir.display()
-                    );
+                    // Untrusted: warn (once per process), STOP walking, fall through.
+                    emit_untrusted_discovery_warn(dir);
                     break;
                 }
                 match dir.parent() {
@@ -1170,7 +1182,7 @@ fn copy_entry_recursive(src: &Path, dst: &Path) -> Result<()> {
         #[cfg(unix)]
         {
             let _ = std::os::unix::fs::symlink(&target, dst);
-            if !dst.exists() && !std::fs::symlink_metadata(dst).is_ok() {
+            if !dst.exists() && std::fs::symlink_metadata(dst).is_err() {
                 std::fs::copy(src, dst)?;
             }
         }
