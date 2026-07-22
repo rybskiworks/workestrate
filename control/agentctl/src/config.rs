@@ -323,6 +323,152 @@ pub struct ConfigFile {
 }
 
 // ---------------------------------------------------------------------------
+// Tool home resolution (ADR 0023 single-home layout)
+// ---------------------------------------------------------------------------
+
+/// How the workestrate tool home was resolved (ADR 0023 single-home layout).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeKind {
+    /// `WORKESTRATE_HOME` env var — new single-home layout.
+    Env,
+    /// Auto-discovered `.workestrate/config.toml` inside a trusted project — new layout.
+    Discovered,
+    /// Legacy XDG layout (`XDG_*_HOME` set) — compatibility, read/write as before.
+    LegacyXdg,
+    /// Default `~/.workestrate` — new single-home layout.
+    Default,
+}
+
+/// One-time stderr migration note for the legacy XDG layout.
+static LEGACY_NOTE: std::sync::Once = std::sync::Once::new();
+
+fn emit_legacy_xdg_note() {
+    LEGACY_NOTE.call_once(|| {
+        eprintln!(
+            "note: using legacy XDG workestrate layout; run 'workestrate migrate-home' to \
+             consolidate into a single WORKESTRATE_HOME"
+        );
+    });
+}
+
+fn xdg_var_set(name: &str) -> bool {
+    std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false)
+}
+
+/// Base home resolution WITHOUT discovery (Env/LegacyXdg/Default only).
+///
+/// Used by the discovery trust-check ([`is_dir_trusted_via_base_registry`]) so
+/// that loading the global trust registry cannot recurse back into discovery.
+fn resolve_home_base_with_kind() -> (PathBuf, HomeKind) {
+    // (a) Env: WORKESTRATE_HOME
+    if let Ok(value) = std::env::var("WORKESTRATE_HOME") {
+        if !value.is_empty() {
+            return (expand_tilde(&value), HomeKind::Env);
+        }
+    }
+    // (c) Legacy XDG
+    if xdg_var_set("XDG_CONFIG_HOME") || xdg_var_set("XDG_DATA_HOME") || xdg_var_set("XDG_STATE_HOME")
+    {
+        return (xdg_config_dir(), HomeKind::LegacyXdg);
+    }
+    // (d) Default
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    (PathBuf::from(home).join(".workestrate"), HomeKind::Default)
+}
+
+/// The registry path computed from the *base* resolution (no discovery).
+///
+/// Location of the global trust list, independent of any discovered project
+/// home — so a hostile `.workestrate/` cannot self-trust.
+fn base_registry_path() -> PathBuf {
+    let (home, kind) = resolve_home_base_with_kind();
+    match kind {
+        HomeKind::LegacyXdg => xdg_config_dir().join("config.toml"),
+        _ => home.join("config.toml"),
+    }
+}
+
+/// Trust-check used ONLY inside discovery; reads the base registry directly to
+/// avoid recursing through [`registry_path`] → [`resolve_home_with_kind`].
+fn is_dir_trusted_via_base_registry(dir: &Path) -> bool {
+    let path = base_registry_path();
+    if !path.exists() {
+        return false;
+    }
+    let reg = match std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| toml::from_str::<Registry>(&c).ok())
+    {
+        Some(reg) => reg,
+        None => return false,
+    };
+    let canonical_dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    reg.trusted_projects.iter().any(|p| {
+        let expanded = expand_tilde(&p.path);
+        let canonical_p = std::fs::canonicalize(&expanded)
+            .or_else(|_| std::fs::canonicalize(&p.path))
+            .unwrap_or_else(|_| expanded.clone());
+        canonical_p == canonical_dir || expanded == dir || Path::new(&p.path) == dir
+    })
+}
+
+/// Resolve the workestrate tool home and how it was chosen (ADR 0023).
+///
+/// Precedence (first match wins):
+/// 1. **Env** — `WORKESTRATE_HOME` (used verbatim, leading `~/` expanded).
+/// 2. **Discovered** — a `.workestrate/config.toml` in a *trusted* ancestor of
+///    the cwd. An untrusted discovery prints a one-time warning and *stops*
+///    walking (does not keep looking higher), then falls through.
+/// 3. **LegacyXdg** — any of `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`
+///    set and non-empty (compatibility; emits a one-time migration note).
+/// 4. **Default** — `~/.workestrate`.
+pub fn resolve_home_with_kind() -> (PathBuf, HomeKind) {
+    // (a) Env
+    if let Ok(value) = std::env::var("WORKESTRATE_HOME") {
+        if !value.is_empty() {
+            return (expand_tilde(&value), HomeKind::Env);
+        }
+    }
+    // (b) Discovery: walk up from cwd for .workestrate/config.toml.
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut dir: &Path = &cwd;
+        loop {
+            let candidate = dir.join(".workestrate").join("config.toml");
+            if candidate.exists() {
+                if is_dir_trusted_via_base_registry(dir) {
+                    return (dir.join(".workestrate"), HomeKind::Discovered);
+                }
+                // Untrusted: warn, STOP walking, fall through to (c)/(d).
+                eprintln!(
+                    ".workestrate/config.toml found in {} but it is not a trusted project; \
+                     ignoring (run 'workestrate config trust <dir>' to trust it)",
+                    dir.display()
+                );
+                break;
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+    }
+    // (c) Legacy XDG
+    if xdg_var_set("XDG_CONFIG_HOME") || xdg_var_set("XDG_DATA_HOME") || xdg_var_set("XDG_STATE_HOME")
+    {
+        emit_legacy_xdg_note();
+        return (xdg_config_dir(), HomeKind::LegacyXdg);
+    }
+    // (d) Default
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    (PathBuf::from(home).join(".workestrate"), HomeKind::Default)
+}
+
+/// Resolve the workestrate tool home (ADR 0023).
+pub fn resolve_home() -> PathBuf {
+    resolve_home_with_kind().0
+}
+
+// ---------------------------------------------------------------------------
 // XDG path resolution
 // ---------------------------------------------------------------------------
 
@@ -359,14 +505,25 @@ pub fn xdg_state_dir() -> PathBuf {
     base.join("workestrate")
 }
 
-/// Registry path: ~/.config/workestrate/config.toml
+/// Registry path: the active tool home's `config.toml`.
+///
+/// In legacy XDG mode this is `$XDG_CONFIG_HOME/workestrate/config.toml`
+/// (unchanged from pre-ADR-0023); in every other mode it is `<home>/config.toml`.
 pub fn registry_path() -> PathBuf {
-    xdg_config_dir().join("config.toml")
+    let (home, kind) = resolve_home_with_kind();
+    match kind {
+        HomeKind::LegacyXdg => xdg_config_dir().join("config.toml"),
+        _ => home.join("config.toml"),
+    }
 }
 
-/// Overrides path: $XDG_CONFIG_HOME/workestrate/overrides.toml
+/// Overrides path: the active tool home's `overrides.toml`.
 pub fn overrides_path() -> PathBuf {
-    xdg_config_dir().join("overrides.toml")
+    let (home, kind) = resolve_home_with_kind();
+    match kind {
+        HomeKind::LegacyXdg => xdg_config_dir().join("overrides.toml"),
+        _ => home.join("overrides.toml"),
+    }
 }
 
 /// Config repo store: resolve_store_dir()/repos/<name>/
@@ -388,6 +545,12 @@ pub struct RegistrySettings {
     pub default_context: Option<String>,
     pub store_dir: Option<String>,
     pub state_dir: Option<String>,
+    /// Layout version of the tool home. Absent ⇒ 1 (legacy XDG-derived layout).
+    /// Set to 2 by `workestrate migrate-home` after consolidating into a single
+    /// `WORKESTRATE_HOME` (ADR 0023). Purely informational/forward-compat: the
+    /// [`HomeKind`] resolution already determines the active layout.
+    #[serde(default)]
+    pub home_version: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -786,7 +949,11 @@ pub fn resolve_state_dir() -> PathBuf {
             return expand_tilde(state_dir);
         }
     }
-    xdg_state_dir()
+    let (home, kind) = resolve_home_with_kind();
+    match kind {
+        HomeKind::LegacyXdg => xdg_state_dir(),
+        _ => home.join("state"),
+    }
 }
 
 pub fn resolve_store_dir() -> PathBuf {
@@ -795,7 +962,11 @@ pub fn resolve_store_dir() -> PathBuf {
             return expand_tilde(store_dir);
         }
     }
-    xdg_data_dir()
+    let (home, kind) = resolve_home_with_kind();
+    match kind {
+        HomeKind::LegacyXdg => xdg_data_dir(),
+        _ => home,
+    }
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
@@ -1131,12 +1302,17 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
         }
     }
 
-    // 4. User-global secrets layer (.env.local.enc in XDG config dir).
-    // Applied per-key AFTER the context's domain layers, BEFORE project layers.
-    // Optional — missing file is handled gracefully by decrypt_layer().
+    // 4. User-global secrets layer (.env.local.enc in the active tool home's
+    // secrets dir). Applied per-key AFTER the context's domain layers, BEFORE
+    // project layers. Optional — missing file is handled gracefully by decrypt_layer().
+    let (home, kind) = resolve_home_with_kind();
+    let global_dir = match kind {
+        HomeKind::LegacyXdg => xdg_config_dir(),
+        _ => home.join("secrets"),
+    };
     layers.push(SecretsLayer {
         name: "user-global".to_string(),
-        dir: xdg_config_dir(),
+        dir: global_dir,
         secrets_file: ".env.local.enc".to_string(),
         age_key_file: None, // uses SOPS_AGE_KEY_FILE env or default
         skip: false,
