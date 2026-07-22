@@ -23,12 +23,25 @@
       url = "github:georgrybski/T3MP3ST";
       flake = false;
     };
+
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, pi, odysseus, opencode, tempest, ... }:
+  outputs = { self, nixpkgs, pi, odysseus, opencode, tempest, fenix, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+
+      # Pinned Rust toolchain via fenix. Both the dev shell and the nix build
+      # (agentctl.nix) consume this so they always agree on the exact rustc.
+      # fenix.stable tracks the latest stable at the fenix input revision pinned
+      # in flake.lock — currently rustc 1.97.1 (manifest 2026-07-16).
+      # The major.minor is echoed below for `just toolchain-check` to parse.
+      # RUST_TOOLCHAIN_VERSION = "1.97"
+      rustToolchain = fenix.packages.${system}.stable;
 
       # Config library: reads the tracked reference config from config.reference/
       referenceConfig = import ./nix/lib/config.nix {};
@@ -114,7 +127,7 @@
       microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {};
       microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix {};
       workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
-        inherit microsandbox microsandbox-filesystem-patched;
+        inherit microsandbox microsandbox-filesystem-patched rustToolchain;
       };
 
       # Hermetic nix build of the pi agent monorepo (runtime tree mounted at /app).
@@ -295,7 +308,7 @@
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
         inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped decrypt-env write-env setup-secrets load-images
-          odysseus opencode pi-bun-built tempest referenceConfig;
+          odysseus opencode pi-bun-built tempest referenceConfig rustToolchain;
         # devshell populates agents/pi/repo from the canonical remote fork.
         pi = pi;
         imageNames = builtins.attrNames workload-images;

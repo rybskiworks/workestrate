@@ -4,6 +4,33 @@
 # that invoke cargo inherit this env automatically.
 export CARGO_TARGET_DIR := `echo "${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
 
+# Verify the host rustc major.minor matches the fenix-pinned toolchain.
+# Parses the RUST_TOOLCHAIN_VERSION marker from flake.nix (not hardcoded
+# here) so the check stays in sync with the flake input automatically.
+# Wired into `verify` as the FIRST gate — a toolchain mismatch invalidates
+# all downstream cargo results.
+toolchain-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    expected=$(grep -oP 'RUST_TOOLCHAIN_VERSION = "\K[^"]+' flake.nix)
+    if [ -z "$expected" ]; then
+        echo "ERROR: could not parse RUST_TOOLCHAIN_VERSION from flake.nix" >&2
+        exit 1
+    fi
+    actual=$(rustc --version 2>/dev/null | grep -oP 'rustc \K[0-9]+\.[0-9]+' || true)
+    if [ -z "$actual" ]; then
+        echo "ERROR: rustc not found on PATH" >&2
+        exit 1
+    fi
+    echo "expected (flake.nix): rustc $expected.x"
+    echo "actual (host):         rustc $actual"
+    if [ "$actual" != "$expected" ]; then
+        echo "FAIL: rustc major.minor mismatch — expected $expected, got $actual" >&2
+        echo "Run 'nix develop' to enter the pinned toolchain shell." >&2
+        exit 1
+    fi
+    echo "OK: rustc $actual matches pinned toolchain"
+
 check:
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
@@ -41,7 +68,7 @@ spec-examples:
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # config validation, golden-check, schema drift, lock-file stability, AND
 # nix-purity lint.
-verify: check test spec-examples litellm-check golden-check schema-check scaffold-check lint-nix store-audit
+verify: toolchain-check check test spec-examples litellm-check golden-check schema-check scaffold-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build

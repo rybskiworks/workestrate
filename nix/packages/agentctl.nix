@@ -1,6 +1,7 @@
 { pkgs
 , microsandbox
 , microsandbox-filesystem-patched
+, rustToolchain
 }:
 
 let
@@ -22,8 +23,15 @@ let
             && pkgs.lib.hasSuffix "/.cargo/config.toml" path));
     src = ../../control/agentctl;
   };
+
+  # Use the fenix-pinned toolchain so nix builds and the dev shell agree on
+  # the exact rustc version (currently 1.97.1).
+  rustPlatform = pkgs.makeRustPlatform {
+    rustc = rustToolchain.rustc;
+    cargo = rustToolchain.cargo;
+  };
 in
-(pkgs.rustPlatform.buildRustPackage {
+(rustPlatform.buildRustPackage {
   pname = "workestrate";
   version = "0.1.0";
 

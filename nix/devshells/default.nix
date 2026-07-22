@@ -2,6 +2,7 @@
 , microsandbox
 , microsandbox-filesystem-patched
 , workestrate
+, rustToolchain
 , msb-wrapped
 , decrypt-env
 , write-env
@@ -48,8 +49,8 @@ pkgs.mkShell {
   packages = with pkgs; [
     age
     workestrate
-    cargo
-    clippy
+    rustToolchain.cargo
+    rustToolchain.clippy
     curl
     decrypt-env
     gcc
@@ -65,9 +66,9 @@ pkgs.mkShell {
     pkg-config
     (python3.withPackages (p: [ p.pip ]))
     (python312.withPackages (ps: [ ps.pip ps."pip-tools" ]))
-    rustc
-    rust-analyzer
-    rustfmt
+    rustToolchain.rustc
+    rustToolchain.rust-analyzer
+    rustToolchain.rustfmt
     sops
     write-env
     setup-secrets
