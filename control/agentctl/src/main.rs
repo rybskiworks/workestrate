@@ -2546,6 +2546,7 @@ mod tests {
             "odysseus",
             "opencode",
             "tempest",
+            "migrate-home",
         ] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
         }

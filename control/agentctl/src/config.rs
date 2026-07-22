@@ -367,7 +367,9 @@ fn resolve_home_base_with_kind() -> (PathBuf, HomeKind) {
         }
     }
     // (c) Legacy XDG
-    if xdg_var_set("XDG_CONFIG_HOME") || xdg_var_set("XDG_DATA_HOME") || xdg_var_set("XDG_STATE_HOME")
+    if xdg_var_set("XDG_CONFIG_HOME")
+        || xdg_var_set("XDG_DATA_HOME")
+        || xdg_var_set("XDG_STATE_HOME")
     {
         return (xdg_config_dir(), HomeKind::LegacyXdg);
     }
@@ -453,7 +455,9 @@ pub fn resolve_home_with_kind() -> (PathBuf, HomeKind) {
         }
     }
     // (c) Legacy XDG
-    if xdg_var_set("XDG_CONFIG_HOME") || xdg_var_set("XDG_DATA_HOME") || xdg_var_set("XDG_STATE_HOME")
+    if xdg_var_set("XDG_CONFIG_HOME")
+        || xdg_var_set("XDG_DATA_HOME")
+        || xdg_var_set("XDG_STATE_HOME")
     {
         emit_legacy_xdg_note();
         return (xdg_config_dir(), HomeKind::LegacyXdg);
@@ -1116,10 +1120,16 @@ fn resolve_migrate_sources(from: &str, dest: &Path) -> Result<MigrateSources> {
                 repos_root: dest.join("data").join("workestrate").join("repos"),
                 sources_root: dest.join("data").join("workestrate").join("sources"),
                 state_root: dest.join("state").join("workestrate"),
+                // NOTE: dest/state is BOTH the old state subtree's parent and
+                // the NEW state destination (new layout moves files INTO
+                // dest/state). So we clean up only the old `state/workestrate`
+                // subdir, never `dest/state` itself, to avoid nuking the
+                // just-moved state. dest/config and dest/data have no new
+                // layout files under them and can be removed wholesale.
                 cleanup_dirs: vec![
                     dest.join("config"),
                     dest.join("data"),
-                    dest.join("state"),
+                    dest.join("state").join("workestrate"),
                 ],
             })
         }
@@ -1186,7 +1196,10 @@ fn plan_moves(sources: &MigrateSources, dest: &Path) -> Vec<(PathBuf, PathBuf)> 
         moves.push((sources.overrides.clone(), dest.join("overrides.toml")));
     }
     if sources.secrets.exists() {
-        moves.push((sources.secrets.clone(), dest.join("secrets").join(".env.local.enc")));
+        moves.push((
+            sources.secrets.clone(),
+            dest.join("secrets").join(".env.local.enc"),
+        ));
     }
     if sources.repos_root.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&sources.repos_root) {
@@ -2889,6 +2902,408 @@ pub(crate) mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    // ---- ADR 0023: resolve_home + migrate-home coverage ----
+
+    /// Snapshot env vars (+ cwd) and restore them on drop, even on panic.
+    /// Mirrors the manual save/restore in older tests but panic-safe.
+    struct EnvGuard {
+        vars: Vec<(&'static str, Option<String>)>,
+        cwd: Option<PathBuf>,
+    }
+    impl EnvGuard {
+        fn capture(keys: &'static [&'static str]) -> Self {
+            let vars = keys.iter().map(|&k| (k, std::env::var(k).ok())).collect();
+            EnvGuard {
+                vars,
+                cwd: std::env::current_dir().ok(),
+            }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.vars {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+            if let Some(cwd) = &self.cwd {
+                let _ = std::env::set_current_dir(cwd);
+            }
+        }
+    }
+
+    const HOME_ENV_KEYS: &[&str] = &[
+        "WORKESTRATE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "WORKESTRATE_CONFIG_DIR",
+        "WORKESTRATE_NO_PROJECT_CONFIG",
+        "HOME",
+    ];
+
+    fn uniq_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "workestrate-{}-{}-{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ))
+    }
+
+    #[test]
+    fn resolve_home_env_wins() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let env_home = uniq_dir("rh-env");
+        let xdg = uniq_dir("rh-env-xdg");
+        std::fs::create_dir_all(&env_home)?;
+        std::env::set_var("HOME", &env_home);
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        std::env::set_var("WORKESTRATE_HOME", &env_home);
+
+        let (home, kind) = resolve_home_with_kind();
+        assert_eq!(kind, HomeKind::Env, "WORKESTRATE_HOME must win over XDG");
+        assert_eq!(home, env_home);
+
+        let _ = std::fs::remove_dir_all(&env_home);
+        let _ = std::fs::remove_dir_all(&xdg);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_home_discovery_trusted() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let base_home = uniq_dir("rh-disc-base");
+        let project = uniq_dir("rh-disc-proj");
+        std::fs::create_dir_all(base_home.join(".workestrate"))?;
+        std::fs::create_dir_all(project.join(".workestrate"))?;
+
+        // Seed a project-local config.toml so discovery notices it.
+        std::fs::write(
+            project.join(".workestrate").join("config.toml"),
+            "layers = []\n",
+        )?;
+
+        // Trust list lives in the Default base registry (<HOME>/.workestrate).
+        let canonical_project = std::fs::canonicalize(&project)?;
+        let trust_toml = format!(
+            "[[trusted_projects]]\npath = \"{}\"\n",
+            canonical_project.display()
+        );
+        std::fs::write(
+            base_home.join(".workestrate").join("config.toml"),
+            trust_toml,
+        )?;
+
+        std::env::set_var("HOME", &base_home);
+        std::env::set_current_dir(&project)?;
+
+        let (home, kind) = resolve_home_with_kind();
+        assert_eq!(kind, HomeKind::Discovered);
+        assert_eq!(home, project.join(".workestrate"));
+
+        let _ = std::fs::remove_dir_all(&base_home);
+        let _ = std::fs::remove_dir_all(&project);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_home_discovery_untrusted_ignored() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let base_home = uniq_dir("rh-untr-base");
+        let project = uniq_dir("rh-untr-proj");
+        std::fs::create_dir_all(base_home.join(".workestrate"))?;
+        std::fs::create_dir_all(project.join(".workestrate"))?;
+        std::fs::write(
+            project.join(".workestrate").join("config.toml"),
+            "layers = []\n",
+        )?;
+        // Base registry exists but does NOT trust the project.
+        std::fs::write(
+            base_home.join(".workestrate").join("config.toml"),
+            "[[trusted_projects]]\npath = \"/some/other/dir\"\n",
+        )?;
+
+        std::env::set_var("HOME", &base_home);
+        std::env::set_current_dir(&project)?;
+
+        let (home, kind) = resolve_home_with_kind();
+        assert_ne!(
+            kind,
+            HomeKind::Discovered,
+            "untrusted .workestrate must be ignored"
+        );
+        // Fell through to Default (<HOME>/.workestrate).
+        assert_eq!(kind, HomeKind::Default);
+        assert_eq!(home, base_home.join(".workestrate"));
+
+        let _ = std::fs::remove_dir_all(&base_home);
+        let _ = std::fs::remove_dir_all(&project);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_home_legacy_xdg_when_xdg_set() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let xdg = uniq_dir("rh-xdg");
+        let home = uniq_dir("rh-xdg-home");
+        std::fs::create_dir_all(&xdg)?;
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+
+        let (resolved, kind) = resolve_home_with_kind();
+        assert_eq!(kind, HomeKind::LegacyXdg);
+        assert_eq!(resolved, xdg.join("workestrate"));
+
+        let _ = std::fs::remove_dir_all(&xdg);
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_home_default_when_nothing_set() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let home = uniq_dir("rh-default-home");
+        std::fs::create_dir_all(&home)?;
+        std::env::set_var("HOME", &home);
+
+        let (resolved, kind) = resolve_home_with_kind();
+        assert_eq!(kind, HomeKind::Default);
+        assert_eq!(resolved, home.join(".workestrate"));
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Build a full legacy XDG layout under `root` and return the computed
+    /// xdg config/data/state dirs. Pins XDG_*_HOME env vars.
+    fn build_xdg_layout(root: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {
+        std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
+        std::env::set_var("XDG_DATA_HOME", root.join("xdg-data"));
+        std::env::set_var("XDG_STATE_HOME", root.join("xdg-state"));
+        std::env::set_var("HOME", root.join("home"));
+
+        let xcfg = xdg_config_dir();
+        let xdata = xdg_data_dir();
+        let xstate = xdg_state_dir();
+        std::fs::create_dir_all(&xcfg)?;
+        std::fs::write(
+            xcfg.join("config.toml"),
+            "[settings]\nstore_dir = \"/old/store\"\n",
+        )?;
+        std::fs::write(xcfg.join("overrides.toml"), "[global]\n")?;
+        std::fs::write(xcfg.join(".env.local.enc"), "ENCRYPTED-BYTES")?;
+
+        std::fs::create_dir_all(xdata.join("repos").join("personal"))?;
+        std::fs::write(
+            xdata.join("repos").join("personal").join("file.txt"),
+            "repo-data",
+        )?;
+        std::fs::create_dir_all(xdata.join("sources").join("foo"))?;
+        std::fs::write(xdata.join("sources").join("foo").join("f.txt"), "src-data")?;
+
+        std::fs::create_dir_all(xstate.join("workspaces"))?;
+        std::fs::write(xstate.join("workspaces").join("ws.txt"), "ws-data")?;
+        Ok((xcfg, xdata, xstate))
+    }
+
+    #[test]
+    fn migrate_home_dry_run_xdg() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = uniq_dir("mig-dry");
+        std::fs::create_dir_all(&root)?;
+        let (xcfg, xdata, xstate) = build_xdg_layout(&root)?;
+        let dest = root.join("dest");
+
+        let summary = run_migrate_home(Some("xdg"), &dest, true, false)?;
+        assert!(summary.dry_run);
+        assert!(!summary.registry_updated);
+        assert!(summary.moved.iter().any(|m| m.dst.ends_with("config.toml")));
+        assert!(summary
+            .moved
+            .iter()
+            .any(|m| m.dst.ends_with("overrides.toml")));
+        assert!(summary
+            .moved
+            .iter()
+            .any(|m| m.dst.ends_with(".env.local.enc")));
+        assert!(summary
+            .moved
+            .iter()
+            .any(|m| m.dst.ends_with("repos/personal")));
+        assert!(summary.moved.iter().any(|m| m.dst.ends_with("sources/foo")));
+        assert!(summary
+            .moved
+            .iter()
+            .any(|m| m.dst.ends_with("state/workspaces")));
+
+        // Dry-run must touch nothing.
+        assert!(xcfg.join("config.toml").exists());
+        assert!(xdata
+            .join("repos")
+            .join("personal")
+            .join("file.txt")
+            .exists());
+        assert!(xstate.join("workspaces").join("ws.txt").exists());
+        assert!(!dest.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_home_real_move_xdg() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = uniq_dir("mig-real");
+        std::fs::create_dir_all(&root)?;
+        let (xcfg, xdata, _xstate) = build_xdg_layout(&root)?;
+        let dest = root.join("dest");
+
+        let summary = run_migrate_home(Some("xdg"), &dest, false, false)?;
+        assert!(!summary.dry_run);
+        assert!(summary.registry_updated);
+        assert_eq!(summary.home_version, Some(2));
+
+        // New single-home layout.
+        assert!(dest.join("config.toml").exists());
+        assert!(dest.join("overrides.toml").exists());
+        assert!(dest.join("secrets").join(".env.local.enc").exists());
+        assert!(dest
+            .join("repos")
+            .join("personal")
+            .join("file.txt")
+            .exists());
+        assert!(dest.join("sources").join("foo").join("f.txt").exists());
+        assert!(dest
+            .join("state")
+            .join("workspaces")
+            .join("ws.txt")
+            .exists());
+
+        // Registry consolidated: store_dir cleared, home_version stamped.
+        let reg: Registry = toml::from_str(&std::fs::read_to_string(dest.join("config.toml"))?)?;
+        assert_eq!(reg.settings.store_dir, None);
+        assert_eq!(reg.settings.state_dir, None);
+        assert_eq!(reg.settings.home_version, Some(2));
+
+        // Old sources moved away.
+        assert!(!xcfg.join("config.toml").exists());
+        assert!(!xcfg.join(".env.local.enc").exists());
+        assert!(!xdata
+            .join("repos")
+            .join("personal")
+            .join("file.txt")
+            .exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_home_bundle_inplace() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = uniq_dir("mig-bundle");
+        let dest = root.join(".workestrate");
+        // Old bundle triplication under dest/{config,data,state}/workestrate.
+        let bcfg = dest.join("config").join("workestrate");
+        let bdata = dest.join("data").join("workestrate");
+        let bstate = dest.join("state").join("workestrate");
+        std::fs::create_dir_all(&bcfg)?;
+        std::fs::write(
+            bcfg.join("config.toml"),
+            "[settings]\nstore_dir = \"/old\"\n",
+        )?;
+        std::fs::write(bcfg.join("overrides.toml"), "[global]\n")?;
+        std::fs::write(bcfg.join(".env.local.enc"), "ENC")?;
+        std::fs::create_dir_all(bdata.join("repos").join("personal"))?;
+        std::fs::write(
+            bdata.join("repos").join("personal").join("file.txt"),
+            "repo",
+        )?;
+        std::fs::create_dir_all(bdata.join("sources").join("foo"))?;
+        std::fs::write(bdata.join("sources").join("foo").join("f.txt"), "src")?;
+        std::fs::create_dir_all(bstate.join("workspaces"))?;
+        std::fs::write(bstate.join("workspaces").join("ws.txt"), "ws")?;
+
+        let summary = run_migrate_home(Some("bundle"), &dest, false, false)?;
+        assert!(summary.registry_updated);
+        assert_eq!(summary.from, "bundle");
+
+        // New single-home layout under dest.
+        assert!(dest.join("config.toml").exists());
+        assert!(dest.join("secrets").join(".env.local.enc").exists());
+        assert!(dest
+            .join("repos")
+            .join("personal")
+            .join("file.txt")
+            .exists());
+        assert!(dest.join("sources").join("foo").join("f.txt").exists());
+        // State: old state/workestrate moved INTO dest/state (overlap case).
+        assert!(dest
+            .join("state")
+            .join("workspaces")
+            .join("ws.txt")
+            .exists());
+
+        // Old subtrees removed; dest/state (new) survives.
+        assert!(!dest.join("config").exists());
+        assert!(!dest.join("data").exists());
+        assert!(!dest.join("state").join("workestrate").exists());
+        assert!(dest.join("state").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn home_version_defaults_to_absent() -> Result<()> {
+        let toml_no_version = "[settings]\ndefault_context = \"personal\"\n";
+        let reg: Registry = toml::from_str(toml_no_version)?;
+        assert_eq!(reg.settings.home_version, None);
+        // Round-trip preserves absence.
+        let round = toml::to_string(&reg)?;
+        let reg2: Registry = toml::from_str(&round)?;
+        assert_eq!(reg2.settings.home_version, None);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_xdg_registry_path_compat() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let xdg = uniq_dir("rh-compat");
+        std::fs::create_dir_all(&xdg)?;
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+
+        // Backward-compat guarantee: existing XDG-pinned callers see the
+        // same registry path as before ADR 0023.
+        assert_eq!(registry_path(), xdg.join("workestrate").join("config.toml"));
+
+        let _ = std::fs::remove_dir_all(&xdg);
         Ok(())
     }
 }
