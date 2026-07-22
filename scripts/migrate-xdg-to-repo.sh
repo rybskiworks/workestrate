@@ -1,9 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ============================================================================
+# SUPERSEDED (ADR 0023): this shell migration is kept for history only.
+# Use the native, in-process migration instead:
+#
+#     workestrate migrate-home --from xdg   # or --from bundle
+#     workestrate migrate-home --dry-run --json
+#
+# `workestrate migrate-home` consolidates the legacy XDG (or bundled
+# .workestrate/{config,data,state}/workestrate/) layout into the single
+# WORKESTRATE_HOME, rewrites config-repo urls, clears store_dir/state_dir,
+# and stamps home_version = 2. It is cross-platform and tested; this script
+# is not. Do not run it for new migrations.
+# ============================================================================
+
+# --- legacy script body below (deprecated) ----------------------------------
 # Migrate workestrate XDG state from container $HOME into repo-local .workestrate/
 # Run this from the repo root: bash scripts/migrate-xdg-to-repo.sh
-
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="$REPO_ROOT/.workestrate"
 
