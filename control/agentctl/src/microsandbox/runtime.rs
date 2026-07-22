@@ -459,13 +459,13 @@ pub(crate) async fn run_service_foreground(
     let mut exec_handle = sandbox
         .exec_stream(&config.command.binary, config.command.arguments)
         .await
-        .map_err(|e| anyhow::anyhow!("failed to start {} process: {}", &config.service_label, e))?;
+        .map_err(|e| anyhow::anyhow!("failed to start {} process: {}", config.service_label, e))?;
 
     match exec_handle.recv().await {
         Some(ExecEvent::Started { pid }) => {
             eprintln!(
                 "{} process started (guest PID {})",
-                &config.service_label, pid
+                config.service_label, pid
             );
         }
         Some(ExecEvent::Failed(err)) => {
@@ -474,7 +474,7 @@ pub(crate) async fn run_service_foreground(
             }
             return Err(anyhow::anyhow!(
                 "{} process failed to start: {:?}",
-                &config.service_label,
+                config.service_label,
                 err
             ));
         }
@@ -487,7 +487,7 @@ pub(crate) async fn run_service_foreground(
             }
             return Err(anyhow::anyhow!(
                 "unexpected exec event waiting for {} start: {:?}",
-                &config.service_label,
+                config.service_label,
                 other
             ));
         }
@@ -521,7 +521,7 @@ pub(crate) async fn run_service_foreground(
 
     println!(
         "Sandbox '{}' started (Ctrl-C to stop)",
-        &config.sandbox_name
+        config.sandbox_name
     );
     if let Err(e) = tokio::signal::ctrl_c().await {
         // Even if the signal handler fails, attempt to stop the sandbox
@@ -532,7 +532,7 @@ pub(crate) async fn run_service_foreground(
     }
     if config.log_stop_errors {
         if let Err(e) = sandbox.stop().await {
-            eprintln!("failed to stop sandbox '{}': {}", &config.sandbox_name, e);
+            eprintln!("failed to stop sandbox '{}': {}", config.sandbox_name, e);
         }
     } else {
         let _ = sandbox.stop().await;
@@ -542,7 +542,7 @@ pub(crate) async fn run_service_foreground(
     // Use a timeout so a hung exec channel doesn't block forever.
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain_handle).await;
 
-    println!("Sandbox '{}' stopped", &config.sandbox_name);
+    println!("Sandbox '{}' stopped", config.sandbox_name);
     Ok(())
 }
 
@@ -567,7 +567,7 @@ pub(crate) async fn run_service_interactive(
 
     println!(
         "Sandbox '{}' started (interactive TUI; ctrl-] to detach)",
-        &sandbox_name
+        sandbox_name
     );
 
     let attach_result = sandbox
@@ -576,25 +576,25 @@ pub(crate) async fn run_service_interactive(
 
     let outcome = match attach_result {
         Ok(code) => {
-            eprintln!("{} exited with code {}", &service_label, code);
+            eprintln!("{} exited with code {}", service_label, code);
             Ok(())
         }
         Err(e) => Err(anyhow::anyhow!(
             "failed to attach to {} process: {}",
-            &service_label,
+            service_label,
             e
         )),
     };
 
     if log_stop_errors {
         if let Err(e) = sandbox.stop().await {
-            eprintln!("failed to stop sandbox '{}': {}", &sandbox_name, e);
+            eprintln!("failed to stop sandbox '{}': {}", sandbox_name, e);
         }
     } else {
         let _ = sandbox.stop().await;
     }
 
-    println!("Sandbox '{}' stopped", &sandbox_name);
+    println!("Sandbox '{}' stopped", sandbox_name);
     outcome
 }
 
