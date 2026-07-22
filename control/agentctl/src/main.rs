@@ -1303,8 +1303,9 @@ async fn cmd_config_new(
                          wrote 'age1PLACEHOLDER'.\n\
                          Set the real key with: edit .sops.yaml, OR re-run with \
                          --age-recipient <key>.\n\
-                         Generate a key with: age-keygen -o ~/.config/sops/age/ai-workbench-secrets.txt",
-                        e
+                         Generate a key with: age-keygen -o {}",
+                        e,
+                        scaffold::AGE_KEY_DEFAULT_PATH
                     );
                     ("age1PLACEHOLDER".to_string(), "placeholder")
                 }

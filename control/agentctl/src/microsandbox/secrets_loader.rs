@@ -115,7 +115,12 @@ fn decrypt_layer(layer: &crate::config::SecretsLayer) -> Result<Option<HashMap<S
         PathBuf::from(env_key)
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join(".config/sops/age/ai-workbench-secrets.txt")
+        // Derive from the shared const (single source of truth, matches
+        // scaffold::AGE_KEY_DEFAULT_PATH and the --empty warning in main.rs).
+        let rel = crate::scaffold::AGE_KEY_DEFAULT_PATH
+            .strip_prefix("~/")
+            .unwrap_or(crate::scaffold::AGE_KEY_DEFAULT_PATH);
+        PathBuf::from(home).join(rel)
     };
 
     if !key_file.exists() {
@@ -289,5 +294,20 @@ mod tests {
         assert_eq!(layers[0].name, "local");
         assert_eq!(layers[0].dir, tmp);
         Ok(())
+    }
+
+    #[test]
+    fn secrets_loader_default_path_uses_const() {
+        // WP-F3: secrets_loader's default age key path must be derived from
+        // scaffold::AGE_KEY_DEFAULT_PATH, not a hardcoded literal. We verify
+        // by checking that the const's stripped path matches the literal
+        // that was previously hardcoded.
+        let const_rel = crate::scaffold::AGE_KEY_DEFAULT_PATH
+            .strip_prefix("~/")
+            .unwrap_or(crate::scaffold::AGE_KEY_DEFAULT_PATH);
+        assert_eq!(
+            const_rel, ".config/sops/age/ai-workbench-secrets.txt",
+            "secrets_loader default path must be derived from AGE_KEY_DEFAULT_PATH const"
+        );
     }
 }

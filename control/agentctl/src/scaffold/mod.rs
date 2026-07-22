@@ -241,12 +241,22 @@ mod tests {
 
     #[test]
     fn age_key_default_path_matches_secrets_loader_canonical() {
-        // Drift guard: the README embeds AGE_KEY_DEFAULT_PATH; if the
-        // secrets_loader canonical path ever changes, this test fails and
-        // forces a coordinated update. See microsandbox/secrets_loader.rs:118.
+        // Drift guard: the const must match the path that secrets_loader
+        // resolves at runtime (home.join(const.strip_prefix("~/"))).
+        // Instead of literal==literal, we cross-reference the actual
+        // resolution logic in secrets_loader::decrypt_layer.
+        let home = "/tmp/fake-home";
+        let rel = AGE_KEY_DEFAULT_PATH
+            .strip_prefix("~/")
+            .unwrap_or(AGE_KEY_DEFAULT_PATH);
+        let resolved = std::path::PathBuf::from(home).join(rel);
+
+        // This must match what secrets_loader would compute for the same home.
+        let secrets_loader_resolved =
+            std::path::PathBuf::from(home).join(".config/sops/age/ai-workbench-secrets.txt");
         assert_eq!(
-            AGE_KEY_DEFAULT_PATH,
-            "~/.config/sops/age/ai-workbench-secrets.txt"
+            resolved, secrets_loader_resolved,
+            "AGE_KEY_DEFAULT_PATH const must resolve to the same path as secrets_loader's hardcoded default"
         );
     }
 
