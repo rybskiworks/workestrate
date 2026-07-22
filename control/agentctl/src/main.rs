@@ -1604,8 +1604,13 @@ async fn cmd_init(url: Option<&str>) -> Result<()> {
     let mut registry = config::Registry::default();
     registry.settings.default_context = Some("personal".to_string());
 
-    std::fs::create_dir_all(config::xdg_data_dir())?;
-    std::fs::create_dir_all(config::xdg_state_dir())?;
+    // Seed the store (repos/sources) and state roots for the active layout.
+    // Legacy XDG: resolve_store_dir() == xdg_data_dir(), resolve_state_dir()
+    //   == xdg_state_dir() — identical to the pre-ADR-0023 mkdirs.
+    // New single-home: <home>/repos, <home>/sources, <home>/state.
+    std::fs::create_dir_all(config::resolve_store_dir().join("repos"))?;
+    std::fs::create_dir_all(config::resolve_store_dir().join("sources"))?;
+    std::fs::create_dir_all(config::resolve_state_dir())?;
 
     if let Some(url) = url {
         let temp_dir =
@@ -2254,12 +2259,23 @@ async fn cmd_check() -> Result<()> {
         }
     }
 
-    println!("\nXDG dirs:");
-    for (label, dir) in [
-        ("config", config::xdg_config_dir()),
-        ("data", config::xdg_data_dir()),
-        ("state", config::xdg_state_dir()),
-    ] {
+    println!("\nTool home:");
+    let (home, kind) = config::resolve_home_with_kind();
+    println!("  home: {} ({:?})", home.display(), kind);
+    let dirs: Vec<(&str, std::path::PathBuf)> = match kind {
+        config::HomeKind::LegacyXdg => vec![
+            ("config", config::xdg_config_dir()),
+            ("data", config::xdg_data_dir()),
+            ("state", config::xdg_state_dir()),
+        ],
+        _ => vec![
+            ("registry", config::registry_path()),
+            ("secrets", home.join("secrets")),
+            ("repos", home.join("repos")),
+            ("state", home.join("state")),
+        ],
+    };
+    for (label, dir) in dirs {
         let ok = dir.exists();
         let status = if ok { "[OK]" } else { "[MISSING]" };
         println!("  {}: {} {}", label, dir.display(), status);
