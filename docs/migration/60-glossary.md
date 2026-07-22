@@ -13,7 +13,7 @@ user's local checkout that overrides the canonical source).
 A user-cloned agent source checkout at a path different from the canonical
 flake input, selected via `WORKESTRATE_<NAME>_BUILD` env var (existing
 convention, `workload.rs:80-90`). Managed by `workestrate source
-clone/build/list/reset`. Stored at `~/.local/share/workestrate/sources/<name>/`.
+clone/build/list/reset`. Stored at `$WORKESTRATE_HOME/sources/<name>/`.
 
 **Recipe**
 A named, versioned, reviewable unit of executable logic in core that config
@@ -45,19 +45,38 @@ layer and in what order. **Deferred** until 3+ layers exist (ADR 0013). Phase
 are a future enhancement.
 
 **Registry**
-The user-level config file at `~/.config/workestrate/config.toml` that holds:
+The user-level config file at `$WORKESTRATE_HOME/config.toml` that holds:
 tool settings, config-repo registry (name→url→ref→rev), ordered `layers` list,
 and `[trusted_projects]`. Tracked in the user's dotfiles repo. This is the
-"home" for config-repo references — where the homeless-registry recursion
+registry for config-repo references — where the homeless-registry recursion
 terminates. Modeled on kubeconfig (`~/.kube/config` holds cluster references).
 
 **Config repo**
 A git repository containing deployment-specific configuration: `workestrate.toml`
 (workload definitions + secrets schema), `.env.enc` (SOPS-encrypted secrets),
 `.sops.yaml` (SOPS config), `infra/litellm/` (LiteLLM values), `agents/*/config/`
-(agent config files). Cloned to `~/.local/share/workestrate/repos/<name>/` by
+(agent config files). Cloned to `$WORKESTRATE_HOME/repos/<name>/` by
 `workestrate config add`. May optionally have its own `flake.nix` (inverted
 dependency, Phase 2).
+
+**Home (WORKESTRATE_HOME)**
+The single tool home directory for workestrate. Default `~/.workestrate`;
+container: `<repo>/.workestrate`. Contains `config.toml` (registry),
+`overrides.toml`, `secrets/`, `repos/`, `sources/`, `state/`, `cache/`.
+Resolution: `WORKESTRATE_HOME` env → auto-discovery (walk-up, trust-gated) →
+legacy XDG (read-only compat) → default. Precedents: `~/.kube`, `~/.docker`,
+`~/.cargo`. See ADR 0023.
+
+**Bundle (repo-local home)**
+A `$WORKESTRATE_HOME` placed inside a repository (typically
+`<repo>/.workestrate/`) for container persistence. Bind-mountable across
+container restarts. The `.envrc`/`local-xdg.sh` set `WORKESTRATE_HOME` to
+point at it. See ADR 0023.
+
+**migrate-home**
+`workestrate migrate-home` — migrates a legacy XDG three-home layout
+(config/data/state split) into the single tool home. Idempotent; warns on
+conflicts. Emits a deprecation note when legacy XDG is detected.
 
 **Reference config**
 A sanitized, tracked copy of the config shipped with the tool at

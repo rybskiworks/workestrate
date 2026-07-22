@@ -9,7 +9,7 @@ This documentation tree is the authoritative pre-implementation record for
 migrating the `ai-workbench` monorepo into the **workestrate-as-tool + XDG +
 dotfiles-registry** model. It captures: the verified current state, the target
 system specification, the security model, the phased migration process, and
-sixteen Architecture Decision Records (ADRs) that pin every load-bearing
+twenty-three Architecture Decision Records (ADRs) that pin every load-bearing
 choice.
 
 Implementation may proceed from this record without re-deriving decisions.
@@ -23,8 +23,8 @@ Where earlier session rounds expressed options or wavered, the ADRs in
 3. `20-target-system-spec.md` — the main spec of the migrated system.
 4. `30-security-model.md` — threat model, invariants, enforcement points.
 5. `40-migration-process.md` — phased process, per-file consequence sweep, gates; review & remediation status.
-6. `50-decisions/README.md` — ADR index (0001–0020).
-7. `50-decisions/NNNN-*.md` — individual ADRs (0001–0020).
+6. `50-decisions/README.md` — ADR index (0001–0023).
+7. `50-decisions/NNNN-*.md` — individual ADRs (0001–0023).
 8. `60-glossary.md` — canonical vocabulary.
 9. `70-open-items.md` — pending user defaults, KVM gates, residual risks.
 10. `80-remediation-plan.md` — review findings (2026-07) remediation plan, PENDING APPROVAL.

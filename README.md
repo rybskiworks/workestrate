@@ -98,7 +98,7 @@ live in your personal config repo.
 
 ## Secrets setup
 
-Secrets live in your **personal config repo** (`~/.local/share/workestrate/repos/personal/`):
+Secrets live in your **personal config repo** (`$WORKESTRATE_HOME/repos/personal/`):
 `.env.enc` (SOPS-encrypted) and `.sops.yaml` (SOPS recipient). The wrappers
 `setup-secrets`, `decrypt-env`, and `write-env` (provided by the flake) use an
 age key that lives outside all repos at
@@ -643,19 +643,23 @@ clone the agent repos into `agents/<name>/repo` only if you intend to run them.
   `.env.enc` and `.sops.yaml` were stripped from the tool repo but remain in
   git history.
 
-## XDG configuration model (Phase 1)
+## Configuration model (single tool home)
 
-workestrate supports a tool+XDG configuration model where the tool is
-decoupled from any workspace. Configuration lives in XDG-standard paths:
+workestrate supports a single tool home configuration model where the tool is
+decoupled from any workspace. Configuration lives in a single tool home
+directory (`$WORKESTRATE_HOME`) with a flat layout (ADR 0023):
 
 | Layer | Path | Contents |
 |---|---|---|
-| **Registry** | `~/.config/workestrate/config.toml` | Tool settings, config-repo registry, ordered layers, trusted projects |
-| **Config repos** | `~/.local/share/workestrate/repos/<name>/` | `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
-| **State** | `~/.local/state/workestrate/` | `workspaces/`, `var/` (runtime state) |
-| **Sources** | `~/.local/share/workestrate/sources/<name>/` | Agent source checkouts + builds |
+| **Home** | `$WORKESTRATE_HOME/` (default `~/.workestrate`; container `<repo>/.workestrate`) | Single tool home directory |
+| **Registry** | `$WORKESTRATE_HOME/config.toml` | Tool settings, config-repo registry, ordered layers, trusted projects |
+| **Overrides** | `$WORKESTRATE_HOME/overrides.toml` | User-global overrides (optional) |
+| **Config repos** | `$WORKESTRATE_HOME/repos/<name>/` | `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
+| **State** | `$WORKESTRATE_HOME/state/` | `workspaces/`, `var/` (runtime state) |
+| **Sources** | `$WORKESTRATE_HOME/sources/<name>/` | Agent source checkouts + builds |
+| **Cache** | `$WORKESTRATE_HOME/cache/` | Cache |
 
-### Quick start (XDG model)
+### Quick start (single home model)
 
 ```bash
 # Initialize the registry (one-time)
@@ -674,10 +678,16 @@ workestrate pi plan
 
 ### Config resolution order
 
-1. `WORKESTRATE_CONFIG_DIR` env var (dev/testing override)
-2. Trusted project `./workestrate.toml` (if cwd is trusted)
-3. Registry single layer (`~/.local/share/workestrate/repos/<name>/workestrate.toml`)
-4. `config.reference/workestrate.toml` (shipped with tool, **synthetic fallback**)
+1. `WORKESTRATE_HOME` env var (explicit override)
+2. Auto-discovery (walk-up from cwd, trust-gated — finds `.workestrate/` in a parent dir)
+3. Legacy XDG (read-only compat + deprecation note — reads old `XDG_CONFIG_HOME/workestrate/` etc. if present)
+4. Default: `~/.workestrate`
+
+Then within the resolved home, config layers merge in this order:
+
+1. Trusted project `./workestrate.toml` (if cwd is trusted)
+2. Registry single layer (`$WORKESTRATE_HOME/repos/<name>/workestrate.toml`)
+3. `config.reference/workestrate.toml` (shipped with tool, **synthetic fallback**)
 
 Fail-closed: with no config repos registered, the synthetic reference config is used
 (placeholder secrets — `example-service plan` works; `up`/`exec` for real workload names
@@ -721,28 +731,25 @@ falls back to the repo root (backwards compat).
 
 ## Container / persistent local state
 
-workestrate stores its XDG state (registry, config repos, secrets, runtime
-state) in a gitignored `.workestrate/` directory inside the repo. This
+workestrate stores its state (registry, config repos, secrets, runtime state)
+in a gitignored `.workestrate/` directory inside the repo. This directory IS
+the tool home (`$WORKESTRATE_HOME`); its layout is the flat home layout. This
 directory is bind-mountable for container persistence across restarts.
 
 ### Layout
 
 ```
-.workestrate/
-├── config/          → XDG_CONFIG_HOME
-│   ├── workestrate/
-│   │   └── config.toml   (registry: config repos, layers, trusted projects)
-│   └── sops/age/
-│       └── ai-workbench-secrets.txt  (age private key — NEVER commit)
-├── data/            → XDG_DATA_HOME
-│   └── workestrate/
-│       ├── repos/        (config repo clones)
-│       │   └── personal/ (workestrate.toml, .env.enc, .sops.yaml, ...)
-│       └── sources/      (agent source checkouts)
-└── state/           → XDG_STATE_HOME
-    └── workestrate/
-        ├── workspaces/   (per-agent scratch)
-        └── var/           (runtime logs, pidfiles)
+.workestrate/                         → WORKESTRATE_HOME (container: <repo>/.workestrate)
+├── config.toml                       (registry: config repos, layers, trusted projects)
+├── overrides.toml                    (user-global overrides, optional)
+├── secrets/                          (machine-local secrets)
+├── repos/                            (config repo clones)
+│   └── personal/                     (workestrate.toml, .env.enc, .sops.yaml, ...)
+├── sources/                          (agent source checkouts)
+├── state/                            (runtime state)
+│   ├── workspaces/                   (per-agent scratch)
+│   └── var/                          (runtime logs, pidfiles)
+└── cache/                            (cache)
 ```
 
 ### Activation
@@ -763,6 +770,12 @@ source scripts/local-xdg.sh
 just local-setup
 ```
 
+The `.envrc` and `scripts/local-xdg.sh` set `WORKESTRATE_HOME` (one env var)
+to point at `.workestrate/`.
+
+**ASSUMPTION (impl):** the `.envrc`/`local-xdg.sh` collapse to
+`WORKESTRATE_HOME` is owned by the implementation track.
+
 ### Container bind-mount
 
 When running in a container, bind-mount the `.workestrate/` directory:
@@ -773,18 +786,22 @@ docker run -v $PWD/.workestrate:$PWD/.workestrate ...
 
 Then source `scripts/local-xdg.sh` (or use direnv) inside the container.
 
-### One-time migration from container $HOME
+### One-time migration from legacy XDG
 
-If you previously had workestrate state in `~/.local/share/workestrate/`
-(ephemeral container HOME), run:
+If you previously had workestrate state in the legacy XDG three-home layout
+(`~/.config/workestrate/`, `~/.local/share/workestrate/`,
+`~/.local/state/workestrate/`), run:
 ```bash
-bash scripts/migrate-xdg-to-repo.sh
+workestrate migrate-home
 ```
 
-This moves the personal config repo, registry, and runtime state into
-`.workestrate/` and cleans up the old dirs. The SOPS age key is
-intentionally NOT moved — it stays at `~/.config/sops/age/` on the host
-(see "Security warning" below).
+This moves the registry, config repos, and runtime state into the single
+home layout (`$WORKESTRATE_HOME`) and cleans up the old XDG dirs. The SOPS
+age key is intentionally NOT moved — it stays at `~/.config/sops/age/` on the
+host (see "Security warning" below).
+
+**ASSUMPTION (impl):** `migrate-xdg-to-repo.sh` is replaced by
+`workestrate migrate-home` in the implementation.
 
 ### Security warning: age key location
 

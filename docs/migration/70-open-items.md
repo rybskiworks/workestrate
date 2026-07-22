@@ -104,9 +104,9 @@ until ready to distribute).
 ### 2. Dotfiles repo for `workestrate init`
 
 **Needed for**: Phase 1, step 1.4 (`workestrate init <url>`).
-**Recommended**: add `~/.config/workestrate/config.toml` to the user's
+**Recommended**: add `$WORKESTRATE_HOME/config.toml` to the user's
 existing dotfiles repo (chezmoi/yadm/stow). If no dotfiles repo exists,
-`~/.config/workestrate/` can be a standalone git repo.
+`$WORKESTRATE_HOME/` can be a standalone git repo.
 **User may prefer**: a different dotfiles tool or location.
 
 ### 3. Default layer-set name
@@ -117,10 +117,11 @@ existing dotfiles repo (chezmoi/yadm/stow). If no dotfiles repo exists,
 
 ### 4. State dir location
 
-**Needed for**: Phase 1, step 1.2 (XDG path resolution).
-**Recommended**: `~/.local/state/workestrate/` (XDG State spec).
-**User may prefer**: `~/.local/share/workestrate/state/` (single tree; XDG
-spec separates share from state, but some tools co-locate them).
+**Needed for**: Phase 1, step 1.2 (home path resolution).
+**Recommended**: `$WORKESTRATE_HOME/state/` (single tool home; ADR 0023).
+**User may prefer**: a custom `state_dir` in `[settings]` pointing elsewhere
+(e.g. a separate disk). The XDG share/state split is no longer relevant —
+repos, sources, and state all live under the single home.
 
 ## KVM gates
 
@@ -184,6 +185,14 @@ invocation. Currently, one invocation resolves exactly ONE context
 (`<context>-<workload>` assumes one context) and port collision detection.
 No current use case; revisit if orchestration scenarios emerge.
 
+### Home restructure (ADR 0023)
+
+The single tool home model (ADR 0023) replaces the XDG three-home layout.
+Legacy XDG paths are read in compat mode (read-only + deprecation note).
+`workestrate migrate-home` provides the upgrade path. The `.workestrate/`
+directory is now the home itself (layout = home layout), not an XDG wrapper
+with config/data/state subdirs.
+
 ### Agent build-output relocation (sources store)
 
 **Status**: deferred — needs config-repo changes.
@@ -191,7 +200,7 @@ No current use case; revisit if orchestration scenarios emerge.
 The in-tree `agents/<name>/build` outputs (pi bun binary, odysseus `.deps/`,
 opencode `node_modules/`) are being relocated out of the flake-visible
 source tree into the managed sources store
-(`~/.local/share/workestrate/sources/<name>/`). This removes the last
+(`$WORKESTRATE_HOME/sources/<name>/`). This removes the last
 impurity vector from flake evaluation (an unfiltered `src = ./.` could
 previously copy `agents/*/build/` into the store — the 29 GB-per-eval
 incident's root cause; see `docs/nix-purity.md`).
@@ -320,12 +329,14 @@ See ADR 0018 for the full decision and rationale.
 
 ## Environment note: container persistence
 
-workestrate XDG state (registry, config repos, encrypted secrets, runtime
-state) lives in a gitignored `.workestrate/` directory inside the repo. This
+workestrate state (registry, config repos, encrypted secrets, runtime state)
+lives in a gitignored `.workestrate/` directory inside the repo. This
+directory IS the tool home (`$WORKESTRATE_HOME`); its layout is the flat home
+layout (`config.toml`, `overrides.toml`, `secrets/`, `repos/`, `sources/`,
+`state/`, `cache/`), not an XDG wrapper with config/data/state subdirs. This
 directory is bind-mountable for container persistence. The `.envrc`
-(direnv) and `scripts/local-xdg.sh` export `XDG_CONFIG_HOME`,
-`XDG_DATA_HOME`, and `XDG_STATE_HOME` to point at `.workestrate/`
-subdirectories.
+(direnv) and `scripts/local-xdg.sh` export `WORKESTRATE_HOME` (one var) to
+point at `.workestrate/`.
 
 **The SOPS age private key is intentionally NOT placed under `.workestrate/`
 or anywhere in the repo** (the repo is agent-reachable via `${CWD}` mounts).
@@ -335,6 +346,10 @@ the container the key is absent and secret operations fail closed by design.
 
 **Warning**: `.workestrate/` contains the encrypted `.env.enc`, the registry,
 and config repos. Never commit it. The `.gitignore` entry is the guard.
+
+**ASSUMPTION (impl):** The `.envrc`/`local-xdg.sh` collapse to
+`WORKESTRATE_HOME` and the `migrate-xdg-to-repo.sh` → `migrate-home` rename
+are owned by the implementation track.
 
 ### setup-secrets.sh per-repo override alignment
 
