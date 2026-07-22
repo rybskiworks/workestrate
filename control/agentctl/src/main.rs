@@ -332,14 +332,17 @@ enum Commands {
 ///
 /// `workload_name` is the bare workload name (e.g. "litellm"). The slot is
 /// derived from the active context. `instance_id` (from --instance) is
-/// validated. `new_id` (from --new, already-allocated) is used as-is.
+/// `instance_id` (from `--instance`) and `new_id` (from `--new`,
+/// already-allocated slug) are BOTH validated through `validate_instance_id` —
+/// uniform validation closes the bypass where the old `--new` integer id
+/// skipped the slug rule.
 ///
 /// Mutually-exclusive flag groups (replace/instance/new) are validated here.
 fn build_instance_spec(
     workload_name: &str,
     replace: bool,
     instance_id: Option<&str>,
-    new_id: Option<u32>,
+    new_id: Option<&str>,
     port_offset: u16,
 ) -> Result<crate::microsandbox::runtime::InstanceSpec> {
     use crate::microsandbox::runtime::InstanceSpec;
@@ -359,11 +362,17 @@ fn build_instance_spec(
     let context = crate::config::active_context_name();
     let slot = slot_for(workload_name, context.as_deref());
 
+    // UNIFORM validation: whichever of --instance / --new was supplied,
+    // the id passes through the same validate_instance_id gate. The slug
+    // allocator (auto_allocate_slug) produces ids guaranteed to pass this.
     let id: Option<String> = if let Some(id) = instance_id {
         validate_instance_id(id)?;
         Some(id.to_string())
+    } else if let Some(slug) = new_id {
+        validate_instance_id(slug)?;
+        Some(slug.to_string())
     } else {
-        new_id.map(|n| n.to_string())
+        None
     };
 
     let instance = instance_name(&slot, id.as_deref());
@@ -397,17 +406,15 @@ async fn dispatch_service<W: Workload>(
             new,
             port_offset,
         } => {
-            let new_id = if new {
+            let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
-                Some(
-                    crate::microsandbox::port_registry::auto_allocate_integer_id(
-                        &state_dir,
-                        &crate::microsandbox::slots::slot_for(
-                            workload.name(),
-                            crate::config::active_context_name().as_deref(),
-                        ),
-                    )?,
-                )
+                Some(crate::microsandbox::port_registry::auto_allocate_slug(
+                    &state_dir,
+                    &crate::microsandbox::slots::slot_for(
+                        workload.name(),
+                        crate::config::active_context_name().as_deref(),
+                    ),
+                )?)
             } else {
                 None
             };
@@ -415,7 +422,7 @@ async fn dispatch_service<W: Workload>(
                 workload.name(),
                 replace,
                 instance.as_deref(),
-                new_id,
+                new_id.as_deref(),
                 port_offset,
             )?;
             crate::microsandbox::runtime::up_service_with_spec(workload, &spec, foreground).await
@@ -447,17 +454,15 @@ async fn dispatch_agent<W: Workload>(
             new,
             port_offset,
         } => {
-            let new_id = if new {
+            let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
-                Some(
-                    crate::microsandbox::port_registry::auto_allocate_integer_id(
-                        &state_dir,
-                        &crate::microsandbox::slots::slot_for(
-                            workload.name(),
-                            crate::config::active_context_name().as_deref(),
-                        ),
-                    )?,
-                )
+                Some(crate::microsandbox::port_registry::auto_allocate_slug(
+                    &state_dir,
+                    &crate::microsandbox::slots::slot_for(
+                        workload.name(),
+                        crate::config::active_context_name().as_deref(),
+                    ),
+                )?)
             } else {
                 None
             };
@@ -465,7 +470,7 @@ async fn dispatch_agent<W: Workload>(
                 workload.name(),
                 replace,
                 instance.as_deref(),
-                new_id,
+                new_id.as_deref(),
                 port_offset,
             )?;
             crate::microsandbox::runtime::exec_agent_with_spec(workload, &spec).await
@@ -2691,6 +2696,48 @@ mod tests {
         assert!(args.contains(&"--instance".to_string()));
         assert!(args.contains(&"--port-offset".to_string()));
         assert_eq!(args[args.len() - 1], "5000");
+        Ok(())
+    }
+
+    /// Round-trip (ADR 0021 WP-B): `--new` allocates a base32 slug, build_instance_spec
+    /// composes `<slot>@<slug>` and passes it through `validate_instance_id` uniformly,
+    /// and the resulting instance name is exactly what `down --instance <slug>` would
+    /// target (so a subsequent teardown resolves the same sandbox).
+    #[test]
+    fn new_slug_round_trips_through_build_instance_spec_and_down_target() -> Result<()> {
+        use crate::microsandbox::port_registry::auto_allocate_slug;
+        use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
+
+        let state_dir = std::env::temp_dir().join(format!(
+            "workestrate-slug-roundtrip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&state_dir)?;
+
+        crate::config::set_active_context(None);
+        let slot = slot_for("litellm", None);
+        assert_eq!(slot, "litellm");
+
+        let slug = auto_allocate_slug(&state_dir, &slot)?;
+        assert_eq!(slug.len(), 4);
+        validate_instance_id(&slug).expect("allocated slug must satisfy the slug rule");
+
+        let spec = build_instance_spec("litellm", false, None, Some(&slug), 10000)?;
+        assert_eq!(
+            spec.instance,
+            format!("litellm@{slug}"),
+            "instance must be <slot>@<slug>, not the bare singleton slot"
+        );
+        assert_eq!(spec.port_offset, 10000);
+
+        let down_target = instance_name(&slot, Some(&slug));
+        assert_eq!(down_target, spec.instance);
+
+        let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
 

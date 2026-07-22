@@ -73,12 +73,35 @@ The operator opts into one of three explicit behaviors:
 | *(none)* | **Refuse.** Print the occupying instance id + remediation, exit non-zero. |
 | `--replace` | Tear down the occupying instance and start a fresh one on the same slot. Destructive; explicit. |
 | `--instance <id>` | Target the parallel slot `<slot>@<id>`. If that parallel slot is occupied, refuse (apply the same rule recursively). |
-| `--new` | Synthesize a fresh `<id>` (short random slug, e.g. 4-char base32) and target `<slot>@<id>`. Guarantees a non-colliding parallel instance. |
+| `--new` | Synthesize a fresh `<id>` (4-char base32 slug — see §2.1) and target `<slot>@<id>`. Guarantees a non-colliding parallel instance. |
 
 `exec` on a singleton slot follows the same rule: refuse if occupied, unless
 `--instance`/`--new`/`--replace` is given. (Agents are typically interactive;
 silent replace of a live agent session is the worst-case destructive action
 the old default permitted.)
+
+### 2.1. `--new` slug allocation (normative)
+
+The `<id>` synthesized by `--new` is produced by `auto_allocate_slug` in
+`port_registry.rs` and is normatively specified as:
+
+- **Alphabet:** lowercase base32 (RFC 4648) — `abcdefghijklmnopqrstuvwxyz234567`
+  (the symbols `0`/`1`/`8`/`9` are excluded as visually ambiguous). 32 symbols
+  means each entropy byte maps uniformly (`256 % 32 == 0` → no modulo bias).
+- **Length:** fixed at **4** characters (≈ 20 bits; namespace `32^4 = 1,048,576`
+  per slot).
+- **Entropy source:** `/dev/urandom` (no new dependency).
+- **Collision / validity policy:** each draw is retried (up to **8** attempts)
+  when it either (a) collides with an existing `<slot>@<slug>` record
+  (consulted via `list_records`), or (b) is purely numeric (e.g. `2345`),
+  which the §1 slug rule rejects. Allocation fails closed with a hard error
+  only if the budget is exhausted — effectively unreachable given the
+  namespace size, but terminating by construction.
+- **Slug-rule guarantee:** the returned slug is **guaranteed** to satisfy the
+  `validate_instance_id` rule (§1): it matches `^[a-z0-9][a-z0-9-]*$`, is ≤ 32
+  chars, is not `all`, and is not purely numeric. Accordingly `--new` and
+  `--instance <id>` both pass through the same `validate_instance_id` gate
+  uniformly — there is no validation bypass for the `--new` path.
 
 ### 3. `down` variants
 
