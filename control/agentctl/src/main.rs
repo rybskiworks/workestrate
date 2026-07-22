@@ -145,7 +145,7 @@ enum ConfigAction {
         /// Name for the new config repo (e.g. "personal", "work").
         name: String,
 
-        /// Destination directory (default: ./<name>).
+        /// Destination directory (default: <store>/repos/<name>).
         #[arg(long, value_name = "DIR")]
         path: Option<std::path::PathBuf>,
 
@@ -1273,10 +1273,13 @@ async fn cmd_config_new(
         }
     }
 
-    // Resolve destination directory.
+    // Resolve destination directory. Default is the managed store
+    // (<store>/repos/<name>) so the repo is immediately active for layer
+    // resolution once registered. An explicit --path overrides this.
+    let store_path = config::config_repo_dir(name);
     let dest: std::path::PathBuf = match path {
         Some(p) => p.to_path_buf(),
-        None => std::path::PathBuf::from(name),
+        None => store_path.clone(),
     };
     if dest.exists() {
         // Refuse if non-empty. An empty existing directory is OK (init in
@@ -1291,6 +1294,20 @@ async fn cmd_config_new(
                 dest.display()
             );
         }
+    }
+
+    // Warn when an explicit --path places the repo outside the managed
+    // store. The repo won't be active for layer resolution until moved into
+    // the store or re-added via `config add` after pushing to a remote.
+    if !no_register && dest != store_path {
+        eprintln!(
+            "warning: '{}' is outside the config store ('{}'); \
+             the repo won't be active for layer resolution until moved into \
+             the store or re-added via `workestrate config add` after pushing \
+             to a remote.",
+            dest.display(),
+            store_path.display()
+        );
     }
 
     // Resolve age recipient: explicit flag → derived → placeholder.

@@ -135,3 +135,20 @@ template's README and `.sops.yaml.jinja` are aligned to the same path.
 - **Copier only:** external dep, no scripting path, drift undetected.
 - **cargo-generate lib:** heavyweight git2 stack for a 7-file skeleton.
 - **Copier drop:** loses ongoing-sync value.
+
+## Amendments
+
+**WP-C (store-default destination):** `workestrate config new <name>`
+now defaults to the managed store (`<store>/repos/<name>`) instead of
+`./<name>`. This ensures the scaffolded repo is immediately active for
+layer resolution once registered (the registry's bare `layers` list
+points at `<store>/repos/<name>`, and `load_config` resolves layers from
+that path). An explicit `--path` still overrides the default; when
+`--path` places the repo outside the store AND registration is enabled
+(not `--no-register`), a warning is printed:
+
+    warning: '<dest>' is outside the config store ('<store>/repos/<name>');
+    the repo won't be active for layer resolution until moved into the
+    store or re-added via `workestrate config add` after pushing to a remote.
+
+The non-empty destination refusal is unchanged.

@@ -66,8 +66,12 @@ live in your personal config repo.
    **Create a new config repo** (recommended for first-time users):
    ```bash
    workestrate config new personal
-   cd personal
    ```
+   The repo is created in the managed store (`<store>/repos/personal`) and
+   auto-registered as a layer — no `cd` needed to start using it. Use
+   `workestrate config list` to see the path. Pass `--path <dir>` to
+   scaffold elsewhere (the repo won't be active for layer resolution until
+   moved into the store or re-added via `workestrate config add`).
 
    **Import an existing config repo** (e.g. from a dotfiles backup):
    ```bash

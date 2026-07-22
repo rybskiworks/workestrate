@@ -305,3 +305,110 @@ fn json_envelope_is_valid() {
     assert!(files.contains(&".sops.yaml".to_string()));
     assert!(files.contains(&".copier-answers.yml".to_string()));
 }
+
+/// WP-C: default dest is the managed store, not ./<name>. The repo lands
+/// in <store>/repos/<name> and a subsequent validate-config (which calls
+/// load_config) sees it as a layer.
+#[test]
+fn config_new_default_path_is_store() {
+    let home = IsolatedHome::new();
+
+    // Use WORKESTRATE_HOME so the store path is predictable.
+    let store = home.dir.join(".workestrate");
+    let expected = store.join("repos").join("personal");
+
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args([
+            "config",
+            "new",
+            "personal",
+            "--no-git-init",
+            "--age-recipient",
+            "age1TEST",
+        ])
+        .output()
+        .expect("invoke config new");
+    assert!(
+        out.status.success(),
+        "config new failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The repo must land in the store, not ./personal.
+    assert!(
+        expected.join("workestrate.toml").exists(),
+        "workestrate.toml should exist at {} (store default), not ./personal",
+        expected.display()
+    );
+    assert!(
+        !home.dir.join("personal").join("workestrate.toml").exists(),
+        "repo should NOT be at ./personal (old default)"
+    );
+
+    // A subsequent validate-config must succeed — load_config resolves the
+    // active context, finds "personal" in the bare layers list (auto-added
+    // by register_config), and loads the workestrate.toml from the store.
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args(["validate-config"])
+        .output()
+        .expect("invoke validate-config");
+    assert!(
+        out.status.success(),
+        "validate-config should succeed (repo is a layer in the store); stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// WP-C: explicit --path outside the store prints a warning when
+/// registration is enabled.
+#[test]
+fn config_new_explicit_path_outside_store_warns() {
+    let home = IsolatedHome::new();
+    let store = home.dir.join(".workestrate");
+    let dest = home.dir.join("outside-store-dest");
+
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args(["config", "new", "personal", "--path"])
+        .arg(&dest)
+        .args(["--no-git-init", "--age-recipient", "age1TEST"])
+        .output()
+        .expect("invoke config new");
+
+    assert!(
+        out.status.success(),
+        "config new with explicit --path should succeed; stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning") && stderr.contains("outside the config store"),
+        "stderr should warn about path outside store; got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("won't be active for layer resolution"),
+        "stderr should explain the consequence; got:\n{}",
+        stderr
+    );
+
+    // The repo should be at the explicit path, not in the store.
+    assert!(
+        dest.join("workestrate.toml").exists(),
+        "repo should be at explicit --path"
+    );
+    assert!(
+        !store
+            .join("repos")
+            .join("personal")
+            .join("workestrate.toml")
+            .exists(),
+        "repo should NOT be in the store when --path is explicit"
+    );
+}
