@@ -245,7 +245,6 @@ pub struct BinarySpec {
     pub entrypoint: Option<String>,
     pub worker: Option<String>,
     pub npm_deps_hash: Option<String>,
-    pub install_layout: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]

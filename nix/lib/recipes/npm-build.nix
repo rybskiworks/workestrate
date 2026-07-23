@@ -18,13 +18,12 @@
 # recipe flow branched on it and no second layout ("lib") consumer exists in
 # this repo. A silent no-op is worse than absence (it implies behavior that
 # does not exist), so the parameter has been removed from the recipe signature
-# and from the buildImagesFromConfig call site in flake.nix. The Rust schema
-# (control/agentctl/src/config.rs:217) still deserializes `install_layout` as
-# an optional field and the migration spec still documents it; fully retiring
-# the field there is a Track A/D follow-up (harmless while it remains an
-# unused Option<String>). If a real second layout consumer is introduced
-# later, re-add an explicit `installLayout ? "app"` param AND branch on it
-# in installPhase — do not restore the no-op.
+# and from the buildImagesFromConfig call site in flake.nix. As of the
+# consolidation wave the field is retired everywhere — recipe, Rust schema
+# (control/agentctl/src/config.rs), and the migration spec. If a real second
+# layout consumer is introduced later, re-add an explicit
+# `installLayout ? "app"` param AND branch on it in installPhase — do not
+# restore the no-op.
 { pkgs, buildNpmPackage, nodejs_24, autoPatchelfHook, stdenv, libcap_ng, lib }:
 
 { src

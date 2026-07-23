@@ -123,7 +123,6 @@ struct BinarySpec {
     entrypoint: Option<String>,
     worker: Option<String>,
     npm_deps_hash: Option<String>,
-    install_layout: Option<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Default)]

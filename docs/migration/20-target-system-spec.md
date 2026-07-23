@@ -570,7 +570,7 @@ fallback = "sources/opencode/build"
 
 [workloads.tempest]
 kind = "agent"
-image = { recipe = "nix-layered", name = "tempest", tag = "latest", contents = ["cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils"], binary = { recipe = "npm-build", src = "flake://tempest", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", install_layout = "app" }, baked_files = [{ path = "root/.config/t3mp3st/config.json", content = '{"defaultProvider":"local"}' }], features = ["create_tmp"] }
+image = { recipe = "nix-layered", name = "tempest", tag = "latest", contents = ["cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils"], binary = { recipe = "npm-build", src = "flake://tempest", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }, baked_files = [{ path = "root/.config/t3mp3st/config.json", content = '{"defaultProvider":"local"}' }], features = ["create_tmp"] }
 workdir = "/work"
 cpus = 2
 memory_mib = 2048
@@ -664,8 +664,8 @@ new full-config example, omit the skip marker and include
 
 | Recipe | Parameters | Core implementation | Replaces |
 |---|---|---|---|
-| `npm-build` | `src, npm_deps_hash, node_version?, install_layout?` | `nix/packages/pi.nix`, `tempest.nix` | Per-agent nix build files |
-| `bun-compile` | `src, entrypoint, worker` | `nix/packages/pi-bun.nix` (incl. `removeReferencesTo` strip) | `pi-bun.nix` |
+| `npm-build` | `src, npm_deps_hash, node_version?, dont_npm_build?, build_phase?, install_phase?` | `nix/packages/pi.nix`, `tempest.nix` | Per-agent nix build files |
+| `bun-compile` | `src, entrypoint, worker, assets?` | `nix/packages/pi-bun.nix` (incl. `removeReferencesTo` strip) | `pi-bun.nix` |
 | `pip-install` | `source, requirements_file, target` | `nix/devshells/default.nix:225-227` | Devshell inline build |
 | `bun-install` | `source` | `nix/devshells/default.nix:230-232` | Devshell inline build |
 

@@ -74,7 +74,7 @@ scope = "local"
 
 [workloads.example-agent]
 kind = "agent"
-image = { recipe = "nix-layered", name = "example-agent", tag = "latest", contents = ["cacert", "busybox", "fakeNss"], binary = { recipe = "npm-build", src = "flake://example-agent", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", install_layout = "app" }, baked_files = [{ path = "root/.config/example/settings.json", content = '{"mode":"test"}' }], features = ["create_tmp"] }
+image = { recipe = "nix-layered", name = "example-agent", tag = "latest", contents = ["cacert", "busybox", "fakeNss"], binary = { recipe = "npm-build", src = "flake://example-agent", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }, baked_files = [{ path = "root/.config/example/settings.json", content = '{"mode":"test"}' }], features = ["create_tmp"] }
 workdir = "/work"
 cpus = 1
 memory_mib = 512
@@ -111,7 +111,7 @@ fallback = "agents/example-agent/build"
 
 [workloads.example-offensive]
 kind = "agent"
-image = { recipe = "nix-layered", name = "example-offensive", tag = "latest", contents = ["cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils"], binary = { recipe = "npm-build", src = "flake://example-offensive", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", install_layout = "app" }, baked_files = [{ path = "root/.config/offensive/config.json", content = '{"defaultProvider":"local"}' }], features = ["create_tmp"] }
+image = { recipe = "nix-layered", name = "example-offensive", tag = "latest", contents = ["cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils"], binary = { recipe = "npm-build", src = "flake://example-offensive", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }, baked_files = [{ path = "root/.config/offensive/config.json", content = '{"defaultProvider":"local"}' }], features = ["create_tmp"] }
 workdir = "/work"
 cpus = 2
 memory_mib = 2048

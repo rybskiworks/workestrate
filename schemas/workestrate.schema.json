@@ -55,12 +55,6 @@
             "null"
           ]
         },
-        "install_layout": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "npm_deps_hash": {
           "type": [
             "string",
