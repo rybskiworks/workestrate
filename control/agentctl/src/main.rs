@@ -3061,7 +3061,7 @@ async fn cmd_check() -> Result<()> {
                     continue;
                 }
                 found = true;
-                let env_var = format!("WORKESTRATE_{}_BUILD", name.to_uppercase());
+                let env_var = build_env_var_name(name);
                 let repo = config::source_store_dir(name).join("repo");
                 let build = config::source_store_dir(name).join("build");
                 let repo_status = if repo.exists() {
@@ -3670,9 +3670,7 @@ mod tests {
         // Hold the env-mutation lock for the whole body: this test mutates
         // HOME / WORKESTRATE_CONFIG_DIR and must not race any other env-mutating
         // test (would otherwise corrupt env reads and poison ENV_TEST_LOCK).
-        let _env_lock = crate::config::test_support::ENV_TEST_LOCK
-            .lock()
-            .unwrap();
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         // Create a temp config repo with a minimal workestrate.toml
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-cmd-new-test-{}-{}",
@@ -4217,5 +4215,16 @@ mod tests {
     #[test]
     fn build_env_var_name_handles_multiple_hyphens() {
         assert_eq!(build_env_var_name("a-b-c"), "WORKESTRATE_A_B_C_BUILD");
+    }
+
+    /// Guards the `cmd_doctor` "Source overrides" site (see line ~3064), which
+    /// previously built the env-var name with an unsanitized
+    /// `format!("WORKESTRATE_{}_BUILD", name.to_uppercase())` that leaked a
+    /// hyphen (e.g. `WORKESTRATE_MY-AGENT_BUILD`) for hyphenated workloads.
+    #[test]
+    fn build_env_var_name_doctor_site_no_hyphen_leak() {
+        let env_var = build_env_var_name("my-agent");
+        assert!(!env_var.contains('-'));
+        assert_eq!(env_var, "WORKESTRATE_MY_AGENT_BUILD");
     }
 }
