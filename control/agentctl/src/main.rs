@@ -2722,12 +2722,30 @@ async fn cmd_source_reset(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Pre-scan argv for a global `--json` flag so ANY error (including clap
+/// parse errors, which call process::exit before `cli.json` is available) can
+/// be formatted as the JSON envelope. Scanning stops at the first `--`
+/// separator or at the `run` subcommand: `run` captures all trailing args
+/// verbatim as the command payload, so a payload `--json` (e.g.
+/// `workestrate run -- somecmd --json`) must not enable JSON mode.
+fn json_mode_from_args(args: &[String]) -> bool {
+    for a in args.iter().skip(1) {
+        if a == "--json" {
+            return true;
+        }
+        if a == "--" || a == "run" {
+            break;
+        }
+    }
+    false
+}
+
 fn main() {
     // Pre-scan argv for --json so we can format ANY error (incl. clap parse
     // errors via Cli::parse()) as the JSON envelope when requested. The
     // global --json on Cli does not help here because Cli::parse() calls
     // process::exit on usage errors before we'd see the parsed value.
-    let json_mode = std::env::args().any(|a| a == "--json");
+    let json_mode = json_mode_from_args(&std::env::args().collect::<Vec<_>>());
 
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -4127,5 +4145,50 @@ mod tests {
                 "litellm down missing flag: {f}"
             );
         }
+    }
+
+    // --- FN-20: --json pre-scan stops at run / -- ---------------------------
+
+    #[test]
+    fn json_pre_scan_ignores_payload_json_after_run_separator() {
+        // `workestrate run -- bash -c 'echo --json'` — a standalone --json in
+        // the run payload (after `--`) must NOT enable JSON mode.
+        let args: Vec<String> = ["workestrate", "run", "--", "bash", "-c", "echo", "--json"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            !json_mode_from_args(&args),
+            "payload --json after `run --` must not enable JSON mode"
+        );
+    }
+
+    #[test]
+    fn json_pre_scan_ignores_payload_json_after_run_no_separator() {
+        // `workestrate run bash --json` (no `--`): run captures --json as payload.
+        let args: Vec<String> = ["workestrate", "run", "bash", "--json"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(!json_mode_from_args(&args));
+    }
+
+    #[test]
+    fn json_pre_scan_detects_global_json_before_subcommand() {
+        let args: Vec<String> = ["workestrate", "--json", "ps"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(json_mode_from_args(&args));
+    }
+
+    #[test]
+    fn json_pre_scan_detects_global_json_after_subcommand() {
+        // `--json` is a global flag valid on any subcommand (e.g. `ps --json`).
+        let args: Vec<String> = ["workestrate", "ps", "--json"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(json_mode_from_args(&args));
     }
 }
