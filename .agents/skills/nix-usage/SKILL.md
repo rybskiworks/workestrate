@@ -200,18 +200,18 @@ of gitignored `target/` alone.
   `docs/nix-purity.md` remains authoritative even when the guard passes.
   Allowlist: `# allow: <reason>` on a line skips it.
 
-- **`just store-audit`** (`scripts/store-audit.py`) — currently
-  PASSIVE / NON-BLOCKING (always exits 0 so `verify` cannot fail on
-  it). Reports the top-20 store paths by closure size and flags any
-  `*-source` paths referencing `ai-workbench` (impure-path probe). Skips
-  with a one-line note when nix is unavailable.
+- **`just store-audit`** (`scripts/store-audit.py`) — reports the
+  top-20 store paths by closure size and flags any `*-source` paths
+  referencing `ai-workbench` (impure-path probe). Skips with a one-line
+  note when nix is unavailable.
 
-  > **Landing (Track 1):** a fail-threshold (V2) will make store-audit
-  > block `verify` when `*-source` paths exceed a threshold, and a
-  > store-delta check (V3) will fail on new source-path copies exceeding
-  > the <50M criterion from the remediation spec. Until V2/V3 land,
-  > store-audit is advisory only — rely on `just lint-nix` as the
-  > active gate.
+  > **Status (Track 1):** V2 has landed — store-audit runs with
+  > `--fail-if-source-over 50` and is wired into `just verify`
+  > (justfile:71,291), so `verify` now fails when `*-source` paths
+  > exceed the 50M threshold. V3 (`just store-delta-check`, justfile:299)
+  > exists as a recipe but is NOT yet wired into `verify` — it is a
+  > periodic host/CI check that fails on new source-path copies
+  > exceeding the <50M criterion from the remediation spec.
 
 - **`just gc`** — `nix-collect-garbage --delete-old` + `nix store
   optimise` (dedupe). Reclaims unreachable paths and deduplicates
