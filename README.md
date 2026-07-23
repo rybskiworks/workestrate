@@ -16,6 +16,36 @@ an OpenAI-compatible endpoint at `http://host.microsandbox.internal:4000`.
 Agent microVMs start with a default-deny network policy and only receive
 the secrets needed to reach the proxy.
 
+## Trust model
+
+workestrate has a small number of deliberate escape hatches. Naming them
+in one place:
+
+- **`workestrate run` = full secret access BY DESIGN.** It decrypts
+  `.env.enc` into the process environment and execs a command — that is
+  its purpose. `run` is the operator's escape hatch for ad-hoc commands
+  that need decrypted secrets; it is not sandboxed.
+- **`WORKESTRATE_CONFIG_DIR` = root authority.** Whoever controls this env
+  var controls which config loads (it bypasses discovery and merging).
+  Env control = root.
+- **`WORKESTRATE_HOME` = root of trust for the home.** Whoever sets it
+  controls the registry, config repos, secrets, sources, and runtime
+  state.
+- **`trusted_projects` gating.** Project-layer config
+  (`./workestrate.toml`, `./workestrate.local.toml`) only loads if cwd is
+  in `[trusted_projects]`. Untrusted discovery prints a one-time warning
+  and stops walking — a `cd` into an untrusted directory cannot silently
+  inject config.
+- **`.env.enc` is ciphertext-safe in repo** (SOPS-encrypted; safe to
+  commit in config repos). The **age key is NEVER in repo** — the repo is
+  agent-reachable via `${CWD}` mounts, so a key inside it would be exposed
+  to sandboxes. The key stays at `~/.config/sops/age/ai-workbench-secrets.txt`
+  on the host.
+- **Network segmentation (default-deny egress) is the authoritative
+  runtime control**, not credential binding. An agent that exfiltrates a
+  key can only reach the explicitly-allowed hosts; the network policy —
+  not the secrecy of the key — is what prevents misuse.
+
 ## Prerequisites
 
 - Debian or Ubuntu on x86_64, with virtualization extensions enabled in
@@ -350,6 +380,10 @@ workestrate run -- bash    # interactive shell with secrets
 ```
 
 The `run` subcommand decrypts `.env.enc` via `sops`, loads all keys into the process environment, then execs the given command.
+
+> **Note (landing, Track B):** `workestrate run` will warn when loading
+> many secrets. This flag is landing via Track B and is not yet in the
+> code.
 
 Pi runs in its sandbox as a **bun standalone binary** at `/app/bin/pi` —
 a self-contained executable with the Bun runtime embedded, so no node
@@ -687,11 +721,14 @@ workestrate pi plan
 3. Legacy XDG (read-only compat + deprecation note — reads old `XDG_CONFIG_HOME/workestrate/` etc. if present)
 4. Default: `~/.workestrate`
 
-Then within the resolved home, config layers merge in this order:
+Then within the resolved home, config layers merge in this order (lowest → highest precedence):
 
-1. Trusted project `./workestrate.toml` (if cwd is trusted)
-2. Registry single layer (`$WORKESTRATE_HOME/repos/<name>/workestrate.toml`)
-3. `config.reference/workestrate.toml` (shipped with tool, **synthetic fallback**)
+1. `WORKESTRATE_CONFIG_DIR` env var (bypasses discovery; single layer, no merging)
+2. Reference config (`config.reference/workestrate.toml`) — synthetic fallback shipped with the tool
+3. Context layers (registry `[contexts.<name>] layers = [...]`, in declared order; each a config repo's `workestrate.toml`)
+4. User-global overrides (`$WORKESTRATE_HOME/overrides.toml`: `[global]` applied to every context, then `[configs.<name>]` for each active context layer)
+5. Trusted project config (`./workestrate.toml` in cwd, IF cwd is in `[trusted_projects]`)
+6. Local overrides (`./workestrate.local.toml` in cwd, same trust gate as #5)
 
 Fail-closed: with no config repos registered, the synthetic reference config is used
 (placeholder secrets — `example-service plan` works; `up`/`exec` for real workload names

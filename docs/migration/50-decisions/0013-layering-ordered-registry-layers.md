@@ -1,6 +1,6 @@
 # ADR 0013: Layering via ordered registry layers + contexts deferred
 
-**Status:** Accepted
+**Status:** SUPERSEDED by ADR 0019 (contexts) for the context-deferral; layer ordering stands. (Originally Accepted.)
 **Date:** 2026-07-18
 
 ## Context

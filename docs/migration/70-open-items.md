@@ -17,12 +17,12 @@ adjudications are recorded in [ADR 0020](50-decisions/0020-review-adjudications.
 | WP3 — Policy enforcement fix (entitlement order) | FIX-NOW | A4 | DONE | `05b6bb7` |
 | WP4 — Spec/code reconciliation + CI guard | FIX-NOW | D1 | DONE | `89d1658` |
 | WP5 — New-user journey unblock (`workestrate check`) | FIX-NOW | E1 | DONE (Decision 1 = standalone) | `973bff3` |
-| WP6 — Schema and semantic fixes | FIX-SOON | A3, A5, A6, C9, C10, E2 | queued | — |
-| WP7 — Trust-model docs and escape-hatch warnings | FIX-SOON | C11, C12, D7, D11, D12, D13 | queued | — |
-| WP8 — Setup-secrets alignment + missing commands | FIX-SOON | A7, E4, E5, E6, E7, E8, C13 | queued | — |
-| WP9 — Nix image completeness | FIX-SOON | B3, B4, B5, B6, B10 | queued | — |
-| WP10 — Provenance, TOCTOU, registry robustness | FIX-SOON | A9, A17=C6, A11, A12, A16, A24 | queued | — |
-| WP11 — Production-path test coverage | FIX-SOON | A21 | queued | — |
+| WP6 — Schema and semantic fixes | FIX-SOON | A3, A5, A6, C9, C10, E2 | IN PROGRESS | — |
+| WP7 — Trust-model docs and escape-hatch warnings | FIX-SOON | C11, C12, D7, D11, D12, D13 | IN PROGRESS | — |
+| WP8 — Setup-secrets alignment + missing commands | FIX-SOON | A7, E4, E5, E6, E7, E8, C13 | IN PROGRESS | — |
+| WP9 — Nix image completeness | FIX-SOON | B3, B4, B5, B6, B10 | IN PROGRESS | — |
+| WP10 — Provenance, TOCTOU, registry robustness | FIX-SOON | A9, A17=C6, A11, A12, A16, A24 | IN PROGRESS | — |
+| WP11 — Production-path test coverage | FIX-SOON | A21 | IN PROGRESS | — |
 | WP12 — Backlog sweep | BACKLOG | see WP12 item list | trickle | — |
 
 Plus post-implementation hardening: `2498f6a` hardened the `just litellm-check`

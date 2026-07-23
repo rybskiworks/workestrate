@@ -362,7 +362,7 @@ remediation plan.
 **Merge-readiness gate** (per `80-remediation-plan.md`): WP1-WP5 green; the
 trust-boundary, entitlement-ordering, and spec-examples regression tests
 pass; the holistic trust-model statement is documented in the README; no
-FIX-NOW item remains open. WP6-WP11 are immediate follow-ups (same or
+FIX-NOW item remains open. WP6-WP11 are IN PROGRESS (this wave, same or
 follow-on branch); WP12 is standing backlog.
 
 The host-batched HOST-NIX and HOST-KVM gates run in one pass at the end so
