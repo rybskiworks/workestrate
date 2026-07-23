@@ -608,20 +608,7 @@ pub fn unregister_all(state_dir: &Path) -> Result<Vec<String>> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    fn unique_state_dir(label: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "workestrate-port-{}-{}-{}",
-            label,
-            std::process::id(),
-            nanos,
-        ))
-    }
+    use crate::config::test_support::unique_state_dir;
 
     #[test]
     fn no_collision_when_no_existing_sandboxes() -> Result<()> {

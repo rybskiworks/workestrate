@@ -992,34 +992,8 @@ pub async fn down_all(state_dir: &Path) -> Result<Vec<DownResult>> {
 mod tests {
     use super::super::plan::{EgressTarget, Protocol};
     use super::network_plan_to_policy;
+    use crate::config::test_support::{unique_state_dir_runtime, TestConfigGuard};
     use crate::microsandbox::workload::{ConfigWorkload, Workload};
-    use std::path::PathBuf;
-
-    /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
-    /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
-    /// previous state on drop. Holds a global lock so env-var tests do not race
-    /// when Cargo runs them in parallel.
-    struct TestConfigGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl TestConfigGuard {
-        fn new() -> Self {
-            let lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
-            let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests")
-                .join("fixtures")
-                .join("config");
-            std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
-            Self { _lock: lock }
-        }
-    }
-
-    impl Drop for TestConfigGuard {
-        fn drop(&mut self) {
-            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
-        }
-    }
 
     #[test]
     fn litellm_network_plan_converts_without_error() -> anyhow::Result<()> {
@@ -1274,25 +1248,12 @@ mod tests {
     // The msb / MSB_HOME-mutating tests below mutate the process-global
     // MSB_HOME env var. They MUST run single-file with every other env-mutating
     // test (notably the `config::tests` family, which serialize via
-    // `crate::config::tests::ENV_TEST_LOCK`): an unsynchronized `set_var` racing
-    // with a config test's env read panics that test while it holds
+    // `crate::config::test_support::ENV_TEST_LOCK`): an unsynchronized `set_var`
+    // racing with a config test's env read panics that test while it holds
     // ENV_TEST_LOCK, poisoning the mutex and cascading ~30 PoisonError failures.
     // Acquiring ENV_TEST_LOCK (the SAME lock the config tests use) makes the
     // whole env-mutating group mutually exclusive. `serial_test`'s separate
     // group cannot help here because the config tests do not use it.
-
-    fn unique_state_dir_runtime(label: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "workestrate-runtime-{}-{}-{}",
-            label,
-            std::process::id(),
-            nanos,
-        ))
-    }
 
     #[test]
     fn refuse_message_is_byte_identical_to_pinned_text() {
@@ -1517,7 +1478,7 @@ mod tests {
         // above) so this set_var(MSB_HOME) cannot race a config test's env read.
         // Declared before `_msb` so the lock is released AFTER MsbHomeGuard
         // restores MSB_HOME on drop (incl. panic).
-        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         // `<tmp>/blocker` is a regular file, so `<MSB_HOME>/db` (=
         // `<tmp>/blocker/db`) cannot be created → init_global fails →
         // Sandbox::get returns a hard error.
@@ -1573,7 +1534,7 @@ mod tests {
     async fn down_all_instances_returns_notfound_when_msb_db_empty_but_openable(
     ) -> anyhow::Result<()> {
         // Serialize with ALL env-mutating tests (see the ENV_TEST_LOCK note above).
-        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-msb-empty-{}-{}",
             std::process::id(),
@@ -1624,7 +1585,7 @@ mod tests {
     // test's env read. Mirrors the WP-E Error test's proven idiom.
     #[allow(clippy::await_holding_lock)]
     async fn probe_liveness_leaves_stale_false_when_msb_db_unreachable() -> anyhow::Result<()> {
-        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-ps-stale-unreachable-{}-{}",
             std::process::id(),

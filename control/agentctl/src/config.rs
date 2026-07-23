@@ -2198,6 +2198,15 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+pub(crate) mod test_support;
+
+#[cfg(test)]
 pub(crate) mod tests {
     #![allow(
         clippy::unwrap_used,
@@ -2206,16 +2215,9 @@ pub(crate) mod tests {
         clippy::unwrap_in_result
     )]
     use super::*;
-
-    /// Global lock for tests that mutate process env vars.
-    ///
-    /// Cargo runs unit tests in parallel by default, and tests that set
-    /// `WORKESTRATE_CONFIG_DIR` or similar env vars would otherwise race.
-    pub static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::config::test_support::*;
 
     // ---- WP6(d)/C9: recipe/feature vocabulary validation ----
-
-    const MINIMAL_VALID_TOML: &str = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true";
 
     #[test]
     fn validate_rejects_unknown_image_recipe() {
@@ -2877,12 +2879,6 @@ pub(crate) mod tests {
 
     // --- User-global overrides tests ---
 
-    fn write_overrides(dir: &Path, content: &str) -> PathBuf {
-        let path = dir.join("overrides.toml");
-        std::fs::write(&path, content).unwrap();
-        path
-    }
-
     #[test]
     fn load_overrides_missing_file_returns_empty() -> Result<()> {
         let tmp = std::env::temp_dir().join(format!(
@@ -3316,36 +3312,6 @@ pub(crate) mod tests {
 
     // ---- A1 regression: workestrate.local.toml requires trust gate ----
 
-    /// Helper: write a minimal registry into XDG_CONFIG_HOME that marks the
-    /// given project as trusted (or NOT trusted, if no paths are passed).
-    fn write_test_registry(home: &Path, trusted_paths: &[&Path]) -> std::io::Result<()> {
-        let cfg_dir = home.join(".config").join("workestrate");
-        std::fs::create_dir_all(&cfg_dir)?;
-        let mut s = String::from("layers = []\n\n");
-        for p in trusted_paths {
-            s.push_str(&format!(
-                "[[trusted_projects]]\npath = \"{}\"\n",
-                p.display()
-            ));
-        }
-        std::fs::write(cfg_dir.join("config.toml"), s)?;
-        Ok(())
-    }
-
-    /// Build a minimal 1-workload ConfigFile TOML string. The workload name
-    /// is the discriminator for the trust-gate test.
-    fn one_workload_toml(name: &str) -> String {
-        format!(
-            "schema_version = 1\n\n\
-             [workloads.{name}]\n\
-             kind = \"agent\"\n\
-             image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
-             command = []\n\n\
-             [workloads.{name}.network]\n\
-             default_deny = true\n"
-        )
-    }
-
     /// A1 regression: with a registry present but cwd NOT trusted, a
     /// workestrate.local.toml in cwd must NOT be loaded. After trusting
     /// the project dir, the local layer MUST be loaded.
@@ -3568,57 +3534,6 @@ pub(crate) mod tests {
     }
 
     // ---- ADR 0023: resolve_home + migrate-home coverage ----
-
-    /// Snapshot env vars (+ cwd) and restore them on drop, even on panic.
-    /// Mirrors the manual save/restore in older tests but panic-safe.
-    struct EnvGuard {
-        vars: Vec<(&'static str, Option<String>)>,
-        cwd: Option<PathBuf>,
-    }
-    impl EnvGuard {
-        fn capture(keys: &'static [&'static str]) -> Self {
-            let vars = keys.iter().map(|&k| (k, std::env::var(k).ok())).collect();
-            EnvGuard {
-                vars,
-                cwd: std::env::current_dir().ok(),
-            }
-        }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (k, v) in &self.vars {
-                match v {
-                    Some(val) => std::env::set_var(k, val),
-                    None => std::env::remove_var(k),
-                }
-            }
-            if let Some(cwd) = &self.cwd {
-                let _ = std::env::set_current_dir(cwd);
-            }
-        }
-    }
-
-    const HOME_ENV_KEYS: &[&str] = &[
-        "WORKESTRATE_HOME",
-        "XDG_CONFIG_HOME",
-        "XDG_DATA_HOME",
-        "XDG_STATE_HOME",
-        "WORKESTRATE_CONFIG_DIR",
-        "WORKESTRATE_NO_PROJECT_CONFIG",
-        "HOME",
-    ];
-
-    fn uniq_dir(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "workestrate-{}-{}-{}",
-            label,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ))
-    }
 
     #[test]
     fn resolve_home_env_wins() -> Result<()> {
@@ -4259,23 +4174,6 @@ pub(crate) mod tests {
     }
 
     // ---- WP10/A11: env var name validation ----
-
-    /// Minimal valid config with one workload; the caller mutates it per test.
-    fn base_config_for_validation() -> ConfigFile {
-        let toml = r#"
-schema_version = 1
-
-[workloads.pi]
-kind = "agent"
-image = { recipe = "registry", ref = "node:24-bookworm-slim" }
-command = []
-log_stop_errors = false
-
-[workloads.pi.network]
-default_deny = true
-"#;
-        toml::from_str(toml).expect("base config must parse")
-    }
 
     #[test]
     fn validate_config_rejects_invalid_env_name() {

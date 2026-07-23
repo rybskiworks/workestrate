@@ -3232,34 +3232,8 @@ async fn cmd_run(command: &[String]) -> Result<()> {
 )]
 mod tests {
     use super::*;
+    use crate::config::test_support::TestConfigGuard;
     use std::collections::HashSet;
-    use std::path::PathBuf;
-
-    /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
-    /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
-    /// previous state on drop. Holds a global lock so env-var tests do not race
-    /// when Cargo runs them in parallel.
-    struct TestConfigGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl TestConfigGuard {
-        fn new() -> Self {
-            let lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
-            let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests")
-                .join("fixtures")
-                .join("config");
-            std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
-            Self { _lock: lock }
-        }
-    }
-
-    impl Drop for TestConfigGuard {
-        fn drop(&mut self) {
-            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
-        }
-    }
 
     /// `ps --json` must emit the exact shape pinned by ADR 0021 §7, in the
     /// documented field order: instance, workload, context, slot, kind,
@@ -3663,7 +3637,9 @@ mod tests {
         // Hold the env-mutation lock for the whole body: this test mutates
         // HOME / WORKESTRATE_CONFIG_DIR and must not race any other env-mutating
         // test (would otherwise corrupt env reads and poison ENV_TEST_LOCK).
-        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap();
         // Create a temp config repo with a minimal workestrate.toml
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-cmd-new-test-{}-{}",
@@ -3728,7 +3704,7 @@ mod tests {
     #[test]
     fn cmd_new_no_config_repo_produces_clear_error() {
         // Hold the env-mutation lock for the whole body (see note above).
-        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         // Use a temp HOME so no registry exists and no project config is found.
         let tmp_home = std::env::temp_dir().join(format!(
             "workestrate-no-config-test-{}-{}",
@@ -3904,7 +3880,7 @@ mod tests {
 
     #[test]
     fn project_root_optional_returns_none_outside_workbench() {
-        let _lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let old_root = std::env::var("AGENTCTL_ROOT").ok();
         let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
         let tmp = std::env::temp_dir().join(format!(
@@ -3950,7 +3926,7 @@ mod tests {
     /// "(not in a workbench checkout — skipped)".
     #[test]
     fn cmd_check_degrades_gracefully_outside_workbench() -> Result<()> {
-        let _lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
 
         let tmp_home = std::env::temp_dir().join(format!(
             "workestrate-e1-{}-{}",

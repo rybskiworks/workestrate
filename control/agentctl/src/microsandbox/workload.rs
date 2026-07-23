@@ -824,32 +824,7 @@ fn secret_line_source<'a>(
 )]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
-    /// fixture and restores the previous state on drop. Holds a global lock so
-    /// env-var tests do not race when Cargo runs them in parallel.
-    struct TestConfigGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl TestConfigGuard {
-        fn new() -> Self {
-            let lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
-            let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests")
-                .join("fixtures")
-                .join("config");
-            std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
-            Self { _lock: lock }
-        }
-    }
-
-    impl Drop for TestConfigGuard {
-        fn drop(&mut self) {
-            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
-        }
-    }
+    use crate::config::test_support::TestConfigGuard;
 
     #[test]
     fn build_path_reads_per_agent_env_override() -> Result<()> {

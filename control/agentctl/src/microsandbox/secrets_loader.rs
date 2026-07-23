@@ -283,7 +283,7 @@ mod tests {
     fn missing_env_enc_produces_required_secret_error() {
         // With multi-layer loading, a missing .env.enc is not an error per layer.
         // The hard failure is an unsatisfied required secret.
-        let _lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let tmp =
             std::env::temp_dir().join(format!("workestrate-secrets-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn resolve_secrets_layers_uses_config_dir_override() -> Result<()> {
-        let _lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let tmp =
             std::env::temp_dir().join(format!("workestrate-layers-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp)?;
