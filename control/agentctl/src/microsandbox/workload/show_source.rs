@@ -1,0 +1,178 @@
+use super::config::ConfigWorkload;
+use super::secrets::secret_line_source;
+use super::Workload;
+
+impl ConfigWorkload {
+    pub(super) fn show_source_render(&self) -> String {
+        let plan = self.plan();
+        let mut out = String::new();
+        let default_source = "core";
+        let secret_prov = crate::merge::get_secret_provenance();
+
+        let source_of = |key: &str| -> &str {
+            self.provenance
+                .as_ref()
+                .and_then(|p| p.get(key))
+                .map(|s| s.as_str())
+                .unwrap_or(default_source)
+        };
+
+        let write_line = |out: &mut String, prefix: &str, content: &str, source: &str| {
+            let full = format!("{}{}", prefix, content);
+            let pad = if full.len() < 48 {
+                " ".repeat(48 - full.len())
+            } else {
+                "  ".to_string()
+            };
+            out.push_str(&full);
+            out.push_str(&pad);
+            out.push('[');
+            out.push_str(source);
+            out.push(']');
+            out.push('\n');
+        };
+
+        write_line(
+            &mut out,
+            "",
+            &format!("name: {}", plan.name),
+            default_source,
+        );
+        if let Some(img) = &plan.image {
+            write_line(
+                &mut out,
+                "",
+                &format!("image: {}", img),
+                source_of(&format!("workloads.{}.image", self.name)),
+            );
+        }
+        if let Some(wd) = &plan.workdir {
+            write_line(
+                &mut out,
+                "",
+                &format!("workdir: {}", wd),
+                source_of(&format!("workloads.{}.workdir", self.name)),
+            );
+        }
+        if !plan.command.is_empty() {
+            write_line(
+                &mut out,
+                "",
+                &format!("command: {}", plan.command.join(" ")),
+                source_of(&format!("workloads.{}.command", self.name)),
+            );
+        }
+        if let Some(cpus) = plan.cpus {
+            write_line(
+                &mut out,
+                "",
+                &format!("cpus: {}", cpus),
+                source_of(&format!("workloads.{}.cpus", self.name)),
+            );
+        }
+        if let Some(mem) = plan.memory_mib {
+            write_line(
+                &mut out,
+                "",
+                &format!("memory: {} MiB", mem),
+                source_of(&format!("workloads.{}.memory_mib", self.name)),
+            );
+        }
+        let env_source = source_of(&format!("workloads.{}.env", self.name));
+        for e in &plan.env {
+            let source = if e.is_secret {
+                // WP6(b)/A5: resolve via the SECRET DEF NAME so remapped
+                // secrets attribute to their true layer, not "core".
+                secret_line_source(
+                    &e.name,
+                    &self.secret_def_names,
+                    &self.name,
+                    self.provenance.as_ref(),
+                    secret_prov.as_ref(),
+                    default_source,
+                )
+            } else {
+                env_source
+            };
+            write_line(&mut out, "", &format!("env: {}", e), source);
+        }
+        for se in &plan.secret_env {
+            // WP6(b)/A5: se.name is the EXPOSED name (e.g. OPENAI_API_KEY);
+            // merge provenance is keyed by the SECRET DEF NAME (e.g.
+            // LITELLM_AUTH). Resolve via the def-name map.
+            let source = secret_line_source(
+                &se.name,
+                &self.secret_def_names,
+                &self.name,
+                self.provenance.as_ref(),
+                secret_prov.as_ref(),
+                default_source,
+            );
+            write_line(
+                &mut out,
+                "",
+                &format!(
+                    "secret_env: {} (redacted, allowed: {})",
+                    se.name,
+                    se.allowed_hosts.join(", ")
+                ),
+                source,
+            );
+        }
+        let ports_source = source_of(&format!("workloads.{}.ports", self.name));
+        for p in &plan.ports {
+            write_line(
+                &mut out,
+                "",
+                &format!("port: {}:{}", p.host, p.guest),
+                ports_source,
+            );
+        }
+        let mounts_source = source_of(&format!("workloads.{}.mounts", self.name));
+        for m in &plan.mounts {
+            let ro = if m.read_only { " (ro)" } else { "" };
+            write_line(
+                &mut out,
+                "",
+                &format!("mount: {}:{}{}", m.host, m.guest, ro),
+                mounts_source,
+            );
+        }
+        write_line(
+            &mut out,
+            "",
+            &format!("network: default_deny={}", plan.network.default_deny),
+            source_of(&format!("workloads.{}.network.default_deny", self.name)),
+        );
+        let ingress_source = source_of(&format!("workloads.{}.network.ingress", self.name));
+        for rule in &plan.network.ingress_rules {
+            write_line(
+                &mut out,
+                "  ",
+                &format!("ingress: {}:{} {}", rule.protocol, rule.port, rule.scope),
+                ingress_source,
+            );
+        }
+        for rule in &plan.network.egress_rules {
+            write_line(
+                &mut out,
+                "  ",
+                &format!("egress: {}:{} -> {}", rule.protocol, rule.port, rule.target),
+                "core",
+            );
+        }
+        for rule in &plan.network.deny_rules {
+            write_line(
+                &mut out,
+                "  ",
+                &format!("egress: deny domain suffix {}", rule.domain_suffix),
+                source_of(&format!(
+                    "workloads.{}.network.deny.{}",
+                    self.name, rule.domain_suffix
+                )),
+            );
+        }
+
+        out
+    }
+}
