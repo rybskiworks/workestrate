@@ -12,12 +12,26 @@
 #       via the lib helper.
 #   (5) Bare repo-root path literals in nix code (outside `src =`/`lockFile =`
 #       fields, which are the bounded escape hatches).
+#   (6) Impure-pattern references in docs/**/*.md (including docs/migration/):
+#       `getFlake ... toString`, `nix eval --impure <arg>`, `toString ./.`.
+#       Docs are where these patterns historically leaked into subagent-run
+#       regression gates (see docs/nix-store-accumulation-report.md), so the
+#       docs tree is scanned too.
 #
 # Files scanned: *.nix under the repo root (flake.nix, nix/, templates/),
-#                plus *.sh under scripts/ and the justfile.
+#                plus *.sh under scripts/ and the justfile,
+#                plus *.md under docs/ (Check 6).
 #
-# Allowlist: lines matching `# allow: <reason>` are skipped. Use sparingly —
-# every allowlist entry is a documented purity exception.
+# Allowlists:
+#   * Line level: lines matching `# allow: <reason>` are skipped in every
+#     scanned file type (belt-and-suspenders in docs). Use sparingly — every
+#     allowlist entry is a documented purity exception.
+#   * File level (docs only): DOCS_ALLOWLIST below names whole-document
+#     discussion contexts where the patterns legitimately appear in narrative
+#     prose, code blocks, and rule statements. Line-comments in markdown prose
+#     would be fragile and noisy; a file allowlist is explicit, auditable,
+#     and in one place. Add a file here ONLY when the document's purpose is
+#     to discuss/forbid the pattern, not to invoke it.
 #
 # Wired into `just lint-nix` and `just verify`.
 
@@ -31,6 +45,19 @@ add_violation() {
     violations+=("$1")
 }
 
+# File-level docs allowlist for Check 6. These three files are whole-document
+# discussion contexts where the impure patterns appear in narrative prose,
+# code blocks, and rule statements — they document/forbid the pattern rather
+# than invoke it:
+#   docs/nix-purity.md                              — FORBIDS the pattern (rules)
+#   docs/nix-store-accumulation-report.md           — incident narrative
+#   docs/migration/nix-store-gc-remediation-spec.md — spec BEFORE examples
+DOCS_ALLOWLIST=(
+    "docs/nix-purity.md"
+    "docs/nix-store-accumulation-report.md"
+    "docs/migration/nix-store-gc-remediation-spec.md"
+)
+
 # Gather the file list (skip this script itself).
 self_path="scripts/check-nix-paths.sh"
 nix_files=()
@@ -43,6 +70,17 @@ while IFS= read -r -d '' f; do
     [ "$f" = "$self_path" ] && continue
     sh_files+=("$f")
 done < <(find scripts justfile -type f \( -name "*.sh" -o -name "justfile" \) -print0 2>/dev/null)
+
+# Gather docs files for Check 6 (skip the file-level allowlist).
+docs_files=()
+while IFS= read -r -d '' f; do
+    skip=0
+    for allowed in "${DOCS_ALLOWLIST[@]}"; do
+        [ "$f" = "$allowed" ] && skip=1 && break
+    done
+    [ "$skip" -eq 1 ] && continue
+    docs_files+=("$f")
+done < <(find docs -type f -name "*.md" -print0 2>/dev/null)
 
 is_allowlisted() {
     case "$1" in *"# allow:"*) return 0 ;; esac
@@ -161,6 +199,34 @@ for f in "${nix_files[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
+# Check 6: impure-pattern references in docs/**/*.md.
+# Patterns: `getFlake ... toString`, `nix eval --impure <arg>` (invocation
+# form — a trailing flag/argument is required so backtick-quoted prose
+# mentions like "`nix eval --impure` against a ..." do not match), and
+# `toString ./.`. Files in DOCS_ALLOWLIST are skipped entirely (gathered
+# above); `# allow:` per-line suppression also applies.
+# ---------------------------------------------------------------------------
+for f in "${docs_files[@]}"; do
+    [ -f "$f" ] || continue
+    lineno=0
+    while IFS= read -r line; do
+        lineno=$((lineno + 1))
+        if is_allowlisted "$line"; then continue; fi
+        case "$line" in
+            *getFlake*toString*)
+                add_violation "$f:$lineno: docs reference to getFlake with toString (impure self-referential flake fetching): $line"
+                ;;
+            *"nix eval --impure -"*|*"nix eval --impure '"*)
+                add_violation "$f:$lineno: docs reference to 'nix eval --impure' invocation (use the git-filtered .# ref form): $line"
+                ;;
+            *"toString ./."*)
+                add_violation "$f:$lineno: docs reference to 'toString ./.' (raw working-tree copy — use a flake input or the .# ref form): $line"
+                ;;
+        esac
+    done < "$f"
+done
+
+# ---------------------------------------------------------------------------
 # Report.
 # ---------------------------------------------------------------------------
 if [ "${#violations[@]}" -gt 0 ]; then
@@ -175,4 +241,4 @@ if [ "${#violations[@]}" -gt 0 ]; then
     exit 1
 fi
 
-echo "OK: no nix-purity violations (scanned ${#nix_files[@]} nix files + ${#sh_files[@]} shell/justfile files)."
+echo "OK: no nix-purity violations (scanned ${#nix_files[@]} nix files + ${#sh_files[@]} shell/justfile files + ${#docs_files[@]} docs files)."

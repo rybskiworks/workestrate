@@ -254,48 +254,86 @@ gc:
     nix-collect-garbage --delete-old
     nix store optimise
 
-# Passive store audit (informational, NON-BLOCKING). Reports the top-20
-# store paths by closure size + flags any *-source paths that reference the
-# ai-workbench repo (impure path-style copy probe). Wired into `verify` as
-# the FINAL step — never fails the gate, even when findings exist (those
-# are reported as warnings; investigate via the active `lint-nix` step).
-# Skips with a one-line note when nix is unavailable (e.g., this container).
-# This is the passive complement to the active `lint-nix`.
+# Store audit: top-20 report (informational) + BLOCKING source-path gate.
+# Reports the top-20 store paths by closure size, then fails (exit 1) if any
+# *ai-workbench*-source path exceeds 50 MB closure size — the impure
+# path-style copy probe, now enforced by scripts/store-audit.py
+# --fail-if-source-over. Wired into `verify` as the FINAL step.
+# Non-blocking only when nix or python3 is unavailable, or when
+# `nix path-info` itself fails (daemon/DB errors degrade to a note, exit 0) —
+# the gate fails ONLY on actual oversized source paths. This is the passive
+# complement to the active `lint-nix`.
 store-audit:
     #!/usr/bin/env bash
-    # NOTE: deliberately NO `set -e` — this recipe MUST NOT fail the
-    # verify gate. `set -uo pipefail` catches unset-variable bugs during
-    # development + surfaces pipe failures via `$?` without aborting.
+    # NOTE: deliberately NO `set -e` — daemon/DB/parse failures MUST NOT
+    # fail the verify gate. `set -uo pipefail` catches unset-variable bugs
+    # + surfaces pipe failures via `$?` without aborting. The python exit
+    # code (1 on oversized source paths) is what propagates out of the recipe.
     set -uo pipefail
     if ! command -v nix >/dev/null 2>&1; then
         echo "store-audit: SKIP (nix not on PATH — run on a nix-capable host for the audit)"
         exit 0
     fi
-    echo "=== store-audit: top-20 store paths by closure size ==="
-    # Each pipe is wrapped in `|| echo` so a daemon / DB / parse failure
-    # degrades to an informational message rather than aborting the recipe.
-    # The report logic lives in scripts/store-audit.py (stdlib-only) — kept
-    # out of the justfile because just's parser choked on the inline python.
     if ! command -v python3 >/dev/null 2>&1; then
-        echo "(python3 not on PATH — non-blocking)"
-    else
-        nix path-info --all --json 2>/dev/null \
-          | python3 scripts/store-audit.py \
-          || echo "(nix path-info failed unexpectedly — non-blocking)"
+        echo "store-audit: SKIP (python3 not on PATH — non-blocking)"
+        exit 0
     fi
-    echo ""
-    echo "=== store-audit: *-source paths referencing ai-workbench repo (impure-path probe) ==="
-    matching=$(nix path-info --all 2>/dev/null | grep -E "ai-workbench.*-source$" | head -20 || true)
-    if [ -z "$matching" ]; then
-        echo "(none — no unbounded source copies detected)"
-    else
-        echo "WARNING: *-source path(s) reference ai-workbench (non-blocking):"
-        echo "$matching"
-        echo ""
-        echo "Investigate the cleanSourceWith filter if any of these are unexpected."
+    echo "=== store-audit: top-20 store paths by closure size ==="
+    # Capture once; a daemon / DB failure degrades to an informational note
+    # rather than aborting the recipe. The report + source-path gate logic
+    # lives in scripts/store-audit.py (stdlib-only) — kept out of the
+    # justfile because just's parser choked on the inline python.
+    path_info=$(nix path-info --all --json 2>/dev/null || true)
+    if [ -z "$path_info" ]; then
+        echo "(nix path-info failed unexpectedly — non-blocking)"
+        exit 0
     fi
-    # Safety net: always exit 0 so `verify` cannot fail on this step.
-    exit 0
+    echo "$path_info" | python3 scripts/store-audit.py --fail-if-source-over 50
+
+# Periodic host/CI check: measures /nix/store growth from one pure eval
+# (nix eval .#packages.x86_64-linux.pi-image.drvPath). Asserts <50M new
+# source paths (exit 1 when the byte delta exceeds 50_000_000). Non-blocking
+# style consistent with store-audit: skips with exit 0 when nix is absent.
+# Run periodically on a nix-capable host or in CI to catch source-closure
+# regressions early. NOT wired into `verify` (it requires nix + is slow).
+store-delta-check:
+    #!/usr/bin/env bash
+    # NOTE: deliberately NO `set -e` — non-blocking style: skips with exit 0
+    # when nix is absent; exits 1 only when nix is present AND the measured
+    # store delta exceeds 50 MiB. `set -uo pipefail` catches unset-variable
+    # bugs + surfaces pipe failures via `$?` without aborting.
+    set -uo pipefail
+    if ! command -v nix >/dev/null 2>&1; then
+        echo "store-delta-check: SKIP (nix not on PATH — run on a nix-capable host)"
+        exit 0
+    fi
+    before=$(du -sb /nix/store 2>/dev/null | awk '{print $1}')
+    if [ -z "${before:-}" ]; then
+        echo "store-delta-check: SKIP (could not measure /nix/store before eval)"
+        exit 0
+    fi
+    echo "store-delta-check: /nix/store before = ${before} bytes"
+    # Pure eval of the pi-image drvPath (git-filtered .# ref — must not copy
+    # the raw working tree). Failure to eval is non-blocking here; the byte
+    # delta is the assertion.
+    if ! nix eval .#packages.x86_64-linux.pi-image.drvPath >/dev/null 2>&1; then
+        echo "store-delta-check: SKIP (nix eval of pi-image drvPath failed — run on a nix-capable host)"
+        exit 0
+    fi
+    after=$(du -sb /nix/store 2>/dev/null | awk '{print $1}')
+    if [ -z "${after:-}" ]; then
+        echo "store-delta-check: SKIP (could not measure /nix/store after eval)"
+        exit 0
+    fi
+    echo "store-delta-check: /nix/store after  = ${after} bytes"
+    delta=$((after - before))
+    echo "store-delta-check: delta = ${delta} bytes"
+    threshold=50000000
+    if [ "$delta" -gt "$threshold" ]; then
+        echo "FAIL: store-delta-check: /nix/store grew by ${delta} bytes (> ${threshold}) from one pure eval — unbounded source copy regression" >&2
+        exit 1
+    fi
+    echo "OK: store-delta-check: delta ${delta} bytes within ${threshold}-byte budget"
 
 
 # Lint nix code for purity violations: --impure flags, builtins.getFlake
