@@ -57,32 +57,58 @@
           vocabulary = recipesForPkgs.vocab;
           buildWorkloadImage = recipesForPkgs.image.nix-layered;
 
-          buildImagesFromConfig = { pkgs, config }:
+          # B6 (WP9): buildImagesFromConfig resolves `flake://<name>` URIs in
+          # binary.src against the `sources` attrset (name -> path/derivation).
+          # This keeps the core flake pure (no builtins.getFlake / impure
+          # fetches): the config-repo flake declares its source inputs and
+          # passes them via `sources`. An unresolved `flake://` URI is a hard
+          # error naming the URI so misconfiguration fails loudly at eval.
+          buildImagesFromConfig = { pkgs, config, sources ? {} }:
             let
               recipesForPkgs = import ./nix/lib/recipes.nix { inherit pkgs; };
+              lib = pkgs.lib;
+
+              # Resolve a binary.src string: `flake://<name>` -> sources.<name>;
+              # any other value is returned as-is (literal store path / path
+              # string already resolved by the caller).
+              resolveSrc = srcStr:
+                if lib.hasPrefix "flake://" srcStr then
+                  let name = lib.removePrefix "flake://" srcStr; in
+                  if sources ? ${name} then
+                    sources.${name}
+                  else
+                    throw "buildImagesFromConfig: unresolved flake:// URI '${srcStr}'; pass sources.${name} = <path/derivation> to buildImagesFromConfig"
+                else
+                  srcStr;
 
               buildBinary = binary:
                 if binary.recipe == "bun-compile" then
                   recipesForPkgs.build.bun-compile {
-                    src = binary.src;
+                    src = resolveSrc binary.src;
                     entrypoint = binary.entrypoint;
                     worker = binary.worker;
+                    # B4: runtime asset mirroring (list of {from, to}).
+                    assets = binary.assets or [];
                   }
                 else if binary.recipe == "npm-build" then
                   recipesForPkgs.build.npm-build {
-                    src = binary.src;
+                    src = resolveSrc binary.src;
                     npmDepsHash = binary.npm_deps_hash;
-                    installLayout = binary.install_layout or "app";
+                    # B3: optional build/install overrides (pi's 4-workspace
+                    # build order + monorepo install layout).
+                    dontNpmBuild = binary.dont_npm_build or false;
+                    buildPhase = binary.build_phase or null;
+                    installPhase = binary.install_phase or null;
                   }
                 else if binary.recipe == "pip-install" then
                   recipesForPkgs.build.pip-install {
-                    source = binary.src;
+                    source = resolveSrc binary.src;
                     requirementsFile = binary.requirements_file or "requirements.txt";
                     target = binary.target or ".deps";
                   }
                 else if binary.recipe == "bun-install" then
                   recipesForPkgs.build.bun-install {
-                    source = binary.src;
+                    source = resolveSrc binary.src;
                   }
                 else
                   throw "unknown binary recipe: ${binary.recipe}";

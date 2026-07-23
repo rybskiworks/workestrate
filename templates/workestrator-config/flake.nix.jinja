@@ -13,9 +13,22 @@
       pkgs = nixpkgs.legacyPackages.${system};
       config = builtins.fromTOML (builtins.readFile ./workestrate.toml);
     in {
-      # Build this repo's nix-layered images using core's exported recipes
+      # Build this repo's nix-layered images using core's exported recipes.
+      # B6 (WP9): `sources` maps `flake://<name>` URIs in workestrate.toml
+      # binary.src fields to flake inputs / store paths. Declare one input per
+      # source your config references and pass it here, e.g. for a config using
+      # `src = "flake://pi"` and `src = "flake://tempest"`:
+      #
+      #   inputs.pi.url     = "github:georgrybski/pi";      inputs.pi.flake     = false;
+      #   inputs.tempest.url = "github:georgrybski/T3MP3ST"; inputs.tempest.flake = false;
+      #   ...
+      #   sources = { pi = pi; tempest = tempest; };
+      #
+      # An empty `sources` is valid only if no binary.src uses `flake://`;
+      # any unresolved `flake://<name>` URI is a hard error at eval naming the URI.
       packages.${system} = workestrator.lib.${system}.buildImagesFromConfig {
         inherit pkgs config;
+        sources = { };
       };
 
       # Config-repo CI: validate against core's schema
