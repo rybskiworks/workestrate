@@ -156,9 +156,8 @@ from the active config repo before starting sandboxes or running commands.
    |---|---|
    | `LITELLM_MASTER_KEY` | Local LiteLLM proxy authentication (any `sk-…` string; `sk-change-me-local-only` is rejected) |
    | `OPENROUTER_API_KEY` | OpenRouter provider |
-   | `KIMI_CODE_API_KEY` | Kimi for Coding provider |
-
-   | `NEURALWATT_API_KEY` | Neuralwatt provider |
+    | `KIMI_CODE_API_KEY` | Kimi for Coding provider |
+    | `NEURALWATT_API_KEY` | Neuralwatt provider |
    | `MINIMAX_CODING_API_KEY` | MiniMax Coding provider |
    | `GITHUB_TOKEN` | GitHub Personal Access Token for agent sandboxes (git operations + API) |
    | `ODYSSEUS_ADMIN_PASSWORD` | Odysseus admin login (required because `AUTH_ENABLED=true`; without it Odysseus auto-generates a random password printed to logs) |
@@ -658,10 +657,10 @@ clone the agent repos into `agents/<name>/repo` only if you intend to run them.
 ## Important notes
 
 - **M1 scope.** Sandbox plans, the `workestrate` CLI, and the LiteLLM
-  proxy are compile-checked and exercised against `nix build`. Running
-  microVMs at runtime requires a host with `/dev/kvm`; this
-  development container has none, so end-to-end agent runs have only
-  been verified up to the planning stage.
+  proxy are implemented and cargo-verified in-container. Runtime
+  `up`/`exec`/detached-mode is HOST-KVM gated (pending runtime validation;
+  this container has no `/dev/kvm`), so end-to-end agent runs are
+  plan-verified but not yet runtime-validated.
 - **In-memory LiteLLM.** No Postgres, no virtual keys, no persistent
   state. Agents reuse `LITELLM_MASTER_KEY` for the lifetime of the
   proxy; rotating the master key requires a `litellm down` followed by

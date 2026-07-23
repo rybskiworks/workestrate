@@ -242,8 +242,7 @@ config is used (placeholder secrets — `example-service plan` works;
   — merge engine, fixture tests, `plan --show-source`, multi-recipient
   SOPS template, copier template. HOST-GATE items (copier copy,
   multi-recipient live, config-repo nix build) deferred.
-- **Review remediation:** WP1–WP5 DONE (merge-gate MET); WP6–WP11 IN
-  PROGRESS; WP12 = backlog.
+- **Review remediation:** WP1–WP11 DONE; WP12 = backlog.
 
 ### Host-gated (remaining unvalidated pieces)
 

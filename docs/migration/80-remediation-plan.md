@@ -41,8 +41,8 @@ main-lead synthesis conducted against `migration/tool-model` @ `12e89b6`.
 | No FIX-NOW item remains open | **DONE** |
 | Independent verification verdict | MET-WITH-CONDITIONS -> MET (the two conditions were: (a) litellm-check recipe portability — closed by `2498f6a`; (b) docs status flip — closed by this commit) |
 
-WP6–WP11 may land as immediate follow-ups on the same branch or a follow-on
-branch; they do not block merge but should be tracked.
+WP6–WP11 have landed as follow-ups on this branch; they did not block
+merge and are now tracked as DONE (see the WP6–WP11 status block below).
 
 ### Merge-readiness gate (definition, retained for the record)
 
@@ -70,8 +70,13 @@ The branch merges when **all** of the following hold:
 Plus the post-implementation hardening commit:
 - `2498f6a` — `fix(just): litellm-check python fallback for non-devshell environments`. Closed the first independent-verification condition.
 
-WP6–WP11 status (queued, do not block merge):
-- WP6 (schema/semantic fixes: A3/A5/A6/C9/C10/E2), WP7 (trust-model docs: C11/C12/D7/D11/D12/D13), WP8 (setup-secrets alignment + missing commands: A7/E4/E5/E6/E7/E8/C13), WP9 (Nix image completeness: B3/B4/B5/B6/B10), WP10 (provenance/TOCTOU/registry robustness: A9/A17=C6/A11/A12/A16/A24), WP11 (production-path test coverage: A21) — all queued for follow-up.
+WP6–WP11 status: ALL DONE.
+- WP6 (schema/semantic fixes: A3/A5/A6/C9/C10/E2) — DONE (`56abadb`)
+- WP7 (trust-model docs: C11/C12/D7/D11/D12/D13) — DONE (`fe769b3`)
+- WP8 (setup-secrets alignment + missing commands: A7/E4/E5/E6/E7/E8/C13) — DONE (`619cc56`, `0b90810`, `3d8d37e`, `aa54496`)
+- WP9 (Nix image completeness: B3/B4/B5/B6/B10) — DONE (`7b5e3b3`)
+- WP10 (provenance/TOCTOU/registry robustness: A9/A17=C6/A11/A12/A16/A24) — DONE (`980854f`)
+- WP11 (production-path test coverage: A21) — DONE (`control/agentctl/tests/production_path.rs` tracked in this consolidation wave)
 
 ### Disk-pressure note (probe artifact, not a defect)
 
@@ -506,7 +511,7 @@ check` from `/tmp` exits 0 with helpful output (HOST-NIX).
 
 ---
 
-### WP6 — Schema and semantic fixes - FIX-SOON - Rust/Tooling
+### WP6 — Schema and semantic fixes - FIX-SOON - Rust/Tooling — DONE (`56abadb`)
 
 **Goal:** enforce `schema_version`; align env merge with secret_env; fix
 provenance keys; honor custom env_override in the template matcher; tighten
@@ -577,7 +582,7 @@ without acute security impact.
 
 ---
 
-### WP7 — Trust-model documentation and escape-hatch warnings - FIX-SOON - Docs/Tooling
+### WP7 — Trust-model documentation and escape-hatch warnings - FIX-SOON - Docs/Tooling — DONE (`fe769b3`)
 
 **Goal:** state the operator-trust model holistically; warn on `run`;
 clean up stale docs.
@@ -630,7 +635,7 @@ spec-examples test from WP4 still green.
 
 ---
 
-### WP8 — Setup-secrets alignment and missing commands - FIX-SOON - Scripts/Tooling
+### WP8 — Setup-secrets alignment and missing commands - FIX-SOON - Scripts/Tooling — DONE (`619cc56`, `0b90810`, `3d8d37e`, `aa54496`)
 
 **Goal:** make setup-secrets.sh and agentctl agree on resolution order; add
 the documented-but-missing commands.
@@ -686,7 +691,7 @@ for setup-secrets; several documented commands don't exist.
 
 ---
 
-### WP9 — Nix image completeness - FIX-SOON - Nix
+### WP9 — Nix image completeness - FIX-SOON - Nix — DONE (`7b5e3b3`)
 
 **Goal:** make the recipes that the parameterization produced actually
 build the agents they claim to.
@@ -733,7 +738,7 @@ five agent derivations build on host (HOST-NIX).
 
 ---
 
-### WP10 — Provenance, TOCTOU, and registry robustness - FIX-SOON - Rust
+### WP10 — Provenance, TOCTOU, and registry robustness - FIX-SOON - Rust — DONE (`980854f`)
 
 **Goal:** make provenance correct under the multi-thread tokio runtime;
 close the port-registry race; surface corrupt state instead of silently
@@ -793,7 +798,7 @@ test -p agentctl` green; concurrent-port test green.
 
 ---
 
-### WP11 — Production-path test coverage - FIX-SOON - Tests
+### WP11 — Production-path test coverage - FIX-SOON - Tests — DONE (`control/agentctl/tests/production_path.rs` tracked in this consolidation wave)
 
 **Goal:** exercise the production filesystem discovery path (not just
 `WORKESTRATE_CONFIG_DIR`), so trust-gating, local layer, and canonicalization

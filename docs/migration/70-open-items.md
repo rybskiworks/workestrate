@@ -17,12 +17,12 @@ adjudications are recorded in [ADR 0020](50-decisions/0020-review-adjudications.
 | WP3 — Policy enforcement fix (entitlement order) | FIX-NOW | A4 | DONE | `05b6bb7` |
 | WP4 — Spec/code reconciliation + CI guard | FIX-NOW | D1 | DONE | `89d1658` |
 | WP5 — New-user journey unblock (`workestrate check`) | FIX-NOW | E1 | DONE (Decision 1 = standalone) | `973bff3` |
-| WP6 — Schema and semantic fixes | FIX-SOON | A3, A5, A6, C9, C10, E2 | IN PROGRESS | — |
-| WP7 — Trust-model docs and escape-hatch warnings | FIX-SOON | C11, C12, D7, D11, D12, D13 | IN PROGRESS | — |
-| WP8 — Setup-secrets alignment + missing commands | FIX-SOON | A7, E4, E5, E6, E7, E8, C13 | IN PROGRESS | — |
-| WP9 — Nix image completeness | FIX-SOON | B3, B4, B5, B6, B10 | IN PROGRESS | — |
-| WP10 — Provenance, TOCTOU, registry robustness | FIX-SOON | A9, A17=C6, A11, A12, A16, A24 | IN PROGRESS | — |
-| WP11 — Production-path test coverage | FIX-SOON | A21 | IN PROGRESS | — |
+| WP6 — Schema and semantic fixes | FIX-SOON | A3, A5, A6, C9, C10, E2 | DONE | `56abadb` |
+| WP7 — Trust-model docs and escape-hatch warnings | FIX-SOON | C11, C12, D7, D11, D12, D13 | DONE | `fe769b3` |
+| WP8 — Setup-secrets alignment + missing commands | FIX-SOON | A7, E4, E5, E6, E7, E8, C13 | DONE | `619cc56`, `0b90810`, `3d8d37e`, `aa54496` |
+| WP9 — Nix image completeness | FIX-SOON | B3, B4, B5, B6, B10 | DONE | `7b5e3b3` |
+| WP10 — Provenance, TOCTOU, registry robustness | FIX-SOON | A9, A17=C6, A11, A12, A16, A24 | DONE | `980854f` |
+| WP11 — Production-path test coverage | FIX-SOON | A21 | DONE | this wave (production_path.rs) |
 | WP12 — Backlog sweep | BACKLOG | see WP12 item list | trickle | — |
 
 Plus post-implementation hardening: `2498f6a` hardened the `just litellm-check`
@@ -315,9 +315,20 @@ relevant ADRs:
 **Status**: RESOLVED. Implemented per-key value merge across layers.
 
 `secrets_loader.rs::load_secrets()` now loads `.env.enc` from EVERY resolved
-layer in precedence order (process env < reference < registry layers in
-declared order < trusted project), merging decrypted values per-key (later
-layer wins). Per-key provenance is tracked for `plan --show-source`.
+layer in precedence order (lowest → highest), merging decrypted values
+per-key (later layer wins). Per-key provenance is tracked for
+`plan --show-source`. The full 7-layer resolution order is:
+
+1. **Process env** (only for defined secrets; lowest precedence)
+2. **`WORKESTRATE_CONFIG_DIR`** (single override, bypasses discovery)
+3. **Reference config dir** (shipped with tool — no `.env.enc` expected)
+4. **Context layers in declared order**, each with its own `.env.enc`
+   (per-repo `secrets_file` and `age_key_file` overrides honored from the
+   registry `[configs.<name>]`)
+5. **User-global secrets** (`$WORKESTRATE_HOME/secrets/.env.local.enc`) —
+   applied per-key AFTER the context's domain layers, BEFORE project layers
+6. **Trusted project dir** (cwd, if trusted) — may have `.env.enc`
+7. **Local overrides dir**
 
 Per-repo secrets config (`secrets`, `secrets_file`, `age_key_file`) is
 honored from the registry. `secrets = "none"` repos are skipped silently.
@@ -351,18 +362,14 @@ and config repos. Never commit it. The `.gitignore` entry is the guard.
 `WORKESTRATE_HOME` (commit 6a6cece) and the `migrate-xdg-to-repo.sh` →
 `migrate-home` rename (commit 7023a47) are complete.
 
-### setup-secrets.sh per-repo override alignment
+### setup-secrets.sh per-repo override alignment — RESOLVED
 
-`setup-secrets.sh` currently targets the correct config repo directory via
-`--config <name>` but hardcodes `SECRET_FILE=.env.enc` and uses
-`SOPS_AGE_KEY_FILE` env only. The Rust `load_secrets()` honors per-repo
-`secrets_file` and `age_key_file` overrides from the registry
-(`[configs.<name>]` fields). The shell script should be updated to read
-these overrides from the registry when `--config <name>` is used, so that
-`setup-secrets --config team init` uses `team`'s `age_key_file` and
-`secrets_file` automatically.
-
-**Non-blocking**: users can set `SOPS_AGE_KEY_FILE` manually as a workaround.
+**Status**: RESOLVED by WP8-1 (`619cc56`). The `workestrate secrets-target`
+command prints the resolved secrets file + age key file for a config repo,
+and `setup-secrets.sh` now aligns its `TARGET_DIR`/`SECRET_FILE`/age-key-file
+resolution with the Rust `load_secrets()` per-repo override chain. Passing
+`--config <name>` resolves `team`'s `age_key_file` and `secrets_file`
+overrides from the registry `[configs.<name>]` automatically.
 
 ### sops+age integration tests in CI
 
