@@ -248,24 +248,39 @@ pub enum DownStatus {
     Error,
 }
 
-/// One row of `workestrate ps` output. Pure: no msb calls.
+/// Whether a `ps` row is the singleton instance or a parallel instance.
+/// Serialized lowercase to match ADR 0021 §7 (`"singleton"` / `"parallel"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum PsKind {
+    Singleton,
+    Parallel,
+}
+
+/// One row of `workestrate ps` output. Pure: no msb calls. The `stale` flag
+/// is the exception — it is populated by the async caller via
+/// [`probe_liveness`]; [`ps`] itself leaves it `false`.
 #[derive(Debug, Clone)]
 pub struct PsEntry {
     pub instance: String,
     pub workload: String,
     pub context: Option<String>,
+    /// Singleton slot derived from `instance`: the whole string when there is
+    /// no `@`, or the part before the first `@` for a parallel instance.
+    pub slot: String,
+    /// Singleton vs parallel instance (presence of `@` in `instance`).
+    pub kind: PsKind,
     /// Effective host:guest port pairs (post-offset host). Legacy records
     /// synthesize `{host: p, guest: p}` from the bare host-port list.
     pub ports: Vec<PortMapping>,
     /// RFC3339 timestamp the instance was registered, or empty for legacy.
-    pub created: String,
-    /// Best-effort staleness flag; populated by callers that can reach msb.
-    /// The pure [`ps`] function always sets this to `false`.
-    //
-    // Surfaced to future `ps --json` / dashboard consumers; the current text
-    // renderer doesn't print it, so it's exercised by tests until the JSON
-    // view lands.
-    #[allow(dead_code)]
+    /// Renamed from `created` to match ADR 0021 §7 (`started_at`).
+    pub started_at: String,
+    /// Effective `--port-offset N` applied when this instance was started.
+    /// `None` for legacy records and `--port-offset 0`.
+    pub port_offset: Option<u16>,
+    /// Best-effort staleness flag; set by [`probe_liveness`] (`false` from
+    /// [`ps`]). Surfaced in both `ps --json` and the text footer (ADR 0021 §4).
     pub stale: bool,
 }
 
@@ -318,16 +333,87 @@ pub fn ps(state_dir: &Path) -> Result<Vec<PsEntry>> {
             } else {
                 r.port_pairs
             };
+            let kind = if slots::instance_id_of(&r.instance).is_some() {
+                PsKind::Parallel
+            } else {
+                PsKind::Singleton
+            };
+            let slot = slots::slot_of_instance(&r.instance).to_string();
             PsEntry {
                 instance: r.instance,
                 workload: r.workload,
                 context: r.context,
+                slot,
+                kind,
                 ports,
-                created: r.created_at,
+                started_at: r.created_at,
+                port_offset: r.port_offset,
                 stale: false,
             }
         })
         .collect())
+}
+
+/// One instance's liveness, abstracted over the `Sandbox::get` result so the
+/// stale/unreachable mapping logic is unit-testable without the SDK's
+/// process-global DB pool (ADR 0021 §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeOutcome {
+    /// `Sandbox::get` Ok — genuinely running.
+    Alive,
+    /// `Sandbox::get` SandboxNotFound — registry record exists, sandbox gone.
+    NotFound,
+    /// `Sandbox::get` other Err — msb DB unreachable (e.g. ENOTDIR on db dir).
+    Unreachable,
+}
+
+/// Apply a parallel slice of liveness outcomes to `ps` entries in place
+/// (ADR 0021 §4): NotFound → `stale = true`; Alive / Unreachable → `stale = false`.
+/// Returns the count of Unreachable outcomes so the caller emits ONE honest
+/// stderr note. Pure: no msb, no I/O — the async SDK calls happen in
+/// [`probe_liveness`], which delegates here.
+fn apply_liveness_outcomes(entries: &mut [PsEntry], outcomes: &[ProbeOutcome]) -> usize {
+    let mut unreachable = 0usize;
+    for (e, o) in entries.iter_mut().zip(outcomes) {
+        e.stale = matches!(o, ProbeOutcome::NotFound);
+        if matches!(o, ProbeOutcome::Unreachable) {
+            unreachable += 1;
+        }
+    }
+    unreachable
+}
+
+/// Best-effort liveness probe for a batch of `ps` entries (ADR 0021 §4).
+///
+/// Mutates each entry's `stale` flag in place and returns the count of
+/// instances whose liveness could NOT be verified because the msb DB was
+/// unreachable. Per-instance outcomes:
+///
+/// - `Sandbox::get` Ok              → genuinely running        → `stale = false`.
+/// - `Sandbox::get` SandboxNotFound → state record, sandbox gone → `stale = true`.
+/// - `Sandbox::get` other Err       → msb DB unreachable        → `stale` left
+///   `false`; counted in the return value so the caller emits ONE honest
+///   stderr note rather than per-row false confidence.
+///
+/// [`ps`] stays pure (no msb); this is the only place `ps` rows touch msb,
+/// keeping the pure function unit-testable. Sequential — N is small (rarely
+/// more than a handful of instances per host). The stale/unreachable mapping
+/// itself lives in the pure [`apply_liveness_outcomes`].
+pub(crate) async fn probe_liveness(entries: &mut [PsEntry]) -> usize {
+    // Probe each instance sequentially via the SDK, collecting outcomes before
+    // delegating the stale/unreachable mapping to the pure helper. Collecting
+    // first means the immutable borrow of `entries` (for e.instance) is
+    // released before apply_liveness_outcomes takes it mutably.
+    let mut outcomes: Vec<ProbeOutcome> = Vec::with_capacity(entries.len());
+    for e in entries.iter() {
+        let outcome = match Sandbox::get(&e.instance).await {
+            Ok(_) => ProbeOutcome::Alive,
+            Err(MicrosandboxError::SandboxNotFound(_)) => ProbeOutcome::NotFound,
+            Err(_) => ProbeOutcome::Unreachable,
+        };
+        outcomes.push(outcome);
+    }
+    apply_liveness_outcomes(entries, &outcomes)
 }
 
 /// Compute the offset-shifted host port, failing on overflow past u16.
@@ -1180,8 +1266,9 @@ mod tests {
     // ---- ADR 0021 instance-lifecycle tests ----
 
     use super::{
-        current_rfc3339_utc, days_to_ymd, down_all_instances, format_refuse_message,
-        occupancy_from_state, ps, DownStatus, Occupancy,
+        apply_liveness_outcomes, current_rfc3339_utc, days_to_ymd, down_all_instances,
+        format_refuse_message, occupancy_from_state, probe_liveness, ps, DownStatus, Occupancy,
+        ProbeOutcome, PsEntry, PsKind,
     };
     use crate::microsandbox::plan::PortMapping;
     // The msb / MSB_HOME-mutating tests below mutate the process-global
@@ -1319,7 +1406,11 @@ mod tests {
         assert_eq!(e.ports.len(), 2);
         assert_eq!(e.ports[0].host, 14000);
         assert_eq!(e.ports[0].guest, 4000);
-        assert_eq!(e.created, "2026-07-20T14:05:42Z");
+        assert_eq!(e.started_at, "2026-07-20T14:05:42Z");
+        // ADR 0021 §7 derived fields.
+        assert_eq!(e.slot, "personal-litellm");
+        assert_eq!(e.kind, PsKind::Parallel);
+        assert_eq!(e.port_offset, Some(10000));
         assert!(!e.stale);
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
@@ -1345,6 +1436,10 @@ mod tests {
         assert_eq!(e.ports[0].guest, 4000);
         assert_eq!(e.ports[1].host, 4001);
         assert_eq!(e.ports[1].guest, 4001);
+        // Legacy record: singleton (no `@`), no port_offset, slot == instance.
+        assert_eq!(e.slot, "legacy-litellm");
+        assert_eq!(e.kind, PsKind::Singleton);
+        assert_eq!(e.port_offset, None);
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
@@ -1509,5 +1604,170 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
+    }
+
+    // ---- ADR 0021 §4 liveness probing (probe_liveness) ----
+
+    /// `probe_liveness` with an UNREACHABLE msb db must leave every entry's
+    /// `stale` flag `false` and report a non-zero unreachable count, so the
+    /// caller can emit one honest stderr note. The msb DB is made unreachable
+    /// by pointing MSB_HOME at a path under a regular file (ENOTDIR on
+    /// `<MSB_HOME>/db`), exactly as the WP-E Error test does.
+    ///
+    /// Deterministic in normal `cargo test`: a failing `init_global` does NOT
+    /// pin the SDK's process-global DB pool, so this test cannot contaminate
+    /// the WP-E Error test (or vice-versa) — both see a fresh failed init.
+    #[tokio::test]
+    // ENV_TEST_LOCK held across `.await`: safe on the single-threaded
+    // current-thread test runtime (no spawned tasks, no yield onto a contended
+    // lock). Spans the await so the set_var(MSB_HOME) cannot race a config
+    // test's env read. Mirrors the WP-E Error test's proven idiom.
+    #[allow(clippy::await_holding_lock)]
+    async fn probe_liveness_leaves_stale_false_when_msb_db_unreachable() -> anyhow::Result<()> {
+        let _env_lock = crate::config::tests::ENV_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ps-stale-unreachable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("blocker"), b"x")?;
+        let _msb = MsbHomeGuard::set(&tmp.join("blocker"));
+
+        let dir = unique_state_dir_runtime("probe-liveness-unreachable");
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "personal-litellm@canary",
+            Some("personal"),
+            "litellm",
+            &[14000],
+        )?;
+        let mut entries = ps(&dir)?;
+        assert_eq!(entries.len(), 1, "one record listed");
+        assert!(!entries[0].stale, "ps() must default stale=false");
+
+        let unreachable = probe_liveness(&mut entries).await;
+        assert_eq!(
+            unreachable, 1,
+            "the single entry's liveness could not be verified (db unreachable)"
+        );
+        assert!(
+            !entries[0].stale,
+            "unreachable db must NOT mark stale; got stale=true"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// Pure mapping logic for `ps` liveness (ADR 0021 §4). Tests the three
+    /// outcome → (stale, unreachable) branches directly against
+    /// `apply_liveness_outcomes`, WITHOUT the SDK's process-global DB pool.
+    ///
+    /// Why not an msb-DB integration test for the NotFound→stale branch: the
+    /// SDK pins its SQLite pool in a process-global OnceCell on the first
+    /// *successful* `init_global`. A writable-MSB_HOME test that triggers
+    /// NotFound PINS the pool at its tmp dir and then deletes it on cleanup,
+    /// invalidating the pool for any later test in the same process (proven
+    /// empirically: it flips a sibling `#[ignore]`'d NotFound test to a hard
+    /// error). Two such tests therefore cannot coexist in one `cargo test`
+    /// invocation. The mapping logic — which is OURS to get right — is fully
+    /// covered here; the SDK's Ok/NotFound/Err behavior is already proven by
+    /// the WP-E Error + NotFound tests. The end-to-end Unreachable path is
+    /// covered by `probe_liveness_leaves_stale_false_when_msb_db_unreachable`
+    /// above (blocker MSB_HOME, no pool pin, deterministic).
+    #[test]
+    fn apply_liveness_outcomes_marks_not_found_stale_and_counts_unreachable() {
+        use crate::microsandbox::plan::PortMapping;
+        // Three entries: NotFound (stale), Alive (not stale), Unreachable
+        // (not stale, counted). The pure helper must set stale per outcome and
+        // return the Unreachable count, regardless of any SDK state.
+        let mut entries = vec![
+            PsEntry {
+                instance: "a@x".into(),
+                workload: "w".into(),
+                context: None,
+                slot: "a".into(),
+                kind: PsKind::Parallel,
+                ports: vec![PortMapping { host: 1, guest: 1 }],
+                started_at: String::new(),
+                port_offset: None,
+                stale: false,
+            },
+            PsEntry {
+                instance: "b".into(),
+                workload: "w".into(),
+                context: None,
+                slot: "b".into(),
+                kind: PsKind::Singleton,
+                ports: vec![],
+                started_at: String::new(),
+                port_offset: None,
+                stale: false,
+            },
+            PsEntry {
+                instance: "c@y".into(),
+                workload: "w".into(),
+                context: None,
+                slot: "c".into(),
+                kind: PsKind::Parallel,
+                ports: vec![],
+                started_at: String::new(),
+                port_offset: None,
+                stale: false,
+            },
+        ];
+        let outcomes = [
+            ProbeOutcome::NotFound,    // a@x → stale
+            ProbeOutcome::Alive,       // b   → not stale
+            ProbeOutcome::Unreachable, // c@y → not stale, counted
+        ];
+        let unreachable = apply_liveness_outcomes(&mut entries, &outcomes);
+        assert_eq!(unreachable, 1, "exactly one Unreachable outcome");
+        assert!(entries[0].stale, "NotFound → stale=true");
+        assert!(!entries[1].stale, "Alive → stale=false");
+        assert!(
+            !entries[2].stale,
+            "Unreachable → stale=false (honest, not stale)"
+        );
+    }
+
+    /// `apply_liveness_outcomes` with all-Alive must leave everything
+    /// non-stale and report zero unreachable.
+    #[test]
+    fn apply_liveness_outcomes_all_alive_is_clean() {
+        let mut entries = vec![
+            PsEntry {
+                instance: "a".into(),
+                workload: "w".into(),
+                context: None,
+                slot: "a".into(),
+                kind: PsKind::Singleton,
+                ports: vec![],
+                started_at: String::new(),
+                port_offset: None,
+                stale: true, // start stale; Alive must clear it
+            },
+            PsEntry {
+                instance: "b".into(),
+                workload: "w".into(),
+                context: None,
+                slot: "b".into(),
+                kind: PsKind::Singleton,
+                ports: vec![],
+                started_at: String::new(),
+                port_offset: None,
+                stale: true,
+            },
+        ];
+        let outcomes = [ProbeOutcome::Alive, ProbeOutcome::Alive];
+        let unreachable = apply_liveness_outcomes(&mut entries, &outcomes);
+        assert_eq!(unreachable, 0);
+        assert!(!entries[0].stale, "Alive clears a pre-existing stale flag");
+        assert!(!entries[1].stale);
     }
 }

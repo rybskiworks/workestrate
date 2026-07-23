@@ -36,11 +36,9 @@ pub(crate) fn instance_name(slot: &str, instance_id: Option<&str>) -> String {
 
 /// Return the slot portion of an instance name (split at the first `@`).
 /// If the instance has no `@`, returns the whole string.
-//
-// Inverse of [`instance_name`]; retained for the ADR 0021 slot helpers surface
-// (the CLI currently round-trips slot/id through `resolve_instance_spec`
-// rather than re-deriving from the composed instance name).
-#[allow(dead_code)]
+///
+/// Inverse of [`instance_name`]; used by `ps` to derive each row's `slot`
+/// field (ADR 0021 §7) from the composed instance name.
 pub(crate) fn slot_of_instance(instance: &str) -> &str {
     match instance.split_once('@') {
         Some((slot, _)) => slot,
@@ -49,9 +47,9 @@ pub(crate) fn slot_of_instance(instance: &str) -> &str {
 }
 
 /// Return the parallel-id portion of an instance name, if any.
-//
-// Inverse of [`instance_name`]; retained for the ADR 0021 slot helpers surface.
-#[allow(dead_code)]
+///
+/// Inverse of [`instance_name`]; used by `ps` to classify a row as singleton
+/// vs parallel (ADR 0021 §7 `kind` field).
 pub(crate) fn instance_id_of(instance: &str) -> Option<&str> {
     instance.split_once('@').map(|(_, id)| id)
 }

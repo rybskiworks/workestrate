@@ -629,8 +629,15 @@ struct PsEntryJson {
     instance: String,
     workload: String,
     context: Option<String>,
+    slot: String,
+    kind: crate::microsandbox::runtime::PsKind,
+    started_at: String,
     ports: Vec<PsPortJson>,
-    created: String,
+    /// Omitted entirely when None (singleton / --port-offset 0), present only
+    /// on parallel instances started with a non-zero offset (ADR 0021 §7).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port_offset: Option<u16>,
+    stale: bool,
 }
 
 fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec<PsEntryJson> {
@@ -640,6 +647,9 @@ fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec<PsE
             instance: e.instance.clone(),
             workload: e.workload.clone(),
             context: e.context.clone(),
+            slot: e.slot.clone(),
+            kind: e.kind,
+            started_at: e.started_at.clone(),
             ports: e
                 .ports
                 .iter()
@@ -648,7 +658,8 @@ fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec<PsE
                     guest: p.guest,
                 })
                 .collect(),
-            created: e.created.clone(),
+            port_offset: e.port_offset,
+            stale: e.stale,
         })
         .collect()
 }
@@ -767,30 +778,56 @@ fn cmd_plan<W: crate::microsandbox::workload::Workload>(
 }
 
 async fn cmd_ps(json: bool) -> Result<()> {
-    use crate::microsandbox::runtime::ps;
+    use crate::microsandbox::runtime::{probe_liveness, ps};
     let state_dir = crate::config::resolve_state_dir();
-    let entries = ps(&state_dir)?;
+    let mut entries = ps(&state_dir)?;
+    // Best-effort liveness probe (ADR 0021 §4). ps() stays pure; this is the
+    // only place ps rows touch msb. When the msb DB is unreachable we cannot
+    // distinguish running from stale, so emit one honest stderr note rather
+    // than silently trusting the registry records.
+    let unreachable = probe_liveness(&mut entries).await;
+    if unreachable > 0 {
+        eprintln!(
+            "warning: could not verify liveness of {n} instance(s) via msb (db unreachable); stale flags may be inaccurate",
+            n = unreachable,
+        );
+    }
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&ps_entries_json(&entries))?
         );
     } else {
-        print_ps_text(&entries);
+        print_ps_text(&entries)?;
     }
     Ok(())
 }
 
-fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) {
+fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) -> Result<()> {
+    // Thin stdout wrapper over the writer-injectable renderer, so the footer
+    // text and table layout are unit-testable without capturing global stdout.
+    print_ps_text_to(entries, &mut std::io::stdout())?;
+    Ok(())
+}
+
+/// Render `ps` rows (table + stale-remediation footer) to `out`. Pure I/O:
+/// no msb, no env. `cmd_ps` passes `&mut std::io::stdout()`; tests pass a
+/// `Vec<u8>`. Returns io::Error on write failure (propagated as anyhow).
+fn print_ps_text_to<W: std::io::Write>(
+    entries: &[crate::microsandbox::runtime::PsEntry],
+    out: &mut W,
+) -> std::io::Result<()> {
     if entries.is_empty() {
-        println!("(no running workestrate instances)");
-        return;
+        writeln!(out, "(no running workestrate instances)")?;
+        return Ok(());
     }
-    // Stable column layout: INSTANCE | WORKLOAD | CONTEXT | PORTS | CREATED
-    println!(
-        "{:<32} {:<16} {:<12} {:<24} CREATED",
+    // Stable column layout: INSTANCE | WORKLOAD | CONTEXT | PORTS | STARTED
+    // (renamed from CREATED to match the ADR 0021 §7 `started_at` field).
+    writeln!(
+        out,
+        "{:<32} {:<16} {:<12} {:<24} STARTED",
         "INSTANCE", "WORKLOAD", "CONTEXT", "PORTS"
-    );
+    )?;
     let mut sorted: Vec<_> = entries.iter().collect();
     sorted.sort_by(|a, b| a.instance.cmp(&b.instance));
     for e in sorted {
@@ -800,19 +837,46 @@ fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) {
             .map(|p| format!("{}:{}", p.host, p.guest))
             .collect::<Vec<_>>()
             .join(",");
-        println!(
+        let started_display = if e.started_at.is_empty() {
+            "-".to_string()
+        } else {
+            e.started_at.clone()
+        };
+        writeln!(
+            out,
             "{:<32} {:<16} {:<12} {:<24} {}",
             e.instance,
             e.workload,
             e.context.clone().unwrap_or_else(|| "-".into()),
             ports_str,
-            if e.created.is_empty() {
-                "-"
-            } else {
-                &e.created
-            },
-        );
+            started_display,
+        )?;
     }
+
+    // ADR 0021 §4: stale state records (registry entry exists but the backing
+    // sandbox is gone) get a remediation footer naming the precise teardown
+    // command per instance, plus the catch-all `down --all`.
+    let stale: Vec<&crate::microsandbox::runtime::PsEntry> =
+        entries.iter().filter(|e| e.stale).collect();
+    if !stale.is_empty() {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{} stale instance(s): registry record exists but the sandbox is not running.",
+            stale.len()
+        )?;
+        for e in &stale {
+            // Parallel instance (slot@id) → `down --instance <id>`;
+            // singleton → bare `down`. Uses the id, not the full instance name.
+            if let Some((_, id)) = e.instance.split_once('@') {
+                writeln!(out, "  workestrate {} down --instance {}", e.workload, id)?;
+            } else {
+                writeln!(out, "  workestrate {} down", e.workload)?;
+            }
+        }
+        writeln!(out, "Remove every instance with: workestrate down --all")?;
+    }
+    Ok(())
 }
 
 async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
@@ -2562,6 +2626,198 @@ mod tests {
         fn drop(&mut self) {
             std::env::remove_var("WORKESTRATE_CONFIG_DIR");
         }
+    }
+
+    /// `ps --json` must emit the exact shape pinned by ADR 0021 §7, in the
+    /// documented field order: instance, workload, context, slot, kind,
+    /// started_at, ports, [port_offset], stale. `port_offset` is omitted on
+    /// the singleton (None) and present on the parallel instance (Some).
+    /// Pure: no env, no msb — constructs PsEntry rows directly and round-trips
+    /// them through `ps_entries_json` + `serde_json::to_string_pretty`.
+    #[test]
+    fn ps_json_matches_adr_0021_section_7() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        let singleton = PsEntry {
+            instance: "personal-litellm".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping {
+                host: 4000,
+                guest: 4000,
+            }],
+            started_at: "2026-07-20T14:03:11Z".to_string(),
+            port_offset: None,
+            stale: false,
+        };
+        let parallel = PsEntry {
+            instance: "personal-litellm@canary".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Parallel,
+            ports: vec![PortMapping {
+                host: 14000,
+                guest: 4000,
+            }],
+            started_at: "2026-07-20T14:05:42Z".to_string(),
+            port_offset: Some(10000),
+            stale: false,
+        };
+
+        let json = serde_json::to_string_pretty(&ps_entries_json(&[singleton, parallel]))
+            .expect("serialize ps entries");
+
+        // Field order, names, casing (kind lowercase), and the
+        // skip_serializing_if on port_offset are all pinned here. Any drift
+        // from ADR 0021 §7 fails this snapshot.
+        let expected = r#"[
+  {
+    "instance": "personal-litellm",
+    "workload": "litellm",
+    "context": "personal",
+    "slot": "personal-litellm",
+    "kind": "singleton",
+    "started_at": "2026-07-20T14:03:11Z",
+    "ports": [
+      {
+        "host": 4000,
+        "guest": 4000
+      }
+    ],
+    "stale": false
+  },
+  {
+    "instance": "personal-litellm@canary",
+    "workload": "litellm",
+    "context": "personal",
+    "slot": "personal-litellm",
+    "kind": "parallel",
+    "started_at": "2026-07-20T14:05:42Z",
+    "ports": [
+      {
+        "host": 14000,
+        "guest": 4000
+      }
+    ],
+    "port_offset": 10000,
+    "stale": false
+  }
+]"#;
+        assert_eq!(json, expected, "ps --json shape drifted from ADR 0021 §7");
+    }
+
+    /// Stale-footer remediation text (ADR 0021 §4). When any entry is stale,
+    /// `print_ps_text` emits per-instance `down` commands and a catch-all
+    /// `down --all`. Exercises the writer-injectable renderer directly so the
+    /// footer text is pinned verbatim (not via global-stdout capture).
+    #[test]
+    fn print_ps_text_emits_remediation_footer_for_stale_entries() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        // One stale parallel instance + one live singleton. Sorted output
+        // orders litellm (l) before pi (p).
+        let entries = vec![
+            PsEntry {
+                instance: "personal-litellm@canary".to_string(),
+                workload: "litellm".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-litellm".to_string(),
+                kind: PsKind::Parallel,
+                ports: vec![PortMapping {
+                    host: 14000,
+                    guest: 4000,
+                }],
+                started_at: "2026-07-20T14:05:42Z".to_string(),
+                port_offset: Some(10000),
+                stale: true,
+            },
+            PsEntry {
+                instance: "personal-pi".to_string(),
+                workload: "pi".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-pi".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping {
+                    host: 3000,
+                    guest: 3000,
+                }],
+                started_at: "2026-07-20T14:06:00Z".to_string(),
+                port_offset: None,
+                stale: false,
+            },
+        ];
+
+        let mut buf: Vec<u8> = Vec::new();
+        print_ps_text_to(&entries, &mut buf).expect("render ps text");
+        let out = String::from_utf8(buf).expect("utf8");
+
+        // Footer header (verbatim).
+        assert!(
+            out.contains(
+                "1 stale instance(s): registry record exists but the sandbox is not running."
+            ),
+            "stale footer header missing; got:
+{out}"
+        );
+        // Parallel stale entry → `down --instance <id>` (id, not full instance).
+        assert!(
+            out.contains("  workestrate litellm down --instance canary"),
+            "parallel stale remediation line missing; got:
+{out}"
+        );
+        // Catch-all.
+        assert!(
+            out.contains("Remove every instance with: workestrate down --all"),
+            "catch-all remediation line missing; got:
+{out}"
+        );
+        // The live singleton must NOT appear in any teardown line.
+        assert!(
+            !out.contains("workestrate pi down"),
+            "live singleton leaked into the footer; got:
+{out}"
+        );
+        // Column header renamed CREATED → STARTED (ADR §7 started_at).
+        assert!(
+            out.contains("STARTED"),
+            "column header should be STARTED (renamed from CREATED); got:
+{out}"
+        );
+    }
+
+    /// No-stale case: the footer is entirely absent. Pins the negative branch.
+    #[test]
+    fn print_ps_text_omits_footer_when_nothing_stale() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        let entries = vec![PsEntry {
+            instance: "personal-litellm".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping {
+                host: 4000,
+                guest: 4000,
+            }],
+            started_at: "2026-07-20T14:03:11Z".to_string(),
+            port_offset: None,
+            stale: false,
+        }];
+        let mut buf: Vec<u8> = Vec::new();
+        print_ps_text_to(&entries, &mut buf).expect("render ps text");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert!(
+            !out.contains("stale"),
+            "no footer expected when nothing stale; got:
+{out}"
+        );
     }
 
     #[test]
