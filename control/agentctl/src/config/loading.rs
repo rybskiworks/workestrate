@@ -5,8 +5,8 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::config::paths::{
-    expand_tilde, overrides_path, reference_config_path, resolve_home_with_kind,
-    resolve_store_dir, xdg_config_dir, HomeKind,
+    expand_tilde, overrides_path, reference_config_path, resolve_home_with_kind, resolve_store_dir,
+    xdg_config_dir, HomeKind,
 };
 use crate::config::registry::{load_registry, resolve_active_context};
 use crate::config::trust::is_trusted_project;
@@ -419,10 +419,7 @@ fn env_dir_secrets_none(dir: &Path) -> bool {
         Ok(v) => v,
         Err(_) => return false,
     };
-    matches!(
-        value.get("secrets").and_then(|v| v.as_str()),
-        Some("none")
-    )
+    matches!(value.get("secrets").and_then(|v| v.as_str()), Some("none"))
 }
 
 /// Resolve all secrets layers in precedence order (lowest first).

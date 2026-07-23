@@ -18,8 +18,8 @@ pub(crate) use migration::{run_migrate_home, MigrateSummary, MovedEntry};
 #[allow(unused_imports)]
 pub use paths::{
     config_repo_dir, overrides_path, registry_path, resolve_active_config_dir, resolve_home,
-    resolve_home_with_kind, resolve_state_dir, resolve_store_dir, source_store_dir,
-    xdg_config_dir, xdg_data_dir, xdg_state_dir, HomeKind,
+    resolve_home_with_kind, resolve_state_dir, resolve_store_dir, source_store_dir, xdg_config_dir,
+    xdg_data_dir, xdg_state_dir, HomeKind,
 };
 #[allow(unused_imports)]
 pub use registry::{load_registry, register_config, resolve_active_context, save_registry};
