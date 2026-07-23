@@ -131,9 +131,25 @@ fi
 cd "$TARGET_DIR"
 export WORKESTRATE_CONFIG_DIR="$TARGET_DIR"
 
+# If --config <name> was used, try to resolve per-repo secrets overrides
+# via workestrate. Fall back to defaults if the command is unavailable or fails.
+if [ -n "$CONFIG_NAME" ]; then
+  if _st_json=$(workestrate secrets-target "$CONFIG_NAME" --json 2>/dev/null); then
+    _st_sf=$(printf '%s' "$_st_json" | grep -oE '"secrets_file"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"//;s/"$//')
+    _st_akf=$(printf '%s' "$_st_json" | grep -oE '"age_key_file"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"//;s/"$//')
+    if [ -n "$_st_sf" ]; then
+      SECRET_FILE="$_st_sf"
+    fi
+    if [ -n "$_st_akf" ]; then
+      SOPS_AGE_KEY_FILE="$_st_akf"
+      export SOPS_AGE_KEY_FILE
+    fi
+  fi
+fi
+
 if [ "$GLOBAL_MODE" -eq 1 ]; then
   SECRET_FILE=".env.local.enc"
-else
+elif [ -z "${SECRET_FILE:-}" ]; then
   SECRET_FILE=".env.enc"
 fi
 

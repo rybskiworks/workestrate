@@ -274,6 +274,11 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Resolve a registered config repo's secrets target paths (for setup-secrets).
+    SecretsTarget {
+        /// Config repo name to resolve.
+        name: String,
+    },
     /// Manage agent source checkouts
     Source {
         #[command(subcommand)]
@@ -944,6 +949,58 @@ fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
             println!("wrote schema to {}", p.display());
         }
         None => println!("{}", json),
+    }
+    Ok(())
+}
+
+/// Resolve a registered config repo's secrets target paths for setup-secrets.
+///
+/// The resolution MUST match `config::resolve_secrets_layers()` for
+/// context-layer entries: dir = `<store>/repos/<name>`, secrets_file from the
+/// entry override or ".env.enc", age_key_file from the entry override
+/// (tilde-expanded). When the entry has no age_key_file override, the fallback
+/// matches `secrets_loader::decrypt_layer()`: `SOPS_AGE_KEY_FILE` env, else
+/// `$HOME` + `scaffold::AGE_KEY_DEFAULT_PATH` with the `~/` prefix stripped.
+async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
+    let registry = config::load_registry()?;
+    let entry = registry
+        .as_ref()
+        .and_then(|r| r.configs.get(name))
+        .ok_or_else(|| anyhow::anyhow!("config repo '{}' not registered", name))?;
+
+    let dir = config::resolve_store_dir().join("repos").join(name);
+    let secrets_file = entry
+        .secrets_file
+        .as_deref()
+        .unwrap_or(".env.enc")
+        .to_string();
+    let age_key_file = if let Some(custom) = entry.age_key_file.as_deref() {
+        expand_tilde(std::path::Path::new(custom))
+    } else if let Ok(env_key) = std::env::var("SOPS_AGE_KEY_FILE") {
+        PathBuf::from(env_key)
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let rel = scaffold::AGE_KEY_DEFAULT_PATH
+            .strip_prefix("~/")
+            .unwrap_or(scaffold::AGE_KEY_DEFAULT_PATH);
+        PathBuf::from(home).join(rel)
+    };
+    let exists = dir.join(&secrets_file).exists();
+
+    if json {
+        let body = serde_json::json!({
+            "dir": dir.display().to_string(),
+            "secrets_file": secrets_file,
+            "age_key_file": age_key_file.display().to_string(),
+            "exists": exists,
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        println!("config repo:    {}", name);
+        println!("dir:            {}", dir.display());
+        println!("secrets_file:   {}", secrets_file);
+        println!("age_key_file:   {}", age_key_file.display());
+        println!("exists:         {}", exists);
     }
     Ok(())
 }
@@ -2182,6 +2239,7 @@ async fn async_main() -> Result<()> {
             }
             other => cmd_config(other).await,
         },
+        Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
         Commands::Source { action } => cmd_source(action).await,
         Commands::Litellm { action } => {
             let workload = ConfigWorkload::new("litellm")?;
@@ -2834,6 +2892,7 @@ mod tests {
             "secrets-schema",
             "generate-env-example",
             "config",
+            "secrets-target",
             "source",
             "litellm",
             "pi",
