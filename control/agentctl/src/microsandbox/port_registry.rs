@@ -1,7 +1,8 @@
 use crate::microsandbox::plan::PortMapping;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// A running sandbox instance record stored in the port registry.
 ///
@@ -27,13 +28,206 @@ pub struct SandboxInstanceRecord {
     pub created_at: String,
 }
 
+// ---------------------------------------------------------------------------
+// Registry lock (WP10/A17: check-then-register TOCTOU mitigation)
+// ---------------------------------------------------------------------------
+
+/// Lock-file name inside `${state_dir}/var/run/`.
+const PORT_REGISTRY_LOCK_NAME: &str = ".port-registry.lock";
+
+/// How long to retry lock acquisition before giving up (~2s), so normal
+/// contention between two near-simultaneous `up` invocations does not produce
+/// a spurious failure.
+const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(2000);
+
+/// Backoff between lock-acquisition attempts.
+const LOCK_ACQUIRE_BACKOFF: Duration = Duration::from_millis(25);
+
+/// RAII guard for exclusive access to the port registry.
+///
+/// Creation acquires the lock by creating
+/// `${state_dir}/var/run/.port-registry.lock` with
+/// `OpenOptions::create_new(true)` (O_EXCL semantics — the create fails while
+/// another holder's file exists); [`Drop`] removes the file. While held, the
+/// holder has exclusive rights to check + register ports.
+///
+/// **Staleness rule (Linux-only):** the file body records the creating PID
+/// and an epoch-second timestamp. If acquisition fails because the file
+/// already exists AND the recorded PID is no longer alive (no `/proc/<pid>` —
+/// e.g. the holder crashed), the file is treated as stale: it is removed and
+/// acquisition is retried. A live PID (or an unreadable/foreign-format lock
+/// file) is never removed — it just keeps retrying until the timeout.
+///
+/// Note this is a cross-process advisory lock on the registry DIRECTORY, not
+/// an `flock`: it needs no extra deps and the registry is only mutated by
+/// workestrate itself.
+pub struct PortRegistryLock {
+    path: PathBuf,
+}
+
+impl PortRegistryLock {
+    /// Acquire the registry lock, retrying briefly and recovering from a
+    /// stale (dead-PID) lock file.
+    pub fn acquire(state_dir: &Path) -> Result<Self> {
+        let run_dir = state_dir.join("var").join("run");
+        std::fs::create_dir_all(&run_dir)
+            .with_context(|| format!("failed to create {}", run_dir.display()))?;
+        let path = run_dir.join(PORT_REGISTRY_LOCK_NAME);
+        let deadline = Instant::now() + LOCK_ACQUIRE_TIMEOUT;
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    let body = format!(
+                        "pid={}\ncreated_at_epoch={}\n",
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0)
+                    );
+                    // Best-effort: the file's EXISTENCE is the lock; the body
+                    // only feeds the staleness check.
+                    let _ = f.write_all(body.as_bytes());
+                    return Ok(Self { path });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if lock_file_is_stale(&path) {
+                        // Stale lock: the creating process is dead. Remove and
+                        // immediately retry acquisition.
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    if Instant::now() >= deadline {
+                        anyhow::bail!(
+                            "timed out acquiring port-registry lock {} after {:?}; \
+                             another workestrate process is registering ports. \
+                             Retry, or remove the file if no workestrate process is running.",
+                            path.display(),
+                            LOCK_ACQUIRE_TIMEOUT
+                        );
+                    }
+                    std::thread::sleep(LOCK_ACQUIRE_BACKOFF);
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("failed to acquire port-registry lock {}", path.display())
+                    });
+                }
+            }
+        }
+    }
+}
+
+impl Drop for PortRegistryLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Whether the lock file at `path` is stale: it exists, records a `pid=N`
+/// line, and that PID is no longer alive (Linux liveness probe).
+///
+/// Conservative: any parse failure, missing PID, or live PID counts as NOT
+/// stale (never remove a lock we cannot prove is dead).
+fn lock_file_is_stale(path: &Path) -> bool {
+    lock_file_is_stale_with(path, pid_is_alive)
+}
+
+/// Testable core of [`lock_file_is_stale`] with the liveness probe injected.
+fn lock_file_is_stale_with(path: &Path, is_alive: fn(u32) -> bool) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let pid = content
+        .lines()
+        .find_map(|line| line.strip_prefix("pid="))
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    match pid {
+        Some(pid) => !is_alive(pid),
+        None => false,
+    }
+}
+
+/// Linux liveness probe (pure std, no extra deps): a PID counts as ALIVE
+/// when `/proc/<pid>` exists AND its `/proc/<pid>/stat` `state` field is not
+/// `X` (dead) or `Z` (zombie). Reading `stat` filters out the defunct-PID
+/// case that plain directory-existence misses when PID recycling is slow.
+fn pid_is_alive(pid: u32) -> bool {
+    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(s) => s,
+        Err(_) => return false, // no /proc entry at all → dead
+    };
+    // Field 3 (after the comm, which is parenthesized and may contain
+    // spaces) is the single-char state. Parse robustly: state is the first
+    // token after the final ')'.
+    let Some((_, after_comm)) = stat.rsplit_once(") ") else {
+        return false;
+    };
+    let state = after_comm.chars().next().unwrap_or('?');
+    !matches!(state, 'X' | 'Z')
+}
+
+/// Read and parse a registry record file, warning loudly (WP10/A12) instead
+/// of silently skipping when the file exists but is unreadable or corrupt.
+///
+/// `Ok(Some)` = valid record; `Ok(None)` = unreadable/corrupt (a WARNING was
+/// emitted) — callers keep their pre-A12 lenient behavior (skip the record,
+/// still succeed), but the corruption is no longer invisible. A MISSING file
+/// is not corruption: returns `Ok(None)` silently (for [`find_record`]).
+fn read_record_loud(path: &Path) -> Result<Option<SandboxInstanceRecord>> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            eprintln!(
+                "WARNING: unreadable port-registry record {}: {}",
+                path.display(),
+                e
+            );
+            return Ok(None);
+        }
+    };
+    match serde_json::from_str::<SandboxInstanceRecord>(&content) {
+        Ok(record) => Ok(Some(record)),
+        Err(e) => {
+            eprintln!(
+                "WARNING: corrupt port-registry record {}: {}",
+                path.display(),
+                e
+            );
+            Ok(None)
+        }
+    }
+}
+
 /// Check for host-port collisions against already-running workestrate sandboxes.
 ///
 /// Scans `${state_dir}/var/run/*.json` for port mappings. Excludes the file
 /// for `instance_name` (in case it's a restart). If any port in `ports`
 /// matches a port in another instance's record, returns a hard error naming
 /// both sandboxes, the port, and remediation.
+///
+/// Acquires the registry lock around its own critical section (WP10/A17):
+/// this makes each individual call atomic against concurrent registrations,
+/// but does NOT close the check-then-register race across two separate calls
+/// — see [`check_and_register_sandbox_lifecycle`] for the atomic path.
 pub fn check_port_collisions(state_dir: &Path, instance_name: &str, ports: &[u16]) -> Result<()> {
+    let _lock = PortRegistryLock::acquire(state_dir)?;
+    check_port_collisions_locked(state_dir, instance_name, ports)
+}
+
+/// Lock-free core of [`check_port_collisions`]; caller must hold the
+/// registry lock (or otherwise guarantee exclusive registry access).
+fn check_port_collisions_locked(
+    state_dir: &Path,
+    instance_name: &str,
+    ports: &[u16],
+) -> Result<()> {
     if ports.is_empty() {
         return Ok(());
     }
@@ -52,13 +246,8 @@ pub fn check_port_collisions(state_dir: &Path, instance_name: &str, ports: &[u16
         if stem == instance_name {
             continue; // self (restart case)
         }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue, // unreadable file, skip
-        };
-        let record: SandboxInstanceRecord = match serde_json::from_str(&content) {
-            Ok(r) => r,
-            Err(_) => continue, // corrupt file, skip
+        let Some(record) = read_record_loud(&path)? else {
+            continue;
         };
         for port in ports {
             if record.ports.contains(port) {
@@ -81,6 +270,49 @@ pub fn check_port_collisions(state_dir: &Path, instance_name: &str, ports: &[u16
     Ok(())
 }
 
+/// Atomically check for port collisions AND register the instance
+/// (WP10/A17).
+///
+/// This is the atomic path: the registry lock is held across BOTH the
+/// collision check and the registration, so no other process can slip a
+/// registration for the same port between the two (the classic
+/// time-of-check-time-of-use race).
+///
+/// **NOTE:** `runtime.rs` currently calls [`check_port_collisions`] and
+/// [`register_sandbox_lifecycle`] SEPARATELY (with the sandbox-create `.await`
+/// in between), so the live `up` path is NOT yet atomic — the two standalone
+/// calls each lock only their own critical section. Closing A17 fully requires
+/// migrating runtime.rs to this combined function (out of scope for WP10).
+//
+// `dead_code`: no in-crate caller yet (runtime.rs is outside WP10's owned
+// set); the tests exercise it. Retained as the atomic entry point of the
+// registry API for the follow-up runtime.rs migration.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+pub fn check_and_register_sandbox_lifecycle(
+    state_dir: &Path,
+    instance_name: &str,
+    context: Option<&str>,
+    workload: &str,
+    host_ports: &[u16],
+    port_pairs: &[PortMapping],
+    port_offset: u16,
+    created_at: &str,
+) -> Result<()> {
+    let _lock = PortRegistryLock::acquire(state_dir)?;
+    check_port_collisions_locked(state_dir, instance_name, host_ports)?;
+    register_sandbox_lifecycle_locked(
+        state_dir,
+        instance_name,
+        context,
+        workload,
+        host_ports,
+        port_pairs,
+        port_offset,
+        created_at,
+    )
+}
+
 /// Register a running sandbox instance with its port mappings.
 ///
 /// Writes `${state_dir}/var/run/<instance>.json`. Called after the sandbox
@@ -98,6 +330,9 @@ pub fn register_sandbox(
     workload: &str,
     ports: &[u16],
 ) -> Result<()> {
+    // WP10/A17: lock the registry around the write so concurrent registrations
+    // serialize instead of interleaving (each call is self-contained atomic).
+    let _lock = PortRegistryLock::acquire(state_dir)?;
     let run_dir = state_dir.join("var").join("run");
     std::fs::create_dir_all(&run_dir)?;
     let record = SandboxInstanceRecord {
@@ -118,9 +353,37 @@ pub fn register_sandbox(
 /// Register a running sandbox instance with full lifecycle metadata.
 ///
 /// Writes `${state_dir}/var/run/<instance>.json` with the port pairs, offset,
-/// and RFC3339 created-at timestamp populated.
+/// and RFC3339 created-at timestamp populated. Locks the registry around the
+/// write (WP10/A17); see [`check_and_register_sandbox_lifecycle`] for the
+/// atomic check+register path.
 #[allow(clippy::too_many_arguments)]
 pub fn register_sandbox_lifecycle(
+    state_dir: &Path,
+    instance_name: &str,
+    context: Option<&str>,
+    workload: &str,
+    host_ports: &[u16],
+    port_pairs: &[PortMapping],
+    port_offset: u16,
+    created_at: &str,
+) -> Result<()> {
+    let _lock = PortRegistryLock::acquire(state_dir)?;
+    register_sandbox_lifecycle_locked(
+        state_dir,
+        instance_name,
+        context,
+        workload,
+        host_ports,
+        port_pairs,
+        port_offset,
+        created_at,
+    )
+}
+
+/// Lock-free core of [`register_sandbox_lifecycle`]; caller must hold the
+/// registry lock.
+#[allow(clippy::too_many_arguments)]
+fn register_sandbox_lifecycle_locked(
     state_dir: &Path,
     instance_name: &str,
     context: Option<&str>,
@@ -167,24 +430,21 @@ pub fn unregister_sandbox(state_dir: &Path, instance_name: &str) -> Result<()> {
 
 /// Read the record for an instance, if any.
 ///
-/// Returns Ok(None) when no state file exists or the file is corrupt
-/// (corrupt files are silently skipped — same lenient policy as
-/// [`check_port_collisions`]).
+/// Returns Ok(None) when no state file exists. A corrupt or unreadable file
+/// also yields Ok(None) (lenient — callers keep working) but emits a loud
+/// WARNING (WP10/A12): corruption is no longer invisible.
 pub fn find_record(state_dir: &Path, instance_name: &str) -> Result<Option<SandboxInstanceRecord>> {
     let path = state_dir
         .join("var")
         .join("run")
         .join(format!("{}.json", instance_name));
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return Ok(None);
-    };
-    Ok(serde_json::from_str(&content).ok())
+    read_record_loud(&path)
 }
 
 /// List all registered instance records in `${state_dir}/var/run/*.json`.
 ///
-/// Corrupt files are skipped (lenient). Returns records in filesystem order
-/// (callers sort as needed).
+/// Corrupt files are skipped (lenient) with a loud WARNING each (WP10/A12).
+/// Returns records in filesystem order (callers sort as needed).
 pub fn list_records(state_dir: &Path) -> Result<Vec<SandboxInstanceRecord>> {
     let run_dir = state_dir.join("var").join("run");
     if !run_dir.exists() {
@@ -197,10 +457,7 @@ pub fn list_records(state_dir: &Path) -> Result<Vec<SandboxInstanceRecord>> {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        if let Ok(record) = serde_json::from_str::<SandboxInstanceRecord>(&content) {
+        if let Some(record) = read_record_loud(&path)? {
             out.push(record);
         }
     }
@@ -940,6 +1197,204 @@ mod tests {
         let removed = unregister_all(&state_dir)?;
         assert_eq!(removed.len(), 2);
         assert!(list_records(&state_dir)?.is_empty());
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- WP10/A17: atomic check+register + registry lock ----
+
+    /// Small helper: a lifecycle registration for `instance` on `port`.
+    fn combined_register(
+        state_dir: &Path,
+        instance: &str,
+        workload: &str,
+        port: u16,
+    ) -> Result<()> {
+        check_and_register_sandbox_lifecycle(
+            state_dir,
+            instance,
+            None,
+            workload,
+            &[port],
+            &[crate::microsandbox::plan::PortMapping {
+                host: port,
+                guest: port,
+            }],
+            0,
+            "2026-07-23T00:00:00Z",
+        )
+    }
+
+    #[test]
+    fn combined_registers_when_no_collision() -> Result<()> {
+        let state_dir = unique_state_dir("combined-ok");
+        combined_register(&state_dir, "personal-litellm", "litellm", 4000)?;
+        let record = find_record(&state_dir, "personal-litellm")?
+            .expect("combined call should have registered the record");
+        assert_eq!(record.ports, vec![4000]);
+        // Lock file must be gone after the guard dropped.
+        assert!(
+            !state_dir
+                .join("var")
+                .join("run")
+                .join(PORT_REGISTRY_LOCK_NAME)
+                .exists(),
+            "lock file should be released after the combined call"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn combined_errors_on_collision_and_leaves_no_record() -> Result<()> {
+        let state_dir = unique_state_dir("combined-collide");
+        combined_register(&state_dir, "personal-litellm", "litellm", 4000)?;
+        // Second instance on the same port must fail the check …
+        let err = combined_register(&state_dir, "work-litellm", "litellm", 4000).unwrap_err();
+        assert!(
+            err.to_string().contains("port collision"),
+            "expected a collision error; got: {err}"
+        );
+        // … and must NOT have left a registered record behind.
+        assert!(
+            find_record(&state_dir, "work-litellm")?.is_none(),
+            "failed combined call must not leave a registered record"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn lock_is_released_after_guard_drop() -> Result<()> {
+        let state_dir = unique_state_dir("lock-release");
+        {
+            let _guard = PortRegistryLock::acquire(&state_dir)?;
+            assert!(
+                state_dir
+                    .join("var")
+                    .join("run")
+                    .join(PORT_REGISTRY_LOCK_NAME)
+                    .exists(),
+                "lock file exists while held"
+            );
+        }
+        // A second acquisition (via the combined function) must succeed.
+        combined_register(&state_dir, "personal-pi", "pi", 3000)?;
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_combined_register_exactly_one_wins_per_port() -> Result<()> {
+        let state_dir = unique_state_dir("combined-race");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let mut handles = Vec::new();
+        for i in 0..4u32 {
+            let dir = state_dir.clone();
+            let b = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                b.wait(); // release all threads at once
+                combined_register(&dir, &format!("inst-{i}"), "litellm", 4000)
+            }));
+        }
+        let results: Vec<Result<()>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("worker thread panicked"))
+            .collect();
+        let wins = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(
+            wins, 1,
+            "exactly one concurrent registration should win the port; results: {results:?}"
+        );
+        for r in &results {
+            if let Err(e) = r {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("port collision") || msg.contains("timed out acquiring"),
+                    "losers must fail with a collision or lock-timeout, got: {msg}"
+                );
+            }
+        }
+        // Only one record may hold port 4000.
+        let records = list_records(&state_dir)?;
+        let holders: Vec<_> = records.iter().filter(|r| r.ports.contains(&4000)).collect();
+        assert_eq!(holders.len(), 1, "exactly one record may hold port 4000");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_lock_from_dead_pid_is_recovered() -> Result<()> {
+        let state_dir = unique_state_dir("stale-lock");
+        let run_dir = state_dir.join("var").join("run");
+        std::fs::create_dir_all(&run_dir)?;
+        // Derive a PROVABLY dead PID: spawn a short-lived child, reap it, then
+        // use its (now-defunct) PID. A hardcoded large PID is unreliable —
+        // containers can set pid_max high enough for it to be a live PID.
+        let dead_pid = {
+            let mut child = std::process::Command::new("true")
+                .spawn()
+                .expect("spawn 'true'");
+            let pid = child.id();
+            child.wait().expect("wait for 'true'");
+            pid
+        };
+        assert!(
+            !pid_is_alive(dead_pid),
+            "test precondition: pid {dead_pid} must be dead"
+        );
+        // Write a lock file whose recorded holder is the dead PID.
+        std::fs::write(
+            run_dir.join(PORT_REGISTRY_LOCK_NAME),
+            format!("pid={dead_pid}\ncreated_at_epoch=1\n"),
+        )?;
+        // Acquisition must detect the dead PID, remove the stale file, and
+        // proceed (not time out).
+        let guard = PortRegistryLock::acquire(&state_dir)?;
+        drop(guard);
+        // … and a normal combined call works afterwards.
+        combined_register(&state_dir, "personal-litellm", "litellm", 4000)?;
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- WP10/A12: corrupt records are loud but non-fatal ----
+
+    #[test]
+    fn corrupt_record_still_skipped_but_valid_collision_still_fires() -> Result<()> {
+        let state_dir = unique_state_dir("corrupt-loud");
+        let run_dir = state_dir.join("var").join("run");
+        std::fs::create_dir_all(&run_dir)?;
+        std::fs::write(run_dir.join("corrupt-sandbox.json"), "{ not valid json")?;
+        // A VALID record holding port 4000 sits next to the corrupt one.
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+
+        // check_port_collisions: succeeds for a free port (corrupt file
+        // skipped — loudly — not fatal) …
+        assert!(check_port_collisions(&state_dir, "new-sandbox", &[3000]).is_ok());
+        // … and still detects the collision from the VALID record.
+        let err = check_port_collisions(&state_dir, "new-sandbox", &[4000]).unwrap_err();
+        assert!(
+            err.to_string().contains("port collision"),
+            "valid record's collision must still fire despite the corrupt sibling: {err}"
+        );
+
+        // list_records: corrupt skipped, valid present.
+        let records = list_records(&state_dir)?;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].instance, "personal-litellm");
+
+        // find_record: corrupt → None (with a warning), still Ok.
+        assert!(find_record(&state_dir, "corrupt-sandbox")?.is_none());
+
+        // The corrupt file itself is untouched (not silently deleted).
+        assert!(run_dir.join("corrupt-sandbox.json").exists());
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

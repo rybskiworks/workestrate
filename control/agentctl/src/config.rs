@@ -13,21 +13,34 @@ pub struct ActiveContext {
     pub layers: Vec<String>,
 }
 
-thread_local! {
-    static ACTIVE_CONTEXT: std::cell::RefCell<Option<ActiveContext>> =
-        const { std::cell::RefCell::new(None) };
-}
+/// The active context for this process (WP10/A9).
+///
+/// This used to be a `thread_local!` `RefCell`. On a tokio MULTI-THREAD
+/// runtime (main.rs builds `tokio::runtime::Builder::new_multi_thread()`) a
+/// task can be migrated across OS threads between `.await` points, so a value
+/// stored in a plain `thread_local` on one thread could be read on a
+/// DIFFERENT thread after an await — returning `None` or a stale value. The
+/// active context is set once per command invocation (inside `load_config`,
+/// which also resolves it) and is inherently process-level state, so a
+/// `std::sync::Mutex` is the correct primitive: no thread affinity, no
+/// scope-establishment requirement (unlike `tokio::task_local!`, which would
+/// need `TaskLocal::scope` at task spawn — a main.rs change that is out of
+/// scope — and panics outside its scope). Lock poisoning is recovered with
+/// `into_inner()` so a panic elsewhere can never wedge context resolution.
+static ACTIVE_CONTEXT: std::sync::Mutex<Option<ActiveContext>> = std::sync::Mutex::new(None);
 
-/// Store the active context for the current thread.
+/// Store the active context for this process.
 pub fn set_active_context(ctx: Option<ActiveContext>) {
-    ACTIVE_CONTEXT.with(|c| {
-        *c.borrow_mut() = ctx;
-    });
+    *ACTIVE_CONTEXT.lock().unwrap_or_else(|e| e.into_inner()) = ctx;
 }
 
 /// Get the active context name (None = bare-layers backward-compat).
 pub fn active_context_name() -> Option<String> {
-    ACTIVE_CONTEXT.with(|c| c.borrow().as_ref().and_then(|ctx| ctx.name.clone()))
+    ACTIVE_CONTEXT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|ctx| ctx.name.clone())
 }
 
 pub fn project_root() -> Result<PathBuf> {
@@ -1015,8 +1028,33 @@ pub fn resolve_active_context() -> Result<ActiveContext> {
     );
 }
 
+/// Load the registry for state/store-dir resolution, distinguishing the
+/// three cases (WP10/A16):
+///   - **missing** → `Ok(None)`: fall back to the default dir silently
+///     (normal first-run/bootstrap state, not corruption);
+///   - **valid** → `Ok(Some)`;
+///   - **corrupt** (exists but fails to parse) → loud `eprintln!` WARNING and
+///     `None` (fall back), so a broken registry no longer silently routes
+///     state/store to the default location while the operator believes the
+///     configured `settings.state_dir`/`store_dir` is in effect.
+///
+/// Returning `Result` (hard error) would be strictly louder, but
+/// [`resolve_state_dir`]/[`resolve_store_dir`] return `PathBuf` (not
+/// `Result`) and are called from main.rs/runtime.rs — changing the signature
+/// is out of scope for WP10, so warn-and-fall-back is the maximal in-scope
+/// surfacing. Full error propagation needs a signature change (follow-up).
+fn load_registry_for_dir_resolution() -> Option<Registry> {
+    match load_registry() {
+        Ok(registry) => registry,
+        Err(e) => {
+            eprintln!("WARNING: corrupt registry ({e:#}); ignoring it and falling back to the default state/store directory. Fix or remove the registry file, or run 'workestrate config list' to diagnose.");
+            None
+        }
+    }
+}
+
 pub fn resolve_state_dir() -> PathBuf {
-    if let Ok(Some(registry)) = load_registry() {
+    if let Some(registry) = load_registry_for_dir_resolution() {
         if let Some(ref state_dir) = registry.settings.state_dir {
             return expand_tilde(state_dir);
         }
@@ -1029,7 +1067,7 @@ pub fn resolve_state_dir() -> PathBuf {
 }
 
 pub fn resolve_store_dir() -> PathBuf {
-    if let Ok(Some(registry)) = load_registry() {
+    if let Some(registry) = load_registry_for_dir_resolution() {
         if let Some(ref store_dir) = registry.settings.store_dir {
             return expand_tilde(store_dir);
         }
@@ -1893,6 +1931,22 @@ const ALLOWED_BUILD_RECIPES: &[&str] = &["npm-build", "bun-compile", "pip-instal
 /// owned file set).
 const ALLOWED_FEATURES: &[&str] = &["create_tmp"];
 
+/// Whether `name` is a syntactically valid environment-variable name:
+/// `^[A-Za-z_][A-Za-z0-9_]*$` (WP10/A11).
+///
+/// Mirrors `is_valid_env_name` in `microsandbox/secrets_loader.rs` (deliberately
+/// NOT imported — that module is outside this task's owned set, and the helper
+/// is three lines). Anything that becomes a real env var (workload `env` entry
+/// names, `secrets.{name}.env_var` values) must match, or the sandbox would be
+/// handed a name no shell or `exec` can set.
+fn is_valid_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(
+        chars.next(),
+        Some(c) if c.is_ascii_alphabetic() || c == '_'
+    ) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // WP6(f)/E2: schema_version enforcement. `ConfigFile.schema_version` is
     // #[serde(default)], so a MISSING version parses as 0 — treated as
@@ -2028,6 +2082,21 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
+    // WP10/A11: `secrets.{name}.env_var` values become real environment
+    // variables (read from the host and injected into the sandbox); reject
+    // names no shell or `exec` could set.
+    for (secret_name, secret) in &config.secrets {
+        if let Some(ref env_var) = secret.env_var {
+            if !is_valid_env_var_name(env_var) {
+                anyhow::bail!(
+                    "secret '{}' env_var '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
+                    secret_name,
+                    env_var
+                );
+            }
+        }
+    }
+
     // Package names in nix-layered images must be in ALLOWED_PACKAGES.
     for (workload_name, workload) in &config.workloads {
         if let Some(ref contents) = workload.image.contents {
@@ -2066,6 +2135,20 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                         secret_name
                     );
                 }
+            }
+        }
+        // WP10/A11: env entry names become real environment variables in the
+        // sandbox; reject anything that is not a valid env-var name. (The
+        // `secret_env` field holds only a `secret` reference — no name to
+        // check here; the env var it produces is the secret's own `env_var` /
+        // `exposed_as`, validated in the secrets section below.)
+        for env in &workload.env {
+            if !is_valid_env_var_name(&env.name) {
+                anyhow::bail!(
+                    "workload '{}' env name '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
+                    workload_name,
+                    env.name
+                );
             }
         }
         for se in &workload.secret_env {
@@ -4130,6 +4213,221 @@ pub(crate) mod tests {
         assert_eq!(registry_path(), xdg.join("workestrate").join("config.toml"));
 
         let _ = std::fs::remove_dir_all(&xdg);
+        Ok(())
+    }
+
+    // ---- WP10/A9: active-context storage is process-global ----
+
+    /// A9 regression: a context set on one OS thread must be readable on a
+    /// DIFFERENT thread (a plain thread_local would return None there — the
+    /// exact failure mode on a tokio multi-thread runtime after task
+    /// migration). Uses ENV_TEST_LOCK because set_active_context is process
+    /// global and other tests mutate it.
+    #[test]
+    fn active_context_set_from_another_thread_is_visible() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        set_active_context(None);
+        std::thread::spawn(|| {
+            set_active_context(Some(ActiveContext {
+                name: Some("personal".to_string()),
+                layers: vec!["personal".to_string()],
+            }));
+        })
+        .join()
+        .expect("setter thread panicked");
+        assert_eq!(active_context_name(), Some("personal".to_string()));
+        set_active_context(None); // clean up for other tests
+    }
+
+    #[test]
+    fn active_context_survives_tokio_multi_thread_migration() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .build()
+            .expect("failed to build multi-thread runtime");
+        rt.block_on(async {
+            set_active_context(Some(ActiveContext {
+                name: Some("work".to_string()),
+                layers: vec!["work".to_string()],
+            }));
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(active_context_name(), Some("work".to_string()));
+        });
+        set_active_context(None);
+    }
+
+    // ---- WP10/A11: env var name validation ----
+
+    /// Minimal valid config with one workload; the caller mutates it per test.
+    fn base_config_for_validation() -> ConfigFile {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+log_stop_errors = false
+
+[workloads.pi.network]
+default_deny = true
+"#;
+        toml::from_str(toml).expect("base config must parse")
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_env_name() {
+        let mut config = base_config_for_validation();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .env
+            .push(EnvVarConfig {
+                name: "1FOO".to_string(),
+                value: Some("x".to_string()),
+                secret: None,
+            });
+        let err = validate_config(&config).unwrap_err();
+        let msg = err.to_string();
+        assert_eq!(
+            msg,
+            "workload 'pi' env name '1FOO' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)"
+        );
+    }
+
+    #[test]
+    fn validate_config_accepts_valid_env_name() -> Result<()> {
+        let mut config = base_config_for_validation();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .env
+            .push(EnvVarConfig {
+                name: "VALID_NAME".to_string(),
+                value: Some("x".to_string()),
+                secret: None,
+            });
+        validate_config(&config)
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_secret_env_var() {
+        let toml = r#"
+schema_version = 1
+
+[secrets.MY_SECRET]
+env_var = "BAD-NAME"
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+log_stop_errors = false
+
+[workloads.pi.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        let err = validate_config(&config).unwrap_err();
+        let msg = err.to_string();
+        // The secret-bindings check runs before the env_var-name check, and
+        // BAD-NAME has no allowlist entry — both orderings name the secret
+        // and the offending value, so assert on the stable shared content.
+        assert!(
+            msg.contains("env_var 'BAD-NAME'"),
+            "error should name the secret env_var value; got: {msg}"
+        );
+        assert!(
+            msg.contains("MY_SECRET"),
+            "error should name the secret; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn env_var_name_helper_matches_posix_shape() {
+        for ok in ["A", "_FOO", "ABC_123", "a", "Z9_", "VALID_NAME"] {
+            assert!(is_valid_env_var_name(ok), "'{ok}' should be valid");
+        }
+        for bad in ["", "1FOO", "FOO-BAR", "FOO BAR", "FOO.BAR", "-A"] {
+            assert!(!is_valid_env_var_name(bad), "'{bad}' should be invalid");
+        }
+    }
+
+    // ---- WP10/A16: corrupt registry is loud (warn) but falls back ----
+
+    #[test]
+    fn corrupt_registry_falls_back_to_default_dirs() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let home = uniq_dir("a16-corrupt-home");
+        std::fs::create_dir_all(home.join(".workestrate"))?;
+        // Corrupt registry: invalid TOML.
+        std::fs::write(
+            home.join(".workestrate").join("config.toml"),
+            "this is = not = valid toml [[[",
+        )?;
+        std::env::set_var("HOME", &home);
+
+        // load_registry_for_dir_resolution must yield None (fallback), not
+        // panic — the corrupt file surfaces as a WARNING on stderr.
+        assert!(
+            load_registry_for_dir_resolution().is_none(),
+            "corrupt registry must fall back to None"
+        );
+        // The dir resolvers still return sane default paths.
+        assert_eq!(resolve_state_dir(), home.join(".workestrate").join("state"));
+        assert_eq!(resolve_store_dir(), home.join(".workestrate"));
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn valid_registry_is_used_for_dir_resolution() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let home = uniq_dir("a16-valid-home");
+        let custom_state = uniq_dir("a16-custom-state");
+        std::fs::create_dir_all(home.join(".workestrate"))?;
+        std::fs::write(
+            home.join(".workestrate").join("config.toml"),
+            format!("[settings]\nstate_dir = \"{}\"\n", custom_state.display()),
+        )?;
+        std::env::set_var("HOME", &home);
+
+        assert!(
+            load_registry_for_dir_resolution().is_some(),
+            "valid registry must parse"
+        );
+        assert_eq!(resolve_state_dir(), custom_state);
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_registry_falls_back_silently() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let home = uniq_dir("a16-missing-home");
+        std::fs::create_dir_all(&home)?; // no .workestrate/config.toml at all
+        std::env::set_var("HOME", &home);
+
+        assert!(
+            load_registry_for_dir_resolution().is_none(),
+            "missing registry → None (normal bootstrap, silent)"
+        );
+        assert_eq!(resolve_store_dir(), home.join(".workestrate"));
+
+        let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }
 }

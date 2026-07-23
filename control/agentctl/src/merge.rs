@@ -58,51 +58,73 @@ pub fn merge_layers(layers: &[Layer]) -> Result<(ConfigFile, Provenance)> {
 }
 
 // ---------------------------------------------------------------------------
-// Provenance thread-local storage
+// Provenance process-global storage (WP10/A9)
 // ---------------------------------------------------------------------------
+//
+// A9: these used to be `thread_local!` `RefCell`s. On a tokio MULTI-THREAD
+// runtime (main.rs builds `tokio::runtime::Builder::new_multi_thread()`) a
+// task can be migrated across OS threads between `.await` points, so a value
+// stored in a plain `thread_local` on one thread could be read on a DIFFERENT
+// thread after an await — returning `None` or a stale value. Both stores are
+// process-level "most recent load in this process" state, so a
+// `std::sync::Mutex` is the correct primitive: it has no thread affinity and
+// needs no scope establishment (unlike `tokio::task_local!`, which would
+// require a `TaskLocal::scope` at task spawn — i.e. a main.rs change that is
+// out of scope — and panics when accessed outside its scope). `Mutex` (not
+// `RwLock`) is chosen because writes are as common as reads here
+// (`take_provenance` writes) and the critical sections are trivially short.
+//
+// Lock-poisoning policy: `lock().unwrap_or_else(|e| e.into_inner())` recovers
+// the inner value instead of panicking, so a panic in one command path cannot
+// wedge provenance for every later path (never panics, per WP10).
 
-thread_local! {
-    static MERGED_PROVENANCE: std::cell::RefCell<Option<Provenance>> =
-        const { std::cell::RefCell::new(None) };
-}
+/// Store the provenance for the most recent merge.
+static MERGED_PROVENANCE: std::sync::Mutex<Option<Provenance>> = std::sync::Mutex::new(None);
 
 /// Store the provenance for the most recent merge.
 pub fn set_provenance(provenance: Option<Provenance>) {
-    MERGED_PROVENANCE.with(|p| {
-        *p.borrow_mut() = provenance;
-    });
+    *MERGED_PROVENANCE.lock().unwrap_or_else(|e| e.into_inner()) = provenance;
 }
 
-/// Take ownership of the stored provenance, leaving the thread-local empty.
+/// Take ownership of the stored provenance, leaving the global slot empty.
 pub fn take_provenance() -> Option<Provenance> {
-    MERGED_PROVENANCE.with(|p| p.borrow_mut().take())
+    MERGED_PROVENANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
 }
 
 // ---------------------------------------------------------------------------
-// Secret provenance thread-local storage
+// Secret provenance process-global storage (WP10/A9)
 // ---------------------------------------------------------------------------
 
-thread_local! {
-    static SECRET_PROVENANCE: std::cell::RefCell<Option<Provenance>> =
-        const { std::cell::RefCell::new(None) };
-}
+/// Provenance of the most recent secret load ("which layer set each env var").
+/// Process-global: overwritten on each `load_secrets` call in secrets_loader.rs
+/// (not owned — its `set_secret_provenance` signature must stay), read by
+/// `ConfigWorkload::show_source` in workload.rs. See the A9 note on
+/// [`MERGED_PROVENANCE`] for why this is a `Mutex` rather than a thread-local.
+static SECRET_PROVENANCE: std::sync::Mutex<Option<Provenance>> = std::sync::Mutex::new(None);
 
 /// Store the provenance for the most recent secret load.
 pub fn set_secret_provenance(provenance: Option<Provenance>) {
-    SECRET_PROVENANCE.with(|p| {
-        *p.borrow_mut() = provenance;
-    });
+    *SECRET_PROVENANCE.lock().unwrap_or_else(|e| e.into_inner()) = provenance;
 }
 
-/// Take ownership of the stored secret provenance, leaving the thread-local empty.
+/// Take ownership of the stored secret provenance, leaving the global slot empty.
 #[allow(dead_code)]
 pub fn take_secret_provenance() -> Option<Provenance> {
-    SECRET_PROVENANCE.with(|p| p.borrow_mut().take())
+    SECRET_PROVENANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
 }
 
 /// Clone the stored secret provenance without consuming it.
 pub fn get_secret_provenance() -> Option<Provenance> {
-    SECRET_PROVENANCE.with(|p| p.borrow().clone())
+    SECRET_PROVENANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +456,7 @@ fn merge_network(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -779,5 +801,85 @@ mod tests {
         let tempest = merged.workloads.get("tempest").unwrap();
         assert_eq!(tempest.network.default_deny, Some(false));
         Ok(())
+    }
+
+    // ---- WP10/A9: provenance storage is process-global (thread-safe) ----
+
+    fn sample_provenance() -> Provenance {
+        let mut p = Provenance::new();
+        p.insert("workloads.pi.cpus".to_string(), "team".to_string());
+        p
+    }
+
+    /// A9 regression: a value set on one OS thread must be readable on a
+    /// DIFFERENT thread (a plain thread_local would return None there — the
+    /// exact failure mode on a tokio multi-thread runtime after task
+    /// migration). Serial execution is guaranteed by an env-mutex-style lock
+    /// shared with the other storage tests below (these tests mutate global
+    /// state, so they must not interleave).
+    static STORAGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn provenance_set_from_another_thread_is_visible() {
+        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        set_provenance(None); // isolate from any earlier test state
+        std::thread::spawn(|| set_provenance(Some(sample_provenance())))
+            .join()
+            .expect("setter thread panicked");
+        let taken = take_provenance().expect("provenance set on another thread must be visible");
+        assert_eq!(taken.get("workloads.pi.cpus"), Some(&"team".to_string()));
+        assert!(take_provenance().is_none(), "take must drain the slot");
+    }
+
+    #[test]
+    fn secret_provenance_set_from_another_thread_is_visible() {
+        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        set_secret_provenance(None);
+        std::thread::spawn(|| set_secret_provenance(Some(sample_provenance())))
+            .join()
+            .expect("setter thread panicked");
+        let got = get_secret_provenance()
+            .expect("secret provenance set on another thread must be visible");
+        assert_eq!(got.get("workloads.pi.cpus"), Some(&"team".to_string()));
+        // get_ does not consume; take_ does.
+        let taken = take_secret_provenance().expect("take must return the stored value");
+        assert_eq!(taken.get("workloads.pi.cpus"), Some(&"team".to_string()));
+        assert!(
+            take_secret_provenance().is_none(),
+            "take must drain the slot"
+        );
+    }
+
+    #[test]
+    fn provenance_survives_tokio_multi_thread_migration() {
+        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .build()
+            .expect("failed to build multi-thread runtime");
+        rt.block_on(async {
+            set_provenance(None);
+            set_provenance(Some(sample_provenance()));
+            // Yield many times to give the scheduler every chance to migrate
+            // this task across worker threads before the read.
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+            let taken =
+                take_provenance().expect("provenance must survive await-points on multi-thread rt");
+            assert_eq!(taken.get("workloads.pi.cpus"), Some(&"team".to_string()));
+        });
+    }
+
+    /// Signatures are unchanged (main.rs/secrets_loader.rs are not editable):
+    /// if any of these changed shape this would fail to compile.
+    #[test]
+    fn provenance_function_signatures_stable() {
+        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        let _: fn(Option<Provenance>) = set_provenance;
+        let _: fn() -> Option<Provenance> = take_provenance;
+        let _: fn(Option<Provenance>) = set_secret_provenance;
+        let _: fn() -> Option<Provenance> = get_secret_provenance;
+        let _: fn() -> Option<Provenance> = take_secret_provenance;
     }
 }
