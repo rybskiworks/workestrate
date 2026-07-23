@@ -274,25 +274,15 @@ store-audit:
     echo "=== store-audit: top-20 store paths by closure size ==="
     # Each pipe is wrapped in `|| echo` so a daemon / DB / parse failure
     # degrades to an informational message rather than aborting the recipe.
-    nix path-info --all --json 2>/dev/null \
-      | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception as e:
-    print(f"(could not read nix path-info: {e})")
-    sys.exit(0)
-paths = []
-for p, info in data.items():
-    try:
-        size = int(info.get("closureSize", info.get("size", 0)) or 0)
-    except Exception:
-        size = 0
-    paths.append((size, p))
-paths.sort(reverse=True)
-for size, p in paths[:20]:
-    print(f"{size:>14,d}  {p}")
-' 2>/dev/null || echo "(nix path-info failed unexpectedly — non-blocking)"
+    # The report logic lives in scripts/store-audit.py (stdlib-only) — kept
+    # out of the justfile because just's parser choked on the inline python.
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "(python3 not on PATH — non-blocking)"
+    else
+        nix path-info --all --json 2>/dev/null \
+          | python3 scripts/store-audit.py \
+          || echo "(nix path-info failed unexpectedly — non-blocking)"
+    fi
     echo ""
     echo "=== store-audit: *-source paths referencing ai-workbench repo (impure-path probe) ==="
     matching=$(nix path-info --all 2>/dev/null | grep -E "ai-workbench.*-source$" | head -20 || true)
