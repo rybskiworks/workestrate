@@ -44,6 +44,10 @@ every evaluation regardless of whether the build runs.
 
 ## THE RULES
 
+> **Operational quick-reference for agents:** see
+> [`.agents/skills/nix-usage`](../.agents/skills/nix-usage/SKILL.md)
+> for the anti-accumulation patterns table and verbatim agent rules.
+
 1. Never reference the repo root as a path. Use
    `builtins.path { name = ...; path = ./subdir; filter = ...; }` with
    an explicit `name` and `filter` so only intended files enter the

@@ -542,6 +542,10 @@ common impurity patterns (`toString ./`, `getFlake`, `--impure`, bare
 `src = ./.`, unfiltered `cleanSourceWith`). Run `just gc` and
 `just store-audit` for store hygiene.
 
+For the operational agent quick-reference (anti-accumulation patterns
+table + verbatim rules), see
+[`.agents/skills/nix-usage`](.agents/skills/nix-usage/SKILL.md).
+
 ## Shell completions
 
 `workestrate` ships shell completions for bash, zsh, fish, elvish, and
