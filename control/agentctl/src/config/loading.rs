@@ -393,6 +393,38 @@ pub fn load_config() -> Result<ConfigFile> {
     Ok(merged)
 }
 
+/// FN-22 (ADR 0018): detect the `secrets = "none"` opt-out marker in a
+/// `WORKESTRATE_CONFIG_DIR` override directory's `workestrate.toml`.
+///
+/// The env-override branch bypasses registry discovery entirely, so there is
+/// no `ConfigRepoEntry.secrets` field to read (unlike branch 3). The only
+/// place the "none" signal can live is the override dir's own
+/// `workestrate.toml`. The `ConfigFile` schema has NO top-level secrets-mode
+/// field — its `[secrets]` table is `HashMap<String, SecretDefConfig>`
+/// (secret DEFINITIONS) — so we parse LENIENTLY as `toml::Value` (NOT via
+/// `ConfigFile`, which would reject the type mismatch) and check for a
+/// top-level `secrets` STRING equal to `"none"`.
+///
+/// A `[secrets]` TABLE (secret definitions, as in `config.reference`) is a
+/// `toml::Value::Table`, not a string, and is correctly NOT treated as the
+/// none-marker. Unparseable/missing files, or any other `secrets` shape,
+/// default to `false` (secrets active).
+fn env_dir_secrets_none(dir: &Path) -> bool {
+    let toml_path = dir.join("workestrate.toml");
+    let content = match std::fs::read_to_string(&toml_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let value: toml::Value = match toml::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    matches!(
+        value.get("secrets").and_then(|v| v.as_str()),
+        Some("none")
+    )
+}
+
 /// Resolve all secrets layers in precedence order (lowest first).
 ///
 /// Same resolution as `load_config()`, but returns layer directories for
@@ -406,10 +438,12 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
         if path.exists() {
             layers.push(SecretsLayer {
                 name: "local".to_string(),
-                dir: path,
+                dir: path.clone(),
                 secrets_file: ".env.enc".to_string(),
                 age_key_file: None,
-                skip: false,
+                // FN-22 (ADR 0018): honor the `secrets = "none"` opt-out in
+                // the env-override branch instead of hardcoding `skip: false`.
+                skip: env_dir_secrets_none(&path),
             });
             return Ok(layers);
         }
@@ -1043,6 +1077,62 @@ pub(crate) mod tests {
             names
         );
 
+        Ok(())
+    }
+
+    // --- FN-22 (ADR 0018): WORKESTRATE_CONFIG_DIR honors `secrets = "none"` ---
+
+    #[test]
+    fn secrets_layers_env_dir_honors_secrets_none() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(HOME_ENV_KEYS);
+        let dir = uniq_dir("fn22-none");
+        std::fs::create_dir_all(&dir)?;
+        // Top-level `secrets = "none"` STRING — the opt-out marker. This dir
+        // carries definitions but no decryptable secrets.
+        std::fs::write(
+            dir.join("workestrate.toml"),
+            "schema_version = 1\nsecrets = \"none\"\n",
+        )?;
+
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &dir);
+        let layers = resolve_secrets_layers()?;
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(layers.len(), 1, "env override yields a single layer");
+        assert_eq!(layers[0].name, "local");
+        assert!(
+            layers[0].skip,
+            "secrets = \"none\" env dir must set skip == true (FN-22)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn secrets_layers_env_dir_defaults_to_file() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(HOME_ENV_KEYS);
+        let dir = uniq_dir("fn22-default");
+        std::fs::create_dir_all(&dir)?;
+        // Normal config with a [secrets] TABLE (secret definitions) — this
+        // must NOT be misread as the none-marker. Mirrors config.reference.
+        std::fs::write(
+            dir.join("workestrate.toml"),
+            "schema_version = 1\n\n[secrets.MY_KEY]\nenv_var = \"MY_KEY\"\nrequired = false\n",
+        )?;
+
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &dir);
+        let layers = resolve_secrets_layers()?;
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(layers.len(), 1, "env override yields a single layer");
+        assert_eq!(layers[0].name, "local");
+        assert!(
+            !layers[0].skip,
+            "a [secrets] TABLE (definitions) must NOT be treated as none-marker; skip must stay false"
+        );
         Ok(())
     }
 }
