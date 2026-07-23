@@ -39,7 +39,7 @@ remain. Odysseus/opencode nix derivations exist (HOST-NIX gate).
 
 | Step | Action | Gate | Env |
 |---|---|---|---|
-| 0b.1 | Implement `nix/lib/config.nix`: reads `config.reference/workestrate.toml` via `builtins.fromTOML`. Exports `workloadNames`, `nixLayeredImages`, `localBuilds` attrsets. | `nix eval .#lib.config.workloadNames` | HOST-NIX |
+| 0b.1 | Implement `nix/lib/config.nix`: reads `config.reference/workestrate.toml` via `builtins.fromTOML`. Exports `workloadNames`, `nixLayeredImages`, `localBuilds` attrsets. | `nix eval .#lib.x86_64-linux.config.workloadNames` (requires the `config = referenceConfig;` export under `libForSystem` in `flake.nix`) | HOST-NIX |
 | 0b.2 | Update devshell `_build_agents` (`nix/devshells/default.nix:169-241`) to read `config.reference/workestrate.toml` via `builtins.fromTOML`. Devshell reads ONLY reference config (tool-dev). | `nix develop` enters; build plan correct | HOST-NIX |
 | 0b.3 | Update `workload-images` attrset (`flake.nix:74-97`) to be config-driven (from `config.reference/`). | `nix eval .#workload-images` | HOST-NIX |
 | 0b.4 | Parameterize `pi.nix`/`pi-bun.nix`/`tempest.nix` into named build recipes under `nix/lib/recipes/`. | `nix build .#pi-bun` succeeds | HOST-NIX |

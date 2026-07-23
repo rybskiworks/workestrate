@@ -106,3 +106,23 @@ Disk is at ~96% full (416G used / 17G avail on a 456G overlay). The Nix store is
 - **Gitignore:** `.gitignore` lines 18–20 (`agents/*/repo`, `agents/*/build`), lines 25–26 (`target/`, `**/target/`), `control/agentctl/.gitignore` line 5 (`/target`).
 - **B14 fix:** `nix/lib/config.nix` — `builtins.path { path = ./../config.reference; filter = ...; }` bounding the config copy.
 - **All GC/df/du outputs:** Captured in this session's command history.
+
+## Resolution note — nix-store GC remediation (2026-07-23, branch migration/tool-model)
+
+Work Items 1 and 3 of `docs/migration/nix-store-gc-remediation-spec.md` executed with orchestrator corrections:
+
+- **Impure gate recipes removed.** The one true impure gate (`80-remediation-plan.md` B1 regression, old line 349-351) was rewritten from `nix eval --impure --expr 'let f = (builtins.getFlake (toString ./.)).packages.x86_64-linux.pi-image; in f.drvPath'` to the native git-filtered form `nix eval .#packages.x86_64-linux.pi-image.drvPath`. Verified running: returns `"/nix/store/caql1kmknlqdw4nbr1lcs627g3r7dsfh-workestrator-pi.tar.gz.drv"`. Store delta measured across the run: **0 MB** (5678 MB before/after) — the git-filtered `.#` ref no longer copies the raw working tree.
+- **Stale `.#lib.config.*` references corrected.** `lib.x86_64-linux` exposed no `config` attr (attrs were `[buildImagesFromConfig, buildWorkloadImage, checks, recipes, vocabulary]`). Fixed by adding `config = referenceConfig;` to the `libForSystem` attrset in `flake.nix` (least-invasive: reuses the existing let-bound `referenceConfig`, no new top-level output). Gates `nix eval .#lib.x86_64-linux.config.workloadNames` / `.nixLayeredImages` / `.localBuilds` verified: `[ "example-agent" "example-offensive" "example-service" ]`, `[ "example-agent" "example-offensive" ]`, `[ "example-agent" "example-offensive" ]`. Doc references at `40-migration-process.md:42` and `80-remediation-plan.md:361` updated to the corrected path with a note that the flake export is required.
+- **B6 design note (old line 723) annotated:** `builtins.getFlake` (impure) marked as considered-and-rejected in favor of flake inputs, per `docs/nix-purity.md` rule 6. Historical narrative at line 84 left untouched.
+- **Devshell gcroot (Work Item 3): DONE.** `nix build .#devShells.x86_64-linux.default --out-link /nix/var/nix/gcroots/per-user/node/ai-workbench-devshell` succeeded directly (no print-dev-env fallback needed). Pin closure = 2.9 GiB. GC-survival verified: `nix-collect-garbage -d` freed 1.9 GiB of unrooted paths, store settled at 3.3G with the toolchain retained, and post-GC `nix develop -c true` completed in 9.1s with **zero re-fetch**.
+
+### Disk-pressure tradeoff of the devshell pin (Work Item 3)
+
+Pinning `.#devShells.x86_64-linux.default` (or `nix print-dev-env` closure) keeps ~5-7G of Rust/LLVM/GCC toolchain permanently reachable so post-GC sessions do not re-fetch it. Tradeoff: the overlay is ~95-96% full with **non-nix** data (411G used / 22G avail of 456G at time of writing); a permanent 5-7G pin consumes roughly a quarter to a third of the currently-free space. Accepted because: (a) without the pin every post-GC session re-downloads the same 5-7G anyway (transient, but repeatedly); (b) the pin is the only mechanism that makes `nix develop` survivable across `nix-collect-garbage -d`. **Rollback:**
+
+```sh
+rm /nix/var/nix/gcroots/per-user/node/ai-workbench-devshell
+nix-collect-garbage -d
+```
+
+**Refresh rule:** re-create the pin whenever `flake.lock` changes (fenix/nixpkgs bumps), else the pinned closure goes stale and agents fetch the new toolchain anyway (no breakage, just no benefit).

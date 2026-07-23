@@ -346,9 +346,9 @@ let configPath = "${configDir}/workestrate.toml"; ...
   `WORKESTRATE_BAKED_EOF` followed by `touch /tmp/pwned`. After the fix,
   the file `/tmp/pwned` must NOT exist in the built image (the literal
   line must be written into the target file, not executed). HOST-NIX gate.
-- **B1 regression:** `nix eval --impure --expr 'let f = (builtins.getFlake
-  (toString ./.)).packages.x86_64-linux.pi-image; in f.drvPath'` succeeds
-  (returns a store path string). HOST-NIX gate.
+- **B1 regression:** `nix eval .#packages.x86_64-linux.pi-image.drvPath`
+  succeeds (returns a store path string). HOST-NIX gate.
+  # uses git-filtered flake ref; untracked files are invisible to eval — stage new files (git add / git add -N) before running
 - **B2 regression:** a Nix test that imports `config.nix` against a
   secret-less fixture TOML and asserts `result.secrets == {}`. HOST-NIX
   gate.
@@ -358,8 +358,12 @@ let configPath = "${configDir}/workestrate.toml"; ...
   the inputDrvs contains only the config.reference file). HOST-NIX gate.
 
 **Effort:** ~1 day. **Dependencies:** none. **Validation gate:** `nix eval
-.#lib.config.workloadNames`; `nix build .#pi-image` and `.#workestrator-pi`
-succeed (HOST-NIX). All four regressions green on host.
+.#lib.x86_64-linux.config.workloadNames` (requires the `config =
+referenceConfig;` export under `libForSystem` in `flake.nix` — added with
+this correction; `lib.x86_64-linux` previously had no `config` attr);
+`nix build .#pi-image` and `.#workestrator-pi` succeed (HOST-NIX). All four
+regressions green on host.
+# uses git-filtered flake ref; untracked files are invisible to eval — stage new files (git add / git add -N) before running
 
 ---
 
@@ -720,7 +724,9 @@ recipe layer.
 - **B6 (buildImagesFromConfig doesn't resolve flake:// URIs):** in
   `nix/lib/recipes/nix-layered.nix` (or wherever `buildImagesFromConfig`
   lives), accept `source` URIs of form `flake:<flake-url>#<attrpath>` and
-  resolve them via `builtins.getFlake` (impure) or a flake input. Document
+  resolve them via a flake input (preferred — pure). NOTE: `builtins.getFlake`
+  (impure) was considered and rejected; see docs/nix-purity.md rule 6 and
+  docs/migration/nix-store-gc-remediation-spec.md. Document
   that config-repo flakes must add the source flake as an input.
 - **B10 (tempest npmDepsHash placeholder):** run `nix run
   nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json` on

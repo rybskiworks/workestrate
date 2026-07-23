@@ -55,6 +55,10 @@
         {
           recipes = recipesForPkgs;
           vocabulary = recipesForPkgs.vocab;
+          # Exposes the parsed config.reference attrset (workloadNames,
+          # nixLayeredImages, localBuilds, ...) so gates can eval
+          # .#lib.<system>.config.* without --impure / getFlake.
+          config = referenceConfig;
           buildWorkloadImage = recipesForPkgs.image.nix-layered;
 
           # B6 (WP9): buildImagesFromConfig resolves `flake://<name>` URIs in
