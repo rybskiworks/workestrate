@@ -2561,9 +2561,19 @@ async fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
         println!("Cloned {} source to {}", name, dest.display());
     }
 
-    let env_var = format!("WORKESTRATE_{}_BUILD", name.to_uppercase());
+    let env_var = build_env_var_name(name);
     println!("Set {}={} for this session", env_var, dest.display());
     Ok(())
+}
+
+/// Env-var name that overrides a workload's build directory for the current
+/// session. Hyphens in the workload name become underscores so the variable is
+/// settable in any shell (e.g. `my-agent` → `WORKESTRATE_MY_AGENT_BUILD`).
+fn build_env_var_name(name: &str) -> String {
+    format!(
+        "WORKESTRATE_{}_BUILD",
+        name.to_ascii_uppercase().replace('-', "_")
+    )
 }
 
 fn build_command_string(name: &str, local_build: &config::LocalBuildConfig) -> String {
@@ -2607,7 +2617,7 @@ async fn cmd_source_build(name: &str) -> Result<()> {
     let command = build_command_string(name, local_build);
     println!("Build command for {}: {}", name, command);
 
-    let env_var = format!("WORKESTRATE_{}_BUILD", name.to_uppercase());
+    let env_var = build_env_var_name(name);
     let build_dir = match std::env::var(&env_var) {
         Ok(path) => PathBuf::from(path),
         Err(_) => config::source_store_dir(name).join("build"),
@@ -2682,7 +2692,7 @@ async fn cmd_source_list() -> Result<()> {
             continue;
         }
         found = true;
-        let env_var = format!("WORKESTRATE_{}_BUILD", name.to_uppercase());
+        let env_var = build_env_var_name(name);
         let repo = config::source_store_dir(name).join("repo");
         let build = config::source_store_dir(name).join("build");
         let repo_status = if repo.exists() {
@@ -4190,5 +4200,22 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert!(json_mode_from_args(&args));
+    }
+
+    // --- FN-27: build-env var name sanitization -----------------------------
+
+    #[test]
+    fn build_env_var_name_sanitizes_hyphens() {
+        assert_eq!(build_env_var_name("my-agent"), "WORKESTRATE_MY_AGENT_BUILD");
+    }
+
+    #[test]
+    fn build_env_var_name_preserves_simple_names() {
+        assert_eq!(build_env_var_name("litellm"), "WORKESTRATE_LITELLM_BUILD");
+    }
+
+    #[test]
+    fn build_env_var_name_handles_multiple_hyphens() {
+        assert_eq!(build_env_var_name("a-b-c"), "WORKESTRATE_A_B_C_BUILD");
     }
 }
