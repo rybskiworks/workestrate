@@ -191,6 +191,26 @@ enum ConfigAction {
         #[arg(long, conflicts_with = "from_reference")]
         empty: bool,
     },
+    /// Unregister a config repo from the registry
+    Remove {
+        /// Config repo name to remove.
+        name: String,
+        /// Also delete the store clone directory.
+        #[arg(long)]
+        delete: bool,
+        /// Force deletion even if the clone is dirty (has uncommitted changes).
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+/// Actions for managing workestrate contexts.
+#[derive(Subcommand)]
+enum ContextAction {
+    /// List all defined contexts.
+    List,
+    /// Show the currently-resolved context and why it was selected.
+    Current,
 }
 
 /// Actions for managing agent source checkouts.
@@ -260,6 +280,17 @@ enum Commands {
     DownAll {
         #[arg(long, help = "Skip the interactive confirmation")]
         yes: bool,
+    },
+    /// Remove state-dir contents (workspaces, var, run). Does not touch repos/sources/config.
+    Clean {
+        /// Skip the interactive confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Manage workestrate contexts
+    Context {
+        #[command(subcommand)]
+        action: ContextAction,
     },
     /// Print the JSON Schema for workestrate.toml to stdout (or write to --out).
     /// The schema is generated from the same serde/schemars types the config
@@ -937,6 +968,101 @@ async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// `workestrate clean` — remove the CONTENTS of the volatile state-dir
+/// subdirectories (`workspaces/`, `var/`, `run/`), leaving the directories
+/// themselves in place. Never touches the store (`repos/`, `sources/`) or any
+/// config file. Interactive confirmation unless `--yes`; non-interactive
+/// stdin without `--yes` is a hard refusal (same policy as `down --all`).
+async fn cmd_clean(yes: bool, json: bool) -> Result<()> {
+    use std::io::IsTerminal;
+    let state_dir = config::resolve_state_dir();
+    const SUBDIRS: [&str; 3] = ["workspaces", "var", "run"];
+
+    if !yes {
+        if std::io::stdin().is_terminal() {
+            eprint!(
+                "This will remove contents of {}/{{workspaces,var,run}}. Continue? [y/N] ",
+                state_dir.display()
+            );
+            std::io::stderr().flush()?;
+            use std::io::BufRead;
+            let answer = std::io::stdin()
+                .lock()
+                .lines()
+                .next()
+                .transpose()?
+                .unwrap_or_default();
+            let confirmed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+            if !confirmed {
+                eprintln!("aborted");
+                std::process::exit(1);
+            }
+        } else {
+            anyhow::bail!("refusing to clean in non-interactive mode without --yes");
+        }
+    }
+
+    struct CleanEntry {
+        dir: &'static str,
+        entries_removed: usize,
+        status: &'static str,
+    }
+    let mut entries: Vec<CleanEntry> = Vec::new();
+    for sub in SUBDIRS {
+        let dir = state_dir.join(sub);
+        if !dir.exists() {
+            entries.push(CleanEntry {
+                dir: sub,
+                entries_removed: 0,
+                status: "absent",
+            });
+            continue;
+        }
+        let removed = std::fs::read_dir(&dir)?.filter_map(|e| e.ok()).count();
+        std::fs::remove_dir_all(&dir)?;
+        std::fs::create_dir_all(&dir)?;
+        entries.push(CleanEntry {
+            dir: sub,
+            entries_removed: removed,
+            status: "cleaned",
+        });
+    }
+
+    if json {
+        let cleaned: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "dir": e.dir,
+                    "entries_removed": e.entries_removed,
+                    "status": e.status,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "state_dir": state_dir.display().to_string(),
+            "cleaned": cleaned,
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        let mut cleaned_count = 0usize;
+        for e in &entries {
+            if e.status == "cleaned" {
+                cleaned_count += 1;
+                println!("  {}: removed {} entries [OK]", e.dir, e.entries_removed);
+            } else {
+                println!("  {}: (absent)", e.dir);
+            }
+        }
+        println!(
+            "Cleaned {} directories in {}",
+            cleaned_count,
+            state_dir.display()
+        );
+    }
+    Ok(())
+}
+
 fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
     let schema = schemars::schema_for!(crate::config::ConfigFile);
     let json = serde_json::to_string_pretty(&schema)?;
@@ -1243,12 +1369,169 @@ async fn cmd_config(action: ConfigAction) -> Result<()> {
         ConfigAction::List => cmd_config_list().await,
         ConfigAction::Trust { dir } => cmd_config_trust(&dir).await,
         ConfigAction::Untrust { dir } => cmd_config_untrust(&dir).await,
+        ConfigAction::Remove {
+            name,
+            delete,
+            force,
+        } => cmd_config_remove(&name, delete, force).await,
         // `New` is dispatched directly in `async_main` so it can route the
         // global `--json` flag. Reaching this arm would be a regression.
         ConfigAction::New { .. } => {
             anyhow::bail!("config new must be dispatched from async_main (--json routing)")
         }
     }
+}
+
+/// `workestrate config remove <name>` — unregister a config repo. With
+/// `--delete`, also remove the store clone at `<store>/repos/<name>`; refuses
+/// to delete a dirty clone unless `--force` is passed. The name is also
+/// scrubbed from the bare `layers` list and every context's `layers`. A
+/// dangling `settings.default_context` pointing at the removed name is
+/// cleared (with a warning).
+async fn cmd_config_remove(name: &str, delete: bool, force: bool) -> Result<()> {
+    config::validate_config_name(name)?;
+    let mut registry = config::load_registry()?
+        .ok_or_else(|| anyhow::anyhow!("no registry found; run 'workestrate init' first"))?;
+    if !registry.configs.contains_key(name) {
+        anyhow::bail!("config repo '{}' is not registered", name);
+    }
+
+    if delete {
+        let dest = config::config_repo_dir(name);
+        if dest.exists() {
+            if git_is_dirty(&dest)? && !force {
+                anyhow::bail!(
+                    "config repo '{}' has uncommitted changes; use --force to delete anyway",
+                    name
+                );
+            }
+            std::fs::remove_dir_all(&dest)?;
+            println!("Deleted store clone: {}", dest.display());
+        } else {
+            println!("(store clone already absent)");
+        }
+    }
+
+    registry.configs.remove(name);
+    registry.layers.retain(|l| l != name);
+    for ctx in registry.contexts.values_mut() {
+        ctx.layers.retain(|l| l != name);
+    }
+    if registry.settings.default_context.as_deref() == Some(name) {
+        registry.settings.default_context = None;
+        eprintln!(
+            "warning: cleared default_context '{}' (it pointed at the removed repo)",
+            name
+        );
+    }
+    config::save_registry(&registry)?;
+    println!("Unregistered config repo: {}", name);
+    Ok(())
+}
+
+/// `workestrate context list|current` — inspect defined contexts and the
+/// currently-resolved active context.
+async fn cmd_context(action: ContextAction, json: bool) -> Result<()> {
+    match action {
+        ContextAction::List => cmd_context_list(json).await,
+        ContextAction::Current => cmd_context_current(json).await,
+    }
+}
+
+async fn cmd_context_list(json: bool) -> Result<()> {
+    let registry = match config::load_registry()? {
+        Some(r) => r,
+        None => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "contexts": [],
+                    }))?
+                );
+            } else {
+                println!("(no registry found)");
+            }
+            return Ok(());
+        }
+    };
+
+    let mut names: Vec<&String> = registry.contexts.keys().collect();
+    names.sort();
+
+    if json {
+        let contexts: Vec<serde_json::Value> = names
+            .iter()
+            .map(|name| {
+                let ctx = &registry.contexts[*name];
+                let is_default = registry.settings.default_context.as_ref() == Some(*name);
+                serde_json::json!({
+                    "name": name,
+                    "layers": ctx.layers,
+                    "is_default": is_default,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "contexts": contexts }))?
+        );
+    } else {
+        println!("Contexts:");
+        for name in names {
+            let ctx = &registry.contexts[name];
+            let is_default = registry.settings.default_context.as_ref() == Some(name);
+            if is_default {
+                println!("  {} (default)", name);
+            } else {
+                println!("  {}", name);
+            }
+            println!("    layers: {}", ctx.layers.join(", "));
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_context_current(json: bool) -> Result<()> {
+    let active = config::resolve_active_context()?;
+
+    // Resolution-source classification: env (--context flag / WORKESTRATE_CONTEXT)
+    // wins; otherwise the registry default_context; otherwise bare-layers
+    // backward-compat when no contexts are defined at all.
+    let source = if std::env::var("WORKESTRATE_CONTEXT").is_ok() {
+        "env"
+    } else if let Ok(Some(ref reg)) = config::load_registry() {
+        if reg.settings.default_context.is_some() {
+            "default"
+        } else if reg.contexts.is_empty() {
+            "bare"
+        } else {
+            "default"
+        }
+    } else {
+        "bare"
+    };
+
+    if json {
+        let body = serde_json::json!({
+            "name": active.name,
+            "source": source,
+            "layers": active.layers,
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        match active.name {
+            Some(ref name) => println!("Active context: {}", name),
+            None => println!("Active context: (none — using bare layers)"),
+        }
+        let source_label = match source {
+            "env" => "env (--context flag or WORKESTRATE_CONTEXT)",
+            other => other,
+        };
+        println!("  source: {}", source_label);
+        println!("  layers: [{}]", active.layers.join(", "));
+    }
+    Ok(())
 }
 
 async fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
@@ -2201,6 +2484,8 @@ async fn async_main() -> Result<()> {
         }
         Commands::Ps => cmd_ps(cli.json).await,
         Commands::DownAll { yes } => cmd_down_all(yes, cli.json).await,
+        Commands::Clean { yes } => cmd_clean(yes, cli.json).await,
+        Commands::Context { action } => cmd_context(action, cli.json).await,
         Commands::GenerateSchema { out } => cmd_generate_schema(out.as_deref()),
         Commands::Config { action } => match action {
             ConfigAction::List => {
@@ -2893,6 +3178,8 @@ mod tests {
             "generate-env-example",
             "config",
             "secrets-target",
+            "clean",
+            "context",
             "source",
             "litellm",
             "pi",
