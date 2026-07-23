@@ -24,6 +24,7 @@
       }
     }
   },
+  "additionalProperties": false,
   "definitions": {
     "BakedFileSpec": {
       "type": "object",
@@ -38,7 +39,8 @@
         "path": {
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "BinarySpec": {
       "type": "object",
@@ -77,7 +79,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "DenyDomainRule": {
       "type": "object",
@@ -193,7 +196,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ImageSpec": {
       "type": "object",
@@ -259,7 +263,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "IngressRule": {
       "type": "object",
@@ -325,7 +330,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "MountPlan": {
       "type": "object",
@@ -376,7 +382,8 @@
             "$ref": "#/definitions/IngressRule"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "PortMapping": {
       "type": "object",
@@ -472,7 +479,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "SecretEnvConfig": {
       "type": "object",
@@ -483,7 +491,8 @@
         "secret": {
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "SeedFileConfig": {
       "type": "object",
@@ -504,7 +513,8 @@
         "target": {
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "WorkloadConfig": {
       "type": "object",
@@ -623,7 +633,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     }
   }
 }

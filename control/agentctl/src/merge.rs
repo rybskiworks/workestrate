@@ -266,7 +266,22 @@ fn merge_workload(
         );
     }
     if table.contains_key("env") {
-        merged.env = layer.env.clone();
+        // WP6(a): env lists merge union-by-name (deduped by EnvVarConfig.name),
+        // last layer wins per key — mirroring the secret_env union semantics
+        // below. Base order is preserved for existing keys; brand-new keys are
+        // appended in override order. (Previously wholesale replace.)
+        for e in &layer.env {
+            if let Some(existing) = merged.env.iter_mut().find(|m| m.name == e.name) {
+                *existing = e.clone();
+            } else {
+                merged.env.push(e.clone());
+            }
+            // Per-key provenance (WP11 renders env provenance end-to-end).
+            provenance.insert(
+                format!("workloads.{name}.env.{}", e.name),
+                layer_ctx.name.clone(),
+            );
+        }
         provenance.insert(format!("workloads.{name}.env"), layer_ctx.name.clone());
     }
     if table.contains_key("ports") {
@@ -671,6 +686,85 @@ mod tests {
 
         let (merged, _) = merge_layers(&[base])?;
         assert_eq!(merged, direct);
+        Ok(())
+    }
+
+    #[test]
+    fn env_union_appends_new_keys() -> Result<()> {
+        // WP6(a): base env [A=1,B=2] + override env [C=3] → A=1, B=2, C=3.
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[[workloads.pi.env]]\nname = \"A\"\nvalue = \"1\"\n\n[[workloads.pi.env]]\nname = \"B\"\nvalue = \"2\"\n\n[workloads.pi.network]\ndefault_deny = true",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[workloads.pi]\n\n[[workloads.pi.env]]\nname = \"C\"\nvalue = \"3\"",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        let env_pairs: Vec<(&str, Option<&str>)> = pi
+            .env
+            .iter()
+            .map(|e| (e.name.as_str(), e.value.as_deref()))
+            .collect();
+        assert_eq!(
+            env_pairs,
+            vec![("A", Some("1")), ("B", Some("2")), ("C", Some("3"))],
+            "override env entries should append after base entries in order"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.env"),
+            Some(&"team".to_string())
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.env.C"),
+            Some(&"team".to_string()),
+            "per-key provenance should attribute C to the override layer"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn env_union_last_layer_wins_per_key() -> Result<()> {
+        // WP6(a): base env [A=1,B=2] + override env [A=9] → A=9 (not
+        // duplicated, replaced in place), B=2 still present.
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[[workloads.pi.env]]\nname = \"A\"\nvalue = \"1\"\n\n[[workloads.pi.env]]\nname = \"B\"\nvalue = \"2\"\n\n[workloads.pi.network]\ndefault_deny = true",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[workloads.pi]\n\n[[workloads.pi.env]]\nname = \"A\"\nvalue = \"9\"",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        let env_pairs: Vec<(&str, Option<&str>)> = pi
+            .env
+            .iter()
+            .map(|e| (e.name.as_str(), e.value.as_deref()))
+            .collect();
+        assert_eq!(
+            env_pairs,
+            vec![("A", Some("9")), ("B", Some("2"))],
+            "A should be replaced in place (last layer wins), B preserved, no duplicate A"
+        );
+        assert_eq!(
+            pi.env.iter().filter(|e| e.name == "A").count(),
+            1,
+            "A must not be duplicated"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.env.A"),
+            Some(&"team".to_string()),
+            "per-key provenance should attribute A to the override layer"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.env.B"),
+            Some(&"base".to_string()),
+            "untouched key B keeps the base layer provenance"
+        );
         Ok(())
     }
 

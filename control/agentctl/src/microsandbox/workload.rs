@@ -153,6 +153,14 @@ pub struct ConfigWorkload {
     workload: WorkloadConfig,
     env: Vec<EnvVar>,
     secret_env: Vec<HostBoundSecret>,
+    /// Maps the rendered env/secret_env name (for a remapped secret, the
+    /// `exposed_as` name) back to the originating `[secrets.NAME]` definition
+    /// name. Merge provenance is recorded under the SECRET DEF NAME
+    /// (`workloads.{wl}.secret_env.{SECRET_DEF_NAME}`), while the rendered
+    /// `HostBoundSecret.name` is the EXPOSED name — without this map a
+    /// remapped secret like LITELLM_AUTH (exposed as OPENAI_API_KEY) looked up
+    /// the wrong provenance key and fell back to "core" (WP6(b)/A5).
+    secret_def_names: HashMap<String, String>,
     provenance: Option<crate::merge::Provenance>,
 }
 
@@ -171,12 +179,14 @@ impl ConfigWorkload {
         let secrets = build_secret_definitions(&config)?;
         let env = build_env(&workload, &secrets)?;
         let secret_env = build_secret_env(&workload, &secrets)?;
+        let secret_def_names = build_secret_def_name_map(&workload, &secrets);
 
         Ok(Self {
             name: name.to_string(),
             workload,
             env,
             secret_env,
+            secret_def_names,
             provenance,
         })
     }
@@ -221,8 +231,16 @@ impl Workload for ConfigWorkload {
             .collect();
 
         let mut mounts = self.workload.mounts.clone();
+        // WP6(c)/A6: a configured local_build.env_override is ALSO honored as
+        // a mount-host template token (checked before the default convention).
+        let env_override = self
+            .workload
+            .local_build
+            .as_ref()
+            .and_then(|b| b.env_override.as_deref());
         for m in &mut mounts {
-            m.host = resolve_mount_host_template(&m.host, self.name(), &self.build_path());
+            m.host =
+                resolve_mount_host_template(&m.host, self.name(), &self.build_path(), env_override);
         }
 
         SandboxPlan {
@@ -323,23 +341,33 @@ impl Workload for ConfigWorkload {
         let env_source = source_of(&format!("workloads.{}.env", self.name));
         for e in &plan.env {
             let source = if e.is_secret {
-                secret_prov
-                    .as_ref()
-                    .and_then(|p| p.get(&e.name))
-                    .map(|s| s.as_str())
-                    .unwrap_or("core")
+                // WP6(b)/A5: resolve via the SECRET DEF NAME so remapped
+                // secrets attribute to their true layer, not "core".
+                secret_line_source(
+                    &e.name,
+                    &self.secret_def_names,
+                    &self.name,
+                    self.provenance.as_ref(),
+                    secret_prov.as_ref(),
+                    default_source,
+                )
             } else {
                 env_source
             };
             write_line(&mut out, "", &format!("env: {}", e), source);
         }
         for se in &plan.secret_env {
-            let se_source = source_of(&format!("workloads.{}.secret_env.{}", self.name, se.name));
-            let source = secret_prov
-                .as_ref()
-                .and_then(|p| p.get(&se.name))
-                .map(|s| s.as_str())
-                .unwrap_or(se_source);
+            // WP6(b)/A5: se.name is the EXPOSED name (e.g. OPENAI_API_KEY);
+            // merge provenance is keyed by the SECRET DEF NAME (e.g.
+            // LITELLM_AUTH). Resolve via the def-name map.
+            let source = secret_line_source(
+                &se.name,
+                &self.secret_def_names,
+                &self.name,
+                self.provenance.as_ref(),
+                secret_prov.as_ref(),
+                default_source,
+            );
             write_line(
                 &mut out,
                 "",
@@ -571,7 +599,36 @@ pub(crate) fn validate_seed_source(src: &str) -> Result<()> {
     Ok(())
 }
 
-fn resolve_mount_host_template(host: &str, name: &str, build_path: &str) -> String {
+/// Resolve mount-host template tokens (WP6(c)/A6).
+///
+/// Matches, in precedence order:
+/// 1. `${<env_override>}` — the workload's configured
+///    `local_build.env_override` var name (checked FIRST so a custom override
+///    that happens to equal the default convention still wins).
+/// 2. `${WORKESTRATE_<NAME>_BUILD}` — the default convention (NAME
+///    uppercased, '-' → '_'), kept for backward compatibility.
+/// 3. `${CWD}` / `${CWD}/...` — current working directory (unchanged).
+///
+/// Anything else is returned unchanged (literal).
+fn resolve_mount_host_template(
+    host: &str,
+    name: &str,
+    build_path: &str,
+    env_override: Option<&str>,
+) -> String {
+    if let Some(custom) = env_override {
+        let custom_template = format!("${{{custom}}}");
+        if host == custom_template {
+            return build_path.to_string();
+        }
+    }
+    let default_build_var = format!(
+        "${{WORKESTRATE_{}_BUILD}}",
+        name.to_ascii_uppercase().replace('-', "_")
+    );
+    if host == default_build_var {
+        return build_path.to_string();
+    }
     if host == "${CWD}" {
         if let Ok(cwd) = std::env::current_dir() {
             return cwd.to_string_lossy().into_owned();
@@ -581,13 +638,6 @@ fn resolve_mount_host_template(host: &str, name: &str, build_path: &str) -> Stri
         if let Ok(cwd) = std::env::current_dir() {
             return format!("{}/{}", cwd.to_string_lossy(), rest);
         }
-    }
-    let default_build_var = format!(
-        "${{WORKESTRATE_{}_BUILD}}",
-        name.to_ascii_uppercase().replace('-', "_")
-    );
-    if host == default_build_var {
-        return build_path.to_string();
     }
     host.to_string()
 }
@@ -702,6 +752,67 @@ fn build_secret_env(
         }
     }
     Ok(secret_env)
+}
+
+/// Map each rendered secret-bearing env name to its `[secrets.NAME]`
+/// definition name (WP6(b)/A5).
+///
+/// For `secret_env` entries the rendered name is the secret's exposed name
+/// (its own `env_var` for a direct secret, `exposed_as` for a remapped one)
+/// and the def name is `se.secret`. For secret-backed `env` entries
+/// (`e.secret = "NAME"`) the rendered name is `e.name` and the def name is
+/// `e.secret` (env entries can only reference direct secrets — remapped
+/// references bail in `build_env`).
+fn build_secret_def_name_map(
+    workload: &WorkloadConfig,
+    secrets: &HashMap<String, ResolvedSecret>,
+) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for se in &workload.secret_env {
+        if let Some(resolved) = secrets.get(&se.secret) {
+            let rendered_name = match resolved {
+                ResolvedSecret::Direct(def) => def.env_var.clone(),
+                ResolvedSecret::Remapped(remap) => remap.exposed_as.clone(),
+            };
+            map.insert(rendered_name, se.secret.clone());
+        }
+    }
+    for e in &workload.env {
+        if let Some(ref secret_name) = e.secret {
+            map.insert(e.name.clone(), secret_name.clone());
+        }
+    }
+    map
+}
+
+/// Resolve the provenance layer for a rendered secret line (WP6(b)/A5).
+///
+/// Lookup order:
+/// 1. Secret-load provenance (`get_secret_provenance()`), keyed by the
+///    rendered ENV VAR name (e.g. LITELLM_MASTER_KEY).
+/// 2. Merge provenance `workloads.{wl}.secret_env.{SECRET_DEF_NAME}` — keyed
+///    by the SECRET DEF NAME so remapped secrets (LITELLM_AUTH exposed as
+///    OPENAI_API_KEY) resolve to the layer that actually bound them, instead
+///    of falling through to "core" when keyed by the exposed name.
+/// 3. `default` ("core").
+fn secret_line_source<'a>(
+    rendered_name: &str,
+    secret_def_names: &HashMap<String, String>,
+    workload_name: &str,
+    provenance: Option<&'a crate::merge::Provenance>,
+    secret_prov: Option<&'a crate::merge::Provenance>,
+    default: &'a str,
+) -> &'a str {
+    if let Some(layer) = secret_prov.and_then(|p| p.get(rendered_name)) {
+        return layer.as_str();
+    }
+    if let Some(def_name) = secret_def_names.get(rendered_name) {
+        let key = format!("workloads.{workload_name}.secret_env.{def_name}");
+        if let Some(layer) = provenance.and_then(|p| p.get(&key)) {
+            return layer.as_str();
+        }
+    }
+    default
 }
 
 #[cfg(test)]
@@ -868,5 +979,155 @@ mod tests {
             validate_seed_source(ok)
                 .unwrap_or_else(|e| panic!("legitimate seed_source='{ok}' rejected: {e}"));
         }
+    }
+
+    // ---- WP6(b)/A5: secret provenance resolves by SECRET DEF NAME ----
+
+    /// A5 before/after demonstration:
+    /// - BEFORE (keyed by exposed name): provenance lookup
+    ///   `workloads.odysseus.secret_env.OPENAI_API_KEY` misses → "core".
+    /// - AFTER (keyed by secret-def name):
+    ///   `workloads.odysseus.secret_env.LITELLM_AUTH` hits → the true layer.
+    #[test]
+    fn secret_provenance_resolves_remapped_secret_by_def_name() -> Result<()> {
+        // Base layer defines the direct secret + binds LITELLM_AUTH on odysseus;
+        // the team layer redefines LITELLM_AUTH (changes exposed_as).
+        let base = crate::merge::Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[secrets.LITELLM_MASTER_KEY]\nenv_var = \"LITELLM_MASTER_KEY\"\n\n[secrets.LITELLM_AUTH]\nsource = \"LITELLM_MASTER_KEY\"\nexposed_as = \"OPENAI_API_KEY\"\n\n[workloads.odysseus]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"python:3.12-slim\" }\ncommand = []\n\n[[workloads.odysseus.secret_env]]\nsecret = \"LITELLM_AUTH\"\n\n[workloads.odysseus.network]\ndefault_deny = true",
+        )?;
+        let team = crate::merge::Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[secrets.LITELLM_AUTH]\nsource = \"LITELLM_MASTER_KEY\"\nexposed_as = \"OPENAI_API_KEY\"",
+        )?;
+
+        let (config, provenance) = crate::merge::merge_layers(&[base, team])?;
+        let secrets = build_secret_definitions(&config)?;
+        let workload = config.workloads.get("odysseus").unwrap().clone();
+        let secret_env = build_secret_env(&workload, &secrets)?;
+        let def_names = build_secret_def_name_map(&workload, &secrets);
+
+        // The rendered HostBoundSecret carries the EXPOSED name.
+        let rendered = secret_env
+            .iter()
+            .find(|se| se.name == "OPENAI_API_KEY")
+            .expect("remapped secret should render under its exposed name");
+
+        // BEFORE: the buggy lookup keyed by the exposed name misses and falls
+        // back to "core".
+        let before = provenance
+            .get("workloads.odysseus.secret_env.OPENAI_API_KEY")
+            .map(|s| s.as_str())
+            .unwrap_or("core");
+        assert_eq!(
+            before, "core",
+            "BEFORE: keying by exposed name misses merge provenance → 'core'"
+        );
+
+        // AFTER: the helper resolves via the secret-def name → the layer that
+        // bound the secret_env entry.
+        let after = secret_line_source(
+            &rendered.name,
+            &def_names,
+            "odysseus",
+            Some(&provenance),
+            None,
+            "core",
+        );
+        assert_eq!(
+            after, "base",
+            "AFTER: keying by secret-def name (LITELLM_AUTH) yields the true layer"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn secret_provenance_prefers_secret_load_provenance_by_env_name() {
+        // secret-load provenance (keyed by env var name) wins over the merge
+        // fallback when both are present.
+        let mut secret_prov: crate::merge::Provenance = HashMap::new();
+        secret_prov.insert("OPENAI_API_KEY".to_string(), "user-global".to_string());
+        let mut prov: crate::merge::Provenance = HashMap::new();
+        prov.insert(
+            "workloads.odysseus.secret_env.LITELLM_AUTH".to_string(),
+            "team".to_string(),
+        );
+        let mut def_names: HashMap<String, String> = HashMap::new();
+        def_names.insert("OPENAI_API_KEY".to_string(), "LITELLM_AUTH".to_string());
+
+        let src = secret_line_source(
+            "OPENAI_API_KEY",
+            &def_names,
+            "odysseus",
+            Some(&prov),
+            Some(&secret_prov),
+            "core",
+        );
+        assert_eq!(src, "user-global");
+    }
+
+    #[test]
+    fn secret_provenance_falls_back_to_core_when_unrecorded() {
+        let def_names: HashMap<String, String> = HashMap::new();
+        let src = secret_line_source("SOME_KEY", &def_names, "pi", None, None, "core");
+        assert_eq!(src, "core");
+    }
+
+    // ---- WP6(c)/A6: build_path template honors custom env_override ----
+
+    #[test]
+    fn mount_template_matches_custom_env_override() {
+        // ${CUSTOM_BUILD} with env_override = CUSTOM_BUILD → build_path.
+        let got = resolve_mount_host_template(
+            "${CUSTOM_BUILD}",
+            "pi",
+            "/tmp/build-out",
+            Some("CUSTOM_BUILD"),
+        );
+        assert_eq!(got, "/tmp/build-out");
+    }
+
+    #[test]
+    fn mount_template_still_matches_default_convention_with_override_set() {
+        // Backward compat: ${WORKESTRATE_PI_BUILD} still resolves even when a
+        // custom env_override is configured.
+        let got = resolve_mount_host_template(
+            "${WORKESTRATE_PI_BUILD}",
+            "pi",
+            "/tmp/build-out",
+            Some("CUSTOM_BUILD"),
+        );
+        assert_eq!(got, "/tmp/build-out");
+    }
+
+    #[test]
+    fn mount_template_custom_token_literal_without_override() {
+        // Without a configured override, ${CUSTOM_BUILD} is NOT substituted.
+        let got = resolve_mount_host_template("${CUSTOM_BUILD}", "pi", "/tmp/build-out", None);
+        assert_eq!(got, "${CUSTOM_BUILD}");
+    }
+
+    #[test]
+    fn mount_template_cwd_unchanged() {
+        let got = resolve_mount_host_template("${CWD}", "pi", "/tmp/build-out", None);
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(got, cwd.to_string_lossy());
+        let got =
+            resolve_mount_host_template("${CWD}/sub", "pi", "/tmp/build-out", Some("X_BUILD"));
+        assert_eq!(got, format!("{}/sub", cwd.to_string_lossy()));
+    }
+
+    #[test]
+    fn mount_template_default_convention_without_override() {
+        let got = resolve_mount_host_template("${WORKESTRATE_PI_BUILD}", "pi", "/tmp/b", None);
+        assert_eq!(got, "/tmp/b");
+        // Hyphenated workload names map '-' → '_'.
+        let got = resolve_mount_host_template(
+            "${WORKESTRATE_EXAMPLE_AGENT_BUILD}",
+            "example-agent",
+            "/tmp/b",
+            None,
+        );
+        assert_eq!(got, "/tmp/b");
     }
 }
