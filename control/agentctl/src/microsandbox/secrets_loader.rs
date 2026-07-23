@@ -102,10 +102,43 @@ pub fn load_secrets() -> Result<()> {
     Ok(())
 }
 
+/// Check if a file's permissions are too permissive (mode > 0600).
+/// Returns a warning message if the file exists and has group/other bits set.
+/// Returns None if the file doesn't exist (caller handles missing files separately)
+/// or if permissions are OK (mode <= 0600).
+#[cfg(unix)]
+fn check_file_perms(path: &std::path::Path, label: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    let mode = metadata.permissions().mode();
+    // Check if any group or other permission bits are set (bits 0077)
+    if mode & 0o077 != 0 {
+        let mode_str = format!("{:04o}", mode & 0o777);
+        Some(format!(
+            "WARNING: {} '{}' has overly permissive mode {} (should be 0600 or stricter)",
+            label,
+            path.display(),
+            mode_str
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+fn check_file_perms(_path: &std::path::Path, _label: &str) -> Option<String> {
+    None
+}
+
 fn decrypt_layer(layer: &crate::config::SecretsLayer) -> Result<Option<HashMap<String, String>>> {
     let env_enc = layer.dir.join(&layer.secrets_file);
     if !env_enc.exists() {
         return Ok(None); // no .env.enc, not an error
+    }
+
+    // C13: warn (not error) if the secrets file is group/other-readable.
+    if let Some(warning) = check_file_perms(&env_enc, "secrets file") {
+        eprintln!("{warning}");
     }
 
     // Resolve age key file.
@@ -122,6 +155,11 @@ fn decrypt_layer(layer: &crate::config::SecretsLayer) -> Result<Option<HashMap<S
             .unwrap_or(crate::scaffold::AGE_KEY_DEFAULT_PATH);
         PathBuf::from(home).join(rel)
     };
+
+    // C13: warn (not error) if the age key file is group/other-readable.
+    if let Some(warning) = check_file_perms(&key_file, "age key file") {
+        eprintln!("{warning}");
+    }
 
     if !key_file.exists() {
         anyhow::bail!("age key not found: {}", key_file.display());
@@ -308,6 +346,80 @@ mod tests {
         assert_eq!(
             const_rel, ".config/sops/age/ai-workbench-secrets.txt",
             "secrets_loader default path must be derived from AGE_KEY_DEFAULT_PATH const"
+        );
+    }
+
+    // --- C13: check_file_perms tests (Unix-only, no env mutation) ---
+
+    #[cfg(unix)]
+    fn make_temp_file_with_mode(name: &str, mode: u32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "workestrate-perms-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        std::fs::write(&path, b"test").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_file_perms_ok_for_mode_0600() {
+        let path = make_temp_file_with_mode("0600", 0o600);
+        let result = check_file_perms(&path, "age key file");
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(result, None, "mode 0600 should not warn");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_file_perms_warns_for_mode_0644() {
+        let path = make_temp_file_with_mode("0644", 0o644);
+        let result = check_file_perms(&path, "secrets file");
+        std::fs::remove_file(&path).unwrap();
+        let msg = result.unwrap();
+        assert!(
+            msg.contains("overly permissive"),
+            "warning should say 'overly permissive'; got: {msg}"
+        );
+        assert!(
+            msg.contains("0644"),
+            "warning should include the mode 0644; got: {msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_file_perms_warns_for_mode_0666() {
+        let path = make_temp_file_with_mode("0666", 0o666);
+        let result = check_file_perms(&path, "age key file");
+        std::fs::remove_file(&path).unwrap();
+        assert!(result.is_some(), "mode 0666 should warn");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_file_perms_none_for_missing_file() {
+        let path = std::env::temp_dir().join(format!(
+            "workestrate-perms-test-{}-does-not-exist",
+            std::process::id()
+        ));
+        // Ensure it really doesn't exist.
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(check_file_perms(&path, "age key file"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_file_perms_ok_for_mode_0400() {
+        let path = make_temp_file_with_mode("0400", 0o400);
+        let result = check_file_perms(&path, "age key file");
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            result, None,
+            "mode 0400 (stricter than 0600) should not warn"
         );
     }
 }
