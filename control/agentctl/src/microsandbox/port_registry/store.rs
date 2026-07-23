@@ -1,176 +1,8 @@
+use super::lock::PortRegistryLock;
+use super::SandboxInstanceRecord;
 use crate::microsandbox::plan::PortMapping;
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
-
-/// A running sandbox instance record stored in the port registry.
-///
-/// **Backward-compat:** `ports` (host-only u16 list) and the original four
-/// fields are always present. Newer fields (`port_pairs`, `port_offset`,
-/// `created_at`) are `#[serde(default)]` so older state files parse cleanly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SandboxInstanceRecord {
-    pub instance: String,
-    pub context: Option<String>,
-    pub workload: String,
-    pub ports: Vec<u16>,
-    /// Full host:guest port pairs (post-offset host). Populated by the
-    /// instance-lifecycle path; absent (empty) on legacy records.
-    #[serde(default)]
-    pub port_pairs: Vec<PortMapping>,
-    /// Effective `--port-offset N` applied when this instance was started.
-    /// `None` for legacy records and `--port-offset 0`.
-    #[serde(default)]
-    pub port_offset: Option<u16>,
-    /// RFC3339 timestamp the instance was registered. Empty for legacy records.
-    #[serde(default)]
-    pub created_at: String,
-}
-
-// ---------------------------------------------------------------------------
-// Registry lock (WP10/A17: check-then-register TOCTOU mitigation)
-// ---------------------------------------------------------------------------
-
-/// Lock-file name inside `${state_dir}/var/run/`.
-const PORT_REGISTRY_LOCK_NAME: &str = ".port-registry.lock";
-
-/// How long to retry lock acquisition before giving up (~2s), so normal
-/// contention between two near-simultaneous `up` invocations does not produce
-/// a spurious failure.
-const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(2000);
-
-/// Backoff between lock-acquisition attempts.
-const LOCK_ACQUIRE_BACKOFF: Duration = Duration::from_millis(25);
-
-/// RAII guard for exclusive access to the port registry.
-///
-/// Creation acquires the lock by creating
-/// `${state_dir}/var/run/.port-registry.lock` with
-/// `OpenOptions::create_new(true)` (O_EXCL semantics — the create fails while
-/// another holder's file exists); [`Drop`] removes the file. While held, the
-/// holder has exclusive rights to check + register ports.
-///
-/// **Staleness rule (Linux-only):** the file body records the creating PID
-/// and an epoch-second timestamp. If acquisition fails because the file
-/// already exists AND the recorded PID is no longer alive (no `/proc/<pid>` —
-/// e.g. the holder crashed), the file is treated as stale: it is removed and
-/// acquisition is retried. A live PID (or an unreadable/foreign-format lock
-/// file) is never removed — it just keeps retrying until the timeout.
-///
-/// Note this is a cross-process advisory lock on the registry DIRECTORY, not
-/// an `flock`: it needs no extra deps and the registry is only mutated by
-/// workestrate itself.
-pub struct PortRegistryLock {
-    path: PathBuf,
-}
-
-impl PortRegistryLock {
-    /// Acquire the registry lock, retrying briefly and recovering from a
-    /// stale (dead-PID) lock file.
-    pub fn acquire(state_dir: &Path) -> Result<Self> {
-        let run_dir = state_dir.join("var").join("run");
-        std::fs::create_dir_all(&run_dir)
-            .with_context(|| format!("failed to create {}", run_dir.display()))?;
-        let path = run_dir.join(PORT_REGISTRY_LOCK_NAME);
-        let deadline = Instant::now() + LOCK_ACQUIRE_TIMEOUT;
-        loop {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut f) => {
-                    use std::io::Write;
-                    let body = format!(
-                        "pid={}\ncreated_at_epoch={}\n",
-                        std::process::id(),
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0)
-                    );
-                    // Best-effort: the file's EXISTENCE is the lock; the body
-                    // only feeds the staleness check.
-                    let _ = f.write_all(body.as_bytes());
-                    return Ok(Self { path });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if lock_file_is_stale(&path) {
-                        // Stale lock: the creating process is dead. Remove and
-                        // immediately retry acquisition.
-                        let _ = std::fs::remove_file(&path);
-                        continue;
-                    }
-                    if Instant::now() >= deadline {
-                        anyhow::bail!(
-                            "timed out acquiring port-registry lock {} after {:?}; \
-                             another workestrate process is registering ports. \
-                             Retry, or remove the file if no workestrate process is running.",
-                            path.display(),
-                            LOCK_ACQUIRE_TIMEOUT
-                        );
-                    }
-                    std::thread::sleep(LOCK_ACQUIRE_BACKOFF);
-                }
-                Err(e) => {
-                    return Err(e).with_context(|| {
-                        format!("failed to acquire port-registry lock {}", path.display())
-                    });
-                }
-            }
-        }
-    }
-}
-
-impl Drop for PortRegistryLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-/// Whether the lock file at `path` is stale: it exists, records a `pid=N`
-/// line, and that PID is no longer alive (Linux liveness probe).
-///
-/// Conservative: any parse failure, missing PID, or live PID counts as NOT
-/// stale (never remove a lock we cannot prove is dead).
-fn lock_file_is_stale(path: &Path) -> bool {
-    lock_file_is_stale_with(path, pid_is_alive)
-}
-
-/// Testable core of [`lock_file_is_stale`] with the liveness probe injected.
-fn lock_file_is_stale_with(path: &Path, is_alive: fn(u32) -> bool) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let pid = content
-        .lines()
-        .find_map(|line| line.strip_prefix("pid="))
-        .and_then(|s| s.trim().parse::<u32>().ok());
-    match pid {
-        Some(pid) => !is_alive(pid),
-        None => false,
-    }
-}
-
-/// Linux liveness probe (pure std, no extra deps): a PID counts as ALIVE
-/// when `/proc/<pid>` exists AND its `/proc/<pid>/stat` `state` field is not
-/// `X` (dead) or `Z` (zombie). Reading `stat` filters out the defunct-PID
-/// case that plain directory-existence misses when PID recycling is slow.
-fn pid_is_alive(pid: u32) -> bool {
-    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(s) => s,
-        Err(_) => return false, // no /proc entry at all → dead
-    };
-    // Field 3 (after the comm, which is parenthesized and may contain
-    // spaces) is the single-char state. Parse robustly: state is the first
-    // token after the final ')'.
-    let Some((_, after_comm)) = stat.rsplit_once(") ") else {
-        return false;
-    };
-    let state = after_comm.chars().next().unwrap_or('?');
-    !matches!(state, 'X' | 'Z')
-}
+use anyhow::Result;
+use std::path::Path;
 
 /// Read and parse a registry record file, warning loudly (WP10/A12) instead
 /// of silently skipping when the file exists but is unreadable or corrupt.
@@ -475,97 +307,6 @@ pub fn list_records_for_workload(
         .collect())
 }
 
-/// Alphabet for `--new` instance slugs: lowercase base32 (RFC 4648), i.e.
-/// `a-z` + `2-7` — the symbols `0`/`1`/`8`/`9` are excluded (ambiguous with
-/// letters). 32 symbols means each byte of entropy maps cleanly (`256 % 32
-/// == 0`), so `byte % 32` is a uniform, bias-free draw onto the alphabet.
-///
-/// Normative for ADR 0021 §2 (`--new` allocation): slug length is fixed at 4
-/// (≈ 20 bits, namespace 32^4 = 1,048,576 per slot), drawn from `/dev/urandom`.
-pub(crate) const SLUG_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
-
-/// Slug length produced by [`auto_allocate_slug`]. Normative (ADR 0021 §2).
-pub(crate) const SLUG_LEN: usize = 4;
-
-/// Maximum collision/validity retries before `--new` gives up (ADR 0021 §2).
-pub(crate) const SLUG_MAX_RETRIES: u32 = 8;
-
-/// Auto-allocate a fresh instance slug for `--new`.
-///
-/// Draws 4-char `[a-z2-7]` slugs from `/dev/urandom` over [`SLUG_ALPHABET`],
-/// retrying (up to [`SLUG_MAX_RETRIES`] attempts) when a draw either:
-///   - collides with an existing `<slot>@<slug>` record, OR
-///   - is purely numeric (e.g. `2345`), which [`validate_instance_id`]
-///     (the uniform id rule) rejects.
-///
-/// The returned slug is therefore **guaranteed** to satisfy the instance-id
-/// slug rule and to be unique among the slot's parallel instances. Returns a
-/// hard error only if every attempt is rejected — effectively unreachable
-/// given the namespace size, but fail-closed by construction.
-///
-/// [`validate_instance_id`]: crate::microsandbox::slots::validate_instance_id
-pub fn auto_allocate_slug(state_dir: &Path, slot: &str) -> Result<String> {
-    auto_allocate_slug_with(state_dir, slot, SLUG_MAX_RETRIES, random_slug)
-}
-
-/// Testable core of [`auto_allocate_slug`]: takes an explicit retry budget and
-/// a `draw` closure (so tests can inject deterministic candidate sequences)
-/// but is otherwise identical to the public entry point.
-fn auto_allocate_slug_with<F>(
-    state_dir: &Path,
-    slot: &str,
-    retries: u32,
-    mut draw: F,
-) -> Result<String>
-where
-    F: FnMut() -> Result<String>,
-{
-    let used = used_slugs_for_slot(state_dir, slot)?;
-    for _ in 0..retries {
-        let candidate = draw()?;
-        // Reject purely-numeric draws up front (validate_instance_id would)
-        // and reject collisions with existing parallel instances.
-        if candidate.chars().any(|c| c.is_ascii_alphabetic()) && !used.contains(&candidate) {
-            return Ok(candidate);
-        }
-    }
-    anyhow::bail!(
-        "could not allocate a non-colliding instance slug for slot '{}' after {} attempts          (namespace unexpectedly saturated)",
-        slot,
-        retries,
-    )
-}
-
-/// Collect the parallel-instance suffixes already in use for `slot` — the
-/// `<id>` portion of every `<slot>@<id>` record (any shape; integer slugs,
-/// named slugs, etc. all count). Singleton records (`<slot>` with no `@`) and
-/// records for other slots are ignored.
-fn used_slugs_for_slot(state_dir: &Path, slot: &str) -> Result<Vec<String>> {
-    let prefix = format!("{}@", slot);
-    let mut out = Vec::new();
-    for r in list_records(state_dir)? {
-        if let Some(suffix) = r.instance.strip_prefix(&prefix) {
-            out.push(suffix.to_string());
-        }
-    }
-    Ok(out)
-}
-
-/// Draw one [`SLUG_LEN`]-char `[a-z2-7]` slug from `/dev/urandom`.
-///
-/// No new dependency: `/dev/urandom` is read directly. Each byte maps
-/// uniformly onto [`SLUG_ALPHABET`] (`256 % 32 == 0` → no modulo bias).
-fn random_slug() -> Result<String> {
-    use std::io::Read;
-    let mut buf = [0u8; SLUG_LEN];
-    let mut f = std::fs::File::open("/dev/urandom")?;
-    f.read_exact(&mut buf)?;
-    Ok(buf
-        .iter()
-        .map(|&b| SLUG_ALPHABET[(b as usize) % SLUG_ALPHABET.len()] as char)
-        .collect())
-}
-
 /// Remove all state files whose record.workload matches `workload`.
 ///
 /// Returns the list of instance names whose state files were removed.
@@ -607,8 +348,31 @@ pub fn unregister_all(state_dir: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use super::super::lock::PORT_REGISTRY_LOCK_NAME;
     use super::*;
     use crate::config::test_support::unique_state_dir;
+
+    /// Small helper: a lifecycle registration for `instance` on `port`.
+    fn combined_register(
+        state_dir: &Path,
+        instance: &str,
+        workload: &str,
+        port: u16,
+    ) -> Result<()> {
+        check_and_register_sandbox_lifecycle(
+            state_dir,
+            instance,
+            None,
+            workload,
+            &[port],
+            &[crate::microsandbox::plan::PortMapping {
+                host: port,
+                guest: port,
+            }],
+            0,
+            "2026-07-23T00:00:00Z",
+        )
+    }
 
     #[test]
     fn no_collision_when_no_existing_sandboxes() -> Result<()> {
@@ -989,159 +753,6 @@ mod tests {
         Ok(())
     }
 
-    // ---- auto_allocate_slug (ADR 0021 §2, WP-B) ----
-
-    #[test]
-    fn random_slug_is_4_chars_of_base32_alphabet() -> Result<()> {
-        for _ in 0..256 {
-            let s = random_slug()?;
-            assert_eq!(
-                s.len(),
-                SLUG_LEN,
-                "slug must be exactly {SLUG_LEN} chars: {s}"
-            );
-            assert!(
-                s.bytes()
-                    .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)),
-                "slug '{s}' contains a char outside [a-z2-7]"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn auto_allocate_slug_shape_and_validates() -> Result<()> {
-        let state_dir = unique_state_dir("slug-empty");
-        register_sandbox(
-            &state_dir,
-            "personal-litellm",
-            Some("personal"),
-            "litellm",
-            &[4000],
-        )?;
-        let slug = auto_allocate_slug(&state_dir, "personal-litellm")?;
-        assert_eq!(slug.len(), SLUG_LEN);
-        assert!(
-            slug.bytes()
-                .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)),
-            "slug '{slug}' outside [a-z2-7]"
-        );
-        crate::microsandbox::slots::validate_instance_id(&slug)
-            .expect("allocated slug must satisfy the instance-id slug rule");
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn auto_allocate_slug_avoids_existing_slugs_via_retry() -> Result<()> {
-        let state_dir = unique_state_dir("slug-collide");
-        register_sandbox(
-            &state_dir,
-            "personal-litellm@ab2z",
-            Some("personal"),
-            "litellm",
-            &[14000],
-        )?;
-        let mut calls = 0u32;
-        let draw = || -> Result<String> {
-            calls += 1;
-            Ok(if calls == 1 {
-                "ab2z".to_string()
-            } else {
-                "mnxy".to_string()
-            })
-        };
-        let slug = auto_allocate_slug_with(&state_dir, "personal-litellm", SLUG_MAX_RETRIES, draw)?;
-        assert_eq!(
-            slug, "mnxy",
-            "must skip the colliding draw and return the fresh one"
-        );
-        assert_eq!(calls, 2);
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn auto_allocate_slug_retries_past_purely_numeric_draws() -> Result<()> {
-        let state_dir = unique_state_dir("slug-numeric");
-        let mut calls = 0u32;
-        let draw = || -> Result<String> {
-            calls += 1;
-            Ok(if calls == 1 {
-                "2345".to_string()
-            } else {
-                "abcd".to_string()
-            })
-        };
-        let slug = auto_allocate_slug_with(&state_dir, "personal-litellm", SLUG_MAX_RETRIES, draw)?;
-        assert_eq!(slug, "abcd");
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn auto_allocate_slug_ignores_non_slug_and_other_slot_records() -> Result<()> {
-        let state_dir = unique_state_dir("slug-ignores");
-        register_sandbox(
-            &state_dir,
-            "personal-litellm",
-            Some("personal"),
-            "litellm",
-            &[4000],
-        )?;
-        register_sandbox(
-            &state_dir,
-            "personal-litellm@2",
-            Some("personal"),
-            "litellm",
-            &[14001],
-        )?;
-        register_sandbox(
-            &state_dir,
-            "personal-litellm@canary",
-            Some("personal"),
-            "litellm",
-            &[14002],
-        )?;
-        register_sandbox(
-            &state_dir,
-            "work-litellm@ab2z",
-            Some("work"),
-            "litellm",
-            &[24000],
-        )?;
-        register_sandbox(&state_dir, "personal-pi", Some("personal"), "pi", &[3000])?;
-        let used = used_slugs_for_slot(&state_dir, "personal-litellm")?;
-        assert_eq!(used.len(), 2, "only the two personal-litellm@* suffixes");
-        assert!(used.contains(&"2".to_string()));
-        assert!(used.contains(&"canary".to_string()));
-        let slug = auto_allocate_slug(&state_dir, "personal-litellm")?;
-        assert!(!used.contains(&slug), "allocated slug must not collide");
-        crate::microsandbox::slots::validate_instance_id(&slug)?;
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn auto_allocate_slug_errors_when_retries_exhausted() -> Result<()> {
-        let state_dir = unique_state_dir("slug-exhaust");
-        register_sandbox(
-            &state_dir,
-            "personal-litellm@ab2z",
-            Some("personal"),
-            "litellm",
-            &[14000],
-        )?;
-        let draw = || -> Result<String> { Ok("ab2z".to_string()) };
-        let err = auto_allocate_slug_with(&state_dir, "personal-litellm", 3, draw).unwrap_err();
-        assert!(
-            err.to_string().contains("could not allocate"),
-            "expected exhaustion error; got: {err}"
-        );
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
     #[test]
     fn unregister_all_for_workload_removes_only_matching() -> Result<()> {
         let state_dir = unique_state_dir("unregister-workload");
@@ -1188,29 +799,7 @@ mod tests {
         Ok(())
     }
 
-    // ---- WP10/A17: atomic check+register + registry lock ----
-
-    /// Small helper: a lifecycle registration for `instance` on `port`.
-    fn combined_register(
-        state_dir: &Path,
-        instance: &str,
-        workload: &str,
-        port: u16,
-    ) -> Result<()> {
-        check_and_register_sandbox_lifecycle(
-            state_dir,
-            instance,
-            None,
-            workload,
-            &[port],
-            &[crate::microsandbox::plan::PortMapping {
-                host: port,
-                guest: port,
-            }],
-            0,
-            "2026-07-23T00:00:00Z",
-        )
-    }
+    // ---- WP10/A17: atomic check+register ----
 
     #[test]
     fn combined_registers_when_no_collision() -> Result<()> {
@@ -1247,100 +836,6 @@ mod tests {
             find_record(&state_dir, "work-litellm")?.is_none(),
             "failed combined call must not leave a registered record"
         );
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn lock_is_released_after_guard_drop() -> Result<()> {
-        let state_dir = unique_state_dir("lock-release");
-        {
-            let _guard = PortRegistryLock::acquire(&state_dir)?;
-            assert!(
-                state_dir
-                    .join("var")
-                    .join("run")
-                    .join(PORT_REGISTRY_LOCK_NAME)
-                    .exists(),
-                "lock file exists while held"
-            );
-        }
-        // A second acquisition (via the combined function) must succeed.
-        combined_register(&state_dir, "personal-pi", "pi", 3000)?;
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn concurrent_combined_register_exactly_one_wins_per_port() -> Result<()> {
-        let state_dir = unique_state_dir("combined-race");
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
-        let mut handles = Vec::new();
-        for i in 0..4u32 {
-            let dir = state_dir.clone();
-            let b = std::sync::Arc::clone(&barrier);
-            handles.push(std::thread::spawn(move || {
-                b.wait(); // release all threads at once
-                combined_register(&dir, &format!("inst-{i}"), "litellm", 4000)
-            }));
-        }
-        let results: Vec<Result<()>> = handles
-            .into_iter()
-            .map(|h| h.join().expect("worker thread panicked"))
-            .collect();
-        let wins = results.iter().filter(|r| r.is_ok()).count();
-        assert_eq!(
-            wins, 1,
-            "exactly one concurrent registration should win the port; results: {results:?}"
-        );
-        for r in &results {
-            if let Err(e) = r {
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("port collision") || msg.contains("timed out acquiring"),
-                    "losers must fail with a collision or lock-timeout, got: {msg}"
-                );
-            }
-        }
-        // Only one record may hold port 4000.
-        let records = list_records(&state_dir)?;
-        let holders: Vec<_> = records.iter().filter(|r| r.ports.contains(&4000)).collect();
-        assert_eq!(holders.len(), 1, "exactly one record may hold port 4000");
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn stale_lock_from_dead_pid_is_recovered() -> Result<()> {
-        let state_dir = unique_state_dir("stale-lock");
-        let run_dir = state_dir.join("var").join("run");
-        std::fs::create_dir_all(&run_dir)?;
-        // Derive a PROVABLY dead PID: spawn a short-lived child, reap it, then
-        // use its (now-defunct) PID. A hardcoded large PID is unreliable —
-        // containers can set pid_max high enough for it to be a live PID.
-        let dead_pid = {
-            let mut child = std::process::Command::new("true")
-                .spawn()
-                .expect("spawn 'true'");
-            let pid = child.id();
-            child.wait().expect("wait for 'true'");
-            pid
-        };
-        assert!(
-            !pid_is_alive(dead_pid),
-            "test precondition: pid {dead_pid} must be dead"
-        );
-        // Write a lock file whose recorded holder is the dead PID.
-        std::fs::write(
-            run_dir.join(PORT_REGISTRY_LOCK_NAME),
-            format!("pid={dead_pid}\ncreated_at_epoch=1\n"),
-        )?;
-        // Acquisition must detect the dead PID, remove the stale file, and
-        // proceed (not time out).
-        let guard = PortRegistryLock::acquire(&state_dir)?;
-        drop(guard);
-        // … and a normal combined call works afterwards.
-        combined_register(&state_dir, "personal-litellm", "litellm", 4000)?;
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
