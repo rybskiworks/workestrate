@@ -924,35 +924,40 @@ fn print_ps_text_to<W: std::io::Write>(
 async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
     use crate::microsandbox::runtime::{down_all, DownStatus};
     if !yes {
-        // Best-effort interactive confirm: read a single y/Y from stdin.
-        // Non-tty stdin → abort with a clear hint to pass --yes.
+        // Read a single line of confirmation so piped input ("y\n") does not
+        // block waiting for EOF — the old read_to_string hung interactive and
+        // scripted use. Mirrors cmd_clean's single-line confirm; the prompt is
+        // shown only on a tty, but a line is read in every mode so a piped
+        // "y"/"yes" confirms and an empty/non-tty stdin aborts. Accepted tokens
+        // are unified to `y`/`yes` (case-insensitive), matching cmd_clean.
         use std::io::IsTerminal;
         if std::io::stdin().is_terminal() {
             eprint!("This will stop EVERY running workestrate sandbox. Continue? [y/N] ");
-            let mut buf = String::new();
-            use std::io::Read;
-            std::io::stdin().read_to_string(&mut buf)?;
-            if !buf.trim().eq_ignore_ascii_case("y") {
-                if json {
-                    eprintln!(
-                        "{}",
-                        serde_json::to_string(&serde_json::json!({
-                            "error": {
-                                "kind": "aborted",
-                                "message": "down --all not confirmed"
-                            }
-                        }))?
-                    );
-                } else {
-                    eprintln!("aborted");
-                }
-                std::process::exit(1);
+            std::io::stderr().flush()?;
+        }
+        use std::io::BufRead;
+        let answer = std::io::stdin()
+            .lock()
+            .lines()
+            .next()
+            .transpose()?
+            .unwrap_or_default();
+        let confirmed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+        if !confirmed {
+            if json {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "error": {
+                            "kind": "aborted",
+                            "message": "down --all not confirmed"
+                        }
+                    }))?
+                );
+            } else {
+                eprintln!("aborted");
             }
-        } else {
-            anyhow::bail!(
-                "down --all requires an interactive tty for confirmation; \
-                 pass --yes to skip"
-            );
+            std::process::exit(1);
         }
     }
     let state_dir = crate::config::resolve_state_dir();
