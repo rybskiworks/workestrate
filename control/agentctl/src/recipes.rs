@@ -17,7 +17,6 @@ pub enum EgressRecipeRef {
 
 impl EgressRecipeRef {
     /// Expand this recipe into the concrete egress rules it represents.
-    #[allow(dead_code)]
     pub fn expand(&self) -> Vec<EgressRule> {
         match self {
             Self::Dns => EgressRule::dns(),

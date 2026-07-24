@@ -249,10 +249,6 @@ impl HostBoundSecret {
     }
 }
 
-impl MountPlan {}
-
-impl PortMapping {}
-
 impl EgressRule {
     pub fn dns() -> Vec<Self> {
         vec![
@@ -289,5 +285,3 @@ impl EgressRule {
         rules
     }
 }
-
-impl IngressRule {}

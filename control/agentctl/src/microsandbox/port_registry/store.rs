@@ -154,6 +154,10 @@ pub fn check_and_register_sandbox_lifecycle(
 // the CLI currently routes through [`register_sandbox_lifecycle`], but this
 // simpler form is part of the ADR 0021 registry surface kept for callers
 // that don't need the full lifecycle metadata.
+//
+// `dead_code`: no in-crate PRODUCTION caller yet, but it is exercised by the
+// registry test-suite across store/slug/ps/runtime test modules (~30 call
+// sites), so it is kept as a supported API rather than deleted (WP5 audit).
 #[allow(dead_code)]
 pub fn register_sandbox(
     state_dir: &Path,
@@ -305,44 +309,6 @@ pub fn list_records_for_workload(
         .into_iter()
         .filter(|r| r.workload == workload)
         .collect())
-}
-
-/// Remove all state files whose record.workload matches `workload`.
-///
-/// Returns the list of instance names whose state files were removed.
-/// Used by `down --all-instances` to clean up state for instances that no
-/// longer have a backing sandbox.
-//
-// Part of the ADR 0021 registry surface; the live `down` paths currently
-// tear down state inline, but this bulk helper is retained for parity with
-// [`unregister_sandbox`] and future callers.
-#[allow(dead_code)]
-pub fn unregister_all_for_workload(state_dir: &Path, workload: &str) -> Result<Vec<String>> {
-    let records = list_records_for_workload(state_dir, workload)?;
-    let mut removed = Vec::with_capacity(records.len());
-    for r in &records {
-        if unregister_sandbox(state_dir, &r.instance).is_ok() {
-            removed.push(r.instance.clone());
-        }
-    }
-    Ok(removed)
-}
-
-/// Remove every state file in the registry. Returns the list of instance names
-/// whose files were removed. Used by `down --all`.
-//
-// Part of the ADR 0021 registry surface; retained for parity with
-// [`unregister_sandbox`] and the `down --all` cleanup path.
-#[allow(dead_code)]
-pub fn unregister_all(state_dir: &Path) -> Result<Vec<String>> {
-    let records = list_records(state_dir)?;
-    let mut removed = Vec::with_capacity(records.len());
-    for r in &records {
-        if unregister_sandbox(state_dir, &r.instance).is_ok() {
-            removed.push(r.instance.clone());
-        }
-    }
-    Ok(removed)
 }
 
 #[cfg(test)]
@@ -749,52 +715,6 @@ mod tests {
         }
         let pi_records = list_records_for_workload(&state_dir, "pi")?;
         assert_eq!(pi_records.len(), 1);
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn unregister_all_for_workload_removes_only_matching() -> Result<()> {
-        let state_dir = unique_state_dir("unregister-workload");
-        register_sandbox(
-            &state_dir,
-            "personal-litellm",
-            Some("personal"),
-            "litellm",
-            &[4000],
-        )?;
-        register_sandbox(
-            &state_dir,
-            "personal-litellm@canary",
-            Some("personal"),
-            "litellm",
-            &[14000],
-        )?;
-        register_sandbox(&state_dir, "personal-pi", Some("personal"), "pi", &[3000])?;
-        let removed = unregister_all_for_workload(&state_dir, "litellm")?;
-        assert_eq!(removed.len(), 2);
-        // pi's state file must remain.
-        assert!(find_record(&state_dir, "personal-pi")?.is_some());
-        assert!(find_record(&state_dir, "personal-litellm")?.is_none());
-        assert!(find_record(&state_dir, "personal-litellm@canary")?.is_none());
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn unregister_all_removes_every_record() -> Result<()> {
-        let state_dir = unique_state_dir("unregister-all");
-        register_sandbox(
-            &state_dir,
-            "personal-litellm",
-            Some("personal"),
-            "litellm",
-            &[4000],
-        )?;
-        register_sandbox(&state_dir, "personal-pi", Some("personal"), "pi", &[3000])?;
-        let removed = unregister_all(&state_dir)?;
-        assert_eq!(removed.len(), 2);
-        assert!(list_records(&state_dir)?.is_empty());
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

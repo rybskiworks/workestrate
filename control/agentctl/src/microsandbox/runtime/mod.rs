@@ -60,13 +60,6 @@ pub(crate) struct ForegroundConfig {
 /// Built by the CLI layer from `--replace` / `--instance <id>` / `--new` /
 /// `--port-offset N` plus the active context. Consumed by [`build_sandbox`].
 pub(crate) struct InstanceSpec {
-    /// Singleton slot: `<workload>` or `<context>-<workload>`.
-    //
-    // Carried for diagnostics/state-file parity; the runtime keys off
-    // `instance` (which is `slot` or `slot@<id>`), so `slot` itself is not
-    // read on the current hot path.
-    #[allow(dead_code)]
-    pub slot: String,
     /// The sandbox name to create: `slot` (singleton) or `slot@<id>` (parallel).
     pub instance: String,
     /// Bare workload name (e.g. `litellm`). Used in user-facing messages.

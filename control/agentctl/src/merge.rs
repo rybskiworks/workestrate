@@ -111,7 +111,10 @@ pub fn set_secret_provenance(provenance: Option<Provenance>) {
 }
 
 /// Take ownership of the stored secret provenance, leaving the global slot empty.
-#[allow(dead_code)]
+///
+/// Test-only: consumed by the provenance round-trip tests; production reads
+/// provenance via [`get_secret_provenance`].
+#[cfg(test)]
 pub fn take_secret_provenance() -> Option<Provenance> {
     SECRET_PROVENANCE
         .lock()

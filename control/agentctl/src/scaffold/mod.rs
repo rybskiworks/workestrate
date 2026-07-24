@@ -39,7 +39,9 @@ pub const DEFAULT_COPIER_VCS_REF: &str = "main";
 /// Mirrors the clap `default_value` on `ConfigAction::New::core_flake_url`
 /// (clap requires a string literal there, so the const can't be referenced
 /// in the attribute; this is the canonical source for tests).
-#[allow(dead_code)]
+///
+/// Test-only: referenced only by the scaffold template tests.
+#[cfg(test)]
 pub const DEFAULT_CORE_FLAKE_URL: &str = "github:georgrybski/ai-workbench";
 
 // Embedded templates. Paths are relative to this file.

@@ -665,10 +665,7 @@ mod tests {
         port_offset: u16,
     ) -> crate::microsandbox::runtime::InstanceSpec {
         use crate::microsandbox::runtime::InstanceSpec;
-        // slot == instance with no `@` for the singleton case; otherwise derive.
-        let slot = instance.split_once('@').map(|(s, _)| s).unwrap_or(instance);
         InstanceSpec {
-            slot: slot.to_string(),
             instance: instance.to_string(),
             workload: "litellm".to_string(),
             context: None,

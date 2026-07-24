@@ -26,13 +26,6 @@ pub struct SandboxCommand {
 }
 
 impl SandboxCommand {
-    #[allow(dead_code)]
-    pub fn new(binary: impl Into<String>) -> Self {
-        Self {
-            binary: binary.into(),
-            arguments: vec![],
-        }
-    }
     pub fn with_args(binary: impl Into<String>, args: &[&str]) -> Self {
         Self {
             binary: binary.into(),
@@ -131,7 +124,6 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// Where to find the built agent code. Defaults to agents/<name>/build;
     /// override per-agent with WORKESTRATE_<NAME>_BUILD (NAME uppercased,
     /// '-' → '_') — used by the nix wrapper to point at a store path.
-    #[allow(dead_code)]
     fn build_path(&self) -> String {
         let key = format!(
             "WORKESTRATE_{}_BUILD",
@@ -142,11 +134,5 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         } else {
             format!("agents/{}/build", self.name())
         }
-    }
-
-    /// Convention: config files live at agents/<name>/config/<filename>
-    #[allow(dead_code)]
-    fn config_path(&self, filename: &str) -> String {
-        format!("agents/{}/config/{}", self.name(), filename)
     }
 }

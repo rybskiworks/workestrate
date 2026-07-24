@@ -1,7 +1,6 @@
 use super::super::env::resolve_templated_value;
 use super::super::mounts::{apply_plan_mounts, ensure_mount_sources};
 use super::super::plan::{PortMapping, SandboxPlan};
-use super::super::slots;
 use super::super::workload::{EntrypointSpec, SandboxCommand, Workload};
 use super::{check_occupied_or_replace, ForegroundConfig, InstanceSpec};
 use anyhow::Result;
@@ -333,46 +332,6 @@ pub(crate) async fn build_sandbox<W: Workload>(
     Ok((sandbox, config))
 }
 
-/// Build the default singleton InstanceSpec for `workload` in the active
-/// context. Used by the legacy no-flag entry points and as the base for the
-/// CLI flag-aware variants.
-///
-/// `replace: false` is the ADR 0021 fail-closed default — `up`/`exec` on an
-/// occupied slot REFUSES unless `--replace` is passed. The legacy
-/// `replace: true` behavior (silent replace) is opt-in via `--replace`.
-//
-// Retained for the legacy no-flag entry points ([`up_service`] / [`exec_agent`])
-// which the CLI no longer dispatches through directly (it resolves flags via
-// `resolve_instance_spec` and calls the `_with_spec` variants). Kept on the
-// migration branch so external/ scripted callers can still reach the simple
-// default-spec path; remove once the migration fully retires the legacy API.
-#[allow(dead_code)]
-fn default_spec<W: Workload>(workload: &W) -> InstanceSpec {
-    let context = crate::config::active_context_name();
-    let slot = slots::slot_for(workload.name(), context.as_deref());
-    let instance = slot.clone();
-    InstanceSpec {
-        slot,
-        instance,
-        workload: workload.name().to_string(),
-        context,
-        port_offset: 0,
-        replace: false,
-    }
-}
-
-/// Start a service workload. Detached by default; pass `foreground = true` to
-/// block until Ctrl-C.
-//
-// Legacy no-flag entry point; the CLI resolves flags and calls
-// [`up_service_with_spec`]. Retained on the migration branch for scripted /
-// external callers of the simple default-spec path.
-#[allow(dead_code)]
-pub async fn up_service<W: Workload>(workload: &W, foreground: bool) -> Result<()> {
-    let spec = default_spec(workload);
-    up_service_with_spec(workload, &spec, foreground).await
-}
-
 pub async fn up_service_with_spec<W: Workload>(
     workload: &W,
     spec: &InstanceSpec,
@@ -389,17 +348,6 @@ pub async fn up_service_with_spec<W: Workload>(
     }
     let (sandbox, config) = build_sandbox(workload, spec).await?;
     run_service_foreground(&sandbox, config).await
-}
-
-/// Attach to an agent workload interactively (TUI).
-//
-// Legacy no-flag entry point; the CLI resolves flags and calls
-// [`exec_agent_with_spec`]. Retained on the migration branch for scripted /
-// external callers of the simple default-spec path.
-#[allow(dead_code)]
-pub async fn exec_agent<W: Workload>(workload: &W) -> Result<()> {
-    let spec = default_spec(workload);
-    exec_agent_with_spec(workload, &spec).await
 }
 
 pub async fn exec_agent_with_spec<W: Workload>(workload: &W, spec: &InstanceSpec) -> Result<()> {

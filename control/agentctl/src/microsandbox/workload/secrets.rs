@@ -25,7 +25,6 @@ pub(super) fn build_secret_definitions(
                     hosts: secret.hosts.clone().unwrap_or_default(),
                     required: secret.required.unwrap_or(true),
                     placeholder: secret.placeholder.clone(),
-                    description: String::new(),
                 },
             );
         }

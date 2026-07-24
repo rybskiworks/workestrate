@@ -15,9 +15,6 @@ pub struct SecretDefinition {
     pub required: bool,
     /// Known-bad placeholder value to reject.
     pub placeholder: Option<String>,
-    /// Human-readable description.
-    #[allow(dead_code)]
-    pub description: String,
 }
 
 /// A secret that is exposed under a different name inside the sandbox.

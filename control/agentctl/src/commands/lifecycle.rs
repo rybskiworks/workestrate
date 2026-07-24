@@ -59,7 +59,6 @@ pub(crate) fn build_instance_spec(
     let instance = instance_name(&slot, id.as_deref());
 
     Ok(InstanceSpec {
-        slot,
         instance,
         workload: workload_name.to_string(),
         context,
