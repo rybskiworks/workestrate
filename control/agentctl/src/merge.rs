@@ -27,6 +27,33 @@ impl Layer {
     }
 
     /// Load a layer from a TOML string.
+    ///
+    /// The string is parsed twice: once as raw `toml::Value` (used by the
+    /// merge engine to detect which keys a layer actually declares) and once
+    /// as the typed [`ConfigFile`]. Both parses must succeed.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use workestrate::merge::Layer;
+    ///
+    /// const TOML: &str = r#"
+    /// schema_version = 1
+    ///
+    /// [workloads.pi]
+    /// kind = "agent"
+    /// image = { recipe = "registry", ref = "node:24" }
+    /// command = []
+    ///
+    /// [workloads.pi.network]
+    /// default_deny = true
+    /// "#;
+    ///
+    /// let layer = Layer::from_string("base", TOML)?;
+    /// assert_eq!(layer.name, "base");
+    /// assert!(layer.config.workloads.contains_key("pi"));
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn from_string(name: &str, content: &str) -> Result<Self> {
         let raw: toml::Value = toml::from_str(content)
             .with_context(|| format!("failed to parse raw TOML for layer '{}'", name))?;
@@ -44,6 +71,30 @@ impl Layer {
 ///
 /// Returns the merged config and a provenance map describing which layer set
 /// each final field value.
+///
+/// # Example
+///
+/// ```rust
+/// use workestrate::merge::{merge_layers, Layer};
+///
+/// const TOML: &str = r#"
+/// schema_version = 1
+///
+/// [workloads.pi]
+/// kind = "agent"
+/// image = { recipe = "registry", ref = "node:24" }
+/// command = []
+///
+/// [workloads.pi.network]
+/// default_deny = true
+/// "#;
+///
+/// let base = Layer::from_string("base", TOML)?;
+/// let (merged, provenance) = merge_layers(&[base])?;
+/// assert!(merged.workloads.contains_key("pi"));
+/// assert_eq!(provenance.get("workloads.pi.kind").map(|s| s.as_str()), Some("base"));
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn merge_layers(layers: &[Layer]) -> Result<(ConfigFile, Provenance)> {
     let mut merged = ConfigFile::default();
     let mut provenance = Provenance::new();

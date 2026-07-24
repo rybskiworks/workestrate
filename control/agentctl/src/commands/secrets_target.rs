@@ -13,7 +13,7 @@ use crate::scaffold;
 /// Returns `Err(message)` when either the `age-keygen` binary is missing
 /// or the key file does not exist (so the caller can fall back to the
 /// placeholder and surface a single, specific reason).
-pub(crate) fn derive_age_recipient(key_file: &std::path::Path) -> Result<String> {
+pub fn derive_age_recipient(key_file: &std::path::Path) -> Result<String> {
     if !key_file.exists() {
         anyhow::bail!("age key file not found at {}", key_file.display());
     }
@@ -39,7 +39,7 @@ pub(crate) fn derive_age_recipient(key_file: &std::path::Path) -> Result<String>
 /// (tilde-expanded). When the entry has no age_key_file override, the fallback
 /// matches `secrets_loader::decrypt_layer()`: `SOPS_AGE_KEY_FILE` env, else
 /// `$HOME` + `scaffold::AGE_KEY_DEFAULT_PATH` with the `~/` prefix stripped.
-pub(crate) async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
+pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
     let registry = config::load_registry()?;
     let entry = registry
         .as_ref()
@@ -83,7 +83,7 @@ pub(crate) async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_secrets_schema() -> Result<()> {
+pub async fn cmd_secrets_schema() -> Result<()> {
     let config = config::load_config()?;
     let mut names: Vec<&str> = config
         .secrets

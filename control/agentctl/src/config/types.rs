@@ -16,6 +16,11 @@ use std::path::PathBuf;
 use crate::microsandbox::plan::{DenyDomainRule, IngressRule, MountPlan, PortMapping};
 use crate::recipes::EgressRecipeRef;
 
+/// How to obtain the sandbox image for a workload (`image = { ... }` inline
+/// table in workestrate.toml). `recipe` selects the acquisition strategy
+/// (e.g. `registry`, `local`); the remaining optional fields narrow it
+/// (`ref`/`name`/`tag`/`contents`) or extend the image (`binary`,
+/// `baked_files`, `features`). Unknown fields are rejected at parse time.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -31,6 +36,10 @@ pub struct ImageSpec {
     pub features: Option<Vec<String>>,
 }
 
+/// A binary built from source and baked into the image (`image.binary`).
+/// `recipe` selects the build strategy and `src` locates the source; the
+/// optional fields tune the produced artifact (`entrypoint`, `worker`,
+/// `npm_deps_hash`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -42,6 +51,8 @@ pub struct BinarySpec {
     pub npm_deps_hash: Option<String>,
 }
 
+/// A single file baked into the image at build time (`image.baked_files`).
+/// `path` is the in-image destination and `content` is the verbatim file body.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -50,6 +61,9 @@ pub struct BakedFileSpec {
     pub content: String,
 }
 
+/// One environment-variable entry in a workload's `env` list. Exactly one of
+/// `value` (literal) or `secret` (reference to a `secrets.<name>` entry) is
+/// expected to be set; `name` must be a valid shell env identifier.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -59,6 +73,9 @@ pub struct EnvVarConfig {
     pub secret: Option<String>,
 }
 
+/// One secret reference in a workload's `secret_env` list: names an entry in
+/// the top-level `secrets` map whose resolved value is injected into the
+/// sandbox environment.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -66,6 +83,10 @@ pub struct SecretEnvConfig {
     pub secret: String,
 }
 
+/// A file copied from the host into the sandbox at start time
+/// (`workloads.<name>.seed_files`). `source` is the host path (validated at
+/// the trust boundary), `target` the in-sandbox destination; `only_if_missing`
+/// skips the copy when the target already exists.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -75,6 +96,10 @@ pub struct SeedFileConfig {
     pub only_if_missing: Option<bool>,
 }
 
+/// Build the workload from a local source checkout instead of pulling an
+/// image (`workloads.<name>.local_build`). `recipe` selects the build
+/// strategy, `source` the checkout location; the optional fields drive
+/// incremental-build gating and fallback behaviour.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -88,6 +113,10 @@ pub struct LocalBuildConfig {
     pub fallback: Option<String>,
 }
 
+/// Per-workload network policy (`workloads.<name>.network`). `default_deny`
+/// is the egress fail-closed switch (monotonic-true across layers for
+/// non-entitled workloads); `egress` lists allowed egress recipes, `deny`
+/// explicit domain-suffix denials, and `ingress` inbound exposure rules.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -101,6 +130,12 @@ pub struct NetworkConfig {
     pub ingress: Vec<IngressRule>,
 }
 
+/// A single workload definition (`workloads.<name>` in workestrate.toml).
+/// `kind` is `"agent"` (interactive TUI attach) or `"service"` (headless,
+/// detached by default); the remaining fields describe the image, resources,
+/// command, env/secret wiring, mounts, ports, seed files, local-build
+/// override, and network policy. All fields merge layer-by-layer via
+/// `merge::merge_layers`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -130,6 +165,11 @@ pub struct WorkloadConfig {
     pub network: NetworkConfig,
 }
 
+/// Definition of one named secret (`secrets.<name>` in workestrate.toml).
+/// `env_var` is the environment variable the resolved value is injected as;
+/// `hosts` constrains which egress hosts may receive it; `required` makes a
+/// missing value a hard error; `source`/`exposed_as`/`placeholder`/
+/// `description` drive resolution and UX.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -144,6 +184,10 @@ pub struct SecretDefConfig {
     pub description: Option<String>,
 }
 
+/// Top-level schema root of a `workestrate.toml` layer: `schema_version`
+/// (must equal `EXPECTED_SCHEMA_VERSION`; absent warns and is treated as
+/// legacy), plus the `secrets` and `workloads` maps. Layers are merged by
+/// `merge::merge_layers` into one effective `ConfigFile`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -160,6 +204,9 @@ pub struct ConfigFile {
 // Registry
 // ---------------------------------------------------------------------------
 
+/// Tool-wide settings section of the tool-home `registry.toml` (`[settings]`).
+/// `default_context` selects the active context when none is given;
+/// `store_dir`/`state_dir` override the derived store/state locations.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegistrySettings {
@@ -174,6 +221,10 @@ pub struct RegistrySettings {
     pub home_version: Option<u32>,
 }
 
+/// One registered config repo in the tool-home registry (`[configs.<name>]`).
+/// `url` is the clone source (git URL, or a filesystem path for `config new`
+/// repos); `ref`/`rev` track the checked-out branch and commit; the
+/// `secrets*` fields locate that repo's encrypted secrets material.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigRepoEntry {
@@ -198,12 +249,19 @@ pub struct SecretsLayer {
     pub skip: bool, // secrets = "none"
 }
 
+/// A project directory trusted for project-layer config loading
+/// (`[[trusted_projects]]` in the registry). `path` is the canonicalized
+/// directory; only trusted projects' `workestrate.toml`/`.workestrate/` are
+/// honored during config/home resolution.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TrustedProject {
     pub path: String,
 }
 
+/// A named context in the registry (`[contexts.<name>]`): an ordered list of
+/// config-layer names merged (earlier = lower precedence) when the context is
+/// active.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
@@ -211,6 +269,10 @@ pub struct Context {
     pub layers: Vec<String>,
 }
 
+/// Schema root of the tool-home `registry.toml`: global `[settings]`, the
+/// registered config repos (`configs`), the default layer stack (`layers`),
+/// named contexts (`contexts`), and the trusted-project list. Written
+/// atomically by `config::save_registry`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Registry {

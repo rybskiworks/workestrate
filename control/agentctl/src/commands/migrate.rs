@@ -13,7 +13,7 @@ use crate::config;
 /// total — a one-time stderr note names the unreadable directory (the size
 /// still returns the readable partial total; this is a best-effort
 /// informational report, not an error path).
-pub(crate) fn entry_bytes(path: &Path) -> u64 {
+pub fn entry_bytes(path: &Path) -> u64 {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(_) => return 0,
@@ -53,7 +53,7 @@ fn emit_entry_bytes_warn(path: &Path, e: &std::io::Error) {
     });
 }
 
-pub(crate) fn render_migrate_summary_human(summary: &config::MigrateSummary) {
+pub fn render_migrate_summary_human(summary: &config::MigrateSummary) {
     println!("migrate-home");
     println!("  source layout: {}", summary.from);
     println!("  destination:   {}", summary.dest);
@@ -105,12 +105,7 @@ pub(crate) fn render_migrate_summary_human(summary: &config::MigrateSummary) {
 /// `workestrate migrate-home`: consolidate a legacy layout into a single
 /// `WORKESTRATE_HOME` (ADR 0023). See `config::run_migrate_home` for the
 /// mechanics; this fn only resolves the destination and renders the summary.
-pub(crate) fn cmd_migrate_home(
-    from: Option<&str>,
-    dry_run: bool,
-    json: bool,
-    force: bool,
-) -> Result<()> {
+pub fn cmd_migrate_home(from: Option<&str>, dry_run: bool, json: bool, force: bool) -> Result<()> {
     let wh = std::env::var("WORKESTRATE_HOME")
         .ok()
         .filter(|v| !v.is_empty());

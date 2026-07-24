@@ -16,7 +16,7 @@ pub const MAX_INSTANCE_ID_LEN: usize = 32;
 ///
 /// - No context: returns `workload` verbatim.
 /// - With context: returns `format!("{}-{}", context, workload)`.
-pub(crate) fn slot_for(workload: &str, context: Option<&str>) -> String {
+pub fn slot_for(workload: &str, context: Option<&str>) -> String {
     match context {
         Some(ctx) => format!("{}-{}", ctx, workload),
         None => workload.to_string(),
@@ -27,7 +27,7 @@ pub(crate) fn slot_for(workload: &str, context: Option<&str>) -> String {
 ///
 /// - No id: returns `slot` (the singleton instance name).
 /// - With id: returns `format!("{}@{}", slot, id)`.
-pub(crate) fn instance_name(slot: &str, instance_id: Option<&str>) -> String {
+pub fn instance_name(slot: &str, instance_id: Option<&str>) -> String {
     match instance_id {
         Some(id) => format!("{}@{}", slot, id),
         None => slot.to_string(),
@@ -39,7 +39,7 @@ pub(crate) fn instance_name(slot: &str, instance_id: Option<&str>) -> String {
 ///
 /// Inverse of [`instance_name`]; used by `ps` to derive each row's `slot`
 /// field (ADR 0021 §7) from the composed instance name.
-pub(crate) fn slot_of_instance(instance: &str) -> &str {
+pub fn slot_of_instance(instance: &str) -> &str {
     match instance.split_once('@') {
         Some((slot, _)) => slot,
         None => instance,
@@ -50,7 +50,7 @@ pub(crate) fn slot_of_instance(instance: &str) -> &str {
 ///
 /// Inverse of [`instance_name`]; used by `ps` to classify a row as singleton
 /// vs parallel (ADR 0021 §7 `kind` field).
-pub(crate) fn instance_id_of(instance: &str) -> Option<&str> {
+pub fn instance_id_of(instance: &str) -> Option<&str> {
     instance.split_once('@').map(|(_, id)| id)
 }
 
@@ -65,7 +65,7 @@ pub(crate) fn instance_id_of(instance: &str) -> Option<&str> {
 ///
 /// Returns `Ok(())` on success or an `anyhow::Error` whose `to_string()` names
 /// the violated rule and the offending input.
-pub(crate) fn validate_instance_id(id: &str) -> Result<()> {
+pub fn validate_instance_id(id: &str) -> Result<()> {
     if id.is_empty() {
         anyhow::bail!("instance id cannot be empty");
     }

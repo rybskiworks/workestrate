@@ -5,14 +5,14 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::cli_actions::{ConfigAction, ContextAction};
 use crate::commands::init::find_reference_workestrate;
 use crate::commands::secrets_target::derive_age_recipient;
 use crate::config;
 use crate::git::{git_clone, git_init, git_is_dirty, git_pull, git_rev_parse, short_rev};
 use crate::scaffold;
-use crate::{ConfigAction, ContextAction};
 
-pub(crate) async fn cmd_config(action: ConfigAction) -> Result<()> {
+pub async fn cmd_config(action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Add { url, name, r#ref } => cmd_config_add(&url, &name, &r#ref).await,
         ConfigAction::Update { name } => cmd_config_update(name.as_deref()).await,
@@ -38,7 +38,7 @@ pub(crate) async fn cmd_config(action: ConfigAction) -> Result<()> {
 /// scrubbed from the bare `layers` list and every context's `layers`. A
 /// dangling `settings.default_context` pointing at the removed name is
 /// cleared (with a warning).
-pub(crate) async fn cmd_config_remove(name: &str, delete: bool, force: bool) -> Result<()> {
+pub async fn cmd_config_remove(name: &str, delete: bool, force: bool) -> Result<()> {
     config::validate_config_name(name)?;
     let mut registry = config::load_registry()?
         .ok_or_else(|| anyhow::anyhow!("no registry found; run 'workestrate init' first"))?;
@@ -81,14 +81,14 @@ pub(crate) async fn cmd_config_remove(name: &str, delete: bool, force: bool) -> 
 
 /// `workestrate context list|current` — inspect defined contexts and the
 /// currently-resolved active context.
-pub(crate) async fn cmd_context(action: ContextAction, json: bool) -> Result<()> {
+pub async fn cmd_context(action: ContextAction, json: bool) -> Result<()> {
     match action {
         ContextAction::List => cmd_context_list(json).await,
         ContextAction::Current => cmd_context_current(json).await,
     }
 }
 
-pub(crate) async fn cmd_context_list(json: bool) -> Result<()> {
+pub async fn cmd_context_list(json: bool) -> Result<()> {
     let registry = match config::load_registry()? {
         Some(r) => r,
         None => {
@@ -142,7 +142,7 @@ pub(crate) async fn cmd_context_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_context_current(json: bool) -> Result<()> {
+pub async fn cmd_context_current(json: bool) -> Result<()> {
     let active = config::resolve_active_context()?;
 
     // Resolution-source classification: env (--context flag / WORKESTRATE_CONTEXT)
@@ -184,7 +184,7 @@ pub(crate) async fn cmd_context_current(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
+pub async fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
     let dest = config::config_repo_dir(name);
     let (rev, short) = if dest.exists() {
         let git_dir = dest.join(".git");
@@ -225,7 +225,7 @@ pub(crate) async fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Resu
 /// shape of other JSON-emitting commands (registry, ps): a single
 /// pretty-printed object on stdout, errors on stderr.
 #[derive(serde::Serialize)]
-pub(crate) struct ConfigNewResult<'a> {
+pub struct ConfigNewResult<'a> {
     name: &'a str,
     path: std::path::PathBuf,
     files_written: Vec<String>,
@@ -238,7 +238,7 @@ pub(crate) struct ConfigNewResult<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn cmd_config_new(
+pub async fn cmd_config_new(
     name: &str,
     path: Option<&std::path::Path>,
     age_recipient: Option<&str>,
@@ -506,7 +506,7 @@ pub(crate) async fn cmd_config_new(
     Ok(())
 }
 
-pub(crate) async fn cmd_config_update(name: Option<&str>) -> Result<()> {
+pub async fn cmd_config_update(name: Option<&str>) -> Result<()> {
     let mut registry =
         config::load_registry()?.ok_or_else(|| anyhow::anyhow!("no config repos registered"))?;
     let names: Vec<String> = match name {
@@ -561,7 +561,7 @@ pub(crate) async fn cmd_config_update(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_config_list_json() -> Result<()> {
+pub async fn cmd_config_list_json() -> Result<()> {
     // The committed JSON shape is a stable object mapping layer info; this is
     // a best-effort serialization of the in-memory Registry (or null when no
     // registry exists).
@@ -577,7 +577,7 @@ pub(crate) async fn cmd_config_list_json() -> Result<()> {
     }
 }
 
-pub(crate) async fn cmd_config_list() -> Result<()> {
+pub async fn cmd_config_list() -> Result<()> {
     match config::load_registry()? {
         None => {
             println!(
@@ -626,14 +626,14 @@ pub(crate) async fn cmd_config_list() -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_config_trust(dir: &str) -> Result<()> {
+pub async fn cmd_config_trust(dir: &str) -> Result<()> {
     let path = PathBuf::from(dir);
     config::trust_project(&path)?;
     println!("Trusted: {}", path.display());
     Ok(())
 }
 
-pub(crate) async fn cmd_config_untrust(dir: &str) -> Result<()> {
+pub async fn cmd_config_untrust(dir: &str) -> Result<()> {
     let path = PathBuf::from(dir);
     config::untrust_project(&path)?;
     println!("Untrusted: {}", path.display());

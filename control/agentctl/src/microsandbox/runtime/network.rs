@@ -3,7 +3,7 @@ use anyhow::Result;
 use microsandbox::NetworkPolicy;
 
 /// Convert a declarative `NetworkPlan` into a Microsandbox SDK `NetworkPolicy`.
-pub(crate) fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
+pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
     let mut builder = NetworkPolicy::builder();
 
     if plan.default_deny {

@@ -11,7 +11,7 @@ use anyhow::Result;
 /// 2. Must not be a process-global name that would hijack a meaningful
 ///    variable: HOME, USER, PATH, SHELL, PWD, SOPS_AGE_KEY_FILE,
 ///    WORKESTRATE_*, AGENTCTL_ROOT, XDG_*.
-pub(crate) fn validate_env_override(name: &str) -> Result<()> {
+pub fn validate_env_override(name: &str) -> Result<()> {
     if name.is_empty() {
         anyhow::bail!("local_build.env_override cannot be empty");
     }
@@ -69,7 +69,7 @@ pub(crate) fn validate_env_override(name: &str) -> Result<()> {
 /// template prefixes like `${CWD}` are not expanded here — they would be
 /// treated as literal directory names. Reject anything that is not a plain
 /// relative path.
-pub(crate) fn validate_seed_source(src: &str) -> Result<()> {
+pub fn validate_seed_source(src: &str) -> Result<()> {
     use std::path::{Component, Path};
     if src.is_empty() {
         anyhow::bail!("seed_files.source cannot be empty");

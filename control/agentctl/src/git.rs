@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 
-pub(crate) fn git_clone(url: &str, dest: &std::path::Path, branch: Option<&str>) -> Result<()> {
+pub fn git_clone(url: &str, dest: &std::path::Path, branch: Option<&str>) -> Result<()> {
     let mut cmd = std::process::Command::new("git");
     cmd.args(["clone", "--depth", "1"]);
     if let Some(branch) = branch {
@@ -24,7 +24,7 @@ pub(crate) fn git_clone(url: &str, dest: &std::path::Path, branch: Option<&str>)
 /// committable. Returns a distinct error kind when the `git` binary is
 /// absent so the caller can warn-and-continue rather than fail the whole
 /// scaffold (the files are already written and valid).
-pub(crate) fn git_init(dir: &std::path::Path) -> Result<()> {
+pub fn git_init(dir: &std::path::Path) -> Result<()> {
     let status = std::process::Command::new("git")
         .arg("init")
         .arg(dir)
@@ -36,7 +36,7 @@ pub(crate) fn git_init(dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn git_rev_parse(repo: &std::path::Path) -> Result<String> {
+pub fn git_rev_parse(repo: &std::path::Path) -> Result<String> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -48,7 +48,7 @@ pub(crate) fn git_rev_parse(repo: &std::path::Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub(crate) fn git_is_dirty(repo: &std::path::Path) -> Result<bool> {
+pub fn git_is_dirty(repo: &std::path::Path) -> Result<bool> {
     // `git status --porcelain` reports tracked modifications AND untracked
     // files; `git diff --quiet HEAD` misses untracked files entirely (a repo
     // whose only change is a new, never-added file would read as clean).
@@ -64,7 +64,7 @@ pub(crate) fn git_is_dirty(repo: &std::path::Path) -> Result<bool> {
     Ok(!output.stdout.is_empty())
 }
 
-pub(crate) fn git_pull(repo: &std::path::Path, branch: &str) -> Result<()> {
+pub fn git_pull(repo: &std::path::Path, branch: &str) -> Result<()> {
     let status = std::process::Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -76,7 +76,7 @@ pub(crate) fn git_pull(repo: &std::path::Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn git_checkout_dot(repo: &std::path::Path) -> Result<()> {
+pub fn git_checkout_dot(repo: &std::path::Path) -> Result<()> {
     let status = std::process::Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -88,7 +88,7 @@ pub(crate) fn git_checkout_dot(repo: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn short_rev(rev: &str) -> String {
+pub fn short_rev(rev: &str) -> String {
     rev.chars().take(7).collect()
 }
 
@@ -99,7 +99,7 @@ pub(crate) fn short_rev(rev: &str) -> String {
 /// is the git working-tree dirty flag (`true` when missing or undeterminable,
 /// matching both callers' prior fail-closed default).
 #[derive(Debug, Clone)]
-pub(crate) struct RepoStatus {
+pub struct RepoStatus {
     pub name: String,
     pub rev: String,
     pub short: String,
@@ -110,7 +110,7 @@ pub(crate) struct RepoStatus {
 /// Collect the on-disk status of every registered config repo. Shared by
 /// `workestrate doctor` and `workestrate check`; behavior is identical to the
 /// two former inline copies (same dir resolution, rev fallback, dirty probe).
-pub(crate) fn collect_repo_statuses(registry: &crate::config::Registry) -> Vec<RepoStatus> {
+pub fn collect_repo_statuses(registry: &crate::config::Registry) -> Vec<RepoStatus> {
     registry
         .configs
         .iter()

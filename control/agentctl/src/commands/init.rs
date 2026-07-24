@@ -21,7 +21,7 @@ impl Drop for TempDirGuard {
     }
 }
 
-pub(crate) async fn cmd_init(url: Option<&str>) -> Result<()> {
+pub async fn cmd_init(url: Option<&str>) -> Result<()> {
     let registry_path = config::registry_path();
     if registry_path.exists() {
         println!(
@@ -111,7 +111,7 @@ pub(crate) async fn cmd_init(url: Option<&str>) -> Result<()> {
 ///
 /// "Escape nothing — reject instead" is the policy: workload names flow into
 /// both filesystem paths and TOML keys, so the safe set is the intersection.
-pub(crate) fn validate_workload_name(name: &str) -> Result<()> {
+pub fn validate_workload_name(name: &str) -> Result<()> {
     if name.is_empty() {
         anyhow::bail!("workload name cannot be empty");
     }
@@ -145,7 +145,7 @@ pub(crate) fn validate_workload_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_new(name: &str) -> Result<()> {
+pub async fn cmd_new(name: &str) -> Result<()> {
     // WP1 / A20: validate the workload name BEFORE using it as a directory
     // name or interpolating it into TOML. Reject everything that is not a
     // safe lowercase-hyphen identifier; this prevents both path escape
@@ -254,7 +254,7 @@ pub(crate) async fn cmd_new(name: &str) -> Result<()> {
 /// Used by `--from-reference` to seed the scaffold with the canonical
 /// 5-workload fixture. Returns the file path on success; bails with an
 /// actionable message if not found within 10 levels.
-pub(crate) fn find_reference_workestrate(start: &std::path::Path) -> Result<std::path::PathBuf> {
+pub fn find_reference_workestrate(start: &std::path::Path) -> Result<std::path::PathBuf> {
     let mut cursor = start.to_path_buf();
     for _ in 0..10 {
         let candidate = cursor.join("config.reference").join("workestrate.toml");

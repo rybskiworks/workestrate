@@ -11,7 +11,7 @@ use crate::scaffold;
 /// One doctor check result. `status` is "OK", "WARN", or "FAIL"; a FAIL
 /// anywhere flips the overall verdict and the process exit code to 1.
 #[derive(serde::Serialize)]
-pub(crate) struct DoctorCheck {
+pub struct DoctorCheck {
     name: &'static str,
     status: &'static str,
     message: String,
@@ -46,7 +46,7 @@ impl DoctorCheck {
 /// Resolve the default age key file path — identical fallback chain to
 /// `secrets_loader::decrypt_layer()`: `SOPS_AGE_KEY_FILE` env, else `$HOME` +
 /// `scaffold::AGE_KEY_DEFAULT_PATH` with the `~/` prefix stripped.
-pub(crate) fn default_age_key_path() -> PathBuf {
+pub fn default_age_key_path() -> PathBuf {
     if let Ok(env_key) = std::env::var("SOPS_AGE_KEY_FILE") {
         return PathBuf::from(env_key);
     }
@@ -58,13 +58,13 @@ pub(crate) fn default_age_key_path() -> PathBuf {
 }
 
 /// The msb binary to probe: `MSB_PATH` when set, else `msb` on PATH.
-pub(crate) fn msb_binary() -> String {
+pub fn msb_binary() -> String {
     std::env::var("MSB_PATH").unwrap_or_else(|_| "msb".to_string())
 }
 
 /// Run `<bin> --version` and return the first line of stdout, trimmed.
 /// Returns `None` when the binary is missing (NotFound) or exits non-zero.
-pub(crate) fn probe_version(bin: &str) -> Option<String> {
+pub fn probe_version(bin: &str) -> Option<String> {
     let output = std::process::Command::new(bin)
         .arg("--version")
         .output()
@@ -81,7 +81,7 @@ pub(crate) fn probe_version(bin: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn doctor_check_kvm() -> DoctorCheck {
+pub fn doctor_check_kvm() -> DoctorCheck {
     let kvm = Path::new("/dev/kvm");
     if !kvm.exists() {
         return DoctorCheck::new("dev_kvm", "FAIL", "not found".to_string()).with_remediation(
@@ -99,7 +99,7 @@ pub(crate) fn doctor_check_kvm() -> DoctorCheck {
     }
 }
 
-pub(crate) fn doctor_check_tool(name: &'static str, bin: &str, remediation: &str) -> DoctorCheck {
+pub fn doctor_check_tool(name: &'static str, bin: &str, remediation: &str) -> DoctorCheck {
     match probe_version(bin) {
         Some(version) => DoctorCheck::new(name, "OK", version),
         None => DoctorCheck::new(name, "FAIL", format!("'{}' not found on PATH", bin))
@@ -107,7 +107,7 @@ pub(crate) fn doctor_check_tool(name: &'static str, bin: &str, remediation: &str
     }
 }
 
-pub(crate) fn doctor_check_age_key_file() -> DoctorCheck {
+pub fn doctor_check_age_key_file() -> DoctorCheck {
     use std::os::unix::fs::PermissionsExt;
     let path = default_age_key_path();
     let metadata = match std::fs::metadata(&path) {
@@ -138,7 +138,7 @@ pub(crate) fn doctor_check_age_key_file() -> DoctorCheck {
     }
 }
 
-pub(crate) fn doctor_check_msb() -> DoctorCheck {
+pub fn doctor_check_msb() -> DoctorCheck {
     let bin = msb_binary();
     match probe_version(&bin) {
         Some(version) => DoctorCheck::new("msb", "OK", version),
@@ -149,7 +149,7 @@ pub(crate) fn doctor_check_msb() -> DoctorCheck {
     }
 }
 
-pub(crate) fn doctor_check_home() -> DoctorCheck {
+pub fn doctor_check_home() -> DoctorCheck {
     let (home, kind) = config::resolve_home_with_kind();
     let message = format!("{} ({:?})", home.display(), kind);
     if home.exists() {
@@ -160,7 +160,7 @@ pub(crate) fn doctor_check_home() -> DoctorCheck {
     }
 }
 
-pub(crate) fn doctor_check_config_repos() -> Result<DoctorCheck> {
+pub fn doctor_check_config_repos() -> Result<DoctorCheck> {
     let registry = match config::load_registry()? {
         Some(r) => r,
         None => {
@@ -215,7 +215,7 @@ pub(crate) fn doctor_check_config_repos() -> Result<DoctorCheck> {
 /// `workestrate doctor` — run environment/tool health checks (KVM, nix,
 /// sops, age, msb, home resolution, config repos), print a human report or a
 /// machine-readable JSON document, and exit non-zero when any check FAILs.
-pub(crate) async fn cmd_doctor(json: bool) -> Result<()> {
+pub async fn cmd_doctor(json: bool) -> Result<()> {
     let checks = vec![
         doctor_check_kvm(),
         doctor_check_tool(

@@ -14,9 +14,9 @@ pub use loading::{
     check_required_files, load_config, load_overrides, resolve_secrets_layers, CheckEntry,
 };
 #[allow(unused_imports)]
-pub(crate) use migration::{run_migrate_home, MigrateSummary, MovedEntry};
+pub use migration::{run_migrate_home, MigrateSummary, MovedEntry};
 #[allow(unused_imports)]
-pub(crate) use paths::expand_tilde;
+pub use paths::expand_tilde;
 #[allow(unused_imports)]
 pub use paths::{
     config_repo_dir, overrides_path, registry_path, resolve_active_config_dir, resolve_home,
@@ -28,7 +28,7 @@ pub use registry::{
     entry_is_local_path, load_registry, register_config, resolve_active_context, save_registry,
 };
 #[allow(unused_imports)]
-pub(crate) use trust::is_dir_trusted_via_base_registry;
+pub use trust::is_dir_trusted_via_base_registry;
 #[allow(unused_imports)]
 pub use trust::{is_trusted_project, trust_project, untrust_project};
 #[allow(unused_imports)]
@@ -81,6 +81,12 @@ pub fn active_context_name() -> Option<String> {
         .and_then(|ctx| ctx.name.clone())
 }
 
+/// Resolve the AI-workbench project root (the checkout containing
+/// `flake.nix`). Precedence: `AGENTCTL_ROOT` env var, then two directories up
+/// from `CARGO_MANIFEST_DIR` (cargo run/test), then the current working
+/// directory. Hard-errors when the resolved root does not contain
+/// `flake.nix`; callers that can degrade gracefully should use
+/// [`project_root_optional`] instead.
 pub fn project_root() -> Result<PathBuf> {
     // 1. AGENTCTL_ROOT env var
     let root = if let Ok(root) = std::env::var("AGENTCTL_ROOT") {
@@ -144,14 +150,14 @@ pub fn project_root_optional() -> Option<PathBuf> {
     None
 }
 
-#[cfg(test)]
 #[allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::unwrap_in_result
+    clippy::unwrap_in_result,
+    clippy::new_without_default
 )]
-pub(crate) mod test_support;
+pub mod test_support;
 
 #[cfg(test)]
 pub(crate) mod tests {

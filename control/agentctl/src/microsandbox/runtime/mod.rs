@@ -15,20 +15,20 @@ mod run;
 mod spawn;
 mod time;
 
-pub(crate) use network::network_plan_to_policy;
-pub(crate) use ps::probe_liveness;
-pub(crate) use ps::PsKind;
+pub use network::network_plan_to_policy;
+pub use ps::probe_liveness;
+pub use ps::PsKind;
 pub use ps::{format_refuse_message, occupancy_from_state, ps, Occupancy, PsEntry};
 pub use run::{exec_agent_with_spec, up_service_with_spec};
 pub use spawn::logs;
-pub(crate) use spawn::spawn_detached_service;
+pub use spawn::spawn_detached_service;
 
 use anyhow::Result;
 use microsandbox::sandbox::{SandboxHandle, SandboxStatus};
 use microsandbox::{MicrosandboxError, Sandbox};
 use std::path::Path;
 
-pub(crate) async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
+pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
     match handle.status() {
         SandboxStatus::Running | SandboxStatus::Draining | SandboxStatus::Paused => {
             if let Err(e) = handle.stop().await {
@@ -48,7 +48,7 @@ pub(crate) async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
 /// This is the shared foreground path used by `up_litellm`, `up_pi`, and
 /// `up_odysseus`. The service label is used in user-facing messages
 /// (e.g. "litellm", "pi", "odysseus").
-pub(crate) struct ForegroundConfig {
+pub struct ForegroundConfig {
     pub sandbox_name: String,
     pub service_label: String,
     pub command: super::workload::SandboxCommand,
@@ -59,7 +59,7 @@ pub(crate) struct ForegroundConfig {
 ///
 /// Built by the CLI layer from `--replace` / `--instance <id>` / `--new` /
 /// `--port-offset N` plus the active context. Consumed by [`build_sandbox`].
-pub(crate) struct InstanceSpec {
+pub struct InstanceSpec {
     /// The sandbox name to create: `slot` (singleton) or `slot@<id>` (parallel).
     pub instance: String,
     /// Bare workload name (e.g. `litellm`). Used in user-facing messages.
@@ -99,7 +99,7 @@ pub enum DownStatus {
 ///   - a state record exists AND msb is unavailable (fail-closed).
 ///
 /// Returns Ok(()) when the slot is free (or has been cleared by --replace).
-pub(crate) async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) -> Result<()> {
+pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) -> Result<()> {
     if spec.replace {
         match Sandbox::get(&spec.instance).await {
             Ok(handle) => {

@@ -11,7 +11,7 @@ use crate::config;
 use crate::config::CheckEntry;
 use crate::json_out::ps_entries_json;
 
-pub(crate) fn cmd_plan<W: crate::microsandbox::workload::Workload>(
+pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     workload: &W,
     show_source: bool,
     json: bool,
@@ -44,7 +44,7 @@ pub(crate) fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     Ok(())
 }
 
-pub(crate) async fn cmd_ps(json: bool) -> Result<()> {
+pub async fn cmd_ps(json: bool) -> Result<()> {
     use crate::microsandbox::runtime::{probe_liveness, ps};
     let state_dir = crate::config::resolve_state_dir();
     let mut entries = ps(&state_dir)?;
@@ -79,7 +79,7 @@ pub(crate) async fn cmd_ps(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) -> Result<()> {
+pub fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) -> Result<()> {
     // Thin stdout wrapper over the writer-injectable renderer, so the footer
     // text and table layout are unit-testable without capturing global stdout.
     print_ps_text_to(entries, &mut std::io::stdout())?;
@@ -89,7 +89,7 @@ pub(crate) fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) -
 /// Render `ps` rows (table + stale-remediation footer) to `out`. Pure I/O:
 /// no msb, no env. `cmd_ps` passes `&mut std::io::stdout()`; tests pass a
 /// `Vec<u8>`. Returns io::Error on write failure (propagated as anyhow).
-pub(crate) fn print_ps_text_to<W: std::io::Write>(
+pub fn print_ps_text_to<W: std::io::Write>(
     entries: &[crate::microsandbox::runtime::PsEntry],
     out: &mut W,
 ) -> std::io::Result<()> {
@@ -155,7 +155,7 @@ pub(crate) fn print_ps_text_to<W: std::io::Write>(
     Ok(())
 }
 
-pub(crate) async fn cmd_check() -> Result<()> {
+pub async fn cmd_check() -> Result<()> {
     println!("=== workestrate check ===\n");
     let mut all_ok = true;
 
@@ -349,7 +349,7 @@ fn print_entry(entry: &CheckEntry) {
     }
 }
 
-pub(crate) fn find_reference_config() -> Option<PathBuf> {
+pub fn find_reference_config() -> Option<PathBuf> {
     // WP5 / E1: project_root_optional() returns None for standalone installs;
     // we then fall through to the CARGO_MANIFEST_DIR probe (cargo run / test)
     // and finally return None so cmd_check can print "(could not resolve
@@ -372,14 +372,14 @@ pub(crate) fn find_reference_config() -> Option<PathBuf> {
     None
 }
 
-pub(crate) async fn cmd_validate_config() -> Result<()> {
+pub async fn cmd_validate_config() -> Result<()> {
     let config = config::load_config()?;
     config::validate_config(&config)?;
     println!("workestrate.toml is valid.");
     Ok(())
 }
 
-pub(crate) fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
+pub fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
     let schema = schemars::schema_for!(crate::config::ConfigFile);
     let json = serde_json::to_string_pretty(&schema)?;
     match out {
@@ -395,7 +395,7 @@ pub(crate) fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> {
+pub async fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> {
     let config = config::load_config()?;
     let mut entries: Vec<(&str, &str)> = config
         .secrets
@@ -437,7 +437,7 @@ pub(crate) async fn cmd_generate_env_example(output: Option<&std::path::Path>) -
     Ok(())
 }
 
-pub(crate) async fn cmd_run(command: &[String]) -> Result<()> {
+pub async fn cmd_run(command: &[String]) -> Result<()> {
     if command.is_empty() {
         anyhow::bail!("no command specified. Usage: workestrate run -- <command> [args...]");
     }

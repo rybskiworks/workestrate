@@ -5,11 +5,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::cli_actions::SourceAction;
 use crate::config;
 use crate::git::{git_checkout_dot, git_clone};
-use crate::SourceAction;
 
-pub(crate) async fn cmd_source(action: SourceAction) -> Result<()> {
+pub async fn cmd_source(action: SourceAction) -> Result<()> {
     match action {
         SourceAction::Clone { name, path } => cmd_source_clone(&name, path.as_deref()).await,
         SourceAction::Build { name } => cmd_source_build(&name).await,
@@ -18,7 +18,7 @@ pub(crate) async fn cmd_source(action: SourceAction) -> Result<()> {
     }
 }
 
-pub(crate) async fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
+pub async fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
     let cfg = config::load_config()?;
     let workload = cfg
         .workloads
@@ -64,14 +64,14 @@ pub(crate) async fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<(
 /// Env-var name that overrides a workload's build directory for the current
 /// session. Hyphens in the workload name become underscores so the variable is
 /// settable in any shell (e.g. `my-agent` → `WORKESTRATE_MY_AGENT_BUILD`).
-pub(crate) fn build_env_var_name(name: &str) -> String {
+pub fn build_env_var_name(name: &str) -> String {
     format!(
         "WORKESTRATE_{}_BUILD",
         name.to_ascii_uppercase().replace('-', "_")
     )
 }
 
-pub(crate) fn build_command_string(name: &str, local_build: &config::LocalBuildConfig) -> String {
+pub fn build_command_string(name: &str, local_build: &config::LocalBuildConfig) -> String {
     match local_build.recipe.as_str() {
         "pip-install" | "pip" => {
             let target = local_build.target.as_deref().unwrap_or(".deps");
@@ -90,7 +90,7 @@ pub(crate) fn build_command_string(name: &str, local_build: &config::LocalBuildC
     }
 }
 
-pub(crate) fn nix_available() -> bool {
+pub fn nix_available() -> bool {
     std::process::Command::new("nix")
         .arg("--version")
         .status()
@@ -98,7 +98,7 @@ pub(crate) fn nix_available() -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) async fn cmd_source_build(name: &str) -> Result<()> {
+pub async fn cmd_source_build(name: &str) -> Result<()> {
     let cfg = config::load_config()?;
     let workload = cfg
         .workloads
@@ -178,7 +178,7 @@ pub(crate) async fn cmd_source_build(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_source_list() -> Result<()> {
+pub async fn cmd_source_list() -> Result<()> {
     let cfg = config::load_config()?;
     println!("Source overrides:");
     let mut found = false;
@@ -213,7 +213,7 @@ pub(crate) async fn cmd_source_list() -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_source_reset(name: &str) -> Result<()> {
+pub async fn cmd_source_reset(name: &str) -> Result<()> {
     let repo = config::source_store_dir(name).join("repo");
     if !repo.exists() {
         anyhow::bail!(

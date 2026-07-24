@@ -6,7 +6,7 @@ use std::path::PathBuf;
 /// config-load abort, short enough to not slow down `up` noticeably.
 const SPAWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
-pub(crate) fn spawn_detached_service(name: &str, args: &[String]) -> Result<std::process::Child> {
+pub fn spawn_detached_service(name: &str, args: &[String]) -> Result<std::process::Child> {
     let exe = std::env::current_exe()?;
     let home = std::env::var("HOME")
         .map(PathBuf::from)

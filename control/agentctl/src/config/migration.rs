@@ -9,7 +9,7 @@ use crate::config::types::Registry;
 
 /// One moved file/dir recorded by [`run_migrate_home`].
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct MovedEntry {
+pub struct MovedEntry {
     pub src: String,
     pub dst: String,
 }
@@ -22,7 +22,7 @@ pub(crate) struct MovedEntry {
 /// `moved` lists the entries that succeeded up to that point. The remaining
 /// planned entries (not in `moved`) were skipped.
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct MigrateSummary {
+pub struct MigrateSummary {
     pub from: String,
     pub dest: String,
     pub dry_run: bool,
@@ -240,7 +240,7 @@ fn looks_like_remote_url(s: &str) -> bool {
 /// [`MigrateSummary`] lists the planned moves. On a real run the registry at
 /// `dest/config.toml` has `store_dir`/`state_dir` cleared and `home_version`
 /// set to `Some(2)`.
-pub(crate) fn run_migrate_home(
+pub fn run_migrate_home(
     from: Option<&str>,
     dest: &Path,
     dry_run: bool,

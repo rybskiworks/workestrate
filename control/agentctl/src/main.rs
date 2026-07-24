@@ -1,32 +1,26 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 
-mod cli_error;
-mod commands;
-mod config;
-mod git;
-mod json_out;
-mod merge;
-mod microsandbox;
-mod policy;
-mod recipes;
-mod scaffold;
-
-use crate::cli_error::{classify_exit_code, emit_error};
-use crate::commands::config_cmd::{cmd_config, cmd_config_list_json, cmd_config_new, cmd_context};
-use crate::commands::diagnostics::{
+use workestrate::cli_actions::{
+    AgentAction, ConfigAction, ContextAction, ServiceAction, SourceAction,
+};
+use workestrate::cli_error::{classify_exit_code, emit_error};
+use workestrate::commands::config_cmd::{
+    cmd_config, cmd_config_list_json, cmd_config_new, cmd_context,
+};
+use workestrate::commands::diagnostics::{
     cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_ps, cmd_run, cmd_validate_config,
 };
-use crate::commands::doctor::cmd_doctor;
-use crate::commands::init::{cmd_init, cmd_new};
-use crate::commands::lifecycle::{
+use workestrate::commands::doctor::cmd_doctor;
+use workestrate::commands::init::{cmd_init, cmd_new};
+use workestrate::commands::lifecycle::{
     cmd_clean, cmd_down_all, dispatch_agent, dispatch_service, parse_agent_action,
     parse_service_action,
 };
-use crate::commands::migrate::cmd_migrate_home;
-use crate::commands::secrets_target::{cmd_secrets_schema, cmd_secrets_target};
-use crate::commands::source::cmd_source;
-use microsandbox::workload::ConfigWorkload;
+use workestrate::commands::migrate::cmd_migrate_home;
+use workestrate::commands::secrets_target::{cmd_secrets_schema, cmd_secrets_target};
+use workestrate::commands::source::cmd_source;
+use workestrate::microsandbox::workload::ConfigWorkload;
 
 #[derive(Parser)]
 #[command(name = "workestrate")]
@@ -50,203 +44,6 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
-}
-
-/// Actions available on service workloads (headless, detached by default).
-#[derive(Subcommand)]
-enum ServiceAction {
-    /// Start the sandbox (detached by default; --foreground to block)
-    Up {
-        #[arg(short, long, help = "Run in foreground (block until Ctrl-C)")]
-        foreground: bool,
-
-        /// Tear down any existing instance at this slot before starting
-        /// (destructive; the ADR 0021 explicit-replace escape hatch).
-        #[arg(long)]
-        replace: bool,
-
-        /// Target a parallel instance `<slot>@<id>`. Refuses if that exact
-        /// instance name is already running.
-        #[arg(long, value_name = "ID")]
-        instance: Option<String>,
-
-        /// Auto-allocate the lowest free integer id >= 2 and target
-        /// `<slot>@<id>`.
-        #[arg(long)]
-        new: bool,
-
-        /// Add N to every HOST port (guest ports unchanged).
-        #[arg(long, default_value_t = 0, value_name = "N")]
-        port_offset: u16,
-    },
-    /// Stop and remove the sandbox
-    Down {
-        /// Stop the parallel instance `<slot>@<id>`.
-        #[arg(long, value_name = "ID")]
-        instance: Option<String>,
-
-        /// Stop the singleton AND every parallel instance of this workload.
-        #[arg(long)]
-        all_instances: bool,
-    },
-    /// Tail the detached service's log file
-    Logs {
-        /// Tail the parallel instance `<slot>@<id>` (default: the singleton).
-        #[arg(long, value_name = "ID")]
-        instance: Option<String>,
-    },
-    /// Print the planned sandbox workload
-    Plan {
-        /// Add N to every HOST port in the displayed plan (mirrors --port-offset on up).
-        #[arg(long, default_value_t = 0, value_name = "N")]
-        port_offset: u16,
-    },
-}
-
-/// Actions available on agent workloads (interactive TUI attach).
-#[derive(Subcommand)]
-enum AgentAction {
-    /// Attach to the sandbox interactively (TUI)
-    Exec {
-        /// Tear down any existing instance at this slot before starting.
-        #[arg(long)]
-        replace: bool,
-
-        /// Target a parallel instance `<slot>@<id>`.
-        #[arg(long, value_name = "ID")]
-        instance: Option<String>,
-
-        /// Auto-allocate the lowest free integer id >= 2.
-        #[arg(long)]
-        new: bool,
-
-        /// Add N to every HOST port (guest ports unchanged).
-        #[arg(long, default_value_t = 0, value_name = "N")]
-        port_offset: u16,
-    },
-    /// Stop and remove the sandbox
-    Down {
-        #[arg(long, value_name = "ID")]
-        instance: Option<String>,
-        #[arg(long)]
-        all_instances: bool,
-    },
-    /// Print the planned sandbox workload
-    Plan {
-        #[arg(long, default_value_t = 0, value_name = "N")]
-        port_offset: u16,
-    },
-}
-
-/// Actions for managing config repositories and trust.
-#[derive(Subcommand)]
-enum ConfigAction {
-    /// Clone a config repo into the managed store and register it
-    Add {
-        url: String,
-        name: String,
-        #[arg(long, default_value = "main")]
-        r#ref: String,
-    },
-    /// Pull latest for a config repo (or all) and update rev in registry
-    Update { name: Option<String> },
-    /// List registered config repos with rev + dirty status
-    List,
-    /// Trust a project directory for project-layer config loading
-    Trust { dir: String },
-    /// Remove trust from a project directory
-    Untrust { dir: String },
-    /// Scaffold a new config repo locally (minimal valid workestrate.toml,
-    /// SOPS, README). Replaces the copier template for the minimal-personal
-    /// subset; writes a `.copier-answers.yml` sidecar so `copier update` stays
-    /// usable for richer features (team keys, flake).
-    New {
-        /// Name for the new config repo (e.g. "personal", "work").
-        name: String,
-
-        /// Destination directory (default: <store>/repos/<name>).
-        #[arg(long, value_name = "DIR")]
-        path: Option<std::path::PathBuf>,
-
-        /// Age public recipient (age1...). If omitted, derived via
-        /// `age-keygen -y` from `--age-key-file` (default
-        /// `~/.config/sops/age/ai-workbench-secrets.txt`). Falls back to
-        /// `age1PLACEHOLDER` + warning if derivation fails.
-        #[arg(long, value_name = "KEY")]
-        age_recipient: Option<String>,
-
-        /// Override the age key file to derive the recipient from.
-        #[arg(long, value_name = "PATH")]
-        age_key_file: Option<std::path::PathBuf>,
-
-        /// Include a flake.nix for inverted-dependency image builds
-        /// (Phase 2).
-        #[arg(long)]
-        with_flake: bool,
-
-        /// URL of the workestrator core flake (only used with --with-flake).
-        #[arg(
-            long,
-            value_name = "URL",
-            default_value = "github:georgrybski/ai-workbench"
-        )]
-        core_flake_url: String,
-
-        /// Skip registering the new repo in the workestrate registry.
-        #[arg(long)]
-        no_register: bool,
-
-        /// Skip `git init` in the new directory.
-        #[arg(long)]
-        no_git_init: bool,
-
-        /// Seed workestrate.toml from config.reference/workestrate.toml
-        /// (full 5-workload fixture). Conflicts with --empty.
-        #[arg(long, conflicts_with = "empty")]
-        from_reference: bool,
-
-        /// Write only a minimal workestrate.toml (no secrets/sops/readme).
-        /// Conflicts with --from-reference.
-        #[arg(long, conflicts_with = "from_reference")]
-        empty: bool,
-    },
-    /// Unregister a config repo from the registry
-    Remove {
-        /// Config repo name to remove.
-        name: String,
-        /// Also delete the store clone directory.
-        #[arg(long)]
-        delete: bool,
-        /// Force deletion even if the clone is dirty (has uncommitted changes).
-        #[arg(long)]
-        force: bool,
-    },
-}
-
-/// Actions for managing workestrate contexts.
-#[derive(Subcommand)]
-enum ContextAction {
-    /// List all defined contexts.
-    List,
-    /// Show the currently-resolved context and why it was selected.
-    Current,
-}
-
-/// Actions for managing agent source checkouts.
-#[derive(Subcommand)]
-enum SourceAction {
-    /// Clone agent source into the managed store
-    Clone {
-        name: String,
-        /// Optional path (defaults to sources/<name>/repo/)
-        path: Option<String>,
-    },
-    /// Build agent from source using the workload's local_build recipe
-    Build { name: String },
-    /// List agent source checkouts with status
-    List,
-    /// Reset agent source to canonical (discard local edits)
-    Reset { name: String },
 }
 
 #[derive(Subcommand)]
@@ -568,8 +365,8 @@ async fn async_main() -> Result<()> {
 )]
 mod tests {
     use super::*;
-    use crate::config::test_support::TestConfigGuard;
     use std::collections::HashSet;
+    use workestrate::config::test_support::TestConfigGuard;
 
     #[test]
     fn cli_exposes_expected_subcommands() {
@@ -667,8 +464,8 @@ mod tests {
         instance: &str,
         replace: bool,
         port_offset: u16,
-    ) -> crate::microsandbox::runtime::InstanceSpec {
-        use crate::microsandbox::runtime::InstanceSpec;
+    ) -> workestrate::microsandbox::runtime::InstanceSpec {
+        use workestrate::microsandbox::runtime::InstanceSpec;
         InstanceSpec {
             instance: instance.to_string(),
             workload: "litellm".to_string(),
@@ -681,7 +478,7 @@ mod tests {
     #[test]
     fn detach_args_include_foreground() -> Result<()> {
         let _guard = TestConfigGuard::new();
-        use crate::microsandbox::workload::Workload;
+        use workestrate::microsandbox::workload::Workload;
         let litellm = ConfigWorkload::new("litellm")?;
 
         // Singleton, no flags: just `<name> up --foreground`.
@@ -737,9 +534,9 @@ mod tests {
     /// target (so a subsequent teardown resolves the same sandbox).
     #[test]
     fn new_slug_round_trips_through_build_instance_spec_and_down_target() -> Result<()> {
-        use crate::commands::lifecycle::build_instance_spec;
-        use crate::microsandbox::port_registry::auto_allocate_slug;
-        use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
+        use workestrate::commands::lifecycle::build_instance_spec;
+        use workestrate::microsandbox::port_registry::auto_allocate_slug;
+        use workestrate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
 
         let state_dir = std::env::temp_dir().join(format!(
             "workestrate-slug-roundtrip-{}-{}",
@@ -751,7 +548,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&state_dir)?;
 
-        crate::config::set_active_context(None);
+        workestrate::config::set_active_context(None);
         let slot = slot_for("litellm", None);
         assert_eq!(slot, "litellm");
 

@@ -106,6 +106,11 @@ fn is_valid_env_var_name(name: &str) -> bool {
     ) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Validate a parsed [`ConfigFile`] against the invariants the TOML schema
+/// alone cannot express: `schema_version` support (see
+/// [`EXPECTED_SCHEMA_VERSION`]), recipe/feature vocabulary allowlists, trust,
+/// and mount/env/secret rules. Returns the first violation found as a hard
+/// error.
 pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // WP6(f)/E2: schema_version enforcement. `ConfigFile.schema_version` is
     // #[serde(default)], so a MISSING version parses as 0 — treated as

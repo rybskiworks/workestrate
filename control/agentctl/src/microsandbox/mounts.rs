@@ -34,7 +34,7 @@ fn resolve_mount_host(root: &Path, host: &str) -> Result<PathBuf> {
 /// - `${MSB_HOME}/...`, `${CWD}/...`, `${CWD}` (exact), `${WORKESTRATE_<NAME>_BUILD}` (exact)
 /// - `workspaces/...`, `var/...` (resolved to XDG state dir)
 /// - any other relative path with no `..` component (resolved to `root.join(host)`)
-pub(crate) fn validate_mount_host(host: &str) -> Result<()> {
+pub fn validate_mount_host(host: &str) -> Result<()> {
     if host.is_empty() {
         anyhow::bail!("mount host cannot be empty");
     }
@@ -76,7 +76,7 @@ pub(crate) fn validate_mount_host(host: &str) -> Result<()> {
 /// microsandbox. This matches the plan's actual intent ("paths that
 /// microsandbox may pivot to real host resources") and is documented here as
 /// a justified narrowing.
-pub(crate) fn validate_mount_guest(guest: &str, read_only: bool) -> Result<()> {
+pub fn validate_mount_guest(guest: &str, read_only: bool) -> Result<()> {
     if guest.is_empty() {
         anyhow::bail!("mount guest cannot be empty");
     }

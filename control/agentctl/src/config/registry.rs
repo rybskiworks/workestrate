@@ -5,6 +5,9 @@ use anyhow::Result;
 use crate::config::paths::registry_path;
 use crate::config::{ActiveContext, ConfigRepoEntry, Registry};
 
+/// Load the tool-home registry (`registry.toml` at [`registry_path`]).
+/// Returns `Ok(None)` when the file does not exist (normal first-run state);
+/// read/parse failures are hard errors.
 pub fn load_registry() -> Result<Option<Registry>> {
     let path = registry_path();
     if !path.exists() {
@@ -17,6 +20,9 @@ pub fn load_registry() -> Result<Option<Registry>> {
     Ok(Some(registry))
 }
 
+/// Persist the registry to `registry.toml`, creating the parent directory as
+/// needed. The write is atomic (serialize to a sibling `.tmp` file, then
+/// rename) so readers never observe a truncated registry (FN-5).
 pub fn save_registry(registry: &Registry) -> Result<()> {
     let path = registry_path();
     if let Some(parent) = path.parent() {

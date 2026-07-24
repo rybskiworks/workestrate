@@ -4,7 +4,7 @@
 //! a human-readable stderr line or a machine-readable JSON error envelope
 //! (under `--json`). Message-substring matching is the current heuristic.
 
-pub(crate) fn emit_error(e: &anyhow::Error, json_mode: bool) {
+pub fn emit_error(e: &anyhow::Error, json_mode: bool) {
     let classified = classify_error(e);
     if json_mode {
         let body = serde_json::json!({
@@ -24,13 +24,13 @@ pub(crate) fn emit_error(e: &anyhow::Error, json_mode: bool) {
     }
 }
 
-pub(crate) struct Classified {
+pub struct Classified {
     kind: &'static str,
     message: String,
     exit_code: i32,
 }
 
-pub(crate) fn classify_error(err: &anyhow::Error) -> Classified {
+pub fn classify_error(err: &anyhow::Error) -> Classified {
     let msg = err.to_string();
     if msg.contains("is already running") {
         Classified {
@@ -53,7 +53,7 @@ pub(crate) fn classify_error(err: &anyhow::Error) -> Classified {
     }
 }
 
-pub(crate) fn classify_exit_code(err: &anyhow::Error) -> i32 {
+pub fn classify_exit_code(err: &anyhow::Error) -> i32 {
     classify_error(err).exit_code
 }
 

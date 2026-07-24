@@ -4,11 +4,11 @@
 use anyhow::Result;
 use std::io::Write;
 
+use crate::cli_actions::{AgentAction, ServiceAction};
 use crate::commands::diagnostics::cmd_plan;
 use crate::config;
 use crate::json_out::{down_result_json, down_results_json};
 use crate::microsandbox::workload::Workload;
-use crate::{AgentAction, ServiceAction};
 
 ///
 /// `workload_name` is the bare workload name (e.g. "litellm"). The slot is
@@ -19,7 +19,7 @@ use crate::{AgentAction, ServiceAction};
 /// skipped the slug rule.
 ///
 /// Mutually-exclusive flag groups (replace/instance/new) are validated here.
-pub(crate) fn build_instance_spec(
+pub fn build_instance_spec(
     workload_name: &str,
     replace: bool,
     instance_id: Option<&str>,
@@ -67,7 +67,7 @@ pub(crate) fn build_instance_spec(
     })
 }
 
-pub(crate) async fn dispatch_service<W: Workload>(
+pub async fn dispatch_service<W: Workload>(
     workload: &W,
     action: ServiceAction,
     show_source: bool,
@@ -119,7 +119,7 @@ pub(crate) async fn dispatch_service<W: Workload>(
             use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
             let context = crate::config::active_context_name();
             let slot = slot_for(workload.name(), context.as_deref());
-            if let Some(ref id) = instance {
+            if let Some(id) = instance.as_deref() {
                 validate_instance_id(id)?;
             }
             let target = instance_name(&slot, instance.as_deref());
@@ -129,7 +129,7 @@ pub(crate) async fn dispatch_service<W: Workload>(
     }
 }
 
-pub(crate) async fn dispatch_agent<W: Workload>(
+pub async fn dispatch_agent<W: Workload>(
     workload: &W,
     action: AgentAction,
     show_source: bool,
@@ -176,7 +176,7 @@ pub(crate) async fn dispatch_agent<W: Workload>(
     }
 }
 
-pub(crate) fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceAction> {
+pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceAction> {
     match action {
         "up" => {
             let foreground = args.iter().any(|a| a == "--foreground");
@@ -212,7 +212,7 @@ pub(crate) fn parse_service_action(action: &str, args: &[String]) -> Result<Serv
     }
 }
 
-pub(crate) fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> {
+pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> {
     match action {
         "exec" => {
             let replace = args.iter().any(|a| a == "--replace");
@@ -244,7 +244,7 @@ pub(crate) fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentA
 
 /// Extract the value of `--flag <value>` or `--flag=value` from a Vec<String>
 /// (the workload catch-all args). Returns None if the flag is absent.
-pub(crate) fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
+pub fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
     let mut iter = args.iter();
     while let Some(a) = iter.next() {
         if a == flag {
@@ -260,7 +260,7 @@ pub(crate) fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
 
 /// Parse `--port-offset <N>` (or `--port-offset=N`) from the workload
 /// catch-all args. Defaults to 0 when absent.
-pub(crate) fn parse_port_offset(args: &[String]) -> Result<u16> {
+pub fn parse_port_offset(args: &[String]) -> Result<u16> {
     let Some(raw) = parse_flag_value(args, "--port-offset") else {
         return Ok(0);
     };
@@ -272,7 +272,7 @@ pub(crate) fn parse_port_offset(args: &[String]) -> Result<u16> {
     })
 }
 
-pub(crate) async fn cmd_down(
+pub async fn cmd_down(
     workload_name: &str,
     instance_id: Option<&str>,
     all_instances: bool,
@@ -326,7 +326,7 @@ pub(crate) async fn cmd_down(
     }
 }
 
-pub(crate) fn print_down_results_text(results: &[crate::microsandbox::runtime::DownResult]) {
+pub fn print_down_results_text(results: &[crate::microsandbox::runtime::DownResult]) {
     use crate::microsandbox::runtime::DownStatus;
     for r in results {
         match r.status {
@@ -341,9 +341,7 @@ pub(crate) fn print_down_results_text(results: &[crate::microsandbox::runtime::D
     }
 }
 
-pub(crate) fn report_down_aggregate(
-    results: &[crate::microsandbox::runtime::DownResult],
-) -> Result<()> {
+pub fn report_down_aggregate(results: &[crate::microsandbox::runtime::DownResult]) -> Result<()> {
     use crate::microsandbox::runtime::DownStatus;
     let had_error = results
         .iter()
@@ -354,7 +352,7 @@ pub(crate) fn report_down_aggregate(
     Ok(())
 }
 
-pub(crate) async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
+pub async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
     use crate::microsandbox::runtime::{down_all, DownStatus};
     if !yes {
         // Read a single line of confirmation so piped input ("y\n") does not
@@ -417,7 +415,7 @@ pub(crate) async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
 /// themselves in place. Never touches the store (`repos/`, `sources/`) or any
 /// config file. Interactive confirmation unless `--yes`; non-interactive
 /// stdin without `--yes` is a hard refusal (same policy as `down --all`).
-pub(crate) async fn cmd_clean(yes: bool, json: bool) -> Result<()> {
+pub async fn cmd_clean(yes: bool, json: bool) -> Result<()> {
     use std::io::IsTerminal;
     let state_dir = config::resolve_state_dir();
     const SUBDIRS: [&str; 3] = ["workspaces", "var", "run"];

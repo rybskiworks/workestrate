@@ -16,7 +16,7 @@ mod show_source;
 mod validate;
 
 pub use config::ConfigWorkload;
-pub(crate) use validate::{validate_env_override, validate_seed_source};
+pub use validate::{validate_env_override, validate_seed_source};
 
 /// Program and args to exec inside the sandbox via exec_stream.
 #[derive(Debug, Clone)]

@@ -1,10 +1,10 @@
 //! Command handlers (`workestrate <cmd>`).
 
-pub(crate) mod config_cmd;
-pub(crate) mod diagnostics;
-pub(crate) mod doctor;
-pub(crate) mod init;
-pub(crate) mod lifecycle;
-pub(crate) mod migrate;
-pub(crate) mod secrets_target;
-pub(crate) mod source;
+pub mod config_cmd;
+pub mod diagnostics;
+pub mod doctor;
+pub mod init;
+pub mod lifecycle;
+pub mod migrate;
+pub mod secrets_target;
+pub mod source;

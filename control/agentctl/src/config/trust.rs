@@ -9,7 +9,7 @@ use crate::config::{load_registry, Registry, TrustedProject};
 
 /// Trust-check used ONLY inside discovery; reads the base registry directly to
 /// avoid recursing through [`registry_path`] → [`resolve_home_with_kind`].
-pub(crate) fn is_dir_trusted_via_base_registry(dir: &Path) -> bool {
+pub fn is_dir_trusted_via_base_registry(dir: &Path) -> bool {
     let path = base_registry_path();
     if !path.exists() {
         return false;

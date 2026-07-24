@@ -247,6 +247,10 @@ fn load_registry_for_dir_resolution() -> Option<Registry> {
     }
 }
 
+/// Resolve the state directory (workspaces, var, run). A registry
+/// `settings.state_dir` wins; otherwise derived from the active tool home
+/// (`<home>/state`, or the legacy XDG state dir in `HomeKind::LegacyXdg`
+/// mode). A corrupt registry warns and falls back to the default.
 pub fn resolve_state_dir() -> PathBuf {
     if let Some(registry) = load_registry_for_dir_resolution() {
         if let Some(ref state_dir) = registry.settings.state_dir {
@@ -260,6 +264,11 @@ pub fn resolve_state_dir() -> PathBuf {
     }
 }
 
+/// Resolve the store directory (managed config-repo clones under `repos/`
+/// and source checkouts under `sources/`). A registry `settings.store_dir`
+/// wins; otherwise derived from the active tool home (the home dir itself,
+/// or the legacy XDG data dir in `HomeKind::LegacyXdg` mode). A corrupt
+/// registry warns and falls back to the default.
 pub fn resolve_store_dir() -> PathBuf {
     if let Some(registry) = load_registry_for_dir_resolution() {
         if let Some(ref store_dir) = registry.settings.store_dir {
@@ -290,7 +299,7 @@ pub fn resolve_store_dir() -> PathBuf {
 /// sites (paths are operator-supplied config values, always valid UTF-8 in
 /// practice). The `HOME`-unset behavior is the ONLY intentional change, and
 /// it changes for every former call site.
-pub(crate) fn expand_tilde(path: &str) -> PathBuf {
+pub fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         match std::env::var("HOME") {
             Ok(home) if !home.is_empty() => PathBuf::from(home).join(rest),

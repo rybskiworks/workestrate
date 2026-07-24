@@ -1,6 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ConfigFile",
+  "description": "Top-level schema root of a `workestrate.toml` layer: `schema_version` (must equal `EXPECTED_SCHEMA_VERSION`; absent warns and is treated as legacy), plus the `secrets` and `workloads` maps. Layers are merged by `merge::merge_layers` into one effective `ConfigFile`.",
   "type": "object",
   "properties": {
     "schema_version": {
@@ -27,6 +28,7 @@
   "additionalProperties": false,
   "definitions": {
     "BakedFileSpec": {
+      "description": "A single file baked into the image at build time (`image.baked_files`). `path` is the in-image destination and `content` is the verbatim file body.",
       "type": "object",
       "required": [
         "content",
@@ -43,6 +45,7 @@
       "additionalProperties": false
     },
     "BinarySpec": {
+      "description": "A binary built from source and baked into the image (`image.binary`). `recipe` selects the build strategy and `src` locates the source; the optional fields tune the produced artifact (`entrypoint`, `worker`, `npm_deps_hash`).",
       "type": "object",
       "required": [
         "recipe",
@@ -170,6 +173,7 @@
       ]
     },
     "EnvVarConfig": {
+      "description": "One environment-variable entry in a workload's `env` list. Exactly one of `value` (literal) or `secret` (reference to a `secrets.<name>` entry) is expected to be set; `name` must be a valid shell env identifier.",
       "type": "object",
       "required": [
         "name"
@@ -194,6 +198,7 @@
       "additionalProperties": false
     },
     "ImageSpec": {
+      "description": "How to obtain the sandbox image for a workload (`image = { ... }` inline table in workestrate.toml). `recipe` selects the acquisition strategy (e.g. `registry`, `local`); the remaining optional fields narrow it (`ref`/`name`/`tag`/`contents`) or extend the image (`binary`, `baked_files`, `features`). Unknown fields are rejected at parse time.",
       "type": "object",
       "required": [
         "recipe"
@@ -282,6 +287,7 @@
       }
     },
     "LocalBuildConfig": {
+      "description": "Build the workload from a local source checkout instead of pulling an image (`workloads.<name>.local_build`). `recipe` selects the build strategy, `source` the checkout location; the optional fields drive incremental-build gating and fallback behaviour.",
       "type": "object",
       "required": [
         "recipe",
@@ -347,6 +353,7 @@
       }
     },
     "NetworkConfig": {
+      "description": "Per-workload network policy (`workloads.<name>.network`). `default_deny` is the egress fail-closed switch (monotonic-true across layers for non-entitled workloads); `egress` lists allowed egress recipes, `deny` explicit domain-suffix denials, and `ingress` inbound exposure rules.",
       "type": "object",
       "properties": {
         "default_deny": {
@@ -425,6 +432,7 @@
       ]
     },
     "SecretDefConfig": {
+      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml). `env_var` is the environment variable the resolved value is injected as; `hosts` constrains which egress hosts may receive it; `required` makes a missing value a hard error; `source`/`exposed_as`/`placeholder`/ `description` drive resolution and UX.",
       "type": "object",
       "properties": {
         "description": {
@@ -477,6 +485,7 @@
       "additionalProperties": false
     },
     "SecretEnvConfig": {
+      "description": "One secret reference in a workload's `secret_env` list: names an entry in the top-level `secrets` map whose resolved value is injected into the sandbox environment.",
       "type": "object",
       "required": [
         "secret"
@@ -489,6 +498,7 @@
       "additionalProperties": false
     },
     "SeedFileConfig": {
+      "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary), `target` the in-sandbox destination; `only_if_missing` skips the copy when the target already exists.",
       "type": "object",
       "required": [
         "source",
@@ -511,6 +521,7 @@
       "additionalProperties": false
     },
     "WorkloadConfig": {
+      "description": "A single workload definition (`workloads.<name>` in workestrate.toml). `kind` is `\"agent\"` (interactive TUI attach) or `\"service\"` (headless, detached by default); the remaining fields describe the image, resources, command, env/secret wiring, mounts, ports, seed files, local-build override, and network policy. All fields merge layer-by-layer via `merge::merge_layers`.",
       "type": "object",
       "properties": {
         "command": {

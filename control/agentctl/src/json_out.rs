@@ -4,13 +4,13 @@
 //! `workestrate down`, plus the conversion functions from runtime types.
 
 #[derive(serde::Serialize)]
-pub(crate) struct DownResultJson {
+pub struct DownResultJson {
     instance: String,
     status: &'static str,
     message: Option<String>,
 }
 
-pub(crate) fn down_result_json(r: &crate::microsandbox::runtime::DownResult) -> DownResultJson {
+pub fn down_result_json(r: &crate::microsandbox::runtime::DownResult) -> DownResultJson {
     // Inline conversion (avoids `expect()` on a 1->1 invariant; clippy
     // `expect_used` is deny in this crate).
     use crate::microsandbox::runtime::DownStatus;
@@ -25,20 +25,20 @@ pub(crate) fn down_result_json(r: &crate::microsandbox::runtime::DownResult) -> 
     }
 }
 
-pub(crate) fn down_results_json(
+pub fn down_results_json(
     results: &[crate::microsandbox::runtime::DownResult],
 ) -> Vec<DownResultJson> {
     results.iter().map(down_result_json).collect()
 }
 
 #[derive(serde::Serialize)]
-pub(crate) struct PsPortJson {
+pub struct PsPortJson {
     host: u16,
     guest: u16,
 }
 
 #[derive(serde::Serialize)]
-pub(crate) struct PsEntryJson {
+pub struct PsEntryJson {
     instance: String,
     workload: String,
     context: Option<String>,
@@ -53,9 +53,7 @@ pub(crate) struct PsEntryJson {
     stale: bool,
 }
 
-pub(crate) fn ps_entries_json(
-    entries: &[crate::microsandbox::runtime::PsEntry],
-) -> Vec<PsEntryJson> {
+pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec<PsEntryJson> {
     entries
         .iter()
         .map(|e| PsEntryJson {

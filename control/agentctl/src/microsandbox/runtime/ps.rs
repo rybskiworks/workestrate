@@ -27,7 +27,7 @@ pub enum Occupancy {
 /// Serialized lowercase to match ADR 0021 §7 (`"singleton"` / `"parallel"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum PsKind {
+pub enum PsKind {
     Singleton,
     Parallel,
 }
@@ -195,7 +195,7 @@ fn apply_liveness_outcomes(entries: &mut [PsEntry], outcomes: &[ProbeOutcome]) -
 /// keeping the pure function unit-testable. Sequential — N is small (rarely
 /// more than a handful of instances per host). The stale/unreachable mapping
 /// itself lives in the pure [`apply_liveness_outcomes`].
-pub(crate) async fn probe_liveness(entries: &mut [PsEntry]) -> (usize, usize) {
+pub async fn probe_liveness(entries: &mut [PsEntry]) -> (usize, usize) {
     // Probe each instance sequentially via the SDK, collecting outcomes before
     // delegating the stale/unreachable mapping to the pure helper. Collecting
     // first means the immutable borrow of `entries` (for e.instance) is

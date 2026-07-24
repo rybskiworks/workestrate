@@ -1,9 +1,12 @@
 //! Shared test-support helpers extracted from `config::tests` and its
 //! siblings (`main::tests`, `microsandbox::*::tests`).
 //!
-//! Everything here is test-only: the module is declared `#[cfg(test)]` at the
-//! declaration site in `config.rs`, so none of this lands in the shipped
-//! binary. Items are `pub` so every consuming test module can share ONE
+//! Everything here is test-support only. The module used to be declared
+//! `#[cfg(test)]` in `config.rs`; with the lib+bin split it is compiled into
+//! the library unconditionally (no `#[cfg(test)]` gate) so the BINARY crate's
+//! own test harness (`main.rs::tests`) can also reach it — a bin's tests link
+//! the lib WITHOUT `cfg(test)`. The crate is `publish = false`, so this is
+//! acceptable. Items are `pub` so every consuming test module can share ONE
 //! canonical copy of each helper (previously `TestConfigGuard` existed in
 //! three identical copies, and two near-duplicates of `uniq_dir` existed).
 
