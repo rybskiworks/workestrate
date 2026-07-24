@@ -48,6 +48,11 @@ fn read_record_loud(path: &Path) -> Result<Option<SandboxInstanceRecord>> {
 /// this makes each individual call atomic against concurrent registrations,
 /// but does NOT close the check-then-register race across two separate calls
 /// — see [`check_and_register_sandbox_lifecycle`] for the atomic path.
+///
+/// No production caller since FN-6 (build_sandbox routes through the atomic
+/// combined entry point); retained as a supported registry API and exercised
+/// across the store/lock test modules.
+#[allow(dead_code)]
 pub fn check_port_collisions(state_dir: &Path, instance_name: &str, ports: &[u16]) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     check_port_collisions_locked(state_dir, instance_name, ports)
@@ -110,16 +115,12 @@ fn check_port_collisions_locked(
 /// registration for the same port between the two (the classic
 /// time-of-check-time-of-use race).
 ///
-/// **NOTE:** `runtime.rs` currently calls [`check_port_collisions`] and
-/// [`register_sandbox_lifecycle`] SEPARATELY (with the sandbox-create `.await`
-/// in between), so the live `up` path is NOT yet atomic — the two standalone
-/// calls each lock only their own critical section. Closing A17 fully requires
-/// migrating runtime.rs to this combined function (out of scope for WP10).
-//
-// `dead_code`: no in-crate caller yet (runtime.rs is outside WP10's owned
-// set); the tests exercise it. Retained as the atomic entry point of the
-// registry API for the follow-up runtime.rs migration.
-#[allow(dead_code)]
+/// Since FN-6 this IS the live path: `build_sandbox` (runtime/run.rs)
+/// registers through here after the sandbox create resolves. The async create
+/// itself cannot sit inside the lock (the lock is a file; holding it across
+/// `.await` would wedge concurrent processes), so a same-port race can still
+/// collide mid-create — but the post-create registration window is closed:
+/// the loser's combined call fails the collision check and leaves no record.
 #[allow(clippy::too_many_arguments)]
 pub fn check_and_register_sandbox_lifecycle(
     state_dir: &Path,
@@ -192,6 +193,11 @@ pub fn register_sandbox(
 /// and RFC3339 created-at timestamp populated. Locks the registry around the
 /// write (WP10/A17); see [`check_and_register_sandbox_lifecycle`] for the
 /// atomic check+register path.
+///
+/// No production caller since FN-6 (build_sandbox uses the atomic combined
+/// entry point); retained as the register-only half of the registry API and
+/// exercised by the store/ps test modules.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn register_sandbox_lifecycle(
     state_dir: &Path,
@@ -253,7 +259,15 @@ fn register_sandbox_lifecycle_locked(
 /// Unregister a sandbox instance (remove its state file).
 ///
 /// Called when the sandbox is stopped/removed. Missing file is not an error.
+///
+/// The registry lock is held ONLY around the synchronous existence-check +
+/// `remove_file` (FN-6). Callers (`down`, `down_one`,
+/// `check_occupied_or_replace`) are async and stop the sandbox BEFORE calling
+/// here: holding the lock across that `.await` would let a stalled stop wedge
+/// every concurrent `up` behind the lock until its acquire timeout — the
+/// guard is scoped to the synchronous remove so it can never cross an await.
 pub fn unregister_sandbox(state_dir: &Path, instance_name: &str) -> Result<()> {
+    let _lock = PortRegistryLock::acquire(state_dir)?;
     let path = state_dir
         .join("var")
         .join("run")
@@ -797,6 +811,59 @@ mod tests {
 
         // The corrupt file itself is untouched (not silently deleted).
         assert!(run_dir.join("corrupt-sandbox.json").exists());
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+    // ---- FN-6: concurrent same-port race (TOCTOU closed) ----
+
+    /// Two threads racing to register the SAME port through the atomic
+    /// combined entry point (the function build_sandbox now uses): exactly
+    /// one may win; the loser must error cleanly (port collision or lock
+    /// timeout) and must not leave a record behind.
+    #[test]
+    fn concurrent_same_port_combined_register_one_wins() -> Result<()> {
+        let state_dir = unique_state_dir("fn6-race");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for i in 0..2u32 {
+            let dir = state_dir.clone();
+            let b = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                b.wait(); // release both threads at once
+                combined_register(&dir, &format!("race-{i}"), "litellm", 4000)
+            }));
+        }
+        let results: Vec<Result<()>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("worker thread panicked"))
+            .collect();
+        let wins = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(
+            wins, 1,
+            "exactly one racer may win the port; results: {results:?}"
+        );
+        for r in &results {
+            if let Err(e) = r {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("port collision") || msg.contains("timed out acquiring"),
+                    "loser must fail cleanly (collision or lock timeout), got: {msg}"
+                );
+            }
+        }
+        // Exactly one record holds the port, and it is the winner's.
+        let records = list_records(&state_dir)?;
+        let holders: Vec<_> = records.iter().filter(|r| r.ports.contains(&4000)).collect();
+        assert_eq!(holders.len(), 1, "exactly one record may hold port 4000");
+        // The lock file is gone afterwards (no wedge).
+        assert!(
+            !state_dir
+                .join("var")
+                .join("run")
+                .join(super::super::lock::PORT_REGISTRY_LOCK_NAME)
+                .exists(),
+            "registry lock must be released after the race"
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

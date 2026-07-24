@@ -262,9 +262,6 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let state_dir = crate::config::resolve_state_dir();
     check_occupied_or_replace(spec, &state_dir).await?;
 
-    // Port collision detection: check against already-running workestrate sandboxes.
-    super::super::port_registry::check_port_collisions(&state_dir, &spec.instance, &host_ports)?;
-
     ensure_mount_sources(&root, &plan)?;
 
     let policy = super::network_plan_to_policy(&plan.network)?;
@@ -313,7 +310,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
         })
         .collect::<Result<Vec<_>>>()?;
     let created_at = super::time::current_rfc3339_utc();
-    super::super::port_registry::register_sandbox_lifecycle(
+    // FN-6: atomic check + register under ONE registry-lock hold. The
+    // collision check must not run as a separate pre-create call: it
+    // released the lock before `create().await`, letting a concurrent
+    // `up` claim the same port in between (check-then-register TOCTOU).
+    // The sandbox create cannot move inside the lock (it is async and
+    // would deadlock the lock file), so a same-port race is still
+    // possible mid-create; this closes the post-create registration
+    // window, and the loser surfaces a clear port-collision error here.
+    super::super::port_registry::check_and_register_sandbox_lifecycle(
         &state_dir,
         &spec.instance,
         spec.context.as_deref(),
