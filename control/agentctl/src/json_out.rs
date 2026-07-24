@@ -28,19 +28,7 @@ pub(crate) fn down_result_json(r: &crate::microsandbox::runtime::DownResult) -> 
 pub(crate) fn down_results_json(
     results: &[crate::microsandbox::runtime::DownResult],
 ) -> Vec<DownResultJson> {
-    use crate::microsandbox::runtime::DownStatus;
-    results
-        .iter()
-        .map(|r| DownResultJson {
-            instance: r.instance.clone(),
-            status: match r.status {
-                DownStatus::Stopped => "stopped",
-                DownStatus::NotFound => "not_found",
-                DownStatus::Error => "error",
-            },
-            message: r.message.clone(),
-        })
-        .collect()
+    results.iter().map(down_result_json).collect()
 }
 
 #[derive(serde::Serialize)]

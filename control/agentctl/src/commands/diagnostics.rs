@@ -9,7 +9,6 @@ use anyhow::Result;
 use crate::commands::source::build_env_var_name;
 use crate::config;
 use crate::config::CheckEntry;
-use crate::git::{git_is_dirty, short_rev};
 use crate::json_out::ps_entries_json;
 
 pub(crate) fn cmd_plan<W: crate::microsandbox::workload::Workload>(
@@ -164,24 +163,22 @@ pub(crate) async fn cmd_check() -> Result<()> {
                 if registry.configs.is_empty() {
                     println!("    (none)");
                 } else {
-                    for (name, entry) in &registry.configs {
-                        let dest = config::config_repo_dir(name);
-                        let (dirty_label, ok) = if dest.exists() {
-                            match git_is_dirty(&dest) {
-                                Ok(false) => ("clean", true),
-                                Ok(true) => ("dirty", false),
-                                Err(_) => ("unknown", false),
+                    for status in crate::git::collect_repo_statuses(&registry) {
+                        let entry = &registry.configs[&status.name];
+                        let (dirty_label, ok) = if status.exists {
+                            if status.dirty {
+                                ("dirty", false)
+                            } else {
+                                ("clean", true)
                             }
                         } else {
                             ("missing", false)
                         };
-                        let rev = entry.rev.as_deref().unwrap_or("unknown");
-                        let short = short_rev(rev);
                         let git_ref = entry.r#ref.as_deref().unwrap_or("main");
-                        let status = if ok { "[OK]" } else { "[MISSING]" };
+                        let mark = if ok { "[OK]" } else { "[MISSING]" };
                         println!(
                             "    {}: {} (ref {}, rev {}, {}) {}",
-                            name, entry.url, git_ref, short, dirty_label, status
+                            status.name, entry.url, git_ref, status.short, dirty_label, mark
                         );
                     }
                 }

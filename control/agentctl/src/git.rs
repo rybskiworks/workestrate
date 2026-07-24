@@ -84,3 +84,42 @@ pub(crate) fn git_checkout_dot(repo: &std::path::Path) -> Result<()> {
 pub(crate) fn short_rev(rev: &str) -> String {
     rev.chars().take(7).collect()
 }
+
+/// On-disk status of one registered config repo. Plain-data result of
+/// [`collect_repo_statuses`]; each caller renders it (doctor → JSON, check →
+/// text). `rev` is the registry-recorded revision (or "unknown"); `short` is
+/// its 7-char prefix; `exists` is whether the clone dir is present; `dirty`
+/// is the git working-tree dirty flag (`true` when missing or undeterminable,
+/// matching both callers' prior fail-closed default).
+#[derive(Debug, Clone)]
+pub(crate) struct RepoStatus {
+    pub name: String,
+    pub rev: String,
+    pub short: String,
+    pub exists: bool,
+    pub dirty: bool,
+}
+
+/// Collect the on-disk status of every registered config repo. Shared by
+/// `workestrate doctor` and `workestrate check`; behavior is identical to the
+/// two former inline copies (same dir resolution, rev fallback, dirty probe).
+pub(crate) fn collect_repo_statuses(registry: &crate::config::Registry) -> Vec<RepoStatus> {
+    registry
+        .configs
+        .iter()
+        .map(|(name, entry)| {
+            let dest = crate::config::config_repo_dir(name);
+            let rev = entry.rev.as_deref().unwrap_or("unknown").to_string();
+            let short = short_rev(&rev);
+            let exists = dest.exists();
+            let dirty = git_is_dirty(&dest).unwrap_or(true);
+            RepoStatus {
+                name: name.clone(),
+                rev,
+                short,
+                exists,
+                dirty,
+            }
+        })
+        .collect()
+}

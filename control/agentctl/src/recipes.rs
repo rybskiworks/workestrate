@@ -21,7 +21,7 @@ impl EgressRecipeRef {
         match self {
             Self::Dns => EgressRule::dns(),
             Self::LitellmProxy => vec![EgressRule::litellm_proxy()],
-            Self::Github => vec![EgressRule::https(&["github.com", "api.github.com"])],
+            Self::Github => vec![EgressRule::https(crate::policy::GITHUB_HOSTS)],
             Self::AgentBase => EgressRule::agent_base(),
             Self::Https { hosts } => {
                 let hosts: Vec<&str> = hosts.iter().map(|s| s.as_str()).collect();

@@ -14,6 +14,10 @@ pub const ALLOWED_EGRESS_HOSTS: &[&str] = &[
     "host.microsandbox.internal",
 ];
 
+/// GitHub egress hosts shared by the `github` recipe and the `agent_base`
+/// plan recipe. Single source of truth; both reference this const.
+pub const GITHUB_HOSTS: &[&str] = &["github.com", "api.github.com"];
+
 /// Core-defined secret→host binding allowlist. Each secret may only bind
 /// to listed hosts. Replaces the const SecretDefinition hosts field.
 pub const SECRET_HOST_BINDINGS: &[(&str, &[&str])] = &[

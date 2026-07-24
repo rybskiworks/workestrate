@@ -281,7 +281,7 @@ impl EgressRule {
     pub fn agent_base() -> Vec<Self> {
         let mut rules = Self::dns();
         rules.push(Self::litellm_proxy());
-        rules.push(Self::https(&["github.com", "api.github.com"]));
+        rules.push(Self::https(crate::policy::GITHUB_HOSTS));
         rules
     }
 }

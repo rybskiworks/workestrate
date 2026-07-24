@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::config;
-use crate::git::{git_is_dirty, short_rev};
 use crate::scaffold;
 
 /// One doctor check result. `status` is "OK", "WARN", or "FAIL"; a FAIL
@@ -172,32 +171,29 @@ pub(crate) fn doctor_check_config_repos() -> Result<DoctorCheck> {
         }
     };
     let mut repos: Vec<serde_json::Value> = Vec::new();
-    for (name, entry) in &registry.configs {
-        let dest = config::config_repo_dir(name);
-        let rev = entry.rev.as_deref().unwrap_or("unknown");
-        let short = short_rev(rev);
-        if !dest.exists() {
+    for status in crate::git::collect_repo_statuses(&registry) {
+        let dest = config::config_repo_dir(&status.name);
+        if !status.exists {
             repos.push(serde_json::json!({
-                "name": name,
+                "name": status.name,
                 "status": "FAIL",
-                "rev": rev,
+                "rev": status.rev,
                 "dirty": false,
                 "message": format!("clone missing at {}", dest.display()),
             }));
             continue;
         }
-        let dirty = git_is_dirty(&dest).unwrap_or(true);
-        let status = if dirty { "WARN" } else { "OK" };
-        let message = if dirty {
-            format!("rev {}, dirty", short)
+        let check = if status.dirty { "WARN" } else { "OK" };
+        let message = if status.dirty {
+            format!("rev {}, dirty", status.short)
         } else {
-            format!("rev {}, clean", short)
+            format!("rev {}, clean", status.short)
         };
         repos.push(serde_json::json!({
-            "name": name,
-            "status": status,
-            "rev": rev,
-            "dirty": dirty,
+            "name": status.name,
+            "status": check,
+            "rev": status.rev,
+            "dirty": status.dirty,
             "message": message,
         }));
     }
