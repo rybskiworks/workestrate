@@ -12,58 +12,14 @@
     clippy::unwrap_in_result
 )]
 
-use std::path::PathBuf;
-use std::process::Command;
+mod common;
 
-const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
-
-struct IsolatedHome {
-    dir: PathBuf,
-}
-
-impl IsolatedHome {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "workestrate-cmd-doctor-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("create isolated HOME");
-        std::fs::create_dir_all(dir.join(".config")).expect("create .config");
-        std::fs::create_dir_all(dir.join(".local").join("share")).expect("create .local/share");
-        std::fs::create_dir_all(dir.join(".local").join("state")).expect("create .local/state");
-        Self { dir }
-    }
-
-    fn cmd(&self) -> Command {
-        let mut c = Command::new(BIN);
-        c.env("HOME", &self.dir);
-        c.env("XDG_CONFIG_HOME", self.dir.join(".config"));
-        c.env("XDG_DATA_HOME", self.dir.join(".local").join("share"));
-        c.env("XDG_STATE_HOME", self.dir.join(".local").join("state"));
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
-        c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c.env_remove("WORKESTRATE_HOME");
-        c.env_remove("WORKESTRATE_CONTEXT");
-        c.stdin(std::process::Stdio::null());
-        c
-    }
-
-    fn write_registry(&self, content: &str) {
-        let workestrate_dir = self.dir.join(".config").join("workestrate");
-        std::fs::create_dir_all(&workestrate_dir).expect("create workestrate config dir");
-        std::fs::write(workestrate_dir.join("config.toml"), content).expect("write registry");
-    }
-}
-
+use common::IsolatedHome;
 /// `doctor --json` emits parseable JSON with a checks array and an overall
 /// verdict; every check carries name/status/message.
 #[test]
 fn doctor_json_is_parseable() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-doctor");
     let out = home
         .cmd()
         .args(["doctor", "--json"])
@@ -97,7 +53,7 @@ fn doctor_json_is_parseable() {
 /// The JSON report covers every documented check name.
 #[test]
 fn doctor_json_has_expected_check_names() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-doctor");
     let out = home
         .cmd()
         .args(["doctor", "--json"])
@@ -132,7 +88,7 @@ fn doctor_json_has_expected_check_names() {
 /// Human output has the section header and mentions the key checks.
 #[test]
 fn doctor_human_output_has_section_header() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-doctor");
     let out = home.cmd().args(["doctor"]).output().expect("invoke doctor");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -154,7 +110,7 @@ fn doctor_human_output_has_section_header() {
 /// must agree with the reported verdict.
 #[test]
 fn doctor_overall_verdict_matches_exit_code() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-doctor");
     let out = home
         .cmd()
         .args(["doctor", "--json"])
@@ -186,7 +142,7 @@ fn doctor_overall_verdict_matches_exit_code() {
 /// git clone) shows up in the config_repos check with a non-OK status.
 #[test]
 fn doctor_config_repos_reports_registered_repo() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-doctor");
     home.write_registry(
         r#"
 [configs.personal]

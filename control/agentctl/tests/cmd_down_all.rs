@@ -10,51 +10,15 @@
     clippy::unwrap_in_result
 )]
 
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+mod common;
 
-const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
-
-struct IsolatedHome {
-    dir: PathBuf,
-}
-
-impl IsolatedHome {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "workestrate-cmd-down-all-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("create isolated HOME");
-        std::fs::create_dir_all(dir.join(".config")).expect("create .config");
-        std::fs::create_dir_all(dir.join(".local").join("share")).expect("create .local/share");
-        std::fs::create_dir_all(dir.join(".local").join("state")).expect("create .local/state");
-        Self { dir }
-    }
-
-    /// Build a Command with HOME / XDG pointed at this isolated root.
-    fn cmd(&self) -> Command {
-        let mut c = Command::new(BIN);
-        c.env("HOME", &self.dir);
-        c.env("XDG_CONFIG_HOME", self.dir.join(".config"));
-        c.env("XDG_DATA_HOME", self.dir.join(".local").join("share"));
-        c.env("XDG_STATE_HOME", self.dir.join(".local").join("state"));
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
-        c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c.env_remove("WORKESTRATE_HOME");
-        c
-    }
-}
-
+use common::IsolatedHome;
+use std::process::Stdio;
 /// Piping "y\n" to `down-all` confirms and proceeds without waiting for EOF.
 /// With an empty state dir, down_all is a no-op and the command succeeds.
 #[test]
 fn down_all_piped_yes_proceeds_without_eof() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-down-all");
     let mut c = home.cmd();
     c.args(["down-all"]);
     c.stdin(Stdio::piped());
@@ -77,7 +41,7 @@ fn down_all_piped_yes_proceeds_without_eof() {
 /// Piping "n\n" to `down-all` aborts (non-zero exit) with an "aborted" message.
 #[test]
 fn down_all_piped_no_aborts() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-down-all");
     let mut c = home.cmd();
     c.args(["down-all"]);
     c.stdin(Stdio::piped());

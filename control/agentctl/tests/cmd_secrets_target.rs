@@ -10,78 +10,9 @@
     clippy::unwrap_in_result
 )]
 
-use std::path::PathBuf;
-use std::process::Command;
+mod common;
 
-const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
-
-/// Isolated sandbox: creates a fresh HOME under std::env::temp_dir() and
-/// returns it along with the env vars to set. Drop is the caller's job
-/// (these tests don't need cleanup — the temp_dir is process-id-namespaced
-/// and the OS reaps it eventually).
-struct IsolatedHome {
-    dir: PathBuf,
-}
-
-impl IsolatedHome {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "workestrate-cmd-secrets-target-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("create isolated HOME");
-        std::fs::create_dir_all(dir.join(".config")).expect("create .config");
-        std::fs::create_dir_all(dir.join(".local").join("share")).expect("create .local/share");
-        Self { dir }
-    }
-
-    /// Build a Command with HOME / XDG pointed at this isolated root.
-    fn cmd(&self) -> Command {
-        let mut c = Command::new(BIN);
-        c.env("HOME", &self.dir);
-        c.env("XDG_CONFIG_HOME", self.dir.join(".config"));
-        c.env("XDG_DATA_HOME", self.dir.join(".local").join("share"));
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
-        c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c.env_remove("SOPS_AGE_KEY_FILE");
-        c
-    }
-
-    /// Path to the registry file (`$XDG_CONFIG_HOME/workestrate/config.toml`).
-    fn registry_path(&self) -> PathBuf {
-        self.dir
-            .join(".config")
-            .join("workestrate")
-            .join("config.toml")
-    }
-
-    /// Path to the store dir (`$XDG_DATA_HOME/workestrate`).
-    fn store_dir(&self) -> PathBuf {
-        self.dir.join(".local").join("share").join("workestrate")
-    }
-
-    /// Write a registry TOML with a single `[configs.<name>]` entry.
-    fn write_registry(&self, name: &str, extra_lines: &str) {
-        let workestrate_dir = self.dir.join(".config").join("workestrate");
-        std::fs::create_dir_all(&workestrate_dir).expect("create workestrate config dir");
-        let content = format!(
-            "[configs.{name}]\nurl = \"https://example.com/repo.git\"\nref = \"main\"\n{extra_lines}"
-        );
-        std::fs::write(self.registry_path(), content).expect("write registry");
-    }
-
-    /// Create the repo checkout dir in the store so `dir` exists.
-    fn create_repo_dir(&self, name: &str) -> PathBuf {
-        let dir = self.store_dir().join("repos").join(name);
-        std::fs::create_dir_all(&dir).expect("create repo dir");
-        dir
-    }
-}
-
+use common::IsolatedHome;
 /// Parse a top-level string field out of a small flat JSON object.
 /// (Avoids pulling serde_json into the test binary; the CLI output shape is
 /// fixed and flat.)
@@ -105,8 +36,8 @@ fn json_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
 /// has not been written yet.
 #[test]
 fn secrets_target_defaults_for_registered_repo() {
-    let home = IsolatedHome::new();
-    home.write_registry("personal", "");
+    let home = IsolatedHome::new("cmd-secrets-target");
+    home.write_registry_entry("personal", "");
     let repo_dir = home.create_repo_dir("personal");
 
     let out = home
@@ -157,8 +88,8 @@ fn secrets_target_defaults_for_registered_repo() {
 /// the JSON output.
 #[test]
 fn secrets_target_honors_per_repo_overrides() {
-    let home = IsolatedHome::new();
-    home.write_registry(
+    let home = IsolatedHome::new("cmd-secrets-target");
+    home.write_registry_entry(
         "personal",
         "secrets_file = \".env.custom.enc\"\nage_key_file = \"/custom/key/path\"\n",
     );
@@ -206,8 +137,8 @@ fn secrets_target_honors_per_repo_overrides() {
 /// explanatory error on stderr.
 #[test]
 fn secrets_target_rejects_unregistered_name() {
-    let home = IsolatedHome::new();
-    home.write_registry("personal", "");
+    let home = IsolatedHome::new("cmd-secrets-target");
+    home.write_registry_entry("personal", "");
 
     let out = home
         .cmd()
@@ -229,8 +160,8 @@ fn secrets_target_rejects_unregistered_name() {
 /// When the resolved secrets file exists on disk, exists=true.
 #[test]
 fn secrets_target_reports_exists_true_when_file_present() {
-    let home = IsolatedHome::new();
-    home.write_registry("personal", "");
+    let home = IsolatedHome::new("cmd-secrets-target");
+    home.write_registry_entry("personal", "");
     let repo_dir = home.create_repo_dir("personal");
     std::fs::write(repo_dir.join(".env.enc"), "sops-encrypted-placeholder").expect("seed .env.enc");
 

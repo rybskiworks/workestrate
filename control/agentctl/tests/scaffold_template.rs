@@ -23,8 +23,17 @@
     clippy::unwrap_in_result
 )]
 
+mod common;
+
+use common::TempDir;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Scratch dir for one test: an RAII `TempDir` guard (removes the tree on
+/// drop — fixes the historical leak where every render left its temp dir).
+fn tempdir_for_test() -> TempDir {
+    TempDir::new("scaffold-test")
+}
 
 /// Render the scaffold via the real binary path. Uses fixed flags so the
 /// render is deterministic: explicit age recipient (skips age-keygen
@@ -48,7 +57,7 @@ fn render_via_subprocess(dest: &Path) -> std::process::Output {
 #[test]
 fn native_skeleton_passes_validate_config() {
     let tmp = tempdir_for_test();
-    let dest = tmp.join("scaffoldtest");
+    let dest = tmp.path().join("scaffoldtest");
     let output = render_via_subprocess(&dest);
     assert!(
         output.status.success(),
@@ -81,7 +90,7 @@ fn native_skeleton_passes_validate_config() {
 #[test]
 fn native_render_leaves_no_unsubstituted_tokens() {
     let tmp = tempdir_for_test();
-    let dest = tmp.join("scaffoldtest");
+    let dest = tmp.path().join("scaffoldtest");
     let output = render_via_subprocess(&dest);
     assert!(
         output.status.success(),
@@ -121,7 +130,7 @@ fn copier_template_byte_matches_native_render() {
     let tmp = tempdir_for_test();
 
     // Native render.
-    let native_dest = tmp.join("native");
+    let native_dest = tmp.path().join("native");
     let native_out = render_via_subprocess(&native_dest);
     assert!(
         native_out.status.success(),
@@ -130,7 +139,7 @@ fn copier_template_byte_matches_native_render() {
     );
 
     // Copier render with minimal-personal answers.
-    let copier_dest = tmp.join("copier");
+    let copier_dest = tmp.path().join("copier");
     std::fs::create_dir_all(&copier_dest).unwrap();
     let copier_template = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -199,7 +208,7 @@ fn copier_update_works_from_native_scaffold() {
     };
 
     let tmp = tempdir_for_test();
-    let dest = tmp.join("scaffoldtest");
+    let dest = tmp.path().join("scaffoldtest");
     let output = render_via_subprocess(&dest);
     assert!(output.status.success(), "native render failed");
     assert!(
@@ -260,19 +269,6 @@ fn which_copier() -> Option<PathBuf> {
         }
     }
     None
-}
-
-fn tempdir_for_test() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "workestrate-scaffold-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
 }
 
 fn walk_files(root: &Path, dir: &Path, cb: &mut dyn FnMut(&Path, &str)) {

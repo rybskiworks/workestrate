@@ -9,61 +9,14 @@
     clippy::unwrap_in_result
 )]
 
-use std::path::PathBuf;
-use std::process::Command;
+mod common;
 
-const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
-
-/// Isolated sandbox: creates a fresh HOME under std::env::temp_dir(). The
-/// legacy-XDG state dir resolves to `$XDG_STATE_HOME/workestrate` (or
-/// `$HOME/.local/state/workestrate` when XDG_STATE_HOME is unset).
-struct IsolatedHome {
-    dir: PathBuf,
-}
-
-impl IsolatedHome {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "workestrate-cmd-clean-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("create isolated HOME");
-        std::fs::create_dir_all(dir.join(".config")).expect("create .config");
-        std::fs::create_dir_all(dir.join(".local").join("share")).expect("create .local/share");
-        std::fs::create_dir_all(dir.join(".local").join("state")).expect("create .local/state");
-        Self { dir }
-    }
-
-    /// Build a Command with HOME / XDG pointed at this isolated root.
-    /// Stdin is /dev/null by default (non-interactive) unless overridden.
-    fn cmd(&self) -> Command {
-        let mut c = Command::new(BIN);
-        c.env("HOME", &self.dir);
-        c.env("XDG_CONFIG_HOME", self.dir.join(".config"));
-        c.env("XDG_DATA_HOME", self.dir.join(".local").join("share"));
-        c.env("XDG_STATE_HOME", self.dir.join(".local").join("state"));
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
-        c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c.env_remove("WORKESTRATE_HOME");
-        c.stdin(std::process::Stdio::null());
-        c
-    }
-
-    /// Legacy-XDG state dir: `$XDG_STATE_HOME/workestrate`.
-    fn state_dir(&self) -> PathBuf {
-        self.dir.join(".local").join("state").join("workestrate")
-    }
-}
-
+use common::IsolatedHome;
 /// `clean --yes` removes the contents of workspaces/ and var/run/ but leaves
 /// the directories themselves in place.
 #[test]
 fn clean_yes_removes_state_contents() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-clean");
     let state = home.state_dir();
     let workspaces = state.join("workspaces");
     let var_run = state.join("var").join("run");
@@ -112,7 +65,7 @@ fn clean_yes_removes_state_contents() {
 /// and points at --yes.
 #[test]
 fn clean_without_yes_non_interactive_refuses() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-clean");
     let out = home.cmd().args(["clean"]).output().expect("invoke clean");
     assert!(
         !out.status.success(),
@@ -129,7 +82,7 @@ fn clean_without_yes_non_interactive_refuses() {
 /// `clean --json` emits the documented JSON shape.
 #[test]
 fn clean_json_shape() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-clean");
     let state = home.state_dir();
     let workspaces = state.join("workspaces");
     std::fs::create_dir_all(&workspaces).expect("create workspaces");
@@ -185,7 +138,7 @@ fn clean_json_shape() {
 /// reports every subdir as absent.
 #[test]
 fn clean_absent_state_dir_is_ok() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-clean");
     // Do NOT create state dir.
     let out = home
         .cmd()

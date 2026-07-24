@@ -10,58 +10,9 @@
     clippy::unwrap_in_result
 )]
 
-use std::path::PathBuf;
-use std::process::Command;
+mod common;
 
-const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
-
-struct IsolatedHome {
-    dir: PathBuf,
-}
-
-impl IsolatedHome {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "workestrate-cmd-context-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("create isolated HOME");
-        std::fs::create_dir_all(dir.join(".config")).expect("create .config");
-        std::fs::create_dir_all(dir.join(".local").join("share")).expect("create .local/share");
-        Self { dir }
-    }
-
-    fn cmd(&self) -> Command {
-        let mut c = Command::new(BIN);
-        c.env("HOME", &self.dir);
-        c.env("XDG_CONFIG_HOME", self.dir.join(".config"));
-        c.env("XDG_DATA_HOME", self.dir.join(".local").join("share"));
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
-        c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c.env_remove("WORKESTRATE_HOME");
-        c.env_remove("WORKESTRATE_CONTEXT");
-        c.stdin(std::process::Stdio::null());
-        c
-    }
-
-    fn registry_path(&self) -> PathBuf {
-        self.dir
-            .join(".config")
-            .join("workestrate")
-            .join("config.toml")
-    }
-
-    fn write_registry(&self, content: &str) {
-        let workestrate_dir = self.dir.join(".config").join("workestrate");
-        std::fs::create_dir_all(&workestrate_dir).expect("create workestrate config dir");
-        std::fs::write(self.registry_path(), content).expect("write registry");
-    }
-}
-
+use common::IsolatedHome;
 /// Parse a top-level string field out of a small flat JSON object. (Avoids
 /// pulling serde_json into the test binary.)
 fn json_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
@@ -82,7 +33,7 @@ fn json_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
 /// With no registry at all, `context list` reports empty.
 #[test]
 fn context_list_no_registry() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-context");
 
     // Human output
     let out = home
@@ -120,7 +71,7 @@ fn context_list_no_registry() {
 /// Defined contexts are listed with their layers and the default marked.
 #[test]
 fn context_list_shows_contexts_and_default() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-context");
     home.write_registry(
         r#"
 [settings]
@@ -191,7 +142,7 @@ layers = ["work"]
 /// WORKESTRATE_CONTEXT env (or --context flag) classifies the source as "env".
 #[test]
 fn context_current_env_source() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-context");
     home.write_registry(
         r#"
 [settings]
@@ -234,7 +185,7 @@ layers = ["work"]
 /// With a default_context set and no env, source is "default".
 #[test]
 fn context_current_default_source() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-context");
     home.write_registry(
         r#"
 [settings]
@@ -274,7 +225,7 @@ layers = ["work"]
 /// source is "bare".
 #[test]
 fn context_current_bare_source() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-context");
     home.write_registry(
         r#"
 layers = []

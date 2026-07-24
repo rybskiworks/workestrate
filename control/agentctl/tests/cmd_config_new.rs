@@ -9,48 +9,10 @@
     clippy::unwrap_in_result
 )]
 
+mod common;
+
+use common::IsolatedHome;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
-
-/// Isolated sandbox: creates a fresh HOME under std::env::temp_dir() and
-/// returns it along with the env vars to set. Drop is the caller's job
-/// (these tests don't need cleanup — the temp_dir is process-id-namespaced
-/// and the OS reaps it eventually).
-struct IsolatedHome {
-    dir: PathBuf,
-}
-
-impl IsolatedHome {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "workestrate-cmd-config-new-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("create isolated HOME");
-        std::fs::create_dir_all(dir.join(".config")).expect("create .config");
-        std::fs::create_dir_all(dir.join(".local").join("share")).expect("create .local/share");
-        Self { dir }
-    }
-
-    /// Build a Command with HOME / XDG / WORKESTRATE_CONFIG_DIR pointed at
-    /// this isolated root.
-    fn cmd(&self) -> Command {
-        let mut c = Command::new(BIN);
-        c.env("HOME", &self.dir);
-        c.env("XDG_CONFIG_HOME", self.dir.join(".config"));
-        c.env("XDG_DATA_HOME", self.dir.join(".local").join("share"));
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
-        c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c
-    }
-}
-
 fn unique_dest(parent: &Path, label: &str) -> PathBuf {
     let p = parent.join(format!(
         "{}-{}",
@@ -67,7 +29,7 @@ fn unique_dest(parent: &Path, label: &str) -> PathBuf {
 /// Invalid names are rejected before any filesystem writes happen.
 #[test]
 fn rejects_invalid_name() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let dest = home.dir.join("bad-name-dest");
     let out = home
         .cmd()
@@ -95,7 +57,7 @@ fn rejects_invalid_name() {
 /// A non-empty destination is refused.
 #[test]
 fn rejects_non_empty_dest() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let dest = unique_dest(&home.dir, "non-empty-dest");
     // Populate with one file to make it non-empty.
     std::fs::write(dest.join("blocker"), "x").expect("seed blocker");
@@ -119,7 +81,7 @@ fn rejects_non_empty_dest() {
 /// `--no-register` skips the registry write.
 #[test]
 fn no_register_skips_registry() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let dest = home.dir.join("no-register-dest");
 
     let out = home
@@ -160,7 +122,7 @@ fn no_register_skips_registry() {
 /// `--no-git-init` skips `git init` (no .git directory in dest).
 #[test]
 fn no_git_init_skips_git() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let dest = home.dir.join("no-git-dest");
 
     let out = home
@@ -192,7 +154,7 @@ fn no_git_init_skips_git() {
 /// to age1PLACEHOLDER + a stderr warning.
 #[test]
 fn placeholder_recipient_when_derivation_fails() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let dest = home.dir.join("placeholder-dest");
 
     let out = home
@@ -226,7 +188,7 @@ fn placeholder_recipient_when_derivation_fails() {
 /// Already-registered name bails BEFORE writing any files (fail-fast).
 #[test]
 fn already_registered_bails_before_writes() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let dest1 = home.dir.join("dest1");
     let dest2 = home.dir.join("dest2");
 
@@ -268,7 +230,7 @@ fn already_registered_bails_before_writes() {
 /// `--json` emits a valid JSON envelope with the expected fields.
 #[test]
 fn json_envelope_is_valid() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let dest = home.dir.join("json-dest");
 
     let out = home
@@ -311,7 +273,7 @@ fn json_envelope_is_valid() {
 /// load_config) sees it as a layer.
 #[test]
 fn config_new_default_path_is_store() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
 
     // Use WORKESTRATE_HOME so the store path is predictable.
     let store = home.dir.join(".workestrate");
@@ -367,7 +329,7 @@ fn config_new_default_path_is_store() {
 /// registration is enabled.
 #[test]
 fn config_new_explicit_path_outside_store_warns() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let store = home.dir.join(".workestrate");
     let dest = home.dir.join("outside-store-dest");
 
@@ -419,7 +381,7 @@ fn config_new_explicit_path_outside_store_warns() {
 #[cfg(unix)]
 #[test]
 fn config_new_symlinked_path_registers_canonical_url_with_note() {
-    let home = IsolatedHome::new();
+    let home = IsolatedHome::new("cmd-config-new");
     let store = home.dir.join(".workestrate");
     let real_parent = unique_dest(&home.dir, "fs25-real");
     let link = home.dir.join("fs25-link");
