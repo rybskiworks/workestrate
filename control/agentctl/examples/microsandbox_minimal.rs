@@ -1,21 +1,89 @@
-use microsandbox::{NetworkPolicy, Sandbox};
+//! Minimal workestrate library example: build, merge, and validate a
+//! layered configuration entirely in-process — no CLI, no sandbox runtime.
+//!
+//! This demonstrates the three-step pipeline that `workestrate plan` runs
+//! internally:
+//!
+//!   1. Parse each layer from a TOML string ([`Layer::from_string`]).
+//!   2. Merge layers in precedence order ([`merge_layers`]) — earlier layers
+//!      are lower precedence; the returned provenance map records which layer
+//!      set each final field value.
+//!   3. Validate the merged config ([`validate_config`]) — checks schema
+//!      version, recipe vocabulary, and network entitlements.
+//!
+//! Run with: `cargo run --example microsandbox_minimal`
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Define a default-deny policy that allows egress TCP/443 to public IPs.
-    let policy = NetworkPolicy::builder()
-        .default_deny()
-        .egress(|e| e.tcp().port(443).allow_public())
-        .build()?;
+use workestrate::config::validate_config;
+use workestrate::merge::{merge_layers, Layer};
 
-    // Configure the sandbox (planning only).
-    let _plan = Sandbox::builder("example-sandbox")
-        .image("alpine:3.20")
-        .cpus(1)
-        .memory(512u32)
-        .network(|n| n.policy(policy))
-        .env("EXAMPLE", "1");
+/// A base layer: declares a single `agent` workload with default-deny
+/// networking and DNS egress.
+const BASE_TOML: &str = r#"
+schema_version = 1
 
-    // Runtime is blocked in this milestone: no .create().await
-    println!("Sandbox plan constructed successfully (compile-check only).");
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.network]
+default_deny = true
+
+[[workloads.pi.network.egress]]
+recipe = "dns"
+"#;
+
+/// A team override layer: bumps `cpus` to 2 and adds a GitHub egress recipe.
+/// Note it does NOT re-declare `kind`, `image`, or `command` — the merge
+/// engine only touches keys each layer explicitly declares.
+const TEAM_TOML: &str = r#"
+schema_version = 1
+
+[workloads.pi]
+cpus = 2
+
+[[workloads.pi.network.egress]]
+recipe = "github"
+"#;
+
+fn main() -> anyhow::Result<()> {
+    // 1. Parse layers.
+    let base = Layer::from_string("base", BASE_TOML)?;
+    let team = Layer::from_string("team", TEAM_TOML)?;
+
+    // 2. Merge (earlier = lower precedence).
+    let (merged, provenance) = merge_layers(&[base, team])?;
+
+    let pi = merged
+        .workloads
+        .get("pi")
+        .ok_or_else(|| anyhow::anyhow!("workload 'pi' must survive the merge"))?;
+
+    println!("workload kind  : {}", pi.kind);
+    println!("cpus           : {:?}", pi.cpus);
+    println!("default_deny   : {:?}", pi.network.default_deny);
+    println!("egress recipes : {}", pi.network.egress.len());
+
+    // The team layer set `cpus`; the base layer set `default_deny`.
+    assert_eq!(
+        provenance.get("workloads.pi.cpus").map(|s| s.as_str()),
+        Some("team"),
+        "cpus provenance should be the team layer"
+    );
+    assert_eq!(
+        provenance
+            .get("workloads.pi.network.default_deny")
+            .map(|s| s.as_str()),
+        Some("base"),
+        "default_deny provenance should be the base layer"
+    );
+
+    // 3. Validate the merged config.
+    validate_config(&merged)?;
+    println!(
+        "\nConfig validated successfully (schema_version = {}).",
+        merged.schema_version
+    );
+
     Ok(())
 }
