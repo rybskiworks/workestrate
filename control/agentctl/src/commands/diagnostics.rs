@@ -464,3 +464,327 @@ pub(crate) async fn cmd_run(command: &[String]) -> Result<()> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    /// `ps --json` must emit the exact shape pinned by ADR 0021 §7, in the
+    /// documented field order: instance, workload, context, slot, kind,
+    /// started_at, ports, [port_offset], stale. `port_offset` is omitted on
+    /// the singleton (None) and present on the parallel instance (Some).
+    /// Pure: no env, no msb — constructs PsEntry rows directly and round-trips
+    /// them through `ps_entries_json` + `serde_json::to_string_pretty`.
+    #[test]
+    fn ps_json_matches_adr_0021_section_7() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        let singleton = PsEntry {
+            instance: "personal-litellm".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping {
+                host: 4000,
+                guest: 4000,
+            }],
+            started_at: "2026-07-20T14:03:11Z".to_string(),
+            port_offset: None,
+            stale: false,
+        };
+        let parallel = PsEntry {
+            instance: "personal-litellm@canary".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Parallel,
+            ports: vec![PortMapping {
+                host: 14000,
+                guest: 4000,
+            }],
+            started_at: "2026-07-20T14:05:42Z".to_string(),
+            port_offset: Some(10000),
+            stale: false,
+        };
+
+        let json = serde_json::to_string_pretty(&ps_entries_json(&[singleton, parallel]))
+            .expect("serialize ps entries");
+
+        // Field order, names, casing (kind lowercase), and the
+        // skip_serializing_if on port_offset are all pinned here. Any drift
+        // from ADR 0021 §7 fails this snapshot.
+        let expected = r#"[
+  {
+    "instance": "personal-litellm",
+    "workload": "litellm",
+    "context": "personal",
+    "slot": "personal-litellm",
+    "kind": "singleton",
+    "started_at": "2026-07-20T14:03:11Z",
+    "ports": [
+      {
+        "host": 4000,
+        "guest": 4000
+      }
+    ],
+    "stale": false
+  },
+  {
+    "instance": "personal-litellm@canary",
+    "workload": "litellm",
+    "context": "personal",
+    "slot": "personal-litellm",
+    "kind": "parallel",
+    "started_at": "2026-07-20T14:05:42Z",
+    "ports": [
+      {
+        "host": 14000,
+        "guest": 4000
+      }
+    ],
+    "port_offset": 10000,
+    "stale": false
+  }
+]"#;
+        assert_eq!(json, expected, "ps --json shape drifted from ADR 0021 §7");
+    }
+
+    /// Stale-footer remediation text (ADR 0021 §4). When any entry is stale,
+    /// `print_ps_text` emits per-instance `down` commands and a catch-all
+    /// `down --all`. Exercises the writer-injectable renderer directly so the
+    /// footer text is pinned verbatim (not via global-stdout capture).
+    #[test]
+    fn print_ps_text_emits_remediation_footer_for_stale_entries() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        // One stale parallel instance + one live singleton. Sorted output
+        // orders litellm (l) before pi (p).
+        let entries = vec![
+            PsEntry {
+                instance: "personal-litellm@canary".to_string(),
+                workload: "litellm".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-litellm".to_string(),
+                kind: PsKind::Parallel,
+                ports: vec![PortMapping {
+                    host: 14000,
+                    guest: 4000,
+                }],
+                started_at: "2026-07-20T14:05:42Z".to_string(),
+                port_offset: Some(10000),
+                stale: true,
+            },
+            PsEntry {
+                instance: "personal-pi".to_string(),
+                workload: "pi".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-pi".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping {
+                    host: 3000,
+                    guest: 3000,
+                }],
+                started_at: "2026-07-20T14:06:00Z".to_string(),
+                port_offset: None,
+                stale: false,
+            },
+        ];
+
+        let mut buf: Vec<u8> = Vec::new();
+        print_ps_text_to(&entries, &mut buf).expect("render ps text");
+        let out = String::from_utf8(buf).expect("utf8");
+
+        // Footer header (verbatim).
+        assert!(
+            out.contains(
+                "1 stale instance(s): registry record exists but the sandbox is not running."
+            ),
+            "stale footer header missing; got:
+{out}"
+        );
+        // Parallel stale entry → `down --instance <id>` (id, not full instance).
+        assert!(
+            out.contains("  workestrate litellm down --instance canary"),
+            "parallel stale remediation line missing; got:
+{out}"
+        );
+        // Catch-all.
+        assert!(
+            out.contains("Remove every instance with: workestrate down --all"),
+            "catch-all remediation line missing; got:
+{out}"
+        );
+        // The live singleton must NOT appear in any teardown line.
+        assert!(
+            !out.contains("workestrate pi down"),
+            "live singleton leaked into the footer; got:
+{out}"
+        );
+        // Column header renamed CREATED → STARTED (ADR §7 started_at).
+        assert!(
+            out.contains("STARTED"),
+            "column header should be STARTED (renamed from CREATED); got:
+{out}"
+        );
+    }
+
+    /// No-stale case: the footer is entirely absent. Pins the negative branch.
+    #[test]
+    fn print_ps_text_omits_footer_when_nothing_stale() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        let entries = vec![PsEntry {
+            instance: "personal-litellm".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping {
+                host: 4000,
+                guest: 4000,
+            }],
+            started_at: "2026-07-20T14:03:11Z".to_string(),
+            port_offset: None,
+            stale: false,
+        }];
+        let mut buf: Vec<u8> = Vec::new();
+        print_ps_text_to(&entries, &mut buf).expect("render ps text");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert!(
+            !out.contains("stale"),
+            "no footer expected when nothing stale; got:
+{out}"
+        );
+    }
+
+    // ---- WP5 / E1 regression: graceful check outside a workbench checkout ----
+
+    #[test]
+    fn project_root_optional_returns_none_outside_workbench() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let old_root = std::env::var("AGENTCTL_ROOT").ok();
+        let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
+        let tmp = std::env::temp_dir().join(format!(
+            "no-flake-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).ok();
+        std::env::set_var("AGENTCTL_ROOT", &tmp);
+        std::env::remove_var("CARGO_MANIFEST_DIR");
+
+        let result = config::project_root_optional();
+
+        match old_root {
+            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
+            None => std::env::remove_var("AGENTCTL_ROOT"),
+        }
+        match old_manifest {
+            Some(v) => std::env::set_var("CARGO_MANIFEST_DIR", v),
+            None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+        }
+
+        // The contract: project_root_optional NEVER returns a path that
+        // lacks flake.nix. It returns Some verified-path or None.
+        match result {
+            None => { /* expected when not in a workbench */ }
+            Some(p) => {
+                assert!(
+                    p.join("flake.nix").exists(),
+                    "project_root_optional returned '{:?}' which lacks flake.nix",
+                    p
+                );
+            }
+        }
+    }
+
+    /// E1 integration: simulate a fresh-install `workestrate check` from /tmp
+    /// with a tmp HOME and no workbench checkout. The check must NOT error
+    /// just because no workbench checkout is reachable; required-files prints
+    /// "(not in a workbench checkout — skipped)".
+    #[test]
+    fn cmd_check_degrades_gracefully_outside_workbench() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+
+        let tmp_home = std::env::temp_dir().join(format!(
+            "workestrate-e1-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp_home)?;
+
+        let old_home = std::env::var("HOME").ok();
+        let old_xdg_config = std::env::var("XDG_CONFIG_HOME").ok();
+        let old_xdg_data = std::env::var("XDG_DATA_HOME").ok();
+        let old_root = std::env::var("AGENTCTL_ROOT").ok();
+        let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
+        let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+
+        std::env::set_var("HOME", &tmp_home);
+        std::env::set_var(
+            "XDG_CONFIG_HOME",
+            tmp_home.join(".config").to_string_lossy().as_ref(),
+        );
+        std::env::set_var(
+            "XDG_DATA_HOME",
+            tmp_home
+                .join(".local")
+                .join("share")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        std::env::set_var("AGENTCTL_ROOT", &tmp_home);
+        std::env::remove_var("CARGO_MANIFEST_DIR");
+        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+
+        // cmd_check is async; run it on a fresh tokio runtime.
+        let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime for E1 test");
+        let result = rt.block_on(async { cmd_check().await });
+
+        for (k, v) in [
+            ("HOME", old_home),
+            ("XDG_CONFIG_HOME", old_xdg_config),
+            ("XDG_DATA_HOME", old_xdg_data),
+            ("AGENTCTL_ROOT", old_root),
+            ("CARGO_MANIFEST_DIR", old_manifest),
+            ("WORKESTRATE_NO_PROJECT_CONFIG", old_no_project),
+            ("WORKESTRATE_CONFIG_DIR", old_config_dir),
+        ] {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp_home);
+
+        // E1 contract: cmd_check must NOT error just because no workbench
+        // checkout is reachable. It may error for OTHER reasons (e.g. a
+        // missing required artifact) but not for project_root being absent.
+        if let Err(e) = &result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("flake.nix") && !msg.contains("project root"),
+                "E1 regression: cmd_check errored on project_root: {msg}"
+            );
+        }
+        Ok(())
+    }
+}

@@ -229,3 +229,42 @@ pub(crate) async fn cmd_source_reset(name: &str) -> Result<()> {
     println!("Reset {} source to canonical", name);
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    // --- FN-27: build-env var name sanitization -----------------------------
+
+    #[test]
+    fn build_env_var_name_sanitizes_hyphens() {
+        assert_eq!(build_env_var_name("my-agent"), "WORKESTRATE_MY_AGENT_BUILD");
+    }
+
+    #[test]
+    fn build_env_var_name_preserves_simple_names() {
+        assert_eq!(build_env_var_name("litellm"), "WORKESTRATE_LITELLM_BUILD");
+    }
+
+    #[test]
+    fn build_env_var_name_handles_multiple_hyphens() {
+        assert_eq!(build_env_var_name("a-b-c"), "WORKESTRATE_A_B_C_BUILD");
+    }
+
+    /// Guards the `cmd_doctor` "Source overrides" site (see line ~3064), which
+    /// previously built the env-var name with an unsanitized
+    /// `format!("WORKESTRATE_{}_BUILD", name.to_uppercase())` that leaked a
+    /// hyphen (e.g. `WORKESTRATE_MY-AGENT_BUILD`) for hyphenated workloads.
+    #[test]
+    fn build_env_var_name_doctor_site_no_hyphen_leak() {
+        let env_var = build_env_var_name("my-agent");
+        assert!(!env_var.contains('-'));
+        assert_eq!(env_var, "WORKESTRATE_MY_AGENT_BUILD");
+    }
+}

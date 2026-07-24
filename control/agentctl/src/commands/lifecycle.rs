@@ -494,3 +494,66 @@ pub(crate) async fn cmd_clean(yes: bool, json: bool) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    // ---- ADR 0021 CLI flag-parsing tests ----
+
+    #[test]
+    fn parse_flag_value_supports_space_form() {
+        let args: Vec<String> = vec!["--instance".into(), "canary".into()];
+        assert_eq!(
+            parse_flag_value(&args, "--instance").as_deref(),
+            Some("canary")
+        );
+    }
+
+    #[test]
+    fn parse_flag_value_supports_equals_form() {
+        let args: Vec<String> = vec!["--instance=blue-green".into()];
+        assert_eq!(
+            parse_flag_value(&args, "--instance").as_deref(),
+            Some("blue-green")
+        );
+    }
+
+    #[test]
+    fn parse_flag_value_returns_none_when_absent() {
+        let args: Vec<String> = vec!["--replace".into()];
+        assert!(parse_flag_value(&args, "--instance").is_none());
+    }
+
+    #[test]
+    fn parse_port_offset_defaults_to_zero() -> Result<()> {
+        let args: Vec<String> = vec!["--replace".into()];
+        assert_eq!(parse_port_offset(&args)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_port_offset_reads_value() -> Result<()> {
+        let args: Vec<String> = vec!["--port-offset".into(), "10000".into()];
+        assert_eq!(parse_port_offset(&args)?, 10000);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_port_offset_rejects_non_numeric() {
+        let args: Vec<String> = vec!["--port-offset".into(), "huge".into()];
+        assert!(parse_port_offset(&args).is_err());
+    }
+
+    #[test]
+    fn parse_port_offset_rejects_overflow() {
+        let args: Vec<String> = vec!["--port-offset".into(), "70000".into()];
+        assert!(parse_port_offset(&args).is_err());
+    }
+}

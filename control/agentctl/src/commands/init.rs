@@ -228,3 +228,256 @@ pub(crate) fn find_reference_workestrate(start: &std::path::Path) -> Result<std:
         start.display()
     );
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmd_new_resolves_active_config_dir() -> Result<()> {
+        // Hold the env-mutation lock for the whole body: this test mutates
+        // HOME / WORKESTRATE_CONFIG_DIR and must not race any other env-mutating
+        // test (would otherwise corrupt env reads and poison ENV_TEST_LOCK).
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        // Create a temp config repo with a minimal workestrate.toml
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-cmd-new-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
+
+        // Point WORKESTRATE_CONFIG_DIR at the temp repo
+        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+
+        // Verify resolve_active_config_dir returns the temp dir
+        let config_dir = config::resolve_active_config_dir()?;
+        assert_eq!(
+            config_dir, tmp,
+            "resolve_active_config_dir should return the WORKESTRATE_CONFIG_DIR path"
+        );
+
+        // Simulate what cmd_new does: create agent config dir + append to workestrate.toml
+        let agent_config = tmp.join("agents").join("test-agent").join("config");
+        std::fs::create_dir_all(&agent_config)?;
+        std::fs::write(agent_config.join(".gitkeep"), "")?;
+
+        let config_path = tmp.join("workestrate.toml");
+        let toml_entry = "\n[workloads.test-agent]\nkind = \"agent\"\n";
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&config_path)?;
+        use std::io::Write;
+        file.write_all(toml_entry.as_bytes())?;
+
+        // Restore env
+        match old {
+            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+        }
+
+        // Verify the agent config dir was created in the config repo
+        assert!(
+            agent_config.exists(),
+            "agent config dir should exist in config repo"
+        );
+
+        // Verify workestrate.toml was appended
+        let toml_content = std::fs::read_to_string(tmp.join("workestrate.toml"))?;
+        assert!(
+            toml_content.contains("[workloads.test-agent]"),
+            "workestrate.toml should contain the new workload entry"
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn cmd_new_no_config_repo_produces_clear_error() {
+        // Hold the env-mutation lock for the whole body (see note above).
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        // Use a temp HOME so no registry exists and no project config is found.
+        let tmp_home = std::env::temp_dir().join(format!(
+            "workestrate-no-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp_home).ok();
+
+        let old_home = std::env::var("HOME").ok();
+        let old_config = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
+
+        std::env::set_var("HOME", &tmp_home);
+        std::env::set_var(
+            "XDG_CONFIG_HOME",
+            tmp_home.join(".config").to_string_lossy().as_ref(),
+        );
+        std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share"));
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+
+        let result = config::resolve_active_config_dir();
+
+        // Restore env
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_config {
+            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+        }
+        match old_no_project {
+            Some(v) => std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", v),
+            None => std::env::remove_var("WORKESTRATE_NO_PROJECT_CONFIG"),
+        }
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("XDG_DATA_HOME");
+
+        let _ = std::fs::remove_dir_all(&tmp_home);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no active config repo") || err.contains("workestrate init"),
+            "error should mention 'no active config repo' or 'workestrate init'; got: {err}"
+        );
+    }
+
+    // ---- A20 regression: cmd_new rejects invalid workload names ----
+
+    #[test]
+    fn validate_workload_name_accepts_legitimate_names() {
+        for ok in [
+            "pi",
+            "opencode",
+            "example-agent",
+            "my-cool-workload",
+            "abc",
+            "a1b",
+            "a",
+            "0",
+            "1agent",
+            &"a".repeat(63),
+        ] {
+            validate_workload_name(ok)
+                .unwrap_or_else(|e| panic!("legitimate name '{ok}' rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_workload_name_rejects_hostile_inputs() {
+        // Each must fail. Categories: path escape, TOML injection,
+        // shell-meta, uppercase, underscore, leading-hyphen, overlong, empty.
+        let hostile = [
+            "../pwned",      // path escape
+            "/etc/pwned",    // absolute path
+            "a]b",           // TOML table close-bracket injection
+            "a.b",           // dot (TOML nested-key separator)
+            "a b",           // whitespace
+            "a$b",           // shell meta
+            "a;b",           // shell meta
+            "Agent",         // uppercase
+            "my_agent",      // underscore (DNS-label style disallows)
+            "-leading",      // leading hyphen
+            "",              // empty
+            &"x".repeat(64), // overlong (64 > 63)
+        ];
+        for h in hostile {
+            let result = validate_workload_name(h);
+            assert!(
+                result.is_err(),
+                "hostile name '{h}' should be rejected, but was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_workload_name_trailing_hyphen_is_allowed_by_design() {
+        // The regex ^[a-z0-9][a-z0-9-]{0,62}$ permits trailing hyphens.
+        // DNS labels disallow them, but workestrate workload names are not
+        // DNS labels — they're filesystem path components and TOML keys.
+        // If a future decision tightens this, update both the regex and this
+        // test together.
+        validate_workload_name("foo-").expect("trailing hyphen is allowed");
+    }
+
+    // ---- config::validate_config_name (used by `workestrate config new`) ----
+
+    #[test]
+    fn validate_config_name_accepts_legitimate_names() {
+        for ok in [
+            "personal",
+            "work",
+            "team",
+            "prod",
+            "a",
+            "0",
+            "p1",
+            "my-config-2",
+        ] {
+            config::validate_config_name(ok)
+                .unwrap_or_else(|e| panic!("legitimate config name '{ok}' rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_config_name_rejects_hostile_inputs() {
+        // Same safe-set as validate_workload_name: config names flow into
+        // both filesystem paths and registry TOML keys, so the
+        // intersection [a-z0-9-] is the only safe charset.
+        let hostile = [
+            "../pwned",
+            "/etc/pwned",
+            "a]b",
+            "a.b",
+            "a b",
+            "Personal", // uppercase
+            "my_config",
+            "-leading",
+            "",
+            &"x".repeat(64),
+        ];
+        for h in hostile {
+            let result = config::validate_config_name(h);
+            assert!(
+                result.is_err(),
+                "hostile config name '{h}' should be rejected, but was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_config_name_error_mentions_config_name() {
+        // Error label is interpolated from the validator, not hardcoded —
+        // this catches a copy-paste regression where the workload-name
+        // message would leak through.
+        let err = config::validate_config_name("BAD").unwrap_err().to_string();
+        assert!(
+            err.contains("config name"),
+            "error should mention 'config name'; got: {err}"
+        );
+        assert!(
+            !err.contains("workload name"),
+            "error should NOT mention 'workload name'; got: {err}"
+        );
+    }
+}

@@ -59,3 +59,39 @@ pub(crate) fn classify_error(err: &anyhow::Error) -> Classified {
 pub(crate) fn classify_exit_code(err: &anyhow::Error) -> i32 {
     classify_error(err).exit_code
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_error_refuse_occupied() {
+        let e =
+            anyhow::anyhow!("instance 'personal-litellm' is already running. Use --replace ...");
+        let c = classify_error(&e);
+        assert_eq!(c.kind, "refuse_occupied");
+        assert_eq!(c.exit_code, 3);
+    }
+
+    #[test]
+    fn classify_error_port_collision() {
+        let e = anyhow::anyhow!("port collision: port 4000 is already in use by ...");
+        let c = classify_error(&e);
+        assert_eq!(c.kind, "port_collision");
+        assert_eq!(c.exit_code, 4);
+    }
+
+    #[test]
+    fn classify_error_generic() {
+        let e = anyhow::anyhow!("something went wrong");
+        let c = classify_error(&e);
+        assert_eq!(c.kind, "error");
+        assert_eq!(c.exit_code, 1);
+    }
+}
