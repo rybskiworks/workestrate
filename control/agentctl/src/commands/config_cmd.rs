@@ -422,7 +422,20 @@ pub(crate) async fn cmd_config_new(
     if !no_register {
         // The already-registered check ran above (fail-fast, before any
         // filesystem writes).
-        let url = dest.canonicalize()?.to_string_lossy().to_string();
+        let canonical = dest.canonicalize()?;
+        let url = canonical.to_string_lossy().to_string();
+        // FS-25: canonicalize() silently rewrites a user-supplied --path
+        // (symlink resolution, `.`/`..` collapse, case) into a DIFFERENT
+        // registered url. Surface that rewrite instead of registering the
+        // silent rewrite — the operator should know the registry records
+        // the canonical form, not their literal input.
+        if canonical != dest {
+            eprintln!(
+                "note: registered url uses the canonicalized path '{}' (resolved from literal '{}')",
+                canonical.display(),
+                dest.display()
+            );
+        }
         // Local-path repos get ref=None, rev=None. cmd_config_update
         // recognizes this and skips the pull step.
         config::register_config(name, &url, None, None)?;
@@ -508,11 +521,14 @@ pub(crate) async fn cmd_config_update(name: Option<&str>) -> Result<()> {
 
     for n in names {
         let dest = config::config_repo_dir(&n);
-        // Local-path repos (created via `config new`) have no pinned rev and
-        // typically no `origin` remote — `git pull` would fail. Skip them
-        // with a forward-looking hint instead.
+        // FS-18: distinguish LOCAL-PATH entries (registered via
+        // `config new` — url is a filesystem path, ref=None/rev=None) from
+        // GIT-URL entries. Only local-path entries skip the pull. A git-URL
+        // entry whose rev is unrecorded (e.g. hand-edited registry, or a
+        // clone whose rev was never written back) is NOT "local" — it falls
+        // through and is pulled, which also re-records its rev.
         let entry_ref = registry.configs.get(&n);
-        let is_local_path = entry_ref.is_some_and(|e| e.rev.is_none());
+        let is_local_path = entry_ref.is_some_and(config::entry_is_local_path);
         if is_local_path {
             println!(
                 "config repo '{}' is a local path (no pinned rev); skipping update.\n\

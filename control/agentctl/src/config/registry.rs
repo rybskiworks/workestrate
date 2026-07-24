@@ -106,6 +106,28 @@ pub(crate) fn with_registry_lock<R>(f: impl FnOnce(&mut Registry) -> Result<R>) 
     Ok(out)
 }
 
+/// Whether a registry entry is a LOCAL-PATH repo (registered via
+/// `config new` — url is a filesystem path, ref=None, rev=None) as opposed
+/// to a GIT-URL repo (registered via `config add <url>`).
+///
+/// FS-18: `cmd_config_update` previously classified `entry.rev.is_none()` as
+/// local, which mis-skipped git-URL entries whose rev was simply unrecorded
+/// (hand-edited registry, or a clone whose rev was never written back).
+/// The explicit classifier: an entry is local-path ONLY when its url is not
+/// a git remote AND no ref/rev was ever recorded. A git-URL entry with a
+/// missing rev is NOT local — it is pulled (which re-records the rev).
+pub fn entry_is_local_path(entry: &ConfigRepoEntry) -> bool {
+    fn looks_like_git_url(url: &str) -> bool {
+        url.starts_with("http://")
+            || url.starts_with("https://")
+            || url.starts_with("git@")
+            || url.starts_with("ssh://")
+            || url.starts_with("git://")
+            || url.ends_with(".git")
+    }
+    !looks_like_git_url(&entry.url) && entry.r#ref.is_none() && entry.rev.is_none()
+}
+
 /// Insert/replace a config repo entry in the registry. If `layers` is empty,
 /// push `name` as the default layer (mirrors cmd_config_add's behavior).
 /// Shared by `cmd_config_add` (clone + register) and `cmd_config_new`
@@ -565,6 +587,64 @@ pub(crate) mod tests {
         );
         Ok(())
     }
+    // ---- FS-18: local-path vs git-URL registry entry classification ----
+
+    fn entry(url: &str, git_ref: Option<&str>, rev: Option<&str>) -> ConfigRepoEntry {
+        ConfigRepoEntry {
+            url: url.to_string(),
+            r#ref: git_ref.map(|s| s.to_string()),
+            rev: rev.map(|s| s.to_string()),
+            secrets: None,
+            secrets_file: None,
+            age_key_file: None,
+        }
+    }
+
+    /// The FS-18 regression: a GIT-URL entry with rev=None is NOT a local
+    /// path — `cmd_config_update` must not skip it (it gets pulled, which
+    /// re-records the rev).
+    #[test]
+    fn git_url_entry_with_missing_rev_is_not_local_path() {
+        for e in [
+            entry("https://example.invalid/repo.git", Some("main"), None),
+            entry("https://example.invalid/repo.git", None, None),
+            entry("git@example.invalid:org/repo.git", Some("main"), None),
+            entry("ssh://git@example.invalid/org/repo", None, None),
+            // Rev recorded but ref missing: still git (rev was once known).
+            entry("https://example.invalid/repo.git", None, Some("abc123")),
+        ] {
+            assert!(
+                !entry_is_local_path(&e),
+                "git-URL entry must NOT be classified local: {:?}",
+                e.url
+            );
+        }
+    }
+
+    /// Genuine local-path entries (what `config new` registers: filesystem
+    /// path url, ref=None, rev=None) ARE classified local and skip the pull.
+    #[test]
+    fn local_path_entry_is_classified_local() {
+        for e in [
+            entry("/home/user/my-config", None, None),
+            entry("relative/path", None, None),
+            entry("~/my-config", None, None),
+        ] {
+            assert!(
+                entry_is_local_path(&e),
+                "local-path entry must be classified local: {:?}",
+                e.url
+            );
+        }
+        // A recorded ref or rev upgrades a path-like url to "tracked" — not
+        // the `config new` shape, so not local.
+        assert!(!entry_is_local_path(&entry(
+            "/home/user/my-config",
+            Some("main"),
+            None
+        )));
+    }
+
     // ---- FN-5: atomic save + advisory lock ----
 
     /// Set WORKESTRATE_HOME to a fresh temp dir (HomeKind::Env → registry at

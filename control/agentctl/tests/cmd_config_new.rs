@@ -412,3 +412,49 @@ fn config_new_explicit_path_outside_store_warns() {
         "repo should NOT be in the store when --path is explicit"
     );
 }
+
+/// FS-25: when `--path` contains a symlink component, canonicalize() resolves
+/// it to a DIFFERENT registered url — the CLI must emit the "canonicalized
+/// path" note on stderr, and the registry records the canonical form.
+#[cfg(unix)]
+#[test]
+fn config_new_symlinked_path_registers_canonical_url_with_note() {
+    let home = IsolatedHome::new();
+    let store = home.dir.join(".workestrate");
+    let real_parent = unique_dest(&home.dir, "fs25-real");
+    let link = home.dir.join("fs25-link");
+    std::os::unix::fs::symlink(&real_parent, &link).expect("create symlink");
+    let dest_via_link = link.join("dest");
+
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args(["config", "new", "personal", "--path"])
+        .arg(&dest_via_link)
+        .args(["--no-git-init", "--age-recipient", "age1TEST"])
+        .output()
+        .expect("invoke config new");
+
+    assert!(
+        out.status.success(),
+        "config new via symlinked --path should succeed; stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("canonicalized path"),
+        "stderr should note the canonicalize() rewrite; got:\n{}",
+        stderr
+    );
+
+    // The registry records the CANONICAL (symlink-resolved) url.
+    let registry_raw = std::fs::read_to_string(store.join("config.toml")).expect("read registry");
+    let canonical = std::fs::canonicalize(real_parent.join("dest")).unwrap();
+    assert!(
+        registry_raw.contains(&canonical.to_string_lossy().to_string()),
+        "registry should record the canonical url {}:\n{}",
+        canonical.display(),
+        registry_raw
+    );
+}

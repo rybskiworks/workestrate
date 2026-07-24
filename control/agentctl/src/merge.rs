@@ -367,6 +367,22 @@ fn merge_workload(
     Ok(())
 }
 
+/// Canonical dedup key for an egress recipe (FS-24). Two recipes are "the
+/// same" when their canonical keys match: for `Https{hosts}` the key is the
+/// SORTED + deduped host list (so `a,b` ≡ `b,a`); every other recipe variant
+/// is its own key verbatim.
+fn canonical_egress_key(recipe: &EgressRecipeRef) -> EgressRecipeRef {
+    match recipe {
+        EgressRecipeRef::Https { hosts } => {
+            let mut hosts = hosts.clone();
+            hosts.sort();
+            hosts.dedup();
+            EgressRecipeRef::Https { hosts }
+        }
+        other => other.clone(),
+    }
+}
+
 fn merge_network(
     merged: &mut crate::config::NetworkConfig,
     layer: &crate::config::NetworkConfig,
@@ -425,14 +441,32 @@ fn merge_network(
                     }
                 }
             }
-            if !merged.egress.contains(recipe) {
-                merged.egress.push(recipe.clone());
-                let idx = merged.egress.len().saturating_sub(1);
-                provenance.insert(
-                    format!("workloads.{name}.network.egress.{idx}"),
-                    layer_ctx.name.clone(),
-                );
-            }
+            // FS-24: dedup against a CANONICAL KEY (sorted+deduped hosts for
+            // Https) so `a,b` and `b,a` collapse — previously order-sensitive
+            // PartialEq let both through. The merged list keeps the FIRST
+            // declaration's recipe verbatim (declared host order is the
+            // rendered plan order, pinned by the golden plans).
+            let key = canonical_egress_key(recipe);
+            let idx = match merged
+                .egress
+                .iter()
+                .position(|r| canonical_egress_key(r) == key)
+            {
+                Some(i) => i,
+                None => {
+                    merged.egress.push(recipe.clone());
+                    merged.egress.len().saturating_sub(1)
+                }
+            };
+            // FS-24: provenance updates on EVERY declaration (mirroring the
+            // FN-3 last-layer-wins pattern), not only on first insert — the
+            // index addresses the slot in the merged list, so a duplicate
+            // declaration re-attributes that slot's provenance to the
+            // later-declaring layer.
+            provenance.insert(
+                format!("workloads.{name}.network.egress.{idx}"),
+                layer_ctx.name.clone(),
+            );
         }
     }
 
@@ -575,6 +609,71 @@ mod tests {
         let (merged, _) = merge_layers(&[base, team])?;
         let pi = merged.workloads.get("pi").unwrap();
         assert_eq!(pi.command, vec!["cat"]);
+        Ok(())
+    }
+
+    // ---- FS-24: Https{hosts} egress dedup is order-insensitive; provenance updates on every declaration ----
+
+    fn https_layer(name: &str, hosts: &str) -> Result<Layer> {
+        let toml = format!(
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true\n\n[[workloads.pi.network.egress]]\nrecipe = \"https\"\nhosts = {hosts}\n"
+        );
+        Layer::from_string(name, &toml)
+    }
+
+    /// FS-24: `a,b` and `b,a` are the SAME Https recipe — the merged list
+    /// must contain exactly one canonicalized (sorted) entry.
+    #[test]
+    fn https_egress_dedup_is_order_insensitive() -> Result<()> {
+        let base = https_layer("base", r#"["openrouter.ai", "github.com"]"#)?;
+        let later = https_layer("later", r#"["github.com", "openrouter.ai"]"#)?;
+
+        let (merged, _provenance) = merge_layers(&[base, later])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        let https_recipes: Vec<_> = pi
+            .network
+            .egress
+            .iter()
+            .filter(|r| matches!(r, EgressRecipeRef::Https { .. }))
+            .collect();
+        assert_eq!(
+            https_recipes.len(),
+            1,
+            "order-permuted Https hosts must dedup to one entry: {:?}",
+            pi.network.egress
+        );
+        match https_recipes[0] {
+            EgressRecipeRef::Https { hosts } => {
+                assert_eq!(
+                    hosts,
+                    &vec!["openrouter.ai".to_string(), "github.com".to_string()],
+                    "the merged entry keeps the FIRST declaration's host order \
+                     (dedup canonicalizes only the comparison key, not the output)"
+                );
+            }
+            other => {
+                return Err(anyhow::anyhow!("expected Https recipe, got {other:?}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// FS-24: provenance moves to the LATER declaring layer even when the
+    /// recipe is a duplicate (mirrors FN-3 last-layer-wins), rather than
+    /// sticking with the first declarer inside the dedup guard.
+    #[test]
+    fn https_egress_provenance_updates_on_duplicate_declaration() -> Result<()> {
+        let base = https_layer("base", r#"["openrouter.ai", "github.com"]"#)?;
+        let later = https_layer("later", r#"["github.com", "openrouter.ai"]"#)?;
+
+        let (_merged, provenance) = merge_layers(&[base, later])?;
+        assert_eq!(
+            provenance
+                .get("workloads.pi.network.egress.0")
+                .map(|s| s.as_str()),
+            Some("later"),
+            "duplicate declaration must re-attribute provenance to the later layer"
+        );
         Ok(())
     }
 

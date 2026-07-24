@@ -8,6 +8,11 @@ use anyhow::Result;
 use crate::config;
 
 /// Recursive byte size of a directory tree (files only); 0 on error.
+///
+/// FS-25: read_dir failures mid-recursion no longer silently truncate the
+/// total — a one-time stderr note names the unreadable directory (the size
+/// still returns the readable partial total; this is a best-effort
+/// informational report, not an error path).
 pub(crate) fn entry_bytes(path: &Path) -> u64 {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -18,14 +23,34 @@ pub(crate) fn entry_bytes(path: &Path) -> u64 {
     }
     if meta.is_dir() {
         let mut total: u64 = 0;
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                total += entry_bytes(&entry.path());
+        match std::fs::read_dir(path) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    total += entry_bytes(&entry.path());
+                }
+            }
+            Err(e) => {
+                emit_entry_bytes_warn(path, &e);
             }
         }
         return total;
     }
     meta.len()
+}
+
+/// One-time stderr note for a directory that could not be read mid-recursion
+/// (FS-25). migrate-home sizing is informational; the note keeps a
+/// permission-denied subdir from silently shrinking the reported total.
+static ENTRY_BYTES_WARN: std::sync::Once = std::sync::Once::new();
+
+fn emit_entry_bytes_warn(path: &Path, e: &std::io::Error) {
+    ENTRY_BYTES_WARN.call_once(|| {
+        eprintln!(
+            "note: could not fully read {} while sizing ({}); reported byte total is a partial sum",
+            path.display(),
+            e
+        );
+    });
 }
 
 pub(crate) fn render_migrate_summary_human(summary: &config::MigrateSummary) {
@@ -113,4 +138,93 @@ pub(crate) fn cmd_migrate_home(
         render_migrate_summary_human(&summary);
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    // ---- FS-25: entry_bytes counts readable files and survives recursion ----
+
+    /// A small tree of known sizes sums exactly; this pins the counting
+    /// contract that the FS-25 read_dir error note must not perturb on the
+    /// happy path.
+    #[test]
+    fn entry_bytes_sums_files_recursively() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "workestrate-fs25-bytes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(root.join("sub").join("deep"))?;
+        std::fs::write(root.join("a.bin"), vec![0u8; 100])?;
+        std::fs::write(root.join("sub").join("b.bin"), vec![0u8; 250])?;
+        std::fs::write(root.join("sub").join("deep").join("c.bin"), vec![0u8; 50])?;
+
+        assert_eq!(entry_bytes(&root), 400, "files only, summed recursively");
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// An unreadable path contributes 0 (pre-existing contract, unchanged);
+    /// a mid-recursion read_dir failure yields the PARTIAL readable sum (the
+    /// one-time stderr note fires but is not captured here).
+    #[test]
+    fn entry_bytes_missing_path_is_zero() -> Result<()> {
+        let missing = std::env::temp_dir().join(format!(
+            "workestrate-fs25-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        assert_eq!(entry_bytes(&missing), 0);
+        Ok(())
+    }
+
+    /// Mid-recursion failure: a permission-denied subdirectory contributes 0
+    /// while its readable sibling still counts — the total is partial but
+    /// the function does not panic or swallow the whole tree.
+    #[cfg(unix)]
+    #[test]
+    fn entry_bytes_unreadable_subdir_yields_partial_sum() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "workestrate-fs25-denied-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let open_dir = root.join("open");
+        let denied = root.join("denied");
+        std::fs::create_dir_all(&open_dir)?;
+        std::fs::create_dir_all(&denied)?;
+        std::fs::write(open_dir.join("a.bin"), vec![0u8; 128])?;
+        std::fs::write(denied.join("secret.bin"), vec![0u8; 999])?;
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o000))?;
+
+        let total = entry_bytes(&root);
+        assert_eq!(
+            total, 128,
+            "unreadable subdir contributes 0; readable sibling still counts"
+        );
+
+        // Restore permissions so cleanup can remove the tree.
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o755))?;
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
 }
