@@ -49,12 +49,19 @@ pub(crate) fn git_rev_parse(repo: &std::path::Path) -> Result<String> {
 }
 
 pub(crate) fn git_is_dirty(repo: &std::path::Path) -> Result<bool> {
-    let status = std::process::Command::new("git")
+    // `git status --porcelain` reports tracked modifications AND untracked
+    // files; `git diff --quiet HEAD` misses untracked files entirely (a repo
+    // whose only change is a new, never-added file would read as clean).
+    // Empty output = clean; any output = dirty.
+    let output = std::process::Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["diff", "--quiet", "HEAD"])
-        .status()?;
-    Ok(!status.success())
+        .args(["status", "--porcelain"])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!("git status failed for {}", repo.display());
+    }
+    Ok(!output.stdout.is_empty())
 }
 
 pub(crate) fn git_pull(repo: &std::path::Path, branch: &str) -> Result<()> {
@@ -122,4 +129,62 @@ pub(crate) fn collect_repo_statuses(registry: &crate::config::Registry) -> Vec<R
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    use super::*;
+    use crate::config::test_support::uniq_dir;
+
+    /// Init a git repo in `dir` with one committed file, using local
+    /// (repo-scoped) identity so the test is independent of global git config.
+    fn init_repo_with_commit(dir: &std::path::Path) {
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .status()
+                .expect("git must be runnable");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        std::fs::create_dir_all(dir).expect("create repo dir");
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "wp6@test.invalid"]);
+        run(&["config", "user.name", "wp6-test"]);
+        std::fs::write(dir.join("tracked.txt"), "committed").expect("write tracked file");
+        run(&["add", "tracked.txt"]);
+        run(&["commit", "--quiet", "-m", "init"]);
+    }
+
+    #[test]
+    fn git_is_dirty_reports_untracked_only_repo_as_dirty() {
+        // FN-1 regression: a repo whose ONLY change is an untracked file must
+        // read as dirty (the old `git diff --quiet HEAD` probe missed it).
+        let dir = uniq_dir("git-dirty-untracked");
+        init_repo_with_commit(&dir);
+        assert!(
+            !git_is_dirty(&dir).expect("dirty check on clean repo"),
+            "fresh commit with no changes must be clean"
+        );
+        std::fs::write(dir.join("new-untracked.txt"), "never added").expect("write untracked file");
+        assert!(
+            git_is_dirty(&dir).expect("dirty check with untracked file"),
+            "repo with only an untracked file must be dirty"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_is_dirty_reports_tracked_modification_as_dirty() {
+        let dir = uniq_dir("git-dirty-modified");
+        init_repo_with_commit(&dir);
+        std::fs::write(dir.join("tracked.txt"), "modified").expect("modify tracked file");
+        assert!(
+            git_is_dirty(&dir).expect("dirty check with modified file"),
+            "repo with a tracked modification must be dirty"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
