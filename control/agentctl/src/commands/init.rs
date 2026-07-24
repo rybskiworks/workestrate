@@ -1,9 +1,6 @@
 //! Bootstrap commands: `workestrate init` (registry seed) and
 //! `workestrate new` (workload scaffold), plus the reference-fixture walker
 //! shared with `config new --from-reference`.
-//!
-//! NOTE (WP4-B): verbatim copies of the private items still live in
-//! `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 use std::io::Write;
 

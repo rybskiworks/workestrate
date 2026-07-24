@@ -1,8 +1,5 @@
 //! Source-override commands (`workestrate source clone|build|list|reset`)
 //! and the build-env-var helpers.
-//!
-//! NOTE (WP4-B): verbatim copies of the private items still live in
-//! `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 use std::path::PathBuf;
 

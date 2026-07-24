@@ -2,9 +2,6 @@
 //!
 //! Serialisable view structs for the `--json` output of `workestrate ps` and
 //! `workestrate down`, plus the conversion functions from runtime types.
-//!
-//! NOTE (WP4-A): these are verbatim copies of the private items still live
-//! in `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 #[derive(serde::Serialize)]
 pub(crate) struct DownResultJson {

@@ -1,8 +1,5 @@
 //! `workestrate doctor` — environment/tool health checks and the
 //! `DoctorCheck` result struct.
-//!
-//! NOTE (WP4-B): verbatim copies of the private items still live in
-//! `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 use std::path::{Path, PathBuf};
 

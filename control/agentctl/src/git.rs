@@ -3,9 +3,6 @@
 //! Thin wrappers around `git` CLI invocations used by config-repo management
 //! (`workestrate config add/update/new/remove`, `check`). Each helper runs a
 //! single `git` command and maps a non-zero exit status to an `anyhow` error.
-//!
-//! NOTE (WP4-A): these are verbatim copies of the private helpers still live
-//! in `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 use anyhow::Result;
 

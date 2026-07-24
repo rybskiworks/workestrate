@@ -1,8 +1,5 @@
 //! Secrets-target resolution (`workestrate secrets-target`, `secrets-schema`)
 //! and the age-recipient / tilde helpers shared with `config new`.
-//!
-//! NOTE (WP4-B): verbatim copies of the private items still live in
-//! `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 use std::path::PathBuf;
 

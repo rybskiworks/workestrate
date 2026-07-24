@@ -3,9 +3,6 @@
 //! Maps an `anyhow::Error` to a classified kind + exit code and emits either
 //! a human-readable stderr line or a machine-readable JSON error envelope
 //! (under `--json`). Message-substring matching is the current heuristic.
-//!
-//! NOTE (WP4-A): these are verbatim copies of the private items still live
-//! in `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 pub(crate) fn emit_error(e: &anyhow::Error, json_mode: bool) {
     let classified = classify_error(e);

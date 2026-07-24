@@ -1,8 +1,5 @@
 //! Workload lifecycle: instance-spec construction, service/agent dispatch,
 //! raw-args action parsing, and teardown (`down`, `down --all`, `clean`).
-//!
-//! NOTE (WP4-B): verbatim copies of the private items still live in
-//! `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 use anyhow::Result;
 use std::io::Write;

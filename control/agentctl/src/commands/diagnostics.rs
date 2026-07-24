@@ -1,9 +1,6 @@
 //! Inspection and diagnostics commands: `plan`, `ps`, `check`,
 //! `validate-config`, `generate-schema`, `generate-env-example`, and the
 //! generic `run` exec entry.
-//!
-//! NOTE (WP4-B): verbatim copies of the private items still live in
-//! `main.rs`. Commit C cuts `main.rs` over to these and deletes its own.
 
 use std::path::PathBuf;
 
