@@ -434,7 +434,12 @@ pub(crate) async fn cmd_run(command: &[String]) -> Result<()> {
     }
 
     // Load secrets from .env.enc (generic — all keys, no filtering).
-    crate::microsandbox::secrets_loader::load_secrets()?;
+    let secrets = crate::microsandbox::secrets_loader::load_secrets()?;
+    // FN-9 scoped set_var: this command `exec(2)` REPLACES the workestrate
+    // process with the user command below, so the secrets can only reach it
+    // via inherited process env. This is the one consumer that fundamentally
+    // requires process env; everywhere else resolves from the returned map.
+    crate::microsandbox::secrets_loader::apply_secrets_to_process_env(&secrets);
 
     // exec the command (replaces the workestrate process).
     #[cfg(unix)]

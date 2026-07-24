@@ -1,4 +1,4 @@
-use super::super::env::resolve_templated_value;
+use super::super::env::{resolve_templated_value, resolve_templated_value_with};
 use super::super::mounts::{apply_plan_mounts, ensure_mount_sources};
 use super::super::plan::{PortMapping, SandboxPlan};
 use super::super::workload::{EntrypointSpec, SandboxCommand, Workload};
@@ -24,10 +24,15 @@ fn reject_if_placeholder(value: &str, placeholder: &Option<String>, label: &str)
 pub(crate) fn apply_plan_secrets(
     builder: SandboxBuilder,
     plan: &SandboxPlan,
+    secrets: &std::collections::HashMap<String, String>,
 ) -> Result<SandboxBuilder> {
     let mut b = builder;
     for s in &plan.secret_env {
-        match resolve_templated_value(&s.value) {
+        // FN-9: resolve ${VAR} templates against the merged secrets map
+        // returned by load_secrets FIRST; fall back to process env only for
+        // variables the map does not carry (ad-hoc user exports, runtime
+        // vars). No secret value is read back out of process-global env.
+        match resolve_templated_value_with(&s.value, secrets) {
             Ok(value) => {
                 reject_if_placeholder(&value, &s.reject_placeholder, &s.name)?;
                 if s.required && value.trim().is_empty() {
@@ -237,9 +242,12 @@ pub(crate) async fn build_sandbox<W: Workload>(
 ) -> Result<(Sandbox, ForegroundConfig)> {
     workload.prepare()?;
 
-    // Load secrets from .env.enc if not already in env.
-    // Only called for exec/up paths — plan/check never reach here.
-    crate::microsandbox::secrets_loader::load_secrets()?;
+    // Load secrets from .env.enc across the resolved layers. FN-9: the
+    // merged map is threaded into env/secret resolution below — it is NOT
+    // written into process-global env (parallel build_sandbox calls would
+    // race on shared keys). Only called for exec/up paths — plan/check
+    // never reach here.
+    let secrets = crate::microsandbox::secrets_loader::load_secrets()?;
 
     let root = crate::config::project_root()?;
     let mut plan = workload.plan();
@@ -289,7 +297,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
 
     builder = apply_plan_envs(builder, &plan)?;
     builder = apply_plan_mounts(builder, &root, &plan)?;
-    builder = apply_plan_secrets(builder, &plan)?;
+    builder = apply_plan_secrets(builder, &plan, &secrets)?;
 
     let builder = if spec.replace {
         builder.replace()
