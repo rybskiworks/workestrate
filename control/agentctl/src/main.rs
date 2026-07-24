@@ -3,7 +3,13 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[allow(dead_code)]
+mod cli_error;
 mod config;
+#[allow(dead_code)]
+mod git;
+#[allow(dead_code)]
+mod json_out;
 mod merge;
 mod microsandbox;
 mod policy;
