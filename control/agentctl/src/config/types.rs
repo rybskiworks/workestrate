@@ -161,6 +161,7 @@ pub struct ConfigFile {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RegistrySettings {
     pub default_context: Option<String>,
     pub store_dir: Option<String>,
@@ -174,6 +175,7 @@ pub struct RegistrySettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigRepoEntry {
     pub url: String,
     pub r#ref: Option<String>,
@@ -197,17 +199,20 @@ pub struct SecretsLayer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TrustedProject {
     pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Context {
     #[serde(default)]
     pub layers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Registry {
     #[serde(default)]
     pub settings: RegistrySettings,
@@ -245,3 +250,113 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
     "local_build",
     "network",
 ];
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    // ---- FS-4: registry structs reject unknown fields (fail loudly on typos) ----
+
+    /// A typo'd top-level registry key must hard-error at parse time, not be
+    /// silently ignored (the same policy the workload config structs already
+    /// enforce).
+    #[test]
+    fn registry_rejects_unknown_top_level_field() {
+        let raw = "layers = []\nunknown_top = 1\n";
+        let err = toml::from_str::<Registry>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "expected unknown-field error, got: {err}"
+        );
+    }
+
+    /// Nested unknown fields must fail at every registry sub-struct.
+    #[test]
+    fn registry_rejects_unknown_nested_fields() {
+        // [settings] typo.
+        let err =
+            toml::from_str::<Registry>("[settings]\ndefault_contex = \"personal\"\n").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "settings typo must fail: {err}"
+        );
+
+        // [configs.<name>] typo.
+        let err = toml::from_str::<Registry>("[configs.personal]\nurl = \"x\"\nrevv = \"abc\"\n")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "configs typo must fail: {err}"
+        );
+
+        // [contexts.<name>] typo.
+        let err = toml::from_str::<Registry>("[contexts.personal]\nlayerz = []\n").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "contexts typo must fail: {err}"
+        );
+
+        // [[trusted_projects]] typo.
+        let err =
+            toml::from_str::<Registry>("[[trusted_projects]]\npathz = \"/tmp/x\"\n").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "trusted_projects typo must fail: {err}"
+        );
+    }
+
+    /// `ConfigRepoEntry` uses a raw identifier (`r#ref`) for the TOML key
+    /// `ref`; verify serde sees the plain name "ref" (not "r#ref") BOTH ways:
+    /// the real key still parses, and a misspelling of it is rejected.
+    #[test]
+    fn config_repo_entry_raw_identifier_ref_round_trips() {
+        let entry: ConfigRepoEntry =
+            toml::from_str("url = \"https://example.invalid/x.git\"\nref = \"main\"\n").unwrap();
+        assert_eq!(entry.r#ref.as_deref(), Some("main"));
+
+        let err = toml::from_str::<ConfigRepoEntry>("url = \"x\"\nreff = \"main\"\n").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "misspelled raw-identifier key must fail: {err}"
+        );
+    }
+
+    /// A fully-populated, valid registry still parses (the new deny rule must
+    /// not reject any known field).
+    #[test]
+    fn registry_accepts_all_known_fields() {
+        let raw = r#"
+layers = ["personal"]
+
+[settings]
+default_context = "personal"
+store_dir = "/tmp/store"
+state_dir = "/tmp/state"
+home_version = 2
+
+[configs.personal]
+url = "https://example.invalid/personal.git"
+ref = "main"
+rev = "abc123"
+secrets = "file"
+secrets_file = ".env.enc"
+age_key_file = "~/.config/sops/age/keys.txt"
+
+[contexts.personal]
+layers = ["personal"]
+
+[[trusted_projects]]
+path = "/tmp/project"
+"#;
+        let registry: Registry = toml::from_str(raw).unwrap();
+        assert_eq!(registry.settings.home_version, Some(2));
+        assert_eq!(registry.configs["personal"].r#ref.as_deref(), Some("main"));
+        assert_eq!(registry.trusted_projects.len(), 1);
+    }
+}

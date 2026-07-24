@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::commands::init::find_reference_workestrate;
-use crate::commands::secrets_target::{derive_age_recipient, expand_tilde};
+use crate::commands::secrets_target::derive_age_recipient;
 use crate::config;
 use crate::git::{git_clone, git_init, git_is_dirty, git_pull, git_rev_parse, short_rev};
 use crate::scaffold;
@@ -311,9 +311,9 @@ pub(crate) async fn cmd_config_new(
     let (recipient, recipient_source) = match age_recipient {
         Some(r) => (r.to_string(), "flag"),
         None => {
-            let key_file = age_key_file.map(expand_tilde).unwrap_or_else(|| {
-                expand_tilde(std::path::Path::new(scaffold::AGE_KEY_DEFAULT_PATH))
-            });
+            let key_file = age_key_file
+                .map(|p| config::expand_tilde(&p.to_string_lossy()))
+                .unwrap_or_else(|| config::expand_tilde(scaffold::AGE_KEY_DEFAULT_PATH));
             match derive_age_recipient(&key_file) {
                 Ok(r) => (r, "derived"),
                 Err(e) => {

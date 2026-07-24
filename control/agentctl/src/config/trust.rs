@@ -14,12 +14,21 @@ pub(crate) fn is_dir_trusted_via_base_registry(dir: &Path) -> bool {
     if !path.exists() {
         return false;
     }
+    // FS-21: a base registry that EXISTS but fails to read/parse must not
+    // silently disable trust and discovery. Trust still fails closed
+    // (`false`), but the operator gets a one-time loud stderr warning —
+    // mirroring `load_registry_for_dir_resolution`'s corrupt-registry note.
+    // One-time: this check runs once per ancestor per home resolution, so an
+    // unguarded warning would print many times per command.
     let reg = match std::fs::read_to_string(&path)
         .ok()
         .and_then(|c| toml::from_str::<Registry>(&c).ok())
     {
         Some(reg) => reg,
-        None => return false,
+        None => {
+            emit_trust_registry_parse_warn(&path);
+            return false;
+        }
     };
     let canonical_dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     reg.trusted_projects.iter().any(|p| {
@@ -29,6 +38,20 @@ pub(crate) fn is_dir_trusted_via_base_registry(dir: &Path) -> bool {
             .unwrap_or_else(|_| expanded.clone());
         canonical_p == canonical_dir || expanded == dir || Path::new(&p.path) == dir
     })
+}
+
+/// One-time stderr warning when the trust-check registry exists but fails to
+/// parse (FS-21). `is_dir_trusted_via_base_registry` runs per ancestor per
+/// home resolution; without this guard the warning would repeat per call.
+static TRUST_REGISTRY_PARSE_WARN: std::sync::Once = std::sync::Once::new();
+
+fn emit_trust_registry_parse_warn(path: &Path) {
+    TRUST_REGISTRY_PARSE_WARN.call_once(|| {
+        eprintln!(
+            "WARNING: trust-check registry {} exists but failed to parse; treating all              projects as untrusted (trust fails closed). Fix or remove the registry file.",
+            path.display()
+        );
+    });
 }
 
 /// Whether `dir` is in the registry's `[trusted_projects]` list.
@@ -257,6 +280,53 @@ pub(crate) mod tests {
                 None => std::env::remove_var(k),
             }
         }
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    // ---- FS-21: corrupt trust-check registry warns and fails closed ----
+
+    /// FS-21: when the base registry EXISTS but is corrupt, the trust check
+    /// must fail closed (dir reported untrusted — the pre-existing behavior)
+    /// AND surface a one-time stderr warning (the new part; the warning
+    /// emission itself is exercised by this call but not captured — stderr
+    /// capture is not available without interprocess plumbing).
+    #[test]
+    fn corrupt_base_registry_fails_closed_and_warns() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = std::env::temp_dir().join(format!(
+            "workestrate-fs21-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let home = root.join("home");
+        let project = root.join("project");
+        std::fs::create_dir_all(home.join(".workestrate"))?;
+        std::fs::create_dir_all(&project)?;
+
+        // Corrupt base registry at the Default home location.
+        std::fs::write(
+            home.join(".workestrate").join("config.toml"),
+            "this is = not = valid toml [[[",
+        )?;
+
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::remove_var("XDG_STATE_HOME");
+        std::env::remove_var("WORKESTRATE_HOME");
+
+        // Fails closed: untrusted. (The one-time stderr warning fires here.)
+        assert!(
+            !is_dir_trusted_via_base_registry(&project),
+            "corrupt trust registry must fail closed (untrusted)"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())

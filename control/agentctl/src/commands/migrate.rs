@@ -1,21 +1,11 @@
 //! `workestrate migrate-home` (ADR 0023) plus its summary renderer and
 //! sizing helpers.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 
 use crate::config;
-
-/// Expand a leading `~/` (mirrors `config::expand_tilde`, which is private).
-pub(crate) fn expand_user_home(s: &str) -> PathBuf {
-    if let Some(rest) = s.strip_prefix("~/") {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join(rest)
-    } else {
-        PathBuf::from(s)
-    }
-}
 
 /// Recursive byte size of a directory tree (files only); 0 on error.
 pub(crate) fn entry_bytes(path: &Path) -> u64 {
@@ -100,7 +90,7 @@ pub(crate) fn cmd_migrate_home(
         .ok()
         .filter(|v| !v.is_empty());
     let dest = if let Some(home) = wh {
-        expand_user_home(&home)
+        config::expand_tilde(&home)
     } else if from == Some("bundle") {
         let cwd = std::env::current_dir()?;
         let candidate = cwd.join(".workestrate");

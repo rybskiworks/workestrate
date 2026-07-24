@@ -8,18 +8,6 @@ use anyhow::Result;
 use crate::config;
 use crate::scaffold;
 
-/// Resolve `~` in a path string via `$HOME` (no `dirs` crate dep). Falls
-/// back to the literal path if `~/` prefix is absent or `$HOME` is unset.
-pub(crate) fn expand_tilde(p: &std::path::Path) -> std::path::PathBuf {
-    let s = p.to_string_lossy();
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home).join(rest);
-        }
-    }
-    p.to_path_buf()
-}
-
 /// Derive the age public recipient from a private key file via
 /// `age-keygen -y <keyfile>`. Returns `Ok(recipient)` on success.
 /// Returns `Err(message)` when either the `age-keygen` binary is missing
@@ -65,7 +53,7 @@ pub(crate) async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
         .unwrap_or(".env.enc")
         .to_string();
     let age_key_file = if let Some(custom) = entry.age_key_file.as_deref() {
-        expand_tilde(std::path::Path::new(custom))
+        config::expand_tilde(custom)
     } else if let Ok(env_key) = std::env::var("SOPS_AGE_KEY_FILE") {
         PathBuf::from(env_key)
     } else {

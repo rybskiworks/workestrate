@@ -273,13 +273,46 @@ pub fn resolve_store_dir() -> PathBuf {
     }
 }
 
+/// The ONE tilde-expansion helper (FS-16; previously three divergent copies:
+/// here, `commands::secrets_target::expand_tilde`, and
+/// `commands::migrate::expand_user_home`).
+///
+/// Behavior:
+/// - `~/rest` with `HOME` set      → `$HOME/rest`.
+/// - `~/rest` with `HOME` UNSET    → the path is returned UNEXPANDED and a
+///   one-time stderr warning is emitted. Substituting "." (the old paths.rs /
+///   migrate.rs behavior) silently redirected `$HOME`-anchored paths into the
+///   caller's cwd — a state-directory corruption risk in minimal containers.
+/// - anything else (including a bare `~` with no trailing slash) → unchanged.
+///
+/// Call-site note: `secrets_target::expand_tilde` took `&Path`; the migration
+/// losslessly stringifies via `to_string_lossy` at the two affected call
+/// sites (paths are operator-supplied config values, always valid UTF-8 in
+/// practice). The `HOME`-unset behavior is the ONLY intentional change, and
+/// it changes for every former call site.
 pub(crate) fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join(rest)
+        match std::env::var("HOME") {
+            Ok(home) if !home.is_empty() => PathBuf::from(home).join(rest),
+            _ => {
+                emit_tilde_home_unset_warn();
+                PathBuf::from(path)
+            }
+        }
     } else {
         PathBuf::from(path)
     }
+}
+
+/// One-time stderr warning for the `HOME`-unset edge of [`expand_tilde`].
+/// expand_tilde is called from many resolution paths per command; without the
+/// guard the note would repeat on every expansion.
+static TILDE_HOME_UNSET_WARN: std::sync::Once = std::sync::Once::new();
+
+fn emit_tilde_home_unset_warn() {
+    TILDE_HOME_UNSET_WARN.call_once(|| {
+        eprintln!("warning: HOME is unset; leaving '~/…' paths unexpanded (not substituting '.')");
+    });
 }
 
 pub(crate) fn reference_config_path() -> Option<PathBuf> {
@@ -616,6 +649,61 @@ pub(crate) mod tests {
         assert_eq!(resolve_state_dir(), custom_state);
 
         let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    // ---- FS-16: one canonical expand_tilde ----
+
+    /// `~/rest` expands against `$HOME` (the common path, unchanged).
+    #[test]
+    fn expand_tilde_expands_against_home() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let home = uniq_dir("tilde-home");
+        std::fs::create_dir_all(&home)?;
+        std::env::set_var("HOME", &home);
+
+        assert_eq!(expand_tilde("~/foo/bar"), home.join("foo").join("bar"));
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Non-tilde inputs pass through verbatim (relative, absolute, and a
+    /// bare `~` with no trailing slash — none of the three legacy impls
+    /// expanded a bare `~`, and the consolidated helper keeps that).
+    #[test]
+    fn expand_tilde_passes_through_non_tilde_prefixes() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        std::env::set_var("HOME", "/definitely/not/used");
+        assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
+        assert_eq!(expand_tilde("rel/path"), PathBuf::from("rel/path"));
+        assert_eq!(expand_tilde("~"), PathBuf::from("~"));
+        assert_eq!(expand_tilde("~other/x"), PathBuf::from("~other/x"));
+        Ok(())
+    }
+
+    /// FS-16 behavior change: with HOME unset, the path is returned
+    /// UNEXPANDED (never "."-substituted). The old paths.rs / migrate.rs
+    /// impls substituted "." — silently redirecting `$HOME`-anchored state
+    /// into the cwd; secrets_target's impl returned the literal path. The
+    /// consolidated helper follows the secrets_target behavior for every
+    /// caller.
+    #[test]
+    fn expand_tilde_home_unset_returns_unexpanded() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        std::env::remove_var("HOME");
+        let expanded = expand_tilde("~/some/state");
+        assert_eq!(
+            expanded,
+            PathBuf::from("~/some/state"),
+            "HOME-unset must return the path unexpanded, never '.'"
+        );
         Ok(())
     }
 
