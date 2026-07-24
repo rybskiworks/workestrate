@@ -138,43 +138,64 @@ pub(crate) enum ProbeOutcome {
     Alive,
     /// `Sandbox::get` SandboxNotFound — registry record exists, sandbox gone.
     NotFound,
-    /// `Sandbox::get` other Err — msb DB unreachable (e.g. ENOTDIR on db dir).
+    /// `Sandbox::get` Io / Http / Database — the msb DB (or the SDK's view of
+    /// it) could not be reached (e.g. ENOTDIR on the db dir). Stale is left
+    /// unchanged; the caller emits ONE honest "could not verify" note.
     Unreachable,
+    /// `Sandbox::get` any OTHER error variant — not a reachability failure.
+    /// FS-7: previously lumped into Unreachable, which mislabeled arbitrary
+    /// SDK errors as "db unreachable". Stale is left unchanged; the caller
+    /// emits a DISTINCT stderr note naming the instance and error.
+    Unknown,
 }
 
 /// Apply a parallel slice of liveness outcomes to `ps` entries in place
-/// (ADR 0021 §4): NotFound → `stale = true`; Alive / Unreachable → `stale = false`.
-/// Returns the count of Unreachable outcomes so the caller emits ONE honest
-/// stderr note. Pure: no msb, no I/O — the async SDK calls happen in
-/// [`probe_liveness`], which delegates here.
-fn apply_liveness_outcomes(entries: &mut [PsEntry], outcomes: &[ProbeOutcome]) -> usize {
+/// (ADR 0021 §4): NotFound → `stale = true`; every other outcome leaves
+/// `stale` unchanged (honest — only a positive NotFound marks stale).
+/// Returns `(unreachable, unknown)` counts so the caller emits ONE honest
+/// stderr note per failure class (FS-7: reachability failures and
+/// unexpected errors are DISTINCT notes). Pure: no msb, no I/O — the async
+/// SDK calls happen in [`probe_liveness`], which delegates here.
+fn apply_liveness_outcomes(entries: &mut [PsEntry], outcomes: &[ProbeOutcome]) -> (usize, usize) {
     let mut unreachable = 0usize;
+    let mut unknown = 0usize;
     for (e, o) in entries.iter_mut().zip(outcomes) {
-        e.stale = matches!(o, ProbeOutcome::NotFound);
-        if matches!(o, ProbeOutcome::Unreachable) {
-            unreachable += 1;
+        // FS-7: only a positive NotFound writes `stale = true`; every other
+        // outcome leaves the flag UNCHANGED. (Previously non-NotFound
+        // outcomes forcibly cleared the flag, contradicting the documented
+        // "leave stale unchanged" contract for Unreachable.)
+        if matches!(o, ProbeOutcome::NotFound) {
+            e.stale = true;
+        }
+        match o {
+            ProbeOutcome::Unreachable => unreachable += 1,
+            ProbeOutcome::Unknown => unknown += 1,
+            _ => {}
         }
     }
-    unreachable
+    (unreachable, unknown)
 }
 
 /// Best-effort liveness probe for a batch of `ps` entries (ADR 0021 §4).
 ///
-/// Mutates each entry's `stale` flag in place and returns the count of
-/// instances whose liveness could NOT be verified because the msb DB was
-/// unreachable. Per-instance outcomes:
+/// Mutates each entry's `stale` flag in place and returns
+/// `(unreachable, unknown)` counts so the caller emits ONE honest stderr note
+/// per failure class. Per-instance outcomes (FS-7):
 ///
-/// - `Sandbox::get` Ok              → genuinely running        → `stale = false`.
+/// - `Sandbox::get` Ok              → genuinely running          → `stale` unchanged.
 /// - `Sandbox::get` SandboxNotFound → state record, sandbox gone → `stale = true`.
-/// - `Sandbox::get` other Err       → msb DB unreachable        → `stale` left
-///   `false`; counted in the return value so the caller emits ONE honest
-///   stderr note rather than per-row false confidence.
+/// - `Sandbox::get` Io / Http / Database → msb DB unreachable   → `stale` left
+///   unchanged; counted in `.0` (reachability failure class).
+/// - `Sandbox::get` any OTHER error → unexpected SDK error      → `stale` left
+///   unchanged; counted in `.1` AND noted individually on stderr (distinct
+///   from the aggregate unreachable note, since these are not reachability
+///   failures and were previously mislabeled as such).
 ///
 /// [`ps`] stays pure (no msb); this is the only place `ps` rows touch msb,
 /// keeping the pure function unit-testable. Sequential — N is small (rarely
 /// more than a handful of instances per host). The stale/unreachable mapping
 /// itself lives in the pure [`apply_liveness_outcomes`].
-pub(crate) async fn probe_liveness(entries: &mut [PsEntry]) -> usize {
+pub(crate) async fn probe_liveness(entries: &mut [PsEntry]) -> (usize, usize) {
     // Probe each instance sequentially via the SDK, collecting outcomes before
     // delegating the stale/unreachable mapping to the pure helper. Collecting
     // first means the immutable borrow of `entries` (for e.instance) is
@@ -184,7 +205,20 @@ pub(crate) async fn probe_liveness(entries: &mut [PsEntry]) -> usize {
         let outcome = match Sandbox::get(&e.instance).await {
             Ok(_) => ProbeOutcome::Alive,
             Err(MicrosandboxError::SandboxNotFound(_)) => ProbeOutcome::NotFound,
-            Err(_) => ProbeOutcome::Unreachable,
+            // FS-7: match the error variants the SDK actually exposes for
+            // reachability — Io (ENOTDIR/EACCES on the db dir), Http (SDK
+            // transport), Database (sea-orm open/query failure). Everything
+            // else is NOT a reachability failure.
+            Err(MicrosandboxError::Io(_))
+            | Err(MicrosandboxError::Http(_))
+            | Err(MicrosandboxError::Database(_)) => ProbeOutcome::Unreachable,
+            Err(other) => {
+                eprintln!(
+                    "note: liveness probe for '{}' returned an unexpected error ({other});                      leaving stale unchanged",
+                    e.instance
+                );
+                ProbeOutcome::Unknown
+            }
         };
         outcomes.push(outcome);
     }
@@ -435,11 +469,12 @@ mod tests {
         assert_eq!(entries.len(), 1, "one record listed");
         assert!(!entries[0].stale, "ps() must default stale=false");
 
-        let unreachable = probe_liveness(&mut entries).await;
+        let (unreachable, unknown) = probe_liveness(&mut entries).await;
         assert_eq!(
             unreachable, 1,
             "the single entry's liveness could not be verified (db unreachable)"
         );
+        assert_eq!(unknown, 0, "a db-reachability failure is not Unknown");
         assert!(
             !entries[0].stale,
             "unreachable db must NOT mark stale; got stale=true"
@@ -512,8 +547,9 @@ mod tests {
             ProbeOutcome::Alive,       // b   → not stale
             ProbeOutcome::Unreachable, // c@y → not stale, counted
         ];
-        let unreachable = apply_liveness_outcomes(&mut entries, &outcomes);
+        let (unreachable, unknown) = apply_liveness_outcomes(&mut entries, &outcomes);
         assert_eq!(unreachable, 1, "exactly one Unreachable outcome");
+        assert_eq!(unknown, 0, "no Unknown outcome in this slice");
         assert!(entries[0].stale, "NotFound → stale=true");
         assert!(!entries[1].stale, "Alive → stale=false");
         assert!(
@@ -522,8 +558,51 @@ mod tests {
         );
     }
 
-    /// `apply_liveness_outcomes` with all-Alive must leave everything
-    /// non-stale and report zero unreachable.
+    /// FS-7: an Unknown (non-reachability) outcome leaves stale unchanged
+    /// (does NOT clear a pre-existing stale flag — only NotFound writes
+    /// stale) and is counted in the DISTINCT unknown bucket, not lumped into
+    /// the unreachable count.
+    #[test]
+    fn apply_liveness_outcomes_unknown_is_distinct_and_preserves_stale() {
+        use crate::microsandbox::plan::PortMapping;
+        let mut entries = vec![
+            PsEntry {
+                instance: "a".into(),
+                workload: "w".into(),
+                context: None,
+                slot: "a".into(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping { host: 1, guest: 1 }],
+                started_at: String::new(),
+                port_offset: None,
+                stale: true, // pre-existing; Unknown must NOT overwrite it
+            },
+            PsEntry {
+                instance: "b".into(),
+                workload: "w".into(),
+                context: None,
+                slot: "b".into(),
+                kind: PsKind::Singleton,
+                ports: vec![],
+                started_at: String::new(),
+                port_offset: None,
+                stale: false,
+            },
+        ];
+        let outcomes = [ProbeOutcome::Unknown, ProbeOutcome::Unknown];
+        let (unreachable, unknown) = apply_liveness_outcomes(&mut entries, &outcomes);
+        assert_eq!(unreachable, 0, "Unknown is not an Unreachable outcome");
+        assert_eq!(unknown, 2, "both outcomes counted as Unknown");
+        assert!(
+            entries[0].stale,
+            "Unknown leaves a pre-existing stale flag unchanged"
+        );
+        assert!(!entries[1].stale, "Unknown leaves stale=false unchanged");
+    }
+
+    /// `apply_liveness_outcomes` with all-Alive reports zero failures and
+    /// leaves stale flags unchanged (Alive does not mark stale; a
+    /// pre-existing stale flag persists — only NotFound writes stale).
     #[test]
     fn apply_liveness_outcomes_all_alive_is_clean() {
         let mut entries = vec![
@@ -551,9 +630,16 @@ mod tests {
             },
         ];
         let outcomes = [ProbeOutcome::Alive, ProbeOutcome::Alive];
-        let unreachable = apply_liveness_outcomes(&mut entries, &outcomes);
+        let (unreachable, unknown) = apply_liveness_outcomes(&mut entries, &outcomes);
         assert_eq!(unreachable, 0);
-        assert!(!entries[0].stale, "Alive clears a pre-existing stale flag");
-        assert!(!entries[1].stale);
+        assert_eq!(unknown, 0);
+        assert!(
+            entries[0].stale,
+            "Alive leaves a pre-existing stale flag unchanged (only NotFound writes stale)"
+        );
+        assert!(
+            entries[1].stale,
+            "Alive leaves a pre-existing stale flag unchanged (only NotFound writes stale)"
+        );
     }
 }

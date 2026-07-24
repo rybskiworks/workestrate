@@ -52,11 +52,20 @@ pub(crate) async fn cmd_ps(json: bool) -> Result<()> {
     // only place ps rows touch msb. When the msb DB is unreachable we cannot
     // distinguish running from stale, so emit one honest stderr note rather
     // than silently trusting the registry records.
-    let unreachable = probe_liveness(&mut entries).await;
+    let (unreachable, unknown) = probe_liveness(&mut entries).await;
     if unreachable > 0 {
         eprintln!(
             "warning: could not verify liveness of {n} instance(s) via msb (db unreachable); stale flags may be inaccurate",
             n = unreachable,
+        );
+    }
+    // FS-7: unexpected (non-reachability) probe errors were already noted
+    // per-instance on stderr by probe_liveness; one aggregate line here makes
+    // the count visible without repeating the per-instance detail.
+    if unknown > 0 {
+        eprintln!(
+            "warning: liveness probe returned an unexpected error for {n} instance(s) (see notes above); stale flags left unchanged",
+            n = unknown,
         );
     }
     if json {
