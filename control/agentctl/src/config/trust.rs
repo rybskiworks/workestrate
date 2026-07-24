@@ -5,7 +5,7 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::config::paths::{base_registry_path, expand_tilde};
-use crate::config::{load_registry, save_registry, Registry, TrustedProject};
+use crate::config::{load_registry, Registry, TrustedProject};
 
 /// Trust-check used ONLY inside discovery; reads the base registry directly to
 /// avoid recursing through [`registry_path`] → [`resolve_home_with_kind`].
@@ -59,44 +59,47 @@ pub fn is_trusted_project(dir: &Path) -> bool {
 /// paths match consistently. Dedup considers both canonical and lexical forms
 /// of existing entries.
 pub fn trust_project(dir: &Path) -> Result<()> {
-    let mut registry = load_registry()?.unwrap_or_default();
-    let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    let dir_str = canonical.to_string_lossy().to_string();
-    let already = registry.trusted_projects.iter().any(|p| {
-        if p.path == dir_str {
-            return true;
+    // FN-5: the load → mutate → save sequence runs under the advisory
+    // registry lock (see config::registry::with_registry_lock); the save
+    // itself is an atomic tmp-write + rename.
+    crate::config::registry::with_registry_lock(|registry| {
+        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let dir_str = canonical.to_string_lossy().to_string();
+        let already = registry.trusted_projects.iter().any(|p| {
+            if p.path == dir_str {
+                return true;
+            }
+            let expanded = expand_tilde(&p.path);
+            std::fs::canonicalize(&expanded)
+                .map(|c| c == canonical)
+                .unwrap_or(false)
+        });
+        if !already {
+            registry
+                .trusted_projects
+                .push(TrustedProject { path: dir_str });
         }
-        let expanded = expand_tilde(&p.path);
-        std::fs::canonicalize(&expanded)
-            .map(|c| c == canonical)
-            .unwrap_or(false)
-    });
-    if !already {
-        registry
-            .trusted_projects
-            .push(TrustedProject { path: dir_str });
-        save_registry(&registry)?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Remove `dir` from the trusted list. Matches by canonical OR lexical form
 /// (closes review finding A18) so untrusting via a different-but-equivalent
 /// path still works.
 pub fn untrust_project(dir: &Path) -> Result<()> {
-    let mut registry = load_registry()?.unwrap_or_default();
-    let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    let canonical_str = canonical.to_string_lossy().to_string();
-    registry.trusted_projects.retain(|p| {
-        if p.path == canonical_str {
-            return false;
-        }
-        let expanded = expand_tilde(&p.path);
-        let p_canonical = std::fs::canonicalize(&expanded).unwrap_or_else(|_| expanded.clone());
-        p_canonical != canonical
-    });
-    save_registry(&registry)?;
-    Ok(())
+    crate::config::registry::with_registry_lock(|registry| {
+        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let canonical_str = canonical.to_string_lossy().to_string();
+        registry.trusted_projects.retain(|p| {
+            if p.path == canonical_str {
+                return false;
+            }
+            let expanded = expand_tilde(&p.path);
+            let p_canonical = std::fs::canonicalize(&expanded).unwrap_or_else(|_| expanded.clone());
+            p_canonical != canonical
+        });
+        Ok(())
+    })
 }
 
 #[cfg(test)]

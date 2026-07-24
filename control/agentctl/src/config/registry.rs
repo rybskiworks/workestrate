@@ -24,8 +24,86 @@ pub fn save_registry(registry: &Registry) -> Result<()> {
     }
     let content = toml::to_string_pretty(registry)
         .map_err(|e| anyhow::anyhow!("failed to serialize registry: {}", e))?;
-    std::fs::write(&path, content)?;
+    // Atomic write: serialize to `<path>.tmp` on the SAME filesystem, then
+    // rename(2) over the target. A crash mid-write can only corrupt the tmp
+    // file — the last good registry stays intact under the original name;
+    // readers never observe a truncated file (FN-5).
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(())
+}
+
+/// Name of the advisory lock file placed next to `config.toml`.
+const REGISTRY_LOCK_NAME: &str = "config.toml.lock";
+
+/// RAII advisory lock for registry mutations (FN-5).
+///
+/// Acquires by O_EXCL-creating `config.toml.lock` next to the registry file
+/// (the create fails while another holder's file exists); [`Drop`] removes
+/// it. Holders serialize the full load → mutate → save critical section in
+/// [`register_config`], [`crate::config::trust_project`], and
+/// [`crate::config::untrust_project`].
+///
+/// This is a cooperative lock between workestrate processes (mirroring the
+/// port-registry lock in `microsandbox::port_registry`), not a mandatory
+/// `flock`: the registry is only ever mutated by workestrate itself. To keep
+/// concurrent trust/register commands from failing spuriously, acquisition
+/// retries briefly (~2s, 25ms backoff) before giving up.
+struct RegistryLock {
+    path: std::path::PathBuf,
+}
+
+impl RegistryLock {
+    fn acquire() -> Result<Self> {
+        let registry = registry_path();
+        if let Some(parent) = registry.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let path = registry.with_file_name(REGISTRY_LOCK_NAME);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2000);
+        let backoff = std::time::Duration::from_millis(25);
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_f) => return Ok(Self { path }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if std::time::Instant::now() >= deadline {
+                        anyhow::bail!(
+                            "timed out acquiring registry lock {}; another workestrate                              process is mutating the registry. Retry, or remove the file                              if no workestrate process is running.",
+                            path.display()
+                        );
+                    }
+                    std::thread::sleep(backoff);
+                }
+                Err(e) => {
+                    return Err(e).map_err(|e| {
+                        anyhow::anyhow!("failed to acquire registry lock {}: {}", path.display(), e)
+                    });
+                }
+            }
+        }
+    }
+}
+
+impl Drop for RegistryLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Run `f` with the advisory registry lock held across the whole
+/// load → mutate → save critical section (FN-5). `f` receives the freshly
+/// loaded registry (or the default when none exists yet).
+pub(crate) fn with_registry_lock<R>(f: impl FnOnce(&mut Registry) -> Result<R>) -> Result<R> {
+    let _lock = RegistryLock::acquire()?;
+    let mut registry = load_registry()?.unwrap_or_default();
+    let out = f(&mut registry)?;
+    save_registry(&registry)?;
+    Ok(out)
 }
 
 /// Insert/replace a config repo entry in the registry. If `layers` is empty,
@@ -40,22 +118,23 @@ pub fn register_config(
     git_ref: Option<&str>,
     rev: Option<&str>,
 ) -> Result<()> {
-    let mut registry = load_registry()?.unwrap_or_default();
-    registry.configs.insert(
-        name.to_string(),
-        ConfigRepoEntry {
-            url: url.to_string(),
-            r#ref: git_ref.map(|s| s.to_string()),
-            rev: rev.map(|s| s.to_string()),
-            secrets: None,
-            secrets_file: None,
-            age_key_file: None,
-        },
-    );
-    if registry.layers.is_empty() {
-        registry.layers.push(name.to_string());
-    }
-    save_registry(&registry)
+    with_registry_lock(|registry| {
+        registry.configs.insert(
+            name.to_string(),
+            ConfigRepoEntry {
+                url: url.to_string(),
+                r#ref: git_ref.map(|s| s.to_string()),
+                rev: rev.map(|s| s.to_string()),
+                secrets: None,
+                secrets_file: None,
+                age_key_file: None,
+            },
+        );
+        if registry.layers.is_empty() {
+            registry.layers.push(name.to_string());
+        }
+        Ok(())
+    })
 }
 
 /// Resolve the active context.
@@ -484,6 +563,137 @@ pub(crate) mod tests {
             err.contains("default_context") || err.contains("--context"),
             "error should mention default_context or --context: {err}"
         );
+        Ok(())
+    }
+    // ---- FN-5: atomic save + advisory lock ----
+
+    /// Set WORKESTRATE_HOME to a fresh temp dir (HomeKind::Env → registry at
+    /// `<tmp>/config.toml`) and return the dir. Caller must hold
+    /// ENV_TEST_LOCK and an EnvGuard for HOME_ENV_KEYS.
+    fn pin_home(label: &str) -> std::path::PathBuf {
+        let home = uniq_dir(label);
+        std::fs::create_dir_all(&home).expect("create pinned home");
+        std::env::set_var("WORKESTRATE_HOME", &home);
+        home
+    }
+
+    #[test]
+    fn save_registry_writes_atomically_and_leaves_no_tmp() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("fn5-atomic");
+
+        let mut registry = Registry::default();
+        registry.configs.insert(
+            "personal".to_string(),
+            ConfigRepoEntry {
+                url: "https://example.invalid/personal.git".to_string(),
+                r#ref: Some("main".to_string()),
+                rev: Some("abc123".to_string()),
+                secrets: None,
+                secrets_file: None,
+                age_key_file: None,
+            },
+        );
+        save_registry(&registry)?;
+
+        // Round-trip: output identical to the saved registry.
+        let loaded = load_registry()?.expect("registry should exist after save");
+        assert_eq!(loaded.configs.len(), 1);
+        assert_eq!(
+            loaded.configs["personal"].url,
+            "https://example.invalid/personal.git"
+        );
+        assert_eq!(loaded.configs["personal"].rev.as_deref(), Some("abc123"));
+
+        // No tmp file left behind next to config.toml.
+        let tmp = registry_path().with_extension("toml.tmp");
+        assert!(!tmp.exists(), "tmp file must not survive the rename");
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_write_leaves_original_registry_intact() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("fn5-interrupt");
+
+        // Commit one good registry first.
+        let mut good = Registry::default();
+        good.layers.push("good".to_string());
+        save_registry(&good)?;
+        let before = std::fs::read_to_string(registry_path())?;
+
+        // Simulate a crashed concurrent writer: a stale tmp file must not
+        // clobber the committed registry — the next save replaces it
+        // atomically, and readers in between keep seeing the original.
+        let tmp = registry_path().with_extension("toml.tmp");
+        std::fs::write(&tmp, "garbage-partial-write")?;
+        assert_eq!(
+            std::fs::read_to_string(registry_path())?,
+            before,
+            "original registry must survive a stale tmp file"
+        );
+
+        let mut next = Registry::default();
+        next.layers.push("next".to_string());
+        save_registry(&next)?;
+        let loaded = load_registry()?.expect("registry parses after save");
+        assert_eq!(loaded.layers, vec!["next".to_string()]);
+        assert!(!tmp.exists(), "save must consume (rename) the tmp file");
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn register_config_removes_lock_file_and_persists_entry() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("fn5-lock");
+
+        register_config(
+            "personal",
+            "https://example.invalid/personal.git",
+            Some("main"),
+            Some("abc123"),
+        )?;
+
+        // Lock file is removed after the critical section.
+        let lock_path = registry_path().with_file_name(REGISTRY_LOCK_NAME);
+        assert!(
+            !lock_path.exists(),
+            "registry lock must be released after register_config"
+        );
+
+        // The entry persisted (load → mutate → save ran under the lock).
+        let loaded = load_registry()?.expect("registry should exist");
+        assert!(loaded.configs.contains_key("personal"));
+        assert_eq!(loaded.layers, vec!["personal".to_string()]);
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn trust_round_trip_releases_lock() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("fn5-trust");
+
+        let project = uniq_dir("fn5-trust-proj");
+        std::fs::create_dir_all(&project)?;
+        crate::config::trust_project(&project)?;
+        assert!(crate::config::is_trusted_project(&project));
+        crate::config::untrust_project(&project)?;
+        assert!(!crate::config::is_trusted_project(&project));
+
+        let lock_path = registry_path().with_file_name(REGISTRY_LOCK_NAME);
+        assert!(
+            !lock_path.exists(),
+            "registry lock must be released after trust/untrust"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&project);
         Ok(())
     }
 }
