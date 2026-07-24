@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 mod cli_error;
+#[allow(dead_code)]
+mod commands;
 mod config;
 #[allow(dead_code)]
 mod git;
