@@ -51,3 +51,98 @@ pub(crate) fn resolve_templated_value(templated: &str) -> Result<String> {
     // key type, which does not satisfy the higher-ranked fn-pointer shape.
     resolve_templated_value_by(templated, |name: &str| std::env::var(name))
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn substitutes_single_var() {
+        let m = vars(&[("FOO", "bar")]);
+        assert_eq!(resolve_templated_value_with("${FOO}", &m).unwrap(), "bar");
+    }
+
+    #[test]
+    fn substitutes_var_embedded_in_text() {
+        let m = vars(&[("NAME", "world")]);
+        assert_eq!(
+            resolve_templated_value_with("hello ${NAME}!", &m).unwrap(),
+            "hello world!"
+        );
+    }
+
+    #[test]
+    fn substitutes_multiple_vars() {
+        let m = vars(&[("A", "1"), ("B", "2")]);
+        assert_eq!(
+            resolve_templated_value_with("${A}-${B}-${A}", &m).unwrap(),
+            "1-2-1"
+        );
+    }
+
+    #[test]
+    fn missing_var_is_an_error_naming_the_var() {
+        let m = vars(&[]);
+        let err = resolve_templated_value_with("${NOPE}", &m).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("NOPE"),
+            "error should name the missing var: {msg}"
+        );
+    }
+
+    #[test]
+    fn empty_template_placeholder_is_an_error() {
+        let m = vars(&[]);
+        let err = resolve_templated_value_with("x ${} y", &m).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("empty variable name"),
+            "expected empty-name error: {msg}"
+        );
+    }
+
+    #[test]
+    fn unclosed_placeholder_is_an_error() {
+        let m = vars(&[("A", "1")]);
+        let err = resolve_templated_value_with("value ${A", &m).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("unclosed"),
+            "expected unclosed-template error: {msg}"
+        );
+    }
+
+    #[test]
+    fn plain_text_passes_through_unchanged() {
+        let m = vars(&[]);
+        assert_eq!(
+            resolve_templated_value_with("no templates here", &m).unwrap(),
+            "no templates here"
+        );
+        assert_eq!(resolve_templated_value_with("", &m).unwrap(), "");
+    }
+
+    #[test]
+    fn dollar_without_brace_is_not_a_template() {
+        let m = vars(&[("A", "1")]);
+        assert_eq!(
+            resolve_templated_value_with("costs $5 or $A", &m).unwrap(),
+            "costs $5 or $A"
+        );
+    }
+}

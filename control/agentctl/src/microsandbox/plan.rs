@@ -285,3 +285,225 @@ impl EgressRule {
         rules
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    fn definition(env_var: &str) -> SecretDefinition {
+        SecretDefinition {
+            env_var: env_var.to_string(),
+            hosts: vec!["example.com".to_string()],
+            required: true,
+            placeholder: Some("CHANGEME".to_string()),
+        }
+    }
+
+    // ---- Display stability (golden-inline; guards Display drift) ----
+
+    #[test]
+    fn sandbox_plan_display_is_stable() {
+        let plan = SandboxPlan {
+            name: "demo".to_string(),
+            image: Some("img:1".to_string()),
+            workdir: Some("/app".to_string()),
+            command: vec!["run".to_string(), "--fast".to_string()],
+            cpus: Some(2),
+            memory_mib: Some(512),
+            env: vec![
+                EnvVar::literal("PLAIN", "value"),
+                EnvVar {
+                    name: "TOKEN".to_string(),
+                    value: "supersecret".to_string(),
+                    is_secret: true,
+                    reject_placeholder: None,
+                },
+            ],
+            secret_env: vec![HostBoundSecret {
+                name: "API_KEY".to_string(),
+                value: "${API_KEY}".to_string(),
+                allowed_hosts: vec!["example.com".to_string()],
+                required: false,
+                reject_placeholder: None,
+            }],
+            ports: vec![PortMapping {
+                host: 8080,
+                guest: 80,
+            }],
+            mounts: vec![
+                MountPlan {
+                    host: "/data".to_string(),
+                    guest: "/mnt".to_string(),
+                    read_only: false,
+                },
+                MountPlan {
+                    host: "/cfg".to_string(),
+                    guest: "/etc/cfg".to_string(),
+                    read_only: true,
+                },
+            ],
+            network: NetworkPlan {
+                default_deny: true,
+                egress_rules: vec![
+                    EgressRule::litellm_proxy(),
+                    EgressRule::https(&["example.com"]),
+                ],
+                deny_rules: vec![DenyDomainRule {
+                    domain_suffix: ".evil".to_string(),
+                }],
+                ingress_rules: vec![IngressRule {
+                    protocol: Protocol::Tcp,
+                    port: 80,
+                    scope: Scope::Local,
+                }],
+            },
+        };
+        let expected = "\
+name: demo
+image: img:1
+workdir: /app
+command: run --fast
+cpus: 2
+memory: 512 MiB
+env: PLAIN=value
+env: TOKEN=(redacted)
+secret_env: API_KEY (value redacted, allowed: example.com, optional)
+port: 8080:80
+mount: /data:/mnt
+mount: /cfg:/etc/cfg (ro)
+network: default_deny=true
+  ingress: tcp:80 local
+  egress: tcp:4000 -> host
+  egress: tcp:443 -> example.com
+  egress: deny domain suffix .evil
+";
+        assert_eq!(format!("{plan}"), expected);
+    }
+
+    #[test]
+    fn sandbox_plan_display_omits_absent_optional_fields() {
+        let plan = SandboxPlan {
+            name: "bare".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports: vec![],
+            mounts: vec![],
+            network: NetworkPlan {
+                default_deny: false,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+            },
+        };
+        assert_eq!(
+            format!("{plan}"),
+            "name: bare\nnetwork: default_deny=false\n"
+        );
+    }
+
+    #[test]
+    fn env_var_display_redacts_secrets_only() {
+        let plain = EnvVar::literal("A", "1");
+        assert_eq!(format!("{plain}"), "A=1");
+        let secret = EnvVar {
+            name: "S".to_string(),
+            value: "hunter2".to_string(),
+            is_secret: true,
+            reject_placeholder: None,
+        };
+        let shown = format!("{secret}");
+        assert_eq!(shown, "S=(redacted)");
+        assert!(!shown.contains("hunter2"), "secret value must not leak");
+    }
+
+    // ---- constructors ----
+
+    #[test]
+    fn env_var_literal_marks_non_secret_and_no_placeholder() {
+        let v = EnvVar::literal("K", "v");
+        assert_eq!(v.name, "K");
+        assert_eq!(v.value, "v");
+        assert!(!v.is_secret);
+        assert_eq!(v.reject_placeholder, None);
+    }
+
+    #[test]
+    fn egress_rule_dns_is_tcp_and_udp_53_to_host() {
+        let rules = EgressRule::dns();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].protocol, Protocol::Tcp);
+        assert_eq!(rules[1].protocol, Protocol::Udp);
+        for r in &rules {
+            assert_eq!(r.port, 53);
+            assert_eq!(r.target, EgressTarget::Host);
+        }
+    }
+
+    #[test]
+    fn egress_rule_litellm_proxy_is_tcp_4000_to_host() {
+        let r = EgressRule::litellm_proxy();
+        assert_eq!(r.protocol, Protocol::Tcp);
+        assert_eq!(r.port, 4000);
+        assert_eq!(r.target, EgressTarget::Host);
+    }
+
+    #[test]
+    fn egress_rule_https_is_tcp_443_to_domains() {
+        let r = EgressRule::https(&["a.com", "b.com"]);
+        assert_eq!(r.protocol, Protocol::Tcp);
+        assert_eq!(r.port, 443);
+        assert_eq!(
+            r.target,
+            EgressTarget::Domains(vec!["a.com".to_string(), "b.com".to_string()])
+        );
+    }
+
+    #[test]
+    fn egress_rule_agent_base_composes_dns_litellm_github() {
+        let rules = EgressRule::agent_base();
+        assert_eq!(rules.len(), 4);
+        assert_eq!(rules[2], EgressRule::litellm_proxy());
+        assert_eq!(rules[3], EgressRule::https(crate::policy::GITHUB_HOSTS));
+    }
+
+    // ---- HostBoundSecret ----
+
+    #[test]
+    fn host_bound_secret_from_definition_templates_value_and_propagates_meta() {
+        let def = definition("MY_SECRET");
+        let bound = HostBoundSecret::from(&def);
+        assert_eq!(bound.name, "MY_SECRET");
+        assert_eq!(bound.value, "${MY_SECRET}");
+        assert_eq!(bound.allowed_hosts, vec!["example.com".to_string()]);
+        assert!(bound.required);
+        assert_eq!(bound.reject_placeholder, Some("CHANGEME".to_string()));
+    }
+
+    #[test]
+    fn host_bound_secret_remapped_uses_exposed_name_and_source_template() {
+        let mapping = RemappedSecret {
+            source: definition("SOURCE_KEY"),
+            exposed_as: "OPENAI_API_KEY".to_string(),
+        };
+        let bound = HostBoundSecret::remapped(&mapping);
+        assert_eq!(bound.name, "OPENAI_API_KEY");
+        assert_eq!(
+            bound.value, "${SOURCE_KEY}",
+            "remapped value must template the SOURCE env var"
+        );
+        assert_eq!(bound.allowed_hosts, vec!["example.com".to_string()]);
+        assert!(bound.required);
+        assert_eq!(bound.reject_placeholder, Some("CHANGEME".to_string()));
+    }
+}
