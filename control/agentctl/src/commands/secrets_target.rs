@@ -83,7 +83,7 @@ pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_secrets_schema() -> Result<()> {
+pub fn cmd_secrets_schema() -> Result<()> {
     let config = config::load_config()?;
     let mut names: Vec<&str> = config
         .secrets

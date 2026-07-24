@@ -14,16 +14,16 @@ use crate::scaffold;
 
 pub async fn cmd_config(action: ConfigAction) -> Result<()> {
     match action {
-        ConfigAction::Add { url, name, r#ref } => cmd_config_add(&url, &name, &r#ref).await,
+        ConfigAction::Add { url, name, r#ref } => cmd_config_add(&url, &name, &r#ref),
         ConfigAction::Update { name } => cmd_config_update(name.as_deref()).await,
         ConfigAction::List => cmd_config_list().await,
-        ConfigAction::Trust { dir } => cmd_config_trust(&dir).await,
-        ConfigAction::Untrust { dir } => cmd_config_untrust(&dir).await,
+        ConfigAction::Trust { dir } => cmd_config_trust(&dir),
+        ConfigAction::Untrust { dir } => cmd_config_untrust(&dir),
         ConfigAction::Remove {
             name,
             delete,
             force,
-        } => cmd_config_remove(&name, delete, force).await,
+        } => cmd_config_remove(&name, delete, force),
         // `New` is dispatched directly in `async_main` so it can route the
         // global `--json` flag. Reaching this arm would be a regression.
         ConfigAction::New { .. } => {
@@ -38,7 +38,7 @@ pub async fn cmd_config(action: ConfigAction) -> Result<()> {
 /// scrubbed from the bare `layers` list and every context's `layers`. A
 /// dangling `settings.default_context` pointing at the removed name is
 /// cleared (with a warning).
-pub async fn cmd_config_remove(name: &str, delete: bool, force: bool) -> Result<()> {
+pub fn cmd_config_remove(name: &str, delete: bool, force: bool) -> Result<()> {
     config::validate_config_name(name)?;
     let mut registry = config::load_registry()?
         .ok_or_else(|| anyhow::anyhow!("no registry found; run 'workestrate init' first"))?;
@@ -83,12 +83,12 @@ pub async fn cmd_config_remove(name: &str, delete: bool, force: bool) -> Result<
 /// currently-resolved active context.
 pub async fn cmd_context(action: ContextAction, json: bool) -> Result<()> {
     match action {
-        ContextAction::List => cmd_context_list(json).await,
-        ContextAction::Current => cmd_context_current(json).await,
+        ContextAction::List => cmd_context_list(json),
+        ContextAction::Current => cmd_context_current(json),
     }
 }
 
-pub async fn cmd_context_list(json: bool) -> Result<()> {
+pub fn cmd_context_list(json: bool) -> Result<()> {
     let registry = match config::load_registry()? {
         Some(r) => r,
         None => {
@@ -142,7 +142,7 @@ pub async fn cmd_context_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_context_current(json: bool) -> Result<()> {
+pub fn cmd_context_current(json: bool) -> Result<()> {
     let active = config::resolve_active_context()?;
 
     // Resolution-source classification: env (--context flag / WORKESTRATE_CONTEXT)
@@ -184,7 +184,7 @@ pub async fn cmd_context_current(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
+pub fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
     let dest = config::config_repo_dir(name);
     let (rev, short) = if dest.exists() {
         let git_dir = dest.join(".git");
@@ -561,7 +561,7 @@ pub async fn cmd_config_update(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_config_list_json() -> Result<()> {
+pub fn cmd_config_list_json() -> Result<()> {
     // The committed JSON shape is a stable object mapping layer info; this is
     // a best-effort serialization of the in-memory Registry (or null when no
     // registry exists).
@@ -626,14 +626,14 @@ pub async fn cmd_config_list() -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_config_trust(dir: &str) -> Result<()> {
+pub fn cmd_config_trust(dir: &str) -> Result<()> {
     let path = PathBuf::from(dir);
     config::trust_project(&path)?;
     println!("Trusted: {}", path.display());
     Ok(())
 }
 
-pub async fn cmd_config_untrust(dir: &str) -> Result<()> {
+pub fn cmd_config_untrust(dir: &str) -> Result<()> {
     let path = PathBuf::from(dir);
     config::untrust_project(&path)?;
     println!("Untrusted: {}", path.display());

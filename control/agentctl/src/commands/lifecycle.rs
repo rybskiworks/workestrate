@@ -415,7 +415,7 @@ pub async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
 /// themselves in place. Never touches the store (`repos/`, `sources/`) or any
 /// config file. Interactive confirmation unless `--yes`; non-interactive
 /// stdin without `--yes` is a hard refusal (same policy as `down --all`).
-pub async fn cmd_clean(yes: bool, json: bool) -> Result<()> {
+pub fn cmd_clean(yes: bool, json: bool) -> Result<()> {
     use std::io::IsTerminal;
     let state_dir = config::resolve_state_dir();
     const SUBDIRS: [&str; 3] = ["workspaces", "var", "run"];

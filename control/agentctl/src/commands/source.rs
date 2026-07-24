@@ -11,14 +11,14 @@ use crate::git::{git_checkout_dot, git_clone};
 
 pub async fn cmd_source(action: SourceAction) -> Result<()> {
     match action {
-        SourceAction::Clone { name, path } => cmd_source_clone(&name, path.as_deref()).await,
-        SourceAction::Build { name } => cmd_source_build(&name).await,
-        SourceAction::List => cmd_source_list().await,
-        SourceAction::Reset { name } => cmd_source_reset(&name).await,
+        SourceAction::Clone { name, path } => cmd_source_clone(&name, path.as_deref()),
+        SourceAction::Build { name } => cmd_source_build(&name),
+        SourceAction::List => cmd_source_list(),
+        SourceAction::Reset { name } => cmd_source_reset(&name),
     }
 }
 
-pub async fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
+pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
     let cfg = config::load_config()?;
     let workload = cfg
         .workloads
@@ -98,7 +98,7 @@ pub fn nix_available() -> bool {
         .unwrap_or(false)
 }
 
-pub async fn cmd_source_build(name: &str) -> Result<()> {
+pub fn cmd_source_build(name: &str) -> Result<()> {
     let cfg = config::load_config()?;
     let workload = cfg
         .workloads
@@ -178,7 +178,7 @@ pub async fn cmd_source_build(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_source_list() -> Result<()> {
+pub fn cmd_source_list() -> Result<()> {
     let cfg = config::load_config()?;
     println!("Source overrides:");
     let mut found = false;
@@ -213,7 +213,7 @@ pub async fn cmd_source_list() -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_source_reset(name: &str) -> Result<()> {
+pub fn cmd_source_reset(name: &str) -> Result<()> {
     let repo = config::source_store_dir(name).join("repo");
     if !repo.exists() {
         anyhow::bail!(

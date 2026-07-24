@@ -215,7 +215,7 @@ pub fn doctor_check_config_repos() -> Result<DoctorCheck> {
 /// `workestrate doctor` — run environment/tool health checks (KVM, nix,
 /// sops, age, msb, home resolution, config repos), print a human report or a
 /// machine-readable JSON document, and exit non-zero when any check FAILs.
-pub async fn cmd_doctor(json: bool) -> Result<()> {
+pub fn cmd_doctor(json: bool) -> Result<()> {
     let checks = vec![
         doctor_check_kvm(),
         doctor_check_tool(

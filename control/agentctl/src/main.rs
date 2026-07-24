@@ -244,29 +244,27 @@ async fn async_main() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Check => cmd_check().await,
-        Commands::Init { url } => cmd_init(url.as_deref()).await,
-        Commands::New { name } => cmd_new(&name).await,
+        Commands::Check => cmd_check(),
+        Commands::Init { url } => cmd_init(url.as_deref()),
+        Commands::New { name } => cmd_new(&name),
         Commands::Completions { shell, for_name } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, &for_name, &mut std::io::stdout());
             Ok(())
         }
-        Commands::Run { command } => cmd_run(&command).await,
-        Commands::ValidateConfig => cmd_validate_config().await,
-        Commands::SecretsSchema => cmd_secrets_schema().await,
-        Commands::GenerateEnvExample { output } => {
-            cmd_generate_env_example(output.as_deref()).await
-        }
+        Commands::Run { command } => cmd_run(&command),
+        Commands::ValidateConfig => cmd_validate_config(),
+        Commands::SecretsSchema => cmd_secrets_schema(),
+        Commands::GenerateEnvExample { output } => cmd_generate_env_example(output.as_deref()),
         Commands::Ps => cmd_ps(cli.json).await,
         Commands::DownAll { yes } => cmd_down_all(yes, cli.json).await,
-        Commands::Clean { yes } => cmd_clean(yes, cli.json).await,
+        Commands::Clean { yes } => cmd_clean(yes, cli.json),
         Commands::Context { action } => cmd_context(action, cli.json).await,
         Commands::GenerateSchema { out } => cmd_generate_schema(out.as_deref()),
         Commands::Config { action } => match action {
             ConfigAction::List => {
                 if cli.json {
-                    cmd_config_list_json().await
+                    cmd_config_list_json()
                 } else {
                     cmd_config(ConfigAction::List).await
                 }
@@ -301,7 +299,7 @@ async fn async_main() -> Result<()> {
             other => cmd_config(other).await,
         },
         Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
-        Commands::Doctor { json } => cmd_doctor(json).await,
+        Commands::Doctor { json } => cmd_doctor(json),
         Commands::Source { action } => cmd_source(action).await,
         Commands::Litellm { action } => {
             let workload = ConfigWorkload::new("litellm")?;

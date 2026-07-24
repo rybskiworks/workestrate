@@ -155,7 +155,7 @@ pub fn print_ps_text_to<W: std::io::Write>(
     Ok(())
 }
 
-pub async fn cmd_check() -> Result<()> {
+pub fn cmd_check() -> Result<()> {
     println!("=== workestrate check ===\n");
     let mut all_ok = true;
 
@@ -372,7 +372,7 @@ pub fn find_reference_config() -> Option<PathBuf> {
     None
 }
 
-pub async fn cmd_validate_config() -> Result<()> {
+pub fn cmd_validate_config() -> Result<()> {
     let config = config::load_config()?;
     config::validate_config(&config)?;
     println!("workestrate.toml is valid.");
@@ -395,7 +395,7 @@ pub fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> {
+pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> {
     let config = config::load_config()?;
     let mut entries: Vec<(&str, &str)> = config
         .secrets
@@ -437,7 +437,7 @@ pub async fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Resul
     Ok(())
 }
 
-pub async fn cmd_run(command: &[String]) -> Result<()> {
+pub fn cmd_run(command: &[String]) -> Result<()> {
     if command.is_empty() {
         anyhow::bail!("no command specified. Usage: workestrate run -- <command> [args...]");
     }
@@ -763,9 +763,7 @@ mod tests {
         std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
         std::env::remove_var("WORKESTRATE_CONFIG_DIR");
 
-        // cmd_check is async; run it on a fresh tokio runtime.
-        let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime for E1 test");
-        let result = rt.block_on(async { cmd_check().await });
+        let result = cmd_check();
 
         for (k, v) in [
             ("HOME", old_home),

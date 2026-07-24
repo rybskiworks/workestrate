@@ -21,7 +21,7 @@ impl Drop for TempDirGuard {
     }
 }
 
-pub async fn cmd_init(url: Option<&str>) -> Result<()> {
+pub fn cmd_init(url: Option<&str>) -> Result<()> {
     let registry_path = config::registry_path();
     if registry_path.exists() {
         println!(
@@ -145,7 +145,7 @@ pub fn validate_workload_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_new(name: &str) -> Result<()> {
+pub fn cmd_new(name: &str) -> Result<()> {
     // WP1 / A20: validate the workload name BEFORE using it as a directory
     // name or interpolating it into TOML. Reject everything that is not a
     // safe lowercase-hyphen identifier; this prevents both path escape
@@ -529,12 +529,10 @@ mod tests {
     /// FS-17: cmd_new against an EXISTING agents/<name> dir must fail — the
     /// exists-check + create_dir(fail-if-exists) pair is the race-safe
     /// refusal. Uses WORKESTRATE_CONFIG_DIR to pin the active config repo.
-    // ENV_TEST_LOCK held across `.await`: safe on the single-threaded
-    // current-thread test runtime (no spawned tasks); mirrors the proven
-    // ps.rs idiom for env-mutating async tests.
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn cmd_new_fails_when_agent_dir_already_exists() -> Result<()> {
+    // ENV_TEST_LOCK held for the whole body: this test mutates process env
+    // and must not race any other env-mutating test.
+    #[test]
+    fn cmd_new_fails_when_agent_dir_already_exists() -> Result<()> {
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
             crate::config::test_support::HOME_ENV_KEYS,
@@ -546,7 +544,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("agents").join("dupe"))?;
         std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
 
-        let result = cmd_new("dupe").await;
+        let result = cmd_new("dupe");
         assert!(result.is_err(), "existing agents/dupe must fail");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -562,9 +560,8 @@ mod tests {
     /// workestrate.toml contains the appended entry AND no scratch file is
     /// left behind (create_new + rename leaves no `.workestrate.toml.new-*`
     /// residue on the success path).
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn cmd_new_appends_entry_atomically_and_leaves_no_scratch() -> Result<()> {
+    #[test]
+    fn cmd_new_appends_entry_atomically_and_leaves_no_scratch() -> Result<()> {
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
             crate::config::test_support::HOME_ENV_KEYS,
@@ -578,7 +575,7 @@ mod tests {
         )?;
         std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
 
-        cmd_new("fresh-agent").await?;
+        cmd_new("fresh-agent")?;
 
         let content = std::fs::read_to_string(tmp.join("workestrate.toml"))?;
         assert!(
