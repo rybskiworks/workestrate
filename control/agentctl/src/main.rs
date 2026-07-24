@@ -90,7 +90,11 @@ enum ServiceAction {
         all_instances: bool,
     },
     /// Tail the detached service's log file
-    Logs,
+    Logs {
+        /// Tail the parallel instance `<slot>@<id>` (default: the singleton).
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+    },
     /// Print the planned sandbox workload
     Plan {
         /// Add N to every HOST port in the displayed plan (mirrors --port-offset on up).

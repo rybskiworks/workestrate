@@ -111,7 +111,20 @@ pub(crate) async fn dispatch_service<W: Workload>(
             instance,
             all_instances,
         } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
-        ServiceAction::Logs => crate::microsandbox::logs(&workload.sandbox_instance_name()).await,
+        ServiceAction::Logs { instance } => {
+            // Resolve the instance name like `up` does: slot from the active
+            // context + optional parallel id (default = the singleton). The
+            // id passes through the same validate_instance_id gate as
+            // up/down (FS-10).
+            use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
+            let context = crate::config::active_context_name();
+            let slot = slot_for(workload.name(), context.as_deref());
+            if let Some(ref id) = instance {
+                validate_instance_id(id)?;
+            }
+            let target = instance_name(&slot, instance.as_deref());
+            crate::microsandbox::logs(&target).await
+        }
         ServiceAction::Plan { port_offset } => cmd_plan(workload, show_source, json, port_offset),
     }
 }
@@ -187,7 +200,10 @@ pub(crate) fn parse_service_action(action: &str, args: &[String]) -> Result<Serv
                 all_instances,
             })
         }
-        "logs" => Ok(ServiceAction::Logs),
+        "logs" => {
+            let instance = parse_flag_value(args, "--instance");
+            Ok(ServiceAction::Logs { instance })
+        }
         "plan" => {
             let port_offset = parse_port_offset(args)?;
             Ok(ServiceAction::Plan { port_offset })
@@ -551,5 +567,72 @@ mod tests {
     fn parse_port_offset_rejects_overflow() {
         let args: Vec<String> = vec!["--port-offset".into(), "70000".into()];
         assert!(parse_port_offset(&args).is_err());
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod fs10_tests {
+    use super::*;
+    use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
+
+    // ---- FS-10: `logs --instance <id>` resolves the per-instance log path ----
+
+    /// The raw-args parser must pick up `--instance <id>` on the logs action
+    /// (both space and equals forms), mirroring up/down.
+    #[test]
+    fn parse_service_action_logs_reads_instance_flag() {
+        let args: Vec<String> = vec!["--instance".into(), "canary".into()];
+        match parse_service_action("logs", &args).unwrap() {
+            ServiceAction::Logs { instance } => {
+                assert_eq!(instance.as_deref(), Some("canary"))
+            }
+            _ => panic!("expected Logs variant"),
+        }
+
+        let args: Vec<String> = vec!["--instance=canary".into()];
+        match parse_service_action("logs", &args).unwrap() {
+            ServiceAction::Logs { instance } => {
+                assert_eq!(instance.as_deref(), Some("canary"))
+            }
+            _ => panic!("expected Logs variant"),
+        }
+    }
+
+    /// Without `--instance`, logs defaults to the singleton (instance None),
+    /// and the resolved target is the bare slot; with an id it is
+    /// `<slot>@<id>` — the same composition `up` uses.
+    #[test]
+    fn logs_instance_resolution_matches_up_composition() {
+        // No context: slot == workload name.
+        let slot = slot_for("litellm", None);
+        assert_eq!(slot, "litellm");
+        assert_eq!(instance_name(&slot, None), "litellm");
+        assert_eq!(instance_name(&slot, Some("canary")), "litellm@canary");
+
+        // With a context the slot is namespaced, exactly like up's target.
+        let slot = slot_for("litellm", Some("personal"));
+        assert_eq!(
+            instance_name(&slot, Some("canary")),
+            "personal-litellm@canary"
+        );
+    }
+
+    /// An invalid `--instance` id is rejected by the same validator the
+    /// dispatch path runs before resolving the log path.
+    #[test]
+    fn logs_instance_id_is_validated() {
+        for bad in ["all", "1234", "-leading", "UPPER", "has_underscore"] {
+            assert!(
+                validate_instance_id(bad).is_err(),
+                "invalid id '{bad}' must be rejected"
+            );
+        }
+        validate_instance_id("canary").expect("canary is a valid id");
     }
 }

@@ -9,6 +9,18 @@ use anyhow::Result;
 use crate::config;
 use crate::git::git_clone;
 
+/// RAII temp-dir cleanup guard (FS-12). Removes the directory on drop —
+/// including the early-`?` return paths, which the old sequential code
+/// leaked on (a failed `git_clone`/`fs::copy`/`save_registry` left the
+/// partial clone in `/tmp`).
+struct TempDirGuard(std::path::PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 pub(crate) async fn cmd_init(url: Option<&str>) -> Result<()> {
     let registry_path = config::registry_path();
     if registry_path.exists() {
@@ -33,25 +45,24 @@ pub(crate) async fn cmd_init(url: Option<&str>) -> Result<()> {
     if let Some(url) = url {
         let temp_dir =
             std::env::temp_dir().join(format!("workestrate-init-{}", std::process::id()));
+        // FS-12: guard/finally-style cleanup — the temp dir is removed even
+        // when a `?` early-returns (previously git_clone/copy/save failures
+        // leaked the clone). Guard is ARMED after the clone (removing a dir
+        // that does not exist is harmless, but arming late keeps the intent
+        // obvious).
         git_clone(url, &temp_dir, None)?;
+        let _temp_guard = TempDirGuard(temp_dir.clone());
 
-        let found = if temp_dir.join("workestrate").join("config.toml").exists() {
-            Some(temp_dir.join("workestrate").join("config.toml"))
-        } else if temp_dir
-            .join(".config")
-            .join("workestrate")
-            .join("config.toml")
-            .exists()
-        {
-            Some(
-                temp_dir
-                    .join(".config")
-                    .join("workestrate")
-                    .join("config.toml"),
-            )
-        } else {
-            None
+        // FS-12: probe the ADR-0023 single-home layout (.workestrate/) in
+        // addition to the legacy workestrate/ and .config/workestrate/
+        // layouts.
+        let probe = |rel: &[&str]| {
+            let candidate = rel.iter().fold(temp_dir.clone(), |acc, seg| acc.join(seg));
+            candidate.exists().then_some(candidate)
         };
+        let found = probe(&[".workestrate", "config.toml"])
+            .or_else(|| probe(&["workestrate", "config.toml"]))
+            .or_else(|| probe(&[".config", "workestrate", "config.toml"]));
 
         let registry_parent = registry_path
             .parent()
@@ -75,7 +86,7 @@ pub(crate) async fn cmd_init(url: Option<&str>) -> Result<()> {
                 config::save_registry(&registry)?;
             }
         }
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        // `_temp_guard` drops here (success path), removing the temp dir.
     } else {
         config::save_registry(&registry)?;
     }
@@ -150,7 +161,23 @@ pub(crate) async fn cmd_new(name: &str) -> Result<()> {
         anyhow::bail!("agents/{} already exists in {}", name, config_dir.display());
     }
 
-    // Create directory structure relative to the config repo.
+    // Create the agent dir with create_dir (NOT create_dir_all): the
+    // exists-check above + create_dir's fail-if-exists together close the
+    // TOCTOU race — a concurrent `workestrate new <name>` that wins the
+    // race turns our create_dir into an AlreadyExists error instead of
+    // silently sharing the dir (FS-17). The `agents/` parent is ensured
+    // first (create_dir does not create intermediates).
+    if let Some(agents_parent) = agent_dir.parent() {
+        std::fs::create_dir_all(agents_parent)?;
+    }
+    std::fs::create_dir(&agent_dir).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to create agents/{} in {} (already exists?): {}",
+            name,
+            config_dir.display(),
+            e
+        )
+    })?;
     let config_subdir = agent_dir.join("config");
     std::fs::create_dir_all(&config_subdir)?;
     std::fs::write(config_subdir.join(".gitkeep"), "")?;
@@ -177,15 +204,34 @@ pub(crate) async fn cmd_new(name: &str) -> Result<()> {
         name, name, name, name
     );
 
-    // Create parent dir if needed, then open with create+append.
+    // Write the TOML entry atomically (FS-17): read the current content,
+    // append, write to a create_new scratch file in the SAME directory
+    // (fail-if-exists guards against a torn concurrent append), then
+    // rename(2) over workestrate.toml. A direct create+append open lets two
+    // concurrent `workestrate new` invocations interleave writes.
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(&config_path)?;
-    file.write_all(toml_entry.as_bytes())?;
+    let existing = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let scratch = config_dir.join(format!(".workestrate.toml.new-{}", std::process::id()));
+    // Belt-and-suspenders: the scratch path is pid-unique, but remove any
+    // stale leftover from a crashed same-pid run so create_new cannot fail
+    // spuriously.
+    let _ = std::fs::remove_file(&scratch);
+    {
+        let mut scratch_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&scratch)?;
+        scratch_file.write_all(existing.as_bytes())?;
+        scratch_file.write_all(toml_entry.as_bytes())?;
+        scratch_file.sync_all()?;
+    }
+    std::fs::rename(&scratch, &config_path)?;
 
     println!(
         "Created agents/{}/config/ in {}",
@@ -357,6 +403,218 @@ mod tests {
             err.contains("no active config repo") || err.contains("workestrate init"),
             "error should mention 'no active config repo' or 'workestrate init'; got: {err}"
         );
+    }
+
+    // ---- FS-12: cmd_init temp-dir cleanup + .workestrate/ probe ----
+
+    /// FS-12: the TempDirGuard removes the temp dir on drop — the mechanism
+    /// that closes the temp-dir leak when a mid-init step early-returns via
+    /// `?` (previously the sequential `remove_dir_all` at the end was the
+    /// ONLY cleanup, so failures leaked the clone).
+    #[test]
+    fn temp_dir_guard_removes_dir_on_drop() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!(
+            "workestrate-fs12-guard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("marker"), b"x")?;
+        {
+            let _guard = TempDirGuard(dir.clone());
+            assert!(dir.exists(), "dir must exist while the guard is alive");
+        }
+        assert!(
+            !dir.exists(),
+            "guard drop must remove the temp dir (even on the early-return path)"
+        );
+        Ok(())
+    }
+
+    /// FS-12: the cloned-repo probe order prefers the ADR-0023 single-home
+    /// layout (`.workestrate/config.toml`) over the legacy `workestrate/`
+    /// and `.config/workestrate/` layouts, and falls back through them.
+    #[test]
+    fn init_probe_order_prefers_dot_workestrate_layout() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "workestrate-fs12-probe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root)?;
+
+        // Mirror the production probe closure from cmd_init.
+        let probe = |temp_dir: &std::path::Path, rel: &[&str]| {
+            let candidate = rel
+                .iter()
+                .fold(temp_dir.to_path_buf(), |acc, seg| acc.join(seg));
+            candidate.exists().then_some(candidate)
+        };
+        let find = |temp_dir: &std::path::Path| {
+            probe(temp_dir, &[".workestrate", "config.toml"])
+                .or_else(|| probe(temp_dir, &["workestrate", "config.toml"]))
+                .or_else(|| probe(temp_dir, &[".config", "workestrate", "config.toml"]))
+        };
+
+        // Only legacy .config layout → found there.
+        let legacy_dotconfig = root.join("c1");
+        std::fs::create_dir_all(legacy_dotconfig.join(".config").join("workestrate"))?;
+        std::fs::write(
+            legacy_dotconfig
+                .join(".config")
+                .join("workestrate")
+                .join("config.toml"),
+            "layers = []\n",
+        )?;
+        assert_eq!(
+            find(&legacy_dotconfig).unwrap(),
+            legacy_dotconfig
+                .join(".config")
+                .join("workestrate")
+                .join("config.toml")
+        );
+
+        // Both legacy layouts → workestrate/ wins over .config/workestrate/.
+        let both_legacy = root.join("c2");
+        std::fs::create_dir_all(both_legacy.join("workestrate"))?;
+        std::fs::create_dir_all(both_legacy.join(".config").join("workestrate"))?;
+        std::fs::write(
+            both_legacy.join("workestrate").join("config.toml"),
+            "layers = []\n",
+        )?;
+        std::fs::write(
+            both_legacy
+                .join(".config")
+                .join("workestrate")
+                .join("config.toml"),
+            "layers = []\n",
+        )?;
+        assert_eq!(
+            find(&both_legacy).unwrap(),
+            both_legacy.join("workestrate").join("config.toml")
+        );
+
+        // All three layouts → .workestrate/ wins (ADR-0023 preferred).
+        let all = root.join("c3");
+        std::fs::create_dir_all(all.join(".workestrate"))?;
+        std::fs::create_dir_all(all.join("workestrate"))?;
+        std::fs::create_dir_all(all.join(".config").join("workestrate"))?;
+        std::fs::write(
+            all.join(".workestrate").join("config.toml"),
+            "layers = []\n",
+        )?;
+        std::fs::write(all.join("workestrate").join("config.toml"), "layers = []\n")?;
+        std::fs::write(
+            all.join(".config").join("workestrate").join("config.toml"),
+            "layers = []\n",
+        )?;
+        assert_eq!(
+            find(&all).unwrap(),
+            all.join(".workestrate").join("config.toml"),
+            "ADR-0023 .workestrate/ layout must be probed first"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    // ---- FS-17: cmd_new TOCTOU ----
+
+    /// FS-17: cmd_new against an EXISTING agents/<name> dir must fail — the
+    /// exists-check + create_dir(fail-if-exists) pair is the race-safe
+    /// refusal. Uses WORKESTRATE_CONFIG_DIR to pin the active config repo.
+    // ENV_TEST_LOCK held across `.await`: safe on the single-threaded
+    // current-thread test runtime (no spawned tasks); mirrors the proven
+    // ps.rs idiom for env-mutating async tests.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cmd_new_fails_when_agent_dir_already_exists() -> Result<()> {
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+
+        let tmp = crate::config::test_support::uniq_dir("fs17-new-exists");
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
+        std::fs::create_dir_all(tmp.join("agents").join("dupe"))?;
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+
+        let result = cmd_new("dupe").await;
+        assert!(result.is_err(), "existing agents/dupe must fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("already exists") || err.contains("failed to create"),
+            "error must name the conflict: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// FS-17: the TOML entry write is atomic — after cmd_new the
+    /// workestrate.toml contains the appended entry AND no scratch file is
+    /// left behind (create_new + rename leaves no `.workestrate.toml.new-*`
+    /// residue on the success path).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cmd_new_appends_entry_atomically_and_leaves_no_scratch() -> Result<()> {
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+
+        let tmp = crate::config::test_support::uniq_dir("fs17-new-atomic");
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(
+            tmp.join("workestrate.toml"),
+            "schema_version = 1\n\n[workloads.existing]\nkind = \"agent\"\n",
+        )?;
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+
+        cmd_new("fresh-agent").await?;
+
+        let content = std::fs::read_to_string(tmp.join("workestrate.toml"))?;
+        assert!(
+            content.contains("[workloads.existing]"),
+            "pre-existing content must be preserved"
+        );
+        assert!(
+            content.contains("[workloads.fresh-agent]"),
+            "the new workload entry must be appended"
+        );
+        // No scratch residue.
+        let scratch_leftovers: Vec<_> = std::fs::read_dir(&tmp)?
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".workestrate.toml.new-")
+            })
+            .collect();
+        assert!(
+            scratch_leftovers.is_empty(),
+            "no scratch files must remain after the atomic rename: {:?}",
+            scratch_leftovers
+                .iter()
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>()
+        );
+        // The agent dir was created.
+        assert!(tmp
+            .join("agents")
+            .join("fresh-agent")
+            .join("config")
+            .exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
     }
 
     // ---- A20 regression: cmd_new rejects invalid workload names ----
