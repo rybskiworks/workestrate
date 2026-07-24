@@ -289,7 +289,11 @@ pub(crate) fn run_migrate_home(
     // overrides.
     let existing_dsts: Vec<String> = planned
         .iter()
-        .filter(|(_, dst)| dst.exists())
+        // lstat, not stat: `dst.exists()` follows symlinks and returns FALSE
+        // for a dangling symlink, so rename(2) would silently clobber one
+        // planted at a planned destination (FN-11). `symlink_metadata` is Ok
+        // for anything occupying the path, including dangling links.
+        .filter(|(_, dst)| std::fs::symlink_metadata(dst).is_ok())
         .map(|(_, dst)| dst.display().to_string())
         .collect();
     if !existing_dsts.is_empty() && !force {
@@ -862,6 +866,49 @@ pub(crate) mod tests {
         let round = toml::to_string(&reg)?;
         let reg2: Registry = toml::from_str(&round)?;
         assert_eq!(reg2.settings.home_version, None);
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn migrate_home_refuses_when_planned_dst_is_dangling_symlink() -> Result<()> {
+        // FN-11 regression: a DANGLING symlink at a planned dst must trip the
+        // clobber guard. `dst.exists()` follows the link and returns false,
+        // so the old guard missed it and rename(2) silently replaced the link.
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+
+        let root = uniq_dir("mig-dangling");
+        std::fs::create_dir_all(&root)?;
+        let _ = build_xdg_layout(&root)?;
+        let dest = root.join("dest");
+
+        // Plant a dangling symlink where repos/personal is planned to land.
+        std::fs::create_dir_all(dest.join("repos"))?;
+        let dangling = dest.join("repos").join("personal");
+        std::os::unix::fs::symlink(root.join("nonexistent-target"), &dangling)?;
+        // Precondition: the link is dangling (stat fails) but lstat sees it.
+        assert!(!dangling.exists(), "test precondition: link must dangle");
+        assert!(std::fs::symlink_metadata(&dangling).is_ok());
+
+        let err = run_migrate_home(Some("xdg"), &dest, false, false).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("already contains"),
+            "expected clobber refusal for the dangling symlink, got: {msg}"
+        );
+        assert!(
+            msg.contains("repos/personal"),
+            "expected the dangling dst listed in the refusal, got: {msg}"
+        );
+        // The dangling symlink must be untouched (refusal precedes any move).
+        assert!(
+            std::fs::symlink_metadata(&dangling)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false),
+            "dangling symlink must survive the refused migration"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
 }
