@@ -332,14 +332,23 @@ fn merge_workload(
         );
     }
     if table.contains_key("secret_env") {
+        // FN-3: secret_env lists merge union-by-secret-name with LAST layer
+        // wins per secret — mirroring the env union semantics above (an
+        // existing entry is replaced IN PLACE; brand-new secrets are
+        // appended in override order). Provenance is updated on EVERY
+        // (re)declaration, so it always names the layer that set the final
+        // value. (Previously first-layer-wins with first-declaration-only
+        // provenance — the opposite of env.)
         for se in &layer.secret_env {
-            if !merged.secret_env.iter().any(|m| m.secret == se.secret) {
+            if let Some(existing) = merged.secret_env.iter_mut().find(|m| m.secret == se.secret) {
+                *existing = se.clone();
+            } else {
                 merged.secret_env.push(se.clone());
-                provenance.insert(
-                    format!("workloads.{name}.secret_env.{}", se.secret),
-                    layer_ctx.name.clone(),
-                );
             }
+            provenance.insert(
+                format!("workloads.{name}.secret_env.{}", se.secret),
+                layer_ctx.name.clone(),
+            );
         }
     }
 
@@ -884,5 +893,98 @@ mod tests {
         let _: fn(Option<Provenance>) = set_secret_provenance;
         let _: fn() -> Option<Provenance> = get_secret_provenance;
         let _: fn() -> Option<Provenance> = take_secret_provenance;
+    }
+    // ---- FN-3: secret_env is last-layer-wins per secret, like env ----
+
+    /// A layer declaring `secret_env` entries (by secret name) for workload
+    /// `pi`. `SecretEnvConfig` carries only the `secret` key, so the win/lose
+    /// signal is which declaration SURVIVES: on a redeclaration the later
+    /// layer's entry replaces the earlier one in place (observable via
+    /// provenance + single entry), while a first declaration appends.
+    fn secret_env_layer(name: &str, secrets: &[&str]) -> Layer {
+        let entries: String = secrets
+            .iter()
+            .map(|s| format!("[[workloads.pi.secret_env]]\nsecret = \"{s}\"\n\n"))
+            .collect();
+        Layer::from_string(
+            name,
+            &format!(
+                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\ncommand = []\nlog_stop_errors = false\n\n{entries}[workloads.pi.network]\ndefault_deny = true"
+            ),
+        )
+        .expect("secret_env layer must parse")
+    }
+
+    #[test]
+    fn secret_env_union_last_layer_wins_per_secret() -> Result<()> {
+        // FN-3 regression: base secret_env [A] + later layer [A] → exactly
+        // one entry survives (in-place replace, no duplicate) and provenance
+        // attributes the (re)declared secret to the LATER layer. Under the
+        // old first-layer-wins semantics the entry was kept and provenance
+        // stayed at "base".
+        let base = secret_env_layer("base", &["GH_TOKEN"]);
+        let team = secret_env_layer("team", &["GH_TOKEN"]);
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        let names: Vec<&str> = pi.secret_env.iter().map(|se| se.secret.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["GH_TOKEN"],
+            "redeclared secret must not be duplicated"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.secret_env.GH_TOKEN"),
+            Some(&"team".to_string()),
+            "provenance must attribute the redeclared secret to the later layer"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn secret_env_union_appends_new_secrets_in_order() -> Result<()> {
+        // Union still holds: a secret declared only in the base survives a
+        // later layer declaring a different secret; the new secret appends
+        // after the base entry, each with its own per-secret provenance.
+        let base = secret_env_layer("base", &["GH_TOKEN"]);
+        let team = secret_env_layer("team", &["NPM_TOKEN"]);
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        let names: Vec<&str> = pi.secret_env.iter().map(|se| se.secret.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["GH_TOKEN", "NPM_TOKEN"],
+            "base secrets preserved; new secrets appended in override order"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.secret_env.GH_TOKEN"),
+            Some(&"base".to_string())
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.secret_env.NPM_TOKEN"),
+            Some(&"team".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn secret_env_three_layer_stack_latest_declaration_wins() -> Result<()> {
+        // Three layers declaring the same secret: one entry survives and
+        // provenance tracks every (re)declaration, ending at the top layer.
+        let base = secret_env_layer("base", &["KEY"]);
+        let mid = secret_env_layer("mid", &["KEY"]);
+        let top = secret_env_layer("top", &["KEY"]);
+
+        let (merged, provenance) = merge_layers(&[base, mid, top])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(pi.secret_env.len(), 1, "no duplicate secret entries");
+        assert_eq!(pi.secret_env[0].secret, "KEY");
+        assert_eq!(
+            provenance.get("workloads.pi.secret_env.KEY"),
+            Some(&"top".to_string()),
+            "provenance must reflect the final (top) declaration"
+        );
+        Ok(())
     }
 }
