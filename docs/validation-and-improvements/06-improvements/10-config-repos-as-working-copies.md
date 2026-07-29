@@ -183,6 +183,35 @@ intent (git repo, remote, hooks, branches). `workestrate home init` is the
 one-button explicit form: discoverable in `--help`, idempotent, refuses to
 clobber, and prints "add your dotfiles remote next".
 
+**Home init: which home, and which homes need it.** Three follow-up decisions
+on how `home init` selects and treats its target home:
+
+1. **NO DEDICATED `--path` FLAG.** `home init` takes no path argument; it
+   operates on the RESOLVED home — the same precedence as every other command:
+   `WORKESTRATE_HOME` env today, and the global `--home` flag once
+   [06-config-home-flag.md](06-config-home-flag.md) is implemented. Rationale:
+   a one-off `--path` would be a THIRD mechanism for "which home" and would rot
+   against the global flag; composition
+   (`workestrate --home <dir> home init`, or
+   `WORKESTRATE_HOME=<dir> workestrate home init`) is the idiomatic pattern.
+   Example for the experiment home:
+   `workestrate --home ~/Development/workestrate-dev-config home init`
+   (flag form; use the env form until the flag lands).
+2. **Experiment/throwaway homes don't need init.** The tool auto-materializes
+   the home layout (registry, `config-repos/`, `sources/`, `state/`) on first
+   use, so a disposable experiment home (`workestrate-dev-config`) needs no
+   `home init` at all — point `WORKESTRATE_HOME`/`--home` at it and run.
+   `home init` is only for homes the user wants VERSIONED (the real
+   `~/.workestrate`; later the dogfood driver home). This is the operational
+   form of the never-auto-git-init rationale above: init is the explicit
+   declaration "this home is real and persistent."
+3. **Idempotent over non-empty homes.** `home init` must tolerate an existing
+   populated home (e.g. after `cp -a` of bundle content per spec 08 step b):
+   it detects existing content, adds ONLY the git layer (`.git`, `.gitignore`,
+   pre-commit hook), and refuses only on a conflicting pre-existing `.git`.
+   This makes both Step 0.5 orderings safe: init-then-migrate OR
+   migrate-then-init.
+
 ---
 
 ## 3. Name decision — `config-repos/`
@@ -244,7 +273,7 @@ document the invariant. Gate: `cargo test`.
 New explicit command (propose `workestrate home init` or `workestrate init
 --home`; existing `workestrate init` at `init.rs:24`). Implements the §2
 scaffolding spec: `git init`, `.gitignore` generation, pre-commit hook
-installation, next-steps printout. NEVER auto-git-init (rationale: §2, "Why never auto-git-init (rationale)").
+installation, next-steps printout. NEVER auto-git-init (rationale: §2, "Why never auto-git-init (rationale)"). It also implements the resolution and idempotency decisions in §2, "Home init: which home, and which homes need it" (no --path flag — operates on the resolved home; idempotent over a populated home, adding only the git layer).
 
 **Gates:** `cargo test` (hook content generation, gitignore generation,
 idempotency).
@@ -290,6 +319,11 @@ Decisions A/B.
   development happens in the home's `config-repos/` working copies (per
   Decision A); the mount set for dev agents becomes: home ro at the default
   path + `config-repos/` rw shadow + dev home rw. See its AMENDED markers.
+- **Sequencing note.** Spec 10's code tasks (Tasks 1–3) should run FIRST in
+  the next devshell session so that
+  [../07-execution-order.md](../07-execution-order.md) Step 0.5 can use
+  `workestrate home init` instead of hand-rolling the home layout and git
+  scaffolding.
 
 ---
 
@@ -309,4 +343,10 @@ Decisions A/B.
 - [ ] **(code, devshell-gated)** Task 2 dirty-guard regression test green.
 - [ ] **(code, devshell-gated)** Task 3 `home init` scaffolds gitignore + hook
   and rejects gitlinks/secret paths (test-verified).
+- [ ] **(code, devshell-gated)** Task 3 `home init` has no `--path` flag and
+  operates on the resolved home (`WORKESTRATE_HOME` env; global `--home` per
+  [06-config-home-flag.md](06-config-home-flag.md) once implemented).
+- [ ] **(code, devshell-gated)** Task 3 `home init` is idempotent over a
+  populated home (adds the git layer only; refuses only on a conflicting
+  pre-existing `.git`).
 - [ ] `repos/` fallback documented (one constant at `paths.rs:216-218`).
