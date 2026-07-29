@@ -53,6 +53,16 @@ re-derive their contents.
 >     `workestrate config update` fails until the config repo is pushed to a
 >     remote.
 >
+> **NEW DECISION (spec 08):** the workestrate tool home must NEVER live
+> inside the repo checkout — home = user-global `~/.workestrate` only. Spec:
+> `06-improvements/08-no-repo-local-home.md` (READY-TO-EXECUTE; code step
+> NEEDS-DEVSHELL). The repo-local bundle `.workestrate/` is STILL PRESENT
+> until the spec is executed — and until its step (a) lands it holds the ONLY
+> committed copy of the personal config (`c41a707`); do NOT rebuild the
+> container or delete the bundle (see spec §5 interim warning). Execution is
+> sequenced EARLY: `07-execution-order.md` Step 0.5, before Lane A / the host
+> batch, because it changes the paths those reference.
+>
 > The authoring container has NO `cc` linker (verified:
 > `command -v cc gcc` → not found). Your FIRST job is to verify the parse:
 > inside `nix develop` (HOST-NIX devshell provides `cc`), run
@@ -74,7 +84,9 @@ re-derive their contents.
 > Do not make a host trip for one gate — batch.
 >
 > **5. How to work.** Work `07-execution-order.md` in order, top to bottom
-> (Step 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8). Report lane-by-lane honestly:
+> (Step 0 → 0.5 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8). Step 0.5 (spec 08, retire
+> the repo-local home) is new — its step (a) is a hard prerequisite for any
+> container rebuild. Report lane-by-lane honestly:
 > `verifiable-here` (this container: TOML, golden files, git, shell/python) vs
 > `HOST-NIX` (nix devshell: cargo gates, nix builds, FOD hashes) vs `HOST-KVM`
 > (runtime: service boot, agent exec, instance lifecycle). The
@@ -127,6 +139,8 @@ re-derive their contents.
 >     edit.
 
 > **Note (2026-07-29):** improvement spec 07 — naming consistency (purge `workestrator` residue, standardize on `workestrate`) — is IN-PROGRESS on branch `migration/tool-model`; see [06-improvements/07-naming-consistency.md](06-improvements/07-naming-consistency.md), including the personal-config-repo image-name FLAG (§4) and the checkout-dir-rename implications (§6).
+
+> **Note (2026-07-29, spec 08):** a NEW user decision exists — **the workestrate tool home must NEVER live inside the repo checkout**; the home is the user-global `~/.workestrate` only. Spec: [06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md) (READY-TO-EXECUTE; code step NEEDS-DEVSHELL). The repo-local bundle at `.workestrate/` is **still present** until the spec is executed. **INTERIM WARNING (spec §5):** until execution step (a) lands (clone `.workestrate/repos/personal` @ `c41a707` → `/home/node/Development/workestrate-personal`), the only committed copy of the personal config lives in the ephemeral container bundle — do NOT rebuild the container or delete the bundle. Execution is sequenced EARLY (07-execution-order.md Step 0.5), before Lane A / the host batch, because it changes the paths those reference. The `--home` flag spec ([06-improvements/06-config-home-flag.md](06-improvements/06-config-home-flag.md)) gains weight: with the discovery tier removed, `--home` becomes THE explicit override (precedence: flag > env > legacy XDG > default).
 
 ---
 

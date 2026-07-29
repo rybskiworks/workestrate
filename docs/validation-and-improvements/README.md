@@ -56,6 +56,7 @@ files. Read in this order:
 | [`06-improvements/05-config-reference-cwd-fallback.md`](06-improvements/05-config-reference-cwd-fallback.md) | Standalone fix spec for the config-reference cwd-fallback quirk | `STATUS: SPEC (bug fix candidate, small)` |
 | [`06-improvements/06-config-home-flag.md`](06-improvements/06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `STATUS: SPEC (small, not yet implemented)` |
 | [`06-improvements/07-naming-consistency.md`](06-improvements/07-naming-consistency.md) | Purge `workestrator` residue; standardize on `workestrate` | `STATUS: IN-PROGRESS THIS BRANCH` |
+| [`06-improvements/08-no-repo-local-home.md`](06-improvements/08-no-repo-local-home.md) | Retire the repo-local tool home: `~/.workestrate` only, never inside the checkout; removes the discovery tier | `STATUS: READY-TO-EXECUTE (docs/decision); code step NEEDS-DEVSHELL` |
 | [`07-execution-order.md`](07-execution-order.md) | Recommended sequencing across all tracks | STATUS: READY-TO-EXECUTE |
 | [`NEXT-SESSION.md`](NEXT-SESSION.md) | Self-contained handoff prompt for the next contextless session | `STATUS: HANDOFF` |
 

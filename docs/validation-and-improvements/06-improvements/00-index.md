@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the seven post-validation improvement specifications under
+This index catalogs the eight post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -52,6 +52,7 @@ invariant.
 | [05-config-reference-cwd-fallback.md](05-config-reference-cwd-fallback.md) | Config-reference cwd-fallback quirk (standalone fix spec) | `SPEC (bug fix candidate, small)` | None — standalone bug fix; referenced by [03](03-dogfooding.md) as the underlying quirk | **S** (explicitly stated) | `verifiable-here` (fix gate: `cargo test`); reproduction is `HOST-NIX` |
 | [06-config-home-flag.md](06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `SPEC (small, not yet implemented)` | None — standalone; referenced by [03](03-dogfooding.md) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) for ergonomics | **S** | `verifiable-here` (fix gate: `cargo test`); runs in HOST-NIX devshell (no `cc` here) |
 | [07-naming-consistency.md](07-naming-consistency.md) | Naming consistency: purge `workestrator` residue | `IN-PROGRESS THIS BRANCH (migration/tool-model)` | None — standalone rename; FLAG: personal config repo image-name coordination (spec §4) | **M** | `verifiable-here` (grep/lint-nix/nix eval); cargo gates `HOST-NIX` |
+| [08-no-repo-local-home.md](08-no-repo-local-home.md) | No repo-local tool home (retire `.workestrate/` inside the checkout) | `READY-TO-EXECUTE (docs/decision); code step (e) is NEEDS-DEVSHELL` | None — stepwise internal ordering only (a→d strictly; e is the code step); sequencing-wise it should land EARLY (before Lane A / host batch) because it changes the paths those reference | **S** (steps a–d, f, g) + **code-S** (step e) | `verifiable-here` for a–d/f/g; step (b) verify + step (e) code gates are `HOST-NIX` devshell (no `cc` here) |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -169,6 +170,31 @@ wrapper package could not become `workestrate` (attr already taken by the
 agentctl binary), so it becomes `workestrate-sandbox`; the image rename is
 FLAGGED for coordinated update of the personal config repo.
 
+### 08 — No repo-local tool home
+
+User decision: the workestrate tool home must **NEVER** live inside the repo
+checkout — the home is the user-global `~/.workestrate` (ADR 0023 default)
+only. Retires the repo-local bundle at `.workestrate/` (created for
+container-$HOME persistence, `.envrc`-pinned, gitignored at `.gitignore:46`,
+untracked) and ALL repo-local-home machinery: `scripts/local-xdg.sh`,
+`scripts/migrate-xdg-to-repo.sh`, the `.envrc` pin, the `.gitignore` entry,
+and — in the code step — the trusted-ancestor discovery tier of
+`resolve_home_with_kind()` (`paths.rs:116-139`), the `HomeKind::Discovered`
+variant, and `emit_untrusted_discovery_warn`. New precedence: **flag
+(`--home`, [06](06-config-home-flag.md)) > env > legacy XDG > default
+`~/.workestrate`**. Execution plan is strictly ordered: (a) preserve the
+personal config (clone `.workestrate/repos/personal` @ `c41a707` →
+`/home/node/Development/workestrate-personal`) → (b) create the real home at
+`~/.workestrate` (drop non-standard `scratch/` — resolves the Step 0(b)
+scratch/cache open decision as: neither, drop it; fix the stale registry rev
+`d2cd0c3` → `c41a707`) → (c) delete the machinery (one commit) → (d) delete
+the bundle → (e) code (HOST-NIX) → (f) ADR 0023 addendum + glossary →
+(g) compose/mount guidance. **Key decision:** no repo-local homes, no
+discovery — the tool consumes config repos from elsewhere. **INTERIM
+WARNING (spec §5):** until step (a) lands, the only committed copy of the
+personal config lives in the ephemeral container bundle — do NOT rebuild the
+container or delete the bundle.
+
 ---
 
 ## Dependency graph
@@ -178,6 +204,9 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 ```
 (standalone)
+├── 08-no-repo-local-home            [no deps; LAND EARLY — it changes the
+│     │                               paths Lane A / host batch reference;
+│     │                               internal order a→d strict, e = code]
 ├── 07-naming-consistency            [no deps; this branch; mechanical rename]
 ├── 02-main-standardization          [no deps; one-shot git rename]
 ├── 06-config-home-flag               [no deps; additive CLI front-end]
@@ -207,6 +236,15 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 **Key dependency notes:**
 
+- **08 (no repo-local home)** has no file-level dependency on any other spec,
+  but **sequencing matters**: it changes the paths that Lane A
+  ([../04-baseline-validation.md](../04-baseline-validation.md)) and the host
+  batch ([../05-host-validation.md](../05-host-validation.md)) reference
+  (`WORKESTRATE_HOME=<repo>/.workestrate` spellings), so it should land
+  BEFORE those lanes run — see [../07-execution-order.md](../07-execution-order.md)
+  Step 0.5. It also **strengthens 06 (`--home` flag)**: with the discovery
+  tier removed, `--home` becomes THE explicit per-invocation override and the
+  precedence simplifies to flag > env > legacy XDG > default.
 - **04 (CLI authoring)** is gated on **`02-config-requirements.md` sign-off**
   (a sibling requirements doc, not an improvement spec). It is `DEFERRED`
   until that sign-off. Additionally, it must be **additive-tolerant** of 01's
@@ -239,7 +277,7 @@ Reproduced from [../01-current-state-and-prereqs.md](../01-current-state-and-pre
 
 ## Inconsistencies between specs (for lead reconciliation)
 
-These are discrepancies found while reading the six specs; they do not block
+These are discrepancies found while reading the specs (01–07, pre-08); they do not block
 this index but should be reconciled:
 
 1. **Effort estimates are inconsistent in format.** 01 breaks effort down per

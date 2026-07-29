@@ -9,10 +9,11 @@
 > [06-improvements/00-index.md](06-improvements/00-index.md)
 
 This document defines the **recommended execution sequence** for the entire
-validation-and-improvements effort: bundle hygiene, Lane A config-plane
-validation, baseline recovery, quick-win improvements, dogfooding guardrails,
-experiment-home probes, the batched host pass, Track A mount filtering, and
-the deferred remainder. A contextless operator follows it top-to-bottom.
+validation-and-improvements effort: bundle hygiene, repo-local-home
+retirement, Lane A config-plane validation, baseline recovery, quick-win
+improvements, dogfooding guardrails, experiment-home probes, the batched host
+pass, Track A mount filtering, and the deferred remainder. A contextless
+operator follows it top-to-bottom.
 
 The spine below is the recommended ordering. It was adjusted from the initial
 draft **only** where sibling files contradicted it — adjustments are called
@@ -49,6 +50,17 @@ Reprodu from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)
 | **Gate / exit criteria** | Items (e) and (a) LANDED (edits applied; verified via grep and `git branch --show-current`). What remains for (e) is the runtime `validate-config` parse verification — the **first Lane A action** in Step 1 (HOST-NIX devshell; no `cc` linker in this container). Item (b) resolved or explicitly deferred with a recorded decision; items (c) and (d) acknowledged as HOST-batched (not blocking Steps 1–5). |
 | **Env marker** | `verifiable-here` for (e) [APPLIED] and (a) [APPLIED] and (b); runtime parse verification for (e) is `HOST-NIX`; `HOST-NIX` for (c); `HOST-KVM` runtime / HOST-only secret provisioning for (d). |
 | **Parallelization** | (e) and (a) have landed (no longer blocking). (b) is independent of everything else. (c) and (d) are deferred to Step 6. The remaining blocker for config-plane work is the runtime `validate-config` verification in Lane A (Step 1). |
+
+### Step 0.5 — Retire the repo-local tool home (spec 08)
+
+| | |
+|---|---|
+| **Goal** | Execute [06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md): the tool home becomes user-global `~/.workestrate` ONLY (ADR 0023 default) — the repo-local bundle `.workestrate/` and all repo-local-home machinery (`.envrc` pin, `scripts/local-xdg.sh`, `scripts/migrate-xdg-to-repo.sh`, `.gitignore:46` entry, and the trusted-ancestor discovery tier in `paths.rs`) are retired. Inserted as an early step BEFORE Lane A / the host batch **because it changes the paths those steps reference** (`WORKESTRATE_HOME=/home/node/Development/ai-workbench/.workestrate` spellings in Steps 1–6 go away; default resolution finds `~/.workestrate`). |
+| **Files to follow** | [06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md) (the full ordered plan a–g; do not re-derive). |
+| **Sub-steps** | **(a) FIRST — preserve the personal config:** `git clone /home/node/Development/ai-workbench/.workestrate/repos/personal /home/node/Development/workestrate-personal`; verify `git log --oneline -2` shows `c41a707` on `main`. **(b)** `cp -a` bundle → `~/.workestrate`; drop non-standard `scratch/` (RESOLVES Step 0(b) scratch/cache: neither — drop it); edit `~/.workestrate/config.toml` (`url` → the standalone clone, `rev` → `c41a70736cd3f65032f6c4e5351302694251fef0` — clears the registry-rev staleness); set origin on `~/.workestrate/repos/personal`; verify `workestrate config list` + `validate-config` in `nix develop` (HOST-NIX). **(c)** One commit: `git rm scripts/local-xdg.sh scripts/migrate-xdg-to-repo.sh`; remove the `WORKESTRATE_HOME` line from `.envrc`; remove `/.workestrate/` (+ its comment) from `.gitignore`. **(d)** ONLY after (b) verified: `rm -rf /home/node/Development/ai-workbench/.workestrate`; sweep `rg -l '\.workestrate' -g '!docs/**' -g '!*.lock' .`. **(e) CODE (NEEDS-DEVSHELL, HOST-NIX):** remove the discovery tier (`paths.rs:116-139`), `HomeKind::Discovered`, `emit_untrusted_discovery_warn`; KEEP `is_dir_trusted_via_base_registry` (second caller `trust.rs:327`); gates `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. **(f)** ADR 0023 addendum + `60-glossary.md` tool-home entry. **(g)** compose/mount guidance: shadow-mount `~/.workestrate` ro at an explicit non-default guest path; the repo mount carries no bundle. |
+| **Gate / exit criteria** | (a) standalone clone exists with `c41a707` as HEAD. (b) `workestrate config list` with NO `WORKESTRATE_HOME` export shows `personal` @ `c41a707` from `~/.workestrate`. (c) machinery commit landed. (d) bundle deleted; reference sweep clean. (e) cargo gates green in devshell. New precedence documented: **flag (`--home`) > env > legacy XDG > default `~/.workestrate`** (no discovery). |
+| **Env marker** | (a)(c)(d)(f)(g): `verifiable-here`. (b) verify + (e): `HOST-NIX` devshell (no `cc` in this container). |
+| **Parallelization** | Strictly ordered internally (a→d). Steps 1–6 should NOT run against the old bundle paths after (d) — land this step first, or accept that Steps 1/3/5/6 command spellings need re-pointing per the spec §4 sweep. **INTERIM WARNING (spec §5):** until (a) is verified, the only committed copy of the personal config (`c41a707`) lives in the ephemeral container bundle — do NOT rebuild the container or delete the bundle. |
 
 ### Step 1 — Lane A gate (config-plane validation)
 
@@ -158,6 +170,7 @@ Reprodu from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)
 | Step | Can run concurrently with | Strictly ordered after | Blocking dependency |
 |---|---|---|---|
 | 0 (bundle hygiene) | 0(e) first; then 0(a) ∥ 0(b); 0(c)/0(d) deferred to Step 6 | — | 0(e) blocks all config loads (CRITICAL) |
+| 0.5 (retire repo-local home) | Nothing until 0.5(a) verified; then sequential a→d | Step 0 (acknowledged) | Changes the paths Steps 1–6 reference — land before Lane A / host batch; (b)+(e) need HOST-NIX devshell |
 | 1 (Lane A gate) | — | Step 0 (acknowledged) | Must be green before Steps 2–8 |
 | 2 (baseline recovery) | Steps 3, 4, 5 | Step 1 | `cc` linker (HOST-NIX per 04) |
 | 3 (quick wins) | Steps 2, 4, 5 | Step 1 | 3(a) is standalone; 3(b) is the only bug-fix improvement (can jump queue) |
@@ -175,6 +188,7 @@ Reprodu from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)
 - [ ] **Baseline parity verdict documented** — all 5 workloads match after normalization, or every delta is justified in a table ([04-baseline-validation.md](04-baseline-validation.md) §5 acceptance criteria).
 - [ ] **Host batch B1–B12 green** — every step in [05-host-validation.md](05-host-validation.md) passes per the capability → proof → acceptance matrix.
 - [x] **Main rename done** — personal clone branch is `main`, `config list` shows `ref main, rev d2cd0c3, clean) [OK]` ([06-improvements/02](06-improvements/02-main-standardization.md)). **(applied; rev `d2cd0c3` unchanged; clone has no origin remote — `config update` pending push)**
+- [ ] **Repo-local home retired** — [06-improvements/08](06-improvements/08-no-repo-local-home.md) executed end-to-end: personal config preserved at `/home/node/Development/workestrate-personal` (@ `c41a707`), real home at `~/.workestrate` (registry rev fixed), machinery commit landed, bundle deleted, discovery tier removed from `paths.rs` (cargo gates green in devshell), ADR 0023 addendum + glossary updated. **(NOT STARTED — interim warning applies until step (a))**
 - [ ] **Dogfooding guardrails active** — Phase 0 env-pinning wrapper in use; B1 self-home mount guard merged (or explicitly deferred with rationale).
 - [ ] **Track A WP1–WP4 merged** (or WP5 triggered) — mount filtering/shadowing schema, policy, render, and runtime shadows landed; or, if the Phase 0 spike failed, the staging-copy fallback (WP5) is landed instead.
 - [ ] **Improvements index statuses updated** — [06-improvements/00-index.md](06-improvements/00-index.md) master table reflects the actual post-execution status of each spec (SPEC → IMPLEMENTED / MERGED / DEFERRED).
