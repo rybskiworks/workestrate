@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the nine post-validation improvement specifications under
+This index catalogs the ten post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -54,6 +54,7 @@ invariant.
 | [07-naming-consistency.md](07-naming-consistency.md) | Naming consistency: purge `workestrator` residue | `IN-PROGRESS THIS BRANCH (migration/tool-model)` | None — standalone rename; FLAG: personal config repo image-name coordination (spec §4) | **M** | `verifiable-here` (grep/lint-nix/nix eval); cargo gates `HOST-NIX` |
 | [08-no-repo-local-home.md](08-no-repo-local-home.md) | No repo-local tool home (retire `.workestrate/` inside the checkout) | `READY-TO-EXECUTE (docs/decision); code step (e) is NEEDS-DEVSHELL` | None — stepwise internal ordering only (a→d strictly; e is the code step); sequencing-wise it should land EARLY (before Lane A / host batch) because it changes the paths those reference | **S** (steps a–d, f, g) + **code-S** (step e) | `verifiable-here` for a–d/f/g; step (b) verify + step (e) code gates are `HOST-NIX` devshell (no `cc` here) |
 | [09-microsandbox-agentd-offline-build.md](09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd offline build (ADR 0011 carrier) | `READY-TO-EXECUTE (option 2 gated on fork push access; option 1 gated on upstream responsiveness; option 3 NEEDS-DEVSHELL + HOST-NIX)` | None file-level on other improvement specs; option 2 blocked on fork push access; option 3 cross-references [01](01-mount-filtering-shadowing.md) | option 2 = **S** (once unblocked); option 1 = **M** (incl. upstream review latency); option 3 = **M** | `HOST-NIX` (options 2/3 builds); option 1 is upstream |
+| [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `READY-TO-EXECUTE (docs/decision); code tasks NEEDS-DEVSHELL` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -218,6 +219,28 @@ hook + agentctl.nix vendor staging + vendor-unlock/lock justfile recipes
 decision:** option 2 first (once unblocked) → option 1 upstream → delete fork
 + machinery after release; option 3 is a separate combinable track.
 
+### 10 — Config repos as working copies + dotfiles-style home
+
+Two NEW user decisions + one name decision. **Decision A:** consumed config
+repos are FIRST-CLASS working copies inside the tool home at
+`$WORKESTRATE_HOME/config-repos/<name>/` — the user edits, commits, pushes, and
+branches directly in them; the REMOTE is canonical (gitops), not a separate
+canonical sibling clone. Supersedes the standalone-sibling model in spec 08
+step (a). The dirty-safe `config update` guard is VERIFIED PRESENT
+(`config_cmd.rs:540-544`); the spec task is a regression test + docs.
+**Decision B:** the home itself becomes a dotfiles-style git repo via explicit
+`workestrate home init` scaffolding (gitignore + pre-commit hook). The
+gitlink failure mode: `git add -A` in the home would register each
+`config-repos/*` as a mode-160000 gitlink (broken pseudo-submodule) and could
+stage secret material — the hook rejects both. Completes ADR 0007's
+dotfiles-registry intent. **Name decision:** rename `repos/` → `config-repos/`
+(collision with `sources/`; ADR 0008 term of art). Three code tasks
+(NEEDS-DEVSHELL): the rename, the dirty-guard regression test, and the
+`home init` scaffolding. Mount model: dev agents get home ro at the default
+path + nested `config-repos/` rw shadow (spec 01 pattern). **Key decision:**
+the home clones ARE the working repos — no standalone sibling, no two-copy
+sync dance.
+
 ---
 
 ## Dependency graph
@@ -260,6 +283,11 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
       │                                 option 2 BLOCKED on fork push access;
       │                                 option 3 ↔ 01 (RESOLVE_BENEATH cross-ref);
       │                                 option 1 is upstream-latency-bound]
+
+10-config-repos-as-working-copies     [amends 08 step (a) + ../03 topology;
+                                        code tasks gated on devshell (NEEDS-DEVSHELL);
+                                        the config-repos/ rename gates the final
+                                        paths referenced by Steps 0.5/3/5 prose]
 ```
 
 **Key dependency notes:**
@@ -287,6 +315,14 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 - **01 (mount filtering)** has no file-level dependency on any other
   improvement spec. Its internal dependency is the Phase 0 KVM spike → WP4
   gate, and the WP5 conditional on spike failure.
+- **10 (config repos as working copies)** amends spec 08 step (a) (no
+  standalone sibling — the home clone IS the working repo) and
+  `../03-sibling-config-setup.md` topology (config-repo development happens in
+  the home's `config-repos/` working copies). Its code tasks (the
+  `repos/` → `config-repos/` rename, the dirty-guard regression test, the
+  `home init` scaffolding) are NEEDS-DEVSHELL / HOST-NIX. The rename gates the
+  final paths referenced by `07-execution-order.md` Steps 0.5/3/5 prose
+  (which cite both spellings until the rename lands).
 
 ---
 

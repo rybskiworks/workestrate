@@ -58,6 +58,7 @@ files. Read in this order:
 | [`06-improvements/07-naming-consistency.md`](06-improvements/07-naming-consistency.md) | Purge `workestrator` residue; standardize on `workestrate` | `STATUS: IN-PROGRESS THIS BRANCH` |
 | [`06-improvements/08-no-repo-local-home.md`](06-improvements/08-no-repo-local-home.md) | Retire the repo-local tool home: `~/.workestrate` only, never inside the checkout; removes the discovery tier | `STATUS: READY-TO-EXECUTE (docs/decision); code step NEEDS-DEVSHELL` |
 | [`06-improvements/09-microsandbox-agentd-offline-build.md`](06-improvements/09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd build-time download: offline-build fix options (upstream MSB_HOME fix / ADR 0011 git-fork carrier / 0.6.8 bump) | `STATUS: READY-TO-EXECUTE (option 2 gated on fork push access; option 1 gated on upstream responsiveness; option 3 NEEDS-DEVSHELL + HOST-NIX)` |
+| [`06-improvements/10-config-repos-as-working-copies.md`](06-improvements/10-config-repos-as-working-copies.md) | Config repos as working copies in the tool home + dotfiles-style home repo (gitlink-guarded `home init`; `repos/` → `config-repos/` rename) | `STATUS: READY-TO-EXECUTE (docs/decision); code tasks NEEDS-DEVSHELL` |
 | [`07-execution-order.md`](07-execution-order.md) | Recommended sequencing across all tracks | STATUS: READY-TO-EXECUTE |
 | [`NEXT-SESSION.md`](NEXT-SESSION.md) | Self-contained handoff prompt for the next contextless session | `STATUS: HANDOFF` |
 

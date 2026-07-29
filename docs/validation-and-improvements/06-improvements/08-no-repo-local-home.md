@@ -7,10 +7,21 @@
 > resolution tier removed + tests updated)
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [06-config-home-flag.md](06-config-home-flag.md) ·
+> [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) ·
 > [../01-current-state-and-prereqs.md](../01-current-state-and-prereqs.md) ·
 > [../07-execution-order.md](../07-execution-order.md) ·
 > [../../migration/50-decisions/0023-single-tool-home.md](../../migration/50-decisions/0023-single-tool-home.md) ·
 > [../../migration/60-glossary.md](../../migration/60-glossary.md)
+>
+> **AMENDED by spec 10 (2026-07-29):** steps (a) and (b) are refined by the
+> working-copy model — consumed config repos are FIRST-CLASS working copies
+> inside the tool home at `$WORKESTRATE_HOME/config-repos/<name>/` (or
+> `repos/<name>/` until the spec-10 rename lands), NOT a standalone sibling.
+> The standalone canonical clone target
+> (`/home/node/Development/workestrate-personal`) is SUPERSEDED: the existing
+> bundle clone IS the personal working repo, moved into the new home. The
+> registry URL becomes the in-home path OR the remote when added. See
+> [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md).
 
 This document records and operationalizes a **user decision**: the workestrate
 tool home must **NEVER** live inside the repo checkout. workestrate is a
@@ -46,6 +57,12 @@ migration script, and the trusted-ancestor discovery tier in `paths.rs`).
 ---
 
 ## 1. Decision + rationale
+
+> **AMENDED by spec 10:** Decision A (config repos as working copies in the
+> home) refines this spec's execution model — the home clones are first-class
+> working repos (edit/commit/push directly in them; remote is canonical), NOT
+> read-only managed clones. See
+> [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md).
 
 **Decision.** workestrate's tool home is the user-global `~/.workestrate`
 (the ADR 0023 default), full stop:
@@ -150,27 +167,48 @@ or after (e).
 
 ### (a) PRESERVE the personal config repo FIRST — `verifiable-here`
 
-The personal config exists **only** in the ephemeral bundle. Clone it out to
-a sibling of the repo checkout, on host-persisted storage:
+> **AMENDED by spec 10:** the standalone canonical clone target
+> (`/home/node/Development/workestrate-personal`) is SUPERSEDED — NO standalone
+> sibling. The existing bundle clone IS the personal working repo, moved into
+> the new home as THE working copy (per spec 10 Decision A). The preservation
+> intent (the bundle clone must survive before step (d)) is KEPT, but
+> re-targeted: preserve by moving/copying the clone into the new home. Until
+> the spec-10 `repos/` → `config-repos/` rename lands, the target is
+> `~/.workestrate/repos/personal`; after the rename, `~/.workestrate/config-repos/personal`.
+
+The personal config exists **only** in the ephemeral bundle. Move/copy it into
+the new home as THE working copy (spec 10 Decision A — the home clone is the
+first-class working repo; give it a remote when ready):
 
 ```sh
-git clone /home/node/Development/ai-workbench/.workestrate/repos/personal \
-    /home/node/Development/workestrate-personal
+mkdir -p ~/.workestrate/repos    # or config-repos/ after the spec-10 rename
+cp -a /home/node/Development/ai-workbench/.workestrate/repos/personal \
+    ~/.workestrate/repos/personal
 ```
 
-**Verify:** `git -C /home/node/Development/workestrate-personal log --oneline -2`
-shows `c41a707 fix(tempest): remove retired install_layout field (schema
-drift)` on `main` as HEAD.
+**Verify:** `git -C ~/.workestrate/repos/personal log --oneline -2` shows
+`c41a707 fix(tempest): remove retired install_layout field (schema drift)` on
+`main` as HEAD.
 
 **Gate:** this step MUST be verified before anything else proceeds. It is
 the only safeguard against the §5 data-loss scenario.
 
 ### (b) Create the real home at `~/.workestrate` — `verifiable-here` + HOST-NIX verify
 
+> **AMENDED by spec 10:** under the working-copy model, the registry URL
+> becomes the in-home path OR the remote when added (NOT the standalone
+> sibling). Origin on the managed clone = the real remote when ready (NOT the
+> standalone sibling).
+
 ```sh
 cp -a /home/node/Development/ai-workbench/.workestrate ~/.workestrate
 rm -rf ~/.workestrate/scratch    # non-standard; see below
 ```
+
+Under the amended flow, step (a) has already placed the personal working copy
+at `~/.workestrate/repos/personal`, so this `cp -a` merges the rest of the
+bundle (registry, secrets, sources, state) around it — the clone is the same
+content, and `cp -a` is idempotent here.
 
 - **Drop `scratch/`.** ADR 0023's layout
   (`docs/migration/50-decisions/0023-single-tool-home.md:73-82`) specifies
@@ -181,19 +219,23 @@ rm -rf ~/.workestrate/scratch    # non-standard; see below
   bundle's `scratch/` carries no required state; the standard layout is kept
   as-is and `cache/` is created lazily by the tool if ever needed.
 - **Edit `~/.workestrate/config.toml`:**
-  - `[configs.personal].url` → `/home/node/Development/workestrate-personal`
-    (the standalone clone from step (a));
+  - `[configs.personal].url` → under the working-copy model (spec 10 Decision
+    A), the registry URL becomes the in-home path
+    (`~/.workestrate/repos/personal` — or `config-repos/personal` after the
+    rename) OR the remote when one is added. State this plainly: point at the
+    in-home working copy for now; switch to the remote URL once a remote is
+    added.
   - `[configs.personal].rev` →
     `c41a70736cd3f65032f6c4e5351302694251fef0` — this also **clears the
     known registry-rev staleness** (`d2cd0c3` → `c41a707`).
 - **Set origin on the managed clone:** the copied
-  `~/.workestrate/repos/personal` currently has no remote. Point it at the
-  standalone repo so `workestrate config update` has somewhere to fetch
+  `~/.workestrate/repos/personal` currently has no remote. Under spec 10,
+  origin = the real remote when ready (NOT the standalone sibling). Point it
+  at the real remote so `workestrate config update` has somewhere to fetch
   from:
 
   ```sh
-  git -C ~/.workestrate/repos/personal remote add origin \
-      /home/node/Development/workestrate-personal
+  git -C ~/.workestrate/repos/personal remote add origin <your-real-remote>
   ```
 
 - **Verify (HOST-NIX devshell — needs `cc`):** inside `nix develop`, run
@@ -330,7 +372,10 @@ immediately after:
   the bundle inventory and "Bundle fixes needed" section (the bundle no
   longer exists; item (b) scratch/cache is RESOLVED by step (b) above).
 - [../03-sibling-config-setup.md](../03-sibling-config-setup.md) — topology:
-  homes are siblings of the checkout / user-global, never inside it.
+  homes are siblings of the checkout / user-global, never inside it. **Also
+  amended by spec 10:** config-repo development happens in the home's
+  `config-repos/` working copies (per spec 10 Decision A); see its AMENDED
+  markers.
 - [../04-baseline-validation.md](../04-baseline-validation.md) and
   [../05-host-validation.md](../05-host-validation.md) — command paths that
   pass `WORKESTRATE_HOME=/home/node/Development/ai-workbench/.workestrate`
@@ -360,8 +405,9 @@ at `/home/node/Development/ai-workbench/.workestrate/repos/personal`.**
 That directory is gitignored (`.gitignore:46`), untracked, and lives on
 container storage that does not survive a container rebuild.
 
-Therefore, until `git -C /home/node/Development/workestrate-personal log
---oneline -2` shows `c41a707` as HEAD:
+Therefore, until `git -C ~/.workestrate/repos/personal log --oneline -2`
+shows `c41a707` as HEAD (`repos/` until the spec-10 rename lands — matching
+the spelling convention in step (a)):
 
 - **Do NOT rebuild or recreate the authoring container.**
 - **Do NOT `rm -rf` or otherwise disturb `.workestrate/`.**
@@ -370,6 +416,7 @@ Therefore, until `git -C /home/node/Development/workestrate-personal log
   personal config.
 
 After step (a) is verified, the hazard is retired: the personal config
-exists as a normal git repo at `/home/node/Development/workestrate-personal`
-on host-persisted storage, and again inside `~/.workestrate/repos/personal`
-after step (b).
+exists as a normal git repo at `~/.workestrate/repos/personal` (or
+`config-repos/personal` after the spec-10 rename) on host-persisted storage
+— the in-home working copy per spec 10 Decision A. Step (b) then copies the
+rest of the home (registry, secrets, sources, state) around it.

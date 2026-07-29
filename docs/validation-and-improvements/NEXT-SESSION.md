@@ -144,6 +144,8 @@ re-derive their contents.
 
 > **Note (2026-07-29, spec 09):** improvement spec 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier) — is READY-TO-EXECUTE with option 2 blocked on fork push access (`github:georgrybski/microsandbox-filesystem`); see [06-improvements/09-microsandbox-agentd-offline-build.md](06-improvements/09-microsandbox-agentd-offline-build.md).
 
+> **Note (2026-07-29, spec 10):** two NEW user decisions exist — (A) consumed config repos are FIRST-CLASS working copies inside the tool home at `$WORKESTRATE_HOME/config-repos/<name>/` (remote is canonical; supersedes the standalone-sibling model), and (B) the home itself becomes a dotfiles-style git repo via explicit `workestrate home init` scaffolding (gitignore + pre-commit hook guarding against mode-160000 gitlinks and secret material). Spec: [06-improvements/10-config-repos-as-working-copies.md](06-improvements/10-config-repos-as-working-copies.md) (READY-TO-EXECUTE; code tasks NEEDS-DEVSHELL). Spec 08 step (a) is AMENDED accordingly — the personal working repo lives at `~/.workestrate/config-repos/personal` (or `repos/personal` until the rename lands), NOT a standalone sibling.
+
 ---
 
 ## Maintenance

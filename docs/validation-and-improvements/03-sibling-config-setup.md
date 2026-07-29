@@ -14,7 +14,8 @@ bundle** at `/home/node/Development/ai-workbench/.workestrate/`. It defines the
 A contextless reader should know two things up front:
 
 - **What a tool home is.** The workestrate *tool home* is the directory holding
-  `config.toml` (the registry), `repos/` (managed config-repo clones),
+  `config.toml` (the registry), `repos/` (managed config-repo clones — being
+  renamed to `config-repos/` per spec 10; both spellings cited below),
   `secrets/`, `sources/`, and `state/`. It is resolved by
   `resolve_home_with_kind()` (`control/agentctl/src/config/paths.rs:104-150`).
   Setting `WORKESTRATE_HOME` to a throwaway path isolates ALL registry writes,
@@ -31,6 +32,14 @@ A contextless reader should know two things up front:
 ---
 
 ## 1. The 3-home topology
+
+> **AMENDED by spec 10:** config-repo DEVELOPMENT happens in the home's
+> `config-repos/` working copies (or `repos/` until the spec-10 rename lands),
+> per spec 10 Decision A — the home clones are first-class working repos
+> (edit/commit/push directly; remote is canonical), NOT read-only managed
+> clones. The mount set for dev agents becomes: home ro at the default path +
+> `config-repos/` rw shadow + dev home rw. See
+> [06-improvements/10-config-repos-as-working-copies.md](06-improvements/10-config-repos-as-working-copies.md).
 
 Workestrate resolves its tool home with a 4-step precedence
 (`paths.rs:104-150`, ADR 0023):
@@ -49,7 +58,7 @@ The three homes used across this doc set:
 |---|---|---|---|---|
 | **REAL bundle** | `/home/node/Development/ai-workbench/.workestrate/` | The live personal deployment: 5 workloads, 8 secrets, real state. | Read-mostly (never written by any probe here) | Persistent (repo-tracked) |
 | **EXPERIMENT home** | `/tmp/workestrate-exp` (via `WORKESTRATE_HOME=/tmp/workestrate-exp`) | Disposable home for scaffold/layering/context probes. All registry writes, repo clones, and state land here. | Read-write (probes may edit freely) | Ephemeral (deleted after probes) |
-| **Host end-state default** | `~/.workestrate` | The default home when no env and no discovery (`paths.rs:148-149`). Not used in this doc set, but is the production end-state after `workestrate migrate-home` (ADR 0023). | Read-write | Persistent (host-local) |
+| **Host end-state default** | `~/.workestrate` | The default home when no env and no discovery (`paths.rs:148-149`). Not used in this doc set, but is the production end-state after `workestrate migrate-home` (ADR 0023). Config-repo development happens in its `config-repos/` working copies (spec 10 Decision A; `repos/` until the rename lands). | Read-write | Persistent (host-local) |
 
 > **Invariant:** the REAL bundle is touched ONLY by read commands
 > (`config list`, `check`, `plan`, `validate-config`). Every probe that writes
