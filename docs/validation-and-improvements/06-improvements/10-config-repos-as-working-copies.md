@@ -114,7 +114,8 @@ both.
 `workestrate home init` or `workestrate init --home`; note `workestrate init`
 exists at `control/agentctl/src/commands/init.rs:24` as
 `cmd_init(url: Option<&str>)`). NEVER auto-git-init the home — that is invasive
-and surprising; the user opts in explicitly. The command must:
+and surprising; the user opts in explicitly (rationale in the subsection below).
+The command must:
 
 1. **`git init` the home** (if not already a git repo).
 2. **Write `.gitignore`** with these entries (verbatim):
@@ -146,6 +147,41 @@ and surprising; the user opts in explicitly. The command must:
 **Idempotency.** Re-running `workestrate home init` on an already-initialized
 home must be a no-op (or refresh the `.gitignore` + hook to the canonical
 content) — never destructive.
+
+**Why never auto-git-init (rationale).** The one-liner above is load-bearing;
+the full reasoning:
+
+1. **The home is created IMPLICITLY on first use** — that is exactly why
+   git-init must not ride along. A silently-created `.git` repo leaks into
+   unrelated tooling: shell prompts start showing repo state, `git status`
+   lists hundreds of runtime files, and backup/dotfiles scanners start
+   treating the home as a repo. Silent state transitions erode CLI trust.
+2. **Multiple homes exist** (the real home, an experiment
+   `workestrate-dev-config` home, a dogfood-driver home, CI homes): auto-init
+   cannot tell them apart and would git-init throwaway homes too — pointless
+   churn plus an invitation to commit into something about to be `rm -rf`'d.
+   An explicit `workestrate home init` doubles as the user DECLARING "this is
+   my real, persistent home"; automation cannot infer that.
+3. **Hooks are executable code fired by the USER's git commands.** Silently
+   installing a pre-commit hook is what hostile tooling does, and a
+   silently-installed hook that starts rejecting commits looks like breakage.
+   The hook is the most valuable part of the scaffolding — and precisely the
+   part that needs consent.
+4. **No good implicit trigger exists.** On-home-creation fires when most first
+   homes are experiments; on-every-command polling is ambient and
+   unpredictable (and weird if the user deliberately removes `.git`);
+   `migrate-home` already has one job. An explicit idempotent command has none
+   of these failure modes: run once → scaffolds `.gitignore` + hook +
+   next-steps; run twice → no-op/warn; refuses to clobber an existing repo.
+5. **Established idiom for this tool class:** `chezmoi init` (the dotfiles
+   manager this init flow already borrows from), `git init`, `pass init` —
+   every comparable tool makes repo creation an explicit verb.
+
+The division of labor: AUTOMATIC = everything the tool needs to function (home
+layout, registry, clones, state); EXPLICIT = everything encoding user workflow
+intent (git repo, remote, hooks, branches). `workestrate home init` is the
+one-button explicit form: discoverable in `--help`, idempotent, refuses to
+clobber, and prints "add your dotfiles remote next".
 
 ---
 
@@ -208,7 +244,7 @@ document the invariant. Gate: `cargo test`.
 New explicit command (propose `workestrate home init` or `workestrate init
 --home`; existing `workestrate init` at `init.rs:24`). Implements the §2
 scaffolding spec: `git init`, `.gitignore` generation, pre-commit hook
-installation, next-steps printout. NEVER auto-git-init.
+installation, next-steps printout. NEVER auto-git-init (rationale: §2, "Why never auto-git-init (rationale)").
 
 **Gates:** `cargo test` (hook content generation, gitignore generation,
 idempotency).
