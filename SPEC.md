@@ -232,7 +232,9 @@ config is used (placeholder secrets — `example-service plan` works;
   (HOST-NIX).
 - **Phase 0b (nix recipe parameterization):** PARTIALLY IMPLEMENTED —
   0b.1–0b.5 + Phase 2 core exports + source-build wiring DONE; 0b.6
-  (vendor→git-fork, ADR 0011) NOT done, deferred to backlog.
+  (vendor→git-fork, ADR 0011) NOT done, deferred to backlog. The single
+  source of truth for the 0b.6 improvement is
+  `docs/validation-and-improvements/06-improvements/09-microsandbox-agentd-offline-build.md`.
 - **Phase 1 (tool home, ADR 0023):** implemented — config
   add/update/list/trust, init, source clone/build/list/reset,
   migrate-home. Runtime on KVM = HOST-KVM gate (NOT validated).

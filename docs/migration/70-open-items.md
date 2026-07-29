@@ -86,7 +86,10 @@ vendor symlink -> git-fork dependency, ADR 0011) is NOT implemented despite
 the prior status line claiming Phase 0b IMPLEMENTED. The vendor symlink still
 exists in `nix/packages/agentctl.nix`. This is not blocking the cargo-verifiable
 or runtime path (the vendored crate builds) but should land before any pure-
-eval Nix build claim. Deferred to backlog; ADR 0011 stays Accepted.
+eval Nix build claim. Deferred to backlog; ADR 0011 stays Accepted. The
+single source of truth for the 0b.6 work is
+`../validation-and-improvements/06-improvements/09-microsandbox-agentd-offline-build.md`
+(spec 09), which supersedes the ad-hoc notes here for that step.
 
 ## Pending user defaults
 

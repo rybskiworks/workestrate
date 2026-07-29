@@ -142,6 +142,8 @@ re-derive their contents.
 
 > **Note (2026-07-29, spec 08):** a NEW user decision exists — **the workestrate tool home must NEVER live inside the repo checkout**; the home is the user-global `~/.workestrate` only. Spec: [06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md) (READY-TO-EXECUTE; code step NEEDS-DEVSHELL). The repo-local bundle at `.workestrate/` is **still present** until the spec is executed. **INTERIM WARNING (spec §5):** until execution step (a) lands (clone `.workestrate/repos/personal` @ `c41a707` → `/home/node/Development/workestrate-personal`), the only committed copy of the personal config lives in the ephemeral container bundle — do NOT rebuild the container or delete the bundle. Execution is sequenced EARLY (07-execution-order.md Step 0.5), before Lane A / the host batch, because it changes the paths those reference. The `--home` flag spec ([06-improvements/06-config-home-flag.md](06-improvements/06-config-home-flag.md)) gains weight: with the discovery tier removed, `--home` becomes THE explicit override (precedence: flag > env > legacy XDG > default).
 
+> **Note (2026-07-29, spec 09):** improvement spec 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier) — is READY-TO-EXECUTE with option 2 blocked on fork push access (`github:georgrybski/microsandbox-filesystem`); see [06-improvements/09-microsandbox-agentd-offline-build.md](06-improvements/09-microsandbox-agentd-offline-build.md).
+
 ---
 
 ## Maintenance

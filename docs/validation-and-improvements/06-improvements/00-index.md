@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the eight post-validation improvement specifications under
+This index catalogs the nine post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -53,6 +53,7 @@ invariant.
 | [06-config-home-flag.md](06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `SPEC (small, not yet implemented)` | None — standalone; referenced by [03](03-dogfooding.md) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) for ergonomics | **S** | `verifiable-here` (fix gate: `cargo test`); runs in HOST-NIX devshell (no `cc` here) |
 | [07-naming-consistency.md](07-naming-consistency.md) | Naming consistency: purge `workestrator` residue | `IN-PROGRESS THIS BRANCH (migration/tool-model)` | None — standalone rename; FLAG: personal config repo image-name coordination (spec §4) | **M** | `verifiable-here` (grep/lint-nix/nix eval); cargo gates `HOST-NIX` |
 | [08-no-repo-local-home.md](08-no-repo-local-home.md) | No repo-local tool home (retire `.workestrate/` inside the checkout) | `READY-TO-EXECUTE (docs/decision); code step (e) is NEEDS-DEVSHELL` | None — stepwise internal ordering only (a→d strictly; e is the code step); sequencing-wise it should land EARLY (before Lane A / host batch) because it changes the paths those reference | **S** (steps a–d, f, g) + **code-S** (step e) | `verifiable-here` for a–d/f/g; step (b) verify + step (e) code gates are `HOST-NIX` devshell (no `cc` here) |
+| [09-microsandbox-agentd-offline-build.md](09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd offline build (ADR 0011 carrier) | `READY-TO-EXECUTE (option 2 gated on fork push access; option 1 gated on upstream responsiveness; option 3 NEEDS-DEVSHELL + HOST-NIX)` | None file-level on other improvement specs; option 2 blocked on fork push access; option 3 cross-references [01](01-mount-filtering-shadowing.md) | option 2 = **S** (once unblocked); option 1 = **M** (incl. upstream review latency); option 3 = **M** | `HOST-NIX` (options 2/3 builds); option 1 is upstream |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -195,6 +196,28 @@ WARNING (spec §5):** until step (a) lands, the only committed copy of the
 personal config lives in the ephemeral container bundle — do NOT rebuild the
 container or delete the bundle.
 
+### 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier)
+
+`microsandbox-filesystem` 0.5.6 performs a build-time network download of the
+prebuilt `agentd` binary (`crates/filesystem/build.rs`, default `prebuilt`
+feature), breaking sandboxed/offline builds (Nix/Bazel/distro/air-gapped CI).
+The SDK crate HAS the standard MSB_HOME escape but it was never ported to the
+filesystem sub-crate — upstream inconsistency/oversight, not philosophy. Three
+options: **(1) UPSTREAM FIX** (preferred end-state) — contribute an
+MSB_HOME-based agentd check to `crates/filesystem/build.rs` mirroring the SDK
+crate's own pattern (precedent: #704 merged the identical pattern into the SDK
+crate; #701/#713 show maintainers are responsive); **(2) INTERIM CARRIER**
+(ADR 0011, decided 2026-07-18) — fork to
+`github:georgrybski/microsandbox-filesystem`, point `[patch.crates-io]` at the
+fork, delete the patch + patched derivation + `_setup_vendor_link` devshell
+hook + agentctl.nix vendor staging + vendor-unlock/lock justfile recipes
+(BLOCKED on fork push access); **(3) VERSION BUMP** — `=0.5.6` → `=0.6.8`
+(requires patch rewrite against 0.6.x build.rs; 0.5.8+ added guest-write quotas,
+0.6.6 added RESOLVE_BENEATH symlink protection — both relevant to
+[01](01-mount-filtering-shadowing.md); NEVER the yanked 0.6.5). **Key
+decision:** option 2 first (once unblocked) → option 1 upstream → delete fork
++ machinery after release; option 3 is a separate combinable track.
+
 ---
 
 ## Dependency graph
@@ -232,6 +255,11 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
       │   a sibling requirements doc — see ../02-config-requirements.md)
       └── Should be additive-tolerant of 01's mount exclude/shadow schema
           (either ship after 01 WP1 lands, or be schema-driven per §4.6)
+
+09-microsandbox-agentd-offline-build   [no file-level deps on other specs;
+      │                                 option 2 BLOCKED on fork push access;
+      │                                 option 3 ↔ 01 (RESOLVE_BENEATH cross-ref);
+      │                                 option 1 is upstream-latency-bound]
 ```
 
 **Key dependency notes:**
@@ -277,7 +305,7 @@ Reproduced from [../01-current-state-and-prereqs.md](../01-current-state-and-pre
 
 ## Inconsistencies between specs (for lead reconciliation)
 
-These are discrepancies found while reading the specs (01–07, pre-08); they do not block
+These are discrepancies found while reading the specs (01–07, pre-08/09); they do not block
 this index but should be reconciled:
 
 1. **Effort estimates are inconsistent in format.** 01 breaks effort down per
