@@ -54,8 +54,8 @@ None on this page — entire page uses curl JSON only, no YAML config blocks.
 - /docs/proxy/temporary_budget_increase (next)
 - API Reference: https://litellm-api.up.railway.app/#/budget%20management
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Budget/Rate Limit Tiers are an ENTERPRISE feature and require a database (budgets stored in `LiteLLM_BudgetTable`). The workestrator runs in-memory (no Postgres, no enterprise license), so rate limit tiers are UNAVAILABLE. Rate limiting in the in-memory deployment is limited to what `router_settings` provides (e.g. `rpm_limit` / `tpm_limit` on model_list entries if supported without DB — inferred, not confirmed on this page).
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Budget/Rate Limit Tiers are an ENTERPRISE feature and require a database (budgets stored in `LiteLLM_BudgetTable`). The workestrate runs in-memory (no Postgres, no enterprise license), so rate limit tiers are UNAVAILABLE. Rate limiting in the in-memory deployment is limited to what `router_settings` provides (e.g. `rpm_limit` / `tpm_limit` on model_list entries if supported without DB — inferred, not confirmed on this page).
 
 ## Confidence / uncertainty notes
 - high confidence on enterprise requirement (verbatim). DB requirement is inferred from the budgets domain (not stated on this page explicitly). The `/budget/new` endpoint likely requires DB (inferred from sibling pages).

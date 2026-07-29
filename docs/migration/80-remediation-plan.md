@@ -289,7 +289,7 @@ disk during eval.
   Evidence: `flake.nix:135` `pi-image = pkgs.callPackage
   ./nix/packages/pi-image.nix {};` — empty args. `pi-image.nix:26` is
   `{ pkgs, pi-bun-built, pi-built }:` — missing args. `nix build
-  .#pi-image` errors immediately. (Line 168 `workestrator-pi` correctly
+  .#pi-image` errors immediately. (Line 168 `workestrate-pi` correctly
   passes the args.)
 - **B2** — `inherit (raw) secrets` throws on secret-less TOML.
   Evidence: `nix/lib/config.nix:8`. A workload TOML without a `[secrets]`
@@ -317,7 +317,7 @@ disk during eval.
   args used at line 168: `pi-image = pkgs.callPackage
   ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };`.
   Alternative: delete the bare `pi-image` attr entirely and document
-  `.#workestrator-pi` as the canonical entry. **Recommended:** inherit
+  `.#workestrate-pi` as the canonical entry. **Recommended:** inherit
   (preserves the public name).
 - **B2:** at `nix/lib/config.nix:8`, change `inherit (raw) secrets;` to
   `secrets = raw.secrets or {};`. One-line fix.
@@ -361,7 +361,7 @@ let configPath = "${configDir}/workestrate.toml"; ...
 .#lib.x86_64-linux.config.workloadNames` (requires the `config =
 referenceConfig;` export under `libForSystem` in `flake.nix` — added with
 this correction; `lib.x86_64-linux` previously had no `config` attr);
-`nix build .#pi-image` and `.#workestrator-pi` succeed (HOST-NIX). All four
+`nix build .#pi-image` and `.#workestrate-pi` succeed (HOST-NIX). All four
 regressions green on host.
 # uses git-filtered flake ref; untracked files are invisible to eval — stage new files (git add / git add -N) before running
 

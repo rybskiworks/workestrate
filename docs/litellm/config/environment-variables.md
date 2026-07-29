@@ -11,13 +11,13 @@ How `os.environ/X` resolution works at config load time; the proxy env-var surfa
 
 (Verbatim) `os.environ/<YOUR-ENV-VAR>` runs `os.getenv("YOUR-ENV-VAR")`. Used for `api_key`, `master_key`, `api_base`, and any string config value. Confirmed on configs, deploy, docker_quick_start, config_settings.
 
-Env vars can ALSO be injected via the top-level `environment_variables:` dict in `config.yaml` (the real workestrator config does **not** use this — env vars are set in the proxy process environment instead).
+Env vars can ALSO be injected via the top-level `environment_variables:` dict in `config.yaml` (the real workestrate config does **not** use this — env vars are set in the proxy process environment instead).
 
 > The env var must be set in the proxy process environment **before** startup for `os.environ/` resolution to succeed. An unset var resolves to empty/`None`, which may cause downstream auth failure rather than a config validation failure.
 
 ## Key proxy env vars
 
-| env var | purpose | scope | requires_db | deprecated | replacement | workestrator_used |
+| env var | purpose | scope | requires_db | deprecated | replacement | workestrate_used |
 | --- | --- | --- | --- | --- | --- | --- |
 | LITELLM_MASTER_KEY | Proxy admin master key. Must start with 'sk-'. Also used as the Admin UI credential. | proxy | false | false | — | **USED** (resolved via `general_settings.master_key: os.environ/LITELLM_MASTER_KEY`; works in-memory) |
 | LITELLM_SALT_KEY | Encryption salt for LLM API key credentials. Cannot be changed after adding a model. | proxy | true | false | — | NOT used (no DB) |
@@ -52,7 +52,7 @@ Env vars can ALSO be injected via the top-level `environment_variables:` dict in
 | NO_PROXY | List of addresses to bypass proxy. | sdk | false | false | — | not used |
 | DISABLE_ADMIN_UI | Set to 'True' to disable the Admin UI. | admin_ui | false | false | — | **RECOMMENDED** to set 'True' for in-memory deployment (Admin UI requires DB) |
 | DISABLE_ADMIN_ENDPOINTS | Disable admin management endpoints. | admin_ui | false | false | — | not used |
-| DISABLE_LLM_API_ENDPOINTS | Disable LLM API endpoints. | admin_ui | false | false | — | NOT used (would disable chat completions endpoints workestrator needs) |
+| DISABLE_LLM_API_ENDPOINTS | Disable LLM API endpoints. | admin_ui | false | false | — | NOT used (would disable chat completions endpoints workestrate needs) |
 | PROXY_BASE_URL | Public URL of proxy. | proxy | false | false | — | not used |
 | PROXY_ADMIN_ID | Proxy admin ID. | proxy | false | false | — | not used |
 | PROXY_BATCH_WRITE_AT | env equivalent of `general_settings.proxy_batch_write_at`. | proxy | true | false | — | not used |
@@ -108,7 +108,7 @@ Env vars can ALSO be injected via the top-level `environment_variables:` dict in
 - **Replicate**: `REPLICATE_API_KEY`
 - **AI21**: `AI21_API_KEY`
 - **Moonshot**: `MOONSHOT_API_KEY`, `MOONSHOT_API_BASE`
-- **OpenRouter**: `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE`, `OR_SITE_URL`, `OR_APP_NAME` — **workestrator-used** (`OPENROUTER_API_KEY` resolved via `os.environ/` for `openrouter/`-prefixed models: GLM/Qwen/Nex).
+- **OpenRouter**: `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE`, `OR_SITE_URL`, `OR_APP_NAME` — **workestrate-used** (`OPENROUTER_API_KEY` resolved via `os.environ/` for `openrouter/`-prefixed models: GLM/Qwen/Nex).
 - **GCS**: `GCS_BUCKET_NAME`, `GCS_PATH_SERVICE_ACCOUNT`, `GCS_PUBSUB_TOPIC_ID` (Enterprise), `GCS_PUBSUB_PROJECT_ID` (Enterprise)
 - **Qdrant**: `QDRANT_API_KEY`, `QDRANT_API_BASE`
 - **Valkey**: `VALKEY_HOST`, `VALKEY_PORT`, `VALKEY_PASSWORD`
@@ -134,9 +134,9 @@ Env vars can ALSO be injected via the top-level `environment_variables:` dict in
 
 ## PROJECT-DEFINED env vars
 
-> **NOT LiteLLM built-ins.** These have empty `source_urls` and `project_defined=true` in `env-vars.index.json`. They are NOT documented on any LiteLLM docs page. They are workestrator-specific keys referenced via `os.environ/` in `model_list.litellm_params.api_key`.
+> **NOT LiteLLM built-ins.** These have empty `source_urls` and `project_defined=true` in `env-vars.index.json`. They are NOT documented on any LiteLLM docs page. They are workestrate-specific keys referenced via `os.environ/` in `model_list.litellm_params.api_key`.
 
-| env var | purpose (verbatim) | workestrator usage |
+| env var | purpose (verbatim) | workestrate usage |
 | --- | --- | --- |
 | KIMI_CODE_API_KEY | API key for Kimi coding endpoint (api.kimi.com/coding) which speaks the Anthropic Messages API. Referenced via `os.environ/KIMI_CODE_API_KEY`. | **USED** for `anthropic/kimi-for-coding` (coding tier primary + `coding.pro`-fallback). NOT documented on any LiteLLM docs page. |
 | MINIMAX_CODING_API_KEY | API key for MiniMax coding endpoint (api.minimax.io/anthropic) which speaks the Anthropic Messages API. | **USED** for `anthropic/MiniMax-M3` (coding-fallback + `coding.fast` primary). NOT documented on any LiteLLM docs page. |
@@ -150,15 +150,15 @@ Env vars can ALSO be injected via the top-level `environment_variables:` dict in
 - **`STORE_MODEL_IN_DB`** — must stay `False` (unset) for static config; the real config defines models in `config.yaml` `model_list`.
 - **`os.environ/<VAR>` resolution timing** — the env var must be set in the proxy process environment **before** startup. An unset var resolves to empty/`None`, which typically causes a downstream auth failure (not a config validation failure).
 - **`LITELLM_SET_VERBOSE` / `SET_VERBOSE`** — deprecated; use `LITELLM_LOG`.
-- **`NUM_WORKERS`** — not used as env in workestrator; passed via `--num_workers` CLI flag in docker-compose.
+- **`NUM_WORKERS`** — not used as env in workestrate; passed via `--num_workers` CLI flag in docker-compose.
 
 ## Reference
 
 - Env-var index: [`env-vars.index.json`](../schemas/env-vars.index.json)
 
-## Workestrator notes
+## Workestrate notes
 
-> **PROJECT CONTEXT** — not upstream LiteLLM docs. Describes the workestrator deployment specifically.
+> **PROJECT CONTEXT** — not upstream LiteLLM docs. Describes the workestrate deployment specifically.
 
 The real config resolves the following via `os.environ/`:
 

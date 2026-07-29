@@ -49,7 +49,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] This is the CANONICAL pattern for Neuralwatt (api.neuralwatt.com/v1) and any self-hosted vLLM/Ollama OpenAI-compatible endpoint. Pattern: `model: openai/<name>` + `api_base: https://<host>/v1` + `api_key: <key>` in litellm_params. The repo's `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` follows this exact documented pattern. For endpoints that don't require an API key, a fake key must still be passed (or use `hosted_vllm/` prefix instead)."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] This is the CANONICAL pattern for Neuralwatt (api.neuralwatt.com/v1) and any self-hosted vLLM/Ollama OpenAI-compatible endpoint. Pattern: `model: openai/<name>` + `api_base: https://<host>/v1` + `api_key: <key>` in litellm_params. The repo's `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` follows this exact documented pattern. For endpoints that don't require an API key, a fake key must still be passed (or use `hosted_vllm/` prefix instead)."
     },
     {
       "provider_name": "Anthropic",
@@ -98,7 +98,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] The `anthropic/` prefix + custom `api_base` IS a documented pattern. The repo uses `anthropic/kimi-for-coding` (api_base: https://api.kimi.com/coding) and `anthropic/MiniMax-M3` (api_base: https://api.minimax.io/anthropic) — pointing the `anthropic/` prefix at non-Anthropic endpoints that speak the Anthropic Messages API. [WORKESTRATOR DEVIATION] kimi-for-coding uses `anthropic/` prefix instead of the documented `moonshot/` prefix because Kimi's coding endpoint (api.kimi.com/coding) speaks Anthropic Messages API, not OpenAI-compatible. LiteLLM auto-appends `/v1/messages` to the api_base, so final URL for Kimi is `api.kimi.com/coding/v1/messages`; for MiniMax it is `api.minimax.io/anthropic/v1/messages`. If the endpoint already includes the full path, set `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true` to prevent auto-append. This is a project choice, not upstream-documented-as-correct."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] The `anthropic/` prefix + custom `api_base` IS a documented pattern. The repo uses `anthropic/kimi-for-coding` (api_base: https://api.kimi.com/coding) and `anthropic/MiniMax-M3` (api_base: https://api.minimax.io/anthropic) — pointing the `anthropic/` prefix at non-Anthropic endpoints that speak the Anthropic Messages API. [WORKESTRATE DEVIATION] kimi-for-coding uses `anthropic/` prefix instead of the documented `moonshot/` prefix because Kimi's coding endpoint (api.kimi.com/coding) speaks Anthropic Messages API, not OpenAI-compatible. LiteLLM auto-appends `/v1/messages` to the api_base, so final URL for Kimi is `api.kimi.com/coding/v1/messages`; for MiniMax it is `api.minimax.io/anthropic/v1/messages`. If the endpoint already includes the full path, set `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true` to prevent auto-append. This is a project choice, not upstream-documented-as-correct."
     },
     {
       "provider_name": "OpenRouter",
@@ -151,7 +151,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] The repo uses `openrouter/z-ai/glm-5.1`, `openrouter/qwen/...`, and `openrouter/nex/...` style model strings. The nested format `openrouter/<provider>/<model>` is the correct documented pattern. `openrouter/z-ai/glm-5.1` is structurally valid (`z-ai` is OpenRouter's namespace for Z.AI/Zhipu). Note: OpenRouter uses `z-ai/` (hyphenated) while LiteLLM's native Z.AI provider uses `zai/` (no hyphen) — distinct paths. `openrouter/qwen/...` and `openrouter/nex/...` are structurally consistent with the documented nested pattern, though not explicitly shown on the page. GLM-5.1 is NOT documented on the native Z.AI provider page (only GLM-4.x). OpenRouter is the correct path for GLM-5.1."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] The repo uses `openrouter/z-ai/glm-5.1`, `openrouter/qwen/...`, and `openrouter/nex/...` style model strings. The nested format `openrouter/<provider>/<model>` is the correct documented pattern. `openrouter/z-ai/glm-5.1` is structurally valid (`z-ai` is OpenRouter's namespace for Z.AI/Zhipu). Note: OpenRouter uses `z-ai/` (hyphenated) while LiteLLM's native Z.AI provider uses `zai/` (no hyphen) — distinct paths. `openrouter/qwen/...` and `openrouter/nex/...` are structurally consistent with the documented nested pattern, though not explicitly shown on the page. GLM-5.1 is NOT documented on the native Z.AI provider page (only GLM-4.x). OpenRouter is the correct path for GLM-5.1."
     },
     {
       "provider_name": "Moonshot AI",
@@ -191,7 +191,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] Moonshot AI = the company; Kimi = their model line. The `moonshot/` prefix uses the OpenAI-compatible Moonshot API at `https://api.moonshot.ai/`. The repo's `anthropic/kimi-for-coding` with `api_base: https://api.kimi.com/coding` is a DIFFERENT integration — it uses the `anthropic/` prefix (Anthropic Messages API protocol) pointed at Kimi's coding endpoint. This pattern is NOT documented on the moonshot page; it's documented on the Anthropic provider page (Custom API Base section). Kimi's coding endpoint (api.kimi.com/coding) speaks the Anthropic Messages API, NOT the OpenAI-compatible API. That's why the repo uses `anthropic/` prefix + custom api_base instead of `moonshot/` prefix. If using the standard Moonshot OpenAI-compatible API, use `moonshot/kimi-k2.5` or `moonshot/moonshot-v1-128k` with `MOONSHOT_API_KEY`."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Moonshot AI = the company; Kimi = their model line. The `moonshot/` prefix uses the OpenAI-compatible Moonshot API at `https://api.moonshot.ai/`. The repo's `anthropic/kimi-for-coding` with `api_base: https://api.kimi.com/coding` is a DIFFERENT integration — it uses the `anthropic/` prefix (Anthropic Messages API protocol) pointed at Kimi's coding endpoint. This pattern is NOT documented on the moonshot page; it's documented on the Anthropic provider page (Custom API Base section). Kimi's coding endpoint (api.kimi.com/coding) speaks the Anthropic Messages API, NOT the OpenAI-compatible API. That's why the repo uses `anthropic/` prefix + custom api_base instead of `moonshot/` prefix. If using the standard Moonshot OpenAI-compatible API, use `moonshot/kimi-k2.5` or `moonshot/moonshot-v1-128k` with `MOONSHOT_API_KEY`."
     },
     {
       "provider_name": "MiniMax",
@@ -234,7 +234,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] [WORKESTRATOR DEVIATION] workestrator config uses `anthropic/MiniMax-M3` (api_base: https://api.minimax.io/anthropic) which DEVIATES from the documented `minimax/` prefix pattern (`minimax/MiniMax-M2.1` with api_base: https://api.minimax.io/anthropic/v1/messages). Both may work; documented approach is `minimax/`. This is a project choice, not upstream-documented-as-correct. The documented approach uses the `minimax/` prefix (NOT `anthropic/`) even when calling the Anthropic Messages endpoint, via `litellm.anthropic.messages.acreate(model=\"minimax/MiniMax-M2.1\", api_base=\"https://api.minimax.io/anthropic/v1/messages\")`. `MiniMax-M3` is NOT in the docs — only M2-series. The repo may be using a newer model not yet documented, or the model name may need verification. The api_base `api.minimax.io/anthropic` in the repo matches the documented `https://api.minimax.io/anthropic/v1/messages` (the repo omits the `/v1/messages` suffix, which LiteLLM would auto-append via the `anthropic/` prefix)."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] [WORKESTRATE DEVIATION] workestrate config uses `anthropic/MiniMax-M3` (api_base: https://api.minimax.io/anthropic) which DEVIATES from the documented `minimax/` prefix pattern (`minimax/MiniMax-M2.1` with api_base: https://api.minimax.io/anthropic/v1/messages). Both may work; documented approach is `minimax/`. This is a project choice, not upstream-documented-as-correct. The documented approach uses the `minimax/` prefix (NOT `anthropic/`) even when calling the Anthropic Messages endpoint, via `litellm.anthropic.messages.acreate(model=\"minimax/MiniMax-M2.1\", api_base=\"https://api.minimax.io/anthropic/v1/messages\")`. `MiniMax-M3` is NOT in the docs — only M2-series. The repo may be using a newer model not yet documented, or the model name may need verification. The api_base `api.minimax.io/anthropic` in the repo matches the documented `https://api.minimax.io/anthropic/v1/messages` (the repo omits the `/v1/messages` suffix, which LiteLLM would auto-append via the `anthropic/` prefix)."
     },
     {
       "provider_name": "Z.AI (Zhipu AI)",
@@ -275,7 +275,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] The repo uses `openrouter/z-ai/glm-5.1` (via OpenRouter). This is the CORRECT path for GLM-5.1 since it's not documented on the native Z.AI provider page. CRITICAL SPELLING DIFFERENCE: LiteLLM native prefix is `zai/` (no hyphen); OpenRouter namespace is `z-ai/` (hyphenated). These are distinct routing paths. Do NOT change `openrouter/z-ai/glm-5.1` to `zai/glm-5.1` — GLM-5.1 is not in the native Z.AI docs and would likely fail routing. If direct Z.AI access is desired, use `zai/glm-4.7` (latest flagship) or `zai/glm-4.5-flash` (free tier). The repo's GLM-5.1 access via OpenRouter is the correct approach since GLM-5.1 is not yet in LiteLLM's native Z.AI docs."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] The repo uses `openrouter/z-ai/glm-5.1` (via OpenRouter). This is the CORRECT path for GLM-5.1 since it's not documented on the native Z.AI provider page. CRITICAL SPELLING DIFFERENCE: LiteLLM native prefix is `zai/` (no hyphen); OpenRouter namespace is `z-ai/` (hyphenated). These are distinct routing paths. Do NOT change `openrouter/z-ai/glm-5.1` to `zai/glm-5.1` — GLM-5.1 is not in the native Z.AI docs and would likely fail routing. If direct Z.AI access is desired, use `zai/glm-4.7` (latest flagship) or `zai/glm-4.5-flash` (free tier). The repo's GLM-5.1 access via OpenRouter is the correct approach since GLM-5.1 is not yet in LiteLLM's native Z.AI docs."
     },
     {
       "provider_name": "vLLM",
@@ -329,7 +329,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] Not currently used in infra/litellm/config.yaml. `hosted_vllm/` is the recommended prefix for self-hosted OpenAI-compatible vLLM servers. This is the alternative to `openai/` prefix when the endpoint doesn't require an API key (no need for fake key). Pattern: `model: hosted_vllm/<model-name>` + `api_base: https://<vllm-host>` + optional `api_key`. Supports more endpoints than openai_compatible: `/rerank`, `/audio/transcriptions` in addition to chat/completions and embeddings. For Neuralwatt (which requires an API key), `openai/` prefix is more appropriate. For keyless local vLLM, `hosted_vllm/` is better."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml. `hosted_vllm/` is the recommended prefix for self-hosted OpenAI-compatible vLLM servers. This is the alternative to `openai/` prefix when the endpoint doesn't require an API key (no need for fake key). Pattern: `model: hosted_vllm/<model-name>` + `api_base: https://<vllm-host>` + optional `api_key`. Supports more endpoints than openai_compatible: `/rerank`, `/audio/transcriptions` in addition to chat/completions and embeddings. For Neuralwatt (which requires an API key), `openai/` prefix is more appropriate. For keyless local vLLM, `hosted_vllm/` is better."
     },
     {
       "provider_name": "Ollama",
@@ -397,7 +397,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] Not currently used in infra/litellm/config.yaml. Ollama is a local model serving pattern. Uses native Ollama API (not OpenAI-compatible). `ollama_chat/` is the recommended prefix for chat; `ollama/` for generate/FIM. No API key required — suitable for local development. `api_base` defaults to `http://localhost:11434`. For OpenAI-compatible local serving, vLLM (`hosted_vllm/`) may be a better choice since it exposes an OpenAI-compatible API."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml. Ollama is a local model serving pattern. Uses native Ollama API (not OpenAI-compatible). `ollama_chat/` is the recommended prefix for chat; `ollama/` for generate/FIM. No API key required — suitable for local development. `api_base` defaults to `http://localhost:11434`. For OpenAI-compatible local serving, vLLM (`hosted_vllm/`) may be a better choice since it exposes an OpenAI-compatible API."
     },
     {
       "provider_name": "LiteLLM Proxy (LLM Gateway)",
@@ -450,7 +450,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] Not currently used in infra/litellm/config.yaml. This is the chained-proxy pattern for one LiteLLM proxy calling another LiteLLM proxy. Pattern: `model: litellm_proxy/<model-name>` + `api_base: <upstream-proxy-url>` + `api_key: <upstream-proxy-key>`. The `USE_LITELLM_PROXY` flag (v1.72.1+) routes ALL SDK requests through the proxy regardless of model — useful for centralized proxy management. Tags (`extra_body={\"tags\": [...]}`) enable request categorization for monitoring/analytics."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml. This is the chained-proxy pattern for one LiteLLM proxy calling another LiteLLM proxy. Pattern: `model: litellm_proxy/<model-name>` + `api_base: <upstream-proxy-url>` + `api_key: <upstream-proxy-key>`. The `USE_LITELLM_PROXY` flag (v1.72.1+) routes ALL SDK requests through the proxy regardless of model — useful for centralized proxy management. Tags (`extra_body={\"tags\": [...]}`) enable request categorization for monitoring/analytics."
     },
     {
       "provider_name": "Inception",
@@ -486,7 +486,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] Not currently used in infra/litellm/config.yaml. Inception is a provider of diffusion LLMs (Mercury family). OpenAI-compatible API. Pattern: `model: inception/mercury-2` + `api_key: os.environ/INCEPTION_API_KEY`. `api_base` is fixed at `https://api.inceptionlabs.ai/v1` — not configurable. Supports FIM (fill-in-the-middle) via `text-completion-inception/mercury-edit-2` prefix. Inception-specific `reasoning_effort=\"instant\"` for near real-time responses."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml. Inception is a provider of diffusion LLMs (Mercury family). OpenAI-compatible API. Pattern: `model: inception/mercury-2` + `api_key: os.environ/INCEPTION_API_KEY`. `api_base` is fixed at `https://api.inceptionlabs.ai/v1` — not configurable. Supports FIM (fill-in-the-middle) via `text-completion-inception/mercury-edit-2` prefix. Inception-specific `reasoning_effort=\"instant\"` for near real-time responses."
     },
     {
       "provider_name": "OpenAI",
@@ -554,7 +554,7 @@
       "requires_db": false,
       "requires_redis": false,
       "enterprise_only": false,
-      "workestrator_alias_recommendation": "[WORKESTRATOR RECOMMENDATION] Not currently used in infra/litellm/config.yaml for direct OpenAI API calls. The repo uses `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` — this follows the documented pattern. `openai/` prefix + `OPENAI_BASE_URL` (or `api_base` in litellm_params) is the canonical way to point LiteLLM at a custom OpenAI-compatible endpoint. The `openai/` prefix is shared between the OpenAI provider page and the openai_compatible page — both use the same prefix for OpenAI-protocol chat-completions endpoints. For Neuralwatt: `model: openai/neuralwatt` + `api_base: https://api.neuralwatt.com/v1` + `api_key: <key>` is correct. The `openai/responses/` sub-prefix is for OpenAI's Responses API (not relevant for Neuralwatt)."
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml for direct OpenAI API calls. The repo uses `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` — this follows the documented pattern. `openai/` prefix + `OPENAI_BASE_URL` (or `api_base` in litellm_params) is the canonical way to point LiteLLM at a custom OpenAI-compatible endpoint. The `openai/` prefix is shared between the OpenAI provider page and the openai_compatible page — both use the same prefix for OpenAI-protocol chat-completions endpoints. For Neuralwatt: `model: openai/neuralwatt` + `api_base: https://api.neuralwatt.com/v1` + `api_key: <key>` is correct. The `openai/responses/` sub-prefix is for OpenAI's Responses API (not relevant for Neuralwatt)."
     }
   ]
 }

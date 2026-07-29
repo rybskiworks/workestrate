@@ -145,7 +145,7 @@ print(response.choices[0].message.content)
 ## Related links
 - https://platform.minimax.io/docs
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - CRITICAL FINDING: The repo uses `anthropic/MiniMax-M3` with `api_base: api.minimax.io/anthropic`, but the documented pattern on this page is `minimax/MiniMax-M2.1` with `api_base: https://api.minimax.io/anthropic/v1/messages`.
 - The documented approach uses the `minimax/` prefix (NOT `anthropic/`) even when calling the Anthropic Messages endpoint, via `litellm.anthropic.messages.acreate(model="minimax/MiniMax-M2.1", api_base="https://api.minimax.io/anthropic/v1/messages")`.
 - The repo's `anthropic/MiniMax-M3` approach may work (since the Anthropic page documents custom api_base), but it differs from the documented `minimax/` prefix pattern.

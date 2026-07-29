@@ -20,7 +20,7 @@
 ## What this area controls
 
 Diagnosis recipes for the most common LiteLLM failure modes in the
-workestrator in-memory deployment: provider URL/prefix mismatches, timeout
+workestrate in-memory deployment: provider URL/prefix mismatches, timeout
 defaults, retry/fallback not firing, DB-required features failing without a
 DB, env-var resolution, port conflicts, and debug logging. Maps to the
 existing `debug-litellm-proxy` skill and a general troubleshooting workflow.
@@ -272,11 +272,11 @@ General debugging approach (project convention — not upstream):
 4. **Apply the targeted fix** from the table above.
 5. **Verify** with the reproducer, then relax verbosity back to `INFO`.
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 
-- The workestrator is in-memory: most "feature X is broken" reports are
+- The workestrate is in-memory: most "feature X is broken" reports are
   actually DB-gated features being invoked. First check
   [auth-access-budget/README.md](auth-access-budget/README.md) → "Features
   that REQUIRE DB/Redis".

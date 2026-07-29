@@ -203,8 +203,8 @@ environment_variables:
 - /docs/enterprise
 - /docs/proxy/dynamic_logging
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Logging callbacks (`litellm_settings.success_callback` / `failure_callback` / `callbacks`) work WITHOUT a database — they send logs to external services (Langfuse, OTEL, S3, etc.). The workestrator can use `callbacks: ["otel"]` or `success_callback: ["langfuse"]` etc. in-memory. `turn_off_message_logging` and `global_disable_no_log_param` work without DB. `redact_user_api_key_info` works without DB. `general_settings.disable_spend_logs` (from db_info page) is separate — it disables DB spend log writes (relevant since no DB). Custom callback classes (`callbacks: custom_callbacks.proxy_handler_instance`) work without DB. Note: `s3_v2` callback requires AWS creds but no DB/Redis.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Logging callbacks (`litellm_settings.success_callback` / `failure_callback` / `callbacks`) work WITHOUT a database — they send logs to external services (Langfuse, OTEL, S3, etc.). The workestrate can use `callbacks: ["otel"]` or `success_callback: ["langfuse"]` etc. in-memory. `turn_off_message_logging` and `global_disable_no_log_param` work without DB. `redact_user_api_key_info` works without DB. `general_settings.disable_spend_logs` (from db_info page) is separate — it disables DB spend log writes (relevant since no DB). Custom callback classes (`callbacks: custom_callbacks.proxy_handler_instance`) work without DB. Note: `s3_v2` callback requires AWS creds but no DB/Redis.
 
 ## Confidence / uncertainty notes
 - high confidence on callback config keys and callback names (verbatim YAML). DB requirement is "not documented" — callbacks are external integrations that don't need LiteLLM's DB (inferred high confidence). Enterprise requirements are verbatim.

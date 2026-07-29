@@ -59,8 +59,8 @@ not documented on this page (zero fenced code blocks in the body)
 - https://docs.litellm.ai/docs/completion/http_handler_config (Custom HTTP Handler — "Configure custom aiohttp sessions for better performance and control in LiteLLM completions.")
 - https://docs.litellm.ai/docs/supported_endpoints (parent index)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-This is the /chat/completions endpoint landing page. It has no direct config.yaml relevance. The actual request/response format for the primary inference endpoint (`POST /v1/chat/completions`) is documented on the child pages (/completion/input, /completion/output, /completion/usage). For the workestrator config, the chat/completions endpoint is the primary inference path used by all clients (OpenAI SDK, curl, Langchain). The request format (model + messages + optional metadata) is documented on /docs/proxy/user_keys (extracted separately as p0-user_keys.md), not on this index page.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+This is the /chat/completions endpoint landing page. It has no direct config.yaml relevance. The actual request/response format for the primary inference endpoint (`POST /v1/chat/completions`) is documented on the child pages (/completion/input, /completion/output, /completion/usage). For the workestrate config, the chat/completions endpoint is the primary inference path used by all clients (OpenAI SDK, curl, Langchain). The request format (model + messages + optional metadata) is documented on /docs/proxy/user_keys (extracted separately as p0-user_keys.md), not on this index page.
 
 ## Confidence / uncertainty notes
 - HTTP status inferred as 200 from successful full content render (canonical URL present, no error page).

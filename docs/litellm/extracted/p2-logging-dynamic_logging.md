@@ -84,8 +84,8 @@ litellm_settings:
 - /docs/traffic_mirroring (Previous)
 - /docs/proxy/logging (Next)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Dynamic callback management (`GET /callbacks/list`, `x-litellm-disable-callbacks` header) works WITHOUT a database — it operates on in-memory callback state. The workestrator can use per-request callback disabling via the `x-litellm-disable-callbacks` header in-memory. The `allow_dynamic_callback_disabling` config key works without DB. However, setting it to `false` (compliance mode) is an Enterprise feature. The `GET /callbacks/list` endpoint works without DB (lists configured callbacks).
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Dynamic callback management (`GET /callbacks/list`, `x-litellm-disable-callbacks` header) works WITHOUT a database — it operates on in-memory callback state. The workestrate can use per-request callback disabling via the `x-litellm-disable-callbacks` header in-memory. The `allow_dynamic_callback_disabling` config key works without DB. However, setting it to `false` (compliance mode) is an Enterprise feature. The `GET /callbacks/list` endpoint works without DB (lists configured callbacks).
 
 ## Confidence / uncertainty notes
 - high confidence on config keys and endpoints (verbatim). Enterprise requirement for the `false` setting is verbatim. The dynamic disabling feature itself (default `true`) works without DB (inferred high confidence — it's an in-memory operation).

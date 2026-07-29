@@ -39,7 +39,7 @@ if KVM is absent (determined in phase 01), mark the gate
    - GET `/health/liveliness` — purpose (verbatim): "Liveness probe. Returns
      200 if the proxy process is alive." (Note verbatim from the index: "both
      /health/liveness and /health/liveliness exist in the OpenAPI — the
-     misspelled variant is the one used by workestrator infra.")
+     misspelled variant is the one used by workestrate infra.")
    - POST `/v1/chat/completions` with `model=<alias>` — the `model` field maps
      to a configured `model_name` alias (verbatim from the index: "model field
      maps to config model_name, same aliasing as /v1/chat/completions").

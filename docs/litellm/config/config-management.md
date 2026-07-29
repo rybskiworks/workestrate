@@ -134,7 +134,7 @@ itself has no stated DB, Redis, or Enterprise requirement.
 - Raw: https://raw.githubusercontent.com/BerriAI/litellm-docs/main/docs/proxy/config_management.md
 - Local: `extracted/p0-config_management.md`
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 

@@ -156,8 +156,8 @@ general_settings:
 - https://api.slack.com/messaging/webhooks
 - https://enterprise.litellm.ai/demo
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Alerting (`general_settings.alerting`, `alerting_threshold`, `alert_types`) works WITHOUT a database — it sends webhooks to Slack/MS Teams/Discord. The workestrator can use `alerting: ["slack"]` in-memory for `llm_exceptions`, `llm_too_slow`, `llm_requests_hanging`, `cooldown_deployment`, `new_model_added`, `outage_alerts`, `daily_reports`, `fallback_reports`. Budget alerts (`budget_alerts`, `spend_reports`, `failed_tracking_spend`) require DB-backed spend tracking (unavailable). `db_exceptions` is moot without DB. Region-outage alerting is Enterprise (unavailable). Digest mode works in-memory (per-instance state). `alerting_args` TTL values may use in-memory cache (no Redis confirmed on page).
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Alerting (`general_settings.alerting`, `alerting_threshold`, `alert_types`) works WITHOUT a database — it sends webhooks to Slack/MS Teams/Discord. The workestrate can use `alerting: ["slack"]` in-memory for `llm_exceptions`, `llm_too_slow`, `llm_requests_hanging`, `cooldown_deployment`, `new_model_added`, `outage_alerts`, `daily_reports`, `fallback_reports`. Budget alerts (`budget_alerts`, `spend_reports`, `failed_tracking_spend`) require DB-backed spend tracking (unavailable). `db_exceptions` is moot without DB. Region-outage alerting is Enterprise (unavailable). Digest mode works in-memory (per-instance state). `alerting_args` TTL values may use in-memory cache (no Redis confirmed on page).
 
 ## Confidence / uncertainty notes
 - high confidence on alerting config keys and alert type names (verbatim). DB requirement for budget alerts is inferred (not verbatim on this page). Redis requirement is not documented — alerting TTL/cache may use in-memory (inferred). Enterprise requirement for region-outage is verbatim.

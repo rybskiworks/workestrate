@@ -156,7 +156,7 @@ log_stop_errors = true      # optional
 ```toml
 image = { recipe = "registry", ref = "ghcr.io/berriai/litellm:v1.89.4" }
 # or
-image = { recipe = "nix-layered", name = "workestrator-pi", tag = "latest",
+image = { recipe = "nix-layered", name = "workestrate-pi", tag = "latest",
           contents = ["cacert", "busybox", "fakeNss"],
           binary = { recipe = "bun-compile", src = "flake://pi",
                      entrypoint = "packages/coding-agent/dist/bun/cli.js",
@@ -621,7 +621,7 @@ and **8 secret definitions**:
 | Name | Kind | Image recipe | Notes |
 |---|---|---|---|
 | `litellm` | service | `registry` (`ghcr.io/berriai/litellm:v1.89.4`) | Proxy; `default_deny = true`; egress to providers. |
-| `pi` | agent | `nix-layered` (`workestrator-pi`) | `bun-compile` binary; `agent_base` egress; deny `.pi.dev`. |
+| `pi` | agent | `nix-layered` (`workestrate-pi`) | `bun-compile` binary; `agent_base` egress; deny `.pi.dev`. |
 | `odysseus` | service | `registry` (`python:3.12-slim`) | `pip-install` local_build; HF egress. |
 | `opencode` | agent | `registry` (`node:24-bookworm-slim`) | `bun-install` local_build; `agent_base` egress. |
 | `tempest` | agent | `nix-layered` (`tempest`) | `npm-build` binary; `default_deny = false` (entitled). |

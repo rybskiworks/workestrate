@@ -72,7 +72,7 @@ model_list:
 - The OpenAI-compatible endpoint uses `reasoning_split` instead of native Anthropic thinking blocks.
 - `minimax/MiniMax-M3` is NOT documented — only M2-series models (M2, M2.1, M2.1-lightning).
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 CRITICAL FINDING: The repo uses `anthropic/MiniMax-M3` with `api_base: api.minimax.io/anthropic`, but the documented pattern on this page is `minimax/MiniMax-M2.1` with `api_base: https://api.minimax.io/anthropic/v1/messages`. The documented approach uses the `minimax/` prefix (NOT `anthropic/`) even when calling the Anthropic Messages endpoint, via `litellm.anthropic.messages.acreate(model="minimax/MiniMax-M2.1", api_base="https://api.minimax.io/anthropic/v1/messages")`. The repo's `anthropic/MiniMax-M3` approach may work (since the Anthropic page documents custom api_base), but it differs from the documented `minimax/` prefix pattern. `MiniMax-M3` is NOT in the docs — only M2-series. The repo may be using a newer model not yet documented, or the model name may need verification. The api_base `api.minimax.io/anthropic` in the repo matches the documented `https://api.minimax.io/anthropic/v1/messages` (the repo omits the `/v1/messages` suffix, which LiteLLM would auto-append via the `anthropic/` prefix).
 

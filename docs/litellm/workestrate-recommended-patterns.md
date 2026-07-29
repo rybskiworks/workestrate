@@ -1,7 +1,7 @@
-# Workestrator Recommended Patterns
+# Workestrate Recommended Patterns
 
 > **RECOMMENDATION DOCUMENT — NOT upstream LiteLLM docs.** This file
-> captures how the workestrator project structures its LiteLLM deployment.
+> captures how the workestrate project structures its LiteLLM deployment.
 > Recommendations are marked **[RECOMMENDATION]**. Where a recommendation
 > rests on an upstream fact, the fact is cited from the on-disk corpus
 > under `docs/litellm/extracted/` or `docs/litellm/schemas/` and marked
@@ -26,7 +26,7 @@
 
 ## What this area controls
 
-How the workestrator should structure `config.yaml`, choose provider
+How the workestrate should structure `config.yaml`, choose provider
 prefixes, enforce security at the proxy + sandbox boundary, and what to
 enable when Postgres is added (M4). This is a project-convention doc, not an
 upstream reference.
@@ -65,7 +65,7 @@ upstream reference.
 
 ### [RECOMMENDATION] Config structure: tier aliases + `-fallback` siblings
 
-The workestrator exposes **tier `model_name` aliases** (not provider model
+The workestrate exposes **tier `model_name` aliases** (not provider model
 IDs) and gives each tier a primary deployment plus a `-fallback` sibling.
 `router_settings.fallbacks` maps each tier to its fallback.
 
@@ -220,8 +220,8 @@ need spend tracking; otherwise remove it when Postgres is live so
 
 ## Related schema / workflow
 
-- [`schemas/config-yaml.option-index.json`](schemas/config-yaml.option-index.json) — per-key `requires_db` / `requires_redis` / `workestrator_recommendation` flags.
-- [`schemas/config-yaml.normalized.schema.md`](schemas/config-yaml.normalized.schema.md) — "Workestrator in-memory deployment mapping".
+- [`schemas/config-yaml.option-index.json`](schemas/config-yaml.option-index.json) — per-key `requires_db` / `requires_redis` / `workestrate_recommendation` flags.
+- [`schemas/config-yaml.normalized.schema.md`](schemas/config-yaml.normalized.schema.md) — "Workestrate in-memory deployment mapping".
 - [`routing/README.md`](routing/README.md) — static fallbacks (M1) → dynamic fallbacks (M4).
 - [`auth-access-budget/README.md`](auth-access-budget/README.md) — M1/M4 phasing.
 - [`deployment-ops/README.md`](deployment-ops/README.md) — image choice, health probes, egress.
@@ -229,7 +229,7 @@ need spend tracking; otherwise remove it when Postgres is live so
 - [`providers/README.md`](providers/README.md) — provider prefix matrix + deviations.
 - [`troubleshooting.md`](troubleshooting.md) — common failure modes.
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 

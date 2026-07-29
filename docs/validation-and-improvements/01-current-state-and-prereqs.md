@@ -140,7 +140,7 @@ table below summarizes each workload; line citations refer to that file.
 | Field | Value | Lines |
 |---|---|---|
 | `kind` | `agent` | 113 |
-| `image` | `recipe = "nix-layered"`, `name = "workestrator-pi"`, `tag = "latest"`, `contents = ["cacert","busybox","fakeNss"]`, `binary = { recipe = "bun-compile", src = "flake://pi", ... }`, `features = ["create_tmp"]` | 114 |
+| `image` | `recipe = "nix-layered"`, `name = "workestrate-pi"`, `tag = "latest"`, `contents = ["cacert","busybox","fakeNss"]`, `binary = { recipe = "bun-compile", src = "flake://pi", ... }`, `features = ["create_tmp"]` | 114 |
 | `ports` | none | — |
 | `mounts` | `workspaces/pi-state` → `/data` (rw); `${CWD}` → `/work` (rw) | 136-144 |
 | `env` (secret) | `LITELLM_MASTER_KEY` (secret=) | 129-131 |
@@ -295,7 +295,7 @@ stability `git diff`.
 | Gate | Command | Notes |
 |---|---|---|
 | Nix build (CLI) | `nix build .#workestrate` | `just verify-full` (`justfile:75-76`) |
-| Image builds | `nix build .#workestrator-pi`, `.#tempest`, etc. | nix-layered image recipes |
+| Image builds | `nix build .#workestrate-pi`, `.#tempest`, etc. | nix-layered image recipes |
 | FOD hash computation | `nix run nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json` | tempest `npm_deps_hash` (Bundle fix c) |
 | Schema generation | `just generate-schema` (`justfile:97-101`) | requires devshell RUSTFLAGS/libcap-ng |
 

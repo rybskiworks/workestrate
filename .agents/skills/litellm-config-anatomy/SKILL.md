@@ -26,7 +26,7 @@ startup**; on invalid config it **fails to start**. Full detail lives in:
 - `docs/litellm/config/config-management.md` — `include` / split-config.
 - `docs/litellm/schemas/config-yaml.option-index.json` — every config key
   with `source_urls`, `type`, `default`, `requires_db`, `requires_redis`,
-  `enterprise`, `deprecated`, `workestrator_recommendation`.
+  `enterprise`, `deprecated`, `workestrate_recommendation`.
 
 > **Do not hallucinate.** Every key/default below traces to
 > `docs/litellm/config/*.md` or `docs/litellm/schemas/config-yaml.option-index.json`.
@@ -123,7 +123,7 @@ Used for `api_key`, `master_key`, `api_base`, and any string config value.
   **auth failure**, NOT a config validation failure (the value type is still
   a string).
 - Env vars can ALSO be injected via the top-level `environment_variables:`
-  dict (workestrator does NOT use this — secrets come from the sandbox
+  dict (workestrate does NOT use this — secrets come from the sandbox
   `env()`/`secret_env()`).
 
 ## Startup validation

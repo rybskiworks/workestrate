@@ -75,8 +75,8 @@ None on this page — page contains only cURL/JSON examples, no YAML config bloc
 - /docs/proxy/credential_routing (Per-Team/Project Credential Routing)
 - /docs/proxy/jwt_auth_arch (RBAC)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Model access restriction by virtual key (`models` param on `/key/generate`) and by team (`models` on `/team/new`) both REQUIRE a database (via virtual keys/teams). The workestrator runs in-memory (no Postgres), so per-key and per-team model restrictions are UNAVAILABLE. Model access in the in-memory deployment is controlled entirely by which `model_name` entries exist in `model_list` in config.yaml — any caller with the `master_key` can access all configured models. `GET /v1/models` (listing) works without a DB. The `include_metadata` and `fallback_type` query params on `/v1/models` work with static fallback config.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Model access restriction by virtual key (`models` param on `/key/generate`) and by team (`models` on `/team/new`) both REQUIRE a database (via virtual keys/teams). The workestrate runs in-memory (no Postgres), so per-key and per-team model restrictions are UNAVAILABLE. Model access in the in-memory deployment is controlled entirely by which `model_name` entries exist in `model_list` in config.yaml — any caller with the `master_key` can access all configured models. `GET /v1/models` (listing) works without a DB. The `include_metadata` and `fallback_type` query params on `/v1/models` work with static fallback config.
 
 ## Confidence / uncertainty notes
 - high confidence on endpoints and request params. DB requirement is inferred from the virtual_keys prerequisite (not restated on this page) — marked as inferred. `GET /v1/models` likely works without DB (inferred).

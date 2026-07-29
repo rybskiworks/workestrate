@@ -1,4 +1,4 @@
-# workestrator
+# workestrate
 
 A local AI workbench that runs Pi, Odysseus, OpenCode, and T3MP3ST agents inside
 Microsandbox microVMs, with LiteLLM as the unified LLM proxy. Everything
@@ -7,7 +7,7 @@ Nix flakes and SOPS-encrypted secrets.
 
 ## What is this
 
-`workestrator` is a single-host sandbox for experimenting with
+`workestrate` is a single-host sandbox for experimenting with
 LLM-driven coding agents without giving them direct network or host
 access. A small Rust CLI builds Microsandbox plans for one or more
 agent microVMs and a local LiteLLM proxy; the proxy terminates
@@ -78,8 +78,8 @@ live in your personal config repo.
    exec` mounts the bun binary at `/app/bin/pi` (once a personal config repo
    is registered).
    ```bash
-   git clone <repo-url> workestrator
-   cd workestrator
+   git clone <repo-url> workestrate
+   cd workestrate
    nix develop
    ```
 2. Verify the workbench layout:
@@ -496,9 +496,9 @@ full `nix build` produces ready-to-run artifacts without `nix develop`:
   sandbox. Provides nodejs_24 + nmap + bind.dnsutils + the compiled
   T3MP3ST tree + a baked `defaultProvider:"local"` config so T3MP3ST
   uses the env-var-driven local LLM provider (no conf-store secrets).
-- `.#workestrator` — `runCommand` + `makeWrapper` wrapper around
+- `.#workestrate-sandbox` — `runCommand` + `makeWrapper` wrapper around
   `.#workestrate` that bakes `WORKESTRATE_PI_BUILD=${pi-bun}` into the
-  environment, so `nix build .#workestrator && ./result/bin/workestrator pi exec`
+  environment, so `nix build .#workestrate-sandbox && ./result/bin/workestrate pi exec`
   runs the hermetic bun-binary pi sandbox with no `nix develop` and no
   extra env. `apps.default` points at this wrapped binary.
 
@@ -515,7 +515,7 @@ nix-side patches in this repo. The flake consumes the fork verbatim.
 
 **Per-agent build-path override.** `Workload::build_path()` reads
 `WORKESTRATE_<NAME>_BUILD` (NAME uppercased, `-`→`_`) and falls back to
-`agents/<name>/build`. This is the mechanism the `.#workestrator` wrapper
+`agents/<name>/build`. This is the mechanism the `.#workestrate-sandbox` wrapper
 uses to point workestrate at the nix store path for pi; the same mechanism
 is available for future agent derivations (odysseus, opencode).
 
@@ -591,8 +591,8 @@ Reload your shell (or `source` the completion file) afterwards.
   `net` feature.
 - The pi microVM runs a **bun standalone binary** (`/app/bin/pi`, from
   `.#pi-bun`) with the Bun runtime embedded; no node/bun is needed inside
-  the sandbox. `.#pi` (npm/node) is the fallback. The `.#workestrator`
-  wrapper bakes `WORKESTRATE_PI_BUILD` so `nix build .#workestrator` runs
+  the sandbox. `.#pi` (npm/node) is the fallback. The `.#workestrate-sandbox`
+  wrapper bakes `WORKESTRATE_PI_BUILD` so `nix build .#workestrate-sandbox` runs
   hermetic.
 - Sandbox plans use a default-deny network policy; only the
   destinations listed above have explicit egress.

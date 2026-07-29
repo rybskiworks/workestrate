@@ -219,9 +219,9 @@ litellm_settings:
 - Authoritative key index: [`config-yaml.option-index.json`](../schemas/config-yaml.option-index.json)
 - Normalized schema: [`config-yaml.normalized.schema.md`](../schemas/config-yaml.normalized.schema.md)
 
-## Workestrator notes
+## Workestrate notes
 
-> **PROJECT CONTEXT** — not upstream LiteLLM docs. Describes the workestrator deployment specifically.
+> **PROJECT CONTEXT** — not upstream LiteLLM docs. Describes the workestrate deployment specifically.
 
 Real config (`infra/litellm/config.yaml`) uses only:
 

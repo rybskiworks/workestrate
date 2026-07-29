@@ -121,8 +121,8 @@ model_list:
 - /docs/skills_gateway — "Skills Gateway" sibling page (SEPARATE from /docs/skills)
 - /docs/enterprise
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- The `/v1/skills` endpoints are Anthropic-compatible passthrough endpoints. DB requirement is NOT documented on this page — skills may be stored in DB or filesystem (inferred). The workestrator could potentially use `/v1/skills` if skills storage doesn't require DB (unconfirmed). Model-based routing (`model_list` with anthropic models) works without DB. The `anthropic-beta: skills-2025-10-02` header and `?beta=true` query param are required. Management endpoints (`POST /claude-code/plugins`, `GET /public/skill_hub`) are on the sibling `/docs/skills_gateway` page (deferred — not fetched). SKILL.md frontmatter format is relevant for skill authoring.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- The `/v1/skills` endpoints are Anthropic-compatible passthrough endpoints. DB requirement is NOT documented on this page — skills may be stored in DB or filesystem (inferred). The workestrate could potentially use `/v1/skills` if skills storage doesn't require DB (unconfirmed). Model-based routing (`model_list` with anthropic models) works without DB. The `anthropic-beta: skills-2025-10-02` header and `?beta=true` query param are required. Management endpoints (`POST /claude-code/plugins`, `GET /public/skill_hub`) are on the sibling `/docs/skills_gateway` page (deferred — not fetched). SKILL.md frontmatter format is relevant for skill authoring.
 
 ## Confidence / uncertainty notes
 - high confidence on endpoints and SKILL.md format (verbatim). DB requirement is "not documented" — skills storage backend is unconfirmed on this page (may require DB for persistence — inferred medium confidence). The sibling `/docs/skills_gateway` page (deferred) likely documents management endpoints and DB requirements.

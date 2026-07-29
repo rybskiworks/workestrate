@@ -34,7 +34,7 @@
 #
 # SECRET HYGIENE: NEVER commit real API keys. Use `os.environ/<VAR>` indirection.
 #
-# WORKESTRATOR NOTES [PROJECT CONTEXT — NOT upstream docs]:
+# WORKESTRATE NOTES [PROJECT CONTEXT — NOT upstream docs]:
 #   - Not currently used in infra/litellm/config.yaml.
 #   - Inception-specific `reasoning_effort="instant"` for near real-time.
 #   - FIM via `text-completion-inception/mercury-edit-2` (32K context).

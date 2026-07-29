@@ -60,7 +60,7 @@ model_list:
 - The `vllm/` prefix is for in-process vLLM SDK usage (packaged installs via `uv add litellm vllm`), not HTTP server calls.
 - `hosted_vllm/` is the recommended alternative to `openai/` prefix when you don't want to pass a fake API key (referenced by openai_compatible page).
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 `hosted_vllm/` is the recommended prefix for self-hosted OpenAI-compatible vLLM servers. This is the alternative to `openai/` prefix when the endpoint doesn't require an API key (no need for fake key). Pattern: `model: hosted_vllm/<model-name>` + `api_base: https://<vllm-host>` + optional `api_key`. Supports more endpoints than openai_compatible: `/rerank`, `/audio/transcriptions` in addition to chat/completions and embeddings. For Neuralwatt (which requires an API key), `openai/` prefix is more appropriate. For keyless local vLLM, `hosted_vllm/` is better.
 

@@ -1,4 +1,4 @@
-# Migration Documentation — workestrator Tool+XDG Model
+# Migration Documentation — workestrate Tool+XDG Model
 
 **Status:** PRE-IMPLEMENTATION (authoritative design record)
 **Branch:** `migration/tool-model`

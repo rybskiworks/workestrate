@@ -176,8 +176,8 @@ litellm_settings:
 - /docs/proxy/access_control (RBAC)
 - /docs/proxy/users (budgets, rate limits)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Virtual keys REQUIRE a Postgres database (`general_settings.database_url` / `DATABASE_URL`). The workestrator runs LiteLLM in-memory (no Postgres), so virtual keys, teams, users, spend tracking, and key rotation are ALL UNAVAILABLE. Only `general_settings.master_key` auth works in-memory (single admin key, no per-key budgets/rate limits/model restrictions). The `litellm_key_header_name` custom header works without a DB. `upperbound_key_generate_params`, `default_key_generate_params`, and `key_generation_settings` are moot without `/key/generate` (which requires DB). `general_settings.disable_spend_logs` (documented on db_info page) is relevant since spend logging is DB-backed.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Virtual keys REQUIRE a Postgres database (`general_settings.database_url` / `DATABASE_URL`). The workestrate runs LiteLLM in-memory (no Postgres), so virtual keys, teams, users, spend tracking, and key rotation are ALL UNAVAILABLE. Only `general_settings.master_key` auth works in-memory (single admin key, no per-key budgets/rate limits/model restrictions). The `litellm_key_header_name` custom header works without a DB. `upperbound_key_generate_params`, `default_key_generate_params`, and `key_generation_settings` are moot without `/key/generate` (which requires DB). `general_settings.disable_spend_logs` (documented on db_info page) is relevant since spend logging is DB-backed.
 
 ## Confidence / uncertainty notes
 - high confidence on DB requirement (multiple verbatim quotes). Enterprise requirement for key rotations is verbatim. The `custom_key_generate` callback path may work without DB for custom auth flows (inferred) but the standard `/key/generate` endpoint requires DB.

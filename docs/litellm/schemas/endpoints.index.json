@@ -24,7 +24,7 @@
       "sdk_compatibility": "OpenAI-compatible",
       "model_alias_behavior": "model field = config.yaml model_name (e.g. 'coding', 'coding.pro'). LiteLLM routes to the primary litellm_params.model and falls back per router_settings.fallbacks. Provider-specific model strings are never sent by clients.",
       "auth_required": true,
-      "streaming_behavior": "SSE chunked stream when stream=true. stream_timeout configurable (workestrator: 300s). Non-stream returns full ChatCompletion JSON.",
+      "streaming_behavior": "SSE chunked stream when stream=true. stream_timeout configurable (workestrate: 300s). Non-stream returns full ChatCompletion JSON.",
       "pass_through_behavior": "drop_params=true drops unsupported provider params. Input/output/exceptions mapped to OpenAI format for all providers. Anthropic providers (kimi/minimax) translated via anthropic/ prefix.",
       "source_urls": [
         "https://docs.litellm.ai/docs/supported_endpoints",
@@ -364,7 +364,7 @@
     {
       "path": "/health/liveliness",
       "method": "GET",
-      "purpose": "Liveness probe. Returns 200 if the proxy process is alive. (Note: both /health/liveness and /health/liveliness exist in the OpenAPI — the misspelled variant is the one used by workestrator infra.)",
+      "purpose": "Liveness probe. Returns 200 if the proxy process is alive. (Note: both /health/liveness and /health/liveliness exist in the OpenAPI — the misspelled variant is the one used by workestrate infra.)",
       "request_shape_summary": "No body.",
       "response_shape_summary": "200 OK (liveness).",
       "sdk_compatibility": "LiteLLM-specific",
@@ -419,7 +419,7 @@
       "_openapi_present": false
     }
   ],
-  "management_endpoints_summary": "Management endpoints (544 operations across 92 tags) are enumerated in openapi-management-endpoints.index.json, organized by tag/family with requires_db flags inferred from path semantics. The workestrator runs LiteLLM in-memory (no Postgres), so management endpoints that mutate or query virtual keys, teams, users, budgets, or spend are unavailable. See openapi-management-endpoints.index.json for the full high-value family index.",
+  "management_endpoints_summary": "Management endpoints (544 operations across 92 tags) are enumerated in openapi-management-endpoints.index.json, organized by tag/family with requires_db flags inferred from path semantics. The workestrate runs LiteLLM in-memory (no Postgres), so management endpoints that mutate or query virtual keys, teams, users, budgets, or spend are unavailable. See openapi-management-endpoints.index.json for the full high-value family index.",
   "notes": {
     "openapi_inventory_totals": {
       "generated": "2026-06-27",
@@ -434,7 +434,7 @@
       "distinct_tags": 92
     },
     "metrics_endpoint_caveat": "GET /metrics is a Prometheus scrape endpoint and is NOT present in the OpenAPI inventory (openapi_route_inventory.json). It is sourced from the Prometheus docs page. It works without a database.",
-    "health_liveliness_typo": "Both /health/liveness and /health/liveliness (misspelled) exist in the OpenAPI. The workestrator infra uses /health/liveliness and /health/readiness.",
+    "health_liveliness_typo": "Both /health/liveness and /health/liveliness (misspelled) exist in the OpenAPI. The workestrate infra uses /health/liveliness and /health/readiness.",
     "anti_hallucination": "Every path/method traces to either p0-supported_endpoints.md or openapi_route_inventory.json. operationId and tag fields are verbatim from the OpenAPI inventory. requires_db is inferred from path semantics."
   }
 }

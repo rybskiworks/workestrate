@@ -76,7 +76,7 @@ The two nix-built images are exposed as explicit flake outputs
 (`flake.nix:210-213`, `flake.nix:349-368`):
 
 ```bash
-nix build .#workestrator-pi    # pi sandbox image (dockerTools.buildLayeredImage)
+nix build .#workestrate-pi    # pi sandbox image (dockerTools.buildLayeredImage)
 nix build .#tempest            # tempest sandbox image
 ```
 
@@ -257,7 +257,7 @@ interactively, confirms the prompt, then detaches (`Ctrl-C` or the agent's
 exit command). There is no scriptable one-liner for this with the current CLI.
 
 **Failure triage:** if the TUI fails to attach, `workestrate pi plan` to
-confirm the image (`workestrator-pi:latest`) is loaded (`just load-images`);
+confirm the image (`workestrate-pi:latest`) is loaded (`just load-images`);
 a missing image → re-run B2 + `just load-images`.
 
 ### B9 — OpenCode and Tempest agent attach smoke `HOST-KVM` (manual / interactive)
@@ -396,7 +396,7 @@ stragglers and `workestrate <name> down --instance <id>` them individually.
 
 | Capability | Proof (step + command) | Acceptance criterion |
 |---|---|---|
-| Image build (pi) | B2: `nix build .#workestrator-pi` | `result` symlink produced; `just load-images` loads `workestrator-pi:latest` into microsandbox |
+| Image build (pi) | B2: `nix build .#workestrate-pi` | `result` symlink produced; `just load-images` loads `workestrate-pi:latest` into microsandbox |
 | Image build (tempest) | B2: `nix build .#tempest` (after FOD hash pin) | `result` symlink produced; `just load-images` loads `tempest:latest` |
 | Config load | B4: `workestrate validate-config` | exit 0, no schema/policy violations |
 | Secrets injection | B5: `workestrate litellm up` boots with `LITELLM_MASTER_KEY` from `.env.enc` | proxy boots and `/v1/models` returns 200 with `Authorization: Bearer $LITELLM_MASTER_KEY` |

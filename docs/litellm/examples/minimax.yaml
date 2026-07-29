@@ -2,7 +2,7 @@
 # minimax.yaml
 # =============================================================================
 # MiniMax — DOCUMENTED `minimax/` prefix pattern (both Anthropic Messages and
-# OpenAI-compatible endpoints), PLUS a clearly-marked workestrator DEVIATION.
+# OpenAI-compatible endpoints), PLUS a clearly-marked workestrate DEVIATION.
 #
 # VERIFIED FROM DOCS (providers/minimax.md,
 #   source: https://docs.litellm.ai/docs/providers/minimax):
@@ -37,7 +37,7 @@
 #
 # SECRET HYGIENE: NEVER commit real API keys. Use `os.environ/<VAR>` indirection.
 #
-# WORKESTRATOR DEVIATION [PROJECT CONTEXT — NOT upstream docs, UNCERTAIN]:
+# WORKESTRATE DEVIATION [PROJECT CONTEXT — NOT upstream docs, UNCERTAIN]:
 #   The repo uses `anthropic/MiniMax-M3` with `api_base: api.minimax.io/anthropic`.
 #   This DEVIATES from the documented `minimax/` prefix pattern. Both may work
 #   (the Anthropic page permits custom api_base), but the documented approach is
@@ -61,7 +61,7 @@ model_list:
       api_key: os.environ/MINIMAX_API_KEY
       api_base: https://api.minimax.io/v1 # VERIFIED verbatim api_base
 
-  # --- WORKESTRATOR DEVIATION (UNCERTAIN — NOT documented as correct) ------
+  # --- WORKESTRATE DEVIATION (UNCERTAIN — NOT documented as correct) ------
   # TODO: verify MiniMax-M3 model name exists; it is NOT in the docs (only M2).
   # TODO: prefer the documented `minimax/` prefix path above unless there is a
   #       specific reason the `anthropic/` prefix is required.

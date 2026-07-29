@@ -115,7 +115,7 @@ Additional surfaces mentioned in prose:
 - Claude Code marketplace: `~/.claude/settings.json` `extraKnownMarketplaces`
 - Sibling page `/docs/skills` — Anthropic Skills API (`/v1/skills` endpoints)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - The Skills Gateway central registry endpoints are now CONFIRMED verbatim upstream (POST /claude-code/plugins, GET /claude-code/plugins, POST /claude-code/plugins/{name}/enable|disable, GET /public/skill_hub, GET /claude-code/marketplace.json). However, the DB/persistence requirement is NOT documented on this page — upstream is silent on whether the registry requires a database. The prior project-context claim that these "require DB for persistence" remains an INFERENCE (runtime-registered skills are plausibly lost on restart without a DB, but this is not stated upstream). Model-based routing and `/v1/skills` are on the separate `/docs/skills` page, not here.
 
 ## Confidence / uncertainty notes

@@ -60,7 +60,7 @@ model_list:
 - `api_base` must include `/v1` postfix or you'll get "Not Found Error".
 - Do NOT append endpoint paths like `/v1/embedding` to `api_base` — the openai-client adds them automatically.
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 This is the CANONICAL pattern for Neuralwatt (`api.neuralwatt.com/v1`) and any self-hosted vLLM/Ollama OpenAI-compatible endpoint. Pattern: `model: openai/<name>` + `api_base: https://<host>/v1` + `api_key: <key>` in `litellm_params`. The repo's `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` follows this exact documented pattern. For endpoints that don't require an API key, a fake key must still be passed (or use `hosted_vllm/` prefix instead).
 

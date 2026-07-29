@@ -32,7 +32,7 @@ annotates per-field provenance with layer names. `up`/`exec` target a slot
 `--instance <id> --port-offset N` or `--new --port-offset N` for parallel
 canaries). `--port-offset N` shifts host ports by `+=N` (guest unchanged).
 
-The `.#workestrator` wrapper (`runCommand` + `makeWrapper`) bakes
+The `.#workestrate-sandbox` wrapper (`runCommand` + `makeWrapper`) bakes
 `WORKESTRATE_PI_BUILD` (pointing at the `.#pi-bun` standalone binary) into
 the environment; `apps.default` points at this wrapped binary.
 

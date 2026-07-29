@@ -43,7 +43,7 @@ remain. Odysseus/opencode nix derivations exist (HOST-NIX gate).
 | 0b.2 | Update devshell `_build_agents` (`nix/devshells/default.nix:169-241`) to read `config.reference/workestrate.toml` via `builtins.fromTOML`. Devshell reads ONLY reference config (tool-dev). | `nix develop` enters; build plan correct | HOST-NIX |
 | 0b.3 | Update `workload-images` attrset (`flake.nix:74-97`) to be config-driven (from `config.reference/`). | `nix eval .#workload-images` | HOST-NIX |
 | 0b.4 | Parameterize `pi.nix`/`pi-bun.nix`/`tempest.nix` into named build recipes under `nix/lib/recipes/`. | `nix build .#pi-bun` succeeds | HOST-NIX |
-| 0b.5 | Parameterize `pi-image.nix`/`tempest-image.nix` into generic `buildWorkloadImage` in `nix/lib/recipes/nix-layered.nix`. | `nix build .#workestrator-pi` succeeds | HOST-NIX |
+| 0b.5 | Parameterize `pi-image.nix`/`tempest-image.nix` into generic `buildWorkloadImage` in `nix/lib/recipes/nix-layered.nix`. | `nix build .#workestrate-pi` succeeds | HOST-NIX |
 | 0b.6 | Migrate microsandbox vendor symlink to git-fork dependency (ADR 0011). Remove `vendor-unlock`/`vendor-lock` recipes. Update `nix/packages/agentctl.nix:41-47` preBuild. | `nix build .#workestrate` succeeds; `cargo check` passes | HOST-NIX |
 | 0b.7 | Full validation. | `just verify` + `nix build .#workestrate` | HOST-NIX |
 
@@ -81,7 +81,7 @@ confusion surfaced by the 2026-07 review (finding D8).
 
 ### Phase 2 core exports — DONE
 - `flake.nix` exposes `lib.${system}` with `recipes`, `vocabulary`, `buildWorkloadImage`, `buildImagesFromConfig`, and `checks.validateConfig`.
-- `templates/workestrator-config/flake.nix.jinja` updated to use `workestrator.lib.${system}` and pass the TOML string to `validateConfig`.
+- `templates/workestrate-config/flake.nix.jinja` updated to use `workestrate.lib.${system}` and pass the TOML string to `validateConfig`.
 
 ### HOST-NIX gates
 - `nix build .#workestrate` and image builds remain HOST-NIX gates; they cannot run in this container.
@@ -133,7 +133,7 @@ config repos. (All HOST-NIX gates.)
 - `nix eval .#lib.x86_64-linux` returns the expected attr paths.
 
 ### Step 2.2–2.4: Config-repo flake + copier template — TEMPLATE READY
-- `templates/workestrator-config/flake.nix.jinja` updated to use `workestrator.lib.${system}`.
+- `templates/workestrate-config/flake.nix.jinja` updated to use `workestrate.lib.${system}`.
 - Live config-repo `nix build` / `nix flake check` / `copier copy` are HOST-NIX gates and remain deferred.
 
 ## Phase 3: Layering engine (fixtures, multi-recipient SOPS, copier)
@@ -264,7 +264,7 @@ golden-check:
 
 ### Fate of existing struct-assertion tests (`runtime.rs:454-678`)
 
-- **Value-equality tests** (e.g. `assert_eq!(plan.image.as_deref(), Some("workestrator-pi:latest"))` at `runtime.rs:485`): **rewritten as loader tests** — load config, produce plan, diff against golden file.
+- **Value-equality tests** (e.g. `assert_eq!(plan.image.as_deref(), Some("workestrate-pi:latest"))` at `runtime.rs:485`): **rewritten as loader tests** — load config, produce plan, diff against golden file.
 - **Invariant tests** (e.g. "pi must NOT host-bind LITELLM_MASTER_KEY" at `runtime.rs:622-643`): **kept as semantic checks** on the loaded plan. These verify properties that golden-file diffing alone can't catch.
 
 ## Rollback strategy per phase
@@ -282,7 +282,7 @@ golden-check:
 | Phase | Done means |
 |---|---|
 | 0a | `just verify` passes. Golden parity proven. `workloads/*.rs` deleted. Odysseus/opencode derivations exist (HOST-NIX). |
-| 0b | `nix build .#workestrate` + `.#workestrator-pi` succeed. Devshell reads `config.reference/` only. No vendor symlink. (All HOST-NIX.) |
+| 0b | `nix build .#workestrate` + `.#workestrate-pi` succeed. Devshell reads `config.reference/` only. No vendor symlink. (All HOST-NIX.) |
 | 1 | `just verify` passes with XDG model. `workestrate config/init/source` commands work. Runtime on KVM host succeeds (HOST-KVM). Root `workestrate.toml` works as project layer. |
 | 2 | Core exports `lib.*`. Config-repo-flake builds images. Copier template works. (All HOST-NIX.) |
 | 3 | Fixture-repo merge tests pass. `plan --show-source` works. Multi-recipient SOPS works. Copier template finalized. |
@@ -316,12 +316,12 @@ golden-check:
 - Default `plan` output unchanged (golden-check green)
 
 ### Step 3.4: Multi-recipient SOPS layout — DONE (template only)
-- `templates/workestrator-config/.sops.yaml.jinja`: multi-recipient template
+- `templates/workestrate-config/.sops.yaml.jinja`: multi-recipient template
   with per-path creation_rules (shared → both keys, personal-only → personal key)
 - SOPS validation: HOST-GATE (sops not available in this container for live testing)
 
 ### Step 3.5: Copier template — DONE (template only)
-- `templates/workestrator-config/`: complete copier template
+- `templates/workestrate-config/`: complete copier template
   (copier.yml, workestrate.toml.jinja, .sops.yaml.jinja, .env.example, README.md,
   optional flake.nix.jinja for inverted-dependency mode)
 - Template verification: HOST-GATE (copier not available in this container)
@@ -333,7 +333,7 @@ golden-check:
 - Nix drvPath parity for `.#pi`, `.#pi-bun`, `.#tempest-built`, `.#tempest-image`, `.#odysseus-built`, `.#opencode-built` verified unchanged
 
 ### HOST-GATE items for Phase 3
-- `copier copy templates/workestrator-config/ /tmp/test-config/` — verify template renders
+- `copier copy templates/workestrate-config/ /tmp/test-config/` — verify template renders
 - `workestrate validate-config` against a copier-generated config repo
 - Multi-recipient SOPS workflow with two age keys (setup-secrets + decrypt)
 - `nix build` in a config repo with the inverted-dependency flake.nix

@@ -63,7 +63,7 @@ model_list:
 - LiteLLM claims to support "ALL OpenRouter models" via the `openrouter/<any-model>` generic pattern.
 - No proxy YAML config is shown on this page.
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 The repo uses `openrouter/z-ai/glm-5.1`, `openrouter/qwen/...`, and `openrouter/nex/...` style model strings. CONFIRMED: The nested format `openrouter/<provider>/<model>` is the correct documented pattern. `openrouter/z-ai/glm-5.1` is structurally valid (`z-ai` is OpenRouter's namespace for Z.AI/Zhipu). Note: OpenRouter uses `z-ai/` (hyphenated) while LiteLLM's native Z.AI provider uses `zai/` (no hyphen) — distinct paths. `openrouter/qwen/...` and `openrouter/nex/...` are structurally consistent with the documented nested pattern, though not explicitly shown on the page. GLM-5.1 is NOT documented on the native Z.AI provider page (only GLM-4.x). OpenRouter is the correct path for GLM-5.1.
 

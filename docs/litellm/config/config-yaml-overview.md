@@ -7,7 +7,7 @@ routed, reliability/retry behavior, auth, and module-level SDK settings.
 
 ## Where it appears
 
-`config.yaml`. In workestrator it is mounted **read-only** at `/app/config.yaml`
+`config.yaml`. In workestrate it is mounted **read-only** at `/app/config.yaml`
 and the proxy is started with `--config /app/config.yaml --host 0.0.0.0`.
 
 ## Verified behavior
@@ -143,7 +143,7 @@ router_settings: {}
 - https://docs.litellm.ai/docs/proxy/configs
 - Local: `extracted/p0-config_settings.md`, `extracted/p0-configs.md`
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 

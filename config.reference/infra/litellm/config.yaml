@@ -1,4 +1,4 @@
-# LiteLLM proxy — workestrator, in-memory, no Postgres/Redis.
+# LiteLLM proxy — workestrate, in-memory, no Postgres/Redis.
 # model_list lives in models.yaml (included below). Clients request tier aliases
 # (coding/coding.fast/coding.pro/coding.free) + neural-* (Neuralwatt catalog)
 # + openrouter-kimi-k3/kimi-code-k3 (Kimi K3 direct-select: OpenRouter / Kimi Coding Plan).

@@ -158,7 +158,7 @@ os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true"  # Prevents automati
 - https://docs.litellm.ai/docs/providers/anthropic_effort (Effort Parameter)
 - https://docs.litellm.ai/docs/completion/input#translated-openai-params
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - CRITICAL: The `anthropic/` prefix + custom `api_base` IS a documented pattern. The page has a dedicated "Custom API Base" section.
 - This confirms the repo's pattern of `anthropic/kimi-for-coding` with `api_base: api.kimi.com/coding` and `anthropic/MiniMax-M3` with `api_base: api.minimax.io/anthropic` is valid — pointing the `anthropic/` prefix at a non-Anthropic endpoint that speaks the Anthropic Messages API.
 - IMPORTANT NUANCE: LiteLLM auto-appends `/v1/messages` to the api_base. For Kimi (api.kimi.com/coding), the final URL would be `api.kimi.com/coding/v1/messages`. For MiniMax (api.minimax.io/anthropic), it would be `api.minimax.io/anthropic/v1/messages` — which matches the MiniMax docs page exactly.

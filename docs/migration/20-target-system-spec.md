@@ -144,12 +144,12 @@ state_dir = "$WORKESTRATE_HOME/state"  # runtime state (workspaces, var; home-re
 # `workestrate config update <name>` pulls latest and updates `rev`.
 
 [configs.personal]
-url = "git@github.com:georgrybski/workestrator-config-personal.git"
+url = "git@github.com:georgrybski/workestrate-config-personal.git"
 ref = "main"
 rev = "abc123def456789abcdef0123456789abcdef01"  # updated by `config update`
 
 [configs.work]
-url = "git@github.com:work-org/workestrator-config-team.git"
+url = "git@github.com:work-org/workestrate-config-team.git"
 ref = "main"
 rev = "789abc012def3456789abc012def456789abc012"
 
@@ -361,7 +361,7 @@ scope = "local"
 
 [workloads.pi]
 kind = "agent"
-image = { recipe = "nix-layered", name = "workestrator-pi", tag = "latest", contents = ["cacert", "busybox", "fakeNss"], binary = { recipe = "bun-compile", src = "flake://pi", entrypoint = "packages/coding-agent/dist/bun/cli.js", worker = "packages/coding-agent/src/utils/image-resize-worker.ts" }, features = ["create_tmp"] }
+image = { recipe = "nix-layered", name = "workestrate-pi", tag = "latest", contents = ["cacert", "busybox", "fakeNss"], binary = { recipe = "bun-compile", src = "flake://pi", entrypoint = "packages/coding-agent/dist/bun/cli.js", worker = "packages/coding-agent/src/utils/image-resize-worker.ts" }, features = ["create_tmp"] }
 workdir = "/work"
 cpus = 2
 memory_mib = 2048
@@ -985,7 +985,7 @@ creation_rules:
 ### What a config repo contains
 
 ```
-workestrator-config-personal/
+workestrate-config-personal/
 ├── workestrate.toml          # workload definitions + secrets: section
 ├── .env.enc                  # SOPS-encrypted secrets
 ├── .sops.yaml                # SOPS config
@@ -1004,25 +1004,25 @@ workestrator-config-personal/
 ### Optional flake.nix (inverted dependency, Phase 2)
 
 ```nix
-# workestrator-config-personal/flake.nix
+# workestrate-config-personal/flake.nix
 {
-  inputs.workestrator.url = "github:georgrybski/ai-workbench";
-  inputs.nixpkgs.follows = "workestrator/nixpkgs";
+  inputs.workestrate.url = "github:georgrybski/ai-workbench";
+  inputs.nixpkgs.follows = "workestrate/nixpkgs";
 
-  outputs = { self, workestrator, nixpkgs }:
+  outputs = { self, workestrate, nixpkgs }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
       config = builtins.fromTOML (builtins.readFile ./workestrate.toml);
     in {
       # Build this repo's nix-layered images using core's exported recipes
-      packages.x86_64-linux = workestrator.lib.buildImagesFromConfig {
+      packages.x86_64-linux = workestrate.lib.buildImagesFromConfig {
         inherit pkgs config;
       };
 
       # Config-repo CI: validate against core's schema
-      checks.x86_64-linux = workestrator.lib.checks.validateConfig {
+      checks.x86_64-linux = workestrate.lib.checks.validateConfig {
         inherit pkgs config;
-        workestrate = workestrator.packages.x86_64-linux.workestrate;
+        workestrate-cli = workestrate.packages.x86_64-linux.workestrate;
       };
     };
 }
@@ -1072,7 +1072,7 @@ Merge order: `config.reference/` (base) → `work` (layer 1) → `personal`
 ```bash
 $ workestrate plan pi --show-source
 name: pi
-image: workestrator-pi:latest                    [personal]
+image: workestrate-pi:latest                    [personal]
 cpus: 2                                          [work]
 memory_mib: 2048                                 [reference]
 egress: agent_base                               [personal]

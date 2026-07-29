@@ -132,6 +132,6 @@ Every hardening recommendation in every phase MUST cite a verbatim config key
 from `docs/litellm/schemas/config-yaml.option-index.json` plus the docs page
 that documents it (e.g. `user_url_validation` SSRF from `config_settings`;
 `disable_spend_logs` from `db_info`). Recommendations not traceable to a
-verbatim key + source MUST be marked `[WORKESTRATOR NOTE]` or `[INFERRED]`.
-Workestrator-specific recommendations (deployment choices that go beyond
-upstream docs) MUST be marked `[WORKESTRATOR NOTE]`.
+verbatim key + source MUST be marked `[WORKESTRATE NOTE]` or `[INFERRED]`.
+Workestrate-specific recommendations (deployment choices that go beyond
+upstream docs) MUST be marked `[WORKESTRATE NOTE]`.

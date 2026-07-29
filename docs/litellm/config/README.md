@@ -18,8 +18,8 @@ structure, the `model_list` anatomy, and per-section references.
 
 ## Schema indexes
 
-- [schemas/config-yaml.option-index.json](../schemas/config-yaml.option-index.json) — every config key with `source_urls`, `type`, `default`, `requires_db`, `requires_redis`, `enterprise`, `deprecated`, `workestrator_recommendation`.
-- [schemas/config-yaml.normalized.schema.md](../schemas/config-yaml.normalized.schema.md) — normalized human-readable schema reference (includes "Workestrator in-memory deployment mapping").
+- [schemas/config-yaml.option-index.json](../schemas/config-yaml.option-index.json) — every config key with `source_urls`, `type`, `default`, `requires_db`, `requires_redis`, `enterprise`, `deprecated`, `workestrate_recommendation`.
+- [schemas/config-yaml.normalized.schema.md](../schemas/config-yaml.normalized.schema.md) — normalized human-readable schema reference (includes "Workestrate in-memory deployment mapping").
 
 ## Sources
 
@@ -27,7 +27,7 @@ structure, the `model_list` anatomy, and per-section references.
 - https://docs.litellm.ai/docs/proxy/configs (Overview — model_list, providers, credentials)
 - Local: `extracted/p0-config_settings.md`, `extracted/p0-configs.md`
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 
@@ -46,4 +46,4 @@ sections:
 
 The config is mounted **read-only** at `/app/config.yaml` and started with
 `--config /app/config.yaml --host 0.0.0.0`. See [00-index.md](../00-index.md) →
-Workestrator notes for the full in-memory constraints.
+Workestrate notes for the full in-memory constraints.

@@ -17,7 +17,7 @@
 
 Routing decides which upstream deployment serves a request, how the proxy
 retries failed calls, when it falls back to alternate `model_name` aliases,
-and how it cools down unhealthy deployments. In the workestrator (in-memory,
+and how it cools down unhealthy deployments. In the workestrate (in-memory,
 no DB, no Redis) the **only** available path is **static `router_settings`
 in `config.yaml`**. Dynamic fallback management endpoints REQUIRE a database
 and are unavailable.
@@ -49,7 +49,7 @@ Verbatim (from `p1-routing-fallback_management.md`):
 > "Database storage must be enabled: Set STORE_MODEL_IN_DB=True"
 
 Endpoints `POST /fallback`, `GET /fallback/{model}`, `DELETE /fallback/{model}`
-are **UNAVAILABLE** in the in-memory workestrator.
+are **UNAVAILABLE** in the in-memory workestrate.
 
 ### Validation rules (verbatim)
 
@@ -169,7 +169,7 @@ Static `router_settings.fallbacks`, `retry_policy`, `num_retries`,
   for 60s after 3 fails.
 - **`set_verbose` is DEPRECATED.** Use `LITELLM_LOG` env var instead.
 - **`redis_url` has a known performance issue** — avoid in prod; prefer
-  discrete `redis_host`/`redis_port` (moot in workestrator: no Redis).
+  discrete `redis_host`/`redis_port` (moot in workestrate: no Redis).
 - **Precedence:** `router_settings` overrides `litellm_settings` on
   overlapping keys. Do not assume `litellm_settings.timeout` wins.
 
@@ -202,15 +202,15 @@ fallback configured.
 ## Related schema / workflow
 
 - [`schemas/config-yaml.option-index.json`](../schemas/config-yaml.option-index.json) — per-key `requires_db` / `requires_redis` / `default` flags (authoritative for DB/Redis gating).
-- [`schemas/config-yaml.normalized.schema.md`](../schemas/config-yaml.normalized.schema.md) — `router_settings` section, precedence rule, workestrator in-memory mapping.
+- [`schemas/config-yaml.normalized.schema.md`](../schemas/config-yaml.normalized.schema.md) — `router_settings` section, precedence rule, workestrate in-memory mapping.
 - `litellm-routing-fallbacks` (`.agents/skills/litellm-routing-fallbacks/`) — operational skill for adding static fallbacks (DB-free).
 - [`config/README.md`](../config/README.md) — top-level config reference.
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 
-- The workestrator uses **static `router_settings.fallbacks` only**. Dynamic
+- The workestrate uses **static `router_settings.fallbacks` only**. Dynamic
   fallback management endpoints are unavailable (no DB, `STORE_MODEL_IN_DB`
   not set).
 - Tier lineup (verbatim from `infra/litellm/config.yaml` header comment):

@@ -45,8 +45,8 @@ None on this page — only JSON and bash code blocks.
 ## Related links
 - /docs/enterprise
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- This page is thin — documents only `GET /daily_metrics` (daily spend/usage). Since spend tracking requires a database (see p2-logging-cost_tracking.md), `/daily_metrics` likely requires DB (inferred). The richer Prometheus metrics content lives at `/docs/proxy/prometheus` (see p2-logging-prometheus.md) which works WITHOUT a DB using `callbacks: ["prometheus"]`. For the in-memory workestrator, Prometheus metrics (not spend metrics) are the viable observability path.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- This page is thin — documents only `GET /daily_metrics` (daily spend/usage). Since spend tracking requires a database (see p2-logging-cost_tracking.md), `/daily_metrics` likely requires DB (inferred). The richer Prometheus metrics content lives at `/docs/proxy/prometheus` (see p2-logging-prometheus.md) which works WITHOUT a DB using `callbacks: ["prometheus"]`. For the in-memory workestrate, Prometheus metrics (not spend metrics) are the viable observability path.
 
 ## Confidence / uncertainty notes
 - high confidence on the single endpoint. DB requirement is inferred from spend tracking domain (not stated on this page). This page is very thin — the Prometheus page is the primary metrics reference.

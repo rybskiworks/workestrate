@@ -200,13 +200,13 @@ services:
 - https://github.com/BerriAI/litellm-ecs-deployment (Terraform ECS)
 - https://litellm-api.up.railway.app/ (Swagger)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-This is the production deployment guide. Relevant to workestrator:
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+This is the production deployment guide. Relevant to workestrate:
 - Docker image: `docker.litellm.ai/berriai/litellm:latest` (main) or `docker.litellm.ai/berriai/litellm-database:latest` (with DB). The real config is in-memory (no Postgres), so the main image suffices.
 - `LITELLM_MASTER_KEY` must start with `sk-` — used as master_key in real config (via os.environ/).
 - `LITELLM_SALT_KEY` encrypts LLM API key credentials — cannot be changed after adding a model. Not currently used in real config (in-memory, no DB).
 - Redis is NOT required for single-instance / low-traffic deployments. The real config has no redis_* settings — consistent with single-instance in-memory deployment.
-- Redis IS required at 1000+ RPS or multi-instance. If workestrator scales, add `router_settings.redis_host/password/port`.
+- Redis IS required at 1000+ RPS or multi-instance. If workestrate scales, add `router_settings.redis_host/password/port`.
 - `--drop_params` CLI flag corresponds to `litellm_settings.drop_params: True` (used in real config).
 - `LITELLM_LOCAL_MODEL_COST_MAP="True"` disables pulling live model prices — relevant for air-gapped/offline deployments.
 - Health endpoints: `GET /health/liveliness` and `GET /health/readiness` — for k8s probes.

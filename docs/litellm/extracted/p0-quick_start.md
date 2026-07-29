@@ -161,8 +161,8 @@ model_list:
 - https://docs.litellm.ai/docs/providers (all supported LLMs)
 - https://litellm-api.up.railway.app/ (Swagger docs)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-This is the CLI quick start. Relevant to workestrator:
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+This is the CLI quick start. Relevant to workestrate:
 - `litellm --config your_config.yaml` is the primary startup command — matches real config usage.
 - `litellm --model <provider/model>` is the single-model quick-start (no config.yaml needed) — NOT used in real config (real config uses config.yaml with model_list).
 - `--detailed_debug` / `--debug` flags and `LITELLM_LOG` env var control logging verbosity — relevant for debugging.

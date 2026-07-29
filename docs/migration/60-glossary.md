@@ -1,6 +1,6 @@
 # 60 — Glossary
 
-Canonical vocabulary for the workestrator tool+XDG migration. One-paragraph
+Canonical vocabulary for the workestrate tool+XDG migration. One-paragraph
 definitions.
 
 **Canonical (source)**

@@ -214,8 +214,8 @@ services:
 - https://github.com/BerriAI/litellm/pkgs/container/litellm-database (database image)
 - https://github.com/orgs/BerriAI/packages (all images)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-This is the primary getting-started tutorial. Relevant to workestrator:
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+This is the primary getting-started tutorial. Relevant to workestrate:
 - The config.yaml pattern shown here (model_list with model_name + litellm_params{model, api_base, api_key: os.environ/X} + general_settings{master_key, database_url}) is the canonical structure. The real config uses the same model_list pattern but omits database_url (in-memory).
 - `os.environ/AZURE_API_KEY` and `os.environ/AZURE_API_BASE` syntax confirmed here — runs os.getenv() at load time. Used in real config for api_key resolution.
 - `general_settings.master_key: sk-1234` — must start with `sk-`. Real config uses `os.environ/...` form for master_key.

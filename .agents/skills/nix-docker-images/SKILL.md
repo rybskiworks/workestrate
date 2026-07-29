@@ -132,7 +132,7 @@ Nix-built images produce standard OCI tarballs. To use with Microsandbox:
 
 1. Build the image: `nix-build image.nix`
 2. Load into image store: `docker load < result` (or Microsandbox's import mechanism)
-3. Reference by name in sandbox plan: `.image("workestrator-pi:latest")`
+3. Reference by name in sandbox plan: `.image("workestrate-pi:latest")`
 
 The Nix image is orthogonal to Microsandbox's network policy — the sandbox plan controls egress/ingress, not the image.
 

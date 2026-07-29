@@ -108,8 +108,8 @@ The page lists endpoint paths as URL-path strings only (NO HTTP method verbs). C
 - https://docs.litellm.ai/docs/search (/search — 14 items)
 - https://litellm-api.up.railway.app/ (Swagger — all endpoints)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-This page is the canonical endpoint index. For the workestrator config, the relevant inference endpoints are:
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+This page is the canonical endpoint index. For the workestrate config, the relevant inference endpoints are:
 - `POST /v1/chat/completions` (and `/chat/completions`) — the primary inference endpoint used by all clients. Confirmed via openapi_route_inventory.json: `chat_completion_v1_chat_completions_post` tagged "inference".
 - `GET /v1/models` — model list (inference). Confirmed via openapi: `model_list_v1_models_get` tagged "inference".
 - The real config only uses chat/completions inference. Other endpoints (embeddings, moderations, rerank, responses) are available but not currently configured.

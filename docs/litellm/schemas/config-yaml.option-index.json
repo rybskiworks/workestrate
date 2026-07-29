@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_for": "workestrator LiteLLM config anti-hallucination reference",
+  "generated_for": "workestrate LiteLLM config anti-hallucination reference",
   "upstream_sources": [
     "https://docs.litellm.ai/docs/proxy/config_settings",
     "https://docs.litellm.ai/docs/proxy/configs",
@@ -44,7 +44,7 @@
       "example_yaml": "environment_variables: {}",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Can inject env vars via config; real config does not use this."
+      "workestrate_recommendation": "(recommendation) Can inject env vars via config; real config does not use this."
     },
     {
       "key": "model_list",
@@ -72,7 +72,7 @@
       "example_yaml": "model_list:\n  - model_name: string\n    litellm_params: {}",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Core of real config; defines all coding-tier deployments."
+      "workestrate_recommendation": "(recommendation) Core of real config; defines all coding-tier deployments."
     },
     {
       "key": "litellm_settings",
@@ -97,7 +97,7 @@
       "example_yaml": "litellm_settings:\n  drop_params: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config for drop_params, request_timeout, force_ipv4."
+      "workestrate_recommendation": "(recommendation) Used in real config for drop_params, request_timeout, force_ipv4."
     },
     {
       "key": "callback_settings",
@@ -122,7 +122,7 @@
       "example_yaml": "callback_settings:\n  otel:\n    message_logging: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "general_settings",
@@ -151,7 +151,7 @@
       "example_yaml": "general_settings:\n  master_key: sk-1234",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config for master_key, completion_model, disable_spend_logs."
+      "workestrate_recommendation": "(recommendation) Used in real config for master_key, completion_model, disable_spend_logs."
     },
     {
       "key": "router_settings",
@@ -177,7 +177,7 @@
       "example_yaml": "router_settings:\n  routing_strategy: simple-shuffle",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config for fallbacks, num_retries, timeout, stream_timeout, allowed_fails, cooldown_time, retry_policy."
+      "workestrate_recommendation": "(recommendation) Used in real config for fallbacks, num_retries, timeout, stream_timeout, allowed_fails, cooldown_time, retry_policy."
     },
     {
       "key": "credential_list",
@@ -201,7 +201,7 @@
       "example_yaml": "credential_list:\n  - credential_name: default_azure_credential",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Not used in real config; available for centralized credential reuse."
+      "workestrate_recommendation": "(recommendation) Not used in real config; available for centralized credential reuse."
     },
     {
       "key": "include",
@@ -225,7 +225,7 @@
       "example_yaml": "include:\n  - model_config.yaml\n  - another_config.yaml",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Not used in real config; available for splitting model_list into child files. Config is mounted read-only in microsandbox, so no hot-reload benefit."
+      "workestrate_recommendation": "(recommendation) Not used in real config; available for splitting model_list into child files. Config is mounted read-only in microsandbox, so no hot-reload benefit."
     },
     {
       "key": "model_name",
@@ -254,7 +254,7 @@
       "example_yaml": "model_name: gpt-4o",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config as coding-tier role names."
+      "workestrate_recommendation": "(recommendation) Used in real config as coding-tier role names."
     },
     {
       "key": "litellm_params",
@@ -283,7 +283,7 @@
       "example_yaml": "litellm_params:\n  model: azure/gpt-4o",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "model_info",
@@ -309,7 +309,7 @@
       "example_yaml": "model_info:\n  id: string",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "model",
@@ -338,7 +338,7 @@
       "example_yaml": "model: azure/gpt-4o-eu",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config with anthropic/ and openrouter/ prefixes."
+      "workestrate_recommendation": "(recommendation) Used in real config with anthropic/ and openrouter/ prefixes."
     },
     {
       "key": "api_base",
@@ -366,7 +366,7 @@
       "example_yaml": "api_base: https://my-endpoint.openai.azure.com/",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config for Kimi/MiniMax/Neuralwatt custom endpoints."
+      "workestrate_recommendation": "(recommendation) Used in real config for Kimi/MiniMax/Neuralwatt custom endpoints."
     },
     {
       "key": "api_key",
@@ -395,7 +395,7 @@
       "example_yaml": "api_key: os.environ/AZURE_API_KEY",
       "security_risk": "Secret credential; use os.environ/ resolution, never hardcode.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "api_version",
@@ -422,7 +422,7 @@
       "example_yaml": "api_version: \"2025-01-01-preview\"",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "organization",
@@ -446,7 +446,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "temperature",
@@ -470,7 +470,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_tokens",
@@ -494,7 +494,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "seed",
@@ -519,7 +519,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "extra_headers",
@@ -543,7 +543,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "rpm",
@@ -569,7 +569,7 @@
       "example_yaml": "rpm: 6",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Not used in real config; available for per-deployment rate limiting."
+      "workestrate_recommendation": "(recommendation) Not used in real config; available for per-deployment rate limiting."
     },
     {
       "key": "tpm",
@@ -594,7 +594,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "weight",
@@ -618,7 +618,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "region_name",
@@ -642,7 +642,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "base_model",
@@ -666,7 +666,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "tags",
@@ -690,7 +690,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "aws_region_name",
@@ -714,7 +714,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "azure_ad_token",
@@ -738,7 +738,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "litellm_credential_name",
@@ -762,7 +762,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "id",
@@ -786,7 +786,7 @@
       "example_yaml": "id: string",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "mode",
@@ -813,7 +813,7 @@
       "example_yaml": "mode: embedding",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "input_cost_per_token",
@@ -837,7 +837,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "output_cost_per_token",
@@ -861,7 +861,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_tokens",
@@ -885,7 +885,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "base_model",
@@ -909,7 +909,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "version",
@@ -933,7 +933,7 @@
       "example_yaml": "version: 2",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "supported_environments",
@@ -957,7 +957,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "access_groups",
@@ -982,7 +982,7 @@
       "example_yaml": "access_groups: [\"beta-models\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Works without DB (static config); not used in real config."
+      "workestrate_recommendation": "(recommendation) Works without DB (static config); not used in real config."
     },
     {
       "key": "custom_tokenizer",
@@ -1006,7 +1006,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "identifier",
@@ -1030,7 +1030,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "revision",
@@ -1054,7 +1054,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "auth_token",
@@ -1078,7 +1078,7 @@
       "example_yaml": null,
       "security_risk": "Secret token.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "credential_name",
@@ -1102,7 +1102,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "credential_values",
@@ -1126,7 +1126,7 @@
       "example_yaml": null,
       "security_risk": "May contain api_key secrets.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "credential_info",
@@ -1150,7 +1150,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "success_callback",
@@ -1175,7 +1175,7 @@
       "example_yaml": "success_callback: [\"langfuse\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "failure_callback",
@@ -1199,7 +1199,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "callbacks",
@@ -1225,7 +1225,7 @@
       "example_yaml": "callbacks: [\"otel\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "service_callbacks",
@@ -1249,7 +1249,7 @@
       "example_yaml": "service_callbacks: [\"datadog\", \"prometheus\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "service_callback",
@@ -1273,7 +1273,7 @@
       "example_yaml": "service_callback: [\"prometheus_system\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "turn_off_message_logging",
@@ -1298,7 +1298,7 @@
       "example_yaml": "turn_off_message_logging: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "modify_params",
@@ -1322,7 +1322,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_preview_features",
@@ -1346,7 +1346,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redact_user_api_key_info",
@@ -1371,7 +1371,7 @@
       "example_yaml": "redact_user_api_key_info: true",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redact_messages_in_exceptions",
@@ -1395,7 +1395,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "mcp_aliases",
@@ -1419,7 +1419,7 @@
       "example_yaml": "mcp_aliases: {\"github\": \"github_mcp_server\"}",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "langfuse_default_tags",
@@ -1443,7 +1443,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "set_verbose",
@@ -1469,7 +1469,7 @@
       "example_yaml": "set_verbose: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "json_logs",
@@ -1493,7 +1493,7 @@
       "example_yaml": "json_logs: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "global_disable_no_log_param",
@@ -1517,7 +1517,7 @@
       "example_yaml": "global_disable_no_log_param: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "forward_traceparent_to_llm_provider",
@@ -1541,7 +1541,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_fallbacks",
@@ -1565,7 +1565,7 @@
       "example_yaml": "default_fallbacks: [\"claude-opus\"]",
       "security_risk": null,
       "common_misconfiguration": "[also router_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "request_timeout",
@@ -1590,7 +1590,7 @@
       "example_yaml": "request_timeout: 10",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "force_ipv4",
@@ -1614,7 +1614,7 @@
       "example_yaml": "force_ipv4: boolean",
       "security_risk": null,
       "common_misconfiguration": "(recommendation) Used in real config (workaround httpx ConnectionError with ipv6 + Anthropic).",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "content_policy_fallbacks",
@@ -1638,7 +1638,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": "[also router_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "context_window_fallbacks",
@@ -1663,7 +1663,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": "[also router_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "fallbacks",
@@ -1687,7 +1687,7 @@
       "example_yaml": "fallbacks: [{\"zephyr-beta\": [\"gpt-4o\"]}]",
       "security_risk": null,
       "common_misconfiguration": "[also router_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "num_retries",
@@ -1711,7 +1711,7 @@
       "example_yaml": "num_retries: 3",
       "security_risk": null,
       "common_misconfiguration": "[also router_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "allowed_fails",
@@ -1735,7 +1735,7 @@
       "example_yaml": "allowed_fails: 3",
       "security_risk": null,
       "common_misconfiguration": "[also router_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "cache",
@@ -1760,7 +1760,7 @@
       "example_yaml": "cache: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "cache_params",
@@ -1785,7 +1785,7 @@
       "example_yaml": "cache_params:\n  type: redis",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_redis_auth_cache",
@@ -1810,7 +1810,7 @@
       "example_yaml": "enable_redis_auth_cache: false",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_caching_on_provider_specific_optional_params",
@@ -1834,7 +1834,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_end_user_cost_tracking",
@@ -1858,7 +1858,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_end_user_cost_tracking_prometheus_only",
@@ -1883,7 +1883,7 @@
       "example_yaml": "enable_end_user_cost_tracking_prometheus_only: true",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "cost_discount_config",
@@ -1907,7 +1907,7 @@
       "example_yaml": "cost_discount_config:\n  vertex_ai: 0.05",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "cost_margin_config",
@@ -1931,7 +1931,7 @@
       "example_yaml": "cost_margin_config:\n  global: 0.05",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "key_generation_settings",
@@ -1956,7 +1956,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "upperbound_key_generate_params",
@@ -1980,7 +1980,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_key_generate_params",
@@ -2004,7 +2004,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_add_transform_inline_image_block",
@@ -2028,7 +2028,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "use_chat_completions_url_for_anthropic_messages",
@@ -2052,7 +2052,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "route_all_chat_openai_to_responses",
@@ -2076,7 +2076,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "skip_system_message_in_guardrail",
@@ -2100,7 +2100,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_hf_tokenizer_download",
@@ -2124,7 +2124,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_json_schema_validation",
@@ -2148,7 +2148,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_key_alias_format_validation",
@@ -2172,7 +2172,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "require_managed_files",
@@ -2196,7 +2196,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "user_url_validation",
@@ -2220,7 +2220,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "user_url_allowed_hosts",
@@ -2244,7 +2244,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_copilot_system_to_assistant",
@@ -2268,7 +2268,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": "Under cache_params; GitHub Copilot now supports system prompts.",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_team_params",
@@ -2292,7 +2292,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "drop_params",
@@ -2317,7 +2317,7 @@
       "example_yaml": "drop_params: True",
       "security_risk": null,
       "common_misconfiguration": "(recommendation) Used in real config; drops unsupported params.",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "ssl_verify",
@@ -2341,7 +2341,7 @@
       "example_yaml": "ssl_verify: false",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_budget",
@@ -2365,7 +2365,7 @@
       "example_yaml": "max_budget: 0",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "budget_duration",
@@ -2389,7 +2389,7 @@
       "example_yaml": "budget_duration: 30d",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_end_user_budget",
@@ -2413,7 +2413,7 @@
       "example_yaml": "max_end_user_budget: 0.0001",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_internal_user_budget",
@@ -2437,7 +2437,7 @@
       "example_yaml": "max_internal_user_budget: 0",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "internal_user_budget_duration",
@@ -2461,7 +2461,7 @@
       "example_yaml": "internal_user_budget_duration: \"1mo\"",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_callback_params",
@@ -2485,7 +2485,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "aws_sqs_callback_params",
@@ -2509,7 +2509,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "prometheus_initialize_budget_metrics",
@@ -2533,7 +2533,7 @@
       "example_yaml": "prometheus_initialize_budget_metrics: true",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "prometheus_emit_stream_label",
@@ -2557,7 +2557,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "custom_prometheus_metadata_labels",
@@ -2581,7 +2581,7 @@
       "example_yaml": "custom_prometheus_metadata_labels: [\"metadata.foo\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "custom_prometheus_tags",
@@ -2605,7 +2605,7 @@
       "example_yaml": "custom_prometheus_tags: [\"prod\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "prometheus_metrics_config",
@@ -2629,7 +2629,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "require_auth_for_metrics_endpoint",
@@ -2653,7 +2653,7 @@
       "example_yaml": "require_auth_for_metrics_endpoint: true",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "type",
@@ -2687,7 +2687,7 @@
       "example_yaml": "type: redis",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "host",
@@ -2712,7 +2712,7 @@
       "example_yaml": "host: localhost",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "port",
@@ -2737,7 +2737,7 @@
       "example_yaml": "port: 6379",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "password",
@@ -2762,7 +2762,7 @@
       "example_yaml": "password: your_password",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "namespace",
@@ -2787,7 +2787,7 @@
       "example_yaml": "namespace: \"litellm.caching.caching\"",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "ttl",
@@ -2812,7 +2812,7 @@
       "example_yaml": "ttl: 600",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_in_memory_ttl",
@@ -2836,7 +2836,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_in_redis_ttl",
@@ -2860,7 +2860,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_connections",
@@ -2885,7 +2885,7 @@
       "example_yaml": "max_connections: 100",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "supported_call_types",
@@ -2910,7 +2910,7 @@
       "example_yaml": "supported_call_types: [\"acompletion\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "mode",
@@ -2937,7 +2937,7 @@
       "example_yaml": "mode: default_off",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redis_startup_nodes",
@@ -2961,7 +2961,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "service_name",
@@ -2985,7 +2985,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "sentinel_nodes",
@@ -3009,7 +3009,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "sentinel_password",
@@ -3033,7 +3033,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "gcp_service_account",
@@ -3057,7 +3057,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "gcp_ssl_ca_certs",
@@ -3081,7 +3081,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "ssl",
@@ -3105,7 +3105,7 @@
       "example_yaml": "ssl: true",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "ssl_cert_reqs",
@@ -3129,7 +3129,7 @@
       "example_yaml": "ssl_cert_reqs: null",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "ssl_check_hostname",
@@ -3153,7 +3153,7 @@
       "example_yaml": "ssl_check_hostname: false",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "similarity_threshold",
@@ -3178,7 +3178,7 @@
       "example_yaml": "similarity_threshold: 0.8",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redis_semantic_cache_embedding_model",
@@ -3202,7 +3202,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "valkey_semantic_cache_embedding_model",
@@ -3226,7 +3226,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "valkey_semantic_cache_index_name",
@@ -3250,7 +3250,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "qdrant_semantic_cache_embedding_model",
@@ -3275,7 +3275,7 @@
       "example_yaml": "qdrant_semantic_cache_embedding_model: openai-embedding",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "qdrant_collection_name",
@@ -3300,7 +3300,7 @@
       "example_yaml": "qdrant_collection_name: test_collection",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "qdrant_quantization_config",
@@ -3324,7 +3324,7 @@
       "example_yaml": "qdrant_quantization_config: binary",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "qdrant_semantic_cache_vector_size",
@@ -3348,7 +3348,7 @@
       "example_yaml": "qdrant_semantic_cache_vector_size: 1536",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_bucket_name",
@@ -3373,7 +3373,7 @@
       "example_yaml": "s3_bucket_name: cache-bucket-litellm",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_region_name",
@@ -3398,7 +3398,7 @@
       "example_yaml": "s3_region_name: us-west-2",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_api_version",
@@ -3422,7 +3422,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_use_ssl",
@@ -3446,7 +3446,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_verify",
@@ -3470,7 +3470,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_endpoint_url",
@@ -3495,7 +3495,7 @@
       "example_yaml": "s3_endpoint_url: https://s3.amazonaws.com",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_aws_access_key_id",
@@ -3520,7 +3520,7 @@
       "example_yaml": "s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_aws_secret_access_key",
@@ -3545,7 +3545,7 @@
       "example_yaml": "s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "s3_aws_session_token",
@@ -3569,7 +3569,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "gcs_bucket_name",
@@ -3594,7 +3594,7 @@
       "example_yaml": "gcs_bucket_name: cache-bucket-litellm",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "gcs_path_service_account",
@@ -3619,7 +3619,7 @@
       "example_yaml": "gcs_path_service_account: os.environ/GCS_PATH_SERVICE_ACCOUNT",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "gcs_path",
@@ -3644,7 +3644,7 @@
       "example_yaml": "gcs_path: cache/",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disk_cache_dir",
@@ -3668,7 +3668,7 @@
       "example_yaml": "disk_cache_dir: /tmp/litellm-cache",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "completion_model",
@@ -3692,7 +3692,7 @@
       "example_yaml": "completion_model: string",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config set to 'coding'."
+      "workestrate_recommendation": "(recommendation) Used in real config set to 'coding'."
     },
     {
       "key": "enable_drain_endpoint",
@@ -3716,7 +3716,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "drain_endpoint_token",
@@ -3740,7 +3740,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_spend_logs",
@@ -3765,7 +3765,7 @@
       "example_yaml": "disable_spend_logs: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Set to true in real config; compensates for no DB (prevents spend-log write attempts)."
+      "workestrate_recommendation": "(recommendation) Set to true in real config; compensates for no DB (prevents spend-log write attempts)."
     },
     {
       "key": "disable_spend_updates",
@@ -3789,7 +3789,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_error_logs",
@@ -3814,7 +3814,7 @@
       "example_yaml": "disable_error_logs: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_master_key_return",
@@ -3838,7 +3838,7 @@
       "example_yaml": "disable_master_key_return: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_retry_on_max_parallel_request_limit_error",
@@ -3862,7 +3862,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_reset_budget",
@@ -3886,7 +3886,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_adding_master_key_hash_to_db",
@@ -3910,7 +3910,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_responses_id_security",
@@ -3934,7 +3934,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_jwt_auth",
@@ -3958,7 +3958,7 @@
       "example_yaml": "enable_jwt_auth: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enforce_user_param",
@@ -3982,7 +3982,7 @@
       "example_yaml": "enforce_user_param: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "reject_clientside_metadata_tags",
@@ -4006,7 +4006,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_batch_input_file_rate_limiting",
@@ -4030,7 +4030,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "skip_batch_input_file_rate_limiting_for_providers",
@@ -4054,7 +4054,7 @@
       "example_yaml": "skip_batch_input_file_rate_limiting_for_providers: [\"hosted_vllm\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "skip_batch_input_file_rate_limiting_for_models",
@@ -4078,7 +4078,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "allowed_routes",
@@ -4102,7 +4102,7 @@
       "example_yaml": "allowed_routes: [\"route1\", \"route2\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "key_management_system",
@@ -4129,7 +4129,7 @@
       "example_yaml": "key_management_system: google_kms",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "master_key",
@@ -4158,7 +4158,7 @@
       "example_yaml": "master_key: sk-1234",
       "security_risk": "Admin secret; must start with 'sk-'. Use os.environ/ resolution.",
       "common_misconfiguration": "Must start with 'sk-'.",
-      "workestrator_recommendation": "(recommendation) Used in real config via os.environ/LITELLM_MASTER_KEY. Works in-memory."
+      "workestrate_recommendation": "(recommendation) Used in real config via os.environ/LITELLM_MASTER_KEY. Works in-memory."
     },
     {
       "key": "database_url",
@@ -4185,7 +4185,7 @@
       "example_yaml": "database_url: \"postgresql://...\"",
       "security_risk": "Contains DB credentials; use os.environ/ or secret manager.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) NOT set in real config (in-memory, no Postgres)."
+      "workestrate_recommendation": "(recommendation) NOT set in real config (in-memory, no Postgres)."
     },
     {
       "key": "database_connection_pool_limit",
@@ -4210,7 +4210,7 @@
       "example_yaml": "database_connection_pool_limit: 0",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "database_connection_timeout",
@@ -4235,7 +4235,7 @@
       "example_yaml": "database_connection_timeout: 0",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "database_connect_timeout",
@@ -4259,7 +4259,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "database_socket_timeout",
@@ -4284,7 +4284,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "database_extra_connection_params",
@@ -4308,7 +4308,7 @@
       "example_yaml": "database_extra_connection_params: {}",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "database_disable_prepared_statements",
@@ -4332,7 +4332,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "database_connection_pool_timeout",
@@ -4356,7 +4356,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "allow_requests_on_db_unavailable",
@@ -4380,7 +4380,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "fail_closed_budget_enforcement",
@@ -4405,7 +4405,7 @@
       "example_yaml": "fail_closed_budget_enforcement: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "custom_auth",
@@ -4429,7 +4429,7 @@
       "example_yaml": "custom_auth: string",
       "security_risk": "References custom auth code path.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "custom_auth_run_common_checks",
@@ -4453,7 +4453,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_parallel_requests",
@@ -4477,7 +4477,7 @@
       "example_yaml": "max_parallel_requests: 0",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "global_max_parallel_requests",
@@ -4501,7 +4501,7 @@
       "example_yaml": "global_max_parallel_requests: 0",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "cancel_on_disconnect",
@@ -4525,7 +4525,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "infer_model_from_keys",
@@ -4549,7 +4549,7 @@
       "example_yaml": "infer_model_from_keys: true",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "background_health_checks",
@@ -4573,7 +4573,7 @@
       "example_yaml": "background_health_checks: true",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "health_check_interval",
@@ -4597,7 +4597,7 @@
       "example_yaml": "health_check_interval: 300",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "health_check_details",
@@ -4621,7 +4621,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "health_check_concurrency",
@@ -4645,7 +4645,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "health_check_ignore_transient_errors",
@@ -4669,7 +4669,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "health_check_skip_disabled_background_models",
@@ -4693,7 +4693,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "health_check_staleness_threshold",
@@ -4717,7 +4717,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_health_check_routing",
@@ -4741,7 +4741,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "use_shared_health_check",
@@ -4765,7 +4765,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "alerting",
@@ -4791,7 +4791,7 @@
       "example_yaml": "alerting: [\"slack\"]",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "alerting_threshold",
@@ -4816,7 +4816,7 @@
       "example_yaml": "alerting_threshold: 0",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "alerting_args",
@@ -4841,7 +4841,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "alert_types",
@@ -4866,7 +4866,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "alert_type_config",
@@ -4891,7 +4891,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "alert_to_webhook_url",
@@ -4916,7 +4916,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "spend_report_frequency",
@@ -4941,7 +4941,7 @@
       "example_yaml": "spend_report_frequency: \"1d\"",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "use_client_credentials_pass_through_routes",
@@ -4965,7 +4965,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "public_routes",
@@ -4989,7 +4989,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enforced_params",
@@ -5013,7 +5013,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_oauth2_auth",
@@ -5037,7 +5037,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "admin_only_routes",
@@ -5061,7 +5061,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_oauth2_proxy_auth",
@@ -5085,7 +5085,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "use_x_forwarded_for",
@@ -5109,7 +5109,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "service_account_settings",
@@ -5133,7 +5133,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "image_generation_model",
@@ -5157,7 +5157,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "store_model_in_db",
@@ -5181,7 +5181,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) NOT set (leave false); models defined statically in config.yaml."
+      "workestrate_recommendation": "(recommendation) NOT set (leave false); models defined statically in config.yaml."
     },
     {
       "key": "supported_db_objects",
@@ -5205,7 +5205,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "user_mcp_management_mode",
@@ -5232,7 +5232,7 @@
       "example_yaml": "user_mcp_management_mode: restricted",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "store_prompts_in_spend_logs",
@@ -5256,7 +5256,7 @@
       "example_yaml": "store_prompts_in_spend_logs: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "scope_spend_list_endpoints_to_caller",
@@ -5280,7 +5280,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "legacy_unscoped_spend_list_endpoints",
@@ -5304,7 +5304,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": "Overrides scope_spend_list_endpoints_to_caller.",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_request_size_mb",
@@ -5328,7 +5328,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_response_size_mb",
@@ -5352,7 +5352,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "proxy_budget_rescheduler_min_time",
@@ -5377,7 +5377,7 @@
       "example_yaml": "proxy_budget_rescheduler_min_time: 1",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "proxy_budget_rescheduler_max_time",
@@ -5402,7 +5402,7 @@
       "example_yaml": "proxy_budget_rescheduler_max_time: 1",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "proxy_batch_write_at",
@@ -5426,7 +5426,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "proxy_batch_polling_interval",
@@ -5450,7 +5450,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "custom_key_generate",
@@ -5475,7 +5475,7 @@
       "example_yaml": "custom_key_generate: custom_auth.custom_generate_key_fn",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "allowed_ips",
@@ -5499,7 +5499,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "embedding_model",
@@ -5523,7 +5523,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_team_disabled",
@@ -5547,7 +5547,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "key_management_settings",
@@ -5571,7 +5571,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "allow_user_auth",
@@ -5595,7 +5595,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "user_api_key_cache_ttl",
@@ -5620,7 +5620,7 @@
       "example_yaml": "user_api_key_cache_ttl: 300",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "disable_prisma_schema_update",
@@ -5644,7 +5644,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "litellm_key_header_name",
@@ -5669,7 +5669,7 @@
       "example_yaml": "litellm_key_header_name: \"X-Litellm-Key\"",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "moderation_model",
@@ -5693,7 +5693,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "custom_sso",
@@ -5717,7 +5717,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "allow_client_side_side_credentials",
@@ -5741,7 +5741,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "use_azure_key_vault",
@@ -5765,7 +5765,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "use_google_kms",
@@ -5789,7 +5789,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "ui_access_mode",
@@ -5813,7 +5813,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Moot without DB (Admin UI requires DB)."
+      "workestrate_recommendation": "(recommendation) Moot without DB (Admin UI requires DB)."
     },
     {
       "key": "litellm_jwtauth",
@@ -5837,7 +5837,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "litellm_license",
@@ -5861,7 +5861,7 @@
       "example_yaml": null,
       "security_risk": "Enterprise license secret.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "oauth2_config_mappings",
@@ -5885,7 +5885,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "pass_through_endpoints",
@@ -5909,7 +5909,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "pass_through_request_timeout",
@@ -5933,7 +5933,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "forward_openai_org_id",
@@ -5957,7 +5957,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "forward_client_headers_to_llm_api",
@@ -5981,7 +5981,7 @@
       "example_yaml": "forward_client_headers_to_llm_api: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "forward_llm_provider_auth_headers",
@@ -6005,7 +6005,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "maximum_spend_logs_retention_period",
@@ -6029,7 +6029,7 @@
       "example_yaml": "maximum_spend_logs_retention_period: 30d",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "maximum_spend_logs_retention_interval",
@@ -6053,7 +6053,7 @@
       "example_yaml": "maximum_spend_logs_retention_interval: 1d",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "maximum_spend_logs_cleanup_cron",
@@ -6077,7 +6077,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "always_include_stream_usage",
@@ -6101,7 +6101,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "auto_redirect_ui_login_to_sso",
@@ -6125,7 +6125,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "control_plane_url",
@@ -6149,7 +6149,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "custom_ui_sso_sign_in_handler",
@@ -6173,7 +6173,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_mcp_registry",
@@ -6197,7 +6197,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enforce_rbac",
@@ -6221,7 +6221,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "mcp_client_side_auth_header_name",
@@ -6245,7 +6245,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "mcp_internal_ip_ranges",
@@ -6269,7 +6269,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "mcp_required_fields",
@@ -6293,7 +6293,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "mcp_trusted_proxy_ranges",
@@ -6317,7 +6317,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "require_end_user_mcp_access_defined",
@@ -6341,7 +6341,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "role_permissions",
@@ -6365,7 +6365,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "search_tools",
@@ -6389,7 +6389,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "token_rate_limit_type",
@@ -6418,7 +6418,7 @@
       "example_yaml": "token_rate_limit_type: \"output\"",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "use_redis_transaction_buffer",
@@ -6443,7 +6443,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "user_header_mappings",
@@ -6467,7 +6467,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "user_header_name",
@@ -6491,7 +6491,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "block_robots",
@@ -6515,7 +6515,7 @@
       "example_yaml": "block_robots: true",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "daily_report_frequency",
@@ -6539,7 +6539,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "report_check_interval",
@@ -6563,7 +6563,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "budget_alert_ttl",
@@ -6587,7 +6587,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "outage_alert_ttl",
@@ -6611,7 +6611,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "region_outage_alert_ttl",
@@ -6635,7 +6635,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "minor_outage_alert_threshold",
@@ -6659,7 +6659,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "major_outage_alert_threshold",
@@ -6683,7 +6683,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_outage_alert_list_size",
@@ -6707,7 +6707,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "log_to_console",
@@ -6731,7 +6731,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "routing_strategy",
@@ -6761,7 +6761,7 @@
       "example_yaml": "routing_strategy: simple-shuffle",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redis_host",
@@ -6787,7 +6787,7 @@
       "example_yaml": "redis_host: <your-redis-host>",
       "security_risk": "Redis connection params; use secret manager for password.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redis_password",
@@ -6813,7 +6813,7 @@
       "example_yaml": "redis_password: <your-redis-password>",
       "security_risk": "Redis connection params; use secret manager for password.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redis_port",
@@ -6839,7 +6839,7 @@
       "example_yaml": "redis_port: <your-redis-port>",
       "security_risk": "Redis connection params; use secret manager for password.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redis_db",
@@ -6863,7 +6863,7 @@
       "example_yaml": null,
       "security_risk": "Redis connection params; use secret manager for password.",
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "redis_url",
@@ -6887,7 +6887,7 @@
       "example_yaml": null,
       "security_risk": "Redis connection params; use secret manager for password.",
       "common_misconfiguration": "Known performance issue with Redis URL.",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_pre_call_check",
@@ -6911,7 +6911,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_pre_call_checks",
@@ -6935,7 +6935,7 @@
       "example_yaml": "enable_pre_call_checks: true",
       "security_risk": null,
       "common_misconfiguration": "Required for model_info.max_input_tokens enforcement. Default: false.",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "optional_pre_call_checks",
@@ -6959,7 +6959,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "content_policy_fallbacks",
@@ -6983,7 +6983,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": "[also litellm_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "fallbacks",
@@ -7008,7 +7008,7 @@
       "example_yaml": "fallbacks: [{\"claude-2\": [\"my-fallback-model\"]}]",
       "security_risk": null,
       "common_misconfiguration": "[also litellm_settings]",
-      "workestrator_recommendation": "(recommendation) Used in real config for coding-tier failover chains."
+      "workestrate_recommendation": "(recommendation) Used in real config for coding-tier failover chains."
     },
     {
       "key": "context_window_fallbacks",
@@ -7032,7 +7032,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": "[also litellm_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_fallbacks",
@@ -7056,7 +7056,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": "[also litellm_settings]",
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_tag_filtering",
@@ -7080,7 +7080,7 @@
       "example_yaml": "enable_tag_filtering: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "tag_filtering_match_any",
@@ -7104,7 +7104,7 @@
       "example_yaml": "tag_filtering_match_any: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_weighted_failover",
@@ -7128,7 +7128,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "cooldown_time",
@@ -7152,7 +7152,7 @@
       "example_yaml": "cooldown_time: 30",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config set to 60."
+      "workestrate_recommendation": "(recommendation) Used in real config set to 60."
     },
     {
       "key": "disable_cooldowns",
@@ -7176,7 +7176,7 @@
       "example_yaml": "disable_cooldowns: True",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "retry_policy",
@@ -7200,7 +7200,7 @@
       "example_yaml": "retry_policy:\n  TimeoutErrorRetries: 3",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config with TimeoutErrorRetries/RateLimitErrorRetries/InternalServerErrorRetries."
+      "workestrate_recommendation": "(recommendation) Used in real config with TimeoutErrorRetries/RateLimitErrorRetries/InternalServerErrorRetries."
     },
     {
       "key": "allowed_fails",
@@ -7225,7 +7225,7 @@
       "example_yaml": "allowed_fails: 3",
       "security_risk": null,
       "common_misconfiguration": "[also litellm_settings]",
-      "workestrator_recommendation": "(recommendation) Used in real config set to 3."
+      "workestrate_recommendation": "(recommendation) Used in real config set to 3."
     },
     {
       "key": "allowed_fails_policy",
@@ -7249,7 +7249,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_max_parallel_requests",
@@ -7273,7 +7273,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_priority",
@@ -7297,7 +7297,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "polling_interval",
@@ -7321,7 +7321,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "max_fallbacks",
@@ -7345,7 +7345,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "default_litellm_params",
@@ -7369,7 +7369,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "timeout",
@@ -7394,7 +7394,7 @@
       "example_yaml": "timeout: 30",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Used in real config set to 300."
+      "workestrate_recommendation": "(recommendation) Used in real config set to 300."
     },
     {
       "key": "stream_timeout",
@@ -7418,7 +7418,7 @@
       "example_yaml": "stream_timeout: 300",
       "security_risk": null,
       "common_misconfiguration": "If not set, the 'timeout' value is used.",
-      "workestrator_recommendation": "(recommendation) Used in real config set to 300."
+      "workestrate_recommendation": "(recommendation) Used in real config set to 300."
     },
     {
       "key": "ttft_timeout",
@@ -7442,7 +7442,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "stream_idle_timeout",
@@ -7466,7 +7466,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "debug_level",
@@ -7490,7 +7490,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "client_ttl",
@@ -7514,7 +7514,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "cache_kwargs",
@@ -7538,7 +7538,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "routing_strategy_args",
@@ -7562,7 +7562,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "model_group_alias",
@@ -7587,7 +7587,7 @@
       "example_yaml": "model_group_alias: {\"gpt-4\": \"gpt-4o\"}",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "num_retries",
@@ -7612,7 +7612,7 @@
       "example_yaml": "num_retries: 2",
       "security_risk": null,
       "common_misconfiguration": "[also litellm_settings]",
-      "workestrator_recommendation": "(recommendation) Used in real config set to 2."
+      "workestrate_recommendation": "(recommendation) Used in real config set to 2."
     },
     {
       "key": "caching_groups",
@@ -7636,7 +7636,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "alerting_config",
@@ -7660,7 +7660,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "assistants_config",
@@ -7684,7 +7684,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "set_verbose",
@@ -7708,7 +7708,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "retry_after",
@@ -7732,7 +7732,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "provider_budget_config",
@@ -7756,7 +7756,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "model_group_retry_policy",
@@ -7780,7 +7780,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "cache_responses",
@@ -7804,7 +7804,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "router_general_settings",
@@ -7828,7 +7828,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "otel",
@@ -7853,7 +7853,7 @@
       "example_yaml": "callback_settings:\n  otel:\n    message_logging: boolean",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "message_logging",
@@ -7878,7 +7878,7 @@
       "example_yaml": "message_logging: False",
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": "(recommendation) Works without DB; available for OTEL message redaction."
+      "workestrate_recommendation": "(recommendation) Works without DB; available for OTEL message redaction."
     },
     {
       "key": "deployment_affinity_ttl_seconds",
@@ -7903,7 +7903,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "model_group_affinity_config",
@@ -7928,7 +7928,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "ignore_invalid_deployments",
@@ -7953,7 +7953,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "search_tools",
@@ -7978,7 +7978,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "guardrail_list",
@@ -8003,7 +8003,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "enable_health_check_routing",
@@ -8028,7 +8028,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "health_check_staleness_threshold",
@@ -8053,7 +8053,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "health_check_ignore_transient_errors",
@@ -8078,7 +8078,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     },
     {
       "key": "routing_groups",
@@ -8103,7 +8103,7 @@
       "example_yaml": null,
       "security_risk": null,
       "common_misconfiguration": null,
-      "workestrator_recommendation": null
+      "workestrate_recommendation": null
     }
   ]
 }

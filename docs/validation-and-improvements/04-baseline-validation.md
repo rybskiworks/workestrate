@@ -323,7 +323,7 @@ Check each against BOTH old and new plans:
 |---|---|---|
 | `litellm_network_plan_converts_without_error` (`network.rs:78`) | litellm | Network plan converts to policy without error |
 | `pi_network_plan_converts_without_error` (`network.rs:91`) | pi | Network plan converts to policy without error |
-| `pi_plan_uses_nix_built_image` (`network.rs:100`) | pi | `image == "workestrator-pi:latest"` (nix-built, NOT `node:24-bookworm-slim`) |
+| `pi_plan_uses_nix_built_image` (`network.rs:100`) | pi | `image == "workestrate-pi:latest"` (nix-built, NOT `node:24-bookworm-slim`) |
 | `odysseus_network_plan_converts_without_error` (`network.rs:111`) | odysseus | Network plan converts to policy without error |
 | `odysseus_plan_includes_admin_password_secret` (`network.rs:124`) | odysseus | `ODYSSEUS_ADMIN_PASSWORD` present as secret env var; NOT in `secret_env` (not host-bound) |
 | `odysseus_plan_has_expected_data_mount` (`network.rs:149`) | odysseus | 2 mounts; `/data` ← `workspaces/odysseus-state` (rw); `/app` ← `agents/odysseus/build` (ro); NO `/app/data` mount |

@@ -1,6 +1,6 @@
 # LiteLLM config.yaml — Normalized Schema Reference
 
-> **Anti-hallucination reference for workestrator.** Every key below was extracted
+> **Anti-hallucination reference for workestrate.** Every key below was extracted
 > verbatim from the on-disk corpus under `docs/litellm/extracted/`. Spelling is
 > verbatim. Values marked `(inferred)` are safely derivable from verbatim YAML
 > examples. Values marked `(not documented in fetched source)` were not stated
@@ -526,7 +526,7 @@ the config_settings Requirements section and per-page requirements.
 
 ---
 
-## Workestrator in-memory deployment mapping
+## Workestrate in-memory deployment mapping
 
 The real config (`infra/litellm/config.yaml`) uses these keys. All confirmed
 present in the reference tables above with correct sections:

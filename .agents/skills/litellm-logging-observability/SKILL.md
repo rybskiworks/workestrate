@@ -195,7 +195,7 @@ spend tracking)**.
 
 ## Project context [PROJECT — not upstream docs]
 
-The workestrator config sets **none** of the observability keys — no
+The workestrate config sets **none** of the observability keys — no
 `callbacks`, no `alerting`, no `prometheus`, no `cache`. The only
 observability-adjacent key is `general_settings.disable_spend_logs: true`
 (prevents DB spend-log write errors). Recommended DB-free additions:

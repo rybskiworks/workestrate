@@ -3,8 +3,8 @@
 # REFERENCE template for a production LiteLLM deployment WITH Postgres + Redis.
 # =============================================================================
 #
-# *** THIS IS NOT THE CURRENT WORKESTRATOR DEPLOYMENT. ***
-# workestrator runs in-memory (no DB, no Redis). See microvm-safe-proxy.yaml for
+# *** THIS IS NOT THE CURRENT WORKESTRATE DEPLOYMENT. ***
+# workestrate runs in-memory (no DB, no Redis). See microvm-safe-proxy.yaml for
 # the actual shape. This file exists only to document the production reference
 # shape and to clearly mark which keys REQUIRE a database and/or Redis.
 #
@@ -32,8 +32,8 @@
 # Required env vars: LITELLM_MASTER_KEY, DATABASE_URL, REDIS_PASSWORD,
 # OPENROUTER_API_KEY (and any provider keys you enable).
 #
-# WORKESTRATOR-SPECIFIC: this whole file is a reference template, NOT used by the
-# in-memory microsandbox deployment. Sections marked [WORKESTRATOR NOTE] are
+# WORKESTRATE-SPECIFIC: this whole file is a reference template, NOT used by the
+# in-memory microsandbox deployment. Sections marked [WORKESTRATE NOTE] are
 # project commentary, not upstream-documented defaults.
 
 model_list:
@@ -54,7 +54,7 @@ general_settings:
 
   # [REQUIRES DB] store_model_in_db: allow models to be added via API/UI at
   # runtime (persisted). Verified: general_settings.store_model_in_db
-  # (requires_db=true). workestrator leaves this unset (false) — models are
+  # (requires_db=true). workestrate leaves this unset (false) — models are
   # static in config.yaml.
   store_model_in_db: true
 
@@ -68,7 +68,7 @@ general_settings:
 
   # [REQUIRES DB] disable_spend_logs: in production WITH a DB you typically leave
   # this false so spend is recorded. Verified: general_settings.disable_spend_logs
-  # (requires_db=true). [WORKESTRATOR NOTE] the in-memory config sets this true
+  # (requires_db=true). [WORKESTRATE NOTE] the in-memory config sets this true
   # to suppress spend-log write attempts against a nonexistent DB.
   disable_spend_logs: false
 
@@ -133,7 +133,7 @@ router_settings:
   # [REQUIRES REDIS] redis_host/redis_password/redis_port/redis_db: router-level
   # Redis for multi-instance coordination. Verified: router_settings.redis_host,
   # redis_password, redis_port, redis_db (all requires_redis=true).
-  # [WORKESTRATOR NOTE] p0-configs.md states: "When using multiple LiteLLM
+  # [WORKESTRATE NOTE] p0-configs.md states: "When using multiple LiteLLM
   # Servers / Kubernetes set redis settings router_settings:redis_host etc".
   redis_host: os.environ/REDIS_HOST
   redis_password: os.environ/REDIS_PASSWORD

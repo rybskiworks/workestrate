@@ -67,7 +67,7 @@ model_list:
 - The `USE_LITELLM_PROXY` flag requires v1.72.1 or higher.
 - OAuth2/JWT auto-refresh is available via `ProxyAuthHandler`.
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 This is the chained-proxy pattern for one LiteLLM proxy calling another LiteLLM proxy. Pattern: `model: litellm_proxy/<model-name>` + `api_base: <upstream-proxy-url>` + `api_key: <upstream-proxy-key>`. The `USE_LITELLM_PROXY` flag (v1.72.1+) routes ALL SDK requests through the proxy regardless of model — useful for centralized proxy management. Tags (`extra_body={"tags": [...]}`) enable request categorization for monitoring/analytics.
 

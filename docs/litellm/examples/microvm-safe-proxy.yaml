@@ -1,6 +1,6 @@
 # =============================================================================
 # microvm-safe-proxy.yaml
-# The in-memory, microsandbox-safe shape ACTUALLY used by workestrator.
+# The in-memory, microsandbox-safe shape ACTUALLY used by workestrate.
 # =============================================================================
 #
 # This mirrors the merged infra/litellm/config.yaml + models.yaml (the real
@@ -17,8 +17,8 @@
 #         stream_timeout, allowed_fails, cooldown_time, retry_policy};
 #       litellm_settings{drop_params, request_timeout, force_ipv4}.
 #   - disable_spend_logs: option-index marks requires_db=true. The
-#     workestrator_recommendation note states it is "Set to true in real config;
-#     compensates for no DB (prevents spend-log write attempts)." [WORKESTRATOR
+#     workestrate_recommendation note states it is "Set to true in real config;
+#     compensates for no DB (prevents spend-log write attempts)." [WORKESTRATE
 #     NOTE] setting it true without a DB suppresses spend-log write attempts.
 #   - force_ipv4: option-index common_misconfiguration note: "Used in real config
 #     (workaround httpx ConnectionError with ipv6 + Anthropic)."
@@ -33,8 +33,8 @@
 #       openai/ (litellm_prefix: openai/, required_env_vars: [OPENAI_API_KEY];
 #         api_base MUST include /v1 postfix).
 #
-# WORKESTRATOR-SPECIFIC DEVIATIONS (clearly marked):
-#   [WORKESTRATOR DEVIATION] Kimi coding endpoint uses `anthropic/` prefix
+# WORKESTRATE-SPECIFIC DEVIATIONS (clearly marked):
+#   [WORKESTRATE DEVIATION] Kimi coding endpoint uses `anthropic/` prefix
 #     (model: anthropic/kimi-for-coding, api_base: https://api.kimi.com/coding)
 #     instead of the documented `moonshot/` prefix. Rationale (from
 #     provider-fields.index.json anthropic/ + moonshot/ entries): Kimi's coding
@@ -43,14 +43,14 @@
 #     base pattern. LiteLLM auto-appends /v1/messages -> final URL
 #     api.kimi.com/coding/v1/messages. This is a project choice, not upstream-
 #     documented-as-correct.
-#   [WORKESTRATOR DEVIATION] MiniMax uses `anthropic/MiniMax-M3` (api_base:
+#   [WORKESTRATE DEVIATION] MiniMax uses `anthropic/MiniMax-M3` (api_base:
 #     https://api.minimax.io/anthropic) instead of the documented `minimax/`
 #     prefix. provider-fields.index.json minimax/ entry documents the
 #     `minimax/` prefix with api_base https://api.minimax.io/anthropic/v1/messages
 #     as the primary path. The repo's `anthropic/` form omits the /v1/messages
 #     suffix (LiteLLM auto-appends it). `MiniMax-M3` is NOT in the docs (only
 #     M2-series). This is a project choice, not upstream-documented-as-correct.
-#   [WORKESTRATOR NOTE] default-deny egress is enforced by the microsandbox
+#   [WORKESTRATE NOTE] default-deny egress is enforced by the microsandbox
 #     runtime (msb), NOT by this config. The api_base hosts below must be on the
 #     runtime's egress allowlist.
 #
@@ -60,7 +60,7 @@
 
 model_list:
   # --- coding (default: Kimi K2.7 specialist) -> MiniMax M3 ---
-  # [WORKESTRATOR DEVIATION] anthropic/ prefix for Kimi coding endpoint.
+  # [WORKESTRATE DEVIATION] anthropic/ prefix for Kimi coding endpoint.
   - model_name: coding
     litellm_params:
       model: anthropic/kimi-for-coding
@@ -69,7 +69,7 @@ model_list:
 
   - model_name: coding-fallback
     litellm_params:
-      # [WORKESTRATOR DEVIATION] anthropic/ prefix for MiniMax (docs use minimax/).
+      # [WORKESTRATE DEVIATION] anthropic/ prefix for MiniMax (docs use minimax/).
       model: anthropic/MiniMax-M3
       api_base: https://api.minimax.io/anthropic
       api_key: os.environ/MINIMAX_CODING_API_KEY
@@ -116,7 +116,7 @@ model_list:
 
   # --- neural (Neuralwatt endpoint) ---
   # openai/ prefix is the CANONICAL pattern for Neuralwatt
-  # (provider-fields.index.json openai/ workestrator_alias_recommendation).
+  # (provider-fields.index.json openai/ workestrate_alias_recommendation).
   # api_base includes /v1 postfix per the openai/ caveat.
   - model_name: neural
     litellm_params:
@@ -131,13 +131,13 @@ general_settings:
   # completion_model: default model group. Verified:
   # option-index general_settings.completion_model.
   completion_model: coding
-  # disable_spend_logs: [WORKESTRATOR NOTE] set true to suppress spend-log write
+  # disable_spend_logs: [WORKESTRATE NOTE] set true to suppress spend-log write
   # attempts against the nonexistent DB. Verified:
   # option-index general_settings.disable_spend_logs (requires_db=true).
   disable_spend_logs: true
 
 router_settings:
-  # fallbacks: Verified router_settings.fallbacks. [WORKESTRATOR] coding-tier
+  # fallbacks: Verified router_settings.fallbacks. [WORKESTRATE] coding-tier
   # failover chains: <tier> -> [<tier>-fallback].
   fallbacks:
     - coding: [coding-fallback]
@@ -166,7 +166,7 @@ litellm_settings:
   drop_params: true
   # request_timeout: Verified litellm_settings.request_timeout (default=6000).
   request_timeout: 300
-  # force_ipv4: [WORKESTRATOR NOTE] workaround for httpx ConnectionError with
+  # force_ipv4: [WORKESTRATE NOTE] workaround for httpx ConnectionError with
   # ipv6 + Anthropic. Verified: litellm_settings.force_ipv4 (option-index
   # common_misconfiguration note confirms real-config usage).
   force_ipv4: true

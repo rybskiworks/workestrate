@@ -18,7 +18,7 @@ wiring its `litellm_params`. The provider prefix is the first path segment of
 `litellm_params.model` (e.g. `anthropic/kimi-for-coding` → prefix `anthropic/`).
 Full detail lives in:
 
-- `docs/litellm/providers/README.md` — provider index + workestrator usage.
+- `docs/litellm/providers/README.md` — provider index + workestrate usage.
 - `docs/litellm/providers/<provider>.md` — per-provider extraction.
 - `docs/litellm/schemas/provider-fields.index.json` — per-provider
   `litellm_prefix`, `required_env_vars`, `api_base_behavior`,
@@ -107,7 +107,7 @@ LiteLLM's native prefix:
 
 ## Project context [PROJECT — not upstream docs]
 
-The workestrator config (`infra/litellm/config.yaml`) uses these prefixes:
+The workestrate config (`infra/litellm/config.yaml`) uses these prefixes:
 
 | Prefix | Used for | Notes |
 |--------|----------|-------|

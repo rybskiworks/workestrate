@@ -42,7 +42,7 @@ python3 .agents/skills/validation-litellm-config-check/scripts/check_config.py \
 
 `--schemas` is an alias for `--schemas-dir`. Use `--mode db-backed` when the
 deployment has Postgres/Redis (then checks e/f do not flag DB/Redis keys).
-Default mode is `in-memory` (the workestrator deployment shape).
+Default mode is `in-memory` (the workestrate deployment shape).
 
 The script runs checks (a)-(i), encoded in `scripts/check_config.py` and the
 8 `constraint-litellm-*` skills (the source of truth):

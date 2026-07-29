@@ -3,7 +3,7 @@
 Each agent has a directory under `agents/<name>/` with two parts:
 
 - `repo/` — upstream source code (gitignored). Populated automatically by `nix develop` via flake inputs, or clone your own locally.
-- `config/` — workestrator-specific configuration (tracked in git).
+- `config/` — workestrate-specific configuration (tracked in git).
 - `build/` — vendored build output (gitignored). For Odysseus this includes `.deps/` (cp312 wheels installed by the `nix develop` shell via Nix `python3.12`); the microVM imports them via `PYTHONPATH=/app/.deps`.
 
 ## Structure
@@ -11,7 +11,7 @@ Each agent has a directory under `agents/<name>/` with two parts:
 ```
 agents/<name>/
 ├── repo/       ← gitignored (flake symlink or local clone)
-├── config/     ← tracked (workestrator adaptation)
+├── config/     ← tracked (workestrate adaptation)
 └── .gitkeep
 ```
 

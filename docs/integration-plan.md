@@ -1,4 +1,4 @@
-# workestrator integration plan
+# workestrate integration plan
 
 ## Current state
 
@@ -54,7 +54,7 @@ general_settings:
 
 ### Role naming
 
-Consider renaming roles from generic (`chat`, `coding`, `reasoning`) to occupation-based names that better reflect what each role does in the workestrator context. For example:
+Consider renaming roles from generic (`chat`, `coding`, `reasoning`) to occupation-based names that better reflect what each role does in the workestrate context. For example:
 - `chat` -> something describing its actual use
 - `coding` -> the coding agent role
 - `reasoning` -> the reasoning/planning role
@@ -199,7 +199,7 @@ Replace Docker Hub base images (`node:24-bookworm-slim`, `python:3.12-slim`) wit
 Example structure:
 ```nix
 pkgs.dockerTools.buildLayeredImage {
-  name = "workestrator-pi";
+  name = "workestrate-pi";
   contents = [ pkgs.nodejs_22 pi-built pi-provider-litellm ];
   config = {
     Cmd = [ "pi" "--mode" "rpc" ];

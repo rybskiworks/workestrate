@@ -37,7 +37,7 @@
 #
 # SECRET HYGIENE: NEVER commit real API keys. Use `os.environ/<VAR>` indirection.
 #
-# WORKESTRATOR NOTES [PROJECT CONTEXT — NOT upstream docs]:
+# WORKESTRATE NOTES [PROJECT CONTEXT — NOT upstream docs]:
 #   - GLM-5.1 routes via OpenRouter (`openrouter/z-ai/glm-5.1`), NOT native
 #     `zai/`. Do NOT change `openrouter/z-ai/glm-5.1` to `zai/glm-5.1` —
 #     GLM-5.1 is not in the native Z.AI docs and would likely fail routing.

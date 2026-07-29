@@ -221,8 +221,8 @@ policy_attachments:
 - /docs/adding_provider/adding_guardrail_support
 - /docs/enterprise
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Guardrail policies (`policies:` + `policy_attachments:` in config.yaml) work WITHOUT a database — they're static config. The workestrator can use `scope: "*"` (global) policies and `condition.model` (model-based) policies in-memory. Team-based and key-based attachments are Enterprise (unavailable). Tag-based attachments read from `metadata.tags` on keys/teams — without virtual keys/teams (no DB), tag-based attachments are moot. `POST /policies/resolve` works without DB (resolves static config). The `inherit` mechanism and `guardrails.add`/`guardrails.remove` work with static config. This is a [Beta] feature.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Guardrail policies (`policies:` + `policy_attachments:` in config.yaml) work WITHOUT a database — they're static config. The workestrate can use `scope: "*"` (global) policies and `condition.model` (model-based) policies in-memory. Team-based and key-based attachments are Enterprise (unavailable). Tag-based attachments read from `metadata.tags` on keys/teams — without virtual keys/teams (no DB), tag-based attachments are moot. `POST /policies/resolve` works without DB (resolves static config). The `inherit` mechanism and `guardrails.add`/`guardrails.remove` work with static config. This is a [Beta] feature.
 
 ## Confidence / uncertainty notes
 - high confidence on policy config format (verbatim YAML). DB requirement is "not documented" — policies are static config (inferred they work without DB). Enterprise requirement for team/key attachments is verbatim. Page is [Beta] — config format may change.

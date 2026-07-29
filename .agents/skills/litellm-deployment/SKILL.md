@@ -5,7 +5,7 @@ description: |
   images (main vs -database), CLI flags (--config, --debug, --detailed_debug,
   --port, --num_workers), config mounted read-only at /app/config.yaml,
   health endpoints (/health, /health/liveliness, /health/readiness), drain
-  endpoint, and the workestrator microsandbox context. Load when starting the
+  endpoint, and the workestrate microsandbox context. Load when starting the
   proxy, choosing an image, wiring health probes, diagnosing startup/env
   resolution, or sizing the deployment. Does NOT cover config anatomy (see
   litellm-config-anatomy), providers (see litellm-providers), or routing
@@ -47,7 +47,7 @@ Load this skill when:
 | `docker.litellm.ai/berriai/litellm:latest` | Main (in-memory) | no Postgres |
 | `ghcr.io/berriai/litellm-database:latest` | With DB | Postgres required |
 
-The workestrator is in-memory (no Postgres) → the **main image suffices**.
+The workestrate is in-memory (no Postgres) → the **main image suffices**.
 Using the `-database` image without a Postgres connection logs DB errors on
 every request.
 
@@ -81,14 +81,14 @@ resolves to an empty string (causing downstream auth failures, not config
 validation failures).
 
 `environment_variables: {}` is a top-level config key for injecting env vars
-via config (workestrator does NOT use this — secrets come from the sandbox
+via config (workestrate does NOT use this — secrets come from the sandbox
 `env()`/`secret_env()`).
 
 ## `NUM_WORKERS`
 
 Number of workers. Multi-worker deployments require `PROMETHEUS_MULTIPROC_DIR`
 for aggregated Prometheus metric collection (single-process does not). In
-workestrator, `NUM_WORKERS` is passed via `--num_workers` CLI flag, not env.
+workestrate, `NUM_WORKERS` is passed via `--num_workers` CLI flag, not env.
 
 ## Health endpoints
 
@@ -99,7 +99,7 @@ workestrator, `NUM_WORKERS` is passed via `--num_workers` CLI flag, not env.
 | `GET /health/readiness` | Readiness — includes DB connection status. | no (DB status N/A) |
 
 > **Misspelling note:** the OpenAPI contains both `/health/liveness` and
-> `/health/liveliness`. The workestrator infra uses the misspelled
+> `/health/liveliness`. The workestrate infra uses the misspelled
 > `/health/liveliness`.
 
 - `/health` is NOT a cheap liveness probe — it calls every configured upstream.
@@ -120,7 +120,7 @@ workestrator, `NUM_WORKERS` is passed via `--num_workers` CLI flag, not env.
 Verbatim: "4 CPU cores and 8 GB RAM".
 
 Redis required at **1000+ RPS or multi-instance**. Not required for
-single-instance (workestrator is single-instance).
+single-instance (workestrate is single-instance).
 
 ## Air-gapped / cost map
 
@@ -135,7 +135,7 @@ single-instance (workestrator is single-instance).
 ## Hot reload
 
 **Not clearly documented in fetched source** — likely needs a process restart
-to pick up `config.yaml` changes **(inferred)**. The workestrator mounts config
+to pick up `config.yaml` changes **(inferred)**. The workestrate mounts config
 read-only, so changes require a sandbox restart.
 
 ## Common Mistakes
@@ -155,7 +155,7 @@ read-only, so changes require a sandbox restart.
 
 ## Project context [PROJECT — not upstream docs]
 
-The workestrator runs LiteLLM **in-memory inside a microsandbox microVM** at
+The workestrate runs LiteLLM **in-memory inside a microsandbox microVM** at
 `:4000`:
 
 - Image: **main** (`docker.litellm.ai/berriai/litellm:latest`), no DB.

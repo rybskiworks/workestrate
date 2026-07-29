@@ -174,7 +174,7 @@ response = completion("openai/your-model-name", messages)
 - https://platform.openai.com/docs/api-reference/responses (Responses API)
 - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - The repo uses `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` — this follows the documented pattern.
 - `openai/` prefix + `OPENAI_BASE_URL` (or `api_base` in litellm_params) is the canonical way to point LiteLLM at a custom OpenAI-compatible endpoint.
 - The `openai/` prefix is shared between the OpenAI provider page and the openai_compatible page — both use the same prefix for OpenAI-protocol chat-completions endpoints.

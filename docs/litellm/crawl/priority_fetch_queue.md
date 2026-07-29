@@ -6,7 +6,7 @@
 ## P0 — Must Extract (10 pages)
 
 These pages cover the core config.yaml structure and proxy fundamentals directly used by
-the workestrator config.
+the workestrate config.
 
 | # | URL | Why It Matters | Classification |
 |---|---|---|---|

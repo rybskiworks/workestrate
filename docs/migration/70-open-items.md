@@ -96,7 +96,7 @@ provided.
 ### 1. Personal config repo git remote
 
 **Needed for**: Phase 1, step M.9 (create personal config repo).
-**Recommended**: `git@github.com:georgrybski/workestrator-config-personal.git`
+**Recommended**: `git@github.com:georgrybski/workestrate-config-personal.git`
 (private). Matches the existing fork pattern (`flake.nix:7-25`).
 **User may prefer**: a different remote, or local-only initially (no remote
 until ready to distribute).

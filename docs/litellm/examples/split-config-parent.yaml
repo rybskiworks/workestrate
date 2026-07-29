@@ -18,15 +18,15 @@
 #     general_settings.completion_model, litellm_settings.drop_params) ARE
 #     verified verbatim from docs/litellm/schemas/config-yaml.option-index.json.
 #
-# PROJECT REALITY (workestrator): the real config at infra/litellm/config.yaml is
+# PROJECT REALITY (workestrate): the real config at infra/litellm/config.yaml is
 # a single monolithic file (no include). This example is illustrative only.
 #
 # SECRETS: master_key uses os.environ/ indirection. NEVER commit real values.
 # Required env var: LITELLM_MASTER_KEY.
 #
-# WORKESTRATOR-SPECIFIC: the include-based split is a recommendation for teams
-# who want to separate model definitions from proxy settings. workestrator does
-# not currently use it. Marked [WORKESTRATOR RECOMMENDATION] below. NOTE: the
+# WORKESTRATE-SPECIFIC: the include-based split is a recommendation for teams
+# who want to separate model definitions from proxy settings. workestrate does
+# not currently use it. Marked [WORKESTRATE RECOMMENDATION] below. NOTE: the
 # config is mounted read-only at /app/config.yaml in the microsandbox, so even
 # with include there is no hot-reload (hot-reload is NOT documented upstream on
 # the config_management page in any case).
@@ -36,7 +36,7 @@
 # this dir) supplies the model_list. A child file may contain ONLY a top-level
 # section (e.g. model_list:) with no wrapper — confirmed by the verbatim upstream
 # example where model_config.yaml contains only a top-level model_list:.
-# [WORKESTRATOR RECOMMENDATION] split by area: one child for models, one for
+# [WORKESTRATE RECOMMENDATION] split by area: one child for models, one for
 # router_settings, one for general_settings, to keep diffs reviewable.
 include:
   - split-config-models.yaml

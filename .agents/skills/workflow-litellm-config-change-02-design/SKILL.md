@@ -22,7 +22,7 @@ phase is read-only: it reads schemas and decides; it does not edit.
 
 - `docs/litellm/schemas/config-yaml.option-index.json` — AUTHORITATIVE for config key existence and `section` placement; also flags `deprecated`, `requires_db`, `requires_redis`.
 - `docs/litellm/schemas/provider-fields.index.json` — AUTHORITATIVE for provider `litellm_prefix`, `required_env_vars`, `api_base_behavior`, `caveats`.
-- `docs/litellm/schemas/env-vars.index.json` — AUTHORITATIVE for env var names, `requires_db`, `deprecated`, `workestrator_used`.
+- `docs/litellm/schemas/env-vars.index.json` — AUTHORITATIVE for env var names, `requires_db`, `deprecated`, `workestrate_used`.
 - `docs/litellm/schemas/config-yaml.normalized.schema.md` — precedence rule, env-var syntax, in-memory mapping table, enum values.
 - Load regular skill `litellm-config-anatomy` for the `litellm_params` key set.
 

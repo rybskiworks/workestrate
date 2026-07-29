@@ -50,7 +50,7 @@ for config repos. Flake materialization is optional sugar for team repos.
 | Phase | Scope | Verifiable here? | Gate |
 |---|---|---|---|
 | **0a** | Data-driven workloads: serde+toml, `workestrate.toml` schema, recipe vocabulary, `policy.rs` allowlist, migrate 5 workloads, golden-file parity, `external_subcommand`-hybrid dispatch. Includes odysseus/opencode nix derivations prerequisite. | Yes (cargo) | `just verify` + golden parity |
-| **0b** | Nix recipe parameterization: `nix/lib/recipes.nix`, `nix/lib/vocabulary.nix`, `buildWorkloadImage`, devshell reads `config.reference/` only. | No (HOST-NIX) | `nix build .#workestrate` + `.#workestrator-pi` |
+| **0b** | Nix recipe parameterization: `nix/lib/recipes.nix`, `nix/lib/vocabulary.nix`, `buildWorkloadImage`, devshell reads `config.reference/` only. | No (HOST-NIX) | `nix build .#workestrate` + `.#workestrate-pi` |
 | **1** | Tool+XDG model: XDG path resolution, `workestrate config add/update/list/trust`, `workestrate init`, `workestrate source clone/build/list/reset`, runtime path migration, personal config repo creation. Additive — root `workestrate.toml` keeps working as project layer. | Yes (cargo) except KVM gate | `just verify` + `HOST-KVM` runtime |
 | **2** | Config-repo-flake (inverted dependency): core exports `lib.*`; config repos optionally have own `flake.nix` taking core as input. Optional mode. | No (HOST-NIX) | `nix build` in config repo |
 | **3** | Layering engine: ordered `layers` merge (RFC 7396 + security-aware merge), `plan --show-source` provenance, multi-recipient SOPS, copier template. Contexts deferred. | Yes (cargo) | Fixture-repo merge tests |

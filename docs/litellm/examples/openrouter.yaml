@@ -31,7 +31,7 @@
 #
 # SECRET HYGIENE: NEVER commit real API keys. Use `os.environ/<VAR>` indirection.
 #
-# WORKESTRATOR NOTES [PROJECT CONTEXT — NOT upstream docs]:
+# WORKESTRATE NOTES [PROJECT CONTEXT — NOT upstream docs]:
 #   - The repo uses `openrouter/z-ai/glm-5.1`, `openrouter/qwen/...`, and
 #     `openrouter/nex/...` style strings — all structurally valid per the
 #     documented nested `openrouter/<provider>/<model>` pattern.

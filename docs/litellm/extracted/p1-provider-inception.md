@@ -121,7 +121,7 @@ print(response.choices[0].text)
 ## Related links
 - https://docs.inceptionlabs.ai/
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - Inception is a provider of diffusion LLMs (Mercury family). OpenAI-compatible API.
 - Pattern: `model: inception/mercury-2` + `api_key: os.environ/INCEPTION_API_KEY`.
 - `api_base` is fixed at `https://api.inceptionlabs.ai/v1` — not configurable.

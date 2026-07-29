@@ -109,8 +109,8 @@ litellm_settings:
 - /docs/proxy/config_settings#general_settings---reference
 - /docs/troubleshoot/cost_discrepancy
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Spend tracking REQUIRES a database (virtual keys + DB). The workestrator runs in-memory (no Postgres), so `/spend/*` endpoints, `/global/spend/*`, `/user/daily/activity`, and per-key/user/team spend tracking are UNAVAILABLE. The relevant setting for the in-memory deployment is `general_settings.disable_spend_logs: True` (documented on db_info page, NOT this page) — this prevents the proxy from attempting DB spend log writes. `litellm_settings.extra_spend_tag_headers` and `disable_add_user_agent_to_request_tags` are moot without spend tracking. Cost metrics can still be emitted to Prometheus/external loggers via callbacks (which work without DB).
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Spend tracking REQUIRES a database (virtual keys + DB). The workestrate runs in-memory (no Postgres), so `/spend/*` endpoints, `/global/spend/*`, `/user/daily/activity`, and per-key/user/team spend tracking are UNAVAILABLE. The relevant setting for the in-memory deployment is `general_settings.disable_spend_logs: True` (documented on db_info page, NOT this page) — this prevents the proxy from attempting DB spend log writes. `litellm_settings.extra_spend_tag_headers` and `disable_add_user_agent_to_request_tags` are moot without spend tracking. Cost metrics can still be emitted to Prometheus/external loggers via callbacks (which work without DB).
 
 ## Confidence / uncertainty notes
 - high confidence on DB requirement (verbatim quotes). The `disable_spend_logs` key is explicitly NOT on this page — it's on db_info (cross-referenced). Enterprise requirements are verbatim.

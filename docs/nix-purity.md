@@ -1,7 +1,7 @@
-# Writing and maintaining pure derivations in workestrator
+# Writing and maintaining pure derivations in workestrate
 
 This document is the canonical reference for keeping Nix evaluation and
-builds pure in the workestrator flake. It records the two purity axes
+builds pure in the workestrate flake. It records the two purity axes
 (eval-time and build-time), the imperative rules that enforce them, the
 29 GB-per-eval incident that motivated the rules, the store-growth model
 that explains why impurity balloons the store, the `just lint-nix`
