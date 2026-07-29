@@ -1,6 +1,6 @@
 # 07 — Naming consistency: purge `workestrator` residue, standardize on `workestrate`
 
-> **STATUS: IN-PROGRESS THIS BRANCH (`migration/tool-model`) — becomes DONE as the phases land**
+> **STATUS: DONE (landed on `migration/tool-model`, 3 commits; cargo gates PENDING host devshell — no `cc` here)**
 > **Effort:** M (repo-wide mechanical rename + attr-graph care; no behavior change)
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [../07-execution-order.md](../07-execution-order.md) ·
@@ -194,10 +194,44 @@ handle — none of this is done in this effort:
 
 | Phase | Commit | Contents | Verification |
 |---|---|---|---|
-| 2 — spec | _(this commit)_ | this spec + index/README/execution-order/NEXT-SESSION wiring | grep counts; doc-map consistency |
-| 3 — docs sweep | _(pending)_ | all tracked docs + tracked skills + `config.reference` comment | `grep -ri workestrator` docs → only §5 residuals |
-| 4 — code/nix/templates | _(pending)_ | rename map §3 | `just lint-nix` (expect only the known foreign `docs/nix` failure); `nix eval`/`nix flake show` of renamed attrs if the evaluator permits; final grep sweep; `git status` clean-scope. **Cargo gates PENDING (no `cc`).** |
-| 5 — final report | _(pending)_ | status flip to DONE + final counts | this table completed |
+| 2 — spec | `7befbb1` | this spec + index/README/execution-order/NEXT-SESSION wiring (5 files, +236/-1) | doc-map consistency; table render check |
+| 3 — docs sweep | `a88fb08` | 143 files, +2300/-2300 (pure rename): all tracked docs + 22 tracked litellm/nix-docker-images skills + `config.reference` comment + `git mv` of `workestrate-recommended-patterns.md` | scope grep 2391 → 91 (all §5/§7-intentional); 6 schema JSONs parse (`python3 -m json.tool`); no foreign artifacts staged |
+| 4 — code/nix/templates | `0e5723b` | 19 files, +62/-55: `git mv templates/workestrate-config/` (7 renames) + flake.nix attr graph + `pi-image.nix` name + agentctl src/tpl/tests/fixture/README | `scripts/check-nix-paths.sh` (lint-nix body) EXIT 0 — zero violations trace to these edits; `nix eval`: `.#workestrate-sandbox.name` → `"workestrate-sandbox"`, `.#workestrate-pi.imageName` → `"workestrate-pi"`, `.#apps...default.program` → `...-workestrate-sandbox/bin/workestrate`, old `.#workestrator` attr gone; final grep: ZERO hits in code/nix/templates/control; `git status` clean-scope. **Cargo gates PENDING (no `cc`).** |
+| 5 — final report | _(this commit)_ | status flip to DONE + final counts | this table |
 
-Per-commit file lists and before/after counts are appended in the final
-report (session output + this section's completion).
+### Final counts (Phase 5)
+
+- Baseline (Phase 1): **2439** hits repo-wide (excl. `.git`, `target/`,
+  `.workestrate/`).
+- After Phase 4: **139** hits, ALL in the §5 justified-residual categories:
+  spec file (46) + purge-prose in v-i docs (7), historical
+  `docs/migration/10-current-state.md` + `50-decisions/**` +
+  `nix-store-accumulation-report.md` (16), foreign untracked `docs/nix/`
+  (40), foreign untracked nix skills (22), git-ignored `.tmp/` +
+  `workspaces/` (6, exact per-file split in session output; category sums
+  account for all 139).
+- **Zero** `workestrator` hits remain in: `flake.nix`, `nix/`, `templates/`,
+  `control/`, `justfile`, `scripts/`, `README.md`, `SPEC.md`, `agents/`,
+  `config.reference/`, tracked `.agents/skills/`.
+
+### Pending gates (handoff)
+
+- All cargo gates (`just check/test/golden-check/scaffold-check/schema-check`)
+  — **PENDING host devshell** (no `cc` linker in this container). The renamed
+  test assertions (`network.rs`, `scaffold/mod.rs`, `scaffold_template.rs`)
+  must be confirmed green there.
+- `nix build` of renamed outputs (`.#workestrate-pi`, `.#workestrate-sandbox`,
+  `.#workestrate-sandbox-node`) — HOST-NIX gate; eval-only verified here.
+- Full `nix flake show` is blocked by a PRE-EXISTING unrelated
+  `nix/packages/tempest.nix` eval error (`unexpected argument 'npmDepsHash'`)
+  — not caused by, not fixed by, this effort; flagged for separate triage.
+- **§4 FLAG stands:** personal config repo `workestrate.toml`
+  (`image.name = "workestrator-pi"` → `"workestrate-pi"`) and any old-template
+  config-repo flake input (`workestrator` → `workestrate`) must be updated
+  externally in the same push window. `just load-images` will then load
+  `workestrate-pi:latest`; any already-loaded `workestrator-pi:latest` image
+  in microsandbox is stale and can be removed.
+- The lint-nix wrapper script `scripts/check-nix-paths.sh` currently carries
+  a FOREIGN working-tree modification (extends the docs allowlist with
+  `docs/nix/**`); the pristine HEAD script would report the known foreign
+  `docs/nix` failure. Neither state is affected by this effort.
