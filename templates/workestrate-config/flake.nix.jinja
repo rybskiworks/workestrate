@@ -1,17 +1,18 @@
-# Inverted-dependency flake: takes workestrator core as input.
+# Inverted-dependency flake: takes workestrate core as input.
 # This flake builds nix-layered images from this config repo's workestrate.toml.
 # Phase 2 feature — optional.
 {
   inputs = {
-    workestrator.url = "{{ core_flake_url }}";
-    nixpkgs.follows = "workestrator/nixpkgs";
+    workestrate.url = "{{ core_flake_url }}";
+    nixpkgs.follows = "workestrate/nixpkgs";
   };
 
-  outputs = { self, workestrator, nixpkgs }:
+  outputs = { self, workestrate, nixpkgs }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       config = builtins.fromTOML (builtins.readFile ./workestrate.toml);
+      workestrate-cli = workestrate.packages.${system}.workestrate;
     in {
       # Build this repo's nix-layered images using core's exported recipes.
       # B6 (WP9): `sources` maps `flake://<name>` URIs in workestrate.toml
@@ -26,15 +27,17 @@
       #
       # An empty `sources` is valid only if no binary.src uses `flake://`;
       # any unresolved `flake://<name>` URI is a hard error at eval naming the URI.
-      packages.${system} = workestrator.lib.${system}.buildImagesFromConfig {
+      packages.${system} = workestrate.lib.${system}.buildImagesFromConfig {
         inherit pkgs config;
         sources = { };
       };
 
       # Config-repo CI: validate against core's schema
-      checks.${system} = workestrator.lib.${system}.checks.validateConfig {
+      checks.${system} = workestrate.lib.${system}.checks.validateConfig {
         inherit pkgs;
-        workestrate = workestrator.packages.${system}.workestrate;
+        # The arg is `workestrate` (the agentctl CLI package); bound via a
+        # let-alias to avoid shadowing the `workestrate` flake input.
+        workestrate = workestrate-cli;
         config = builtins.readFile ./workestrate.toml;
       };
     };

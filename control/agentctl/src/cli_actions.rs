@@ -141,7 +141,7 @@ pub enum ConfigAction {
         #[arg(long)]
         with_flake: bool,
 
-        /// URL of the workestrator core flake (only used with --with-flake).
+        /// URL of the workestrate core flake (only used with --with-flake).
         #[arg(
             long,
             value_name = "URL",

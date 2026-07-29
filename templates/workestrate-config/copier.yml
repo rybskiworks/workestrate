@@ -1,7 +1,7 @@
-# Copier template for a new workestrator config repo.
-# Usage: copier copy templates/workestrator-config/ my-config-repo/
+# Copier template for a new workestrate config repo.
+# Usage: copier copy templates/workestrate-config/ my-config-repo/
 #
-# Or from a remote: copier copy github:georgrybski/ai-workbench/templates/workestrator-config/ my-config-repo/
+# Or from a remote: copier copy github:georgrybski/ai-workbench/templates/workestrate-config/ my-config-repo/
 
 config_name:
   type: str
@@ -25,7 +25,7 @@ include_flake:
 
 core_flake_url:
   type: str
-  help: "URL of the workestrator core flake"
+  help: "URL of the workestrate core flake"
   default: "github:georgrybski/ai-workbench"
   when: "{{ include_flake }}"
 

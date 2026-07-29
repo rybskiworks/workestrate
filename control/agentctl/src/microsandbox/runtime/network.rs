@@ -100,10 +100,10 @@ mod tests {
     fn pi_plan_uses_nix_built_image() -> anyhow::Result<()> {
         let _guard = TestConfigGuard::new();
         // The pi-bun binary's PT_INTERP points at nix glibc 2.42; the sandbox
-        // image must be the nix-built `workestrator-pi:latest` (loaded via
+        // image must be the nix-built `workestrate-pi:latest` (loaded via
         // `just load-pi-image`), NOT node:24-bookworm-slim (glibc 2.36 → crash).
         let plan = ConfigWorkload::new("pi")?.plan();
-        assert_eq!(plan.image.as_deref(), Some("workestrator-pi:latest"));
+        assert_eq!(plan.image.as_deref(), Some("workestrate-pi:latest"));
         Ok(())
     }
 
@@ -286,7 +286,7 @@ mod tests {
         let plan = ConfigWorkload::new("pi")?.plan();
         assert_eq!(plan.mounts.len(), 2, "pi should have 2 mounts");
         // /app is no longer mounted — the bun binary + assets are baked into
-        // the workestrator-pi image (the daemon can't bind-mount from
+        // the workestrate-pi image (the daemon can't bind-mount from
         // /nix/store). /app/bin/pi resolves via the symlink in the image.
         assert!(
             plan.mounts.iter().all(|m| m.guest != "/app"),

@@ -1,7 +1,7 @@
-# workestrator-config: {{ config_name }}
+# workestrate-config: {{ config_name }}
 
-This is a workestrator configuration repo, generated from the
-`workestrator-config` copier template.
+This is a workestrate configuration repo, generated from the
+`workestrate-config` copier template.
 
 ## Structure
 

@@ -208,7 +208,7 @@
       # Explicit workload images (not config-driven). config.reference is now
       # synthetic; real deployments live in the user's personal config repo.
       workload-images = {
-        workestrator-pi = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
+        workestrate-pi = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
         tempest = pkgs.callPackage ./nix/packages/tempest-image.nix { inherit tempest-built; };
       };
 
@@ -239,11 +239,11 @@
 
       # Reusable wrapper around workestrate that bakes WORKESTRATE_PI_BUILD
       # (pointing at the given pi build) into the environment, so `nix run .` /
-      # `.#workestrator` runs the pi sandbox without extra env. Wraps the
+      # `.#workestrate-sandbox` runs the pi sandbox without extra env. Wraps the
       # already-wrapped `${workestrate}/bin/workestrate` (which sets MSB_HOME
       # via its postInstall wrapProgram); makeWrapper preserves that inner
       # wrapper's env by exec'ing it, so MSB_HOME is retained.
-      workestrator-wrapper = { pi-build }: pkgs.runCommand "workestrator" {
+      workestrate-wrapper = { pi-build }: pkgs.runCommand "workestrate-sandbox" {
         nativeBuildInputs = [ pkgs.makeWrapper ];
       } ''
         mkdir -p $out/bin
@@ -251,13 +251,14 @@
           --set WORKESTRATE_PI_BUILD ${pi-build}
       '';
 
-      # .#workestrator (default): canonical pi-bun standalone binary (Bun runtime
-      # embedded). Behavior unchanged from the previous inline wrapper.
-      workestrator = workestrator-wrapper { pi-build = pi-bun-built; };
+      # .#workestrate-sandbox: the pi-bun wrapper (canonical pi-bun standalone
+      # binary, Bun runtime embedded). NOTE: the flake's `default` package is
+      # `.#workestrate` (the agentctl binary), NOT this wrapper.
+      workestrate-sandbox = workestrate-wrapper { pi-build = pi-bun-built; };
 
-      # .#workestrator-node: npm/node fallback (the .#pi JS tree). One-command
-      # switch — no manual WORKESTRATE_PI_BUILD export needed.
-      workestrator-node = workestrator-wrapper { pi-build = pi-built; };
+      # .#workestrate-sandbox-node: npm/node fallback (the .#pi JS tree).
+      # One-command switch — no manual WORKESTRATE_PI_BUILD export needed.
+      workestrate-sandbox-node = workestrate-wrapper { pi-build = pi-built; };
 
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
       # and other runtime commands look in ~/.microsandbox (where workestrate
@@ -348,7 +349,7 @@
 
       packages.${system} = workload-images // {
         inherit workload-images;
-        inherit workestrate workestrator workestrator-node microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets load-images;
+        inherit workestrate workestrate-sandbox workestrate-sandbox-node microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets load-images;
         # .#pi = npm/node JS tree (canonical remote fork).
         # .#pi-bun = standalone Bun binary (Bun runtime embedded).
         # Both from one source, one npmDepsHash. Local dev: `just dev-build-pi`.
@@ -369,7 +370,7 @@
 
       apps.${system}.default = {
         type = "app";
-        program = "${workestrator}/bin/workestrate";
+        program = "${workestrate-sandbox}/bin/workestrate";
       };
     };
 }

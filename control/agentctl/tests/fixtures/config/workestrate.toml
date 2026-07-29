@@ -111,7 +111,7 @@ scope = "local"
 
 [workloads.pi]
 kind = "agent"
-image = { recipe = "nix-layered", name = "workestrator-pi", tag = "latest", contents = ["cacert", "busybox", "fakeNss"], binary = { recipe = "bun-compile", src = "flake://pi", entrypoint = "packages/coding-agent/dist/bun/cli.js", worker = "packages/coding-agent/src/utils/image-resize-worker.ts" }, features = ["create_tmp"] }
+image = { recipe = "nix-layered", name = "workestrate-pi", tag = "latest", contents = ["cacert", "busybox", "fakeNss"], binary = { recipe = "bun-compile", src = "flake://pi", entrypoint = "packages/coding-agent/dist/bun/cli.js", worker = "packages/coding-agent/src/utils/image-resize-worker.ts" }, features = ["create_tmp"] }
 workdir = "/work"
 cpus = 2
 memory_mib = 2048

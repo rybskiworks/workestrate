@@ -51,7 +51,7 @@ let
 in
 
 pkgs.dockerTools.buildLayeredImage {
-  name = "workestrator-pi";
+  name = "workestrate-pi";
   tag = "latest";
 
   # cacert: CA roots for TLS egress (github.com, LiteLLM proxy TLS interception).

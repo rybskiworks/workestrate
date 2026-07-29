@@ -145,7 +145,7 @@ fn copier_template_byte_matches_native_render() {
         .join("..")
         .join("..")
         .join("templates")
-        .join("workestrator-config");
+        .join("workestrate-config");
     let copier_out = Command::new(&copier)
         .args(["copy", "--defaults"])
         .arg(&copier_template)
@@ -187,7 +187,7 @@ fn copier_template_byte_matches_native_render() {
     assert!(
         mismatches.is_empty(),
         "native scaffold and copier template produce different output for the minimal-personal \
-         subset. Align templates/workestrator-config/ with the Rust skeleton:\n{}",
+         subset. Align templates/workestrate-config/ with the Rust skeleton:\n{}",
         mismatches.join("\n")
     );
 }

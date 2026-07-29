@@ -33,8 +33,8 @@ just build
 Hermetic nix build (no `nix develop` needed to run):
 
 ```bash
-nix build .#workestrator
-./result/bin/workestrator pi exec   # bakes WORKESTRATE_PI_BUILD (.#pi-bun)
+nix build .#workestrate-sandbox
+./result/bin/workestrate pi exec   # bakes WORKESTRATE_PI_BUILD (.#pi-bun)
 ```
 
 `.#pi` (npm/node) and `.#pi-bun` (standalone bun binary) are the two pi
