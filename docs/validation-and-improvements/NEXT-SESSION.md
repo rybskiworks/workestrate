@@ -55,44 +55,55 @@ re-derive their contents.
 >
 > **NEW DECISION (spec 08):** the workestrate tool home must NEVER live
 > inside the repo checkout — home = user-global `~/.workestrate` only. Spec:
-> `06-improvements/08-no-repo-local-home.md` (READY-TO-EXECUTE; code step
-> NEEDS-DEVSHELL). The repo-local bundle `.workestrate/` is STILL PRESENT
+> `06-improvements/08-no-repo-local-home.md` (READY-TO-EXECUTE; code step runs
+> via `nix develop` in this container). The repo-local bundle `.workestrate/` is STILL PRESENT
 > until the spec is executed — and until its step (a) lands it holds the ONLY
 > committed copy of the personal config (`c41a707`); do NOT rebuild the
 > container or delete the bundle (see spec §5 interim warning). Execution is
 > sequenced EARLY: `07-execution-order.md` Step 0.5, before Lane A / the host
 > batch, because it changes the paths those reference.
 >
-> The authoring container has NO `cc` linker (verified:
-> `command -v cc gcc` → not found). Your FIRST job is to verify the parse:
-> inside `nix develop` (HOST-NIX devshell provides `cc`), run
-> `workestrate validate-config` and `workestrate tempest plan` against the real
-> bundle (`WORKESTRATE_HOME=/home/node/Development/ai-workbench/.workestrate`).
+> A bare shell in this container has NO `cc` linker (verified:
+> `command -v cc gcc` → not found), but nix IS installed at
+> `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin` (not on PATH)
+> and `nix develop` provides a full C toolchain (verified 2026-07-29:
+> `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"`
+> then `nix develop -c bash -c 'cc --version'` → gcc 15.2.0; `cargo 1.97.1`,
+> `rustc 1.97.1`; `cargo check` compiles in ~27s; first devshell build takes
+> minutes, subsequent runs are fast). Your FIRST job is to verify the parse:
+> inside `nix develop`, run `workestrate validate-config` and
+> `workestrate tempest plan` against the real bundle
+> (`WORKESTRATE_HOME=/home/node/Development/ai-workbench/.workestrate`).
 > This is Step 0(e) runtime verification + the Lane A gate entry action.
 >
 > **4. Environment honesty.** This container has:
 >   - **No KVM** (`ls /dev/kvm` → not found) — no sandbox runtime can execute.
->   - **No `cc` linker** — every cargo-linked gate (`check`, `test`,
->     `spec-examples`, `golden-check`, `schema-check`, `scaffold-check`) is NOT
->     runnable here; use `nix develop` (HOST-NIX) for those.
+>   - **No `cc` linker in a bare shell** — but cargo-linked gates (`check`,
+>     `test`, `spec-examples`, `golden-check`, `schema-check`, `scaffold-check`)
+>     ARE runnable here via `nix develop` (store-path prefix; verified
+>     2026-07-29: `cc --version` → gcc 15.2.0 inside `nix develop`).
 >   - **No sops age key** (`~/.config/sops/age/` absent, `SOPS_AGE_KEY` unset,
 >     `sops` not on PATH) — secret decryption FAILS CLOSED. Do NOT attempt to
 >     work around it; secret provisioning is HOST-only.
 >
-> HOST-KVM and HOST-NIX gates are DEFERRED per `05-host-validation.md` and
-> BATCHED into the single host pass at `07-execution-order.md` Step 6 (B1–B12).
-> Do not make a host trip for one gate — batch.
+> HOST-KVM gates and the genuine HOST-NIX gates (`nix build` image builds,
+> `nix run nixpkgs#...` prefetch jobs, `just verify-full`, `just generate-schema`)
+> are DEFERRED per `05-host-validation.md` and BATCHED into the single host
+> pass at `07-execution-order.md` Step 6 (B1–B12). Do not make a host trip for
+> one gate — batch.
 >
 > **5. How to work.** Work `07-execution-order.md` in order, top to bottom
 > (Step 0 → 0.5 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8). Step 0.5 (spec 08, retire
 > the repo-local home) is new — its step (a) is a hard prerequisite for any
 > container rebuild. Report lane-by-lane honestly:
-> `verifiable-here` (this container: TOML, golden files, git, shell/python) vs
-> `HOST-NIX` (nix devshell: cargo gates, nix builds, FOD hashes) vs `HOST-KVM`
+> `verifiable-here` (this container: TOML, golden files, git, shell/python,
+> AND cargo-linked gates via `nix develop`) vs `HOST-NIX` (host only: nix
+> builds, FOD hashes, `just verify-full`, `just generate-schema`) vs `HOST-KVM`
 > (runtime: service boot, agent exec, instance lifecycle). The
-> `verifiable-here` subset that passes in this container is: `toolchain-check`,
+> `verifiable-here` subset that passes in a bare shell is: `toolchain-check`,
 > `litellm-check`, `lint-nix`, `store-audit` (SKIP), and the `Cargo.lock`
-> stability `git diff`.
+> stability `git diff`; the cargo-linked gates additionally pass via
+> `nix develop`.
 >
 > **6. Experiment home.** The disposable experiment home setup is
 > `03-sibling-config-setup.md` — bootstrap is
@@ -134,17 +145,18 @@ re-derive their contents.
 >   - **What was confirmed** — with evidence (command + output, or file:line
 >     citation).
 >   - **What is blocked and exactly why** — name the missing capability
->     (`cc` linker / KVM / sops age key) and the step it gates.
+>     (KVM / sops age key; note: `cc` is available via `nix develop` in this
+>     container, so cargo gates are NOT blocked) and the step it gates.
 >   - **The next concrete action** — one sentence, the very next command or
 >     edit.
 
 > **Note (2026-07-29):** improvement spec 07 — naming consistency (purge `workestrator` residue, standardize on `workestrate`) — is IN-PROGRESS on branch `migration/tool-model`; see [06-improvements/07-naming-consistency.md](06-improvements/07-naming-consistency.md), including the personal-config-repo image-name FLAG (§4) and the checkout-dir-rename implications (§6).
 
-> **Note (2026-07-29, spec 08):** a NEW user decision exists — **the workestrate tool home must NEVER live inside the repo checkout**; the home is the user-global `~/.workestrate` only. Spec: [06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md) (READY-TO-EXECUTE; code step NEEDS-DEVSHELL). The repo-local bundle at `.workestrate/` is **still present** until the spec is executed. **INTERIM WARNING (spec §5):** until execution step (a) lands (clone `.workestrate/repos/personal` @ `c41a707` → `/home/node/Development/workestrate-personal`), the only committed copy of the personal config lives in the ephemeral container bundle — do NOT rebuild the container or delete the bundle. Execution is sequenced EARLY (07-execution-order.md Step 0.5), before Lane A / the host batch, because it changes the paths those reference. The `--home` flag spec ([06-improvements/06-config-home-flag.md](06-improvements/06-config-home-flag.md)) gains weight: with the discovery tier removed, `--home` becomes THE explicit override (precedence: flag > env > legacy XDG > default).
+> **Note (2026-07-29, spec 08):** a NEW user decision exists — **the workestrate tool home must NEVER live inside the repo checkout**; the home is the user-global `~/.workestrate` only. Spec: [06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md) (READY-TO-EXECUTE; code step runs via `nix develop` in this container — nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, bare shell lacks `cc`). The repo-local bundle at `.workestrate/` is **still present** until the spec is executed. **INTERIM WARNING (spec §5):** until execution step (a) lands (clone `.workestrate/repos/personal` @ `c41a707` → `/home/node/Development/workestrate-personal`), the only committed copy of the personal config lives in the ephemeral container bundle — do NOT rebuild the container or delete the bundle. Execution is sequenced EARLY (07-execution-order.md Step 0.5), before Lane A / the host batch, because it changes the paths those reference. The `--home` flag spec ([06-improvements/06-config-home-flag.md](06-improvements/06-config-home-flag.md)) gains weight: with the discovery tier removed, `--home` becomes THE explicit override (precedence: flag > env > legacy XDG > default).
 
 > **Note (2026-07-29, spec 09):** improvement spec 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier) — is READY-TO-EXECUTE with option 2 blocked on fork push access (`github:georgrybski/microsandbox-filesystem`); see [06-improvements/09-microsandbox-agentd-offline-build.md](06-improvements/09-microsandbox-agentd-offline-build.md).
 
-> **Note (2026-07-29, spec 10):** two NEW user decisions exist — (A) consumed config repos are FIRST-CLASS working copies inside the tool home at `$WORKESTRATE_HOME/config-repos/<name>/` (remote is canonical; supersedes the standalone-sibling model), and (B) the home itself becomes a dotfiles-style git repo via explicit `workestrate home init` scaffolding (gitignore + pre-commit hook guarding against mode-160000 gitlinks and secret material). Spec: [06-improvements/10-config-repos-as-working-copies.md](06-improvements/10-config-repos-as-working-copies.md) (READY-TO-EXECUTE; code tasks NEEDS-DEVSHELL). Spec 08 step (a) is AMENDED accordingly — the personal working repo lives at `~/.workestrate/config-repos/personal` (or `repos/personal` until the rename lands), NOT a standalone sibling.
+> **Note (2026-07-29, spec 10):** two NEW user decisions exist — (A) consumed config repos are FIRST-CLASS working copies inside the tool home at `$WORKESTRATE_HOME/config-repos/<name>/` (remote is canonical; supersedes the standalone-sibling model), and (B) the home itself becomes a dotfiles-style git repo via explicit `workestrate home init` scaffolding (gitignore + pre-commit hook guarding against mode-160000 gitlinks and secret material). Spec: [06-improvements/10-config-repos-as-working-copies.md](06-improvements/10-config-repos-as-working-copies.md) (READY-TO-EXECUTE; code tasks run via `nix develop` in this container — bare shell lacks `cc`). Spec 08 step (a) is AMENDED accordingly — the personal working repo lives at `~/.workestrate/config-repos/personal` (or `repos/personal` until the rename lands), NOT a standalone sibling.
 
 ---
 

@@ -145,11 +145,15 @@ that must match the old hardcoded behavior. They are enumerated in §3d.
 
 ## Baseline recovery procedure
 
-This procedure is `HOST-NIX` (the old binary must be built with cargo, which
-requires the dev shell's `cc` linker and native crates — not available in
-this container; verified: `cargo run ... -- example-service plan` fails with
-`error: linker 'cc' not found`). Run it on a nix-capable host inside
-`nix develop`.
+This procedure is runnable in this container via `nix develop` (the old binary
+must be built with cargo, which requires the dev shell's `cc` linker and
+native crates — absent in a bare shell, but present inside `nix develop`).
+Nix is installed at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`
+(not on PATH); prefix with
+`export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"`
+then run inside `nix develop -c bash -c '<cmd>'` (verified 2026-07-29:
+`cc --version` → gcc 15.2.0; `cargo check` compiles in ~27s; first devshell
+build takes minutes, subsequent runs are fast).
 
 ### Step 1 — Create a git worktree at the base commit
 
@@ -219,9 +223,11 @@ done
    ```
 
 4. **Cargo network access.** The old `Cargo.lock` deps may need fetching on a
-   fresh worktree. This is `HOST-NIX` / online; if offline, ensure the cargo
-   cache is warm. The dev shell (`nix develop`) provides the `cc` linker and
-   native deps (`aws-lc-rs`, `parking_lot_core`, etc.) required to build.
+   fresh worktree. This is online; if offline, ensure the cargo cache is warm.
+   The dev shell (`nix develop`, via the store-path prefix) provides the `cc`
+   linker and native deps (`aws-lc-rs`, `parking_lot_core`, etc.) required to
+   build — runnable in this container (verified 2026-07-29: `cc --version` →
+   gcc 15.2.0 inside `nix develop`).
 
 ### Step 3 — Generate NEW config-driven plans
 
@@ -361,21 +367,29 @@ structurally correct and produces well-formed plans. Runtime parity (actual
 sandbox execution) is Lane B / HOST-KVM — see
 [05-host-validation.md](05-host-validation.md).
 
-> **Not-run-here note.** This container has no `cc` linker (verified:
-> `cargo run ... -- example-service plan` → `error: linker 'cc' not found`),
-> so the cargo-based commands below are marked `HOST-NIX`. The read-only git
-> / grep / file inspections in §"Why there is no committed golden" were run
-> here and their outputs pasted verbatim.
+> **Run-here note.** A bare shell in this container has no `cc` linker, but
+> nix IS installed at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`
+> (not on PATH), and `nix develop` provides a full C toolchain. Prefix with
+> `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"`
+> then run `nix develop -c bash -c '<cmd>'` (verified 2026-07-29:
+> `cc --version` → gcc 15.2.0; `cargo check` compiles in ~27s; first devshell
+> build takes minutes). So the cargo-based commands below are runnable in this
+> container via `nix develop` (`verifiable-here`). The read-only git / grep /
+> file inspections in §"Why there is no committed golden" were run here in a
+> bare shell and their outputs pasted verbatim.
 
 > **Bundle-load blocker (CRITICAL) — edit LANDED, runtime verification PENDING.**
 > The `install_layout = "app"` field has been REMOVED from
 > `.workestrate/repos/personal/workestrate.toml:317` (fix e applied; verified:
 > `grep -n install_layout .workestrate/repos/personal/workestrate.toml` → no
 > match), so the parse no longer hard-errors. What remains is the runtime
-> verification itself — `workestrate validate-config` is cargo-linked and cannot
-> run in this container (no `cc` linker); it is the first Lane A action in the
-> HOST-NIX devshell (`nix develop`). The historical note below is kept for the
-> record.
+> verification itself — `workestrate validate-config` is cargo-linked and runs
+> in this container via `nix develop` (nix at
+> `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`; verified
+> 2026-07-29: `cc --version` → gcc 15.2.0 inside `nix develop`); it is the
+> first Lane A action (`export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"`
+> then `nix develop -c bash -c 'just workestrate validate-config'`). The
+> historical note below is kept for the record.
 >
 > **Historical (pre-fix).** Even on a host with `cc`, the personal
 > config layer previously **FAILED to load** due to the tempest `install_layout`
@@ -411,13 +425,13 @@ verify: toolchain-check check test spec-examples litellm-check golden-check sche
 | Gate | What it checks | Env |
 |---|---|---|
 | `toolchain-check` | `rustc` major.minor matches `RUST_TOOLCHAIN_VERSION` in `flake.nix` | `verifiable-here` |
-| `check` | `cargo check` (compile) | `HOST-NIX` (needs `cc`) |
-| `test` | `cargo test` (unit + integration, incl. `network.rs` invariants) | `HOST-NIX` |
-| `spec-examples` | Every fenced TOML block in `20-target-system-spec.md` parses against the schema | `HOST-NIX` |
+| `check` | `cargo check` (compile) | `verifiable-here` via `nix develop` (bare shell lacks `cc`) |
+| `test` | `cargo test` (unit + integration, incl. `network.rs` invariants) | `verifiable-here` via `nix develop` (bare shell lacks `cc`) |
+| `spec-examples` | Every fenced TOML block in `20-target-system-spec.md` parses against the schema | `verifiable-here` via `nix develop` (bare shell lacks `cc`) |
 | `litellm-check` | LiteLLM config YAML validity | `verifiable-here` (falls back to `nix develop -c python3`) |
-| `golden-check` | Synthetic 3 golden plan parity (see A2) | `HOST-NIX` |
-| `schema-check` | `schemas/workestrate.schema.json` drift guard | `HOST-NIX` |
-| `scaffold-check` | `workestrate config new` scaffold drift guard | `HOST-NIX` |
+| `golden-check` | Synthetic 3 golden plan parity (see A2) | `verifiable-here` via `nix develop` (bare shell lacks `cc`) |
+| `schema-check` | `schemas/workestrate.schema.json` drift guard | `verifiable-here` via `nix develop` (bare shell lacks `cc`) |
+| `scaffold-check` | `workestrate config new` scaffold drift guard | `verifiable-here` via `nix develop` (bare shell lacks `cc`) |
 | `lint-nix` | Nix purity lint (`scripts/check-nix-paths.sh`) | `verifiable-here` |
 | `store-audit` | Nix store closure-size audit | `verifiable-here` (skips if nix absent) |
 
@@ -633,6 +647,6 @@ Reproduced from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.m
 
 | Marker | Meaning |
 |---|---|
-| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts). NOTE: cargo-linked gates are NOT runnable here — no `cc` linker; they run on the host (HOST-NIX devshell) |
-| `HOST-NIX` | Requires nix on the user's host (this container has no nix / no `cc` linker) |
+| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts). INCLUDES cargo-linked gates run via `nix develop` (nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH — prefix with `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"` then `nix develop -c bash -c '<cmd>'`; verified 2026-07-29: `cc --version` → gcc 15.2.0, `cargo check` compiles in ~27s). A bare shell (outside `nix develop`) has no `cc`. |
+| `HOST-NIX` | Requires nix on the user's host: `nix build` image builds, `nix run nixpkgs#...` prefetch jobs, full `just verify-full`, and `just generate-schema` (devshell RUSTFLAGS/libcap-ng). Cargo-linked `just` gates are NOT here — they run in-container via `nix develop` (see `verifiable-here`). |
 | `HOST-KVM` | Requires KVM on the user's host (this container has no `/dev/kvm`) |

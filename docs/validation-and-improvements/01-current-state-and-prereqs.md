@@ -21,7 +21,7 @@ and limits (mirroring the convention in
 
 | Capability | Present here | Notes |
 |---|---|---|
-| `nix` on PATH | **No** | `command -v nix` → not found. Nix is available only via `nix develop` on a nix-capable host. |
+| `nix` on PATH | **No (but installed)** | `command -v nix` → not found on PATH, but nix IS installed at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`. Usable via `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"` then `nix develop -c bash -c '<cmd>'` (first devshell build takes minutes; subsequent runs are fast). |
 | KVM (`/dev/kvm`) | **No** | `ls /dev/kvm` → not found. No sandbox runtime can execute. |
 | `sops` on PATH | **No** | `command -v sops` → not found. |
 | SOPS age key | **No** | `~/.config/sops/age/` absent; `SOPS_AGE_KEY` unset. Secrets cannot be decrypted here. |
@@ -35,8 +35,8 @@ lines 8-14:
 
 | Marker | Meaning |
 |---|---|
-| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts). NOTE: cargo-linked gates are NOT runnable here — no `cc` linker; they run on the host (HOST-NIX devshell) |
-| `HOST-NIX` | Requires nix on the user's host (this container has no nix) |
+| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts). INCLUDES cargo-linked gates run via `nix develop` (nix is installed at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH — prefix with `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"` then `nix develop -c bash -c '<cmd>'`; verified 2026-07-29: `nix develop -c bash -c 'cc --version'` → gcc 15.2.0, `cargo check` compiles in ~27s). A bare shell (outside `nix develop`) has no `cc`. |
+| `HOST-NIX` | Requires nix on the user's host: `nix build` image builds, `nix run nixpkgs#...` prefetch jobs, full `just verify-full`, and `just generate-schema` (devshell RUSTFLAGS/libcap-ng). Cargo-linked `just` gates are NOT here — they run in-container via `nix develop` (see `verifiable-here`). |
 | `HOST-KVM` | Requires KVM on the user's host (this container has no KVM) |
 
 ### Devshell / vendor facts
@@ -202,7 +202,7 @@ flagged with severity.
 | b | `scratch/` directory not in ADR 0023 layout | Medium | `.workestrate/scratch/` exists (empty) but [ADR 0023](../migration/50-decisions/0023-single-tool-home.md) lines 73-82 specify the single-home layout as: `config.toml`, `overrides.toml`, `secrets/`, `repos/`, `sources/`, `state/`, `cache/`. `scratch/` is **not** in the spec. Either `scratch/` is renamed to `cache/` or the ADR layout is amended. **Open decision** — flag for resolution. | `verifiable-here` |
 | c | tempest `npm_deps_hash` placeholder | High | `workestrate.toml:317` has `npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="` — a placeholder FOD hash. The real hash must be computed on a nix-capable host (`nix run nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json`; see `justfile:233-234`). Until computed, `nix build .#tempest` will fail. | `HOST-NIX` |
 | d | `ODYSSEUS_ADMIN_PASSWORD` placeholder | High | `workestrate.toml:47` declares `placeholder = "change_me_before_first_boot"` for the `ODYSSEUS_ADMIN_PASSWORD` secret. This must be replaced with a real secret (via SOPS) before first boot. `AUTH_ENABLED` is on by default (`workestrate.toml:174-175`). | `HOST-KVM` (runtime); secret provisioning is HOST-only (sops age key absent here) |
-| e | tempest `install_layout` config/schema drift | **CRITICAL** | **APPLIED.** `.workestrate/repos/personal/workestrate.toml:317` previously set `install_layout = "app"` inside tempest's `binary` inline table. `BinarySpec` (`control/agentctl/src/config/types.rs:46-52`) has `#[serde(deny_unknown_fields)]` (`types.rs:44`) and **no `install_layout` field** — the nix-side `installLayout` param was REMOVED as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`). The field has been **REMOVED** from the bundle config (verified: `grep -n install_layout .workestrate/repos/personal/workestrate.toml` → no match). **PENDING:** runtime parse verification — `workestrate validate-config` cannot run in this container (no `cc` linker; verified: `command -v cc gcc` → not found); it is the **first Lane A action** in the HOST-NIX devshell (`nix develop`). | `verifiable-here` (config edit applied); runtime parse verification is `HOST-NIX` |
+| e | tempest `install_layout` config/schema drift | **CRITICAL** | **APPLIED.** `.workestrate/repos/personal/workestrate.toml:317` previously set `install_layout = "app"` inside tempest's `binary` inline table. `BinarySpec` (`control/agentctl/src/config/types.rs:46-52`) has `#[serde(deny_unknown_fields)]` (`types.rs:44`) and **no `install_layout` field** — the nix-side `installLayout` param was REMOVED as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`). The field has been **REMOVED** from the bundle config (verified: `grep -n install_layout .workestrate/repos/personal/workestrate.toml` → no match). **PENDING:** runtime parse verification — `workestrate validate-config` is cargo-linked and runs in this container via `nix develop` (nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`; verified 2026-07-29: `cc --version` → gcc 15.2.0 inside `nix develop`); it is the **first Lane A action** (`export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"` then `nix develop -c bash -c 'just workestrate validate-config'`). | `verifiable-here` (config edit applied; runtime parse verification is `verifiable-here` via `nix develop`) |
 
 ## Tooling facts
 
@@ -264,31 +264,37 @@ stability check (`justfile:72`).
 
 ### Gates classification (verified against `justfile`)
 
-This container has **no C toolchain** (verified: `command -v cc gcc` → not
-found; `cargo` exists at `~/.cargo/bin/cargo` but cannot link). Therefore
-**every cargo-linked gate is not runnable here** — it must run on a host or
-any env with a C toolchain (the HOST-NIX devshell provides `cc`). The
-shell/python/git-based gates remain runnable in this container.
+A **bare shell** in this container has no C toolchain (verified:
+`command -v cc gcc` → not found; `cargo` exists at `~/.cargo/bin/cargo` but
+cannot link). However, nix IS installed at
+`/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin` (not on PATH),
+and `nix develop` provides a full C toolchain (verified 2026-07-29:
+`export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"`
+then `nix develop -c bash -c 'cc --version'` → gcc 15.2.0; `cargo 1.97.1`,
+`rustc 1.97.1`; `cargo check` compiles in ~27s; first devshell build takes
+minutes, subsequent runs are fast). Therefore **every cargo-linked gate is
+runnable in this container via `nix develop`** (store-path PATH prefix). The
+shell/python/git-based gates run in a bare shell directly.
 
 | Gate | Recipe | Status |
 |---|---|---|
 | Toolchain check | `just toolchain-check` (`justfile:12-32`) | Pass (shell/grep + `rustc --version`; rustc on PATH) |
-| Format + clippy + check | `just check` (`justfile:34-37`) | Not runnable here — no `cc` linker in this container (verified: `command -v cc gcc` → not found); run on host or any env with a C toolchain |
-| Unit tests | `just test` (`justfile:132-133`) | Not runnable here — no `cc` linker in this container (verified: `command -v cc gcc` → not found); run on host or any env with a C toolchain |
-| Spec examples parse | `just spec-examples` (`justfile:65-66`) | Not runnable here — no `cc` linker in this container (verified: `command -v cc gcc` → not found); run on host or any env with a C toolchain |
+| Format + clippy + check | `just check` (`justfile:34-37`) | Runnable here via `nix develop` (store-path prefix; bare shell lacks `cc`) |
+| Unit tests | `just test` (`justfile:132-133`) | Runnable here via `nix develop` (store-path prefix; bare shell lacks `cc`) |
+| Spec examples parse | `just spec-examples` (`justfile:65-66`) | Runnable here via `nix develop` (store-path prefix; bare shell lacks `cc`) |
 | LiteLLM config check | `just litellm-check` (`justfile:46-61`) | Pass (python3 + PyYAML path; falls back to `nix develop -c python3`) |
-| Golden check | `just golden-check` (`justfile:86-91`) | Not runnable here — no `cc` linker in this container (verified: `command -v cc gcc` → not found); run on host or any env with a C toolchain |
-| Schema drift | `just schema-check` (`justfile:106-107`) | Not runnable here — no `cc` linker in this container (verified: `command -v cc gcc` → not found); run on host or any env with a C toolchain |
-| Scaffold template | `just scaffold-check` (`justfile:114-115`) | Not runnable here — no `cc` linker in this container (verified: `command -v cc gcc` → not found); run on host or any env with a C toolchain |
+| Golden check | `just golden-check` (`justfile:86-91`) | Runnable here via `nix develop` (store-path prefix; bare shell lacks `cc`) |
+| Schema drift | `just schema-check` (`justfile:106-107`) | Runnable here via `nix develop` (store-path prefix; bare shell lacks `cc`) |
+| Scaffold template | `just scaffold-check` (`justfile:114-115`) | Runnable here via `nix develop` (store-path prefix; bare shell lacks `cc`) |
 | Nix purity lint | `just lint-nix` (`justfile:343-344`) | Pass (runs `scripts/check-nix-paths.sh`) |
-| Store audit | `just store-audit` (`justfile:266-291`) | SKIP (nix not on PATH — non-blocking, `justfile:273-275`) |
+| Store audit | `just store-audit` (`justfile:266-291`) | SKIP (nix not on PATH — non-blocking, `justfile:273-275`; runnable via the store-path prefix if desired) |
 | Cargo.lock stability | `git diff --exit-code` (`justfile:72`) | Pass |
 
-**`just verify` overall: NOT RUNNABLE in this container** (cargo gates require
-a C toolchain); run on the host (HOST-NIX env provides `cc` via the devshell).
-Only the shell/python/git-based subset passes here: `toolchain-check`,
-`litellm-check`, `lint-nix`, `store-audit` (SKIP), and the `Cargo.lock`
-stability `git diff`.
+**`just verify` overall: runnable in this container via `nix develop`** (the
+cargo-linked gates run with the store-path PATH prefix +
+`nix develop -c bash -c '<cmd>'`; the shell/python/git-based subset
+— `toolchain-check`, `litellm-check`, `lint-nix`, `store-audit` (SKIP), and
+the `Cargo.lock` stability `git diff` — passes in a bare shell).
 
 ### `HOST-NIX` (deferred to a nix-capable host)
 
@@ -318,10 +324,10 @@ Before executing [03-sibling-config-setup.md](03-sibling-config-setup.md),
 - [ ] `.workestrate/config.toml` is well-formed: `layers=["personal"]`, `default_context="personal"`, `home_version=2`, `configs.personal.ref="main"`, `rev=d2cd0c3506b5641507883078d01b626368f9d163`, `trusted_projects=[/home/node/Development/ai-workbench]` (verified, lines 1-15).
 - [ ] Secrets can be decrypted — **HOST-only**. This container has no sops age key (`~/.config/sops/age/` absent, `SOPS_AGE_KEY` unset, `sops` not on PATH). Secret provisioning and decryption must happen on a host with the age key.
 - [ ] No KVM here — runtime steps (`workestrate litellm up`, `workestrate pi exec`, odysseus first boot) are **deferred** to [05-host-validation.md](05-host-validation.md) on a KVM-capable host.
-- [ ] `just verify` is NOT RUNNABLE in this container (cargo gates require a C toolchain; verified: `command -v cc gcc` → not found). Only the shell/python/git-based subset passes here (`toolchain-check`, `litellm-check`, `lint-nix`, `store-audit` SKIP, `Cargo.lock` stability). Run the full `just verify` on the host (HOST-NIX env provides `cc` via the devshell).
+- [ ] `just verify` is runnable in this container via `nix develop` (nix installed at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; verified 2026-07-29: `nix develop -c bash -c 'cc --version'` → gcc 15.2.0, `cargo check` compiles in ~27s). Prefix with `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"` then `nix develop -c bash -c 'just verify'` (first devshell build takes minutes). A bare shell lacks `cc` and runs only the shell/python/git subset (`toolchain-check`, `litellm-check`, `lint-nix`, `store-audit` SKIP, `Cargo.lock` stability). `just verify-full` (adds `nix build .#workestrate`) remains HOST-NIX.
 - [ ] tempest `npm_deps_hash` placeholder is understood — the real FOD hash must be computed on a nix-capable host before `nix build .#tempest` will succeed (Bundle fix c, `HOST-NIX`).
 - [ ] `ODYSSEUS_ADMIN_PASSWORD` placeholder is understood — must be replaced with a real SOPS secret before odysseus first boot (Bundle fix d, `HOST-KVM` runtime).
-- [x] tempest `install_layout` drift is FIXED — the field has been REMOVED from tempest's `binary` table in `.workestrate/repos/personal/workestrate.toml:317` (verified: `grep -n install_layout .workestrate/repos/personal/workestrate.toml` → no match). `BinarySpec` has `deny_unknown_fields` and no such field (`types.rs:44-52`); the nix-side param was removed as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`). **PENDING:** runtime parse verification (`workestrate validate-config`) is the **first Lane A action** on the host (HOST-NIX devshell; no `cc` linker in this container).
+- [x] tempest `install_layout` drift is FIXED — the field has been REMOVED from tempest's `binary` table in `.workestrate/repos/personal/workestrate.toml:317` (verified: `grep -n install_layout .workestrate/repos/personal/workestrate.toml` → no match). `BinarySpec` has `deny_unknown_fields` and no such field (`types.rs:44-52`); the nix-side param was removed as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`). **PENDING:** runtime parse verification (`workestrate validate-config`) is the **first Lane A action**, runnable in this container via `nix develop` (store-path prefix; bare shell lacks `cc`).
 
 ### WORKESTRATE_HOME resolution
 
