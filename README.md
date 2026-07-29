@@ -97,7 +97,8 @@ live in your personal config repo.
    ```bash
    workestrate config new personal
    ```
-   The repo is created in the managed store (`<store>/repos/personal`) and
+   The repo is created in the managed store (`<store>/config-repos/personal`)
+   and
    auto-registered as a layer — no `cd` needed to start using it. Use
    `workestrate config list` to see the path. Pass `--path <dir>` to
    scaffold elsewhere (the repo won't be active for layer resolution until
@@ -132,7 +133,7 @@ live in your personal config repo.
 
 ## Secrets setup
 
-Secrets live in your **personal config repo** (`$WORKESTRATE_HOME/repos/personal/`):
+Secrets live in your **personal config repo** (`$WORKESTRATE_HOME/config-repos/personal/`):
 `.env.enc` (SOPS-encrypted) and `.sops.yaml` (SOPS recipient). The wrappers
 `setup-secrets`, `decrypt-env`, and `write-env` (provided by the flake) use an
 age key that lives outside all repos at
@@ -695,7 +696,7 @@ directory (`$WORKESTRATE_HOME`) with a flat layout (ADR 0023):
 | **Home** | `$WORKESTRATE_HOME/` (default `~/.workestrate`; container `<repo>/.workestrate`) | Single tool home directory |
 | **Registry** | `$WORKESTRATE_HOME/config.toml` | Tool settings, config-repo registry, ordered layers, trusted projects |
 | **Overrides** | `$WORKESTRATE_HOME/overrides.toml` | User-global overrides (optional) |
-| **Config repos** | `$WORKESTRATE_HOME/repos/<name>/` | `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
+| **Config repos** | `$WORKESTRATE_HOME/config-repos/<name>/` | `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
 | **State** | `$WORKESTRATE_HOME/state/` | `workspaces/`, `var/` (runtime state) |
 | **Sources** | `$WORKESTRATE_HOME/sources/<name>/` | Agent source checkouts + builds |
 | **Cache** | `$WORKESTRATE_HOME/cache/` | Cache |
@@ -787,7 +788,7 @@ directory is bind-mountable for container persistence across restarts.
 ├── config.toml                       (registry: config repos, layers, trusted projects)
 ├── overrides.toml                    (user-global overrides, optional)
 ├── secrets/                          (machine-local secrets)
-├── repos/                            (config repo clones)
+├── config-repos/                     (config repo clones)
 │   └── personal/                     (workestrate.toml, .env.enc, .sops.yaml, ...)
 ├── sources/                          (agent source checkouts)
 ├── state/                            (runtime state)

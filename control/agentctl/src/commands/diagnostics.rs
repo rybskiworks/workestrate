@@ -237,7 +237,7 @@ pub fn cmd_check() -> Result<()> {
         _ => vec![
             ("registry", config::registry_path()),
             ("secrets", home.join("secrets")),
-            ("repos", home.join("repos")),
+            ("config-repos", home.join("config-repos")),
             ("state", home.join("state")),
         ],
     };

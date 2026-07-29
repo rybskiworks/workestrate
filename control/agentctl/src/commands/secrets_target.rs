@@ -34,7 +34,8 @@ pub fn derive_age_recipient(key_file: &std::path::Path) -> Result<String> {
 /// Resolve a registered config repo's secrets target paths for setup-secrets.
 ///
 /// The resolution MUST match `config::resolve_secrets_layers()` for
-/// context-layer entries: dir = `<store>/repos/<name>`, secrets_file from the
+/// context-layer entries: dir = `<store>/config-repos/<name>`, secrets_file
+/// from the
 /// entry override or ".env.enc", age_key_file from the entry override
 /// (tilde-expanded). When the entry has no age_key_file override, the fallback
 /// matches `secrets_loader::decrypt_layer()`: `SOPS_AGE_KEY_FILE` env, else
@@ -46,7 +47,7 @@ pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
         .and_then(|r| r.configs.get(name))
         .ok_or_else(|| anyhow::anyhow!("config repo '{}' not registered", name))?;
 
-    let dir = config::resolve_store_dir().join("repos").join(name);
+    let dir = config::resolve_store_dir().join("config-repos").join(name);
     let secrets_file = entry
         .secrets_file
         .as_deref()

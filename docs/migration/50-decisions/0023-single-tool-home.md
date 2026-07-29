@@ -75,7 +75,7 @@ $WORKESTRATE_HOME/
 ├── config.toml          # registry: tool settings + config-repo registry + layers + trusted_projects
 ├── overrides.toml       # user-global overrides (was: $XDG_CONFIG_HOME/workestrate/overrides.toml)
 ├── secrets/             # .env.local.enc (machine-local secrets; was: $XDG_CONFIG_HOME/workestrate/.env.local.enc)
-├── repos/               # managed config-repo clones (was: $XDG_DATA_HOME/workestrate/repos/)
+├── config-repos/        # managed config-repo clones (was: $XDG_DATA_HOME/workestrate/repos/)
 ├── sources/             # agent source checkouts + builds (was: $XDG_DATA_HOME/workestrate/sources/)
 ├── state/               # workspaces/, var/ (was: $XDG_STATE_HOME/workestrate/)
 └── cache/               # cache
@@ -104,13 +104,13 @@ an older layout to the current one.
 
 Migrates a legacy XDG three-home layout into the single home layout. Moves
 `config/workestrate/config.toml` → `config.toml`,
-`data/workestrate/repos/` → `repos/`, etc. Idempotent; warns on conflicts
+`data/workestrate/repos/` → `config-repos/`, etc. Idempotent; warns on conflicts
 (existing files at the target are not silently overwritten). Emits a
 deprecation note when legacy XDG paths are detected. After moving, the
 relocated registry at `dest/config.toml` has `store_dir`/`state_dir`
 cleared (derivation from the new home takes over), `home_version` stamped
 to `2`, and `configs.<name>.url` fields pointing into the old layout
-rewritten to the new `dest/repos/<name>` path. Remote URLs (`http://`,
+rewritten to the new `dest/config-repos/<name>` path. Remote URLs (`http://`,
 `https://`, `ssh://`, `git@`, `flake://`, or any `://` scheme) are left
 untouched.
 

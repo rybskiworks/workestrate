@@ -212,9 +212,9 @@ pub fn overrides_path() -> PathBuf {
     }
 }
 
-/// Config repo store: resolve_store_dir()/repos/<name>/
+/// Config repo store: resolve_store_dir()/config-repos/<name>/
 pub fn config_repo_dir(name: &str) -> PathBuf {
-    resolve_store_dir().join("repos").join(name)
+    resolve_store_dir().join("config-repos").join(name)
 }
 
 /// Source override store: resolve_store_dir()/sources/<name>/
@@ -264,11 +264,11 @@ pub fn resolve_state_dir() -> PathBuf {
     }
 }
 
-/// Resolve the store directory (managed config-repo clones under `repos/`
-/// and source checkouts under `sources/`). A registry `settings.store_dir`
-/// wins; otherwise derived from the active tool home (the home dir itself,
-/// or the legacy XDG data dir in `HomeKind::LegacyXdg` mode). A corrupt
-/// registry warns and falls back to the default.
+/// Resolve the store directory (managed config-repo clones under
+/// `config-repos/` and source checkouts under `sources/`). A registry
+/// `settings.store_dir` wins; otherwise derived from the active tool home
+/// (the home dir itself, or the legacy XDG data dir in `HomeKind::LegacyXdg`
+/// mode). A corrupt registry warns and falls back to the default.
 pub fn resolve_store_dir() -> PathBuf {
     if let Some(registry) = load_registry_for_dir_resolution() {
         if let Some(ref store_dir) = registry.settings.store_dir {
@@ -382,7 +382,7 @@ pub fn resolve_active_config_dir() -> anyhow::Result<PathBuf> {
     if let Ok(Some(_registry)) = crate::config::load_registry() {
         let active_context = crate::config::resolve_active_context()?;
         if let Some(name) = active_context.layers.first() {
-            return Ok(resolve_store_dir().join("repos").join(name));
+            return Ok(resolve_store_dir().join("config-repos").join(name));
         }
     }
 

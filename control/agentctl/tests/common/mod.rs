@@ -106,7 +106,7 @@ impl IsolatedHome {
 
     /// Store-clone path for a registered repo name.
     pub fn repo_dir(&self, name: &str) -> PathBuf {
-        self.store_dir().join("repos").join(name)
+        self.store_dir().join("config-repos").join(name)
     }
 
     /// Write a registry TOML with verbatim content.

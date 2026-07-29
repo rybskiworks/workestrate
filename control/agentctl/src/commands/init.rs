@@ -34,11 +34,12 @@ pub fn cmd_init(url: Option<&str>) -> Result<()> {
     let mut registry = config::Registry::default();
     registry.settings.default_context = Some("personal".to_string());
 
-    // Seed the store (repos/sources) and state roots for the active layout.
+    // Seed the store (config-repos/sources) and state roots for the active
+    // layout.
     // Legacy XDG: resolve_store_dir() == xdg_data_dir(), resolve_state_dir()
     //   == xdg_state_dir() — identical to the pre-ADR-0023 mkdirs.
-    // New single-home: <home>/repos, <home>/sources, <home>/state.
-    std::fs::create_dir_all(config::resolve_store_dir().join("repos"))?;
+    // New single-home: <home>/config-repos, <home>/sources, <home>/state.
+    std::fs::create_dir_all(config::resolve_store_dir().join("config-repos"))?;
     std::fs::create_dir_all(config::resolve_store_dir().join("sources"))?;
     std::fs::create_dir_all(config::resolve_state_dir())?;
 

@@ -33,7 +33,8 @@ pub async fn cmd_config(action: ConfigAction) -> Result<()> {
 }
 
 /// `workestrate config remove <name>` — unregister a config repo. With
-/// `--delete`, also remove the store clone at `<store>/repos/<name>`; refuses
+/// `--delete`, also remove the store clone at `<store>/config-repos/<name>`;
+/// refuses
 /// to delete a dirty clone unless `--force` is passed. The name is also
 /// scrubbed from the bare `layers` list and every context's `layers`. A
 /// dangling `settings.default_context` pointing at the removed name is
@@ -271,8 +272,8 @@ pub async fn cmd_config_new(
     }
 
     // Resolve destination directory. Default is the managed store
-    // (<store>/repos/<name>) so the repo is immediately active for layer
-    // resolution once registered. An explicit --path overrides this.
+    // (<store>/config-repos/<name>) so the repo is immediately active for
+    // layer resolution once registered. An explicit --path overrides this.
     let store_path = config::config_repo_dir(name);
     let dest: std::path::PathBuf = match path {
         Some(p) => p.to_path_buf(),

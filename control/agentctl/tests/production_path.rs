@@ -3,7 +3,7 @@
 //! Drives the REAL config resolution chain end-to-end by executing the
 //! compiled `workestrate` binary as a child process:
 //!
-//!   reference layer → context config-repo layers (<home>/repos/<name>/)
+//!   reference layer → context config-repo layers (<home>/config-repos/<name>/)
 //!   → user-global overrides (<home>/overrides.toml) → trusted project layer
 //!   (<cwd>/workestrate.toml) → local layer.
 //!
@@ -18,7 +18,7 @@
 //!   state_dir      = <home>/state
 //!
 //! and writes fixture TOML inline (registry, per-layer
-//! `<home>/repos/<layer>/workestrate.toml`, project `workestrate.toml`).
+//! `<home>/config-repos/<layer>/workestrate.toml`, project `workestrate.toml`).
 //!
 //! The repo's `config.reference/workestrate.toml` is auto-prepended as the
 //! "reference" base layer on every invocation (compile-time-anchored
@@ -49,7 +49,8 @@ const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
 // ---------------------------------------------------------------------------
 
 /// Isolated production-path sandbox. Creates:
-///   <root>/home/            → WORKESTRATE_HOME (registry, overrides, repos/)
+///   <root>/home/            → WORKESTRATE_HOME (registry, overrides,
+///                             config-repos/)
 ///   <root>/operator-home/   → HOME (kept separate from WORKESTRATE_HOME so
 ///                             tilde expansion and default-home discovery can
 ///                             never leak between tests)
@@ -103,9 +104,9 @@ impl ProdHome {
         std::fs::write(self.registry(), contents).expect("write registry");
     }
 
-    /// Write a config-repo layer at <home>/repos/<name>/workestrate.toml.
+    /// Write a config-repo layer at <home>/config-repos/<name>/workestrate.toml.
     fn write_layer(&self, name: &str, contents: &str) {
-        let dir = self.home.join("repos").join(name);
+        let dir = self.home.join("config-repos").join(name);
         std::fs::create_dir_all(&dir).expect("create layer dir");
         std::fs::write(dir.join("workestrate.toml"), contents).expect("write layer toml");
     }

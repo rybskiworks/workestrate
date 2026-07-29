@@ -269,7 +269,8 @@ fn json_envelope_is_valid() {
 }
 
 /// WP-C: default dest is the managed store, not ./<name>. The repo lands
-/// in <store>/repos/<name> and a subsequent validate-config (which calls
+/// in <store>/config-repos/<name> and a subsequent validate-config (which
+/// calls
 /// load_config) sees it as a layer.
 #[test]
 fn config_new_default_path_is_store() {
@@ -277,7 +278,7 @@ fn config_new_default_path_is_store() {
 
     // Use WORKESTRATE_HOME so the store path is predictable.
     let store = home.dir.join(".workestrate");
-    let expected = store.join("repos").join("personal");
+    let expected = store.join("config-repos").join("personal");
 
     let out = home
         .cmd()
@@ -367,7 +368,7 @@ fn config_new_explicit_path_outside_store_warns() {
     );
     assert!(
         !store
-            .join("repos")
+            .join("config-repos")
             .join("personal")
             .join("workestrate.toml")
             .exists(),

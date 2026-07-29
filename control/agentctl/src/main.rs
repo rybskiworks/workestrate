@@ -97,7 +97,7 @@ enum Commands {
         #[arg(long, help = "Skip the interactive confirmation")]
         yes: bool,
     },
-    /// Remove state-dir contents (workspaces, var, run). Does not touch repos/sources/config.
+    /// Remove state-dir contents (workspaces, var, run). Does not touch config-repos/sources/config.
     Clean {
         /// Skip the interactive confirmation.
         #[arg(long)]

@@ -55,14 +55,14 @@ terminates. Modeled on kubeconfig (`~/.kube/config` holds cluster references).
 A git repository containing deployment-specific configuration: `workestrate.toml`
 (workload definitions + secrets schema), `.env.enc` (SOPS-encrypted secrets),
 `.sops.yaml` (SOPS config), `infra/litellm/` (LiteLLM values), `agents/*/config/`
-(agent config files). Cloned to `$WORKESTRATE_HOME/repos/<name>/` by
+(agent config files). Cloned to `$WORKESTRATE_HOME/config-repos/<name>/` by
 `workestrate config add`. May optionally have its own `flake.nix` (inverted
 dependency, Phase 2).
 
 **Home (WORKESTRATE_HOME)**
 The single tool home directory for workestrate. Default `~/.workestrate`;
 container: `<repo>/.workestrate`. Contains `config.toml` (registry),
-`overrides.toml`, `secrets/`, `repos/`, `sources/`, `state/`, `cache/`.
+`overrides.toml`, `secrets/`, `config-repos/`, `sources/`, `state/`, `cache/`.
 Resolution: `WORKESTRATE_HOME` env → auto-discovery (walk-up, trust-gated,
 only when no `XDG_*_HOME` is set) → legacy XDG (read-only compat) →
 default. Precedents: `~/.kube`, `~/.docker`, `~/.cargo`. See ADR 0023.

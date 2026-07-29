@@ -30,7 +30,8 @@ pub struct MigrateSummary {
     pub registry_updated: bool,
     pub home_version: Option<u32>,
     /// Names of `configs.<name>` entries whose local `url` pointed into the
-    /// old layout and was rewritten to the new `repos/<name>` path. Empty in
+    /// old layout and was rewritten to the new `config-repos/<name>` path.
+    /// Empty in
     /// dry-run (no editing happens) and when no local urls matched.
     pub urls_rewritten: Vec<String>,
     /// True when the migration moved some entries but aborted mid-loop (see
@@ -174,7 +175,7 @@ fn plan_moves(sources: &MigrateSources, dest: &Path) -> Vec<(PathBuf, PathBuf)> 
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let p = entry.path();
-                moves.push((p, dest.join("repos").join(name)));
+                moves.push((p, dest.join("config-repos").join(name)));
             }
         }
     }
@@ -283,7 +284,7 @@ pub fn run_migrate_home(
     }
 
     // Clobber guard: scan ALL planned dst paths (overrides.toml,
-    // secrets/.env.local.enc, every repos/<name>, sources/<name>,
+    // secrets/.env.local.enc, every config-repos/<name>, sources/<name>,
     // state/<name>). The config.toml primary check above is the fast-path
     // refusal; this catches every other pre-existing destination. --force
     // overrides.
@@ -310,7 +311,7 @@ pub fn run_migrate_home(
     std::fs::create_dir_all(dest)?;
     std::fs::create_dir_all(dest.join("secrets"))?;
     std::fs::create_dir_all(dest.join("state"))?;
-    std::fs::create_dir_all(dest.join("repos"))?;
+    std::fs::create_dir_all(dest.join("config-repos"))?;
     std::fs::create_dir_all(dest.join("sources"))?;
 
     // Pre-flight: verify every src exists and every dst parent is writable
@@ -403,7 +404,7 @@ pub fn run_migrate_home(
             // are considered (remote URLs are left untouched). A url matches
             // when it equals, or lives under, the old repo base
             // `sources.repos_root/<name>`; it is then rewritten to the new
-            // `dest/repos/<name>` path.
+            // `dest/config-repos/<name>` path.
             for (name, entry) in reg.configs.iter_mut() {
                 if looks_like_remote_url(&entry.url) {
                     continue;
@@ -419,7 +420,11 @@ pub fn run_migrate_home(
                     _ => url_path == old_base || url_path.starts_with(&old_base),
                 };
                 if matches {
-                    entry.url = dest.join("repos").join(name).to_string_lossy().to_string();
+                    entry.url = dest
+                        .join("config-repos")
+                        .join(name)
+                        .to_string_lossy()
+                        .to_string();
                     urls_rewritten.push(name.clone());
                 }
             }
@@ -535,7 +540,7 @@ pub(crate) mod tests {
         assert!(summary
             .moved
             .iter()
-            .any(|m| m.dst.ends_with("repos/personal")));
+            .any(|m| m.dst.ends_with("config-repos/personal")));
         assert!(summary.moved.iter().any(|m| m.dst.ends_with("sources/foo")));
         assert!(summary
             .moved
@@ -576,7 +581,7 @@ pub(crate) mod tests {
         assert!(dest.join("overrides.toml").exists());
         assert!(dest.join("secrets").join(".env.local.enc").exists());
         assert!(dest
-            .join("repos")
+            .join("config-repos")
             .join("personal")
             .join("file.txt")
             .exists());
@@ -642,7 +647,7 @@ pub(crate) mod tests {
         assert!(dest.join("config.toml").exists());
         assert!(dest.join("secrets").join(".env.local.enc").exists());
         assert!(dest
-            .join("repos")
+            .join("config-repos")
             .join("personal")
             .join("file.txt")
             .exists());
@@ -708,7 +713,7 @@ pub(crate) mod tests {
         // Reload the relocated registry and confirm the url was rewritten.
         let new_reg_text = std::fs::read_to_string(dest.join("config.toml"))?;
         let new_reg: Registry = toml::from_str(&new_reg_text)?;
-        let expected_new = dest.join("repos").join("personal");
+        let expected_new = dest.join("config-repos").join("personal");
         let entry = new_reg
             .configs
             .get("personal")
@@ -740,9 +745,9 @@ pub(crate) mod tests {
         let dest = root.join("dest");
 
         // Pre-create TWO dst paths that would be clobbered.
-        std::fs::create_dir_all(dest.join("repos").join("personal"))?;
+        std::fs::create_dir_all(dest.join("config-repos").join("personal"))?;
         std::fs::write(
-            dest.join("repos").join("personal").join("stale.txt"),
+            dest.join("config-repos").join("personal").join("stale.txt"),
             "stale",
         )?;
         std::fs::create_dir_all(dest.join("sources").join("foo"))?;
@@ -756,8 +761,8 @@ pub(crate) mod tests {
             "expected clobber refusal, got: {msg}"
         );
         assert!(
-            msg.contains("repos/personal"),
-            "expected existing dst repos/personal listed in refusal, got: {msg}"
+            msg.contains("config-repos/personal"),
+            "expected existing dst config-repos/personal listed in refusal, got: {msg}"
         );
         assert!(
             msg.contains("sources/foo"),
@@ -765,7 +770,7 @@ pub(crate) mod tests {
         );
         // The stale files must be untouched (refusal happens before any move).
         assert!(dest
-            .join("repos")
+            .join("config-repos")
             .join("personal")
             .join("stale.txt")
             .exists());
@@ -786,9 +791,9 @@ pub(crate) mod tests {
         let dest = root.join("dest");
 
         // Pre-create a dst repo dir that would be clobbered.
-        std::fs::create_dir_all(dest.join("repos").join("personal"))?;
+        std::fs::create_dir_all(dest.join("config-repos").join("personal"))?;
         std::fs::write(
-            dest.join("repos").join("personal").join("stale.txt"),
+            dest.join("config-repos").join("personal").join("stale.txt"),
             "stale",
         )?;
 
@@ -800,7 +805,7 @@ pub(crate) mod tests {
         assert!(summary.failed_at.is_none());
         // The moved repo content overwrites the stale file.
         assert!(dest
-            .join("repos")
+            .join("config-repos")
             .join("personal")
             .join("file.txt")
             .exists());
@@ -819,12 +824,13 @@ pub(crate) mod tests {
         let _ = build_xdg_layout(&root)?;
         let dest = root.join("dest");
 
-        // Plant a regular FILE at dest/repos/personal where the src is a
-        // DIRECTORY. --force bypasses the clobber guard; the pre-flight
-        // passes (src exists, dst parent dest/repos/ is writable) but the
-        // actual move of the repos/personal dir onto a file path fails.
-        std::fs::create_dir_all(dest.join("repos"))?;
-        std::fs::write(dest.join("repos").join("personal"), "BLOCKER")?;
+        // Plant a regular FILE at dest/config-repos/personal where the src is
+        // a DIRECTORY. --force bypasses the clobber guard; the pre-flight
+        // passes (src exists, dst parent dest/config-repos/ is writable) but
+        // the actual move of the config-repos/personal dir onto a file path
+        // fails.
+        std::fs::create_dir_all(dest.join("config-repos"))?;
+        std::fs::write(dest.join("config-repos").join("personal"), "BLOCKER")?;
 
         let summary = run_migrate_home(Some("xdg"), &dest, false, true)?;
         eprintln!(
@@ -846,8 +852,8 @@ pub(crate) mod tests {
             "expected failed_at to contain 'personal', got {:?}",
             summary.failed_at
         );
-        // Some entries before repos/personal should have moved (registry,
-        // overrides, secrets come first in plan_moves ordering).
+        // Some entries before config-repos/personal should have moved
+        // (registry, overrides, secrets come first in plan_moves ordering).
         assert!(
             !summary.moved.is_empty(),
             "expected at least one moved entry before the failure"
@@ -882,9 +888,10 @@ pub(crate) mod tests {
         let _ = build_xdg_layout(&root)?;
         let dest = root.join("dest");
 
-        // Plant a dangling symlink where repos/personal is planned to land.
-        std::fs::create_dir_all(dest.join("repos"))?;
-        let dangling = dest.join("repos").join("personal");
+        // Plant a dangling symlink where config-repos/personal is planned to
+        // land.
+        std::fs::create_dir_all(dest.join("config-repos"))?;
+        let dangling = dest.join("config-repos").join("personal");
         std::os::unix::fs::symlink(root.join("nonexistent-target"), &dangling)?;
         // Precondition: the link is dangling (stat fails) but lstat sees it.
         assert!(!dangling.exists(), "test precondition: link must dangle");
@@ -897,7 +904,7 @@ pub(crate) mod tests {
             "expected clobber refusal for the dangling symlink, got: {msg}"
         );
         assert!(
-            msg.contains("repos/personal"),
+            msg.contains("config-repos/personal"),
             "expected the dangling dst listed in the refusal, got: {msg}"
         );
         // The dangling symlink must be untouched (refusal precedes any move).

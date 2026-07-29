@@ -310,7 +310,7 @@ pub fn load_config() -> Result<ConfigFile> {
     set_active_context(Some(active_context.clone()));
     for name in &active_context.layers {
         let path = resolve_store_dir()
-            .join("repos")
+            .join("config-repos")
             .join(name)
             .join("workestrate.toml");
         if path.exists() {
@@ -465,7 +465,7 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
     let active_context = resolve_active_context()?;
     if let Some(registry) = registry {
         for name in &active_context.layers {
-            let dir = resolve_store_dir().join("repos").join(name);
+            let dir = resolve_store_dir().join("config-repos").join(name);
             let entry = registry.configs.get(name);
             let secrets_mode = entry.and_then(|e| e.secrets.as_deref()).unwrap_or("file");
             let secrets_file = entry
@@ -927,7 +927,7 @@ pub(crate) mod tests {
         )?;
 
         // Config repo dir with a workestrate.toml (so the layer is loaded)
-        let repo_dir = data_dir.join("repos").join("personal");
+        let repo_dir = data_dir.join("config-repos").join("personal");
         std::fs::create_dir_all(&repo_dir)?;
         std::fs::write(repo_dir.join("workestrate.toml"), "schema_version = 1\n")?;
 
@@ -1024,7 +1024,7 @@ pub(crate) mod tests {
             "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[configs.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\n",
         )?;
 
-        let repo_dir = data_dir.join("repos").join("personal");
+        let repo_dir = data_dir.join("config-repos").join("personal");
         std::fs::create_dir_all(&repo_dir)?;
         std::fs::write(repo_dir.join("workestrate.toml"), "schema_version = 1\n")?;
 

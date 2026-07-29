@@ -121,7 +121,7 @@ pub enum ConfigAction {
         /// Name for the new config repo (e.g. "personal", "work").
         name: String,
 
-        /// Destination directory (default: <store>/repos/<name>).
+        /// Destination directory (default: <store>/config-repos/<name>).
         #[arg(long, value_name = "DIR")]
         path: Option<std::path::PathBuf>,
 

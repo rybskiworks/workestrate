@@ -96,14 +96,14 @@ consumption. The dev shell pins `nodejs_24`.
   forks)
 - Agent repos are optional local overrides in `agents/` (gitignored) or in
   the managed sources store (`$WORKESTRATE_HOME/sources/<name>/`)
-- Config repos live in the managed store (`$WORKESTRATE_HOME/repos/<name>/`)
+- Config repos live in the managed store (`$WORKESTRATE_HOME/config-repos/<name>/`)
 - Profiles live in `profiles/` (tracked, reference)
 
 ## Secrets model
 
 Secrets are SOPS-encrypted (age recipient) per config repo. Each config
 repo holds its own `.env.enc` + `.sops.yaml` in
-`$WORKESTRATE_HOME/repos/<name>/`. A user-global secrets layer
+`$WORKESTRATE_HOME/config-repos/<name>/`. A user-global secrets layer
 (`$WORKESTRATE_HOME/secrets/.env.local.enc`) applies per-key across all
 contexts.
 
@@ -185,7 +185,7 @@ Single tool home (`$WORKESTRATE_HOME`, default `~/.workestrate`; container
 | `$WORKESTRATE_HOME/config.toml` | Registry: config repos, ordered layers/contexts, trusted projects |
 | `$WORKESTRATE_HOME/overrides.toml` | User-global overrides (optional) |
 | `$WORKESTRATE_HOME/secrets/` | Machine-local secrets incl. `.env.local.enc` |
-| `$WORKESTRATE_HOME/repos/<name>/` | Config repo clones: `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
+| `$WORKESTRATE_HOME/config-repos/<name>/` | Config repo clones: `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
 | `$WORKESTRATE_HOME/sources/<name>/` | Agent source checkouts + builds |
 | `$WORKESTRATE_HOME/state/` | `workspaces/`, `var/` (runtime state) |
 | `$WORKESTRATE_HOME/cache/` | Cache |

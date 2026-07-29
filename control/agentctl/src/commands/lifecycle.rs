@@ -412,7 +412,8 @@ pub async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
 
 /// `workestrate clean` — remove the CONTENTS of the volatile state-dir
 /// subdirectories (`workspaces/`, `var/`, `run/`), leaving the directories
-/// themselves in place. Never touches the store (`repos/`, `sources/`) or any
+/// themselves in place. Never touches the store (`config-repos/`, `sources/`)
+/// or any
 /// config file. Interactive confirmation unless `--yes`; non-interactive
 /// stdin without `--yes` is a hard refusal (same policy as `down --all`).
 pub fn cmd_clean(yes: bool, json: bool) -> Result<()> {

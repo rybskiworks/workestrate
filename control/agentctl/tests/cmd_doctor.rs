@@ -151,13 +151,13 @@ ref = "main"
 "#,
     );
     // Create the repo dir (empty, not a git clone) where the store expects it:
-    // legacy-XDG layout → $XDG_DATA_HOME/workestrate/repos/<name>.
+    // legacy-XDG layout → $XDG_DATA_HOME/workestrate/config-repos/<name>.
     let repo_dir = home
         .dir
         .join(".local")
         .join("share")
         .join("workestrate")
-        .join("repos")
+        .join("config-repos")
         .join("personal");
     std::fs::create_dir_all(&repo_dir).expect("create fake repo dir");
 
