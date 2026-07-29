@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the six post-validation improvement specifications under
+This index catalogs the seven post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -51,6 +51,7 @@ invariant.
 | [04-cli-config-authoring.md](04-cli-config-authoring.md) | CLI Config Authoring (DEFERRED vision + requirements traceability) | `DEFERRED` — pending sign-off of [02-config-requirements.md](../02-config-requirements.md) | Gated on `02-config-requirements.md` sign-off; must be additive-tolerant of 01's mount exclude/shadow schema (§2 of the spec) | **M** (explicitly stated) | `verifiable-here` |
 | [05-config-reference-cwd-fallback.md](05-config-reference-cwd-fallback.md) | Config-reference cwd-fallback quirk (standalone fix spec) | `SPEC (bug fix candidate, small)` | None — standalone bug fix; referenced by [03](03-dogfooding.md) as the underlying quirk | **S** (explicitly stated) | `verifiable-here` (fix gate: `cargo test`); reproduction is `HOST-NIX` |
 | [06-config-home-flag.md](06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `SPEC (small, not yet implemented)` | None — standalone; referenced by [03](03-dogfooding.md) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) for ergonomics | **S** | `verifiable-here` (fix gate: `cargo test`); runs in HOST-NIX devshell (no `cc` here) |
+| [07-naming-consistency.md](07-naming-consistency.md) | Naming consistency: purge `workestrator` residue | `IN-PROGRESS THIS BRANCH (migration/tool-model)` | None — standalone rename; FLAG: personal config repo image-name coordination (spec §4) | **M** | `verifiable-here` (grep/lint-nix/nix eval); cargo gates `HOST-NIX` |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -154,6 +155,20 @@ and the dogfood-driver flow ([03-dogfooding.md](03-dogfooding.md)): e.g.
 **Key decision:** reuse the env-var precedence step (flag sets the env var)
 rather than adding a new resolution layer — zero change to `paths.rs`.
 
+### 07 — Naming consistency (purge `workestrator` residue)
+
+Repo-internal rename standardizing every reference on the canonical
+`workestrate` name: template directory (`templates/workestrate-config/`),
+flake attrs (`.#workestrate-pi`, `workestrate-wrapper`, `workestrate-sandbox`
+/`workestrate-sandbox-node`), the OCI image (`workestrate-pi:latest`),
+scaffold strings, LiteLLM knowledge-pack JSON keys (`workestrate_*`), and
+all doc/skill prose. The project repo rename (new origin, checkout dir,
+`.workestrate/config.toml` absolute paths) is the user's later step —
+documented in spec §6, not done here. **Key decision:** the `workestrator`
+wrapper package could not become `workestrate` (attr already taken by the
+agentctl binary), so it becomes `workestrate-sandbox`; the image rename is
+FLAGGED for coordinated update of the personal config repo.
+
 ---
 
 ## Dependency graph
@@ -163,6 +178,7 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 ```
 (standalone)
+├── 07-naming-consistency            [no deps; this branch; mechanical rename]
 ├── 02-main-standardization          [no deps; one-shot git rename]
 ├── 06-config-home-flag               [no deps; additive CLI front-end]
 ├── 05-config-reference-cwd-fallback [no deps; standalone bug fix]

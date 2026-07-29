@@ -127,6 +127,19 @@ Reprodu from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)
 | **Env marker** | WP1–WP3: `verifiable-here` (schema regen is `HOST-NIX` per `justfile:95-96`). Phase 0 + WP4: `HOST-KVM`. |
 | **Parallelization** | WP1 → WP2 → WP3 are sequentially ordered (WP2 depends on WP1 types; WP3 depends on WP1 + WP2). **The Phase 0 spike can fold into the Step 6 host batch** to avoid a second host trip — [06-improvements/01](06-improvements/01-mount-filtering-shadowing.md) §7 Phase 0 says the spike is a standalone HOST-KVM PoC with no dependency on WP1–WP3, so it can run during the same host pass as B1–B12. WP4 depends on the spike result and must run after it (potentially a second host trip if the spike was batched into Step 6 and WP4 code wasn't ready yet). |
 
+### Step 8a — Naming consistency (branch `migration/tool-model`, THIS BRANCH)
+
+| | |
+|---|---|
+| **Goal** | Purge `workestrator` residue repo-internally; standardize on `workestrate`. Local rename only — no remote/checkout-dir changes. |
+| **Files to follow** | [06-improvements/07-naming-consistency.md](06-improvements/07-naming-consistency.md) (decision, inventory, rename map, FLAG §4, dir-rename implications §6). |
+| **Sub-steps** | Phase 2 spec (landed with this edit). Phase 3 docs sweep. Phase 4 code/nix/templates rename (template `git mv`, flake attr graph, image name, JSON keys, scaffold strings). Phase 5 final report. |
+| **Gate / exit criteria** | `grep -ri workestrator` returns only the spec §5 residuals; `just lint-nix` shows only the known foreign `docs/nix` failure; renamed flake attrs eval. Cargo gates PENDING (`HOST-NIX`, no `cc` here) — batch into Step 6. |
+| **Env marker** | `verifiable-here` (grep/lint-nix/nix eval); cargo + `nix build` are `HOST-NIX`. |
+| **Parallelization** | Independent of Steps 0–8 code work; must land before the user renames the origin/checkout dir (spec §6). |
+
+---
+
 ### Step 8 — Remainder (B2/B3 dogfooding, WP5 conditional, CLI authoring DEFERRED)
 
 | | |

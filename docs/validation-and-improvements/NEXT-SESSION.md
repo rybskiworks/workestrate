@@ -126,6 +126,8 @@ re-derive their contents.
 >   - **The next concrete action** — one sentence, the very next command or
 >     edit.
 
+> **Note (2026-07-29):** improvement spec 07 — naming consistency (purge `workestrator` residue, standardize on `workestrate`) — is IN-PROGRESS on branch `migration/tool-model`; see [06-improvements/07-naming-consistency.md](06-improvements/07-naming-consistency.md), including the personal-config-repo image-name FLAG (§4) and the checkout-dir-rename implications (§6).
+
 ---
 
 ## Maintenance

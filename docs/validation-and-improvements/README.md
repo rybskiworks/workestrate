@@ -55,6 +55,7 @@ files. Read in this order:
 | [`06-improvements/04-cli-config-authoring.md`](06-improvements/04-cli-config-authoring.md) | DEFERRED vision + requirements traceability for the toml_edit CLI authoring tool | `STATUS: DEFERRED` |
 | [`06-improvements/05-config-reference-cwd-fallback.md`](06-improvements/05-config-reference-cwd-fallback.md) | Standalone fix spec for the config-reference cwd-fallback quirk | `STATUS: SPEC (bug fix candidate, small)` |
 | [`06-improvements/06-config-home-flag.md`](06-improvements/06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `STATUS: SPEC (small, not yet implemented)` |
+| [`06-improvements/07-naming-consistency.md`](06-improvements/07-naming-consistency.md) | Purge `workestrator` residue; standardize on `workestrate` | `STATUS: IN-PROGRESS THIS BRANCH` |
 | [`07-execution-order.md`](07-execution-order.md) | Recommended sequencing across all tracks | STATUS: READY-TO-EXECUTE |
 | [`NEXT-SESSION.md`](NEXT-SESSION.md) | Self-contained handoff prompt for the next contextless session | `STATUS: HANDOFF` |
 
