@@ -6,6 +6,7 @@
 
 use crate::microsandbox::plan::PortMapping;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 mod lock;
 mod slug;
@@ -17,8 +18,8 @@ pub use store::*;
 /// A running sandbox instance record stored in the port registry.
 ///
 /// **Backward-compat:** `ports` (host-only u16 list) and the original four
-/// fields are always present. Newer fields (`port_pairs`, `created_at`) are
-/// `#[serde(default)]` so older state files parse cleanly.
+/// fields are always present. Newer fields (`port_pairs`, `created_at`,
+/// `bind_ip`) are `#[serde(default)]` so older state files parse cleanly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxInstanceRecord {
     pub instance: String,
@@ -32,4 +33,9 @@ pub struct SandboxInstanceRecord {
     /// RFC3339 timestamp the instance was registered. Empty for legacy records.
     #[serde(default)]
     pub created_at: String,
+    /// Instance bind IP (ADR 0026). 127.0.0.1 = singleton/shared bind;
+    /// 127.0.0.N (N>=2) = parallel slot. Legacy records without the field
+    /// parse as 127.0.0.1.
+    #[serde(default = "crate::microsandbox::plan::default_bind_ip")]
+    pub bind_ip: IpAddr,
 }

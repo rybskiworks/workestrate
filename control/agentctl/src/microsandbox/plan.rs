@@ -1,7 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr};
 
 use crate::microsandbox::secrets::{RemappedSecret, SecretDefinition};
+
+/// Default host bind address for published ports (ADR 0026): `127.0.0.1`,
+/// the shared singleton bind. Parallel slots bind per-instance loopbacks
+/// (`127.0.0.N`, `N >= 2`) drawn from the port registry's loopback allocator.
+pub fn default_bind_ip() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
+}
 
 /// Network protocol for ingress/egress rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -82,6 +90,20 @@ pub struct SandboxPlan {
 pub struct PortMapping {
     pub host: u16,
     pub guest: u16,
+    /// Host bind address (ADR 0026). Defaults to 127.0.0.1 (the shared singleton bind).
+    #[serde(default = "default_bind_ip")]
+    pub bind_ip: IpAddr,
+}
+
+impl PortMapping {
+    /// A host:guest mapping on the default shared singleton bind (127.0.0.1).
+    pub fn new(host: u16, guest: u16) -> Self {
+        Self {
+            host,
+            guest,
+            bind_ip: default_bind_ip(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -332,10 +354,7 @@ mod tests {
                 required: false,
                 reject_placeholder: None,
             }],
-            ports: vec![PortMapping {
-                host: 8080,
-                guest: 80,
-            }],
+            ports: vec![PortMapping::new(8080, 80)],
             mounts: vec![
                 MountPlan {
                     host: "/data".to_string(),

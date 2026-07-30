@@ -98,10 +98,7 @@ pub fn ps(state_dir: &Path) -> Result<Vec<PsEntry>> {
         .into_iter()
         .map(|r| {
             let ports = if r.port_pairs.is_empty() {
-                r.ports
-                    .iter()
-                    .map(|&h| PortMapping { host: h, guest: h })
-                    .collect()
+                r.ports.iter().map(|&h| PortMapping::new(h, h)).collect()
             } else {
                 r.port_pairs
             };
@@ -328,21 +325,13 @@ mod tests {
     #[test]
     fn ps_lists_lifecycle_records_with_port_pairs() -> anyhow::Result<()> {
         let dir = unique_state_dir_runtime("ps-lifecycle");
-        let pairs = vec![
-            PortMapping {
-                host: 14000,
-                guest: 4000,
-            },
-            PortMapping {
-                host: 14001,
-                guest: 4001,
-            },
-        ];
+        let pairs = vec![PortMapping::new(14000, 4000), PortMapping::new(14001, 4001)];
         crate::microsandbox::port_registry::register_sandbox_lifecycle(
             &dir,
             "personal-litellm@canary",
             Some("personal"),
             "litellm",
+            crate::microsandbox::plan::default_bind_ip(),
             &[14000, 14001],
             &pairs,
             "2026-07-20T14:05:42Z",
@@ -507,7 +496,7 @@ mod tests {
                 context: None,
                 slot: "a".into(),
                 kind: PsKind::Parallel,
-                ports: vec![PortMapping { host: 1, guest: 1 }],
+                ports: vec![PortMapping::new(1, 1)],
                 started_at: String::new(),
                 stale: false,
             },
@@ -562,7 +551,7 @@ mod tests {
                 context: None,
                 slot: "a".into(),
                 kind: PsKind::Singleton,
-                ports: vec![PortMapping { host: 1, guest: 1 }],
+                ports: vec![PortMapping::new(1, 1)],
                 started_at: String::new(),
                 stale: true, // pre-existing; Unknown must NOT overwrite it
             },

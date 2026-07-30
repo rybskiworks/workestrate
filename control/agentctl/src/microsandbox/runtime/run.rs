@@ -300,11 +300,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // would deadlock the lock file), so a same-port race is still
     // possible mid-create; this closes the post-create registration
     // window, and the loser surfaces a clear port-collision error here.
+    //
+    // ADR 0026/C1: ALL slots bind the shared singleton 127.0.0.1 for now —
+    // per-instance loopback (127.0.0.N) wiring for parallel slots is C2.
     super::super::port_registry::check_and_register_sandbox_lifecycle(
         &state_dir,
         &spec.instance,
         spec.context.as_deref(),
         workload.name(),
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
         &host_ports,
         &port_pairs,
         &created_at,

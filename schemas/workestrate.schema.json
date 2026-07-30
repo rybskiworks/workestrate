@@ -393,6 +393,12 @@
         "host"
       ],
       "properties": {
+        "bind_ip": {
+          "description": "Host bind address (ADR 0026). Defaults to 127.0.0.1 (the shared singleton bind).",
+          "default": "127.0.0.1",
+          "type": "string",
+          "format": "ip"
+        },
         "guest": {
           "type": "integer",
           "format": "uint16",

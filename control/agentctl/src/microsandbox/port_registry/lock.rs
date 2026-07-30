@@ -152,8 +152,10 @@ mod tests {
     use super::super::store::{check_and_register_sandbox_lifecycle, list_records};
     use super::*;
     use crate::config::test_support::unique_state_dir;
+    use std::net::IpAddr;
 
-    /// Small helper: a lifecycle registration for `instance` on `port`.
+    /// Small helper: a lifecycle registration for `instance` on `port` bound
+    /// to the shared singleton 127.0.0.1 (ADR 0026: same-(ip, port) race).
     fn combined_register(
         state_dir: &Path,
         instance: &str,
@@ -165,11 +167,9 @@ mod tests {
             instance,
             None,
             workload,
+            IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             &[port],
-            &[crate::microsandbox::plan::PortMapping {
-                host: port,
-                guest: port,
-            }],
+            &[crate::microsandbox::plan::PortMapping::new(port, port)],
             "2026-07-23T00:00:00Z",
         )
     }

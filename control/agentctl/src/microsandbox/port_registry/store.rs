@@ -2,6 +2,7 @@ use super::lock::PortRegistryLock;
 use super::SandboxInstanceRecord;
 use crate::microsandbox::plan::PortMapping;
 use anyhow::Result;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
 /// Read and parse a registry record file, warning loudly (WP10/A12) instead
@@ -40,9 +41,10 @@ fn read_record_loud(path: &Path) -> Result<Option<SandboxInstanceRecord>> {
 /// Check for host-port collisions against already-running workestrate sandboxes.
 ///
 /// Scans `${state_dir}/var/run/*.json` for port mappings. Excludes the file
-/// for `instance_name` (in case it's a restart). If any port in `ports`
-/// matches a port in another instance's record, returns a hard error naming
-/// both sandboxes, the port, and remediation.
+/// for `instance_name` (in case it's a restart). Collisions are keyed on
+/// `(bind_ip, port)` (ADR 0026(b)): if any pair in `pairs` matches both the
+/// bind IP and a port of another instance's record, returns a hard error
+/// naming both sandboxes, the bind:port, and remediation.
 ///
 /// Acquires the registry lock around its own critical section (WP10/A17):
 /// this makes each individual call atomic against concurrent registrations,
@@ -53,9 +55,13 @@ fn read_record_loud(path: &Path) -> Result<Option<SandboxInstanceRecord>> {
 /// combined entry point); retained as a supported registry API and exercised
 /// across the store/lock test modules.
 #[allow(dead_code)]
-pub fn check_port_collisions(state_dir: &Path, instance_name: &str, ports: &[u16]) -> Result<()> {
+pub fn check_port_collisions(
+    state_dir: &Path,
+    instance_name: &str,
+    pairs: &[(IpAddr, u16)],
+) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
-    check_port_collisions_locked(state_dir, instance_name, ports)
+    check_port_collisions_locked(state_dir, instance_name, pairs)
 }
 
 /// Lock-free core of [`check_port_collisions`]; caller must hold the
@@ -63,9 +69,9 @@ pub fn check_port_collisions(state_dir: &Path, instance_name: &str, ports: &[u16
 fn check_port_collisions_locked(
     state_dir: &Path,
     instance_name: &str,
-    ports: &[u16],
+    pairs: &[(IpAddr, u16)],
 ) -> Result<()> {
-    if ports.is_empty() {
+    if pairs.is_empty() {
         return Ok(());
     }
     let run_dir = state_dir.join("var").join("run");
@@ -86,14 +92,15 @@ fn check_port_collisions_locked(
         let Some(record) = read_record_loud(&path)? else {
             continue;
         };
-        for port in ports {
-            if record.ports.contains(port) {
+        for (bind, port) in pairs {
+            if record.bind_ip == *bind && record.ports.contains(port) {
                 anyhow::bail!(
-                    "port collision: port {} is already in use by sandbox '{}' \
+                    "port collision: {}:{} is already in use by sandbox '{}' \
                      (workload '{}', context {}).\n\
-                     Sandbox '{}' cannot use this port.\n\
+                     Sandbox '{}' cannot use this bind:port.\n\
                      Remediation: change the port in one of the config repos, \
                      or stop the other sandbox with 'workestrate {} down'.",
+                    bind,
                     port,
                     record.instance,
                     record.workload,
@@ -112,8 +119,9 @@ fn check_port_collisions_locked(
 ///
 /// This is the atomic path: the registry lock is held across BOTH the
 /// collision check and the registration, so no other process can slip a
-/// registration for the same port between the two (the classic
-/// time-of-check-time-of-use race).
+/// registration for the same `(bind_ip, port)` pair between the two (the
+/// classic time-of-check-time-of-use race). Collisions are keyed on
+/// `(bind_ip, port)` (ADR 0026(b)); the record stores `bind_ip`.
 ///
 /// Since FN-6 this IS the live path: `build_sandbox` (runtime/run.rs)
 /// registers through here after the sandbox create resolves. The async create
@@ -121,22 +129,29 @@ fn check_port_collisions_locked(
 /// `.await` would wedge concurrent processes), so a same-port race can still
 /// collide mid-create — but the post-create registration window is closed:
 /// the loser's combined call fails the collision check and leaves no record.
+// too_many_arguments: the ADR 0021 registry surface is positional by design
+// (identity, bind, ports, metadata); the bind_ip addition (ADR 0026) pushes
+// the count to 8. A params struct is deferred to the C2 wiring commit.
+#[allow(clippy::too_many_arguments)]
 pub fn check_and_register_sandbox_lifecycle(
     state_dir: &Path,
     instance_name: &str,
     context: Option<&str>,
     workload: &str,
+    bind_ip: IpAddr,
     host_ports: &[u16],
     port_pairs: &[PortMapping],
     created_at: &str,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
-    check_port_collisions_locked(state_dir, instance_name, host_ports)?;
+    let pairs: Vec<(IpAddr, u16)> = host_ports.iter().map(|p| (bind_ip, *p)).collect();
+    check_port_collisions_locked(state_dir, instance_name, &pairs)?;
     register_sandbox_lifecycle_locked(
         state_dir,
         instance_name,
         context,
         workload,
+        bind_ip,
         host_ports,
         port_pairs,
         created_at,
@@ -176,6 +191,7 @@ pub fn register_sandbox(
         ports: ports.to_vec(),
         port_pairs: Vec::new(),
         created_at: String::new(),
+        bind_ip: crate::microsandbox::plan::default_bind_ip(),
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -193,12 +209,14 @@ pub fn register_sandbox(
 /// No production caller since FN-6 (build_sandbox uses the atomic combined
 /// entry point); retained as the register-only half of the registry API and
 /// exercised by the store/ps test modules.
-#[allow(dead_code)]
+// too_many_arguments: see check_and_register_sandbox_lifecycle.
+#[allow(dead_code, clippy::too_many_arguments)]
 pub fn register_sandbox_lifecycle(
     state_dir: &Path,
     instance_name: &str,
     context: Option<&str>,
     workload: &str,
+    bind_ip: IpAddr,
     host_ports: &[u16],
     port_pairs: &[PortMapping],
     created_at: &str,
@@ -209,6 +227,7 @@ pub fn register_sandbox_lifecycle(
         instance_name,
         context,
         workload,
+        bind_ip,
         host_ports,
         port_pairs,
         created_at,
@@ -217,11 +236,14 @@ pub fn register_sandbox_lifecycle(
 
 /// Lock-free core of [`register_sandbox_lifecycle`]; caller must hold the
 /// registry lock.
+// too_many_arguments: see check_and_register_sandbox_lifecycle.
+#[allow(clippy::too_many_arguments)]
 fn register_sandbox_lifecycle_locked(
     state_dir: &Path,
     instance_name: &str,
     context: Option<&str>,
     workload: &str,
+    bind_ip: IpAddr,
     host_ports: &[u16],
     port_pairs: &[PortMapping],
     created_at: &str,
@@ -235,6 +257,7 @@ fn register_sandbox_lifecycle_locked(
         ports: host_ports.to_vec(),
         port_pairs: port_pairs.to_vec(),
         created_at: created_at.to_string(),
+        bind_ip,
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -311,6 +334,57 @@ pub fn list_records_for_workload(
         .collect())
 }
 
+// ---------------------------------------------------------------------------
+// Loopback allocator (ADR 0026(a): parallel-slot bind IPs)
+// ---------------------------------------------------------------------------
+
+/// Allocate a per-instance loopback bind IP (`127.0.0.N`, `N >= 2`) for a
+/// parallel slot (ADR 0026(a)).
+///
+/// Semantics (normative, ADR 0026(a)):
+///
+/// - `127.0.0.1` is the shared singleton bind and is NEVER allocated — the
+///   allocator only draws from `127.0.0.2..=127.0.0.254`.
+/// - Allocation is lowest-free across the CURRENT records: the returned IP is
+///   the lowest `127.0.0.N` (`N` in `2..=254`) that is not any record's
+///   `bind_ip`.
+/// - An IP is freed automatically when its record is removed
+///   (`unregister_sandbox` / `down`): the next allocation re-selects it.
+/// - A STALE record (backing sandbox gone, record file still present) still
+///   RESERVES its IP until the record is cleared — conservative by design:
+///   it prevents handing an IP to a new instance while an untracked sandbox
+///   might still hold it.
+///
+/// The registry lock is held across list + select (fail-closed): two
+/// concurrent allocations cannot return the same IP. A second allocation
+/// still colliding at publish time is caught by the `(bind_ip, port)`
+/// collision check in [`check_and_register_sandbox_lifecycle`].
+///
+/// Hard error when the range is exhausted (all 253 addresses reserved).
+pub fn allocate_loopback_ip(state_dir: &Path) -> Result<IpAddr> {
+    let _lock = PortRegistryLock::acquire(state_dir)?;
+    let records = list_records(state_dir)?;
+    match lowest_free_loopback(&records) {
+        Some(ip) => Ok(IpAddr::V4(ip)),
+        None => anyhow::bail!(
+            "loopback bind address space exhausted: every 127.0.0.N (N in 2..=254) \
+             is reserved by a registered instance. Stop unused instances \
+             ('workestrate <workload> down', 'workestrate down --all') or clear \
+             stale registry records before starting another parallel instance."
+        ),
+    }
+}
+
+/// Pure core of [`allocate_loopback_ip`]: the lowest `127.0.0.N` (`N` in
+/// `2..=254`) not present as any record's `bind_ip`. `None` when the range
+/// is exhausted. Records bound on `127.0.0.1` (or any address outside the
+/// allocatable range) do not consume allocator slots.
+fn lowest_free_loopback(records: &[SandboxInstanceRecord]) -> Option<Ipv4Addr> {
+    (2..=254u16)
+        .map(|n| Ipv4Addr::new(127, 0, 0, n as u8))
+        .find(|candidate| !records.iter().any(|r| r.bind_ip == IpAddr::V4(*candidate)))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -318,7 +392,13 @@ mod tests {
     use super::*;
     use crate::config::test_support::unique_state_dir;
 
-    /// Small helper: a lifecycle registration for `instance` on `port`.
+    /// The shared singleton bind (127.0.0.1) as an owned `IpAddr`.
+    fn singleton_bind() -> IpAddr {
+        crate::microsandbox::plan::default_bind_ip()
+    }
+
+    /// Small helper: a lifecycle registration for `instance` on `port`,
+    /// bound to the shared singleton 127.0.0.1.
     fn combined_register(
         state_dir: &Path,
         instance: &str,
@@ -330,11 +410,9 @@ mod tests {
             instance,
             None,
             workload,
+            singleton_bind(),
             &[port],
-            &[crate::microsandbox::plan::PortMapping {
-                host: port,
-                guest: port,
-            }],
+            &[crate::microsandbox::plan::PortMapping::new(port, port)],
             "2026-07-23T00:00:00Z",
         )
     }
@@ -342,7 +420,8 @@ mod tests {
     #[test]
     fn no_collision_when_no_existing_sandboxes() -> Result<()> {
         let state_dir = unique_state_dir("empty");
-        let result = check_port_collisions(&state_dir, "personal-litellm", &[4000]);
+        let result =
+            check_port_collisions(&state_dir, "personal-litellm", &[(singleton_bind(), 4000)]);
         assert!(
             result.is_ok(),
             "no collision expected when no existing sandboxes"
@@ -362,7 +441,7 @@ mod tests {
             &[4000],
         )?;
         // A different sandbox with a different port — should not collide.
-        let result = check_port_collisions(&state_dir, "personal-pi", &[3000]);
+        let result = check_port_collisions(&state_dir, "personal-pi", &[(singleton_bind(), 3000)]);
         assert!(
             result.is_ok(),
             "no collision expected with different ports: {:?}",
@@ -382,8 +461,9 @@ mod tests {
             "litellm",
             &[4000],
         )?;
-        // A different sandbox trying to use the same port — should collide.
-        let result = check_port_collisions(&state_dir, "work-litellm", &[4000]);
+        // A different sandbox trying to use the same port on the SAME bind —
+        // should collide.
+        let result = check_port_collisions(&state_dir, "work-litellm", &[(singleton_bind(), 4000)]);
         assert!(result.is_err(), "collision expected with same port");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -391,8 +471,8 @@ mod tests {
             "error should mention 'port collision': {err}"
         );
         assert!(
-            err.contains("4000"),
-            "error should mention port 4000: {err}"
+            err.contains("127.0.0.1:4000"),
+            "error should name the bind:port 127.0.0.1:4000: {err}"
         );
         assert!(
             err.contains("personal-litellm"),
@@ -421,7 +501,8 @@ mod tests {
             &[4000],
         )?;
         // Same instance name restarting — should not collide with itself.
-        let result = check_port_collisions(&state_dir, "personal-litellm", &[4000]);
+        let result =
+            check_port_collisions(&state_dir, "personal-litellm", &[(singleton_bind(), 4000)]);
         assert!(result.is_ok(), "no self-collision expected on restart");
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
@@ -437,8 +518,9 @@ mod tests {
             "litellm",
             &[4000, 7000],
         )?;
-        // Try to start work-odysseus on port 7000 — should collide.
-        let result = check_port_collisions(&state_dir, "work-odysseus", &[7000]);
+        // Try to start work-odysseus on port 7000 (same bind) — should collide.
+        let result =
+            check_port_collisions(&state_dir, "work-odysseus", &[(singleton_bind(), 7000)]);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -450,8 +532,8 @@ mod tests {
             "error should name the new sandbox (in context): {err}"
         );
         assert!(
-            err.contains("7000"),
-            "error should mention port 7000: {err}"
+            err.contains("127.0.0.1:7000"),
+            "error should name the bind:port 127.0.0.1:7000: {err}"
         );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
@@ -508,7 +590,8 @@ mod tests {
         // Write a corrupt JSON file.
         std::fs::write(run_dir.join("corrupt-sandbox.json"), "not valid json")?;
         // Should not error — corrupt files are skipped.
-        let result = check_port_collisions(&state_dir, "personal-litellm", &[4000]);
+        let result =
+            check_port_collisions(&state_dir, "personal-litellm", &[(singleton_bind(), 4000)]);
         assert!(
             result.is_ok(),
             "corrupt state file should be skipped, not error"
@@ -547,20 +630,15 @@ mod tests {
     fn register_lifecycle_round_trips_new_fields() -> Result<()> {
         let state_dir = unique_state_dir("lifecycle");
         let pairs = vec![
-            crate::microsandbox::plan::PortMapping {
-                host: 14000,
-                guest: 4000,
-            },
-            crate::microsandbox::plan::PortMapping {
-                host: 14001,
-                guest: 4001,
-            },
+            crate::microsandbox::plan::PortMapping::new(14000, 4000),
+            crate::microsandbox::plan::PortMapping::new(14001, 4001),
         ];
         register_sandbox_lifecycle(
             &state_dir,
             "personal-litellm@canary",
             Some("personal"),
             "litellm",
+            singleton_bind(),
             &[14000, 14001],
             &pairs,
             "2026-07-20T14:05:42Z",
@@ -575,6 +653,11 @@ mod tests {
         assert_eq!(record.port_pairs[0].host, 14000);
         assert_eq!(record.port_pairs[0].guest, 4000);
         assert_eq!(record.created_at, "2026-07-20T14:05:42Z");
+        assert_eq!(
+            record.bind_ip,
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            "lifecycle register stores the given bind_ip"
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -600,6 +683,11 @@ mod tests {
         assert_eq!(record.ports, vec![4000]);
         assert!(record.port_pairs.is_empty());
         assert!(record.created_at.is_empty());
+        assert_eq!(
+            record.bind_ip,
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            "legacy record without bind_ip parses as 127.0.0.1 (ADR 0026(b))"
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -641,11 +729,9 @@ mod tests {
             "personal-litellm@canary",
             Some("personal"),
             "litellm",
+            singleton_bind(),
             &[14000],
-            &[crate::microsandbox::plan::PortMapping {
-                host: 14000,
-                guest: 4000,
-            }],
+            &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
             "2026-07-20T14:05:42Z",
         )?;
         let records = list_records(&state_dir)?;
@@ -752,9 +838,12 @@ mod tests {
 
         // check_port_collisions: succeeds for a free port (corrupt file
         // skipped — loudly — not fatal) …
-        assert!(check_port_collisions(&state_dir, "new-sandbox", &[3000]).is_ok());
+        assert!(
+            check_port_collisions(&state_dir, "new-sandbox", &[(singleton_bind(), 3000)]).is_ok()
+        );
         // … and still detects the collision from the VALID record.
-        let err = check_port_collisions(&state_dir, "new-sandbox", &[4000]).unwrap_err();
+        let err = check_port_collisions(&state_dir, "new-sandbox", &[(singleton_bind(), 4000)])
+            .unwrap_err();
         assert!(
             err.to_string().contains("port collision"),
             "valid record's collision must still fire despite the corrupt sibling: {err}"
@@ -822,6 +911,221 @@ mod tests {
                 .join(super::super::lock::PORT_REGISTRY_LOCK_NAME)
                 .exists(),
             "registry lock must be released after the race"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0026: loopback allocator ----
+
+    /// Build a record bound on `ip` (no filesystem — pure selection tests).
+    fn record_on(ip: IpAddr) -> SandboxInstanceRecord {
+        SandboxInstanceRecord {
+            instance: format!("inst-{ip}"),
+            context: None,
+            workload: "w".to_string(),
+            ports: vec![],
+            port_pairs: vec![],
+            created_at: String::new(),
+            bind_ip: ip,
+        }
+    }
+
+    fn loopback(n: u8) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, n))
+    }
+
+    #[test]
+    fn lowest_free_loopback_empty_registry_gives_dot_2() {
+        assert_eq!(lowest_free_loopback(&[]), Some(Ipv4Addr::new(127, 0, 0, 2)));
+    }
+
+    #[test]
+    fn lowest_free_loopback_skips_used_ips() {
+        let records = vec![record_on(loopback(2))];
+        assert_eq!(
+            lowest_free_loopback(&records),
+            Some(Ipv4Addr::new(127, 0, 0, 3))
+        );
+        let records = vec![record_on(loopback(2)), record_on(loopback(3))];
+        assert_eq!(
+            lowest_free_loopback(&records),
+            Some(Ipv4Addr::new(127, 0, 0, 4))
+        );
+    }
+
+    #[test]
+    fn lowest_free_loopback_reuses_gaps() {
+        // .2 and .4 used → .3 is the lowest free.
+        let records = vec![record_on(loopback(2)), record_on(loopback(4))];
+        assert_eq!(
+            lowest_free_loopback(&records),
+            Some(Ipv4Addr::new(127, 0, 0, 3))
+        );
+    }
+
+    #[test]
+    fn lowest_free_loopback_ignores_singleton_bind() {
+        // Records bound on 127.0.0.1 (the shared singleton bind) do NOT
+        // consume allocator space (N >= 2).
+        let records = vec![record_on(IpAddr::V4(Ipv4Addr::LOCALHOST))];
+        assert_eq!(
+            lowest_free_loopback(&records),
+            Some(Ipv4Addr::new(127, 0, 0, 2))
+        );
+    }
+
+    #[test]
+    fn lowest_free_loopback_none_when_exhausted() {
+        let records: Vec<_> = (2..=254u8).map(|n| record_on(loopback(n))).collect();
+        assert_eq!(lowest_free_loopback(&records), None);
+    }
+
+    #[test]
+    fn allocate_then_unregister_then_allocate_reuses_ip() -> Result<()> {
+        let state_dir = unique_state_dir("alloc-reuse");
+        // Register a record bound on .2 via the lifecycle path.
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm@a",
+            None,
+            "litellm",
+            loopback(2),
+            &[4000],
+            &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
+            "2026-07-30T00:00:00Z",
+        )?;
+        // Next allocation skips .2 → .3.
+        assert_eq!(allocate_loopback_ip(&state_dir)?, loopback(3));
+        // Unregister frees .2; the next allocation re-selects it.
+        unregister_sandbox(&state_dir, "personal-litellm@a")?;
+        assert_eq!(allocate_loopback_ip(&state_dir)?, loopback(2));
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn allocate_loopback_ip_releases_lock_file() -> Result<()> {
+        let state_dir = unique_state_dir("alloc-lock");
+        let _ = allocate_loopback_ip(&state_dir)?;
+        assert!(
+            !state_dir
+                .join("var")
+                .join("run")
+                .join(PORT_REGISTRY_LOCK_NAME)
+                .exists(),
+            "lock file should be released after allocate_loopback_ip"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn singleton_bind_records_do_not_consume_allocator_ips() -> Result<()> {
+        let state_dir = unique_state_dir("alloc-singleton");
+        // Legacy/simple register_sandbox records bind 127.0.0.1 …
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        // … and so do lifecycle registrations on the shared bind.
+        combined_register(&state_dir, "personal-pi", "pi", 3000)?;
+        // Neither consumes the 127.0.0.N (N >= 2) allocator space.
+        assert_eq!(allocate_loopback_ip(&state_dir)?, loopback(2));
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0026(b): collisions keyed on (bind_ip, port) ----
+
+    #[test]
+    fn same_port_on_different_bind_ips_does_not_collide() -> Result<()> {
+        let state_dir = unique_state_dir("diff-bind-ok");
+        // 127.0.0.1:4000 is taken (simple register binds the singleton IP).
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        // The same port on a DIFFERENT bind IP must not collide.
+        let result = check_port_collisions(&state_dir, "work-litellm", &[(loopback(2), 4000)]);
+        assert!(
+            result.is_ok(),
+            "same port on a different bind IP must not collide: {:?}",
+            result.err()
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn same_bind_and_port_refuses_with_bind_in_message() -> Result<()> {
+        let state_dir = unique_state_dir("same-bind-collide");
+        // Register 127.0.0.2:4000 via the lifecycle path with that bind.
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm@canary",
+            Some("personal"),
+            "litellm",
+            loopback(2),
+            &[4000],
+            &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
+            "2026-07-30T00:00:00Z",
+        )?;
+        // A second registration for the same (127.0.0.2, 4000) must refuse,
+        // naming the bind:port.
+        let err = check_port_collisions(&state_dir, "work-litellm@x", &[(loopback(2), 4000)])
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("port collision"),
+            "expected a collision error; got: {msg}"
+        );
+        assert!(
+            msg.contains("127.0.0.2:4000"),
+            "error must name the colliding bind:port 127.0.0.2:4000; got: {msg}"
+        );
+        assert!(
+            msg.contains("Remediation"),
+            "error should mention remediation: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_record_collides_on_singleton_bind_only() -> Result<()> {
+        // A pre-C1 record file (no bind_ip) is treated as 127.0.0.1
+        // (ADR 0026(b)): it collides with (127.0.0.1, port) but NOT with
+        // (127.0.0.2, port).
+        let state_dir = unique_state_dir("legacy-bind");
+        let run_dir = state_dir.join("var").join("run");
+        std::fs::create_dir_all(&run_dir)?;
+        std::fs::write(
+            run_dir.join("legacy-litellm.json"),
+            r#"{
+  "instance": "legacy-litellm",
+  "context": null,
+  "workload": "litellm",
+  "ports": [4000]
+}"#,
+        )?;
+        // Same (127.0.0.1, 4000) → collision.
+        let err = check_port_collisions(&state_dir, "new-sandbox", &[(singleton_bind(), 4000)])
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("127.0.0.1:4000"),
+            "legacy record must collide on the singleton bind: {err}"
+        );
+        // Same port on 127.0.0.2 → no collision.
+        assert!(
+            check_port_collisions(&state_dir, "new-sandbox", &[(loopback(2), 4000)]).is_ok(),
+            "legacy record must NOT collide on a different bind IP"
         );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())

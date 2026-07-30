@@ -481,10 +481,7 @@ mod tests {
             context: Some("personal".to_string()),
             slot: "personal-litellm".to_string(),
             kind: PsKind::Singleton,
-            ports: vec![PortMapping {
-                host: 4000,
-                guest: 4000,
-            }],
+            ports: vec![PortMapping::new(4000, 4000)],
             started_at: "2026-07-20T14:03:11Z".to_string(),
             stale: false,
         };
@@ -494,10 +491,7 @@ mod tests {
             context: Some("personal".to_string()),
             slot: "personal-litellm".to_string(),
             kind: PsKind::Parallel,
-            ports: vec![PortMapping {
-                host: 14000,
-                guest: 4000,
-            }],
+            ports: vec![PortMapping::new(14000, 4000)],
             started_at: "2026-07-20T14:05:42Z".to_string(),
             stale: false,
         };
@@ -560,10 +554,7 @@ mod tests {
                 context: Some("personal".to_string()),
                 slot: "personal-litellm".to_string(),
                 kind: PsKind::Parallel,
-                ports: vec![PortMapping {
-                    host: 14000,
-                    guest: 4000,
-                }],
+                ports: vec![PortMapping::new(14000, 4000)],
                 started_at: "2026-07-20T14:05:42Z".to_string(),
                 stale: true,
             },
@@ -573,10 +564,7 @@ mod tests {
                 context: Some("personal".to_string()),
                 slot: "personal-pi".to_string(),
                 kind: PsKind::Singleton,
-                ports: vec![PortMapping {
-                    host: 3000,
-                    guest: 3000,
-                }],
+                ports: vec![PortMapping::new(3000, 3000)],
                 started_at: "2026-07-20T14:06:00Z".to_string(),
                 stale: false,
             },
@@ -632,10 +620,7 @@ mod tests {
             context: Some("personal".to_string()),
             slot: "personal-litellm".to_string(),
             kind: PsKind::Singleton,
-            ports: vec![PortMapping {
-                host: 4000,
-                guest: 4000,
-            }],
+            ports: vec![PortMapping::new(4000, 4000)],
             started_at: "2026-07-20T14:03:11Z".to_string(),
             stale: false,
         }];
