@@ -1,8 +1,18 @@
 # 08 — No repo-local tool home (retire `.workestrate/` inside the checkout)
 
-> **STATUS: READY-TO-EXECUTE (docs/decision); the code step (e) is
-> NEEDS-DEVSHELL (no `cc` linker in the authoring container — run in
-> `nix develop`, HOST-NIX)**
+> **STATUS: EXECUTED (2026-07-30).** All steps (a)–(g) are done. Commit refs:
+> `d7c5a83` (rename `repos/` → `config-repos/`), `bd99481` (dirty-guard test
+> in config update), `3894fb7` (`workestrate home init`), `bef1c37` (remove
+> trusted-ancestor home discovery + ADR 0023 addendum follow-through),
+> `418530a` (remove repo-local tool home machinery). Home adopted into git as
+> root commit `a42e597` "home: adopt registry + personal config repo".
+> **Cargo.lock stability:** `control/agentctl/Cargo.lock` verified stable
+> (sha256 `7580f399…` identical across 2 consecutive `cargo check --locked`
+> runs; no commit needed). Runtime verification: `workestrate validate-config`
+> → "workestrate.toml is valid." exit 0; `workestrate doctor` → "home: OK
+> (/home/node/.workestrate (Default))"; `workestrate config list` → "personal:
+> /home/node/.workestrate/config-repos/personal (ref main, rev unknown, clean)
+> [OK]". The body below is the design record.
 > **Effort:** S (steps a–d, f, g: shell/git/docs) + code-S (step e: one
 > resolution tier removed + tests updated)
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·

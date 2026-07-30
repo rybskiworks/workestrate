@@ -64,56 +64,61 @@ it. This vendor symlink is the ADR 0011 open item (deferred; see
 [`docs/migration/40-migration-process.md`](../migration/40-migration-process.md)
 §Phase 0b Status, lines 50-56).
 
-## Bundle inventory (verified)
+## Tool home layout (verified)
 
-The workestrate tool home is at `/home/node/Development/ai-workbench/.workestrate/`
-(resolved via `WORKESTRATE_HOME` — see §WORKESTRATE_HOME resolution below).
-Verified directory listing:
+The workestrate tool home now lives at `~/.workestrate` (the ADR 0023 default),
+resolved with NO `WORKESTRATE_HOME` export (the repo-local bundle and all
+repo-local-home machinery have been retired — see
+[06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md)
+STATUS: EXECUTED). Verified directory layout:
 
 ```
-.workestrate/
-├── config.toml          # registry: layers, settings, configs.personal, trusted_projects
-├── repos/
-│   └── personal/        # managed config-repo clone (the personal layer)
-├── secrets/             # empty (no .env.local.enc here — HOST-only)
-├── sources/             # empty (no agent source checkouts here — HOST-only)
-├── state/
-│   ├── var/             # runtime var
-│   └── workspaces/      # per-workload state mounts
-└── scratch/             # empty — NOT in ADR 0023 layout (see §Bundle fixes)
+~/.workestrate/                         → WORKESTRATE_HOME (default ~/.workestrate)
+├── config.toml                         # registry: layers, settings, configs.personal, trusted_projects
+├── .gitignore                          # ignores /config-repos/, /sources/, /state/, /cache/, secret patterns
+├── .git/                               # dotfiles git repo (root commit a42e597)
+│   └── hooks/pre-commit                # rejects gitlinks (mode 160000), store-dirs, secret material
+├── config-repos/
+│   └── personal/                       # personal config working clone (local-path, no remote; HEAD c41a707)
+├── secrets/                            # empty (no .env.local.enc here — HOST-only)
+├── sources/                            # empty (no agent source checkouts here — HOST-only)
+└── state/
+    ├── var/                            # runtime var
+    └── workspaces/                     # per-workload state mounts
 ```
 
-### `.workestrate/config.toml` (verified, 15 lines)
+The home is a dotfiles-style git repo (scaffolded by `workestrate home init`,
+commit `3894fb7`). `git ls-files` shows ONLY `.gitignore` + `config.toml`
+tracked; store dirs are gitignored. The pre-commit hook rejects mode-160000
+gitlinks, staged paths under `config-repos/`/`sources/`/`state/`, and
+secret-material patterns.
 
-Cited from `.workestrate/config.toml`:
+### `~/.workestrate/config.toml` (verified)
 
-| Field | Value | Line |
-|---|---|---|
-| `layers` | `["personal"]` | 1 |
-| `[settings] default_context` | `"personal"` | 4 |
-| `[settings] home_version` | `2` | 5 |
-| `[configs.personal] url` | `/home/node/Development/ai-workbench/.workestrate/repos/personal` | 8 |
-| `[configs.personal] ref` | `"main"` | 9 |
-| `[configs.personal] rev` | `d2cd0c3506b5641507883078d01b626368f9d163` | 10 |
-| `[[trusted_projects]] path` | `/home/node/Development/ai-workbench` | 15 |
+| Field | Value |
+|---|---|
+| `layers` | `["personal"]` |
+| `[settings] default_context` | `"personal"` |
+| `[settings] home_version` | `2` |
+| `[configs.personal] url` | `/home/node/.workestrate/config-repos/personal` |
+| `[[trusted_projects]] path` | `/home/node/Development/ai-workbench` |
 
-### Registry/clone branch mismatch (RESOLVED — fix a applied)
+The `[configs.personal]` entry has NO `ref` or `rev` lines — the personal
+config is a local working clone with no remote (local-path classification;
+provenance in the clone's own git log: `c41a707` "fix(tempest): remove retired
+install_layout field").
 
-**RESOLVED (fix a applied):** the clone at `.workestrate/repos/personal` is now
-on branch **`main`** (verified: `git -C .workestrate/repos/personal
-branch --show-current` → `main`), HEAD `d2cd0c3` unchanged (matches the
-registry `rev` at `config.toml:10`). The registry needed **no edit** —
-`config.toml:9` already declared `ref = "main"`. The fix was a plain
-`git branch -m master main` (see [06-improvements/02](06-improvements/02-main-standardization.md)).
+### Historical: the repo-local bundle (RETIRED)
 
-**Was:** the registry declared `ref = "main"` (`config.toml:9`) but the clone
-was on branch `master` — a registry/clone mismatch (see §Bundle fixes (a)
-below).
-
-**Still pending:** the clone has **NO origin remote** (verified:
-`git -C .workestrate/repos/personal remote -v` → empty), so
-`workestrate config update` fails for that reason until the config repo is
-pushed to a remote.
+The repo-local bundle at `/home/node/Development/ai-workbench/.workestrate/`
+(previously pinned by `.envrc`, gitignored at `.gitignore:46`, untracked) has
+been **RETIRED and DELETED**. It held the only committed copy of the personal
+config (`c41a707`) until the home migration (spec 08 + spec 10) moved it to
+`~/.workestrate/config-repos/personal`. The `.envrc` pin, the
+`scripts/local-xdg.sh` + `scripts/migrate-xdg-to-repo.sh` scripts, the
+`/.workestrate/` gitignore entry, and the trusted-ancestor discovery tier in
+`paths.rs` are all removed (commits `418530a`, `bef1c37`). See
+[06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md).
 
 ## The 5 workloads
 
@@ -320,26 +325,32 @@ Before executing [03-sibling-config-setup.md](03-sibling-config-setup.md),
 [05-host-validation.md](05-host-validation.md):
 
 - [ ] Repo is on branch `migration/tool-model` (verified: `git branch --show-current` → `migration/tool-model`).
-- [ ] `.workestrate/` bundle is present at repo root (verified: `config.toml`, `repos/personal/`, `state/{var,workspaces}`, `secrets/`, `sources/`, `scratch/`).
-- [ ] `.workestrate/config.toml` is well-formed: `layers=["personal"]`, `default_context="personal"`, `home_version=2`, `configs.personal.ref="main"`, `rev=d2cd0c3506b5641507883078d01b626368f9d163`, `trusted_projects=[/home/node/Development/ai-workbench]` (verified, lines 1-15).
+- [x] Tool home at `~/.workestrate` is present (verified: `config.toml`, `config-repos/personal/`, `state/{var,workspaces}`, `secrets/`, `sources/`, `.git/` + `.gitignore` + pre-commit hook). Home migration (spec 08 + spec 10) EXECUTED.
+- [x] `~/.workestrate/config.toml` is well-formed: `layers=["personal"]`, `default_context="personal"`, `home_version=2`, `configs.personal.url="/home/node/.workestrate/config-repos/personal"` (no `ref`/`rev` — local-path classification), `trusted_projects=[/home/node/Development/ai-workbench]` (verified).
 - [ ] Secrets can be decrypted — **HOST-only**. This container has no sops age key (`~/.config/sops/age/` absent, `SOPS_AGE_KEY` unset, `sops` not on PATH). Secret provisioning and decryption must happen on a host with the age key.
 - [ ] No KVM here — runtime steps (`workestrate litellm up`, `workestrate pi exec`, odysseus first boot) are **deferred** to [05-host-validation.md](05-host-validation.md) on a KVM-capable host.
 - [ ] `just verify` is runnable in this container via `nix develop` (nix installed at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; verified 2026-07-29: `nix develop -c bash -c 'cc --version'` → gcc 15.2.0, `cargo check` compiles in ~27s). Prefix with `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"` then `nix develop -c bash -c 'just verify'` (first devshell build takes minutes). A bare shell lacks `cc` and runs only the shell/python/git subset (`toolchain-check`, `litellm-check`, `lint-nix`, `store-audit` SKIP, `Cargo.lock` stability). `just verify-full` (adds `nix build .#workestrate`) remains HOST-NIX.
 - [ ] tempest `npm_deps_hash` placeholder is understood — the real FOD hash must be computed on a nix-capable host before `nix build .#tempest` will succeed (Bundle fix c, `HOST-NIX`).
 - [ ] `ODYSSEUS_ADMIN_PASSWORD` placeholder is understood — must be replaced with a real SOPS secret before odysseus first boot (Bundle fix d, `HOST-KVM` runtime).
-- [x] tempest `install_layout` drift is FIXED — the field has been REMOVED from tempest's `binary` table in `.workestrate/repos/personal/workestrate.toml:317` (verified: `grep -n install_layout .workestrate/repos/personal/workestrate.toml` → no match). `BinarySpec` has `deny_unknown_fields` and no such field (`types.rs:44-52`); the nix-side param was removed as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`). **PENDING:** runtime parse verification (`workestrate validate-config`) is the **first Lane A action**, runnable in this container via `nix develop` (store-path prefix; bare shell lacks `cc`).
+- [x] tempest `install_layout` drift is FIXED and RUNTIME-VERIFIED — the field has been REMOVED from tempest's `binary` table in the personal config. `BinarySpec` has `deny_unknown_fields` and no such field (`types.rs:44-52`); the nix-side param was removed as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`). **Runtime-verified:** `workestrate validate-config` → "workestrate.toml is valid." exit 0 (run with `WORKESTRATE_HOME` unset, binary from `cargo build`, from neutral cwd `/tmp`).
 
 ### WORKESTRATE_HOME resolution
 
 `WORKESTRATE_HOME` is resolved in `control/agentctl/src/config/paths.rs`. The
-precedence (ADR 0023, `paths.rs:92-119`) is:
+precedence (ADR 0023, post-spec-08 — discovery tier removed in commit
+`bef1c37`) is:
 
 1. **Env** — `WORKESTRATE_HOME` (used verbatim, `~/` expanded) — `paths.rs:106-110`.
-2. **Discovered** — a `.workestrate/config.toml` in a *trusted* ancestor of cwd, only when no `XDG_*_HOME` var is set — `paths.rs:116-119`.
-3. **Legacy XDG** — any of `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME` set (compat, read-only + deprecation note).
-4. **Default** — `~/.workestrate`.
+2. **Legacy XDG** — any of `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME` set (compat, read-only + deprecation note).
+3. **Default** — `~/.workestrate`.
 
-In this container, `WORKESTRATE_HOME` is set to `$PWD/.workestrate` (via
-`.envrc` / `scripts/local-xdg.sh`, per ADR 0023 §`.envrc` collapse, lines
-117-123), so precedence step 1 applies and the bundle at
-`/home/node/Development/ai-workbench/.workestrate/` is the active tool home.
+The trusted-ancestor discovery tier (previously precedence step 2) has been
+**removed from the code** (commit `bef1c37`); `HomeKind::Discovered` and
+`emit_untrusted_discovery_warn` are gone. The `--home` flag
+([06-improvements/06-config-home-flag.md](06-improvements/06-config-home-flag.md))
+will become the highest-precedence override once implemented (precedence: flag
+> env > legacy XDG > default).
+
+In this container, `WORKESTRATE_HOME` is **unset** (the `.envrc` pin was removed
+in commit `418530a`), so precedence falls through to the default
+`~/.workestrate` — the active tool home.

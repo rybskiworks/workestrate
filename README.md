@@ -693,7 +693,7 @@ directory (`$WORKESTRATE_HOME`) with a flat layout (ADR 0023):
 
 | Layer | Path | Contents |
 |---|---|---|
-| **Home** | `$WORKESTRATE_HOME/` (default `~/.workestrate`; container `<repo>/.workestrate`) | Single tool home directory |
+| **Home** | `$WORKESTRATE_HOME/` (default `~/.workestrate`) | Single tool home directory |
 | **Registry** | `$WORKESTRATE_HOME/config.toml` | Tool settings, config-repo registry, ordered layers, trusted projects |
 | **Overrides** | `$WORKESTRATE_HOME/overrides.toml` | User-global overrides (optional) |
 | **Config repos** | `$WORKESTRATE_HOME/config-repos/<name>/` | `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
@@ -721,9 +721,8 @@ workestrate pi plan
 ### Config resolution order
 
 1. `WORKESTRATE_HOME` env var (explicit override)
-2. Auto-discovery (walk-up from cwd, trust-gated — finds `.workestrate/` in a parent dir)
-3. Legacy XDG (read-only compat + deprecation note — reads old `XDG_CONFIG_HOME/workestrate/` etc. if present)
-4. Default: `~/.workestrate`
+2. Legacy XDG (read-only compat + deprecation note — reads old `XDG_CONFIG_HOME/workestrate/` etc. if present)
+3. Default: `~/.workestrate`
 
 Then within the resolved home, config layers merge in this order (lowest → highest precedence):
 
@@ -774,38 +773,30 @@ setup-secrets --config personal update
 Without `--config`, it auto-detects a single registered config repo, or
 falls back to the repo root (backwards compat).
 
-## Container / persistent local state
+## Tool home layout
 
 workestrate stores its state (registry, config repos, secrets, runtime state)
-in a gitignored `.workestrate/` directory inside the repo. This directory IS
-the tool home (`$WORKESTRATE_HOME`); its layout is the flat home layout. This
-directory is bind-mountable for container persistence across restarts.
+in a single tool home directory (`$WORKESTRATE_HOME`, default `~/.workestrate`).
+The home defaults to `~/.workestrate` everywhere (container and host alike);
+`WORKESTRATE_HOME` remains as an explicit override. The home can be versioned
+as a dotfiles-style git repo via `workestrate home init` (scaffolds `.gitignore`
++ a pre-commit hook that rejects gitlinks, store-dirs, and secret material).
 
 ### Layout
 
 ```
-.workestrate/                         → WORKESTRATE_HOME (container: <repo>/.workestrate)
-├── config.toml                       (registry: config repos, layers, trusted projects)
-├── overrides.toml                    (user-global overrides, optional)
-├── secrets/                          (machine-local secrets)
-├── config-repos/                     (config repo clones)
-│   └── personal/                     (workestrate.toml, .env.enc, .sops.yaml, ...)
-├── sources/                          (agent source checkouts)
-├── state/                            (runtime state)
-│   ├── workspaces/                   (per-agent scratch)
-│   └── var/                          (runtime logs, pidfiles)
-└── cache/                            (cache)
+~/.workestrate/                        → WORKESTRATE_HOME (default ~/.workestrate)
+├── config.toml                        (registry: config repos, layers, trusted projects)
+├── overrides.toml                     (user-global overrides, optional)
+├── secrets/                           (machine-local secrets)
+├── config-repos/                      (config repo working copies)
+│   └── personal/                      (workestrate.toml, .env.enc, .sops.yaml, ...)
+├── sources/                           (agent source checkouts)
+├── state/                             (runtime state)
+│   ├── workspaces/                    (per-agent scratch)
+│   └── var/                           (runtime logs, pidfiles)
+└── cache/                             (cache)
 ```
-
-### Container bind-mount
-
-When running in a container, bind-mount the `.workestrate/` directory:
-```bash
-docker run -v $PWD/.workestrate:$PWD/.workestrate ...
-# or with your container runner's equivalent
-```
-
-Then export `WORKESTRATE_HOME="$PWD/.workestrate"` inside the container.
 
 ### One-time migration from legacy XDG
 
@@ -831,6 +822,7 @@ secret operations (`setup-secrets`, `with-secrets`, `run-with-secrets`,
 `decrypt-env`, `write-env`) therefore run on the host; in the container
 the key is simply absent and secret operations fail closed by design.
 
-`.workestrate/` still contains the encrypted `.env.enc`, the registry, and
-config repos — **NEVER commit `.workestrate/`.** The `.gitignore` entry
-(`/.workestrate/`) is the guard.
+The home (`~/.workestrate`) contains the encrypted `.env.enc`, the registry,
+and config repos. If you version the home as a dotfiles repo via
+`workestrate home init`, the generated `.gitignore` ignores store dirs and
+secret material — but **NEVER commit unencrypted secrets.**

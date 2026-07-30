@@ -38,30 +38,67 @@ re-derive their contents.
 > below is reproduced from them.
 >
 > **3. Current state.** The migration to the config-driven tool model is
-> COMPLETE — ~370 tests green per the migration record. Both bundle fixes are
-> APPLIED but RUNTIME-UNVERIFIED:
->   - **(e) tempest `install_layout = "app"`** — REMOVED from
->     `.workestrate/repos/personal/workestrate.toml:317`. `BinarySpec`
->     (`control/agentctl/src/config/types.rs:44-52`) has
->     `#[serde(deny_unknown_fields)]` and no `install_layout` field; the nix-side
->     param was removed as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`).
->     Verified by grep (no match). **PENDING:** runtime parse verification.
->   - **(a) personal clone branch** — renamed `master` → `main` (verified:
->     `git branch --show-current` → `main`), HEAD `d2cd0c3` unchanged, no
->     registry edit (`config.toml:9` already declared `ref = "main"`). NOTE: the
->     clone has NO origin remote (verified: `git remote -v` → empty), so
->     `workestrate config update` fails until the config repo is pushed to a
->     remote.
+> COMPLETE — ~370 tests green per the migration record. The home migration
+> (spec 08 + spec 10) is **EXECUTED** — the next session starts at Lane A
+> full gates / host batch / remaining improvements.
 >
-> **NEW DECISION (spec 08):** the workestrate tool home must NEVER live
-> inside the repo checkout — home = user-global `~/.workestrate` only. Spec:
-> `06-improvements/08-no-repo-local-home.md` (READY-TO-EXECUTE; code step runs
-> via `nix develop` in this container). The repo-local bundle `.workestrate/` is STILL PRESENT
-> until the spec is executed — and until its step (a) lands it holds the ONLY
-> committed copy of the personal config (`c41a707`); do NOT rebuild the
-> container or delete the bundle (see spec §5 interim warning). Execution is
-> sequenced EARLY: `07-execution-order.md` Step 0.5, before Lane A / the host
-> batch, because it changes the paths those reference.
+> **Home migration — EXECUTED (ops, not repo commits):**
+>   - The workestrate tool home now lives at `~/.workestrate` as a dotfiles
+>     git repo (root commit `a42e597` "home: adopt registry + personal config
+>     repo"). `git ls-files` shows ONLY `.gitignore` + `config.toml` tracked;
+>     store dirs (`config-repos/`, `sources/`, `state/`) are gitignored; no
+>     gitlinks (mode-160000 count = 0). The pre-commit hook (installed by
+>     `workestrate home init`) rejects gitlinks, store-dirs, and secret
+>     material; it did not block the legitimate root-commit files.
+>   - The personal config is a local working clone at
+>     `~/.workestrate/config-repos/personal` (no remote; `ref`/`rev` lines
+>     removed from the registry — local-path classification; provenance in
+>     the clone's own git log: `c41a707` "fix(tempest): remove retired
+>     install_layout field").
+>   - `workestrate home init` ran idempotently over the populated home
+>     (first run: added `.git`/`.gitignore`/`.git/hooks/pre-commit` only,
+>     content untouched; second run: "already initialized … nothing to do").
+>   - The repo-local bundle `/home/node/Development/ai-workbench/.workestrate`
+>     is DELETED.
+>
+> **STAGE A commits (code):** `421a54a` (docs env claims), `d7c5a83` (rename
+> `repos/` → `config-repos/`), `bd99481` (dirty-guard test in config update),
+> `3894fb7` (`workestrate home init`), `bef1c37` (remove trusted-ancestor home
+> discovery).
+>
+> **STAGE B commit:** `418530a` "chore: remove repo-local tool home machinery"
+> (`.envrc` pin removed; `scripts/local-xdg.sh` +
+> `scripts/migrate-xdg-to-repo.sh` deleted; `/.workestrate/` gitignore entry
+> removed; justfile `local-setup` recipe + README activation refs cleaned).
+>
+> **Cargo.lock stability:** `control/agentctl/Cargo.lock` is stable (sha256
+> `7580f399…` identical across 2 consecutive `cargo check --locked` runs from
+> `control/agentctl` cwd; vendored microsandbox-filesystem symlink present and
+> resolving to
+> `/nix/store/syksqgy5…-microsandbox-filesystem-patched-0.5.6`). NO commit
+> needed.
+>
+> **install_layout removal — RUNTIME-VERIFIED:** `workestrate validate-config`
+> → "workestrate.toml is valid." exit 0 (run with `WORKESTRATE_HOME` unset,
+> binary from `cargo build`, from neutral cwd `/tmp`). This runtime-proves the
+> tempest `install_layout` field removal (bundle fix e).
+>
+> **Consumption verification (all run with `WORKESTRATE_HOME` unset, binary
+> from `cargo build`, from neutral cwd `/tmp` unless noted):**
+>   - `workestrate config list` → "personal: /home/node/.workestrate/config-repos/personal (ref main, rev unknown, clean) [OK]", Layers: ["personal"], trusted project /home/node/Development/ai-workbench [OK]; exit 0.
+>   - `workestrate validate-config` → "workestrate.toml is valid." exit 0.
+>   - All 5 plans render, exit 0: litellm, pi, odysseus, opencode, tempest.
+>   - `workestrate ps` → "(no running workestrate instances)" exit 0.
+>   - `workestrate doctor` → "home: OK (/home/node/.workestrate (Default))",
+>     "config_repos: OK (1 repo(s) checked)"; `dev_kvm`: FAIL (expected — no
+>     KVM in container); `age_key_file` WARN (expected); exit 1 solely due to
+>     `dev_kvm`.
+>   - `workestrate secrets-schema` → exactly 7 env var names: GITHUB_TOKEN,
+>     KIMI_CODE_API_KEY, LITELLM_MASTER_KEY, MINIMAX_CODING_API_KEY,
+>     NEURALWATT_API_KEY, ODYSSEUS_ADMIN_PASSWORD, OPENROUTER_API_KEY.
+>   - From INSIDE the repo (`WORKESTRATE_HOME` unset): `doctor` reports the
+>     SAME home "/home/node/.workestrate (Default)" — no repo-local discovery,
+>     no legacy-XDG note.
 >
 > A bare shell in this container has NO `cc` linker (verified:
 > `command -v cc gcc` → not found), but nix IS installed at
@@ -70,11 +107,9 @@ re-derive their contents.
 > `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"`
 > then `nix develop -c bash -c 'cc --version'` → gcc 15.2.0; `cargo 1.97.1`,
 > `rustc 1.97.1`; `cargo check` compiles in ~27s; first devshell build takes
-> minutes, subsequent runs are fast). Your FIRST job is to verify the parse:
-> inside `nix develop`, run `workestrate validate-config` and
-> `workestrate tempest plan` against the real bundle
-> (`WORKESTRATE_HOME=/home/node/Development/ai-workbench/.workestrate`).
-> This is Step 0(e) runtime verification + the Lane A gate entry action.
+> minutes, subsequent runs are fast). The home migration is done; the next
+> session starts at **Lane A full gates / host batch / remaining
+> improvements** (`07-execution-order.md` Steps 1+).
 >
 > **4. Environment honesty.** This container has:
 >   - **No KVM** (`ls /dev/kvm` → not found) — no sandbox runtime can execute.
@@ -152,11 +187,30 @@ re-derive their contents.
 
 > **Note (2026-07-29):** improvement spec 07 — naming consistency (purge `workestrator` residue, standardize on `workestrate`) — is IN-PROGRESS on branch `migration/tool-model`; see [06-improvements/07-naming-consistency.md](06-improvements/07-naming-consistency.md), including the personal-config-repo image-name FLAG (§4) and the checkout-dir-rename implications (§6).
 
-> **Note (2026-07-29, spec 08):** a NEW user decision exists — **the workestrate tool home must NEVER live inside the repo checkout**; the home is the user-global `~/.workestrate` only. Spec: [06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md) (READY-TO-EXECUTE; code step runs via `nix develop` in this container — nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, bare shell lacks `cc`). The repo-local bundle at `.workestrate/` is **still present** until the spec is executed. **INTERIM WARNING (spec §5):** until execution step (a) lands (clone `.workestrate/repos/personal` @ `c41a707` → `/home/node/Development/workestrate-personal`), the only committed copy of the personal config lives in the ephemeral container bundle — do NOT rebuild the container or delete the bundle. Execution is sequenced EARLY (07-execution-order.md Step 0.5), before Lane A / the host batch, because it changes the paths those reference. The `--home` flag spec ([06-improvements/06-config-home-flag.md](06-improvements/06-config-home-flag.md)) gains weight: with the discovery tier removed, `--home` becomes THE explicit override (precedence: flag > env > legacy XDG > default).
+> **Note (2026-07-30, spec 08):** **EXECUTED.** The workestrate tool home
+> must NEVER live inside the repo checkout — the home is the user-global
+> `~/.workestrate` only. Spec:
+> [06-improvements/08-no-repo-local-home.md](06-improvements/08-no-repo-local-home.md)
+> (STATUS: EXECUTED). The repo-local bundle at `.workestrate/` is **deleted**;
+> the home lives at `~/.workestrate` as a dotfiles git repo (root commit
+> `a42e597`). Commit refs: `d7c5a83`, `bd99481`, `3894fb7`, `bef1c37`,
+> `418530a`; home commit `a42e597`. The `--home` flag spec
+> ([06-improvements/06-config-home-flag.md](06-improvements/06-config-home-flag.md))
+> gains weight: with the discovery tier removed, `--home` becomes THE explicit
+> override (precedence: flag > env > legacy XDG > default).
 
 > **Note (2026-07-29, spec 09):** improvement spec 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier) — is READY-TO-EXECUTE with option 2 blocked on fork push access (`github:georgrybski/microsandbox-filesystem`); see [06-improvements/09-microsandbox-agentd-offline-build.md](06-improvements/09-microsandbox-agentd-offline-build.md).
 
-> **Note (2026-07-29, spec 10):** two NEW user decisions exist — (A) consumed config repos are FIRST-CLASS working copies inside the tool home at `$WORKESTRATE_HOME/config-repos/<name>/` (remote is canonical; supersedes the standalone-sibling model), and (B) the home itself becomes a dotfiles-style git repo via explicit `workestrate home init` scaffolding (gitignore + pre-commit hook guarding against mode-160000 gitlinks and secret material). Spec: [06-improvements/10-config-repos-as-working-copies.md](06-improvements/10-config-repos-as-working-copies.md) (READY-TO-EXECUTE; code tasks run via `nix develop` in this container — bare shell lacks `cc`). Spec 08 step (a) is AMENDED accordingly — the personal working repo lives at `~/.workestrate/config-repos/personal` (or `repos/personal` until the rename lands), NOT a standalone sibling.
+> **Note (2026-07-30, spec 10):** **EXECUTED (code tasks landed).** (A)
+> consumed config repos are FIRST-CLASS working copies inside the tool home at
+> `$WORKESTRATE_HOME/config-repos/<name>/` (remote is canonical; supersedes the
+> standalone-sibling model), and (B) the home itself becomes a dotfiles-style
+> git repo via explicit `workestrate home init` scaffolding (gitignore +
+> pre-commit hook guarding against mode-160000 gitlinks and secret material).
+> Spec: [06-improvements/10-config-repos-as-working-copies.md](06-improvements/10-config-repos-as-working-copies.md)
+> (STATUS: code tasks landed — `d7c5a83` rename, `bd99481` dirty-guard test,
+> `3894fb7` home init; docs/spec fully done). The personal working repo lives
+> at `~/.workestrate/config-repos/personal`, NOT a standalone sibling.
 
 ---
 

@@ -1,9 +1,13 @@
 # 10 — Config repos as working copies + dotfiles-style home
 
-> **STATUS: READY-TO-EXECUTE (docs/decision); the code tasks (config-repos/
-> rename, dirty-guard regression test, home-init scaffolding) are
-> NEEDS-DEVSHELL (no `cc` linker in the authoring container — run in
-> `nix develop`, HOST-NIX)**
+> **STATUS: EXECUTED (2026-07-30).** Docs/decision landed; all three code
+> tasks landed — Task 1 `config-repos/` rename (commit `d7c5a83`), Task 2
+> dirty-guard regression test (commit `bd99481`), Task 3 `workestrate home
+> init` scaffolding (commit `3894fb7`). Home adopted into git as root commit
+> `a42e597`; `home init` idempotent over populated home; pre-commit hook
+> rejects gitlinks/store-dirs/secret material. Runtime verification:
+> `workestrate validate-config` → "workestrate.toml is valid." exit 0;
+> `workestrate doctor` → "home: OK (/home/node/.workestrate (Default))".
 > **Effort:** S (docs/decision) + M (code: rename + home-init scaffolding)
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [08-no-repo-local-home.md](08-no-repo-local-home.md) ·
@@ -329,24 +333,23 @@ Decisions A/B.
 
 ## 8. Acceptance criteria
 
-- [ ] Spec 10 written and indexed in
+- [x] Spec 10 written and indexed in
   [00-index.md](00-index.md) + the [../README.md](../README.md) doc map +
   [../07-execution-order.md](../07-execution-order.md).
-- [ ] Spec 08 step (a) + `../03-sibling-config-setup.md` topology carry
+- [x] Spec 08 step (a) + `../03-sibling-config-setup.md` topology carry
   `**AMENDED by spec 10**` markers.
-- [ ] [00-index.md](00-index.md), [../README.md](../README.md),
+- [x] [00-index.md](00-index.md), [../README.md](../README.md),
   [../07-execution-order.md](../07-execution-order.md), and
   [../NEXT-SESSION.md](../NEXT-SESSION.md) updated.
-- [ ] **(code, devshell-gated — NEEDS-DEVSHELL / HOST-NIX)** Task 1 rename
-  landed with `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`
-  green.
-- [ ] **(code, devshell-gated)** Task 2 dirty-guard regression test green.
-- [ ] **(code, devshell-gated)** Task 3 `home init` scaffolds gitignore + hook
-  and rejects gitlinks/secret paths (test-verified).
-- [ ] **(code, devshell-gated)** Task 3 `home init` has no `--path` flag and
-  operates on the resolved home (`WORKESTRATE_HOME` env; global `--home` per
+- [x] **(code)** Task 1 rename landed (commit `d7c5a83`) with `cargo fmt
+  --check` + `cargo clippy -- -D warnings` + `cargo test` green.
+- [x] **(code)** Task 2 dirty-guard regression test green (commit `bd99481`).
+- [x] **(code)** Task 3 `home init` scaffolds gitignore + hook and rejects
+  gitlinks/secret paths (test-verified; commit `3894fb7`).
+- [x] **(code)** Task 3 `home init` has no `--path` flag and operates on the
+  resolved home (`WORKESTRATE_HOME` env; global `--home` per
   [06-config-home-flag.md](06-config-home-flag.md) once implemented).
-- [ ] **(code, devshell-gated)** Task 3 `home init` is idempotent over a
-  populated home (adds the git layer only; refuses only on a conflicting
-  pre-existing `.git`).
-- [ ] `repos/` fallback documented (one constant at `paths.rs:216-218`).
+- [x] **(code)** Task 3 `home init` is idempotent over a populated home (adds
+  the git layer only; refuses only on a conflicting pre-existing `.git`).
+  Verified: second run → "already initialized … nothing to do".
+- [x] `repos/` fallback documented (one constant at `paths.rs:216-218`).
