@@ -76,6 +76,16 @@ pub fn cmd_config_remove(name: &str, delete: bool, force: bool) -> Result<()> {
         );
     }
     config::save_registry(&registry)?;
+
+    // ADR 0025(e): drop the lock entry for this repo. Only mutate an
+    // EXISTING lock — never create one in a home that never had one (legacy
+    // homes stay lock-free until a writer that pins repos runs).
+    if let Some(mut lock) = config::load_home_lock()? {
+        lock.repos.remove(name);
+        lock.tool_version = env!("CARGO_PKG_VERSION").to_string();
+        config::save_home_lock(&lock)?;
+    }
+
     println!("Unregistered config repo: {}", name);
     Ok(())
 }
@@ -212,6 +222,31 @@ pub fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
     // Insert/replace the registry entry. Delegates to config::register_config
     // (shared with cmd_config_new's local-path registration).
     config::register_config(name, url, Some(git_ref), Some(rev.as_str()))?;
+
+    // ADR 0025(e): upsert the lock entry for this repo. Load-or-default so a
+    // home that predates the lock gains one on the first add; home_version
+    // comes from the registry (default 2 — the ADR 0023 single-home layout).
+    let home_version = config::load_registry()?
+        .and_then(|r| r.settings.home_version)
+        .unwrap_or(2);
+    let mut lock = config::load_home_lock()?.unwrap_or_else(|| config::HomeLock {
+        version: config::LOCK_VERSION,
+        home_version,
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        repos: std::collections::BTreeMap::new(),
+    });
+    lock.home_version = home_version;
+    lock.tool_version = env!("CARGO_PKG_VERSION").to_string();
+    lock.repos.insert(
+        name.to_string(),
+        config::LockedRepo {
+            url: url.to_string(),
+            r#ref: Some(git_ref.to_string()),
+            rev: Some(rev.clone()),
+        },
+    );
+    config::save_home_lock(&lock)?;
+
     println!(
         "Registered config repo {} from {} at {} (rev {})",
         name,
@@ -559,6 +594,16 @@ pub async fn cmd_config_update(name: Option<&str>) -> Result<()> {
         println!("{}: updated to {}", n, short);
     }
     config::save_registry(&registry)?;
+
+    // ADR 0025(e): rebuild the lock from the updated registry + the actual
+    // checked-out revs (local-path repos keep rev=None — that is their
+    // registry shape too). Checkouts live under the STORE dir
+    // (`config_repo_dir` = resolve_store_dir()/config-repos/<name>), which is
+    // the home itself in the single-home layout and the XDG data dir in a
+    // legacy home — so the lock's rev follows HEAD in both layouts.
+    let store = config::resolve_store_dir();
+    let lock = config::lock_from_registry(&registry, &store);
+    config::save_home_lock(&lock)?;
     Ok(())
 }
 

@@ -166,7 +166,17 @@ pub fn cmd_home_init(
         crate::commands::config_cmd::cmd_config_add(url, name, "main")?;
     }
 
-    // 8. Summary + next steps.
+    // 8. ADR 0025(e): write the generated lock. This runs AFTER a successful
+    //    init only — never on the idempotent no-op path above (which leaves
+    //    the home, including its lock, untouched). The registry may not exist
+    //    yet when --config wasn't passed (cmd_config_add already wrote the
+    //    lock when it was); a bare init with no config repos writes a lock
+    //    with an empty `repos` map.
+    let registry = config::load_registry()?.unwrap_or_default();
+    let lock = config::lock_from_registry(&registry, &home);
+    config::save_home_lock_to(&home, &lock)?;
+
+    // 9. Summary + next steps.
     print_summary(&home, config_url.is_some(), name, &ensured);
     Ok(())
 }
@@ -210,8 +220,7 @@ enum ReproKind {
     UnreproducibleOnRemoteSource,
 }
 
-/// The `--from <src>` provisioning path (ADR 0025 §2 steps 1–7, 9, 10; the
-/// workestrate.lock write — step 8 — lands in a later commit).
+/// The `--from <src>` provisioning path (ADR 0025 §2 steps 1–10).
 fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
     // -- Step 1: RESOLVE SRC ---------------------------------------------
     // A git URL (or a local path ending in .git) is cloned to a temp dir and
@@ -422,6 +431,13 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
          git -C {} config receive.denyCurrentBranch updateInstead",
         origin_target
     );
+
+    // -- Step 8: WRITE workestrate.lock ------------------------------------
+    // Fresh pins from the ACTUAL checked-out revs under dest (the dest
+    // registry value parsed/mutated in step 6 is reused). The lock lands in
+    // the dest home root and is committed to the home repo (NOT gitignored).
+    let lock = config::lock_from_registry(&dest_registry, dest);
+    config::save_home_lock_to(dest, &lock)?;
 
     // -- Step 9: TRUSTED_PROJECTS (carried with the registry; warn LOUDLY) --
     for tp in &dest_registry.trusted_projects {

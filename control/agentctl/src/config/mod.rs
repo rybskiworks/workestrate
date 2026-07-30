@@ -1,4 +1,5 @@
 pub mod loading;
+pub mod lockfile;
 pub mod migration;
 pub mod paths;
 pub mod registry;
@@ -12,6 +13,11 @@ pub mod validation;
 #[allow(unused_imports)]
 pub use loading::{
     check_required_files, load_config, load_overrides, resolve_secrets_layers, CheckEntry,
+};
+#[allow(unused_imports)]
+pub use lockfile::{
+    home_lock_path, home_lock_path_for, load_home_lock, load_home_lock_from, lock_from_registry,
+    save_home_lock, save_home_lock_to, HomeLock, LockedRepo, LOCK_FILE_NAME, LOCK_VERSION,
 };
 #[allow(unused_imports)]
 pub use migration::{run_migrate_home, MigrateSummary, MovedEntry};
