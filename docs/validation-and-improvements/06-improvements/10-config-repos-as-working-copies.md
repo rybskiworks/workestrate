@@ -22,6 +22,11 @@
 > [../../migration/50-decisions/0018-secrets-layering-and-per-repo-config.md](../../migration/50-decisions/0018-secrets-layering-and-per-repo-config.md) ·
 > [../../migration/50-decisions/0023-single-tool-home.md](../../migration/50-decisions/0023-single-tool-home.md) ·
 > [../../migration/60-glossary.md](../../migration/60-glossary.md)
+>
+> Decisions A and B are now ADR'd: [ADR 0024](../../migration/50-decisions/0024-dotfiles-home-and-working-copy-config-repos.md);
+> the `home init --from`/positional-dest extension + `workestrate.lock` are
+> [ADR 0025](../../migration/50-decisions/0025-home-provisioning-and-lockfile.md)
+> + [spec 11](11-home-provisioning-and-lockfile.md).
 
 > Every citation below was verified against the working tree on branch
 > `migration/tool-model` during the authoring session (2026-07-29). Commands
@@ -280,7 +285,9 @@ scaffolding spec: `git init`, `.gitignore` generation, pre-commit hook
 installation, next-steps printout. NEVER auto-git-init (rationale: §2, "Why never auto-git-init (rationale)"). It also implements the resolution and idempotency decisions in §2, "Home init: which home, and which homes need it" (no --path flag — operates on the resolved home; idempotent over a populated home, adding only the git layer).
 
 **Gates:** `cargo test` (hook content generation, gitignore generation,
-idempotency).
+idempotency). The `--from`/positional-`dest` extension of `home init` is
+specified by [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md)
+(ADR 0025).
 
 ---
 

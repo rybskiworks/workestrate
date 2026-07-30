@@ -178,6 +178,19 @@ Reprodu from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)
 
 ---
 
+### Step 8d — --home flag + home provisioning + lockfile (specs 06 + 11)
+
+| | |
+|---|---|
+| **Goal** | Execute spec 06 `--home` global flag and spec 11 provisioning + lockfile; SAME WAVE RECOMMENDED — both touch the same CLI/home-resolution surface: `cli_actions.rs` args, `home.rs` init, home-resolution precedence prose. |
+| **Files to follow** | [06-improvements/06-config-home-flag.md](06-improvements/06-config-home-flag.md) + [06-improvements/11-home-provisioning-and-lockfile.md](06-improvements/11-home-provisioning-and-lockfile.md) (§2–§4); ADR 0025 ([../migration/50-decisions/0025-home-provisioning-and-lockfile.md](../migration/50-decisions/0025-home-provisioning-and-lockfile.md)). |
+| **Sub-steps** | **(6a)** `--home` flag per spec 06 (sets `WORKESTRATE_HOME` from `async_main`; zero change to `paths.rs`). **(6b)** `home init --from`/positional dest + lockfile per spec 11 §2–§4 (`HomeAction::Init` gains `from`/`dest` at `cli_actions.rs:185`; provisioning at `commands/home.rs:67`; lock writers at `config_cmd.rs:42/188/510` + `registry.rs` `load_home_lock`/`save_home_lock` siblings; `looks_like_git_url` visibility at `registry.rs:126`). **(6c)** Tests per spec 11 §4 (positional dest, `--from` local/remote, fail-before-write residue, lock round-trip, newer-version hard error, trusted_projects warning, locked-rev checkout). |
+| **Gate / exit criteria** | `cargo test` green incl. spec 11 test plan; `--home` composition e.g. `workestrate --home <dir> home init --from <src>` works. |
+| **Env marker** | `verifiable-here` via `nix develop` (cargo-linked gates; bare shell lacks `cc`). |
+| **Parallelization** | Independent of Lane A/B and Steps 7–8; recommended same wave as spec 06. |
+
+---
+
 ### Step 8 — Remainder (B2/B3 dogfooding, WP5 conditional, CLI authoring DEFERRED)
 
 | | |
@@ -206,6 +219,7 @@ Reprodu from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)
 | 7 (Track A) | WP1–WP3 ∥ Steps 3–5; Phase 0 spike ∥ Step 6 | Step 1 (for WP1–WP3); Step 6 (for Phase 0 spike if batched) | Phase 0 spike gates WP4; WP5 conditional on spike failure |
 | 8 (remainder) | B2 ∥ B3 ∥ WP5 ∥ CLI (when unblocked) | Step 7 (for WP5); external sign-off (for CLI) | CLI gated on `02-config-requirements.md` sign-off |
 | 8c (spec 10: config repos as working copies + dotfiles home) | Tasks 2 ∥ 3; independent of Lane A/B and Steps 0–8 | — | Task 1 (`config-repos/` rename) gates the final paths referenced by Steps 0.5/3/5 prose |
+| 8d (specs 06 + 11: --home flag + home provisioning + lockfile) | 6a ∥ 6b (same wave recommended); independent of Lane A/B and Steps 7–8 | — | Both touch the same CLI/home-resolution surface (`cli_actions.rs` args, `home.rs` init, precedence prose) |
 
 ---
 

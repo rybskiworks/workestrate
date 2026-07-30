@@ -56,9 +56,10 @@ files. Read in this order:
 | [`06-improvements/05-config-reference-cwd-fallback.md`](06-improvements/05-config-reference-cwd-fallback.md) | Standalone fix spec for the config-reference cwd-fallback quirk | `STATUS: SPEC (bug fix candidate, small)` |
 | [`06-improvements/06-config-home-flag.md`](06-improvements/06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `STATUS: SPEC (small, not yet implemented)` |
 | [`06-improvements/07-naming-consistency.md`](06-improvements/07-naming-consistency.md) | Purge `workestrator` residue; standardize on `workestrate` | `STATUS: IN-PROGRESS THIS BRANCH` |
-| [`06-improvements/08-no-repo-local-home.md`](06-improvements/08-no-repo-local-home.md) | Retire the repo-local tool home: `~/.workestrate` only, never inside the checkout; removes the discovery tier | `STATUS: READY-TO-EXECUTE (docs/decision); code step NEEDS-DEVSHELL` |
+| [`06-improvements/08-no-repo-local-home.md`](06-improvements/08-no-repo-local-home.md) | Retire the repo-local tool home: `~/.workestrate` only, never inside the checkout; removes the discovery tier | `STATUS: EXECUTED (2026-07-30); commits d7c5a83, bd99481, 3894fb7, bef1c37, 418530a; home commit a42e597` |
 | [`06-improvements/09-microsandbox-agentd-offline-build.md`](06-improvements/09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd build-time download: offline-build fix options (upstream MSB_HOME fix / ADR 0011 git-fork carrier / 0.6.8 bump) | `STATUS: READY-TO-EXECUTE (option 2 gated on fork push access; option 1 gated on upstream responsiveness; option 3 NEEDS-DEVSHELL + HOST-NIX)` |
-| [`06-improvements/10-config-repos-as-working-copies.md`](06-improvements/10-config-repos-as-working-copies.md) | Config repos as working copies in the tool home + dotfiles-style home repo (gitlink-guarded `home init`; `repos/` → `config-repos/` rename) | `STATUS: READY-TO-EXECUTE (docs/decision); code tasks NEEDS-DEVSHELL` |
+| [`06-improvements/10-config-repos-as-working-copies.md`](06-improvements/10-config-repos-as-working-copies.md) | Config repos as working copies in the tool home + dotfiles-style home repo (gitlink-guarded `home init`; `repos/` → `config-repos/` rename) | `STATUS: EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init)` |
+| [`06-improvements/11-home-provisioning-and-lockfile.md`](06-improvements/11-home-provisioning-and-lockfile.md) | Home provisioning (`home init --from` + positional dest) + generated `workestrate.lock` pin file (executes ADR 0025) | `STATUS: READY-TO-EXECUTE (design); implementation NEEDS-DEVSHELL` |
 | [`07-execution-order.md`](07-execution-order.md) | Recommended sequencing across all tracks | STATUS: READY-TO-EXECUTE |
 | [`NEXT-SESSION.md`](NEXT-SESSION.md) | Self-contained handoff prompt for the next contextless session | `STATUS: HANDOFF` |
 
@@ -156,9 +157,9 @@ were run in this container and their outputs pasted verbatim).
 
 ## Authoritative design record
 
-The migration design record — including the 23 ADRs that pin every
+The migration design record — including the 25 ADRs that pin every
 load-bearing decision — lives at
 [`../migration/README.md`](../migration/README.md). Individual ADRs are at
 [`../migration/50-decisions/`](../migration/50-decisions/). This tree is the
 operational companion: it validates the design and implements the
-improvements, but does not re-litigate decisions (ADRs 0001–0023 stand).
+improvements, but does not re-litigate decisions (ADRs 0001–0025 stand).
