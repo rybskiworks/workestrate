@@ -1,6 +1,6 @@
 # 12 — Per-instance addressing + discovery-lite
 
-> **STATUS: IN-PROGRESS (Wave 1 / 12a code landing on migration/tool-model; Experiment E1 + guest-reachability reassessment NEEDS-KVM)**
+> **STATUS: IMPLEMENTED (Waves 1+2 landed — Wave 1: 9107b87 / de9aa62 / f9fd2f0 / c5837e7; Wave 2: 4adad3f / 7b65ad1 / 39c1694; Experiment E1 guest-reachability + the deferred binding decision remain NEEDS-KVM per ADR 0026)**
 > **Effort:** M
 > Prerequisites / see-also: [README.md](../README.md) ·
 > [00-index.md](00-index.md) ·
@@ -99,15 +99,26 @@ plans unaffected (offset was never rendered).
 
 ---
 
-## 3. Wave 2 (12b) discovery-lite sketch
+## 3. Wave 2 (12b) discovery-lite — LANDED
 
-- `depends_on` declaration in `workestrate.toml`.
-- UNCONDITIONAL plan-time resolution (singleton default).
-- Env injection (resolved address into the dependent's env).
-- Egress derivation (dependent's egress gains the dep's `bind:port`).
-- `--use <dep>@<instance>` = instance-selection override only.
-- `required = true` and not running → refuse at plan time with remediation
-  (`workestrate <dep> up`), no auto-start v1.
+All Wave 2 acceptance items landed (schema: `4adad3f`; resolution /
+injection / egress: `7b65ad1`; `--use` overrides: `39c1694`):
+
+- [x] `depends_on` declaration in `workestrate.toml` (`env` + `required`,
+      `required` defaulting `false`) — `4adad3f`.
+- [x] UNCONDITIONAL plan-time resolution (singleton default) — `7b65ad1`.
+- [x] Env injection — the resolved address is injected into the dependent's
+      env in the guest-visible `host.microsandbox.internal:<published-port>`
+      form — `7b65ad1`.
+- [x] Egress derivation — the dependent's egress gains a derived
+      `tcp:<port> -> host` allow rule for the dep's `bind:port` (additive
+      only; `default_deny` is never touched) — `7b65ad1`.
+- [x] `--use <dep>@<instance>` = instance-selection override only, with hard
+      plan-time errors: `--use` on a workload with no declared `depends_on`,
+      `--use` naming an undeclared dep, and `--use` naming an instance that
+      is not running all refuse (no declared-port fallback) — `39c1694`.
+- [x] `required = true` and not running → refuse at plan time with
+      remediation (`workestrate <dep> up`), no auto-start v1 — `7b65ad1`.
 
 ---
 
@@ -123,3 +134,8 @@ guest-facing addressing for alternates:
   (the conservative default until E1 runs).
 
 Record the outcome here when E1 lands.
+
+**Status note (2026-07-30):** Waves 1+2 code landed (see banner); this open
+decision is the ONLY remaining item and stays NEEDS-KVM until Experiment E1
+runs in the host batch ([../07-execution-order.md](../07-execution-order.md)
+Step 6 B10).

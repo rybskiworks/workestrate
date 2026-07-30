@@ -222,6 +222,18 @@ re-derive their contents.
 > `3894fb7` home init; docs/spec fully done). The personal working repo lives
 > at `~/.workestrate/config-repos/personal`, NOT a standalone sibling.
 
+> **Note (2026-07-30, spec 12):** **IMPLEMENTED (code landed).** Per-instance
+> addressing + discovery-lite (ADR 0026) is code-complete on
+> `migration/tool-model`: Wave 1 (`9107b87`, `de9aa62`, `f9fd2f0`,
+> `c5837e7`) + Wave 2 (`4adad3f`, `7b65ad1`, `39c1694`). That leaves 12 specs
+> total in `06-improvements/` with these remaining open: 01 (mounts), 03
+> (dogfooding), 04 (CLI authoring — stays DEFERRED), 05 (cwd-fallback), 07
+> (naming leftovers), 09 (agentd offline build). Experiment E1
+> (guest-reachability of non-`127.0.0.1` loopbacks) is a first-class
+> HOST-KVM host-batch item (`07-execution-order.md` Step 6 B10); the deferred
+> binding decision stays NEEDS-KVM per ADR 0026 until E1 runs and its
+> outcome is recorded in the spec's §open-decisions.
+
 ---
 
 ## Maintenance
