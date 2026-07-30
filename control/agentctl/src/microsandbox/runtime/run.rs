@@ -265,11 +265,6 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // the actual sandbox identity (slot for singleton, slot@id for parallel).
     plan.name = spec.instance.clone();
 
-    // Host ports from the plan. `host_ports` is used both for collision
-    // checking and for the legacy `ports` field in the lifecycle state
-    // record.
-    let host_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
-
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.
     let state_dir = crate::config::resolve_state_dir();
@@ -284,6 +279,21 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // check+register (FN-6) keyed on (bind_ip, port) closes the window: the
     // loser surfaces a clear port-collision error at registration.
     let bind_ip = slot_bind_ip(&spec.instance, &state_dir)?;
+
+    // ADR 0026(c)/C3: --port-auto replaces every declared host port with a
+    // lock-probed free port on the slot's bind (guest unchanged). The probed
+    // ports are NOT a reservation — see probe_free_ports' doc comment; the
+    // post-create atomic check+register (FN-6) closes the remaining window
+    // and the chosen ports are recorded in the instance record. Composes
+    // with per-instance binds: a parallel slot probes on its 127.0.0.N, the
+    // singleton probes on the shared 127.0.0.1.
+    if spec.port_auto && !plan.ports.is_empty() {
+        let probed =
+            super::super::port_registry::probe_free_ports(&state_dir, bind_ip, plan.ports.len())?;
+        for (p, host) in plan.ports.iter_mut().zip(probed) {
+            p.host = host;
+        }
+    }
 
     check_occupied_or_replace(spec, &state_dir).await?;
 
@@ -329,6 +339,12 @@ pub(crate) async fn build_sandbox<W: Workload>(
         builder
     };
     let sandbox = builder.create().await?;
+
+    // Host ports from the (possibly --port-auto-mutated) plan: single source
+    // of truth for the collision check and the legacy `ports` field in the
+    // lifecycle state record, so the record always carries the EFFECTIVE
+    // (probed) ports — `ps`/`down` recover them.
+    let host_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
 
     // Register with full lifecycle metadata so `ps` and `down --all` work.
     // Each pair carries the slot's bind IP (ADR 0026): the record feeds `ps`

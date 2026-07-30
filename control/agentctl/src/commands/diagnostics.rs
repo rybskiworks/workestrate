@@ -116,10 +116,20 @@ pub fn print_ps_text_to<W: std::io::Write>(
     let mut sorted: Vec<_> = entries.iter().collect();
     sorted.sort_by(|a, b| a.instance.cmp(&b.instance));
     for e in sorted {
+        // ADR 0026/C3: a pair renders `<bind_ip>:<host>:<guest>` when bound
+        // on a non-default bind (parallel slot), else the legacy
+        // `<host>:<guest>` (singleton rows stay clean). Matches the plan
+        // Display rule (C2).
         let ports_str = e
             .ports
             .iter()
-            .map(|p| format!("{}:{}", p.host, p.guest))
+            .map(|p| {
+                if p.bind_ip == crate::microsandbox::plan::default_bind_ip() {
+                    format!("{}:{}", p.host, p.guest)
+                } else {
+                    format!("{}:{}:{}", p.bind_ip, p.host, p.guest)
+                }
+            })
             .collect::<Vec<_>>()
             .join(",");
         let started_display = if e.started_at.is_empty() {
@@ -518,7 +528,11 @@ mod tests {
             context: Some("personal".to_string()),
             slot: "personal-litellm".to_string(),
             kind: PsKind::Parallel,
-            ports: vec![PortMapping::new(14000, 4000)],
+            ports: vec![PortMapping {
+                host: 14000,
+                guest: 4000,
+                bind_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2)),
+            }],
             started_at: "2026-07-20T14:05:42Z".to_string(),
             stale: false,
         };
@@ -527,7 +541,9 @@ mod tests {
             .expect("serialize ps entries");
 
         // Field order, names, and casing (kind lowercase) are all pinned
-        // here. Any drift from ADR 0021 §7 fails this snapshot.
+        // here. Any drift from ADR 0021 §7 fails this snapshot. ADR 0026/C3:
+        // `bind_ip` is an additive per-port field, always serialized (uniform
+        // shape); the parallel row carries its per-instance 127.0.0.2 bind.
         let expected = r#"[
   {
     "instance": "personal-litellm",
@@ -539,7 +555,8 @@ mod tests {
     "ports": [
       {
         "host": 4000,
-        "guest": 4000
+        "guest": 4000,
+        "bind_ip": "127.0.0.1"
       }
     ],
     "stale": false
@@ -554,7 +571,8 @@ mod tests {
     "ports": [
       {
         "host": 14000,
-        "guest": 4000
+        "guest": 4000,
+        "bind_ip": "127.0.0.2"
       }
     ],
     "stale": false
@@ -632,6 +650,69 @@ mod tests {
             out.contains("STARTED"),
             "column header should be STARTED (renamed from CREATED); got:
 {out}"
+        );
+    }
+
+    /// ADR 0026/C3: the text PORTS column renders `<bind_ip>:<host>:<guest>`
+    /// for a pair bound on a non-default bind (parallel slot), and keeps the
+    /// legacy `<host>:<guest>` for default-bind pairs (singleton rows stay
+    /// clean). Both JSON (`bind_ip` field) and text surfaces are pinned.
+    #[test]
+    fn ps_text_and_json_render_bind_ip_for_non_default_binds() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        let entries = vec![
+            PsEntry {
+                instance: "personal-litellm".to_string(),
+                workload: "litellm".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-litellm".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping::new(4000, 4000)],
+                started_at: "2026-07-20T14:03:11Z".to_string(),
+                stale: false,
+            },
+            PsEntry {
+                instance: "personal-litellm@canary".to_string(),
+                workload: "litellm".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-litellm".to_string(),
+                kind: PsKind::Parallel,
+                ports: vec![PortMapping {
+                    host: 4000,
+                    guest: 4000,
+                    bind_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2)),
+                }],
+                started_at: "2026-07-20T14:05:42Z".to_string(),
+                stale: false,
+            },
+        ];
+
+        // Text: non-default bind renders the three-field form; the default
+        // bind keeps the two-field form and never prints 127.0.0.1.
+        let mut buf: Vec<u8> = Vec::new();
+        print_ps_text_to(&entries, &mut buf).expect("render ps text");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert!(
+            out.contains("127.0.0.2:4000:4000"),
+            "non-default bind must render <bind_ip>:<host>:<guest>; got:\n{out}"
+        );
+        assert!(
+            !out.contains("127.0.0.1:4000:4000"),
+            "default bind must NOT print the bind IP; got:\n{out}"
+        );
+
+        // JSON: both rows carry the additive bind_ip field.
+        let json =
+            serde_json::to_string_pretty(&ps_entries_json(&entries)).expect("serialize ps entries");
+        assert!(
+            json.contains(r#""bind_ip": "127.0.0.1""#),
+            "singleton port must serialize bind_ip 127.0.0.1; got:\n{json}"
+        );
+        assert!(
+            json.contains(r#""bind_ip": "127.0.0.2""#),
+            "parallel port must serialize bind_ip 127.0.0.2; got:\n{json}"
         );
     }
 

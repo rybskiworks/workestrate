@@ -35,6 +35,9 @@ pub fn down_results_json(
 pub struct PsPortJson {
     host: u16,
     guest: u16,
+    /// Host bind address (ADR 0026). Always serialized (uniform shape;
+    /// additive field) — serde renders it as a string, e.g. "127.0.0.1".
+    pub bind_ip: std::net::IpAddr,
 }
 
 #[derive(serde::Serialize)]
@@ -65,6 +68,7 @@ pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec
                 .map(|p| PsPortJson {
                     host: p.host,
                     guest: p.guest,
+                    bind_ip: p.bind_ip,
                 })
                 .collect(),
             stale: e.stale,

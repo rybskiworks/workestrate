@@ -69,6 +69,10 @@ pub struct InstanceSpec {
     /// `--replace`. If true, occupancy is torn down before create; otherwise
     /// an occupied slot REFUSES (fail-closed default).
     pub replace: bool,
+    /// `--port-auto` (ADR 0026(c)). Publish each port on a lock-probed free
+    /// port on the slot's bind; the chosen ports are recorded in the instance
+    /// record.
+    pub port_auto: bool,
 }
 
 /// Outcome of stopping one instance. Used by `down --instance`, `down

@@ -399,6 +399,75 @@ pub fn prospective_loopback_ip(state_dir: &Path) -> Result<IpAddr> {
     select_loopback(&records)
 }
 
+// ---------------------------------------------------------------------------
+// --port-auto port probing (ADR 0026(c))
+// ---------------------------------------------------------------------------
+
+/// Probe `count` OS-free ports on `bind` for a `--port-auto` publish
+/// (ADR 0026(c)).
+///
+/// NOT A RESERVATION (normative): the probed ports are released immediately
+/// (each probe listener is dropped the moment its port is known). The
+/// registry lock only serializes the PROBE against other workestrate
+/// processes — it cannot stop a non-workestrate process (or the OS, or a
+/// sandbox mid-create) from claiming a probed port the instant the lock
+/// drops. Two mechanisms close the remaining window:
+///
+/// - the post-create atomic check+register (FN-6,
+///   [`check_and_register_sandbox_lifecycle`]) fails the create if the
+///   chosen `(bind, port)` was registered by another workestrate instance in
+///   the meantime;
+/// - the sandbox's own publish fails at create time if the port was claimed
+///   outside the registry.
+///
+/// The chosen ports are recorded in the instance record, so `ps` / `down`
+/// recover them afterwards.
+///
+/// A candidate is skipped (re-probed) when it (a) duplicates a port already
+/// probed in THIS call, or (b) appears in any registry record's `ports` on
+/// the SAME `bind` — defense-in-depth over records whose sandboxes may not
+/// have bound the OS port yet. After `3 * count` attempts without enough
+/// distinct candidates the probe bails (fail-closed) rather than loop.
+pub fn probe_free_ports(state_dir: &Path, bind: IpAddr, count: usize) -> Result<Vec<u16>> {
+    let _lock = PortRegistryLock::acquire(state_dir)?;
+    let records = list_records(state_dir)?;
+    let mut probed: Vec<u16> = Vec::with_capacity(count);
+    let mut attempts = 0usize;
+    let max_attempts = 3 * count;
+    while probed.len() < count {
+        attempts += 1;
+        if attempts > max_attempts {
+            anyhow::bail!(
+                "--port-auto: failed to probe {} distinct free port(s) on {} after {} attempts. \
+                 Retry, or publish explicit ports (drop --port-auto).",
+                count,
+                bind,
+                max_attempts
+            );
+        }
+        // Ephemeral bind probe: port 0 asks the OS for a free port on `bind`;
+        // the listener is dropped immediately (see the NOT-A-RESERVATION note
+        // in the doc comment above).
+        let port = std::net::TcpListener::bind((bind, 0))?.local_addr()?.port();
+        // (a) Skip duplicates within this call (two ephemeral probes can
+        //     return the same port once the first listener is dropped).
+        if probed.contains(&port) {
+            continue;
+        }
+        // (b) Skip ports a registry record already holds on the SAME bind —
+        //     the record may belong to a sandbox that has not bound the OS
+        //     port yet, so an OS-free answer is not sufficient.
+        let recorded = records
+            .iter()
+            .any(|r| r.bind_ip == bind && r.ports.contains(&port));
+        if recorded {
+            continue;
+        }
+        probed.push(port);
+    }
+    Ok(probed)
+}
+
 /// Pure core of [`allocate_loopback_ip`]: the lowest `127.0.0.N` (`N` in
 /// `2..=254`) not present as any record's `bind_ip`. `None` when the range
 /// is exhausted. Records bound on `127.0.0.1` (or any address outside the
@@ -429,12 +498,24 @@ mod tests {
         workload: &str,
         port: u16,
     ) -> Result<()> {
+        register_instance_on(state_dir, instance, workload, singleton_bind(), port)
+    }
+
+    /// Small helper: a lifecycle registration for `instance` on `port` bound
+    /// to an explicit `bind` (ADR 0026: (bind, port)-keyed tests).
+    fn register_instance_on(
+        state_dir: &Path,
+        instance: &str,
+        workload: &str,
+        bind: IpAddr,
+        port: u16,
+    ) -> Result<()> {
         check_and_register_sandbox_lifecycle(
             state_dir,
             instance,
             None,
             workload,
-            singleton_bind(),
+            bind,
             &[port],
             &[crate::microsandbox::plan::PortMapping::new(port, port)],
             "2026-07-23T00:00:00Z",
@@ -1059,6 +1140,101 @@ mod tests {
         combined_register(&state_dir, "personal-pi", "pi", 3000)?;
         // Neither consumes the 127.0.0.N (N >= 2) allocator space.
         assert_eq!(allocate_loopback_ip(&state_dir)?, loopback(2));
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0026(c)/C3: probe_free_ports (--port-auto) ----
+
+    /// Assert every probed port is bindable on `bind` RIGHT NOW (the probe
+    /// dropped its listeners) and distinct.
+    fn assert_probed_ports_bindable(bind: IpAddr, probed: &[u16], expected: usize) {
+        assert_eq!(probed.len(), expected, "probe must return {expected} ports");
+        let distinct: std::collections::HashSet<u16> = probed.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            probed.len(),
+            "probed ports must be distinct: {probed:?}"
+        );
+        for p in probed {
+            let listener = std::net::TcpListener::bind((bind, *p));
+            assert!(
+                listener.is_ok(),
+                "probed port {p} on {bind} must be bindable after the probe: {:?}",
+                listener.err()
+            );
+        }
+    }
+
+    #[test]
+    fn probe_free_ports_returns_distinct_bindable_ports_on_singleton_bind() -> Result<()> {
+        let state_dir = unique_state_dir("probe-singleton");
+        let bind = singleton_bind();
+        let probed = probe_free_ports(&state_dir, bind, 3)?;
+        assert_probed_ports_bindable(bind, &probed, 3);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn probe_free_ports_returns_distinct_bindable_ports_on_parallel_bind() -> Result<()> {
+        let state_dir = unique_state_dir("probe-parallel");
+        // Linux 127/8 is bindable per-address: probing on 127.0.0.2 works.
+        let bind = loopback(2);
+        let probed = probe_free_ports(&state_dir, bind, 3)?;
+        assert_probed_ports_bindable(bind, &probed, 3);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn probe_free_ports_skips_ports_recorded_on_same_bind() -> Result<()> {
+        let state_dir = unique_state_dir("probe-skip-same-bind");
+        let bind = singleton_bind();
+        // A first probe yields P; a record claims (bind, P); a re-probe must
+        // never hand P out again on the same bind (defense-in-depth: the
+        // record's sandbox may not hold the OS port yet).
+        let p = probe_free_ports(&state_dir, bind, 1)?[0];
+        register_instance_on(&state_dir, "personal-litellm", "litellm", bind, p)?;
+        for _ in 0..8 {
+            let probed = probe_free_ports(&state_dir, bind, 2)?;
+            assert!(
+                !probed.contains(&p),
+                "probe must skip port {p} recorded on {bind}: {probed:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn probe_free_ports_ignores_ports_recorded_on_other_binds() -> Result<()> {
+        let state_dir = unique_state_dir("probe-other-bind");
+        // A record on (127.0.0.2, P) does NOT reserve P on 127.0.0.1 — the
+        // collision model (and the probe) key on (bind, port) (ADR 0026(b)).
+        // (Only the record side is exercised here: whether P itself is
+        // re-probed on 127.0.0.1 is left to the OS; asserting it would be
+        // flaky since P is ephemeral-free on 127.0.0.1 too.)
+        let p = probe_free_ports(&state_dir, loopback(2), 1)?[0];
+        register_instance_on(&state_dir, "personal-litellm@a", "litellm", loopback(2), p)?;
+        let probed = probe_free_ports(&state_dir, singleton_bind(), 2)?;
+        assert_probed_ports_bindable(singleton_bind(), &probed, 2);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn probe_free_ports_releases_lock_file() -> Result<()> {
+        let state_dir = unique_state_dir("probe-lock-release");
+        let _ = probe_free_ports(&state_dir, singleton_bind(), 1)?;
+        assert!(
+            !state_dir
+                .join("var")
+                .join("run")
+                .join(PORT_REGISTRY_LOCK_NAME)
+                .exists(),
+            "lock file should be released after probe_free_ports"
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

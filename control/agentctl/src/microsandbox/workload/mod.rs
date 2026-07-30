@@ -74,6 +74,7 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// `up --foreground` path with the SAME identity and flags the parent
     /// resolved:
     ///   - `--replace` (when `spec.replace`),
+    ///   - `--port-auto` (when `spec.port_auto`, ADR 0026(c)),
     ///   - `--instance <id>` for a parallel instance — the **bare id**, not
     ///     `slot@id` (the child re-derives the slot from its own context).
     ///
@@ -90,6 +91,9 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         ];
         if spec.replace {
             args.push("--replace".to_string());
+        }
+        if spec.port_auto {
+            args.push("--port-auto".to_string());
         }
         // Forward the parallel-instance id only when this is NOT the singleton
         // (instance == slot, no `@`). instance_id_of splits on the first `@`;

@@ -24,6 +24,7 @@ pub fn build_instance_spec(
     replace: bool,
     instance_id: Option<&str>,
     new_id: Option<&str>,
+    port_auto: bool,
 ) -> Result<crate::microsandbox::runtime::InstanceSpec> {
     use crate::microsandbox::runtime::InstanceSpec;
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
@@ -62,6 +63,7 @@ pub fn build_instance_spec(
         workload: workload_name.to_string(),
         context,
         replace,
+        port_auto,
     })
 }
 
@@ -82,6 +84,7 @@ pub async fn dispatch_service<W: Workload>(
             replace,
             instance,
             new,
+            port_auto,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -100,6 +103,7 @@ pub async fn dispatch_service<W: Workload>(
                 replace,
                 instance.as_deref(),
                 new_id.as_deref(),
+                port_auto,
             )?;
             crate::microsandbox::runtime::up_service_with_spec(workload, &spec, foreground).await
         }
@@ -143,6 +147,7 @@ pub async fn dispatch_agent<W: Workload>(
             replace,
             instance,
             new,
+            port_auto,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -161,6 +166,7 @@ pub async fn dispatch_agent<W: Workload>(
                 replace,
                 instance.as_deref(),
                 new_id.as_deref(),
+                port_auto,
             )?;
             crate::microsandbox::runtime::exec_agent_with_spec(workload, &spec).await
         }
@@ -180,12 +186,14 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
             let foreground = args.iter().any(|a| a == "--foreground");
             let replace = args.iter().any(|a| a == "--replace");
             let new = args.iter().any(|a| a == "--new");
+            let port_auto = args.iter().any(|a| a == "--port-auto");
             let instance = parse_flag_value(args, "--instance");
             Ok(ServiceAction::Up {
                 foreground,
                 replace,
                 instance,
                 new,
+                port_auto,
             })
         }
         "down" => {
@@ -213,11 +221,13 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
         "exec" => {
             let replace = args.iter().any(|a| a == "--replace");
             let new = args.iter().any(|a| a == "--new");
+            let port_auto = args.iter().any(|a| a == "--port-auto");
             let instance = parse_flag_value(args, "--instance");
             Ok(AgentAction::Exec {
                 replace,
                 instance,
                 new,
+                port_auto,
             })
         }
         "down" => {
@@ -520,6 +530,36 @@ mod tests {
     fn parse_flag_value_returns_none_when_absent() {
         let args: Vec<String> = vec!["--replace".into()];
         assert!(parse_flag_value(&args, "--instance").is_none());
+    }
+
+    // ---- ADR 0026(c)/C3: --port-auto raw-args parsing ----
+
+    #[test]
+    fn parse_service_action_up_reads_port_auto() {
+        let args: Vec<String> = vec!["--port-auto".into()];
+        match parse_service_action("up", &args).unwrap() {
+            ServiceAction::Up { port_auto, .. } => assert!(port_auto),
+            _ => panic!("expected Up variant"),
+        }
+        let args: Vec<String> = vec!["--foreground".into()];
+        match parse_service_action("up", &args).unwrap() {
+            ServiceAction::Up { port_auto, .. } => assert!(!port_auto),
+            _ => panic!("expected Up variant"),
+        }
+    }
+
+    #[test]
+    fn parse_agent_action_exec_reads_port_auto() {
+        let args: Vec<String> = vec!["--port-auto".into()];
+        match parse_agent_action("exec", &args).unwrap() {
+            AgentAction::Exec { port_auto, .. } => assert!(port_auto),
+            _ => panic!("expected Exec variant"),
+        }
+        let args: Vec<String> = vec!["--replace".into()];
+        match parse_agent_action("exec", &args).unwrap() {
+            AgentAction::Exec { port_auto, .. } => assert!(!port_auto),
+            _ => panic!("expected Exec variant"),
+        }
     }
 }
 

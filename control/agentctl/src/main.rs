@@ -537,12 +537,22 @@ mod tests {
         instance: &str,
         replace: bool,
     ) -> workestrate::microsandbox::runtime::InstanceSpec {
+        spec_for_detach_full(instance, replace, false)
+    }
+
+    /// spec_for_detach with an explicit --port-auto flag (ADR 0026(c)/C3).
+    fn spec_for_detach_full(
+        instance: &str,
+        replace: bool,
+        port_auto: bool,
+    ) -> workestrate::microsandbox::runtime::InstanceSpec {
         use workestrate::microsandbox::runtime::InstanceSpec;
         InstanceSpec {
             instance: instance.to_string(),
             workload: "litellm".to_string(),
             context: None,
             replace,
+            port_auto,
         }
     }
 
@@ -593,6 +603,30 @@ mod tests {
         assert!(args.contains(&"--foreground".to_string()));
         assert!(args.contains(&"--instance".to_string()));
         assert_eq!(args[args.len() - 1], "xy7");
+
+        // `--port-auto` (ADR 0026(c)) is forwarded alongside --instance; it
+        // must NOT appear when unset.
+        let args = litellm.detach_args(&spec_for_detach_full("litellm@canary", false, true));
+        assert!(
+            args.contains(&"--port-auto".to_string()),
+            "--port-auto must be forwarded to the detached child: {args:?}"
+        );
+        assert_eq!(
+            args,
+            vec![
+                "litellm",
+                "up",
+                "--foreground",
+                "--port-auto",
+                "--instance",
+                "canary",
+            ]
+        );
+        let args = litellm.detach_args(&spec_for_detach("litellm", false));
+        assert!(
+            !args.contains(&"--port-auto".to_string()),
+            "--port-auto must not appear when unset: {args:?}"
+        );
         Ok(())
     }
 
@@ -624,7 +658,7 @@ mod tests {
         assert_eq!(slug.len(), 4);
         validate_instance_id(&slug).expect("allocated slug must satisfy the slug rule");
 
-        let spec = build_instance_spec("litellm", false, None, Some(&slug))?;
+        let spec = build_instance_spec("litellm", false, None, Some(&slug), false)?;
         assert_eq!(
             spec.instance,
             format!("litellm@{slug}"),
@@ -661,7 +695,7 @@ mod tests {
             .get_arguments()
             .filter_map(|a| a.get_long().map(|s| s.to_string()))
             .collect();
-        for f in ["replace", "instance", "new", "foreground"] {
+        for f in ["replace", "instance", "new", "foreground", "port-auto"] {
             assert!(
                 flag_names.contains(&f.to_string()),
                 "litellm up missing flag: {f}"

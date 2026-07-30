@@ -31,6 +31,11 @@ pub enum ServiceAction {
         /// `<slot>@<id>`.
         #[arg(long)]
         new: bool,
+
+        /// Publish each port on a lock-probed free port on the slot's bind
+        /// (the chosen ports are recorded in the instance record).
+        #[arg(long)]
+        port_auto: bool,
     },
     /// Stop and remove the sandbox
     Down {
@@ -73,6 +78,11 @@ pub enum AgentAction {
         /// Auto-allocate the lowest free integer id >= 2.
         #[arg(long)]
         new: bool,
+
+        /// Publish each port on a lock-probed free port on the slot's bind
+        /// (the chosen ports are recorded in the instance record).
+        #[arg(long)]
+        port_auto: bool,
     },
     /// Stop and remove the sandbox
     Down {
