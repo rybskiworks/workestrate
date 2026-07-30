@@ -326,6 +326,35 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
+    // ADR 0026(d): depends_on entries must name an existing workload (a
+    // workload may NOT depend on itself — self-dependency is nonsensical for
+    // discovery), and the injected `env` target must be a valid env-var name.
+    for (workload_name, workload) in &config.workloads {
+        for (dep, spec) in &workload.depends_on {
+            if dep == workload_name {
+                anyhow::bail!(
+                    "workload '{}' depends_on references itself (self-dependency is not allowed)",
+                    workload_name
+                );
+            }
+            if !config.workloads.contains_key(dep) {
+                anyhow::bail!(
+                    "workload '{}' depends_on references undefined workload '{}'",
+                    workload_name,
+                    dep
+                );
+            }
+            if !is_valid_env_var_name(&spec.env) {
+                anyhow::bail!(
+                    "workload '{}' depends_on '{}' env '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
+                    workload_name,
+                    dep,
+                    spec.env
+                );
+            }
+        }
+    }
+
     // WP1 trust-boundary validators (closes A2, C2, C3, C4). These run at
     // config-load time so hostile layers are rejected BEFORE merge / plan /
     // sandbox-start. See `80-remediation-plan.md` WP1.
@@ -641,5 +670,94 @@ default_deny = true
         for bad in ["", "1FOO", "FOO-BAR", "FOO BAR", "FOO.BAR", "-A"] {
             assert!(!is_valid_env_var_name(bad), "'{bad}' should be invalid");
         }
+    }
+
+    // ---- ADR 0026(d): depends_on validation ----
+
+    /// Base config plus a second workload that `pi` can legitimately depend
+    /// on; the caller mutates it per test.
+    fn depends_on_config() -> ConfigFile {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+log_stop_errors = false
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+
+[workloads.pi.network]
+default_deny = true
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.litellm.network]
+default_deny = true
+"#;
+        toml::from_str(toml).expect("depends_on config must parse")
+    }
+
+    #[test]
+    fn validate_config_accepts_valid_depends_on() -> Result<()> {
+        let config = depends_on_config();
+        validate_config(&config)
+    }
+
+    #[test]
+    fn validate_config_rejects_undefined_depends_on_dep() {
+        let mut config = depends_on_config();
+        config.workloads.get_mut("pi").unwrap().depends_on.insert(
+            "missing".to_string(),
+            crate::config::DependsOnSpec {
+                env: "MISSING_URL".to_string(),
+                required: false,
+            },
+        );
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on references undefined workload 'missing'"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_depends_on_self_dependency() {
+        let mut config = depends_on_config();
+        config.workloads.get_mut("pi").unwrap().depends_on.insert(
+            "pi".to_string(),
+            crate::config::DependsOnSpec {
+                env: "SELF_URL".to_string(),
+                required: false,
+            },
+        );
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on references itself (self-dependency is not allowed)"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_depends_on_env_name() {
+        let mut config = depends_on_config();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .env = "BAD-NAME".to_string();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on 'litellm' env 'BAD-NAME' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)"
+        );
     }
 }

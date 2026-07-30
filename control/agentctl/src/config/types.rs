@@ -130,12 +130,26 @@ pub struct NetworkConfig {
     pub ingress: Vec<IngressRule>,
 }
 
+/// A single dependency declaration of a workload
+/// (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d)
+/// discovery-lite). `env` names the environment variable the resolved address
+/// of dependency `<dep>` is injected as; `required` (default false) makes a
+/// not-running dependency a plan-time refusal instead of a skip.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+pub struct DependsOnSpec {
+    pub env: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
 /// A single workload definition (`workloads.<name>` in workestrate.toml).
 /// `kind` is `"agent"` (interactive TUI attach) or `"service"` (headless,
 /// detached by default); the remaining fields describe the image, resources,
 /// command, env/secret wiring, mounts, ports, seed files, local-build
-/// override, and network policy. All fields merge layer-by-layer via
-/// `merge::merge_layers`.
+/// override, network policy, and dependency declarations. All fields merge
+/// layer-by-layer via `merge::merge_layers`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -163,6 +177,12 @@ pub struct WorkloadConfig {
     pub local_build: Option<LocalBuildConfig>,
     #[serde(default)]
     pub network: NetworkConfig,
+    /// Dependency declarations (`workloads.<name>.depends_on.<dep>`; ADR
+    /// 0026(d)): each entry names another workload whose address is resolved
+    /// from the port registry and injected as the declared env var at plan
+    /// time. Layers merge union-by-dependency-name, last layer wins per dep.
+    #[serde(default)]
+    pub depends_on: HashMap<String, DependsOnSpec>,
 }
 
 /// Definition of one named secret (`secrets.<name>` in workestrate.toml).
@@ -311,6 +331,7 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
     "seed_files",
     "local_build",
     "network",
+    "depends_on",
 ];
 
 #[cfg(test)]
@@ -420,5 +441,95 @@ path = "/tmp/project"
         assert_eq!(registry.settings.home_version, Some(2));
         assert_eq!(registry.configs["personal"].r#ref.as_deref(), Some("main"));
         assert_eq!(registry.trusted_projects.len(), 1);
+    }
+
+    // ---- ADR 0026(d): depends_on dependency declarations ----
+
+    /// A `[workloads.pi.depends_on.litellm]` table carrying only `env` must
+    /// parse with `required` defaulting to false.
+    #[test]
+    fn depends_on_parses_with_required_defaulting_false() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let spec = &config.workloads["pi"].depends_on["litellm"];
+        assert_eq!(spec.env, "LITELLM_URL");
+        assert!(!spec.required, "required must default to false");
+    }
+
+    /// An explicit `required = true` survives a serialize/deserialize
+    /// round-trip.
+    #[test]
+    fn depends_on_required_true_round_trips() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+required = true
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let spec = &config.workloads["pi"].depends_on["litellm"];
+        assert_eq!(spec.env, "LITELLM_URL");
+        assert!(spec.required);
+
+        let serialized = toml::to_string(&config).unwrap();
+        let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, config);
+    }
+
+    /// A typo inside a depends_on spec must hard-error (closed vocabulary).
+    #[test]
+    fn depends_on_rejects_unknown_spec_field() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+evn = "X"
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "depends_on spec typo must fail: {err}"
+        );
+    }
+
+    /// A camelCase `dependsOn` at workload level is not a known field and
+    /// must be rejected like any other typo.
+    #[test]
+    fn workload_rejects_unknown_depends_on_casing() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+dependsOn = {}
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "workload-level 'dependsOn' must fail: {err}"
+        );
     }
 }

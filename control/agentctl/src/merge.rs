@@ -403,6 +403,25 @@ fn merge_workload(
         }
     }
 
+    if table.contains_key("depends_on") {
+        // ADR 0026(d): depends_on maps merge union-by-dependency-name, last
+        // layer wins per dep — mirroring the env union semantics above (for
+        // a map, insert/overwrite replaces an existing entry in place).
+        // Provenance is recorded per dep AND for the whole key, exactly like
+        // the env arm.
+        for (dep, spec) in &layer.depends_on {
+            merged.depends_on.insert(dep.clone(), spec.clone());
+            provenance.insert(
+                format!("workloads.{name}.depends_on.{dep}"),
+                layer_ctx.name.clone(),
+            );
+        }
+        provenance.insert(
+            format!("workloads.{name}.depends_on"),
+            layer_ctx.name.clone(),
+        );
+    }
+
     if table.contains_key("network") {
         let raw_network = table.get("network").and_then(|v| v.as_table());
         merge_network(
@@ -1134,6 +1153,51 @@ mod tests {
             provenance.get("workloads.pi.secret_env.KEY"),
             Some(&"top".to_string()),
             "provenance must reflect the final (top) declaration"
+        );
+        Ok(())
+    }
+
+    // ---- ADR 0026(d): depends_on is union-by-dep-name, last layer wins ----
+
+    #[test]
+    fn depends_on_union_last_layer_wins_per_dep() -> Result<()> {
+        // Base declares dep A; the override layer re-declares A with a
+        // different env and adds B → A is overridden in place, B is appended,
+        // and provenance names the override layer for both deps (plus the
+        // whole-key entry).
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.depends_on.litellm]\nenv = \"LITELLM_URL\"\n\n[workloads.pi.network]\ndefault_deny = true",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[workloads.pi]\n\n[workloads.pi.depends_on.litellm]\nenv = \"LITELLM_BASE_URL\"\nrequired = true\n\n[workloads.pi.depends_on.db]\nenv = \"DB_URL\"",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let pi = merged.workloads.get("pi").unwrap();
+
+        assert_eq!(pi.depends_on.len(), 2, "A overridden + B appended");
+        let a = &pi.depends_on["litellm"];
+        assert_eq!(a.env, "LITELLM_BASE_URL", "override wins per dep key");
+        assert!(a.required);
+        let b = &pi.depends_on["db"];
+        assert_eq!(b.env, "DB_URL");
+        assert!(!b.required, "required defaults to false");
+
+        assert_eq!(
+            provenance.get("workloads.pi.depends_on"),
+            Some(&"team".to_string())
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.depends_on.litellm"),
+            Some(&"team".to_string()),
+            "re-declared dep must be re-attributed to the override layer"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.depends_on.db"),
+            Some(&"team".to_string()),
+            "new dep provenance names the override layer"
         );
         Ok(())
     }
