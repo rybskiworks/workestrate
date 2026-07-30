@@ -279,7 +279,53 @@ operator confirms the agent prompt appears.
 back to `agents/opencode/build`. Tempest uses the nix-built `tempest:latest`
 image (`workestrate.toml:317`) — ensure B2 + `just load-images` succeeded.
 
-### B10 — Instance lifecycle: parallel instances, port offset, teardown `HOST-KVM`
+### Experiment E1 — Guest reachability of non-127.0.0.1 loopbacks `HOST-KVM`
+
+**Purpose:** feeds ADR 0026(f) DEFERRED-PENDING-E1; decides guest-facing
+addressing for parallel alternates. The conservative default (guest-facing
+alternates share `127.0.0.1` + `--port-auto`) holds until this experiment
+runs.
+
+**On the HOST** — bind four HTTP servers on different loopback IPs:
+
+```bash
+python3 -m http.server 8081 --bind 127.0.0.1 &
+python3 -m http.server 8082 --bind 127.0.0.2 &
+python3 -m http.server 8083 --bind 127.0.0.3 &
+python3 -m http.server 8084 --bind 0.0.0.0 &
+ss -tlnp | grep 808   # verify all four are listening
+```
+
+**From INSIDE a pi sandbox** (`workestrate pi exec`, interactive — same CLI
+limitation as B8/B9: no headless in-sandbox exec):
+
+```bash
+getent hosts host.microsandbox.internal
+ip route
+curl -sS http://host.microsandbox.internal:8081/   # 127.0.0.1 bind
+curl -sS http://host.microsandbox.internal:8082/   # 127.0.0.2 bind
+curl -sS http://host.microsandbox.internal:8083/   # 127.0.0.3 bind
+curl -sS http://host.microsandbox.internal:8084/   # 0.0.0.0 bind
+```
+
+Note which of the four succeed (HTTP 200 / directory listing) and which fail
+(connection refused / timeout).
+
+**Cleanup:** `kill` the four python servers.
+
+**Decision table:**
+
+| E1 outcome | ADR 0026 consequence |
+|---|---|
+| All four binds reachable from the guest | `127/8` is guest-reachable → parallel slots may publish guest-facing alternates on their own `127.0.0.N` |
+| Only the `0.0.0.0` bind reachable | Guest-facing alternates publish `0.0.0.0` (host-only services keep `127.0.0.N`) |
+| Only `127.0.0.1` reachable (`0.0.0.0` works or not) | Conservative default confirmed: guest-facing alternates share the `127.0.0.1` bind and differentiate with `--port-auto` |
+
+The outcome MUST be recorded in
+[06-improvements/12-per-instance-addressing.md](06-improvements/12-per-instance-addressing.md)
+§open-decisions.
+
+### B10 — Instance lifecycle: parallel instances, per-instance addressing, teardown `HOST-KVM`
 
 This step exercises the ADR 0021 instance-lifecycle model
 (`docs/migration/50-decisions/0021-instance-lifecycle-model.md`).
@@ -293,8 +339,10 @@ workestrate litellm up --new
 #    Equivalent explicit form: workestrate litellm up --instance <id>
 #    The instance name becomes <slot>@<id> (lifecycle.rs:59, main.rs:534-570).
 
-# 3. Start a parallel instance with an explicit port offset (host ports += N).
-workestrate litellm up --new --port-offset 10000
+# 3. Start a parallel instance publishing on its own per-instance IP.
+workestrate litellm up --new
+#    The parallel instance publishes 127.0.0.2:4000 (same guest port 4000,
+#    bind differs; ADR 0026).
 
 # 4. Stop the singleton AND every parallel instance of litellm.
 workestrate litellm down --all-instances
@@ -311,7 +359,7 @@ workestrate down-all --yes
 | `--replace` | `up`/`exec` | tear down existing instance at this slot first | `cli_actions.rs:22-23,69-70` |
 | `--instance <id>` | `up`/`exec`/`down`/`logs` | target `<slot>@<id>`; refuses if already running | `cli_actions.rs:27-28,42-43` |
 | `--new` | `up`/`exec` | auto-allocate lowest free integer id ≥ 2 | `cli_actions.rs:32-33` |
-| `--port-offset <n>` | `up`/`exec`/`plan` | add N to every **host** port (guest unchanged) | `cli_actions.rs:36-37`; ADR 0021 §5 |
+| `--port-auto` | `up`/`exec` | lock-probed free port on the slot's bind (recorded in the instance record) | ADR 0026 (`--port-offset` was removed pre-release) |
 | `--all-instances` | `down` | stop singleton + every parallel instance of this workload | `cli_actions.rs:46-47` |
 
 `--replace`, `--instance`, and `--new` are **mutually exclusive**
@@ -320,10 +368,10 @@ workestrate down-all --yes
 **Expected:**
 
 - `workestrate ps` lists the singleton after B5/B7, then the parallel
-  instance after `--new`, with distinct instance names and host ports.
-- `--port-offset 10000` shifts the litellm host port from 4000 to 14000
-  (guest stays 4000); the shifted port is checked against the port registry
-  for collisions (ADR 0021 §5, `70-open-items.md:166-178`).
+  instance after `--new`, with distinct instance names and bind IPs.
+- The parallel instance publishes `127.0.0.2:4000` (guest unchanged) while
+  the singleton holds `127.0.0.1:4000`; collisions are keyed on
+  `(bind_ip, port)` so no offset arithmetic is needed (ADR 0026).
 - `down --all-instances` removes every litellm instance; `down-all --yes`
   removes every sandbox across all workloads (`lifecycle.rs:355-411`).
 
@@ -406,8 +454,8 @@ stragglers and `workestrate <name> down --instance <id>` them individually.
 | Agent attach (pi) | B8: `workestrate pi exec` (interactive) | TUI prompt appears; `/work` mount visible |
 | Agent attach (opencode) | B9: `workestrate opencode exec` (interactive) | TUI prompt appears |
 | Agent attach (tempest) | B9: `workestrate tempest exec` (interactive) | TUI prompt appears |
-| Parallel instances | B10: `workestrate litellm up --new` | `workestrate ps` lists `<slot>@<id>` with distinct host port |
-| Port offset | B10: `workestrate litellm up --new --port-offset 10000` | host port = 4000 + 10000 = 14000; guest port unchanged |
+| Parallel instances | B10: `workestrate litellm up --new` | `workestrate ps` lists `<slot>@<id>` with distinct bind IP |
+| Per-instance IP | B10: `workestrate litellm up --new` (second parallel) | `ps` shows `127.0.0.2:4000` vs singleton `127.0.0.1:4000`; guest port unchanged |
 | Teardown | B12: `workestrate down-all --yes` | `workestrate ps` empty |
 | Plan parity (original-5) | B11 (Lane A baseline in `04-baseline-validation.md`) | `workestrate <name> plan` matches baseline for all 5 workloads |
 | Runtime parity (mounts/env) | B11: inferred from plan parity + service boot | plan matches baseline AND services boot (no headless in-sandbox exec exists) |
@@ -431,6 +479,7 @@ honesty). Every step above is marked `HOST-NIX` or `HOST-KVM` as applicable:
 | B8 | `HOST-KVM` | sandbox runtime execution (interactive) |
 | B9 | `HOST-KVM` | sandbox runtime execution (interactive) |
 | B10 | `HOST-KVM` | sandbox lifecycle (up/down/ps) |
+| E1 | `HOST-KVM` | guest reachability probe (interactive in-sandbox curl) |
 | B11 | `HOST-KVM` | runtime parity (interactive egress check) |
 | B12 | `HOST-KVM` | sandbox teardown |
 

@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the eleven post-validation improvement specifications under
+This index catalogs the twelve post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -35,7 +35,9 @@ format), [0003](../../migration/50-decisions/0003-config-purity-closed-vocabular
 home), [0024](../../migration/50-decisions/0024-dotfiles-home-and-working-copy-config-repos.md)
 (dotfiles home + working-copy config repos), and
 [0025](../../migration/50-decisions/0025-home-provisioning-and-lockfile.md)
-(home provisioning + lockfile). The ADR index is at
+(home provisioning + lockfile), and
+[0026](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md)
+(per-instance addressing + discovery-lite). The ADR index is at
 [`../../migration/50-decisions/README.md`](../../migration/50-decisions/README.md).
 No spec here contradicts an ADR; where a spec extends the config surface, it
 does so via `#[serde(default)]` additive fields (ADR 0021 §8) and post-merge
@@ -59,6 +61,7 @@ invariant.
 | [09-microsandbox-agentd-offline-build.md](09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd offline build (ADR 0011 carrier) | `READY-TO-EXECUTE (option 2 gated on fork push access; option 1 gated on upstream responsiveness; option 3 NEEDS-DEVSHELL + HOST-NIX)` | None file-level on other improvement specs; option 2 blocked on fork push access; option 3 cross-references [01](01-mount-filtering-shadowing.md) | option 2 = **S** (once unblocked); option 1 = **M** (incl. upstream review latency); option 3 = **M** | `HOST-NIX` (options 2/3 builds); option 1 is upstream |
 | [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init); docs/spec fully done` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
 | [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home init --from` + positional dest) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
+| [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IN-PROGRESS (Wave 1 / 12a code landing on migration/tool-model; Experiment E1 + guest-reachability reassessment NEEDS-KVM)` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) is Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -259,6 +262,23 @@ today"). Selective copy: never copies `state/` (ephemeral), excludes
 mechanism for `--from`, future `up --pin`, and dogfooding B3/B4 — no second
 mechanism.
 
+### 12 — Per-instance addressing + discovery-lite
+
+Execution spec for ADR 0026: replaces ADR 0021 §5 `--port-offset` (removed
+pre-release) with slot-based binding — the singleton publishes on the shared
+bind `127.0.0.1` at the declared ports (the well-known address static configs
+use), parallel slots publish on per-instance loopback IPs (`127.0.0.N`,
+`N >= 2`) drawn from a locked allocator in the port registry. Collisions are
+keyed on `(bind_ip, port)` (same port on different IPs is legal). `--port-auto`
+picks a lock-probed free port on the slot's bind. Wave 1 (12a) = slot-based
+binding + bind-aware registry + surfacing + `--port-auto` + `--port-offset`
+removal; Wave 2 (12b) = `depends_on` discovery-lite (unconditional plan-time
+resolution, env injection, egress derivation, `--use <dep>@<instance>`
+override, refuse-if-required-not-running). **Key decision:** guest-reachability
+of non-`127.0.0.1` loopbacks is KVM-unverified (DEFERRED-PENDING-E1) —
+conservative default: guest-facing alternates share `127.0.0.1` + `--port-auto`
+until Experiment E1 runs.
+
 ---
 
 ## Dependency graph
@@ -309,6 +329,8 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 11-home-provisioning-and-lockfile     [deps: ADR 0025; ↔ 06 (same wave);
                                         extends 10 Task 3]
+
+12-per-instance-addressing [deps: ADR 0026; supersedes ADR 0021 §5; E1 ↔ ../05-host-validation.md]
 ```
 
 **Key dependency notes:**
@@ -351,6 +373,15 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
   wave. It extends [10](10-config-repos-as-working-copies.md) Task 3 (the
   `home init` scaffolding) with `--from`/positional-dest provisioning and the
   generated `workestrate.lock`. Its code tasks are NEEDS-DEVSHELL / HOST-NIX.
+- **12 (per-instance addressing)** depends on ADR 0026 and supersedes ADR 0021
+  §5 (`--port-offset`, removed pre-release). Wave 1 (12a) is the slot-based
+  binding + bind-aware registry + surfacing + `--port-auto` code landing on
+  `migration/tool-model`; Wave 2 (12b) is `depends_on` discovery-lite. The
+  guest-reachability of non-`127.0.0.1` loopbacks is gated on Experiment E1
+  ([../05-host-validation.md](../05-host-validation.md)) — the conservative
+  default (shared `127.0.0.1` + `--port-auto` for guest-facing alternates)
+  holds until E1 runs and its outcome is recorded in the spec's
+  §open-decisions.
 
 ---
 

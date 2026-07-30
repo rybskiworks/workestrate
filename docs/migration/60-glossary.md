@@ -149,13 +149,15 @@ singleton slot and refuses if it is occupied. See ADR 0021.
 An instance on a parallel instance slot, named `<slot>@<id>` (e.g.
 `litellm@canary`). Coexists with the singleton and with other parallel
 instances of the same workload. Created via `--instance <id>` or `--new`.
-Typically paired with `--port-offset N` to avoid host-port collisions. See
+Typically paired with `--port-offset N` to avoid host-port collisions
+(removed pre-release; superseded by ADR 0026's per-instance addressing). See
 ADR 0021.
 
 **Blue-green (config change workflow)**
 A safe mutation workflow for an agent (or operator) modifying the project:
 bring up the new revision on a parallel instance slot with `--new
---port-offset N`, smoke-test it on the offset port, then atomically cut over
+--port-offset N` (removed pre-release; superseded by ADR 0026's per-instance
+addressing), smoke-test it on the offset port, then atomically cut over
 by stopping the old instance (`down --instance <old>` or `up --replace` on
 the singleton). The refuse-on-occupied default makes this workflow native —
 the new revision comes up alongside the old one rather than destroying it.

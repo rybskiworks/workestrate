@@ -1,0 +1,104 @@
+# ADR 0026: Per-instance addressing + discovery-lite (supersedes ADR 0021 §5 `--port-offset`)
+
+**Status:** Accepted
+**Date:** 2026-07-30
+**References:** ADR 0021 (instance lifecycle), ADR 0020 Ruling 4,
+`docs/validation-and-improvements/06-improvements/12-per-instance-addressing.md`
+(execution spec),
+`docs/validation-and-improvements/05-host-validation.md` Experiment E1.
+
+## Context
+
+ADR 0021 gave parallel instances `--port-offset N` (host ports `+= N`) so a
+canary can coexist with the singleton. Offsets are a poor addressing model:
+they say nothing about WHERE a port is bound, they break any static config
+that hardcodes the well-known address (e.g. agents reach the LiteLLM proxy
+at `host.microsandbox.internal:4000` — the address static configs use), and
+they force every consumer to recompute arithmetic per instance.
+
+Meanwhile the SDK already supports per-bind publishing (`.port_bind(IpAddr,
+host, guest)`; `.port()` is `.port_bind(127.0.0.1, ...)`). Pre-release is the
+only cheap window to replace the model — there are no released users to keep
+compat for.
+
+## Options considered
+
+1. **Keep `--port-offset` alongside the slot model.** Rejected: dead weight
+   pre-release; two addressing mechanisms for the same problem; offsets break
+   static-config addressing anyway.
+
+2. **A provider-level flag selecting bind strategy per workload.** Rejected:
+   the slot model already carries the distinction — singleton vs parallel — a
+   second knob duplicates it.
+
+3. **A name-based router/registry (e.g. DNS or a proxy mapping names to
+   instances).** Rejected-for-now: DEFERRED; trigger documented — adopt when
+   >1 guest-facing alternate per workload must coexist AND E1 shows neither
+   per-IP reachability nor `0.0.0.0` publishing is acceptable.
+
+## Decision
+
+(a) **SLOT-BASED BINDING** — the singleton slot publishes on the shared bind
+`127.0.0.1` at the declared ports (UNCHANGED — this is the well-known address
+static configs use, e.g. `host.microsandbox.internal:4000`); parallel slots
+(`--instance`/`--new`) publish on per-instance loopback IPs (`127.0.0.N`,
+`N >= 2`) drawn from a locked allocator in the port registry (lowest free `N`
+across records; freed on unregister; stale records still reserve their IP
+until cleared — conservative by design).
+
+(b) Port collisions are keyed on `(bind_ip, port)` — the same port on
+different bind IPs does not collide; the same `(ip, port)` refuses with
+remediation. Legacy records without `bind_ip` are treated as `127.0.0.1`.
+
+(c) **`--port-auto`** — pick a lock-probed free port on the slot's bind (for
+cases where even the per-IP port must not be assumed); the chosen port is
+recorded in the instance record.
+
+(d) **depends_on discovery-lite** — declaring a dependency in config triggers
+UNCONDITIONAL plan-time resolution (singleton instance by default), env
+injection of the resolved address, and egress derivation. `--use
+<dep>@<instance>` is ONLY an instance-selection override (not an on/off switch
+— declaration alone activates discovery). A required dependency that is not
+running → REFUSE at plan time with a remediation message; NO auto-start in v1.
+
+(e) **`--port-offset` is REMOVED pre-release** (superseded by this ADR; no
+compat framing, no deprecation window — the tool has not shipped).
+
+(f) **DEFERRED-PENDING-E1:** guest-reachability of non-`127.0.0.1` loopbacks
+is KVM-unverified. Conservative default: guest-facing alternates publish on
+`127.0.0.1` with `--port-auto` until Experiment E1
+(`05-host-validation.md`) proves whether a guest can reach host services
+bound on `127.0.0.N` via `host.microsandbox.internal`. Reassess after E1 (3
+outcomes documented in the E1 decision table).
+
+## Consequences
+
+- Parallel instances no longer need port arithmetic; static configs keep one
+  well-known address per workload (the singleton).
+- The `(bind_ip, port)` collision model makes same-port parallels legal.
+- discovery-lite makes cross-workload wiring declarative.
+- `--port-offset` scripts break loudly (unknown flag) rather than silently —
+  acceptable pre-release.
+- Historical references to `--port-offset` remain in
+  `docs/migration/20-target-system-spec.md` §13 and the ADR 0021 body
+  (retained for history; the ADR 0021 addendum + this ADR are the
+  supersession of record).
+
+## Rejected why
+
+- **Keep `--port-offset` alongside the slot model:** dead weight pre-release;
+  two addressing mechanisms for the same problem; offsets break
+  static-config addressing anyway.
+- **A provider-level flag selecting bind strategy per workload:** the slot
+  model already carries the distinction — singleton vs parallel — a second
+  knob duplicates it.
+- **A name-based router/registry (e.g. DNS or a proxy mapping names to
+  instances):** DEFERRED — adopt when >1 guest-facing alternate per workload
+  must coexist AND E1 shows neither per-IP reachability nor `0.0.0.0`
+  publishing is acceptable.
+
+---
+
+The execution spec is
+`docs/validation-and-improvements/06-improvements/12-per-instance-addressing.md`
+(IN-PROGRESS; guest-reachability parts NEEDS-KVM).

@@ -300,26 +300,29 @@ renders the `SandboxPlan` with per-field provenance annotations
 (`diagnostics.rs:30-31` → `workload.show_source()`). The `--show-source` flag is
 a global flag on the `Cli` struct (`main.rs:33-34`).
 
-### P2 — Instances: `--new` / `--instance` / `--port-offset` (plan-plane)
+### P2 — Instances: `--new` / `--instance` / per-instance addressing (plan-plane)
 
 **Goal:** verify the instance-lifecycle flags render correctly in `plan`
 (runtime execution is `HOST-KVM` — marked).
 
 The instance flags are on `ServiceAction::Up` / `AgentAction::Exec`
 (`cli_actions.rs:16-38`, `cli_actions.rs:67-83`): `--new` (auto-allocate slug),
-`--instance <id>` (target parallel instance), `--port-offset <n>` (shift host
-ports). `plan` accepts `--port-offset` (`cli_actions.rs:56-60`, `92-95`).
+`--instance <id>` (target parallel instance). Per ADR 0026, parallel slots
+publish on per-instance loopback IPs (`127.0.0.N`, `N >= 2`); `plan
+--instance <id>` renders the prospective parallel plan (bind computed from
+the registry view, read-only).
 
 **Commands:**
 
 ```sh
-# Plan with port offset (config-plane, no KVM):
-just workestrate probe-svc plan --port-offset 10000
-# Expected: port line renders as "port: 18080:8080" (host port shifted by 10000,
-# diagnostics.rs:32-40).
+# Plan a parallel-slot instance (config-plane, no KVM):
+just workestrate probe-svc plan --instance canary
+# Expected: the plan renders the prospective per-instance bind (127.0.0.2)
+# when the bind differs from 127.0.0.1 (conditional additive rendering,
+# ADR 0026). The singleton plan stays byte-identical.
 
-# Plan with --show-source + --port-offset:
-just workestrate probe-svc plan --show-source --port-offset 10000
+# Plan with --show-source + --instance:
+just workestrate probe-svc plan --show-source --instance canary
 ```
 
 > **`--new` and `--instance` are runtime-only** (they allocate/target a

@@ -180,6 +180,9 @@ port-registry record so `down`/`logs`/`ps` recover it without re-passing
   `port_offset: Option<u16>` field; `down --instance <id>` also works by id
   regardless).
 
+**Superseded 2026-07-30:** `--port-offset` was removed pre-release by ADR 0026
+(per-instance addressing); this resolution is historical.
+
 ### Multi-context batch
 
 **Deferred until**: a use case requires merging multiple contexts in one

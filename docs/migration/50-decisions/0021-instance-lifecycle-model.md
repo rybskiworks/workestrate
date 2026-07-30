@@ -7,6 +7,10 @@
 ADR 0019 (instance namespacing via `<context>-<workload>`); ADR 0020 Ruling 4
 (spec-code CI guard pattern, reused for schema drift).
 
+> **Addendum 2026-07-30:** §5 (`--port-offset`) is REMOVED pre-release —
+> superseded by [ADR 0026](0026-per-instance-addressing-and-discovery.md).
+> The section is retained for history.
+
 ## Context
 
 Historically, `workestrate <name> up` / `exec` always **replaced** any existing
@@ -310,3 +314,19 @@ the pointer does not interfere with the spec-code CI guard.
   (Resolved: the impl derives `JsonSchema` cleanly via `schemars`; the
   hand-maintained-schema fallback was not needed. The drift guard remains
   load-bearing for catching schema/code drift.)
+
+---
+
+## Addendum (2026-07-30): `--port-offset` removed pre-release
+
+`--port-offset` (§5) is removed before the first release of the tool. It is
+superseded by [ADR 0026](0026-per-instance-addressing-and-discovery.md)'s
+slot-based binding (singleton on shared `127.0.0.1`, parallel slots on
+`127.0.0.N` from a locked allocator), `(bind_ip, port)` collision model, and
+`--port-auto` (lock-probed free port on the slot's bind).
+
+There is no compat or deprecation framing because the tool has not shipped —
+there are no released users to keep compat for. The §5 and §7 references
+(including the `port_offset` JSON field) are historical: they describe the
+model as originally decided and are retained for the record. The ADR 0026
+addendum above + ADR 0026 itself are the supersession of record.

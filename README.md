@@ -307,8 +307,8 @@ accidentally nuke a running baseline by re-running `up`.
 # Refuse-safe defaults
 workestrate litellm up                       # refuses if litellm slot is occupied
 workestrate litellm up --replace             # explicit recycle (was the old default)
-workestrate litellm up --instance canary --port-offset 10000   # parallel canary on :14000
-workestrate litellm up --new --port-offset 10000               # auto-named canary on :14000
+workestrate litellm up --instance canary   # parallel canary on 127.0.0.2:4000
+workestrate litellm up --new               # auto-named canary on 127.0.0.N:4000
 
 # Listing + teardown
 workestrate ps                               # list running instances for the active context
@@ -318,27 +318,32 @@ workestrate litellm down --all-instances     # stop singleton + all parallel ins
 workestrate down --all                       # stop everything (confirms unless --yes)
 ```
 
-`--port-offset N` shifts **host** ports by `+= N` (guest ports unchanged),
-so a parallel instance of a port-publishing workload does not collide with
-the singleton. See [docs/migration/20-target-system-spec.md §13](docs/migration/20-target-system-spec.md)
+The singleton slot publishes on the shared bind `127.0.0.1` at the declared
+ports (the well-known address static configs use, e.g.
+`host.microsandbox.internal:4000`); parallel slots publish on per-instance
+loopback IPs (`127.0.0.N`, `N >= 2`) drawn from a locked allocator in the
+port registry. Collisions are keyed on `(bind_ip, port)` — the same port on
+different bind IPs does not collide. `--port-auto` picks a lock-probed free
+port on the slot's bind for cases where even the per-IP port must not be
+assumed. See [ADR 0026](docs/migration/50-decisions/0026-per-instance-addressing-and-discovery.md)
 and [ADR 0021](docs/migration/50-decisions/0021-instance-lifecycle-model.md).
 
 ### Blue-green config changes
 
-The refuse-on-occupied default + `--new`/`--port-offset` make a safe
+The refuse-on-occupied default + `--new`/per-instance addressing make a safe
 blue-green workflow for an agent (or operator) modifying the project native.
 Example: validating a candidate LiteLLM `config.yaml` without touching the
 serving proxy.
 
 ```bash
 # 1. Edit the candidate config in your config repo (or a working copy).
-# 2. Bring up a canary on an offset port alongside the live proxy.
-workestrate litellm up --new --port-offset 10000
-#    → live proxy stays on :4000; canary on :14000 (guest still :4000).
+# 2. Bring up a canary on its own per-instance IP alongside the live proxy.
+workestrate litellm up --new
+#    → live proxy stays on 127.0.0.1:4000; canary on 127.0.0.2:4000 (guest still :4000).
 
 # 3. Smoke-test the canary.
 workestrate run -- bash -c \
-  'curl -sS http://127.0.0.1:14000/v1/chat/completions \
+  'curl -sS http://127.0.0.2:4000/v1/chat/completions \
    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
    -H "Content-Type: application/json" \
    -d "{\"model\":\"coding\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
@@ -350,9 +355,9 @@ workestrate litellm up --replace             # (slot is now free; --replace is b
 workestrate litellm down --all-instances     # or target the canary id from `ps`
 ```
 
-This workflow is the reason `--port-offset` exists: it lets a canary and a
-live instance of the same workload coexist on the same host long enough to
-compare them.
+This workflow is the reason per-instance addressing exists (ADR 0026): it
+lets a canary and a live instance of the same workload coexist on the same
+host long enough to compare them.
 
 ### Synthetic reference workloads
 
