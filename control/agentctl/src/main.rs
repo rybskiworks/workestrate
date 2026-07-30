@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
+use std::path::PathBuf;
 
 use workestrate::cli_actions::{
     AgentAction, ConfigAction, ContextAction, HomeAction, ServiceAction, SourceAction,
@@ -36,6 +37,14 @@ struct Cli {
 
     #[arg(long, global = true, help = "Active context name")]
     context: Option<String>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "DIR",
+        help = "Workestrate tool home"
+    )]
+    home: Option<PathBuf>,
 
     /// Emit machine-readable JSON to stdout and an error envelope to stderr
     /// on failure. Applies to: ps, plan, config list, down (per-instance
@@ -248,6 +257,12 @@ async fn async_main() -> Result<()> {
     if let Some(ref ctx) = cli.context {
         std::env::set_var("WORKESTRATE_CONTEXT", ctx);
     }
+    // --home <DIR> populates the WORKESTRATE_HOME precedence step
+    // (paths.rs resolve_home_with_kind checks it first), so the flag becomes
+    // the highest-precedence override with no path-resolution change.
+    if let Some(ref h) = cli.home {
+        std::env::set_var("WORKESTRATE_HOME", h);
+    }
 
     match cli.command {
         Commands::Check => cmd_check(),
@@ -402,6 +417,19 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
         }
+    }
+
+    #[test]
+    fn cli_root_has_global_home_flag() {
+        let cmd = Cli::command();
+        let home = cmd
+            .get_arguments()
+            .find(|a| a.get_long() == Some("home"))
+            .expect("root command must have a --home argument");
+        assert!(
+            home.is_global_set(),
+            "--home must be a global argument (valid on every subcommand)"
+        );
     }
 
     #[test]
