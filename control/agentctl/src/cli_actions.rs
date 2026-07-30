@@ -185,15 +185,38 @@ pub enum ConfigAction {
 pub enum HomeAction {
     /// Initialize the resolved tool home as a dotfiles-style git repo
     /// (git init + .gitignore + pre-commit hook). Idempotent.
+    ///
+    /// With `--from <src>` the home is PROVISIONED from an existing home
+    /// (ADR 0025): the registry layer is cloned/copied, config repos are
+    /// re-cloned or copied, and registry urls pointing into the source home
+    /// are rewritten to the dest-local `config-repos/<name>` paths. A
+    /// positional `<dest>` selects where the new home is created (default:
+    /// the resolved tool home). `--config`/`--name` remain valid on the bare
+    /// path only — combining them with `--from` or a positional dest is a
+    /// usage error.
     Init {
         /// Clone and register this config-repo URL as config-repos/<name>
-        /// after scaffolding the home.
-        #[arg(long)]
+        /// after scaffolding the home (bare path only).
+        #[arg(long, conflicts_with = "from", conflicts_with = "dest")]
         config: Option<String>,
 
         /// Name for the cloned config repo (only used with --config).
-        #[arg(long, default_value = "personal")]
+        #[arg(
+            long,
+            default_value = "personal",
+            conflicts_with = "from",
+            conflicts_with = "dest"
+        )]
         name: String,
+
+        /// Provision the home from this source (absolute path, relative path
+        /// resolved against cwd, or git URL).
+        #[arg(long, value_name = "SRC")]
+        from: Option<String>,
+
+        /// Destination directory for the new home (default: the resolved
+        /// tool home).
+        dest: Option<String>,
     },
 }
 

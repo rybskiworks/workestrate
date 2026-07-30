@@ -19,6 +19,71 @@ pub fn git_clone(url: &str, dest: &std::path::Path, branch: Option<&str>) -> Res
     Ok(())
 }
 
+/// Full (non-shallow) clone of `url` into `dest` on the default branch.
+/// Used by `home init --from` (ADR 0025): reproducing a home needs the full
+/// history so a recorded registry `rev` can be checked out (a `--depth 1`
+/// clone only carries the branch tip).
+pub fn git_clone_full(url: &str, dest: &std::path::Path) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .args(["clone"])
+        .arg(url)
+        .arg(dest)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("git clone failed for {}", url);
+    }
+    Ok(())
+}
+
+/// Check out `rev` in `repo` (detached HEAD). Used by `home init --from` to
+/// pin a reproduced config repo to the source home's recorded revision.
+pub fn git_checkout_rev(repo: &std::path::Path, rev: &str) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["checkout", rev])
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("git checkout {} failed for {}", rev, repo.display());
+    }
+    Ok(())
+}
+
+/// Read a remote's URL (`git remote get-url <name>`). Returns `Ok(None)`
+/// when the remote does not exist (git exits 2); other failures are errors.
+pub fn git_remote_get_url(repo: &std::path::Path, name: &str) -> Result<Option<String>> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["remote", "get-url", name])
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
+}
+
+/// Add or repoint a remote: `git remote add <name> <url>` when the remote is
+/// absent, else `git remote set-url <name> <url>`.
+pub fn git_remote_add_or_set_url(repo: &std::path::Path, name: &str, url: &str) -> Result<()> {
+    let verb = if git_remote_get_url(repo, name)?.is_some() {
+        "set-url"
+    } else {
+        "add"
+    };
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["remote", verb, name, url])
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("git remote {} failed for {}", verb, repo.display());
+    }
+    Ok(())
+}
+
 /// Initialize a new git repo at `dir` (no commit, mirrors `cargo new`).
 /// Used by `workestrate config new` to make the scaffold immediately
 /// committable. Returns a distinct error kind when the `git` binary is

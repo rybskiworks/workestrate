@@ -24,6 +24,8 @@ pub use paths::{
     xdg_data_dir, xdg_state_dir, HomeKind,
 };
 #[allow(unused_imports)]
+pub(crate) use registry::looks_like_git_url;
+#[allow(unused_imports)]
 pub use registry::{
     entry_is_local_path, load_registry, register_config, resolve_active_context, save_registry,
 };

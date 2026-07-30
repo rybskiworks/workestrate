@@ -123,15 +123,23 @@ pub(crate) fn with_registry_lock<R>(f: impl FnOnce(&mut Registry) -> Result<R>) 
 /// a git remote AND no ref/rev was ever recorded. A git-URL entry with a
 /// missing rev is NOT local — it is pulled (which re-records the rev).
 pub fn entry_is_local_path(entry: &ConfigRepoEntry) -> bool {
-    fn looks_like_git_url(url: &str) -> bool {
-        url.starts_with("http://")
-            || url.starts_with("https://")
-            || url.starts_with("git@")
-            || url.starts_with("ssh://")
-            || url.starts_with("git://")
-            || url.ends_with(".git")
-    }
     !looks_like_git_url(&entry.url) && entry.r#ref.is_none() && entry.rev.is_none()
+}
+
+/// Classifier: whether `url` names a GIT remote (http(s)/ssh/git protocol or
+/// a `.git`-suffixed path) as opposed to a plain local filesystem path.
+/// Extracted from [`entry_is_local_path`] (ADR 0025): `home init --from`
+/// reuses it to classify the provisioning source (`--from <src>`) and each
+/// registry entry's reproducibility. NOTE: a local path ending in `.git` is
+/// classified remote — git itself treats such paths as cloneable URLs, and
+/// offline tests lean on exactly that behavior.
+pub(crate) fn looks_like_git_url(url: &str) -> bool {
+    url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("git@")
+        || url.starts_with("ssh://")
+        || url.starts_with("git://")
+        || url.ends_with(".git")
 }
 
 /// Insert/replace a config repo entry in the registry. If `layers` is empty,

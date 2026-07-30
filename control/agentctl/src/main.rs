@@ -428,6 +428,19 @@ mod tests {
             "home init must NOT have a --path flag (spec 10 §2: operates on the \
              resolved home only); got: {long_names:?}"
         );
+        // ADR 0025: provisioning flags.
+        assert!(
+            long_names.contains(&"from".to_string()),
+            "home init missing --from flag (ADR 0025); got: {long_names:?}"
+        );
+        let positionals: Vec<String> = init
+            .get_positionals()
+            .map(|a| a.get_id().to_string())
+            .collect();
+        assert!(
+            positionals.contains(&"dest".to_string()),
+            "home init missing positional <dest> (ADR 0025); got: {positionals:?}"
+        );
     }
 
     fn check_service_subcommands(cmd: &clap::Command, name: &str) {
