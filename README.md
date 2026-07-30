@@ -797,30 +797,6 @@ directory is bind-mountable for container persistence across restarts.
 └── cache/                            (cache)
 ```
 
-### Activation
-
-**Option A: direnv (recommended)**
-```bash
-# .envrc is committed; direnv loads it automatically when you cd into the repo
-direnv allow
-```
-
-**Option B: manual sourcing**
-```bash
-source scripts/local-xdg.sh
-```
-
-**Option C: just recipe**
-```bash
-just local-setup
-```
-
-The `.envrc` and `scripts/local-xdg.sh` set `WORKESTRATE_HOME` (one env var)
-to point at `.workestrate/`.
-
-**Implemented:** the `.envrc`/`local-xdg.sh` collapse to
-`WORKESTRATE_HOME` is complete (commit 6a6cece).
-
 ### Container bind-mount
 
 When running in a container, bind-mount the `.workestrate/` directory:
@@ -829,7 +805,7 @@ docker run -v $PWD/.workestrate:$PWD/.workestrate ...
 # or with your container runner's equivalent
 ```
 
-Then source `scripts/local-xdg.sh` (or use direnv) inside the container.
+Then export `WORKESTRATE_HOME="$PWD/.workestrate"` inside the container.
 
 ### One-time migration from legacy XDG
 
@@ -844,9 +820,6 @@ This moves the registry, config repos, and runtime state into the single
 home layout (`$WORKESTRATE_HOME`) and cleans up the old XDG dirs. The SOPS
 age key is intentionally NOT moved — it stays at `~/.config/sops/age/` on the
 host (see "Security warning" below).
-
-**Implemented:** `migrate-xdg-to-repo.sh` is replaced by
-`workestrate migrate-home` (commit 7023a47).
 
 ### Security warning: age key location
 

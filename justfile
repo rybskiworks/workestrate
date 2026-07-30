@@ -205,12 +205,6 @@ dev-run-pi *args:
 load-images:
     nix develop -c load-images
 
-# Set up and verify repo-local XDG state
-local-setup:
-    @echo "Setting up repo-local XDG state..."
-    @source scripts/local-xdg.sh
-    @workestrate check
-
 # Refresh all fixed-output derivation (FOD) dependency hashes for the agent
 # recipes. Run this whenever the agent source inputs change (flake.lock bumps
 # to tempest/opencode/odysseus) or after editing per-recipe lock/requirements
