@@ -25,6 +25,11 @@ pub struct ConfigWorkload {
     /// the wrong provenance key and fell back to "core" (WP6(b)/A5).
     pub(super) secret_def_names: HashMap<String, String>,
     pub(super) provenance: Option<crate::merge::Provenance>,
+    /// ADR 0026(d) discovery-lite: depends_on resolutions computed at
+    /// construction (declaration triggers resolution on every up/exec/plan
+    /// path). `plan()` appends the injected env AFTER the declared env and
+    /// the derived egress AFTER the expanded declared egress rules.
+    pub(super) depends_resolved: Vec<crate::microsandbox::discovery::ResolvedDependency>,
 }
 
 impl ConfigWorkload {
@@ -39,6 +44,13 @@ impl ConfigWorkload {
             .ok_or_else(|| anyhow::anyhow!("workload '{}' not found in config", name))?
             .clone();
 
+        // ADR 0026(d): a declared depends_on map resolves EVERY declared dep
+        // at plan time — no flag. A required-but-not-running dep refuses
+        // here, on every up/exec/plan path (they all construct via `new`).
+        let state_dir = crate::config::resolve_state_dir();
+        let depends_resolved =
+            crate::microsandbox::discovery::resolve_depends_on(&config, name, &state_dir)?;
+
         let secrets = build_secret_definitions(&config)?;
         let env = build_env(&workload, &secrets)?;
         let secret_env = build_secret_env(&workload, &secrets)?;
@@ -51,6 +63,7 @@ impl ConfigWorkload {
             secret_env,
             secret_def_names,
             provenance,
+            depends_resolved,
         })
     }
 
@@ -93,6 +106,23 @@ impl Workload for ConfigWorkload {
             .flat_map(crate::recipes::EgressRecipeRef::expand)
             .collect();
 
+        // ADR 0026(d): apply the depends_on resolution — injected env AFTER
+        // declared env (declared wins on a name conflict; skipped inside),
+        // derived egress AFTER the expanded declared rules (identical rules
+        // deduped inside). Derivation only ADDS: default_deny is untouched
+        // (monotonic; FS-16 entitlement check untouched), and the derived
+        // rules land in `egress_rules` so `network_plan_to_policy` consumes
+        // them identically to declared egress.
+        let (injected_env, derived_egress) = crate::microsandbox::discovery::apply_resolution(
+            &self.depends_resolved,
+            &self.env,
+            &egress_rules,
+        );
+        let mut env = self.env.clone();
+        env.extend(injected_env);
+        let mut egress_rules = egress_rules;
+        egress_rules.extend(derived_egress);
+
         let mut mounts = self.workload.mounts.clone();
         // WP6(c)/A6: a configured local_build.env_override is ALSO honored as
         // a mount-host template token (checked before the default convention).
@@ -113,7 +143,7 @@ impl Workload for ConfigWorkload {
             command: self.workload.command.clone(),
             cpus: self.workload.cpus,
             memory_mib: self.workload.memory_mib,
-            env: self.env.clone(),
+            env,
             secret_env: self.secret_env.clone(),
             ports: self.workload.ports.clone(),
             mounts,
@@ -207,6 +237,7 @@ impl Workload for ConfigWorkload {
 mod tests {
     use super::*;
     use crate::config::test_support::TestConfigGuard;
+    use crate::microsandbox::plan::EgressTarget;
 
     #[test]
     fn build_path_reads_per_agent_env_override() -> Result<()> {
@@ -247,6 +278,197 @@ mod tests {
         assert_eq!(pi.name(), "pi"); // bare name unchanged for CLI dispatch
                                      // Clean up
         crate::config::set_active_context(None);
+        Ok(())
+    }
+
+    // ---- ADR 0026(d): depends_on resolution fires inside ConfigWorkload ----
+
+    /// Minimal two-workload config: `pi` depends on `litellm` (4000:4000).
+    /// The caller adjusts `required` per test.
+    const DEPENDS_CONFIG_TOML: &str = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+
+[workloads.pi.network]
+default_deny = true
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[[workloads.litellm.ports]]
+host = 4000
+guest = 4000
+
+[workloads.litellm.network]
+default_deny = true
+"#;
+
+    /// RAII guard: point `WORKESTRATE_CONFIG_DIR` at a temp dir holding a
+    /// `workestrate.toml` with `content`, and `WORKESTRATE_STATE_DIR` at a
+    /// temp dir acting as the (initially empty) port-registry state home.
+    /// Holds the global env lock; both vars are removed on drop.
+    struct DependsEnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        config_dir: std::path::PathBuf,
+        state_dir: std::path::PathBuf,
+    }
+
+    impl DependsEnvGuard {
+        fn new(label: &str, content: &str) -> Self {
+            let lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+            let config_dir = crate::config::test_support::unique_state_dir(label);
+            let state_dir = crate::config::test_support::unique_state_dir(label);
+            std::fs::create_dir_all(&config_dir).expect("create temp config dir");
+            std::fs::create_dir_all(&state_dir).expect("create temp state dir");
+            std::fs::write(config_dir.join("workestrate.toml"), content)
+                .expect("write temp workestrate.toml");
+            std::env::set_var("WORKESTRATE_CONFIG_DIR", &config_dir);
+            std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+            Self {
+                _lock: lock,
+                config_dir,
+                state_dir,
+            }
+        }
+
+        fn state_dir(&self) -> &std::path::Path {
+            &self.state_dir
+        }
+    }
+
+    impl Drop for DependsEnvGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+            std::env::remove_var("WORKESTRATE_STATE_DIR");
+            let _ = std::fs::remove_dir_all(&self.config_dir);
+            let _ = std::fs::remove_dir_all(&self.state_dir);
+        }
+    }
+
+    fn register_litellm_singleton(state_dir: &std::path::Path) -> Result<()> {
+        crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
+            state_dir,
+            "litellm",
+            None,
+            "litellm",
+            crate::microsandbox::plan::default_bind_ip(),
+            &[4000],
+            &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
+            "2026-07-30T00:00:00Z",
+        )
+    }
+
+    /// ConfigWorkload::new resolves declared deps and plan() injects the
+    /// guest-form address env + derives the egress rule, marked.
+    #[test]
+    fn new_resolves_depends_on_and_plan_injects_env_and_egress() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-inject", DEPENDS_CONFIG_TOML);
+        register_litellm_singleton(guard.state_dir())?;
+
+        let pi = ConfigWorkload::new("pi")?;
+        let plan = pi.plan();
+
+        let injected = plan
+            .env
+            .iter()
+            .find(|e| e.name == "LITELLM_URL")
+            .expect("plan env must carry the injected LITELLM_URL");
+        assert_eq!(injected.value, "host.microsandbox.internal:4000");
+        assert!(!injected.is_secret, "the injected URL is not a secret");
+        assert_eq!(injected.injected_by.as_deref(), Some("litellm"));
+        // The plan Display marks the injection.
+        assert!(
+            format!("{plan}").contains(
+                "env: LITELLM_URL=host.microsandbox.internal:4000 (injected: depends_on 'litellm')"
+            ),
+            "plan render must mark the injected env; got:\n{plan}"
+        );
+
+        let derived: Vec<_> = plan
+            .network
+            .egress_rules
+            .iter()
+            .filter(|r| r.derived_from.as_deref() == Some("litellm"))
+            .collect();
+        assert_eq!(derived.len(), 1, "exactly one derived egress rule");
+        assert_eq!(derived[0].port, 4000);
+        assert_eq!(derived[0].target, EgressTarget::Host);
+        assert!(
+            format!("{plan}")
+                .contains("  egress: tcp:4000 -> host (derived: depends_on 'litellm')"),
+            "plan render must mark the derived egress; got:\n{plan}"
+        );
+        // Monotonic: derivation only ADDED; default_deny untouched.
+        assert!(plan.network.default_deny);
+        Ok(())
+    }
+
+    /// Optional dep with NO running record: resolution falls back to the
+    /// declared port; the injection still lands in the plan.
+    #[test]
+    fn new_falls_back_to_declared_port_when_dep_not_running() -> Result<()> {
+        let _guard = DependsEnvGuard::new("cw-fallback", DEPENDS_CONFIG_TOML);
+        let pi = ConfigWorkload::new("pi")?;
+        let plan = pi.plan();
+        let injected = plan
+            .env
+            .iter()
+            .find(|e| e.name == "LITELLM_URL")
+            .expect("fallback injection still lands in the plan");
+        assert_eq!(injected.value, "host.microsandbox.internal:4000");
+        Ok(())
+    }
+
+    /// Required dep with NO running record: ConfigWorkload::new REFUSES —
+    /// every up/exec/plan path constructs through `new`, so the refusal
+    /// propagates on all of them.
+    #[test]
+    fn new_refuses_when_required_dep_not_running() -> Result<()> {
+        let required_toml = DEPENDS_CONFIG_TOML.replace(
+            "env = \"LITELLM_URL\"",
+            "env = \"LITELLM_URL\"\nrequired = true",
+        );
+        let _guard = DependsEnvGuard::new("cw-refuse", &required_toml);
+        let err = ConfigWorkload::new("pi").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("is required but not running; start it with"),
+            "refusal must carry the remediation lead: {msg}"
+        );
+        assert!(
+            msg.contains("workestrate litellm up"),
+            "refusal must name the start command: {msg}"
+        );
+        Ok(())
+    }
+
+    /// The reference/test fixtures declare NO depends_on → construction is
+    /// unaffected and the plan carries no injected/derived markers.
+    #[test]
+    fn plan_without_depends_on_is_unaffected() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        let pi = ConfigWorkload::new("pi")?;
+        let plan = pi.plan();
+        assert!(
+            plan.env.iter().all(|e| e.injected_by.is_none()),
+            "no env may be marked injected without depends_on"
+        );
+        assert!(
+            plan.network
+                .egress_rules
+                .iter()
+                .all(|r| r.derived_from.is_none()),
+            "no egress may be marked derived without depends_on"
+        );
         Ok(())
     }
 }

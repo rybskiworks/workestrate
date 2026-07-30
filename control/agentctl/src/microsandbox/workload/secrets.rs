@@ -89,6 +89,7 @@ pub(super) fn build_env(
                         value: format!("${{{}}}", def.env_var),
                         is_secret: true,
                         reject_placeholder: def.placeholder.clone(),
+                        injected_by: None,
                     }),
                     ResolvedSecret::Remapped(_) => {
                         anyhow::bail!(

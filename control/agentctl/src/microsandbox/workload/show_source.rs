@@ -80,7 +80,11 @@ impl ConfigWorkload {
         }
         let env_source = source_of(&format!("workloads.{}.env", self.name));
         for e in &plan.env {
-            let source = if e.is_secret {
+            let source = if let Some(dep) = &e.injected_by {
+                // ADR 0026(d): an injected var attributes to the layer that
+                // declared the depends_on entry, not the env layer.
+                source_of(&format!("workloads.{}.depends_on.{}", self.name, dep))
+            } else if e.is_secret {
                 // WP6(b)/A5: resolve via the SECRET DEF NAME so remapped
                 // secrets attribute to their true layer, not "core".
                 secret_line_source(
@@ -154,12 +158,23 @@ impl ConfigWorkload {
             );
         }
         for rule in &plan.network.egress_rules {
-            write_line(
-                &mut out,
-                "  ",
-                &format!("egress: {}:{} -> {}", rule.protocol, rule.port, rule.target),
-                "core",
-            );
+            // ADR 0026(d): a rule derived from a depends_on resolution
+            // renders with its marker (matching the plan Display) and
+            // attributes to the layer that declared the dependency.
+            let (content, source) = match &rule.derived_from {
+                Some(dep) => (
+                    format!(
+                        "egress: {}:{} -> {} (derived: depends_on '{}')",
+                        rule.protocol, rule.port, rule.target, dep
+                    ),
+                    source_of(&format!("workloads.{}.depends_on.{}", self.name, dep)),
+                ),
+                None => (
+                    format!("egress: {}:{} -> {}", rule.protocol, rule.port, rule.target),
+                    "core",
+                ),
+            };
+            write_line(&mut out, "  ", &content, source);
         }
         for rule in &plan.network.deny_rules {
             write_line(

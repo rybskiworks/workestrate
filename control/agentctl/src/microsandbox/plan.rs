@@ -131,6 +131,12 @@ pub struct EnvVar {
     pub value: String,
     pub is_secret: bool,
     pub reject_placeholder: Option<String>,
+    /// ADR 0026(d) discovery-lite: the `depends_on` dependency this var was
+    /// injected for (`None` = declared env). Additive serde default so plans
+    /// serialized before this field existed still parse; skipped when `None`
+    /// so declared-env JSON is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injected_by: Option<String>,
 }
 
 impl fmt::Display for EnvVar {
@@ -140,7 +146,16 @@ impl fmt::Display for EnvVar {
         } else {
             self.value.as_str()
         };
-        write!(f, "{}={}", self.name, value)
+        // ADR 0026(d): an injected var is marked with its origin dependency;
+        // declared env keeps the legacy `NAME=value` form byte-identical.
+        match &self.injected_by {
+            Some(dep) => write!(
+                f,
+                "{}={} (injected: depends_on '{}')",
+                self.name, value, dep
+            ),
+            None => write!(f, "{}={}", self.name, value),
+        }
     }
 }
 
@@ -159,6 +174,11 @@ pub struct EgressRule {
     pub protocol: Protocol,
     pub port: u16,
     pub target: EgressTarget,
+    /// ADR 0026(d) discovery-lite: the `depends_on` dependency this rule was
+    /// derived for (`None` = declared/recipe-expanded egress). Additive serde
+    /// default; skipped when `None` so declared-egress JSON is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_from: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -231,11 +251,22 @@ impl fmt::Display for SandboxPlan {
             )?;
         }
         for rule in &self.network.egress_rules {
-            writeln!(
-                f,
-                "  egress: {}:{} -> {}",
-                rule.protocol, rule.port, rule.target
-            )?;
+            // ADR 0026(d): a rule derived from a depends_on resolution is
+            // marked with its origin dependency; declared/recipe-expanded
+            // rules keep the legacy line byte-identical (the golden plans
+            // pin this).
+            match &rule.derived_from {
+                Some(dep) => writeln!(
+                    f,
+                    "  egress: {}:{} -> {} (derived: depends_on '{}')",
+                    rule.protocol, rule.port, rule.target, dep
+                )?,
+                None => writeln!(
+                    f,
+                    "  egress: {}:{} -> {}",
+                    rule.protocol, rule.port, rule.target
+                )?,
+            }
         }
         for rule in &self.network.deny_rules {
             writeln!(f, "  egress: deny domain suffix {}", rule.domain_suffix)?;
@@ -251,6 +282,7 @@ impl EnvVar {
             value: value.into(),
             is_secret: false,
             reject_placeholder: None,
+            injected_by: None,
         }
     }
 }
@@ -287,11 +319,13 @@ impl EgressRule {
                 protocol: Protocol::Tcp,
                 port: 53,
                 target: EgressTarget::Host,
+                derived_from: None,
             },
             Self {
                 protocol: Protocol::Udp,
                 port: 53,
                 target: EgressTarget::Host,
+                derived_from: None,
             },
         ]
     }
@@ -300,6 +334,7 @@ impl EgressRule {
             protocol: Protocol::Tcp,
             port: 4000,
             target: EgressTarget::Host,
+            derived_from: None,
         }
     }
     pub fn https(domains: &[&str]) -> Self {
@@ -307,6 +342,7 @@ impl EgressRule {
             protocol: Protocol::Tcp,
             port: 443,
             target: EgressTarget::Domains(domains.iter().map(|d| d.to_string()).collect()),
+            derived_from: None,
         }
     }
     pub fn agent_base() -> Vec<Self> {
@@ -354,6 +390,7 @@ mod tests {
                     value: "supersecret".to_string(),
                     is_secret: true,
                     reject_placeholder: None,
+                    injected_by: None,
                 },
             ],
             secret_env: vec![HostBoundSecret {
@@ -498,6 +535,7 @@ network: default_deny=true
             value: "hunter2".to_string(),
             is_secret: true,
             reject_placeholder: None,
+            injected_by: None,
         };
         let shown = format!("{secret}");
         assert_eq!(shown, "S=(redacted)");
@@ -513,6 +551,73 @@ network: default_deny=true
         assert_eq!(v.value, "v");
         assert!(!v.is_secret);
         assert_eq!(v.reject_placeholder, None);
+        assert_eq!(v.injected_by, None, "declared env is never marked");
+    }
+
+    // ---- ADR 0026(d): injected-env / derived-egress render forms ----
+
+    /// An injected env var renders `NAME=value (injected: depends_on
+    /// '<dep>')`; the value is a URL (NOT a secret — never redacted). The
+    /// declared form stays byte-identical (`None` marker).
+    #[test]
+    fn env_var_display_marks_injected_by() {
+        let injected = EnvVar {
+            name: "LITELLM_URL".to_string(),
+            value: "host.microsandbox.internal:4000".to_string(),
+            is_secret: false,
+            reject_placeholder: None,
+            injected_by: Some("litellm".to_string()),
+        };
+        assert_eq!(
+            format!("{injected}"),
+            "LITELLM_URL=host.microsandbox.internal:4000 (injected: depends_on 'litellm')"
+        );
+        let declared = EnvVar::literal("PLAIN", "value");
+        assert_eq!(format!("{declared}"), "PLAIN=value");
+    }
+
+    /// A derived egress rule renders the ` (derived: depends_on '<dep>')`
+    /// suffix; declared/recipe-expanded rules (`None`) keep the legacy line.
+    #[test]
+    fn egress_rule_display_marks_derived_from() {
+        let plan = |rules: Vec<EgressRule>| SandboxPlan {
+            name: "derived".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports: vec![],
+            mounts: vec![],
+            network: NetworkPlan {
+                default_deny: true,
+                egress_rules: rules,
+                deny_rules: vec![],
+                ingress_rules: vec![],
+            },
+        };
+        let rendered = format!(
+            "{}",
+            plan(vec![
+                EgressRule::litellm_proxy(),
+                EgressRule {
+                    protocol: Protocol::Tcp,
+                    port: 5432,
+                    target: EgressTarget::Host,
+                    derived_from: Some("db".to_string()),
+                },
+            ])
+        );
+        assert!(
+            rendered.contains("  egress: tcp:4000 -> host\n"),
+            "declared rule keeps the legacy line; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("  egress: tcp:5432 -> host (derived: depends_on 'db')\n"),
+            "derived rule renders the marker suffix; got:\n{rendered}"
+        );
     }
 
     #[test]

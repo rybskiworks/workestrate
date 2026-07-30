@@ -1,3 +1,4 @@
+pub mod discovery;
 mod env;
 mod mounts;
 pub mod plan;
