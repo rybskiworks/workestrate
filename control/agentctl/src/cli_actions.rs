@@ -36,6 +36,14 @@ pub enum ServiceAction {
         /// (the chosen ports are recorded in the instance record).
         #[arg(long)]
         port_auto: bool,
+
+        /// Instance-selection override `<dep>@<instance>` for depends_on
+        /// resolution (ADR 0026(d)). PURE selection: discovery is activated
+        /// by the depends_on declaration alone — `--use` only picks WHICH
+        /// running instance of a declared dependency supplies the injected
+        /// address. Repeatable (one per dep).
+        #[arg(long = "use", value_name = "DEP@INSTANCE")]
+        use_: Vec<String>,
     },
     /// Stop and remove the sandbox
     Down {
@@ -59,6 +67,14 @@ pub enum ServiceAction {
         /// (prospective per-instance bind).
         #[arg(long, value_name = "ID")]
         instance: Option<String>,
+
+        /// Instance-selection override `<dep>@<instance>` for depends_on
+        /// resolution (ADR 0026(d)). PURE selection: discovery is activated
+        /// by the depends_on declaration alone — `--use` only picks WHICH
+        /// running instance of a declared dependency supplies the injected
+        /// address. Repeatable (one per dep).
+        #[arg(long = "use", value_name = "DEP@INSTANCE")]
+        use_: Vec<String>,
     },
 }
 
@@ -83,6 +99,14 @@ pub enum AgentAction {
         /// (the chosen ports are recorded in the instance record).
         #[arg(long)]
         port_auto: bool,
+
+        /// Instance-selection override `<dep>@<instance>` for depends_on
+        /// resolution (ADR 0026(d)). PURE selection: discovery is activated
+        /// by the depends_on declaration alone — `--use` only picks WHICH
+        /// running instance of a declared dependency supplies the injected
+        /// address. Repeatable (one per dep).
+        #[arg(long = "use", value_name = "DEP@INSTANCE")]
+        use_: Vec<String>,
     },
     /// Stop and remove the sandbox
     Down {
@@ -97,6 +121,14 @@ pub enum AgentAction {
         /// (prospective per-instance bind).
         #[arg(long, value_name = "ID")]
         instance: Option<String>,
+
+        /// Instance-selection override `<dep>@<instance>` for depends_on
+        /// resolution (ADR 0026(d)). PURE selection: discovery is activated
+        /// by the depends_on declaration alone — `--use` only picks WHICH
+        /// running instance of a declared dependency supplies the injected
+        /// address. Repeatable (one per dep).
+        #[arg(long = "use", value_name = "DEP@INSTANCE")]
+        use_: Vec<String>,
     },
 }
 

@@ -73,6 +73,11 @@ pub struct InstanceSpec {
     /// port on the slot's bind; the chosen ports are recorded in the instance
     /// record.
     pub port_auto: bool,
+    /// Typed `--use <dep>@<instance>` overrides as `(dep, instance-id)` pairs
+    /// (ADR 0026(d)). Pure instance-selection overrides for depends_on
+    /// resolution; forwarded to a detached `up` child so it resolves
+    /// identically to the parent.
+    pub use_overrides: Vec<(String, String)>,
 }
 
 /// Outcome of stopping one instance. Used by `down --instance`, `down

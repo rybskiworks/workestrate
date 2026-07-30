@@ -4,9 +4,11 @@
 //! triggers UNCONDITIONAL plan-time resolution — no flag, no opt-in:
 //!
 //! 1. The dependency's SINGLETON slot record is looked up in the port
-//!    registry (the record whose `instance` name contains no `@`; parallel
-//!    `<slot>@<id>` records are only reachable via the `--use <dep>@<instance>`
-//!    instance-selection override, a later wave).
+//!    registry (the record whose `instance` name contains no `@`). A
+//!    `--use <dep>@<instance>` override (ADR 0026(d)) selects the record for
+//!    that parallel instance instead — a PURE instance-selection override:
+//!    declaration alone activates discovery; `--use` is never an on/off
+//!    switch and never required for the default case.
 //! 2. The resolved address is injected into the dependent's plan env as the
 //!    spec's `env` var in GUEST-VISIBLE form:
 //!    `host.microsandbox.internal:<published-host-port>` — guests reach the
@@ -45,11 +47,53 @@ pub const GUEST_HOST_ALIAS: &str = "host.microsandbox.internal";
 /// How a dependency's address was resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionSource {
-    /// A running singleton slot record supplied the published host port.
-    RunningSingleton,
+    /// A running record (the singleton by default, or the
+    /// `--use <dep>@<instance>`-selected parallel record) supplied the
+    /// published host port.
+    RunningInstance,
     /// No usable running record; the dependency's DECLARED ports on the
     /// shared bind (the convention address) were used instead.
     DeclaredFallback,
+}
+
+/// Parse raw `--use <dep>@<instance>` values into typed overrides
+/// `(dep, instance-id)` (ADR 0026(d)).
+///
+/// The value is split on the FIRST `@` (workload names never contain `@`,
+/// so this is unambiguous). Malformed values (no `@`, empty dep, empty id)
+/// are a clear usage error naming the offending value; the id is validated
+/// through the same [`crate::microsandbox::slots::validate_instance_id`]
+/// gate `--instance` uses.
+///
+/// PURE parsing: whether the named dep is DECLARED in the workload's
+/// depends_on map (and whether a matching instance record exists) is
+/// validated at resolution time inside [`resolve_depends_on`].
+pub fn parse_use_overrides(values: &[String]) -> Result<Vec<(String, String)>> {
+    let mut overrides = Vec::with_capacity(values.len());
+    for v in values {
+        let Some((dep, id)) = v.split_once('@') else {
+            anyhow::bail!(
+                "invalid --use value '{}': expected <dep>@<instance> (missing '@')",
+                v
+            );
+        };
+        if dep.is_empty() {
+            anyhow::bail!(
+                "invalid --use value '{}': the dependency name before '@' cannot be empty",
+                v
+            );
+        }
+        if id.is_empty() {
+            anyhow::bail!(
+                "invalid --use value '{}': the instance id after '@' cannot be empty",
+                v
+            );
+        }
+        crate::microsandbox::slots::validate_instance_id(id)
+            .map_err(|e| anyhow::anyhow!("invalid --use value '{}': {}", v, e))?;
+        overrides.push((dep.to_string(), id.to_string()));
+    }
+    Ok(overrides)
 }
 
 /// The plan-time resolution of one declared dependency.
@@ -105,6 +149,20 @@ fn declared_host_port(config: &ConfigFile, dep: &str) -> Option<u16> {
 /// Resolve every dependency declared by `workload_name` against the port
 /// registry at `state_dir` (ADR 0026(d) discovery-lite).
 ///
+/// `use_overrides` carries the typed `--use <dep>@<instance>` selections
+/// (parsed by [`parse_use_overrides`]): for the named dep the record whose
+/// instance id matches is selected instead of the singleton. An override is
+/// a PURE instance-selection override — it is validated against the
+/// workload's DECLARED depends_on map here:
+///
+/// - an override naming a dep NOT in the map → hard error (`--use` only
+///   overrides selection for DECLARED depends_on entries);
+/// - any override when the workload declares no depends_on at all → hard
+///   error;
+/// - no running record with the selected instance id → hard error naming
+///   dep + instance (unknown instance; no declared-port fallback — the user
+///   explicitly chose an instance).
+///
 /// Iterates `depends_on` SORTED by dependency name (determinism: the plan
 /// output derived from this list must not depend on `HashMap` order).
 ///
@@ -116,23 +174,42 @@ fn declared_host_port(config: &ConfigFile, dep: &str) -> Option<u16> {
 /// Warnings (fallbacks, per-IP binds, port-less records) are emitted on
 /// stderr via `eprintln!`, matching the house "WARNING:"/"warning:"
 /// conventions.
-///
-/// **C3 hook (`--use <dep>@<instance>`):** instance selection is currently
-/// fixed to the singleton record (records whose `instance` name contains no
-/// `@`). The `--use` override will slot in as an additional parameter (a
-/// `dep -> instance-name` selector) consulted where this function filters
-/// the records below; everything downstream (address form, injection, egress
-/// derivation) is instance-agnostic.
 pub fn resolve_depends_on(
     config: &ConfigFile,
     workload_name: &str,
     state_dir: &Path,
+    use_overrides: &[(String, String)],
 ) -> Result<Vec<ResolvedDependency>> {
     let Some(workload) = config.workloads.get(workload_name) else {
         anyhow::bail!("workload '{}' not found in config", workload_name);
     };
     if workload.depends_on.is_empty() {
+        if let Some((dep, _)) = use_overrides.first() {
+            anyhow::bail!(
+                "--use {}@…: workload '{}' declares no depends_on entries; \
+                 --use is a pure instance-selection override for DECLARED dependencies (ADR 0026(d))",
+                dep,
+                workload_name
+            );
+        }
         return Ok(Vec::new());
+    }
+    for (dep, _) in use_overrides {
+        if !workload.depends_on.contains_key(dep) {
+            anyhow::bail!(
+                "--use {}@…: '{}' is not a declared depends_on entry of workload '{}' \
+                 (declared: {}); --use only overrides instance selection for DECLARED dependencies (ADR 0026(d))",
+                dep,
+                dep,
+                workload_name,
+                workload
+                    .depends_on
+                    .keys()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
     }
 
     let mut deps: Vec<(&String, &crate::config::DependsOnSpec)> =
@@ -141,17 +218,41 @@ pub fn resolve_depends_on(
 
     let mut resolved = Vec::with_capacity(deps.len());
     for (dep, spec) in deps {
-        // Default selection (ADR 0026(d)): the dependency's SINGLETON slot
-        // record — the one whose `instance` name contains no `@`. Parallel
-        // `<slot>@<id>` records are out of scope for declaration-triggered
-        // resolution (only `--use` selects them, later wave).
         let records = list_records_for_workload(state_dir, dep)?;
-        let singleton = records
-            .iter()
-            .find(|r| crate::microsandbox::slots::instance_id_of(&r.instance).is_none());
+        // Selection (ADR 0026(d)): default = the dependency's SINGLETON slot
+        // record (the one whose `instance` name contains no `@`); a `--use
+        // <dep>@<instance>` override selects the record whose parallel id
+        // matches instead — a PURE selection override with no declared-port
+        // fallback when the chosen instance is not running.
+        let (selected, selector): (Option<&SandboxInstanceRecord>, String) =
+            match use_overrides.iter().find(|(d, _)| d == dep) {
+                Some((_, id)) => {
+                    let Some(record) = records.iter().find(|r| {
+                        crate::microsandbox::slots::instance_id_of(&r.instance) == Some(id.as_str())
+                    }) else {
+                        anyhow::bail!(
+                        "--use {}@{}: no running instance '{}' of dependency '{}' is registered \
+                             (start it with `workestrate {} up --instance {}`)",
+                        dep,
+                        id,
+                        id,
+                        dep,
+                        dep,
+                        id
+                    );
+                    };
+                    (Some(record), format!("--use {}@{}", dep, id))
+                }
+                None => (
+                    records.iter().find(|r| {
+                        crate::microsandbox::slots::instance_id_of(&r.instance).is_none()
+                    }),
+                    "singleton".to_string(),
+                ),
+            };
 
-        match singleton {
-            Some(record) => match record_host_port(record) {
+        match (selected, selector) {
+            (Some(record), selector) => match record_host_port(record) {
                 Some(port) => {
                     // ADR 0026(f) DEFERRED-PENDING-E1: a record published on
                     // a per-IP parallel bind (bind_ip != 127.0.0.1) is NOT
@@ -159,10 +260,12 @@ pub fn resolve_depends_on(
                     // (host.microsandbox.internal:<port>) but warn loudly.
                     if record.bind_ip != crate::microsandbox::plan::default_bind_ip() {
                         eprintln!(
-                            "warning: depends_on '{}': singleton record is published on the per-IP bind {}; \
+                            "warning: depends_on '{}': selected record '{}' ({}) is published on the per-IP bind {}; \
                              guest-reachability of non-127.0.0.1 loopbacks via {} is DEFERRED-PENDING-E1 \
                              (ADR 0026(f) conservative default) — the injected address may not be reachable from the guest",
                             dep,
+                            record.instance,
+                            selector,
                             record.bind_ip,
                             GUEST_HOST_ALIAS
                         );
@@ -172,7 +275,7 @@ pub fn resolve_depends_on(
                         env_var: spec.env.clone(),
                         address: format!("{}:{}", GUEST_HOST_ALIAS, port),
                         host_port: port,
-                        source: ResolutionSource::RunningSingleton,
+                        source: ResolutionSource::RunningInstance,
                     });
                 }
                 None => {
@@ -183,13 +286,13 @@ pub fn resolve_depends_on(
                         dep,
                         &spec.env,
                         &format!(
-                            "its singleton record '{}' publishes no ports",
-                            record.instance
+                            "its {} record '{}' publishes no ports",
+                            selector, record.instance
                         ),
                     )?);
                 }
             },
-            None => {
+            (None, _) => {
                 if spec.required {
                     anyhow::bail!(
                         "dependency '{}' of workload '{}' is required but not running; start it with `workestrate {} up`",
@@ -396,14 +499,14 @@ default_deny = true
         register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
         let config = depends_config();
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
         assert_eq!(resolved.len(), 1);
         let r = &resolved[0];
         assert_eq!(r.dep, "litellm");
         assert_eq!(r.env_var, "LITELLM_URL");
         assert_eq!(r.address, "host.microsandbox.internal:4000");
         assert_eq!(r.host_port, 4000);
-        assert_eq!(r.source, ResolutionSource::RunningSingleton);
+        assert_eq!(r.source, ResolutionSource::RunningInstance);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -422,7 +525,7 @@ default_deny = true
             .unwrap()
             .required = true;
 
-        let err = resolve_depends_on(&config, "pi", &state_dir).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("is required but not running; start it with"),
@@ -443,7 +546,7 @@ default_deny = true
         let state_dir = unique_state_dir("disc-optional");
         let config = depends_config();
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
         assert_eq!(resolved.len(), 1);
         let r = &resolved[0];
         assert_eq!(r.address, "host.microsandbox.internal:4000");
@@ -473,7 +576,7 @@ default_deny = true
             },
         );
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
         assert_eq!(resolved.len(), 2);
         for r in &resolved {
             assert!(
@@ -498,7 +601,7 @@ default_deny = true
         let state_dir = unique_state_dir("disc-env-conflict");
         register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
         let config = depends_config();
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
 
         let declared = vec![EnvVar::literal("LITELLM_URL", "http://custom:1")];
         let (injected, _) = apply_resolution(&resolved, &declared, &[]);
@@ -517,7 +620,7 @@ default_deny = true
         let state_dir = unique_state_dir("disc-egress-dedup");
         register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
         let config = depends_config();
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
 
         let declared_expanded = vec![EgressRule::litellm_proxy()];
         let (_, derived) = apply_resolution(&resolved, &[], &declared_expanded);
@@ -546,10 +649,10 @@ default_deny = true
         register_singleton(&state_dir, "litellm", loopback(2), 4000, 4000)?;
         let config = depends_config();
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
-        assert_eq!(resolved[0].source, ResolutionSource::RunningSingleton);
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -574,7 +677,7 @@ default_deny = true
         config.workloads.insert("aaa".to_string(), litellm);
 
         for _ in 0..8 {
-            let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+            let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
             let order: Vec<&str> = resolved.iter().map(|r| r.dep.as_str()).collect();
             assert_eq!(
                 order,
@@ -602,7 +705,7 @@ default_deny = true
             },
         );
 
-        let err = resolve_depends_on(&config, "pi", &state_dir).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("declares no ports"),
@@ -636,7 +739,7 @@ default_deny = true
             },
         );
         // `noports` declares no ports either → the fallback itself errors.
-        let err = resolve_depends_on(&config, "pi", &state_dir).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
         assert!(err.to_string().contains("declares no ports"));
 
         // Now give `noports` a declared port: the port-less RECORD falls
@@ -647,7 +750,7 @@ default_deny = true
             .unwrap()
             .ports
             .push(PortMapping::new(9100, 9100));
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
         let r = resolved
             .iter()
             .find(|r| r.dep == "noports")
@@ -682,7 +785,7 @@ default_deny = true
 
         // No singleton → optional dep falls back to the DECLARED port (not
         // the parallel record's 14000).
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].host_port, 4000);
         assert_eq!(resolved[0].source, ResolutionSource::DeclaredFallback);
@@ -703,9 +806,178 @@ default_deny = true
             &[4000],
         )?;
         let config = depends_config();
-        let resolved = resolve_depends_on(&config, "pi", &state_dir)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
         assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
-        assert_eq!(resolved[0].source, ResolutionSource::RunningSingleton);
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0026(d)/C3-W2: --use <dep>@<instance> selection override ----
+
+    /// Register a PARALLEL lifecycle record `<slot>@<id>` for `workload`.
+    fn register_parallel(
+        state_dir: &Path,
+        workload: &str,
+        id: &str,
+        bind: IpAddr,
+        host: u16,
+        guest: u16,
+    ) -> Result<()> {
+        check_and_register_sandbox_lifecycle(
+            state_dir,
+            &format!("personal-{workload}@{id}"),
+            Some("personal"),
+            workload,
+            bind,
+            &[host],
+            &[PortMapping {
+                host,
+                guest,
+                bind_ip: bind,
+            }],
+            "2026-07-30T00:00:00Z",
+        )
+    }
+
+    // parse_use_overrides: well-formed values split on the FIRST `@` into
+    // (dep, id) pairs in order.
+    #[test]
+    fn parse_use_overrides_splits_on_first_at() -> Result<()> {
+        let values = vec!["litellm@canary".to_string(), "redis@blue-2".to_string()];
+        let parsed = parse_use_overrides(&values)?;
+        assert_eq!(
+            parsed,
+            vec![
+                ("litellm".to_string(), "canary".to_string()),
+                ("redis".to_string(), "blue-2".to_string()),
+            ]
+        );
+        assert!(parse_use_overrides(&[])?.is_empty());
+        Ok(())
+    }
+
+    // parse_use_overrides: malformed values (no `@`, empty dep, empty id)
+    // are clear usage errors naming the offending value.
+    #[test]
+    fn parse_use_overrides_rejects_malformed_values() {
+        for bad in ["nodep", "@x", "dep@"] {
+            let err = parse_use_overrides(&[bad.to_string()]).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("invalid --use value"),
+                "error must flag the value as an invalid --use: {msg}"
+            );
+            assert!(
+                msg.contains(bad),
+                "error must name the offending value '{bad}': {msg}"
+            );
+        }
+    }
+
+    // parse_use_overrides: the id passes through validate_instance_id —
+    // an invalid slug is rejected with the validator's reason.
+    #[test]
+    fn parse_use_overrides_rejects_invalid_instance_id() {
+        for bad in ["litellm@ALL", "litellm@1234", "litellm@-lead"] {
+            assert!(
+                parse_use_overrides(&[bad.to_string()]).is_err(),
+                "invalid id in '{bad}' must be rejected"
+            );
+        }
+        // `all` is a valid shape but reserved — must also be rejected here.
+        let err = parse_use_overrides(&["litellm@all".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("reserved"));
+    }
+
+    // Override resolution: BOTH a singleton record AND a parallel record
+    // exist — the default selects the singleton; `--use litellm@canary`
+    // selects the parallel record (per-IP bind → the DEFERRED-PENDING-E1
+    // warning path is exercised; the injected guest form carries the
+    // PARALLEL record's port).
+    #[test]
+    fn use_override_selects_parallel_record_over_singleton() -> Result<()> {
+        let state_dir = unique_state_dir("disc-use-override");
+        register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
+        register_parallel(&state_dir, "litellm", "canary", loopback(2), 14000, 4000)?;
+        let config = depends_config();
+
+        // Default: the singleton record wins (port 4000).
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
+
+        // `--use litellm@canary`: the parallel record's port (14000) is
+        // injected — the bind is per-IP, so this ALSO exercises the
+        // DEFERRED-PENDING-E1 warning arm (stderr; not asserted here).
+        let overrides = vec![("litellm".to_string(), "canary".to_string())];
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &overrides)?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].dep, "litellm");
+        assert_eq!(resolved[0].host_port, 14000);
+        assert_eq!(resolved[0].address, "host.microsandbox.internal:14000");
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
+        // The derived egress rule follows the SELECTED record's port.
+        assert_eq!(resolved[0].derived_egress_rule().port, 14000);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // Unknown instance: `--use litellm@ghost` names dep + instance and does
+    // NOT fall back to the declared port (the user explicitly selected).
+    #[test]
+    fn use_override_unknown_instance_is_a_hard_error() -> Result<()> {
+        let state_dir = unique_state_dir("disc-use-ghost");
+        register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
+        let config = depends_config();
+
+        let overrides = vec![("litellm".to_string(), "ghost".to_string())];
+        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("litellm"), "error must name the dep: {msg}");
+        assert!(msg.contains("ghost"), "error must name the instance: {msg}");
+        assert!(
+            msg.contains("no running instance"),
+            "error must explain the selection found nothing: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // Unknown dep: `--use redis@canary` when depends_on only declares
+    // litellm → hard error naming redis (override only applies to DECLARED
+    // deps).
+    #[test]
+    fn use_override_for_undeclared_dep_is_a_hard_error() -> Result<()> {
+        let state_dir = unique_state_dir("disc-use-undeclared");
+        let config = depends_config();
+        let overrides = vec![("redis".to_string(), "canary".to_string())];
+        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("redis"), "error must name the dep: {msg}");
+        assert!(
+            msg.contains("not a declared depends_on entry"),
+            "error must explain --use only overrides DECLARED deps: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // `--use` on a workload with NO depends_on at all → hard error.
+    #[test]
+    fn use_override_without_any_depends_on_is_a_hard_error() -> Result<()> {
+        let state_dir = unique_state_dir("disc-use-nodeps");
+        let mut config = depends_config();
+        config.workloads.get_mut("pi").unwrap().depends_on.clear();
+        let overrides = vec![("litellm".to_string(), "canary".to_string())];
+        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("declares no depends_on entries"),
+            "error must explain the workload has no depends_on: {msg}"
+        );
+        assert!(msg.contains("litellm"), "error must name the dep: {msg}");
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

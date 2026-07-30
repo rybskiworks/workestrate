@@ -16,15 +16,38 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     show_source: bool,
     json: bool,
     instance: Option<&str>,
+    use_values: &[String],
 ) -> Result<()> {
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
+
+    // ADR 0026(d): depends_on resolution happens INSIDE the workload's
+    // construction (every up/exec/plan path), so `workload.plan()` already
+    // reflects the overrides the caller constructed it with. This parser
+    // entry point (the workload catch-all) takes the RAW `--use` values and
+    // applies the selection here instead — the plan render itself is
+    // unchanged: the overrides only change WHICH record resolution selected.
+    let plan_holder = if use_values.is_empty() {
+        None
+    } else {
+        let overrides = crate::microsandbox::discovery::parse_use_overrides(use_values)?;
+        Some(
+            crate::microsandbox::workload::ConfigWorkload::new_with_use_overrides(
+                workload.name(),
+                &overrides,
+            )?,
+        )
+    };
+    let effective: &dyn crate::microsandbox::workload::Workload = match plan_holder.as_ref() {
+        Some(w) => w,
+        None => workload,
+    };
 
     // ADR 0026/C2: `--instance <id>` renders the plan as the parallel slot
     // `<slot>@<id>` would see it — the instance name plus the prospective
     // per-instance bind IP on every published port. The prospective bind is
     // a READ-ONLY registry snapshot (no lock, no reservation): a preview of
     // what `up --instance <id>` would draw right now.
-    let mut plan = workload.plan();
+    let mut plan = effective.plan();
     if let Some(id) = instance {
         validate_instance_id(id)?;
         let slot = slot_for(workload.name(), config::active_context_name().as_deref());

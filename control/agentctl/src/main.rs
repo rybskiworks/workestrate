@@ -201,6 +201,28 @@ enum Commands {
     Workload(Vec<String>),
 }
 
+/// Extract the typed `--use <dep>@<instance>` overrides from a clap-parsed
+/// ServiceAction (ADR 0026(d)). The hardcoded subcommands parse the action
+/// via clap BEFORE constructing the workload, so the overrides reach
+/// `ConfigWorkload::new_with_use_overrides` and resolution selects the same
+/// records the dispatch will forward to a detached child.
+fn service_action_use_overrides(action: &ServiceAction) -> Result<Vec<(String, String)>> {
+    let raw: &[String] = match action {
+        ServiceAction::Up { use_, .. } | ServiceAction::Plan { use_, .. } => use_,
+        _ => &[],
+    };
+    workestrate::microsandbox::discovery::parse_use_overrides(raw)
+}
+
+/// The AgentAction counterpart of [`service_action_use_overrides`].
+fn agent_action_use_overrides(action: &AgentAction) -> Result<Vec<(String, String)>> {
+    let raw: &[String] = match action {
+        AgentAction::Exec { use_, .. } | AgentAction::Plan { use_, .. } => use_,
+        _ => &[],
+    };
+    workestrate::microsandbox::discovery::parse_use_overrides(raw)
+}
+
 /// Pre-scan argv for a global `--json` flag so ANY error (including clap
 /// parse errors, which call process::exit before `cli.json` is available) can
 /// be formatted as the JSON envelope. Scanning stops at the first `--`
@@ -324,23 +346,28 @@ async fn async_main() -> Result<()> {
         Commands::Doctor { json } => cmd_doctor(json),
         Commands::Source { action } => cmd_source(action).await,
         Commands::Litellm { action } => {
-            let workload = ConfigWorkload::new("litellm")?;
+            let overrides = service_action_use_overrides(&action)?;
+            let workload = ConfigWorkload::new_with_use_overrides("litellm", &overrides)?;
             dispatch_service(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Pi { action } => {
-            let workload = ConfigWorkload::new("pi")?;
+            let overrides = agent_action_use_overrides(&action)?;
+            let workload = ConfigWorkload::new_with_use_overrides("pi", &overrides)?;
             dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Odysseus { action } => {
-            let workload = ConfigWorkload::new("odysseus")?;
+            let overrides = service_action_use_overrides(&action)?;
+            let workload = ConfigWorkload::new_with_use_overrides("odysseus", &overrides)?;
             dispatch_service(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Opencode { action } => {
-            let workload = ConfigWorkload::new("opencode")?;
+            let overrides = agent_action_use_overrides(&action)?;
+            let workload = ConfigWorkload::new_with_use_overrides("opencode", &overrides)?;
             dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Tempest { action } => {
-            let workload = ConfigWorkload::new("tempest")?;
+            let overrides = agent_action_use_overrides(&action)?;
+            let workload = ConfigWorkload::new_with_use_overrides("tempest", &overrides)?;
             dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
         Commands::MigrateHome {
@@ -360,7 +387,16 @@ async fn async_main() -> Result<()> {
 
             let name = args.remove(0);
             let action = args.first().cloned().unwrap_or_else(|| "plan".to_string());
-            let workload = ConfigWorkload::new(&name)?;
+            // ADR 0026(d): extract the raw `--use <dep>@<instance>` values
+            // BEFORE constructing the workload — resolution runs INSIDE the
+            // constructor, so the overrides must reach it. The raw
+            // parse_service_action/parse_agent_action parsers are pure and
+            // re-collect `--use` from the same args after construction, so
+            // the action the dispatch sees carries them too (detached `up`
+            // forwarding consumes them from the action via build_instance_spec).
+            let raw_use = workestrate::commands::lifecycle::parse_flag_values(&args, "--use");
+            let overrides = workestrate::microsandbox::discovery::parse_use_overrides(&raw_use)?;
+            let workload = ConfigWorkload::new_with_use_overrides(&name, &overrides)?;
             match workload.kind() {
                 "service" => {
                     let service_action = parse_service_action(&action, &args)?;
@@ -553,6 +589,7 @@ mod tests {
             context: None,
             replace,
             port_auto,
+            use_overrides: Vec::new(),
         }
     }
 
@@ -630,6 +667,62 @@ mod tests {
         Ok(())
     }
 
+    /// ADR 0026(d)/C3-W2: `--use <dep>@<instance>` overrides ride the spec so
+    /// the DETACHED child re-enters `up --foreground` with the same
+    /// instance-selection the parent resolved (the child re-parses via
+    /// parse_service_action, which collects every --use).
+    #[test]
+    fn detach_args_forwards_use_overrides() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        use workestrate::microsandbox::workload::Workload;
+        let pi = ConfigWorkload::new("pi")?;
+
+        let mut spec = spec_for_detach("pi", false);
+        spec.use_overrides = vec![
+            ("litellm".to_string(), "canary".to_string()),
+            ("redis".to_string(), "blue".to_string()),
+        ];
+        let args = pi.detach_args(&spec);
+        assert_eq!(
+            args,
+            vec![
+                "pi",
+                "up",
+                "--foreground",
+                "--use",
+                "litellm@canary",
+                "--use",
+                "redis@blue",
+            ]
+        );
+
+        // No overrides → no --use tokens.
+        let args = pi.detach_args(&spec_for_detach("pi", false));
+        assert!(
+            !args.contains(&"--use".to_string()),
+            "--use must not appear without overrides: {args:?}"
+        );
+
+        // The forwarded args round-trip through the raw-args parser the
+        // detached child uses.
+        let parsed = workestrate::commands::lifecycle::parse_service_action("up", &args[1..])?;
+        match parsed {
+            ServiceAction::Up { use_, .. } => assert!(use_.is_empty()),
+            _ => panic!("expected Up variant"),
+        }
+        let round_trip = workestrate::commands::lifecycle::parse_service_action(
+            "up",
+            &pi.detach_args(&spec)[1..],
+        )?;
+        match round_trip {
+            ServiceAction::Up { use_, .. } => {
+                assert_eq!(use_, vec!["litellm@canary", "redis@blue"])
+            }
+            _ => panic!("expected Up variant"),
+        }
+        Ok(())
+    }
+
     /// Round-trip (ADR 0021 WP-B): `--new` allocates a base32 slug, build_instance_spec
     /// composes `<slot>@<slug>` and passes it through `validate_instance_id` uniformly,
     /// and the resulting instance name is exactly what `down --instance <slug>` would
@@ -658,7 +751,7 @@ mod tests {
         assert_eq!(slug.len(), 4);
         validate_instance_id(&slug).expect("allocated slug must satisfy the slug rule");
 
-        let spec = build_instance_spec("litellm", false, None, Some(&slug), false)?;
+        let spec = build_instance_spec("litellm", false, None, Some(&slug), false, &[])?;
         assert_eq!(
             spec.instance,
             format!("litellm@{slug}"),

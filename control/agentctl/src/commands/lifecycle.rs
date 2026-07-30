@@ -25,6 +25,7 @@ pub fn build_instance_spec(
     instance_id: Option<&str>,
     new_id: Option<&str>,
     port_auto: bool,
+    use_overrides: &[(String, String)],
 ) -> Result<crate::microsandbox::runtime::InstanceSpec> {
     use crate::microsandbox::runtime::InstanceSpec;
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
@@ -64,6 +65,7 @@ pub fn build_instance_spec(
         context,
         replace,
         port_auto,
+        use_overrides: use_overrides.to_vec(),
     })
 }
 
@@ -85,6 +87,7 @@ pub async fn dispatch_service<W: Workload>(
             instance,
             new,
             port_auto,
+            use_,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -104,6 +107,7 @@ pub async fn dispatch_service<W: Workload>(
                 instance.as_deref(),
                 new_id.as_deref(),
                 port_auto,
+                &crate::microsandbox::discovery::parse_use_overrides(&use_)?,
             )?;
             crate::microsandbox::runtime::up_service_with_spec(workload, &spec, foreground).await
         }
@@ -125,8 +129,8 @@ pub async fn dispatch_service<W: Workload>(
             let target = instance_name(&slot, instance.as_deref());
             crate::microsandbox::logs(&target).await
         }
-        ServiceAction::Plan { instance } => {
-            cmd_plan(workload, show_source, json, instance.as_deref())
+        ServiceAction::Plan { instance, use_ } => {
+            cmd_plan(workload, show_source, json, instance.as_deref(), &use_)
         }
     }
 }
@@ -148,6 +152,7 @@ pub async fn dispatch_agent<W: Workload>(
             instance,
             new,
             port_auto,
+            use_,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -167,6 +172,7 @@ pub async fn dispatch_agent<W: Workload>(
                 instance.as_deref(),
                 new_id.as_deref(),
                 port_auto,
+                &crate::microsandbox::discovery::parse_use_overrides(&use_)?,
             )?;
             crate::microsandbox::runtime::exec_agent_with_spec(workload, &spec).await
         }
@@ -174,8 +180,8 @@ pub async fn dispatch_agent<W: Workload>(
             instance,
             all_instances,
         } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
-        AgentAction::Plan { instance } => {
-            cmd_plan(workload, show_source, json, instance.as_deref())
+        AgentAction::Plan { instance, use_ } => {
+            cmd_plan(workload, show_source, json, instance.as_deref(), &use_)
         }
     }
 }
@@ -188,12 +194,14 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
             let new = args.iter().any(|a| a == "--new");
             let port_auto = args.iter().any(|a| a == "--port-auto");
             let instance = parse_flag_value(args, "--instance");
+            let use_ = parse_flag_values(args, "--use");
             Ok(ServiceAction::Up {
                 foreground,
                 replace,
                 instance,
                 new,
                 port_auto,
+                use_,
             })
         }
         "down" => {
@@ -210,7 +218,8 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
         }
         "plan" => {
             let instance = parse_flag_value(args, "--instance");
-            Ok(ServiceAction::Plan { instance })
+            let use_ = parse_flag_values(args, "--use");
+            Ok(ServiceAction::Plan { instance, use_ })
         }
         other => anyhow::bail!("unknown service action: {}", other),
     }
@@ -223,11 +232,13 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
             let new = args.iter().any(|a| a == "--new");
             let port_auto = args.iter().any(|a| a == "--port-auto");
             let instance = parse_flag_value(args, "--instance");
+            let use_ = parse_flag_values(args, "--use");
             Ok(AgentAction::Exec {
                 replace,
                 instance,
                 new,
                 port_auto,
+                use_,
             })
         }
         "down" => {
@@ -240,7 +251,8 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
         }
         "plan" => {
             let instance = parse_flag_value(args, "--instance");
-            Ok(AgentAction::Plan { instance })
+            let use_ = parse_flag_values(args, "--use");
+            Ok(AgentAction::Plan { instance, use_ })
         }
         other => anyhow::bail!("unknown agent action: {}", other),
     }
@@ -260,6 +272,26 @@ pub fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Extract EVERY occurrence of `--flag <value>` or `--flag=value` from a
+/// Vec<String> (the workload catch-all args), in argv order. Used for
+/// repeatable flags like `--use <dep>@<instance>` (ADR 0026(d)) where each
+/// occurrence overrides selection for one dep. A trailing bare `--flag` (no
+/// following value) is silently skipped, matching `parse_flag_value`.
+pub fn parse_flag_values(args: &[String], flag: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        if a == flag {
+            if let Some(v) = iter.next() {
+                values.push(v.clone());
+            }
+        } else if let Some(rest) = a.strip_prefix(&format!("{}=", flag)) {
+            values.push(rest.to_string());
+        }
+    }
+    values
 }
 
 pub async fn cmd_down(
@@ -560,6 +592,86 @@ mod tests {
             AgentAction::Exec { port_auto, .. } => assert!(!port_auto),
             _ => panic!("expected Exec variant"),
         }
+    }
+
+    // ---- ADR 0026(d)/C3-W2: --use <dep>@<instance> raw-args parsing ----
+
+    #[test]
+    fn parse_flag_values_collects_space_and_equals_forms_in_order() {
+        let args: Vec<String> = vec![
+            "--use".into(),
+            "litellm@canary".into(),
+            "--replace".into(),
+            "--use=redis@blue".into(),
+            "--use".into(),
+            "odysseus@x1".into(),
+        ];
+        assert_eq!(
+            parse_flag_values(&args, "--use"),
+            vec!["litellm@canary", "redis@blue", "odysseus@x1"]
+        );
+    }
+
+    #[test]
+    fn parse_flag_values_returns_empty_when_absent() {
+        let args: Vec<String> = vec!["--instance".into(), "canary".into()];
+        assert!(parse_flag_values(&args, "--use").is_empty());
+    }
+
+    #[test]
+    fn parse_service_action_up_collects_all_use_values() {
+        let args: Vec<String> = vec![
+            "--use".into(),
+            "litellm@canary".into(),
+            "--use=redis@blue".into(),
+        ];
+        match parse_service_action("up", &args).unwrap() {
+            ServiceAction::Up { use_, .. } => {
+                assert_eq!(use_, vec!["litellm@canary", "redis@blue"])
+            }
+            _ => panic!("expected Up variant"),
+        }
+    }
+
+    #[test]
+    fn parse_service_action_plan_collects_use_values() {
+        let args: Vec<String> = vec!["--use".into(), "litellm@canary".into()];
+        match parse_service_action("plan", &args).unwrap() {
+            ServiceAction::Plan { use_, .. } => assert_eq!(use_, vec!["litellm@canary"]),
+            _ => panic!("expected Plan variant"),
+        }
+    }
+
+    #[test]
+    fn parse_agent_action_exec_collects_use_values() {
+        let args: Vec<String> = vec!["--use".into(), "litellm@canary".into()];
+        match parse_agent_action("exec", &args).unwrap() {
+            AgentAction::Exec { use_, .. } => assert_eq!(use_, vec!["litellm@canary"]),
+            _ => panic!("expected Exec variant"),
+        }
+    }
+
+    #[test]
+    fn parse_agent_action_plan_collects_use_values() {
+        let args: Vec<String> = vec!["--use=litellm@canary".into()];
+        match parse_agent_action("plan", &args).unwrap() {
+            AgentAction::Plan { use_, .. } => assert_eq!(use_, vec!["litellm@canary"]),
+            _ => panic!("expected Plan variant"),
+        }
+    }
+
+    /// build_instance_spec stores the typed overrides on the spec so
+    /// detach_args can forward them to the detached child (ADR 0021/0026(d)).
+    #[test]
+    fn build_instance_spec_stores_use_overrides() {
+        let overrides = vec![
+            ("litellm".to_string(), "canary".to_string()),
+            ("redis".to_string(), "blue".to_string()),
+        ];
+        let spec = build_instance_spec("pi", false, None, None, false, &overrides).unwrap();
+        assert_eq!(spec.use_overrides, overrides);
+        let spec = build_instance_spec("pi", false, None, None, false, &[]).unwrap();
+        assert!(spec.use_overrides.is_empty());
     }
 }
 

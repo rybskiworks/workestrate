@@ -35,6 +35,19 @@ pub struct ConfigWorkload {
 impl ConfigWorkload {
     /// Load the active config and construct a workload by name.
     pub fn new(name: &str) -> Result<Self> {
+        Self::new_with_use_overrides(name, &[])
+    }
+
+    /// Load the active config and construct a workload by name, applying the
+    /// typed `--use <dep>@<instance>` instance-selection overrides
+    /// (`(dep, instance-id)` pairs; ADR 0026(d)) to depends_on resolution.
+    ///
+    /// The overrides are validated INSIDE
+    /// [`crate::microsandbox::discovery::resolve_depends_on`] against this
+    /// workload's DECLARED depends_on map: an override naming an undeclared
+    /// dep (or any override with no depends_on at all) is a hard error here,
+    /// so every up/exec/plan path refuses identically.
+    pub fn new_with_use_overrides(name: &str, use_overrides: &[(String, String)]) -> Result<Self> {
         let config = crate::config::load_config()?;
         let provenance = crate::merge::take_provenance();
         crate::config::validate_config(&config)?;
@@ -48,8 +61,12 @@ impl ConfigWorkload {
         // at plan time — no flag. A required-but-not-running dep refuses
         // here, on every up/exec/plan path (they all construct via `new`).
         let state_dir = crate::config::resolve_state_dir();
-        let depends_resolved =
-            crate::microsandbox::discovery::resolve_depends_on(&config, name, &state_dir)?;
+        let depends_resolved = crate::microsandbox::discovery::resolve_depends_on(
+            &config,
+            name,
+            &state_dir,
+            use_overrides,
+        )?;
 
         let secrets = build_secret_definitions(&config)?;
         let env = build_env(&workload, &secrets)?;
@@ -469,6 +486,94 @@ default_deny = true
                 .all(|r| r.derived_from.is_none()),
             "no egress may be marked derived without depends_on"
         );
+        Ok(())
+    }
+
+    // ---- ADR 0026(d)/C3-W2: new_with_use_overrides ----
+
+    /// A singleton AND a parallel record exist; `new` selects the singleton
+    /// while `new_with_use_overrides([("litellm","canary")])` injects the
+    /// PARALLEL record's port (guest form) into the plan env.
+    #[test]
+    fn new_with_use_overrides_selects_the_parallel_record() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-use", DEPENDS_CONFIG_TOML);
+        register_litellm_singleton(guard.state_dir())?;
+        crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
+            guard.state_dir(),
+            "litellm@canary",
+            None,
+            "litellm",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2)),
+            &[14000],
+            &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
+            "2026-07-30T00:00:00Z",
+        )?;
+
+        let pi = ConfigWorkload::new("pi")?;
+        let injected = pi
+            .plan()
+            .env
+            .iter()
+            .find(|e| e.name == "LITELLM_URL")
+            .expect("default injection present")
+            .value
+            .clone();
+        assert_eq!(injected, "host.microsandbox.internal:4000");
+
+        let pi = ConfigWorkload::new_with_use_overrides(
+            "pi",
+            &[("litellm".to_string(), "canary".to_string())],
+        )?;
+        let plan = pi.plan();
+        let injected = plan
+            .env
+            .iter()
+            .find(|e| e.name == "LITELLM_URL")
+            .expect("override injection present");
+        assert_eq!(injected.value, "host.microsandbox.internal:14000");
+        let derived: Vec<_> = plan
+            .network
+            .egress_rules
+            .iter()
+            .filter(|r| r.derived_from.as_deref() == Some("litellm"))
+            .collect();
+        assert_eq!(derived.len(), 1);
+        assert_eq!(derived[0].port, 14000, "egress follows the selected record");
+        Ok(())
+    }
+
+    /// An override naming a dep the workload does NOT declare refuses at
+    /// construction — every up/exec/plan path surfaces the same hard error.
+    #[test]
+    fn new_with_use_overrides_refuses_undeclared_dep() -> Result<()> {
+        let _guard = DependsEnvGuard::new("cw-use-undeclared", DEPENDS_CONFIG_TOML);
+        let err = ConfigWorkload::new_with_use_overrides(
+            "pi",
+            &[("redis".to_string(), "canary".to_string())],
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("redis"), "error must name the dep: {msg}");
+        assert!(
+            msg.contains("not a declared depends_on entry"),
+            "error must explain --use only overrides DECLARED deps: {msg}"
+        );
+        Ok(())
+    }
+
+    /// An unknown selected instance refuses at construction, naming dep +
+    /// instance.
+    #[test]
+    fn new_with_use_overrides_refuses_unknown_instance() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-use-ghost", DEPENDS_CONFIG_TOML);
+        register_litellm_singleton(guard.state_dir())?;
+        let err = ConfigWorkload::new_with_use_overrides(
+            "pi",
+            &[("litellm".to_string(), "ghost".to_string())],
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("litellm") && msg.contains("ghost"));
         Ok(())
     }
 }

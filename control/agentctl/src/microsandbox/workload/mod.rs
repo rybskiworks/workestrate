@@ -76,7 +76,10 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     ///   - `--replace` (when `spec.replace`),
     ///   - `--port-auto` (when `spec.port_auto`, ADR 0026(c)),
     ///   - `--instance <id>` for a parallel instance — the **bare id**, not
-    ///     `slot@id` (the child re-derives the slot from its own context).
+    ///     `slot@id` (the child re-derives the slot from its own context),
+    ///   - `--use <dep>@<instance>` for each depends_on instance-selection
+    ///     override (`spec.use_overrides`, ADR 0026(d)) so the child resolves
+    ///     the SAME records the parent did.
     ///
     /// `--new` is intentionally NOT forwarded: the parent has already
     /// materialized the slug into `spec.instance`, so the child must target
@@ -94,6 +97,10 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         }
         if spec.port_auto {
             args.push("--port-auto".to_string());
+        }
+        for (dep, id) in &spec.use_overrides {
+            args.push("--use".to_string());
+            args.push(format!("{}@{}", dep, id));
         }
         // Forward the parallel-instance id only when this is NOT the singleton
         // (instance == slot, no `@`). instance_id_of splits on the first `@`;
