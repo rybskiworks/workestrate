@@ -92,6 +92,11 @@ $WORKESTRATE_HOME/
    `XDG_CONFIG_HOME/workestrate/config.toml` etc. if present, does NOT write)
 4. Default (`~/.workestrate`)
 
+> **Note (2026-07-30, spec 06):** the global `--home <DIR>` CLI flag sets
+> `WORKESTRATE_HOME` for the invocation — it populates step 1 from the CLI
+> surface, effectively precedence step 0 when passed, and wins over any
+> ambient export (commit `d991252`).
+
 ### `home_version` field
 
 A field in `config.toml` (e.g. `home_version = 1`) that tracks the home

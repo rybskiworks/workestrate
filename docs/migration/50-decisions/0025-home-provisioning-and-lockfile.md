@@ -124,3 +124,18 @@ shared, like `Cargo.lock`); it is not in the home `.gitignore`.
 The execution spec is
 `docs/validation-and-improvements/06-improvements/11-home-provisioning-and-lockfile.md`
 (READY-TO-EXECUTE; implementation NEEDS-DEVSHELL).
+
+---
+
+## Implemented
+
+**Date:** 2026-07-30
+
+- `172d5dd` feat(agentctl): home init --from provisioning with positional dest — CLI (`--from <src>`, positional `<dest>`, `--config`/`--name` usage-error conflicts), the spec-11 §2 provisioning algorithm (steps 1–7, 9, 10), `looks_like_git_url` made `pub(crate)`, new git helpers (`git_clone_full`, `git_checkout_rev`, remote get/add-or-set-url).
+- `19ff272` feat(agentctl): generated workestrate.lock (typed, versioned) — new `config::lockfile` module (`HomeLock`/`LockedRepo`, atomic save, absent lock tolerated, `version` newer-than-supported → "home created by a newer workestrate"); writers wired: `config add` / `config update` / `config remove` / `home init` (bare + `--from`).
+- `be356f7` feat(agentctl): home init --from consumes lockfile + version evolution — the locked rev wins over the registry rev (lock url preferred over a drifted registry url), local-only copies honor the lock, legacy no-lock path preserved.
+- `d991252` feat(agentctl): global --home flag (spec 06) — same wave (shared CLI/home-resolution surface).
+
+Gates per commit (all green): `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, full `cargo test` (411 passed at wave end), `just golden-check` / `schema-check` / `spec-examples` / `scaffold-check`, clean `control/agentctl/Cargo.lock`.
+
+Ops verification (2026-07-30): `home init --from ~/.workestrate <scratch-dest>` provisioned a dev home end-to-end — registry cloned (origin → `~/.workestrate`), `config-repos/personal` copied at rev `c41a707` with origin wired to the source repo, registry url rewritten dest-local, `workestrate.lock` written pinning `c41a707`, `state/`/`secrets/` empty, loud per-entry `[[trusted_projects]]` warning, warn-only post-flight `validate-config` passed silently, and `--home <dest> config list` / `--home <dest> litellm plan` both resolved the provisioned home. (Container note: `/home/node/Development` is root-owned, so the scratch dest lived under `/home/node/Development/worktrees/`.)

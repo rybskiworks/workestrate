@@ -78,6 +78,16 @@ re-derive their contents.
 > `/nix/store/syksqgy5…-microsandbox-filesystem-patched-0.5.6`). NO commit
 > needed.
 >
+> **Home-provisioning wave — EXECUTED (2026-07-30, Step 8d, specs 06 + 11):**
+> commits `172d5dd` (`home init --from` + positional dest), `19ff272`
+> (generated `workestrate.lock`), `be356f7` (lock consumption + version
+> evolution), `d991252` (global `--home` flag). Ops-verified: `home init
+> --from ~/.workestrate <dest>` produces a reproducible home (personal pinned
+> at `c41a707`, dest-local url rewrite, empty `state/`, loud trusted_projects
+> warning); `--home <dest> config list` / `litellm plan` work. CONTAINER
+> GOTCHA: `/home/node/Development/` is root-owned — scratch provisioning dests
+> must go under `/home/node/Development/worktrees/` or `/tmp`.
+>
 > **install_layout removal — RUNTIME-VERIFIED:** `workestrate validate-config`
 > → "workestrate.toml is valid." exit 0 (run with `WORKESTRATE_HOME` unset,
 > binary from `cargo build`, from neutral cwd `/tmp`). This runtime-proves the

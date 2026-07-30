@@ -1,6 +1,6 @@
 # 06 — `--home` global CLI flag (idiomatic config-home override)
 
-> **STATUS: SPEC (small, not yet implemented)**
+> **STATUS: EXECUTED (2026-07-30 — commit `d991252` "feat(agentctl): global --home flag (spec 06)")**
 > **Effort:** S (additive CLI front-end; no path-resolution change)
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [03-dogfooding.md](03-dogfooding.md) ·
@@ -191,5 +191,5 @@ stating that the `--home` global flag sets `WORKESTRATE_HOME` and therefore
 slots in as precedence step 0 when passed (i.e. it populates step 1 from
 the CLI surface, winning over any ambient export).
 
-This is a **doc edit to the ADR, deferred to implementation time** — it is
-described here, NOT applied in this spec.
+This ADR note was **applied at implementation time** (2026-07-30) — see ADR
+0023 §"Resolution precedence".
