@@ -61,13 +61,13 @@ pub fn cmd_home(action: HomeAction) -> Result<()> {
 }
 
 /// `workestrate home init` — scaffold the RESOLVED tool home (no `--path`;
-/// `WORKESTRATE_HOME` / discovery / default resolution decides which home)
+/// `WORKESTRATE_HOME` / legacy XDG / default resolution decides which home)
 /// as a dotfiles-style git repo: `git init` + `.gitignore` + pre-commit hook.
 /// Idempotent: re-running on an initialized home is a pure no-op.
 pub fn cmd_home_init(config_url: Option<&str>, name: &str) -> Result<()> {
-    // 1. Resolve the home via the standard precedence (env → discovery →
-    //    legacy XDG → default). No path flag, no discovery involvement beyond
-    //    what resolve_home_with_kind already does.
+    // 1. Resolve the home via the standard precedence (env → legacy XDG →
+    //    default). No path flag; resolution is entirely what
+    //    resolve_home_with_kind already does.
     let (home, _kind) = config::resolve_home_with_kind();
     std::fs::create_dir_all(&home)?;
 

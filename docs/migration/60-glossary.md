@@ -60,12 +60,13 @@ A git repository containing deployment-specific configuration: `workestrate.toml
 dependency, Phase 2).
 
 **Home (WORKESTRATE_HOME)**
-The single tool home directory for workestrate. Default `~/.workestrate`;
-container: `<repo>/.workestrate`. Contains `config.toml` (registry),
+The single tool home directory for workestrate. Default `~/.workestrate`.
+Contains `config.toml` (registry),
 `overrides.toml`, `secrets/`, `config-repos/`, `sources/`, `state/`, `cache/`.
-Resolution: `WORKESTRATE_HOME` env → auto-discovery (walk-up, trust-gated,
-only when no `XDG_*_HOME` is set) → legacy XDG (read-only compat) →
-default. Precedents: `~/.kube`, `~/.docker`, `~/.cargo`. See ADR 0023.
+Resolution: `WORKESTRATE_HOME` env → legacy XDG (compat) → default
+`~/.workestrate` (the trusted-ancestor auto-discovery tier was removed; see
+spec 08 + ADR 0023 addendum). Precedents: `~/.kube`, `~/.docker`, `~/.cargo`.
+See ADR 0023.
 
 **Bundle (repo-local home)**
 A `$WORKESTRATE_HOME` placed inside a repository (typically

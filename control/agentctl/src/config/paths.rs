@@ -1,7 +1,7 @@
 //! Tool home resolution (ADR 0023 single-home layout), XDG path resolution,
 //! and state/store directory derivation.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::config::types::Registry;
 
@@ -14,8 +14,6 @@ use crate::config::types::Registry;
 pub enum HomeKind {
     /// `WORKESTRATE_HOME` env var — new single-home layout.
     Env,
-    /// Auto-discovered `.workestrate/config.toml` inside a trusted project — new layout.
-    Discovered,
     /// Legacy XDG layout (`XDG_*_HOME` set) — compatibility, read/write as before.
     LegacyXdg,
     /// Default `~/.workestrate` — new single-home layout.
@@ -34,30 +32,17 @@ fn emit_legacy_xdg_note() {
     });
 }
 
-/// One-time stderr warning when an untrusted `.workestrate/config.toml` is found
-/// during discovery. `resolve_home_with_kind` is called many times per command
-/// (cmd_check, registry_path, store/state resolution, ...); without this guard
-/// the warning would print once per call.
-static DISCOVERY_WARN: std::sync::Once = std::sync::Once::new();
-
-fn emit_untrusted_discovery_warn(dir: &Path) {
-    DISCOVERY_WARN.call_once(|| {
-        eprintln!(
-            ".workestrate/config.toml found in {} but it is not a trusted project; \
-             ignoring (run 'workestrate config trust <dir>' to trust it)",
-            dir.display()
-        );
-    });
-}
-
 fn xdg_var_set(name: &str) -> bool {
     std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false)
 }
 
-/// Base home resolution WITHOUT discovery (Env/LegacyXdg/Default only).
+/// Base home resolution (Env/LegacyXdg/Default only).
 ///
-/// Used by the discovery trust-check ([`is_dir_trusted_via_base_registry`]) so
-/// that loading the global trust registry cannot recurse back into discovery.
+/// Used by the base-registry trust check ([`is_dir_trusted_via_base_registry`])
+/// so that loading the global trust registry cannot recurse back through home
+/// resolution. (The discovery tier that originally motivated this split was
+/// removed in spec 08 step (e); the base resolution is kept because the trust
+/// registry check still uses it.)
 fn resolve_home_base_with_kind() -> (PathBuf, HomeKind) {
     // (a) Env: WORKESTRATE_HOME
     if let Ok(value) = std::env::var("WORKESTRATE_HOME") {
@@ -77,10 +62,11 @@ fn resolve_home_base_with_kind() -> (PathBuf, HomeKind) {
     (PathBuf::from(home).join(".workestrate"), HomeKind::Default)
 }
 
-/// The registry path computed from the *base* resolution (no discovery).
+/// The registry path computed from the *base* resolution.
 ///
-/// Location of the global trust list, independent of any discovered project
-/// home — so a hostile `.workestrate/` cannot self-trust.
+/// Location of the global trust list, resolved via the base home resolution
+/// (Env/LegacyXdg/Default) so that loading the trust registry never recurses
+/// through home resolution.
 pub(crate) fn base_registry_path() -> PathBuf {
     let (home, kind) = resolve_home_base_with_kind();
     match kind {
@@ -93,14 +79,14 @@ pub(crate) fn base_registry_path() -> PathBuf {
 ///
 /// Precedence (first match wins):
 /// 1. **Env** — `WORKESTRATE_HOME` (used verbatim, leading `~/` expanded).
-/// 2. **Discovered** — a `.workestrate/config.toml` in a *trusted* ancestor of
-///    the cwd, but only when no `XDG_*_HOME` var is set; an explicit XDG var is
-///    a deliberate legacy-layout signal that discovery must not override. An
-///    untrusted discovery prints a one-time warning and *stops* walking (does
-///    not keep looking higher), then falls through.
-/// 3. **LegacyXdg** — any of `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`
+/// 2. **LegacyXdg** — any of `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`
 ///    set and non-empty (compatibility; emits a one-time migration note).
-/// 4. **Default** — `~/.workestrate`.
+/// 3. **Default** — `~/.workestrate`.
+///
+/// The trusted-ancestor auto-discovery tier was removed (spec 08 step (e);
+/// see `docs/validation-and-improvements/06-improvements/08-no-repo-local-home.md`
+/// and spec 10 `10-config-repos-as-working-copies.md`): repo-local homes and
+/// discovery caused split-brain/shadow-home ambiguity.
 pub fn resolve_home_with_kind() -> (PathBuf, HomeKind) {
     // (a) Env: WORKESTRATE_HOME
     if let Ok(value) = std::env::var("WORKESTRATE_HOME") {
@@ -109,42 +95,16 @@ pub fn resolve_home_with_kind() -> (PathBuf, HomeKind) {
         }
     }
 
+    // (b) Legacy XDG
     let xdg_explicit = xdg_var_set("XDG_CONFIG_HOME")
         || xdg_var_set("XDG_DATA_HOME")
         || xdg_var_set("XDG_STATE_HOME");
-
-    // (b) Discovery — only when XDG is NOT explicitly set. An explicit XDG
-    // var is a deliberate legacy-layout choice that discovery must not
-    // override (keeps XDG-pinned environments and tests working even when
-    // a trusted .workestrate/config.toml exists in an ancestor).
-    if !xdg_explicit {
-        if let Ok(cwd) = std::env::current_dir() {
-            let mut dir: &Path = &cwd;
-            loop {
-                let candidate = dir.join(".workestrate").join("config.toml");
-                if candidate.exists() {
-                    if crate::config::is_dir_trusted_via_base_registry(dir) {
-                        return (dir.join(".workestrate"), HomeKind::Discovered);
-                    }
-                    // Untrusted: warn (once per process), STOP walking, fall through.
-                    emit_untrusted_discovery_warn(dir);
-                    break;
-                }
-                match dir.parent() {
-                    Some(parent) => dir = parent,
-                    None => break,
-                }
-            }
-        }
-    }
-
-    // (c) Legacy XDG
     if xdg_explicit {
         emit_legacy_xdg_note();
         return (xdg_config_dir(), HomeKind::LegacyXdg);
     }
 
-    // (d) Default
+    // (c) Default
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     (PathBuf::from(home).join(".workestrate"), HomeKind::Default)
 }
@@ -421,135 +381,6 @@ pub(crate) mod tests {
 
         let _ = std::fs::remove_dir_all(&env_home);
         let _ = std::fs::remove_dir_all(&xdg);
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_home_discovery_trusted() -> Result<()> {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-
-        let base_home = uniq_dir("rh-disc-base");
-        let project = uniq_dir("rh-disc-proj");
-        std::fs::create_dir_all(base_home.join(".workestrate"))?;
-        std::fs::create_dir_all(project.join(".workestrate"))?;
-
-        // Seed a project-local config.toml so discovery notices it.
-        std::fs::write(
-            project.join(".workestrate").join("config.toml"),
-            "layers = []\n",
-        )?;
-
-        // Trust list lives in the Default base registry (<HOME>/.workestrate).
-        let canonical_project = std::fs::canonicalize(&project)?;
-        let trust_toml = format!(
-            "[[trusted_projects]]\npath = \"{}\"\n",
-            canonical_project.display()
-        );
-        std::fs::write(
-            base_home.join(".workestrate").join("config.toml"),
-            trust_toml,
-        )?;
-
-        std::env::set_var("HOME", &base_home);
-        std::env::set_current_dir(&project)?;
-
-        let (home, kind) = resolve_home_with_kind();
-        assert_eq!(kind, HomeKind::Discovered);
-        assert_eq!(home, project.join(".workestrate"));
-
-        let _ = std::fs::remove_dir_all(&base_home);
-        let _ = std::fs::remove_dir_all(&project);
-        Ok(())
-    }
-
-    /// Precedence regression: an explicit XDG var must win over discovery even
-    /// when a *trusted* `.workestrate/config.toml` exists in the cwd. Without
-    /// this guarantee, discovery overrides a deliberately-pinned legacy layout
-    /// whenever a trusted project config is present in an ancestor.
-    #[test]
-    fn discovery_does_not_override_explicit_xdg() -> Result<()> {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-
-        let base_home = uniq_dir("rh-xdg-base");
-        let project = uniq_dir("rh-xdg-proj");
-        let xdg = uniq_dir("rh-xdg-explicit");
-        std::fs::create_dir_all(base_home.join(".workestrate"))?;
-        std::fs::create_dir_all(project.join(".workestrate"))?;
-        std::fs::create_dir_all(&xdg)?;
-
-        // Project-local config.toml so discovery WOULD notice it if it ran.
-        std::fs::write(
-            project.join(".workestrate").join("config.toml"),
-            "layers = []\n",
-        )?;
-
-        // Base registry at <HOME>/.workestrate trusts the project dir, so
-        // discovery would return Discovered if it were allowed to run.
-        let canonical_project = std::fs::canonicalize(&project)?;
-        let trust_toml = format!(
-            "[[trusted_projects]]\npath = \"{}\"\n",
-            canonical_project.display()
-        );
-        std::fs::write(
-            base_home.join(".workestrate").join("config.toml"),
-            trust_toml,
-        )?;
-
-        std::env::set_var("HOME", &base_home);
-        std::env::set_var("XDG_CONFIG_HOME", &xdg);
-        std::env::remove_var("WORKESTRATE_HOME");
-        std::env::set_current_dir(&project)?;
-
-        let (_home, kind) = resolve_home_with_kind();
-        assert_ne!(
-            kind,
-            HomeKind::Discovered,
-            "explicit XDG var must override discovery even for a trusted project"
-        );
-        assert_eq!(kind, HomeKind::LegacyXdg);
-
-        let _ = std::fs::remove_dir_all(&base_home);
-        let _ = std::fs::remove_dir_all(&project);
-        let _ = std::fs::remove_dir_all(&xdg);
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_home_discovery_untrusted_ignored() -> Result<()> {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-
-        let base_home = uniq_dir("rh-untr-base");
-        let project = uniq_dir("rh-untr-proj");
-        std::fs::create_dir_all(base_home.join(".workestrate"))?;
-        std::fs::create_dir_all(project.join(".workestrate"))?;
-        std::fs::write(
-            project.join(".workestrate").join("config.toml"),
-            "layers = []\n",
-        )?;
-        // Base registry exists but does NOT trust the project.
-        std::fs::write(
-            base_home.join(".workestrate").join("config.toml"),
-            "[[trusted_projects]]\npath = \"/some/other/dir\"\n",
-        )?;
-
-        std::env::set_var("HOME", &base_home);
-        std::env::set_current_dir(&project)?;
-
-        let (home, kind) = resolve_home_with_kind();
-        assert_ne!(
-            kind,
-            HomeKind::Discovered,
-            "untrusted .workestrate must be ignored"
-        );
-        // Fell through to Default (<HOME>/.workestrate).
-        assert_eq!(kind, HomeKind::Default);
-        assert_eq!(home, base_home.join(".workestrate"));
-
-        let _ = std::fs::remove_dir_all(&base_home);
-        let _ = std::fs::remove_dir_all(&project);
         Ok(())
     }
 

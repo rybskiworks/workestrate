@@ -1,4 +1,4 @@
-//! Trust gating: the `[trusted_projects]` registry list and the discovery
+//! Trust gating: the `[trusted_projects]` registry list and the base-registry
 //! trust-check.
 
 use anyhow::Result;
@@ -7,18 +7,21 @@ use std::path::Path;
 use crate::config::paths::{base_registry_path, expand_tilde};
 use crate::config::{load_registry, Registry, TrustedProject};
 
-/// Trust-check used ONLY inside discovery; reads the base registry directly to
-/// avoid recursing through [`registry_path`] → [`resolve_home_with_kind`].
+/// Base-registry trust check; reads the base registry directly to avoid
+/// recursing through [`registry_path`] → [`resolve_home_with_kind`]. The
+/// discovery tier that was its original call site was removed (spec 08 step
+/// (e)); the function is kept as the base-registry trust check (exercised by
+/// the FS-21 test below).
 pub fn is_dir_trusted_via_base_registry(dir: &Path) -> bool {
     let path = base_registry_path();
     if !path.exists() {
         return false;
     }
     // FS-21: a base registry that EXISTS but fails to read/parse must not
-    // silently disable trust and discovery. Trust still fails closed
+    // silently disable trust. Trust still fails closed
     // (`false`), but the operator gets a one-time loud stderr warning —
     // mirroring `load_registry_for_dir_resolution`'s corrupt-registry note.
-    // One-time: this check runs once per ancestor per home resolution, so an
+    // One-time: this check may run many times per command, so an
     // unguarded warning would print many times per command.
     let reg = match std::fs::read_to_string(&path)
         .ok()

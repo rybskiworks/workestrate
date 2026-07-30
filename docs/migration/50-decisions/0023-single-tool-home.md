@@ -201,3 +201,21 @@ move begins. The migration remains non-transactional: if a move fails
 mid-loop, entries already moved stay moved, and the summary reports
 `partial: true` with `failed_at` naming the destination that could not be
 moved and `moved` listing the entries that succeeded up to that point.
+
+## Addendum (2026-07-30): discovery tier removed + `config-repos/` rename (specs 08/10)
+
+The trusted-ancestor auto-discovery tier (walk-up from cwd, trust-gated) is
+**REMOVED** (spec 08 step (e),
+`docs/validation-and-improvements/06-improvements/08-no-repo-local-home.md`).
+Repo-local homes and discovery caused split-brain/shadow-home ambiguity.
+Resolution precedence is now: `WORKESTRATE_HOME` env → legacy XDG (compat
+note) → default `~/.workestrate`. The "container: `<repo>/.workestrate`"
+language in the Decision section and the auto-discovery precedence step (plus
+the "Auto-discovery trust model" section) are **SUPERSEDED** by this addendum.
+
+The home store dir `repos/` is renamed `config-repos/` (spec 10 §3,
+`docs/validation-and-improvements/06-improvements/10-config-repos-as-working-copies.md`)
+— already reflected in the layout above.
+
+`is_dir_trusted_via_base_registry` is **KEPT** (project-config trust, ADR
+0014); only the discovery call site was removed.
