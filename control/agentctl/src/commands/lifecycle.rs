@@ -24,7 +24,6 @@ pub fn build_instance_spec(
     replace: bool,
     instance_id: Option<&str>,
     new_id: Option<&str>,
-    port_offset: u16,
 ) -> Result<crate::microsandbox::runtime::InstanceSpec> {
     use crate::microsandbox::runtime::InstanceSpec;
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
@@ -62,7 +61,6 @@ pub fn build_instance_spec(
         instance,
         workload: workload_name.to_string(),
         context,
-        port_offset,
         replace,
     })
 }
@@ -84,7 +82,6 @@ pub async fn dispatch_service<W: Workload>(
             replace,
             instance,
             new,
-            port_offset,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -103,7 +100,6 @@ pub async fn dispatch_service<W: Workload>(
                 replace,
                 instance.as_deref(),
                 new_id.as_deref(),
-                port_offset,
             )?;
             crate::microsandbox::runtime::up_service_with_spec(workload, &spec, foreground).await
         }
@@ -125,7 +121,7 @@ pub async fn dispatch_service<W: Workload>(
             let target = instance_name(&slot, instance.as_deref());
             crate::microsandbox::logs(&target).await
         }
-        ServiceAction::Plan { port_offset } => cmd_plan(workload, show_source, json, port_offset),
+        ServiceAction::Plan => cmd_plan(workload, show_source, json),
     }
 }
 
@@ -145,7 +141,6 @@ pub async fn dispatch_agent<W: Workload>(
             replace,
             instance,
             new,
-            port_offset,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -164,7 +159,6 @@ pub async fn dispatch_agent<W: Workload>(
                 replace,
                 instance.as_deref(),
                 new_id.as_deref(),
-                port_offset,
             )?;
             crate::microsandbox::runtime::exec_agent_with_spec(workload, &spec).await
         }
@@ -172,7 +166,7 @@ pub async fn dispatch_agent<W: Workload>(
             instance,
             all_instances,
         } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
-        AgentAction::Plan { port_offset } => cmd_plan(workload, show_source, json, port_offset),
+        AgentAction::Plan => cmd_plan(workload, show_source, json),
     }
 }
 
@@ -183,13 +177,11 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
             let replace = args.iter().any(|a| a == "--replace");
             let new = args.iter().any(|a| a == "--new");
             let instance = parse_flag_value(args, "--instance");
-            let port_offset = parse_port_offset(args)?;
             Ok(ServiceAction::Up {
                 foreground,
                 replace,
                 instance,
                 new,
-                port_offset,
             })
         }
         "down" => {
@@ -204,10 +196,7 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
             let instance = parse_flag_value(args, "--instance");
             Ok(ServiceAction::Logs { instance })
         }
-        "plan" => {
-            let port_offset = parse_port_offset(args)?;
-            Ok(ServiceAction::Plan { port_offset })
-        }
+        "plan" => Ok(ServiceAction::Plan),
         other => anyhow::bail!("unknown service action: {}", other),
     }
 }
@@ -218,12 +207,10 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
             let replace = args.iter().any(|a| a == "--replace");
             let new = args.iter().any(|a| a == "--new");
             let instance = parse_flag_value(args, "--instance");
-            let port_offset = parse_port_offset(args)?;
             Ok(AgentAction::Exec {
                 replace,
                 instance,
                 new,
-                port_offset,
             })
         }
         "down" => {
@@ -234,10 +221,7 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
                 all_instances,
             })
         }
-        "plan" => {
-            let port_offset = parse_port_offset(args)?;
-            Ok(AgentAction::Plan { port_offset })
-        }
+        "plan" => Ok(AgentAction::Plan),
         other => anyhow::bail!("unknown agent action: {}", other),
     }
 }
@@ -256,20 +240,6 @@ pub fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// Parse `--port-offset <N>` (or `--port-offset=N`) from the workload
-/// catch-all args. Defaults to 0 when absent.
-pub fn parse_port_offset(args: &[String]) -> Result<u16> {
-    let Some(raw) = parse_flag_value(args, "--port-offset") else {
-        return Ok(0);
-    };
-    raw.parse::<u16>().map_err(|_| {
-        anyhow::anyhow!(
-            "invalid --port-offset value '{}' (expected u16 0..=65535)",
-            raw
-        )
-    })
 }
 
 pub async fn cmd_down(
@@ -540,32 +510,6 @@ mod tests {
     fn parse_flag_value_returns_none_when_absent() {
         let args: Vec<String> = vec!["--replace".into()];
         assert!(parse_flag_value(&args, "--instance").is_none());
-    }
-
-    #[test]
-    fn parse_port_offset_defaults_to_zero() -> Result<()> {
-        let args: Vec<String> = vec!["--replace".into()];
-        assert_eq!(parse_port_offset(&args)?, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn parse_port_offset_reads_value() -> Result<()> {
-        let args: Vec<String> = vec!["--port-offset".into(), "10000".into()];
-        assert_eq!(parse_port_offset(&args)?, 10000);
-        Ok(())
-    }
-
-    #[test]
-    fn parse_port_offset_rejects_non_numeric() {
-        let args: Vec<String> = vec!["--port-offset".into(), "huge".into()];
-        assert!(parse_port_offset(&args).is_err());
-    }
-
-    #[test]
-    fn parse_port_offset_rejects_overflow() {
-        let args: Vec<String> = vec!["--port-offset".into(), "70000".into()];
-        assert!(parse_port_offset(&args).is_err());
     }
 }
 

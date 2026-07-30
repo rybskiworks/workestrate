@@ -79,18 +79,6 @@ pub(crate) fn apply_plan_envs(
     Ok(b)
 }
 
-/// Compute the offset-shifted host port, failing on overflow past u16.
-fn offset_port(host: u16, offset: u16) -> Result<u16> {
-    host.checked_add(offset).ok_or_else(|| {
-        anyhow::anyhow!(
-            "port offset {} applied to host port {} overflows u16; \
-             reduce --port-offset",
-            offset,
-            host
-        )
-    })
-}
-
 pub(crate) async fn run_service_foreground(
     sandbox: &Sandbox,
     config: ForegroundConfig,
@@ -256,14 +244,10 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // the actual sandbox identity (slot for singleton, slot@id for parallel).
     plan.name = spec.instance.clone();
 
-    // Compute offset-adjusted host ports (post-offset). `host_ports` is used
-    // both for collision checking and for the legacy `ports` field in the
-    // lifecycle state record.
-    let host_ports: Vec<u16> = plan
-        .ports
-        .iter()
-        .map(|p| offset_port(p.host, spec.port_offset))
-        .collect::<Result<Vec<u16>>>()?;
+    // Host ports from the plan. `host_ports` is used both for collision
+    // checking and for the legacy `ports` field in the lifecycle state
+    // record.
+    let host_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
 
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.
@@ -291,8 +275,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
     builder = builder.entrypoint(["/bin/sh", "-c", "tail -f /dev/null"]);
 
     for port in &plan.ports {
-        let host = offset_port(port.host, spec.port_offset)?;
-        builder = builder.port(host, port.guest);
+        builder = builder.port(port.host, port.guest);
     }
 
     builder = apply_plan_envs(builder, &plan)?;
@@ -307,16 +290,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let sandbox = builder.create().await?;
 
     // Register with full lifecycle metadata so `ps` and `down --all` work.
-    let port_pairs: Vec<PortMapping> = plan
-        .ports
-        .iter()
-        .map(|p| {
-            Ok(PortMapping {
-                host: offset_port(p.host, spec.port_offset)?,
-                guest: p.guest,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let port_pairs: Vec<PortMapping> = plan.ports.clone();
     let created_at = super::time::current_rfc3339_utc();
     // FN-6: atomic check + register under ONE registry-lock hold. The
     // collision check must not run as a separate pre-create call: it
@@ -333,7 +307,6 @@ pub(crate) async fn build_sandbox<W: Workload>(
         workload.name(),
         &host_ports,
         &port_pairs,
-        spec.port_offset,
         &created_at,
     )?;
     let config = ForegroundConfig {

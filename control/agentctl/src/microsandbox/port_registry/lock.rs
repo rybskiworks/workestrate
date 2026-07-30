@@ -170,7 +170,6 @@ mod tests {
                 host: port,
                 guest: port,
             }],
-            0,
             "2026-07-23T00:00:00Z",
         )
     }

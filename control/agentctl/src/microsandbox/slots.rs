@@ -60,8 +60,8 @@ pub fn instance_id_of(instance: &str) -> Option<&str> {
 /// 1. Matches `^[a-z0-9][a-z0-9-]{0,31}$` (1–32 chars; lowercase alphanumerics
 ///    and hyphens; must start alphanumeric).
 /// 2. MUST NOT be `all` (reserved by `down --all-instances` / `down --all`).
-/// 3. MUST NOT be purely numeric (avoid ambiguity with `--port-offset N` and
-///    integer allocation from `--new`).
+/// 3. MUST NOT be purely numeric (reserved for future numeric-flag ambiguity;
+///    also avoids collision with integer allocation from `--new`).
 ///
 /// Returns `Ok(())` on success or an `anyhow::Error` whose `to_string()` names
 /// the violated rule and the offending input.
@@ -106,11 +106,12 @@ pub fn validate_instance_id(id: &str) -> Result<()> {
         );
     }
     // Purely numeric: every char is an ascii digit. Reject to avoid ambiguity
-    // with --port-offset N and the integer allocation range used by --new.
+    // with the integer allocation range used by --new (and any future numeric
+    // flag).
     if id.chars().all(|c| c.is_ascii_digit()) {
         anyhow::bail!(
-            "instance id '{}' must not be purely numeric (ambiguous with --port-offset N \
-             and --new integer allocation); add at least one non-digit character",
+            "instance id '{}' must not be purely numeric (ambiguous with --new integer \
+             allocation); add at least one non-digit character",
             id
         );
     }

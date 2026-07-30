@@ -536,14 +536,12 @@ mod tests {
     fn spec_for_detach(
         instance: &str,
         replace: bool,
-        port_offset: u16,
     ) -> workestrate::microsandbox::runtime::InstanceSpec {
         use workestrate::microsandbox::runtime::InstanceSpec;
         InstanceSpec {
             instance: instance.to_string(),
             workload: "litellm".to_string(),
             context: None,
-            port_offset,
             replace,
         }
     }
@@ -555,12 +553,12 @@ mod tests {
         let litellm = ConfigWorkload::new("litellm")?;
 
         // Singleton, no flags: just `<name> up --foreground`.
-        let args = litellm.detach_args(&spec_for_detach("litellm", false, 0));
+        let args = litellm.detach_args(&spec_for_detach("litellm", false));
         assert_eq!(args, vec!["litellm", "up", "--foreground"]);
 
         // Parallel instance: forward `--instance <id>` with the BARE id, never
         // `slot@id`. `--new` must NOT appear (already materialized by parent).
-        let args = litellm.detach_args(&spec_for_detach("litellm@canary", false, 0));
+        let args = litellm.detach_args(&spec_for_detach("litellm@canary", false));
         assert_eq!(
             args,
             vec!["litellm", "up", "--foreground", "--instance", "canary"]
@@ -571,11 +569,11 @@ mod tests {
         );
 
         // `--replace` is forwarded when requested.
-        let args = litellm.detach_args(&spec_for_detach("litellm", true, 0));
+        let args = litellm.detach_args(&spec_for_detach("litellm", true));
         assert_eq!(args, vec!["litellm", "up", "--foreground", "--replace"]);
 
-        // `--port-offset` is forwarded only when nonzero.
-        let args = litellm.detach_args(&spec_for_detach("litellm@ab2z", true, 10000));
+        // `--replace` and `--instance` compose.
+        let args = litellm.detach_args(&spec_for_detach("litellm@ab2z", true));
         assert_eq!(
             args,
             vec![
@@ -585,19 +583,16 @@ mod tests {
                 "--replace",
                 "--instance",
                 "ab2z",
-                "--port-offset",
-                "10000",
             ]
         );
 
         // A workload other than litellm uses its own name as argv[0].
         let pi = ConfigWorkload::new("pi")?;
-        let args = pi.detach_args(&spec_for_detach("pi@xy7", false, 5000));
+        let args = pi.detach_args(&spec_for_detach("pi@xy7", false));
         assert_eq!(args.first(), Some(&"pi".to_string()));
         assert!(args.contains(&"--foreground".to_string()));
         assert!(args.contains(&"--instance".to_string()));
-        assert!(args.contains(&"--port-offset".to_string()));
-        assert_eq!(args[args.len() - 1], "5000");
+        assert_eq!(args[args.len() - 1], "xy7");
         Ok(())
     }
 
@@ -629,13 +624,12 @@ mod tests {
         assert_eq!(slug.len(), 4);
         validate_instance_id(&slug).expect("allocated slug must satisfy the slug rule");
 
-        let spec = build_instance_spec("litellm", false, None, Some(&slug), 10000)?;
+        let spec = build_instance_spec("litellm", false, None, Some(&slug))?;
         assert_eq!(
             spec.instance,
             format!("litellm@{slug}"),
             "instance must be <slot>@<slug>, not the bare singleton slot"
         );
-        assert_eq!(spec.port_offset, 10000);
 
         let down_target = instance_name(&slot, Some(&slug));
         assert_eq!(down_target, spec.instance);
@@ -661,13 +655,13 @@ mod tests {
             .and_then(|s| s.find_subcommand("up"))
             .expect("litellm up must exist");
         // get_long() returns the user-facing long flag name (clap hyphenates
-        // underscores: port_offset → port-offset). get_id() preserves the raw
-        // field identifier; the CLI surface is what we care about here.
+        // underscores: all_instances → all-instances). get_id() preserves the
+        // raw field identifier; the CLI surface is what we care about here.
         let flag_names: Vec<_> = up
             .get_arguments()
             .filter_map(|a| a.get_long().map(|s| s.to_string()))
             .collect();
-        for f in ["replace", "instance", "new", "port-offset", "foreground"] {
+        for f in ["replace", "instance", "new", "foreground"] {
             assert!(
                 flag_names.contains(&f.to_string()),
                 "litellm up missing flag: {f}"

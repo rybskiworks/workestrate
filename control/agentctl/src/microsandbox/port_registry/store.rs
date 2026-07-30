@@ -121,7 +121,6 @@ fn check_port_collisions_locked(
 /// `.await` would wedge concurrent processes), so a same-port race can still
 /// collide mid-create — but the post-create registration window is closed:
 /// the loser's combined call fails the collision check and leaves no record.
-#[allow(clippy::too_many_arguments)]
 pub fn check_and_register_sandbox_lifecycle(
     state_dir: &Path,
     instance_name: &str,
@@ -129,7 +128,6 @@ pub fn check_and_register_sandbox_lifecycle(
     workload: &str,
     host_ports: &[u16],
     port_pairs: &[PortMapping],
-    port_offset: u16,
     created_at: &str,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
@@ -141,7 +139,6 @@ pub fn check_and_register_sandbox_lifecycle(
         workload,
         host_ports,
         port_pairs,
-        port_offset,
         created_at,
     )
 }
@@ -178,7 +175,6 @@ pub fn register_sandbox(
         workload: workload.to_string(),
         ports: ports.to_vec(),
         port_pairs: Vec::new(),
-        port_offset: None,
         created_at: String::new(),
     };
     let path = run_dir.join(format!("{}.json", instance_name));
@@ -189,8 +185,8 @@ pub fn register_sandbox(
 
 /// Register a running sandbox instance with full lifecycle metadata.
 ///
-/// Writes `${state_dir}/var/run/<instance>.json` with the port pairs, offset,
-/// and RFC3339 created-at timestamp populated. Locks the registry around the
+/// Writes `${state_dir}/var/run/<instance>.json` with the port pairs and
+/// RFC3339 created-at timestamp populated. Locks the registry around the
 /// write (WP10/A17); see [`check_and_register_sandbox_lifecycle`] for the
 /// atomic check+register path.
 ///
@@ -198,7 +194,6 @@ pub fn register_sandbox(
 /// entry point); retained as the register-only half of the registry API and
 /// exercised by the store/ps test modules.
 #[allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
 pub fn register_sandbox_lifecycle(
     state_dir: &Path,
     instance_name: &str,
@@ -206,7 +201,6 @@ pub fn register_sandbox_lifecycle(
     workload: &str,
     host_ports: &[u16],
     port_pairs: &[PortMapping],
-    port_offset: u16,
     created_at: &str,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
@@ -217,14 +211,12 @@ pub fn register_sandbox_lifecycle(
         workload,
         host_ports,
         port_pairs,
-        port_offset,
         created_at,
     )
 }
 
 /// Lock-free core of [`register_sandbox_lifecycle`]; caller must hold the
 /// registry lock.
-#[allow(clippy::too_many_arguments)]
 fn register_sandbox_lifecycle_locked(
     state_dir: &Path,
     instance_name: &str,
@@ -232,7 +224,6 @@ fn register_sandbox_lifecycle_locked(
     workload: &str,
     host_ports: &[u16],
     port_pairs: &[PortMapping],
-    port_offset: u16,
     created_at: &str,
 ) -> Result<()> {
     let run_dir = state_dir.join("var").join("run");
@@ -243,11 +234,6 @@ fn register_sandbox_lifecycle_locked(
         workload: workload.to_string(),
         ports: host_ports.to_vec(),
         port_pairs: port_pairs.to_vec(),
-        port_offset: if port_offset == 0 {
-            None
-        } else {
-            Some(port_offset)
-        },
         created_at: created_at.to_string(),
     };
     let path = run_dir.join(format!("{}.json", instance_name));
@@ -349,7 +335,6 @@ mod tests {
                 host: port,
                 guest: port,
             }],
-            0,
             "2026-07-23T00:00:00Z",
         )
     }
@@ -578,7 +563,6 @@ mod tests {
             "litellm",
             &[14000, 14001],
             &pairs,
-            10000,
             "2026-07-20T14:05:42Z",
         )?;
         let record = find_record(&state_dir, "personal-litellm@canary")?
@@ -590,30 +574,7 @@ mod tests {
         assert_eq!(record.port_pairs.len(), 2);
         assert_eq!(record.port_pairs[0].host, 14000);
         assert_eq!(record.port_pairs[0].guest, 4000);
-        assert_eq!(record.port_offset, Some(10000));
         assert_eq!(record.created_at, "2026-07-20T14:05:42Z");
-        let _ = std::fs::remove_dir_all(&state_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn register_lifecycle_zero_offset_serializes_as_none() -> Result<()> {
-        let state_dir = unique_state_dir("zero-offset");
-        register_sandbox_lifecycle(
-            &state_dir,
-            "personal-litellm",
-            Some("personal"),
-            "litellm",
-            &[4000],
-            &[crate::microsandbox::plan::PortMapping {
-                host: 4000,
-                guest: 4000,
-            }],
-            0,
-            "2026-07-20T14:03:11Z",
-        )?;
-        let record = find_record(&state_dir, "personal-litellm")?.unwrap();
-        assert_eq!(record.port_offset, None, "offset 0 must serialize as None");
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -638,7 +599,6 @@ mod tests {
         assert_eq!(record.instance, "legacy-litellm");
         assert_eq!(record.ports, vec![4000]);
         assert!(record.port_pairs.is_empty());
-        assert_eq!(record.port_offset, None);
         assert!(record.created_at.is_empty());
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
@@ -686,7 +646,6 @@ mod tests {
                 host: 14000,
                 guest: 4000,
             }],
-            10000,
             "2026-07-20T14:05:42Z",
         )?;
         let records = list_records(&state_dir)?;

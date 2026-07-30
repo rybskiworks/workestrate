@@ -1,10 +1,10 @@
 //! End-to-end test for the detached-instance lifecycle (ADR 0021, WP-A).
 //!
-//! Verifies that a detached `up --new --port-offset N` forwards the resolved
+//! Verifies that a detached `up --new` forwards the resolved
 //! [`InstanceSpec`] into the background child so that:
 //!   1. the child creates the sandbox at `<slot>@<slug>` (NOT the bare slot),
-//!   2. the port-registry record lands at `<slot>@<slug>` with the offset,
-//!   3. `workestrate ps --json` reports it with the shifted host ports,
+//!   2. the port-registry record lands at `<slot>@<slug>`,
+//!   3. `workestrate ps --json` reports it with the plan's host ports,
 //!   4. `workestrate <wl> down --instance <slug>` stops and removes it.
 //!
 //! This exercises the real microsandbox create path, which needs KVM + a
@@ -96,7 +96,7 @@ fn ps_contains(home: &std::path::Path, instance: &str) -> bool {
 
 #[tokio::test]
 #[ignore = "needs KVM + a loaded litellm image; run manually with --ignored"]
-async fn detached_up_new_port_offset_registers_slot_at_slug_and_down_stops_it() {
+async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
     let home = std::env::temp_dir().join(format!(
         "workestrate-lifecycle-detached-{}-{}",
         std::process::id(),
@@ -107,11 +107,11 @@ async fn detached_up_new_port_offset_registers_slot_at_slug_and_down_stops_it() 
     ));
     std::fs::create_dir_all(&home).expect("create isolated HOME");
 
-    // 1. Detached `up --new --port-offset 10000`. The parent returns at once
-    //    after spawning the foreground child; the child creates the sandbox
-    //    and writes the registry record.
+    // 1. Detached `up --new`. The parent returns at once after spawning the
+    //    foreground child; the child creates the sandbox and writes the
+    //    registry record.
     let up = isolated_cmd(&home)
-        .args(["litellm", "up", "--new", "--port-offset", "10000"])
+        .args(["litellm", "up", "--new"])
         .output()
         .expect("spawn litellm up --new");
     let up_stdout = String::from_utf8_lossy(&up.stdout).to_string();
@@ -175,7 +175,7 @@ async fn detached_up_new_port_offset_registers_slot_at_slug_and_down_stops_it() 
     }
     assert!(seen, "ps --json never listed '{instance}' within 60s");
 
-    // 4. The ps entry must carry the offset: host port 4000 + 10000 = 14000,
+    // 4. The registry record must carry the plan's port pair: host 4000,
     //    guest 4000. Read the raw record to assert the port pair directly
     //    (independent of the ps JSON renderer).
     let state_dir = home.join(".local").join("state").join("workestrate");
@@ -185,8 +185,8 @@ async fn detached_up_new_port_offset_registers_slot_at_slug_and_down_stops_it() 
         .join(format!("{instance}.json"));
     let record = std::fs::read_to_string(&record_path).expect("read registry record");
     assert!(
-        record.contains("\"host\": 14000") && record.contains("\"guest\": 4000"),
-        "registry record for '{instance}' must carry the offset port pair (14000:4000); got:\n{record}"
+        record.contains("\"host\": 4000") && record.contains("\"guest\": 4000"),
+        "registry record for '{instance}' must carry the plan port pair (4000:4000); got:\n{record}"
     );
 
     // 5. `down --instance <slug>` stops and removes it.

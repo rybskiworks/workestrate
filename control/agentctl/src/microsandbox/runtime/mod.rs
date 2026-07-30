@@ -57,8 +57,8 @@ pub struct ForegroundConfig {
 
 /// Resolved identity + flags for a single `up`/`exec` invocation (ADR 0021).
 ///
-/// Built by the CLI layer from `--replace` / `--instance <id>` / `--new` /
-/// `--port-offset N` plus the active context. Consumed by [`build_sandbox`].
+/// Built by the CLI layer from `--replace` / `--instance <id>` / `--new`
+/// plus the active context. Consumed by [`build_sandbox`].
 pub struct InstanceSpec {
     /// The sandbox name to create: `slot` (singleton) or `slot@<id>` (parallel).
     pub instance: String,
@@ -66,8 +66,6 @@ pub struct InstanceSpec {
     pub workload: String,
     /// Active context name, if any.
     pub context: Option<String>,
-    /// `--port-offset N`. Added to every HOST port. 0 = no shift.
-    pub port_offset: u16,
     /// `--replace`. If true, occupancy is torn down before create; otherwise
     /// an occupied slot REFUSES (fail-closed default).
     pub replace: bool,

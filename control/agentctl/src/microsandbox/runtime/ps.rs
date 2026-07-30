@@ -51,9 +51,6 @@ pub struct PsEntry {
     /// RFC3339 timestamp the instance was registered, or empty for legacy.
     /// Renamed from `created` to match ADR 0021 §7 (`started_at`).
     pub started_at: String,
-    /// Effective `--port-offset N` applied when this instance was started.
-    /// `None` for legacy records and `--port-offset 0`.
-    pub port_offset: Option<u16>,
     /// Best-effort staleness flag; set by [`probe_liveness`] (`false` from
     /// [`ps`]). Surfaced in both `ps --json` and the text footer (ADR 0021 §4).
     pub stale: bool,
@@ -122,7 +119,6 @@ pub fn ps(state_dir: &Path) -> Result<Vec<PsEntry>> {
                 kind,
                 ports,
                 started_at: r.created_at,
-                port_offset: r.port_offset,
                 stale: false,
             }
         })
@@ -349,7 +345,6 @@ mod tests {
             "litellm",
             &[14000, 14001],
             &pairs,
-            10000,
             "2026-07-20T14:05:42Z",
         )?;
         let entries = ps(&dir)?;
@@ -365,7 +360,6 @@ mod tests {
         // ADR 0021 §7 derived fields.
         assert_eq!(e.slot, "personal-litellm");
         assert_eq!(e.kind, PsKind::Parallel);
-        assert_eq!(e.port_offset, Some(10000));
         assert!(!e.stale);
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
@@ -391,10 +385,9 @@ mod tests {
         assert_eq!(e.ports[0].guest, 4000);
         assert_eq!(e.ports[1].host, 4001);
         assert_eq!(e.ports[1].guest, 4001);
-        // Legacy record: singleton (no `@`), no port_offset, slot == instance.
+        // Legacy record: singleton (no `@`), slot == instance.
         assert_eq!(e.slot, "legacy-litellm");
         assert_eq!(e.kind, PsKind::Singleton);
-        assert_eq!(e.port_offset, None);
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
@@ -516,7 +509,6 @@ mod tests {
                 kind: PsKind::Parallel,
                 ports: vec![PortMapping { host: 1, guest: 1 }],
                 started_at: String::new(),
-                port_offset: None,
                 stale: false,
             },
             PsEntry {
@@ -527,7 +519,6 @@ mod tests {
                 kind: PsKind::Singleton,
                 ports: vec![],
                 started_at: String::new(),
-                port_offset: None,
                 stale: false,
             },
             PsEntry {
@@ -538,7 +529,6 @@ mod tests {
                 kind: PsKind::Parallel,
                 ports: vec![],
                 started_at: String::new(),
-                port_offset: None,
                 stale: false,
             },
         ];
@@ -574,7 +564,6 @@ mod tests {
                 kind: PsKind::Singleton,
                 ports: vec![PortMapping { host: 1, guest: 1 }],
                 started_at: String::new(),
-                port_offset: None,
                 stale: true, // pre-existing; Unknown must NOT overwrite it
             },
             PsEntry {
@@ -585,7 +574,6 @@ mod tests {
                 kind: PsKind::Singleton,
                 ports: vec![],
                 started_at: String::new(),
-                port_offset: None,
                 stale: false,
             },
         ];
@@ -614,7 +602,6 @@ mod tests {
                 kind: PsKind::Singleton,
                 ports: vec![],
                 started_at: String::new(),
-                port_offset: None,
                 stale: true, // start stale; Alive must clear it
             },
             PsEntry {
@@ -625,7 +612,6 @@ mod tests {
                 kind: PsKind::Singleton,
                 ports: vec![],
                 started_at: String::new(),
-                port_offset: None,
                 stale: true,
             },
         ];

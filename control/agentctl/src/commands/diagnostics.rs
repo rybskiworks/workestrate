@@ -15,29 +15,11 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     workload: &W,
     show_source: bool,
     json: bool,
-    port_offset: u16,
 ) -> Result<()> {
     if json {
-        let mut plan = workload.plan();
-        if port_offset != 0 {
-            for p in &mut plan.ports {
-                p.host = p.host.checked_add(port_offset).ok_or_else(|| {
-                    anyhow::anyhow!("port offset {} overflows host port {}", port_offset, p.host)
-                })?;
-            }
-        }
-        println!("{}", serde_json::to_string_pretty(&plan)?);
+        println!("{}", serde_json::to_string_pretty(&workload.plan())?);
     } else if show_source {
         println!("{}", workload.show_source());
-    } else if port_offset != 0 {
-        // Reuse the Display impl but shift host ports first.
-        let mut plan = workload.plan();
-        for p in &mut plan.ports {
-            p.host = p.host.checked_add(port_offset).ok_or_else(|| {
-                anyhow::anyhow!("port offset {} overflows host port {}", port_offset, p.host)
-            })?;
-        }
-        print!("{}", plan);
     } else {
         println!("{}", workload.plan());
     }
@@ -485,8 +467,7 @@ mod tests {
 
     /// `ps --json` must emit the exact shape pinned by ADR 0021 §7, in the
     /// documented field order: instance, workload, context, slot, kind,
-    /// started_at, ports, [port_offset], stale. `port_offset` is omitted on
-    /// the singleton (None) and present on the parallel instance (Some).
+    /// started_at, ports, stale.
     /// Pure: no env, no msb — constructs PsEntry rows directly and round-trips
     /// them through `ps_entries_json` + `serde_json::to_string_pretty`.
     #[test]
@@ -505,7 +486,6 @@ mod tests {
                 guest: 4000,
             }],
             started_at: "2026-07-20T14:03:11Z".to_string(),
-            port_offset: None,
             stale: false,
         };
         let parallel = PsEntry {
@@ -519,16 +499,14 @@ mod tests {
                 guest: 4000,
             }],
             started_at: "2026-07-20T14:05:42Z".to_string(),
-            port_offset: Some(10000),
             stale: false,
         };
 
         let json = serde_json::to_string_pretty(&ps_entries_json(&[singleton, parallel]))
             .expect("serialize ps entries");
 
-        // Field order, names, casing (kind lowercase), and the
-        // skip_serializing_if on port_offset are all pinned here. Any drift
-        // from ADR 0021 §7 fails this snapshot.
+        // Field order, names, and casing (kind lowercase) are all pinned
+        // here. Any drift from ADR 0021 §7 fails this snapshot.
         let expected = r#"[
   {
     "instance": "personal-litellm",
@@ -558,7 +536,6 @@ mod tests {
         "guest": 4000
       }
     ],
-    "port_offset": 10000,
     "stale": false
   }
 ]"#;
@@ -588,7 +565,6 @@ mod tests {
                     guest: 4000,
                 }],
                 started_at: "2026-07-20T14:05:42Z".to_string(),
-                port_offset: Some(10000),
                 stale: true,
             },
             PsEntry {
@@ -602,7 +578,6 @@ mod tests {
                     guest: 3000,
                 }],
                 started_at: "2026-07-20T14:06:00Z".to_string(),
-                port_offset: None,
                 stale: false,
             },
         ];
@@ -662,7 +637,6 @@ mod tests {
                 guest: 4000,
             }],
             started_at: "2026-07-20T14:03:11Z".to_string(),
-            port_offset: None,
             stale: false,
         }];
         let mut buf: Vec<u8> = Vec::new();

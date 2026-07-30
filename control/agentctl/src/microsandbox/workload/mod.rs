@@ -75,8 +75,7 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// resolved:
     ///   - `--replace` (when `spec.replace`),
     ///   - `--instance <id>` for a parallel instance — the **bare id**, not
-    ///     `slot@id` (the child re-derives the slot from its own context),
-    ///   - `--port-offset <N>` when the offset is nonzero.
+    ///     `slot@id` (the child re-derives the slot from its own context).
     ///
     /// `--new` is intentionally NOT forwarded: the parent has already
     /// materialized the slug into `spec.instance`, so the child must target
@@ -98,10 +97,6 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         if let Some(id) = crate::microsandbox::slots::instance_id_of(&spec.instance) {
             args.push("--instance".to_string());
             args.push(id.to_string());
-        }
-        if spec.port_offset != 0 {
-            args.push("--port-offset".to_string());
-            args.push(spec.port_offset.to_string());
         }
         args
     }

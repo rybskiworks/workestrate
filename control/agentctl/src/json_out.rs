@@ -46,10 +46,6 @@ pub struct PsEntryJson {
     kind: crate::microsandbox::runtime::PsKind,
     started_at: String,
     ports: Vec<PsPortJson>,
-    /// Omitted entirely when None (singleton / --port-offset 0), present only
-    /// on parallel instances started with a non-zero offset (ADR 0021 §7).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    port_offset: Option<u16>,
     stale: bool,
 }
 
@@ -71,7 +67,6 @@ pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec
                     guest: p.guest,
                 })
                 .collect(),
-            port_offset: e.port_offset,
             stale: e.stale,
         })
         .collect()

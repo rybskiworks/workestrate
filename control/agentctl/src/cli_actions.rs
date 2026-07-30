@@ -31,10 +31,6 @@ pub enum ServiceAction {
         /// `<slot>@<id>`.
         #[arg(long)]
         new: bool,
-
-        /// Add N to every HOST port (guest ports unchanged).
-        #[arg(long, default_value_t = 0, value_name = "N")]
-        port_offset: u16,
     },
     /// Stop and remove the sandbox
     Down {
@@ -53,11 +49,7 @@ pub enum ServiceAction {
         instance: Option<String>,
     },
     /// Print the planned sandbox workload
-    Plan {
-        /// Add N to every HOST port in the displayed plan (mirrors --port-offset on up).
-        #[arg(long, default_value_t = 0, value_name = "N")]
-        port_offset: u16,
-    },
+    Plan,
 }
 
 /// Actions available on agent workloads (interactive TUI attach).
@@ -76,10 +68,6 @@ pub enum AgentAction {
         /// Auto-allocate the lowest free integer id >= 2.
         #[arg(long)]
         new: bool,
-
-        /// Add N to every HOST port (guest ports unchanged).
-        #[arg(long, default_value_t = 0, value_name = "N")]
-        port_offset: u16,
     },
     /// Stop and remove the sandbox
     Down {
@@ -89,10 +77,7 @@ pub enum AgentAction {
         all_instances: bool,
     },
     /// Print the planned sandbox workload
-    Plan {
-        #[arg(long, default_value_t = 0, value_name = "N")]
-        port_offset: u16,
-    },
+    Plan,
 }
 
 /// Actions for managing config repositories and trust.
