@@ -49,7 +49,12 @@ pub enum ServiceAction {
         instance: Option<String>,
     },
     /// Print the planned sandbox workload
-    Plan,
+    Plan {
+        /// Render the plan as parallel slot <slot>@<id> would see it
+        /// (prospective per-instance bind).
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+    },
 }
 
 /// Actions available on agent workloads (interactive TUI attach).
@@ -77,7 +82,12 @@ pub enum AgentAction {
         all_instances: bool,
     },
     /// Print the planned sandbox workload
-    Plan,
+    Plan {
+        /// Render the plan as parallel slot <slot>@<id> would see it
+        /// (prospective per-instance bind).
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+    },
 }
 
 /// Actions for managing config repositories and trust.

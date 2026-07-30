@@ -121,7 +121,9 @@ pub async fn dispatch_service<W: Workload>(
             let target = instance_name(&slot, instance.as_deref());
             crate::microsandbox::logs(&target).await
         }
-        ServiceAction::Plan => cmd_plan(workload, show_source, json),
+        ServiceAction::Plan { instance } => {
+            cmd_plan(workload, show_source, json, instance.as_deref())
+        }
     }
 }
 
@@ -166,7 +168,9 @@ pub async fn dispatch_agent<W: Workload>(
             instance,
             all_instances,
         } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
-        AgentAction::Plan => cmd_plan(workload, show_source, json),
+        AgentAction::Plan { instance } => {
+            cmd_plan(workload, show_source, json, instance.as_deref())
+        }
     }
 }
 
@@ -196,7 +200,10 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
             let instance = parse_flag_value(args, "--instance");
             Ok(ServiceAction::Logs { instance })
         }
-        "plan" => Ok(ServiceAction::Plan),
+        "plan" => {
+            let instance = parse_flag_value(args, "--instance");
+            Ok(ServiceAction::Plan { instance })
+        }
         other => anyhow::bail!("unknown service action: {}", other),
     }
 }
@@ -221,7 +228,10 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
                 all_instances,
             })
         }
-        "plan" => Ok(AgentAction::Plan),
+        "plan" => {
+            let instance = parse_flag_value(args, "--instance");
+            Ok(AgentAction::Plan { instance })
+        }
         other => anyhow::bail!("unknown agent action: {}", other),
     }
 }

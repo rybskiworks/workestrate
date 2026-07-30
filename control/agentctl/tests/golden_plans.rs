@@ -102,3 +102,55 @@ fn golden_plans_match_byte_for_byte() {
         );
     }
 }
+
+/// ADR 0026/C2: `plan --instance <id>` renders the prospective parallel-slot
+/// plan — `<slot>@<id>` name plus the prospective per-instance bind
+/// (`127.0.0.2` on an empty registry) on every port.
+///
+/// Hermetic: `WORKESTRATE_STATE_DIR` points at a fresh temp dir so the
+/// prospective bind comes from an EMPTY registry view (never the dev's real
+/// state home); the temp dir is removed afterwards.
+#[test]
+fn golden_parallel_instance_plan_matches_byte_for_byte() {
+    let golden: &str = include_str!("golden/example-service.plan-instance.txt");
+
+    let state_dir = std::env::temp_dir().join(format!(
+        "workestrate-golden-instance-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&state_dir)
+        .unwrap_or_else(|e| panic!("failed to create temp state dir: {e}"));
+
+    let out = Command::new(BIN)
+        .args(["example-service", "plan", "--instance", "canary"])
+        .env("WORKESTRATE_CONFIG_DIR", config_reference_dir())
+        .env("WORKESTRATE_STATE_DIR", &state_dir)
+        .env_remove("WORKESTRATE_NO_PROJECT_CONFIG")
+        .env_remove("WORKESTRATE_HOME")
+        .env_remove("WORKESTRATE_CONTEXT")
+        .output()
+        .unwrap_or_else(|e| {
+            panic!("failed to invoke `workestrate example-service plan --instance canary`: {e}")
+        });
+    let _ = std::fs::remove_dir_all(&state_dir);
+
+    assert!(
+        out.status.success(),
+        "`workestrate example-service plan --instance canary` failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout == golden.as_bytes(),
+        "golden drift for `example-service plan --instance canary`: output no longer \
+         matches control/agentctl/tests/golden/example-service.plan-instance.txt \
+         byte-for-byte.\n{}\nIf the Display change is intended, regenerate the fixture \
+         (WORKESTRATE_CONFIG_DIR=config.reference WORKESTRATE_STATE_DIR=$(mktemp -d) \
+         cargo run --manifest-path control/agentctl/Cargo.toml -- example-service plan \
+         --instance canary).",
+        first_diff_context(&out.stdout, golden.as_bytes()),
+    );
+}

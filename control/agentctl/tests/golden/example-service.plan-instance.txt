@@ -1,0 +1,17 @@
+name: example-service@canary
+image: python:3.12-slim
+workdir: /app
+command: python -m http.server 8080
+cpus: 2
+memory: 1024 MiB
+env: APP_PORT=8080
+secret_env: OPENAI_API_KEY (value redacted, allowed: host.microsandbox.internal, required)
+port: 127.0.0.2:8080:8080
+mount: workspaces/example-service-state:/data
+mount: config.reference/infra/litellm:/app/config (ro)
+network: default_deny=true
+  ingress: tcp:8080 local
+  egress: tcp:53 -> host
+  egress: udp:53 -> host
+  egress: tcp:443 -> github.com, api.github.com
+

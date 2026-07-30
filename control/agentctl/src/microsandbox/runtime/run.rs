@@ -6,6 +6,27 @@ use super::{check_occupied_or_replace, ForegroundConfig, InstanceSpec};
 use anyhow::Result;
 use microsandbox::sandbox::{exec::ExecEvent, SandboxBuilder};
 use microsandbox::Sandbox;
+use std::net::{IpAddr, Ipv4Addr};
+use std::path::Path;
+
+/// Resolve the host bind IP for the slot `instance` runs in (ADR 0026(a)).
+///
+/// - PARALLEL slot (`<slot>@<id>`): a per-instance loopback (`127.0.0.N`,
+///   `N >= 2`) drawn from the port registry's locked allocator.
+/// - SINGLETON slot: the shared bind `127.0.0.1` (UNCHANGED — the well-known
+///   address static configs use).
+///
+/// The allocation happens for parallel slots EVEN when the workload publishes
+/// no ports: every parallel instance holds a per-instance IP as its uniform
+/// identity (the registry record reserves it until `down`), so addressing
+/// does not depend on whether this particular workload exposes a port.
+pub(crate) fn slot_bind_ip(instance: &str, state_dir: &Path) -> Result<IpAddr> {
+    if crate::microsandbox::slots::instance_id_of(instance).is_some() {
+        super::super::port_registry::allocate_loopback_ip(state_dir)
+    } else {
+        Ok(IpAddr::V4(Ipv4Addr::LOCALHOST))
+    }
+}
 
 fn reject_if_placeholder(value: &str, placeholder: &Option<String>, label: &str) -> Result<()> {
     if let Some(ref ph) = placeholder {
@@ -252,6 +273,18 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.
     let state_dir = crate::config::resolve_state_dir();
+
+    // ADR 0026(a)/C2: resolve the slot's bind IP BEFORE the builder port
+    // loop. Parallel slots draw a per-instance loopback from the locked
+    // allocator; the singleton keeps the shared 127.0.0.1 bind.
+    //
+    // TOCTOU honesty: this allocation is NOT a reservation — it happens
+    // pre-create, so two concurrent parallel `up`s of the same workload can
+    // draw the same IP before either registers. The post-create atomic
+    // check+register (FN-6) keyed on (bind_ip, port) closes the window: the
+    // loser surfaces a clear port-collision error at registration.
+    let bind_ip = slot_bind_ip(&spec.instance, &state_dir)?;
+
     check_occupied_or_replace(spec, &state_dir).await?;
 
     ensure_mount_sources(&root, &plan)?;
@@ -274,8 +307,16 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // any appended CMD, keeping the sandbox alive for the relay's exec_stream.
     builder = builder.entrypoint(["/bin/sh", "-c", "tail -f /dev/null"]);
 
+    // ADR 0026(a): the singleton publishes on the shared bind via `.port`
+    // (`.port_bind(127.0.0.1, ...)`); parallel slots publish on their
+    // per-instance loopback via `.port_bind`.
+    let is_parallel = crate::microsandbox::slots::instance_id_of(&spec.instance).is_some();
     for port in &plan.ports {
-        builder = builder.port(port.host, port.guest);
+        builder = if is_parallel {
+            builder.port_bind(bind_ip, port.host, port.guest)
+        } else {
+            builder.port(port.host, port.guest)
+        };
     }
 
     builder = apply_plan_envs(builder, &plan)?;
@@ -290,7 +331,16 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let sandbox = builder.create().await?;
 
     // Register with full lifecycle metadata so `ps` and `down --all` work.
-    let port_pairs: Vec<PortMapping> = plan.ports.clone();
+    // Each pair carries the slot's bind IP (ADR 0026): the record feeds `ps`
+    // and the (bind_ip, port)-keyed collision model.
+    let port_pairs: Vec<PortMapping> = plan
+        .ports
+        .iter()
+        .map(|p| PortMapping {
+            bind_ip,
+            ..p.clone()
+        })
+        .collect();
     let created_at = super::time::current_rfc3339_utc();
     // FN-6: atomic check + register under ONE registry-lock hold. The
     // collision check must not run as a separate pre-create call: it
@@ -301,14 +351,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // possible mid-create; this closes the post-create registration
     // window, and the loser surfaces a clear port-collision error here.
     //
-    // ADR 0026/C1: ALL slots bind the shared singleton 127.0.0.1 for now —
-    // per-instance loopback (127.0.0.N) wiring for parallel slots is C2.
+    // ADR 0026/C2: the resolved slot bind (shared 127.0.0.1 for the
+    // singleton, per-instance 127.0.0.N for parallel slots) is registered
+    // with the record.
     super::super::port_registry::check_and_register_sandbox_lifecycle(
         &state_dir,
         &spec.instance,
         spec.context.as_deref(),
         workload.name(),
-        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        bind_ip,
         &host_ports,
         &port_pairs,
         &created_at,
@@ -343,4 +394,60 @@ pub async fn up_service_with_spec<W: Workload>(
 pub async fn exec_agent_with_spec<W: Workload>(workload: &W, spec: &InstanceSpec) -> Result<()> {
     let (sandbox, config) = build_sandbox(workload, spec).await?;
     run_service_interactive(&sandbox, config).await
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+    use crate::config::test_support::unique_state_dir;
+
+    // ---- ADR 0026(a)/C2: slot_bind_ip ----
+
+    #[test]
+    fn slot_bind_ip_singleton_uses_shared_localhost() -> Result<()> {
+        let state_dir = unique_state_dir("slot-bind-singleton");
+        // Singleton slot (no `@`): the shared bind, and the allocator is
+        // never consulted (no records needed).
+        let ip = slot_bind_ip("personal-litellm", &state_dir)?;
+        assert_eq!(ip, IpAddr::V4(Ipv4Addr::LOCALHOST));
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn slot_bind_ip_parallel_allocates_lowest_free_loopback() -> Result<()> {
+        let state_dir = unique_state_dir("slot-bind-parallel");
+        // Empty registry → 127.0.0.2 (the lowest allocatable N >= 2).
+        let ip = slot_bind_ip("personal-litellm@canary", &state_dir)?;
+        assert_eq!(ip, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)));
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn slot_bind_ip_parallel_skips_registered_ips() -> Result<()> {
+        let state_dir = unique_state_dir("slot-bind-skip");
+        // A registered parallel instance holding 127.0.0.2 …
+        super::super::super::port_registry::check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm@canary",
+            None,
+            "litellm",
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+            &[4000],
+            &[PortMapping::new(4000, 4000)],
+            "2026-07-30T00:00:00Z",
+        )?;
+        // … makes the next parallel slot draw 127.0.0.3.
+        let ip = slot_bind_ip("personal-litellm@blue", &state_dir)?;
+        assert_eq!(ip, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)));
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
 }

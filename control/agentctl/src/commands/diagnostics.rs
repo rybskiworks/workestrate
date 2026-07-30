@@ -15,13 +15,40 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     workload: &W,
     show_source: bool,
     json: bool,
+    instance: Option<&str>,
 ) -> Result<()> {
+    use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
+
+    // ADR 0026/C2: `--instance <id>` renders the plan as the parallel slot
+    // `<slot>@<id>` would see it — the instance name plus the prospective
+    // per-instance bind IP on every published port. The prospective bind is
+    // a READ-ONLY registry snapshot (no lock, no reservation): a preview of
+    // what `up --instance <id>` would draw right now.
+    let mut plan = workload.plan();
+    if let Some(id) = instance {
+        validate_instance_id(id)?;
+        let slot = slot_for(workload.name(), config::active_context_name().as_deref());
+        plan.name = instance_name(&slot, Some(id));
+        let state_dir = config::resolve_state_dir();
+        let bind = crate::microsandbox::port_registry::prospective_loopback_ip(&state_dir)?;
+        for p in &mut plan.ports {
+            p.bind_ip = bind;
+        }
+    }
+
     if json {
-        println!("{}", serde_json::to_string_pretty(&workload.plan())?);
+        println!("{}", serde_json::to_string_pretty(&plan)?);
     } else if show_source {
-        println!("{}", workload.show_source());
+        if instance.is_some() {
+            // The prospective parallel view has no per-field source
+            // annotation; render the plain plan (source view stays the
+            // singleton's).
+            println!("{}", plan);
+        } else {
+            println!("{}", workload.show_source());
+        }
     } else {
-        println!("{}", workload.plan());
+        println!("{}", plan);
     }
     Ok(())
 }

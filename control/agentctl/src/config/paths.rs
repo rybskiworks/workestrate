@@ -207,11 +207,23 @@ fn load_registry_for_dir_resolution() -> Option<Registry> {
     }
 }
 
-/// Resolve the state directory (workspaces, var, run). A registry
-/// `settings.state_dir` wins; otherwise derived from the active tool home
-/// (`<home>/state`, or the legacy XDG state dir in `HomeKind::LegacyXdg`
-/// mode). A corrupt registry warns and falls back to the default.
+/// Resolve the state directory (workspaces, var, run).
+///
+/// Precedence (first match wins):
+/// 1. **`WORKESTRATE_STATE_DIR` env var** (highest; additive escape hatch —
+///    used by hermetic tests, e.g. the parallel-slot golden plan, to isolate
+///    the port registry from the real dev home without touching the
+///    registry). Used verbatim (leading `~/` expanded).
+/// 2. A registry `settings.state_dir`.
+/// 3. Derived from the active tool home (`<home>/state`, or the legacy XDG
+///    state dir in `HomeKind::LegacyXdg` mode). A corrupt registry warns and
+///    falls back to the default.
 pub fn resolve_state_dir() -> PathBuf {
+    if let Ok(value) = std::env::var("WORKESTRATE_STATE_DIR") {
+        if !value.is_empty() {
+            return expand_tilde(&value);
+        }
+    }
     if let Some(registry) = load_registry_for_dir_resolution() {
         if let Some(ref state_dir) = registry.settings.state_dir {
             return expand_tilde(state_dir);
@@ -544,6 +556,46 @@ pub(crate) mod tests {
             PathBuf::from("~/some/state"),
             "HOME-unset must return the path unexpanded, never '.'"
         );
+        Ok(())
+    }
+
+    // ---- WORKESTRATE_STATE_DIR override (C2; hermetic registry isolation) ----
+
+    /// The env override is the HIGHEST-precedence step: it wins over a
+    /// registry `settings.state_dir` AND over the home-derived default.
+    #[test]
+    fn state_dir_env_override_wins_over_registry_and_default() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        // WORKESTRATE_STATE_DIR is not in HOME_ENV_KEYS; guard it manually.
+        let old_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
+
+        let home = uniq_dir("sd-override-home");
+        let registry_state = uniq_dir("sd-override-registry");
+        let env_state = uniq_dir("sd-override-env");
+        std::fs::create_dir_all(home.join(".workestrate"))?;
+        std::fs::write(
+            home.join(".workestrate").join("config.toml"),
+            format!("[settings]\nstate_dir = \"{}\"\n", registry_state.display()),
+        )?;
+        std::env::set_var("HOME", &home);
+        std::env::set_var("WORKESTRATE_STATE_DIR", &env_state);
+
+        assert_eq!(
+            resolve_state_dir(),
+            env_state,
+            "WORKESTRATE_STATE_DIR must win over registry settings.state_dir"
+        );
+
+        // Unset → the registry setting takes over again.
+        std::env::remove_var("WORKESTRATE_STATE_DIR");
+        assert_eq!(resolve_state_dir(), registry_state);
+
+        match old_state {
+            Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }
 

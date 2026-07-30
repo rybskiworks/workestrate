@@ -364,7 +364,16 @@ pub fn list_records_for_workload(
 pub fn allocate_loopback_ip(state_dir: &Path) -> Result<IpAddr> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     let records = list_records(state_dir)?;
-    match lowest_free_loopback(&records) {
+    select_loopback(&records)
+}
+
+/// Shared selection core of [`allocate_loopback_ip`] and
+/// [`prospective_loopback_ip`]: apply [`lowest_free_loopback`] to `records`
+/// and map exhaustion to the hard error. Keeping BOTH entry points on this
+/// one selection path guarantees the prospective (plan) view can never
+/// diverge from the real (up) allocation.
+fn select_loopback(records: &[SandboxInstanceRecord]) -> Result<IpAddr> {
+    match lowest_free_loopback(records) {
         Some(ip) => Ok(IpAddr::V4(ip)),
         None => anyhow::bail!(
             "loopback bind address space exhausted: every 127.0.0.N (N in 2..=254) \
@@ -373,6 +382,21 @@ pub fn allocate_loopback_ip(state_dir: &Path) -> Result<IpAddr> {
              stale registry records before starting another parallel instance."
         ),
     }
+}
+
+/// The bind IP a parallel slot WOULD draw right now (ADR 0026(a)/C2) — the
+/// prospective view used by `plan --instance <id>`.
+///
+/// READ-ONLY SNAPSHOT: this lists the current records WITHOUT acquiring the
+/// registry lock and reserves nothing. It exists purely for plan rendering;
+/// the authoritative allocation is [`allocate_loopback_ip`] (locked), which
+/// shares the same selection core ([`select_loopback`]) so the two can never
+/// diverge on the same registry view. A concurrent `up` between the plan
+/// render and a later real `up` can of course change the answer — the plan
+/// output is a point-in-time preview, not a reservation.
+pub fn prospective_loopback_ip(state_dir: &Path) -> Result<IpAddr> {
+    let records = list_records(state_dir)?;
+    select_loopback(&records)
 }
 
 /// Pure core of [`allocate_loopback_ip`]: the lowest `127.0.0.N` (`N` in
@@ -1035,6 +1059,58 @@ mod tests {
         combined_register(&state_dir, "personal-pi", "pi", 3000)?;
         // Neither consumes the 127.0.0.N (N >= 2) allocator space.
         assert_eq!(allocate_loopback_ip(&state_dir)?, loopback(2));
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0026/C2: prospective_loopback_ip (read-only plan view) ----
+
+    #[test]
+    fn prospective_matches_allocate_on_same_registry_view() -> Result<()> {
+        let state_dir = unique_state_dir("prospective-parity");
+        // Empty registry: both entry points agree on 127.0.0.2.
+        assert_eq!(prospective_loopback_ip(&state_dir)?, loopback(2));
+        assert_eq!(
+            prospective_loopback_ip(&state_dir)?,
+            allocate_loopback_ip(&state_dir)?,
+            "prospective and locked allocation must agree on the same view"
+        );
+        // Register a record on .2: both move to .3.
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm@canary",
+            None,
+            "litellm",
+            loopback(2),
+            &[4000],
+            &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
+            "2026-07-30T00:00:00Z",
+        )?;
+        assert_eq!(prospective_loopback_ip(&state_dir)?, loopback(3));
+        assert_eq!(
+            prospective_loopback_ip(&state_dir)?,
+            allocate_loopback_ip(&state_dir)?,
+            "prospective and locked allocation must agree after a registration"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn prospective_is_read_only_and_leaves_no_lock_file() -> Result<()> {
+        let state_dir = unique_state_dir("prospective-readonly");
+        let before = list_records(&state_dir)?.len();
+        let _ = prospective_loopback_ip(&state_dir)?;
+        let after = list_records(&state_dir)?.len();
+        assert_eq!(before, after, "prospective view must not register anything");
+        assert!(
+            !state_dir
+                .join("var")
+                .join("run")
+                .join(PORT_REGISTRY_LOCK_NAME)
+                .exists(),
+            "prospective view must not leave a lock file behind"
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

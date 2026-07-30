@@ -207,7 +207,16 @@ impl fmt::Display for SandboxPlan {
             )?;
         }
         for p in &self.ports {
-            writeln!(f, "port: {}:{}", p.host, p.guest)?;
+            // ADR 0026/C2: render the bind ONLY when it is not the default
+            // shared singleton bind (127.0.0.1). Default-bind plans keep the
+            // legacy `port: <host>:<guest>` line BYTE-IDENTICAL (the golden
+            // plans pin this); non-default binds render
+            // `port: <bind_ip>:<host>:<guest>`.
+            if p.bind_ip == default_bind_ip() {
+                writeln!(f, "port: {}:{}", p.host, p.guest)?;
+            } else {
+                writeln!(f, "port: {}:{}:{}", p.bind_ip, p.host, p.guest)?;
+            }
         }
         for m in &self.mounts {
             let ro = if m.read_only { " (ro)" } else { "" };
@@ -403,6 +412,55 @@ network: default_deny=true
   egress: deny domain suffix .evil
 ";
         assert_eq!(format!("{plan}"), expected);
+    }
+
+    /// ADR 0026/C2: a non-default bind renders `port: <bind_ip>:<host>:<guest>`;
+    /// the default shared bind (127.0.0.1) keeps the legacy two-field line so
+    /// existing golden plans stay byte-identical.
+    #[test]
+    fn sandbox_plan_display_renders_bind_only_when_non_default() {
+        let base = |ports: Vec<PortMapping>| SandboxPlan {
+            name: "binds".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports,
+            mounts: vec![],
+            network: NetworkPlan {
+                default_deny: false,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+            },
+        };
+
+        // Non-default bind → three-field line with the bind IP.
+        let parallel = base(vec![PortMapping {
+            host: 8080,
+            guest: 80,
+            bind_ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+        }]);
+        let rendered = format!("{parallel}");
+        assert!(
+            rendered.contains("port: 127.0.0.2:8080:80\n"),
+            "non-default bind must render the bind IP; got:\n{rendered}"
+        );
+
+        // Default bind → legacy two-field line (golden-plan invariant).
+        let singleton = base(vec![PortMapping::new(8080, 80)]);
+        let rendered = format!("{singleton}");
+        assert!(
+            rendered.contains("port: 8080:80\n"),
+            "default bind must keep the legacy line; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("127.0.0.1"),
+            "default bind must NOT print the bind IP; got:\n{rendered}"
+        );
     }
 
     #[test]
