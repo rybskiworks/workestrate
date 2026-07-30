@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 
 use workestrate::cli_actions::{
-    AgentAction, ConfigAction, ContextAction, ServiceAction, SourceAction,
+    AgentAction, ConfigAction, ContextAction, HomeAction, ServiceAction, SourceAction,
 };
 use workestrate::cli_error::{classify_exit_code, emit_error};
 use workestrate::commands::config_cmd::{
@@ -12,6 +12,7 @@ use workestrate::commands::diagnostics::{
     cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_ps, cmd_run, cmd_validate_config,
 };
 use workestrate::commands::doctor::cmd_doctor;
+use workestrate::commands::home::cmd_home;
 use workestrate::commands::init::{cmd_init, cmd_new};
 use workestrate::commands::lifecycle::{
     cmd_clean, cmd_down_all, dispatch_agent, dispatch_service, parse_agent_action,
@@ -120,6 +121,11 @@ enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+    /// Manage the workestrate tool home (init as a dotfiles-style git repo)
+    Home {
+        #[command(subcommand)]
+        action: HomeAction,
     },
     /// Resolve a registered config repo's secrets target paths (for setup-secrets).
     SecretsTarget {
@@ -298,6 +304,7 @@ async fn async_main() -> Result<()> {
             }
             other => cmd_config(other).await,
         },
+        Commands::Home { action } => cmd_home(action),
         Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
         Commands::Doctor { json } => cmd_doctor(json),
         Commands::Source { action } => cmd_source(action).await,
@@ -380,6 +387,7 @@ mod tests {
             "secrets-schema",
             "generate-env-example",
             "config",
+            "home",
             "secrets-target",
             "doctor",
             "clean",
@@ -394,6 +402,32 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
         }
+    }
+
+    #[test]
+    fn home_init_has_no_path_flag() {
+        let cmd = Cli::command();
+        let init = cmd
+            .find_subcommand("home")
+            .and_then(|s| s.find_subcommand("init"))
+            .expect("home init must exist");
+        let long_names: Vec<String> = init
+            .get_arguments()
+            .filter_map(|a| a.get_long().map(|s| s.to_string()))
+            .collect();
+        assert!(
+            long_names.contains(&"config".to_string()),
+            "home init missing --config flag; got: {long_names:?}"
+        );
+        assert!(
+            long_names.contains(&"name".to_string()),
+            "home init missing --name flag; got: {long_names:?}"
+        );
+        assert!(
+            !long_names.contains(&"path".to_string()),
+            "home init must NOT have a --path flag (spec 10 §2: operates on the \
+             resolved home only); got: {long_names:?}"
+        );
     }
 
     fn check_service_subcommands(cmd: &clap::Command, name: &str) {

@@ -3,6 +3,7 @@
 pub mod config_cmd;
 pub mod diagnostics;
 pub mod doctor;
+pub mod home;
 pub mod init;
 pub mod lifecycle;
 pub mod migrate;

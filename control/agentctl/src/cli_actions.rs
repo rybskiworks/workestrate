@@ -180,6 +180,23 @@ pub enum ConfigAction {
     },
 }
 
+/// Actions for managing the workestrate tool home itself.
+#[derive(Subcommand)]
+pub enum HomeAction {
+    /// Initialize the resolved tool home as a dotfiles-style git repo
+    /// (git init + .gitignore + pre-commit hook). Idempotent.
+    Init {
+        /// Clone and register this config-repo URL as config-repos/<name>
+        /// after scaffolding the home.
+        #[arg(long)]
+        config: Option<String>,
+
+        /// Name for the cloned config repo (only used with --config).
+        #[arg(long, default_value = "personal")]
+        name: String,
+    },
+}
+
 /// Actions for managing workestrate contexts.
 #[derive(Subcommand)]
 pub enum ContextAction {
