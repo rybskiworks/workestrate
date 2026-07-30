@@ -448,3 +448,163 @@ fn home_init_from_writes_dest_lock_pinning_the_checked_out_rev() {
 fn remoteish_as_path(remoteish: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(remoteish)
 }
+
+// ---------------------------------------------------------------------------
+// home init --from consumes the SOURCE lock: locked rev wins over the registry
+// ---------------------------------------------------------------------------
+
+/// Build a SOURCE home whose config repo has commits R1 (older) and R2 (tip);
+/// the src registry records rev R2 while the src workestrate.lock pins rev R1
+/// (the source advanced past the lock). Returns (scratch, src_home, mirror
+/// path, R1, R2).
+fn build_lock_driven_source(
+    scratch: &Path,
+) -> (std::path::PathBuf, std::path::PathBuf, String, String) {
+    let src_home = scratch.join("src-home");
+    std::fs::create_dir_all(&src_home).expect("create src home");
+    run_git(&src_home, &["init", "-b", "main"]);
+    run_git(&src_home, &["config", "user.email", "test@example.com"]);
+    run_git(&src_home, &["config", "user.name", "Test"]);
+
+    // The config repo: R1 then R2.
+    let src_repo = git_source_repo(&src_home.join("config-repos"), "work");
+    let r1 = git_stdout(&src_repo, &["rev-parse", "HEAD"]);
+    std::fs::write(src_repo.join("notes.md"), "second commit\n").expect("write notes");
+    run_git(&src_repo, &["add", "."]);
+    run_git(&src_repo, &["commit", "-m", "notes"]);
+    let r2 = git_stdout(&src_repo, &["rev-parse", "HEAD"]);
+    assert_ne!(r1, r2, "R1 and R2 must differ");
+
+    // A cloneable mirror at a .git-suffixed path (classifier: git URL).
+    let remoteish = format!("{}.git", src_repo.display());
+    run_git(
+        scratch,
+        &["clone", src_repo.to_str().expect("utf8"), &remoteish],
+    );
+
+    // The registry records the TIP (R2); the lock pins the OLDER R1.
+    std::fs::write(
+        src_home.join("config.toml"),
+        format!(
+            "layers = [\"work\"]\n\n[settings]\nhome_version = 2\n\n[configs.work]\nurl = \"{remoteish}\"\nref = \"main\"\nrev = \"{r2}\"\n"
+        ),
+    )
+    .expect("write src registry");
+    std::fs::write(
+        src_home.join("workestrate.lock"),
+        format!(
+            "version = 1\nhome_version = 2\ntool_version = \"0.1.0\"\n\n[repos.work]\nurl = \"{remoteish}\"\nref = \"main\"\nrev = \"{r1}\"\n"
+        ),
+    )
+    .expect("write src lock");
+    std::fs::write(src_home.join(".gitignore"), "/config-repos/\n/state/\n").expect("gitignore");
+    run_git(&src_home, &["add", "."]);
+    run_git(&src_home, &["commit", "-m", "home: initial"]);
+
+    (src_home, remoteish_as_path(&remoteish), r1, r2)
+}
+
+#[test]
+fn home_init_from_lock_rev_wins_over_registry_rev() {
+    let home = IsolatedHome::new("cmd-lockfile");
+    let scratch = TempDir::new("cmd-lockfile-src");
+    let (src_home, _mirror, r1, r2) = build_lock_driven_source(scratch.path());
+
+    let dest = scratch.path().join("dest-home");
+    let out = home
+        .cmd()
+        .args(["home", "init", "--from"])
+        .arg(&src_home)
+        .arg(&dest)
+        .output()
+        .expect("invoke home init --from");
+    assert!(
+        out.status.success(),
+        "home init --from failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The dest checkout lands on R1 (the LOCK rev), NOT R2 (registry rev/tip).
+    let dest_head = git_stdout(
+        &dest.join("config-repos").join("work"),
+        &["rev-parse", "HEAD"],
+    );
+    assert_eq!(
+        dest_head, r1,
+        "the lock rev must win over the registry rev ({r2})"
+    );
+
+    // The dest lock pins R1 (the actual checked-out rev).
+    let lock = std::fs::read_to_string(dest.join("workestrate.lock")).expect("read dest lock");
+    let section = lock_repo_section(&lock, "work");
+    assert!(
+        section.contains(&format!("rev = \"{r1}\"")),
+        "dest lock must pin the locked rev ({r1}):\n{section}"
+    );
+    assert!(
+        !section.contains(&format!("rev = \"{r2}\"")),
+        "the registry tip must NOT leak into the dest lock:\n{section}"
+    );
+
+    // The summary notes the locked rev per repo line.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("locked rev") && stdout.contains(&r1[..7]),
+        "summary must note the locked rev: stdout=\n{stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// too-new source lock → hard error, zero dest residue
+// ---------------------------------------------------------------------------
+
+#[test]
+fn home_init_from_src_with_newer_lock_version_fails_with_no_dest_residue() {
+    let home = IsolatedHome::new("cmd-lockfile");
+    let scratch = TempDir::new("cmd-lockfile-src");
+
+    // Minimal source home: a git repo with a committed config.toml.
+    let src_home = scratch.path().join("src-home");
+    std::fs::create_dir_all(&src_home).expect("create src home");
+    run_git(&src_home, &["init", "-b", "main"]);
+    run_git(&src_home, &["config", "user.email", "test@example.com"]);
+    run_git(&src_home, &["config", "user.name", "Test"]);
+    std::fs::write(
+        src_home.join("config.toml"),
+        "layers = []\n\n[settings]\nhome_version = 2\n",
+    )
+    .expect("write src registry");
+    // A lock from the future.
+    std::fs::write(
+        src_home.join("workestrate.lock"),
+        "version = 99\nhome_version = 2\ntool_version = \"0.1.0\"\n",
+    )
+    .expect("write too-new lock");
+    run_git(&src_home, &["add", "."]);
+    run_git(&src_home, &["commit", "-m", "home: initial"]);
+
+    let dest = scratch.path().join("dest-home");
+    let out = home
+        .cmd()
+        .args(["home", "init", "--from"])
+        .arg(&src_home)
+        .arg(&dest)
+        .output()
+        .expect("invoke home init --from");
+    assert!(
+        !out.status.success(),
+        "a too-new source lock must fail; stdout=\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let combined = format!("{stderr}\n{stdout}");
+    assert!(
+        combined.contains("home created by a newer workestrate"),
+        "error must contain the exact phrase:\n{combined}"
+    );
+    assert!(
+        !dest.exists(),
+        "dest must NOT exist after a pre-flight failure (zero residue)"
+    );
+}

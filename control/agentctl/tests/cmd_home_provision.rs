@@ -573,3 +573,164 @@ fn from_src_with_newer_home_version_fails() {
         "dest must NOT exist after a pre-flight failure"
     );
 }
+
+// ---------------------------------------------------------------------------
+// legacy no-lock path: a source WITHOUT workestrate.lock provisions as before
+// ---------------------------------------------------------------------------
+
+#[test]
+fn legacy_src_without_lock_honors_registry_rev_and_no_pin_warns() {
+    let home = IsolatedHome::new("cmd-home-prov");
+    let scratch = TempDir::new("cmd-home-prov");
+
+    // Source home with TWO config repos cloned from .git-suffixed mirrors:
+    // `pinned` (registry rev = R1, tip = R2) and `unpinned` (no rev, no ref —
+    // must warn). NO workestrate.lock in the source (legacy home).
+    let src_home = scratch.path().join("src-home");
+    git_init_repo(&src_home);
+
+    let mk_mirror = |name: &str, with_pin: bool| -> String {
+        let repo = src_home.join("config-repos").join(name);
+        git_init_repo(&repo);
+        std::fs::write(repo.join("workestrate.toml"), "schema_version = 1\n")
+            .expect("write workestrate.toml");
+        git_commit_all(&repo, "config: initial");
+        let r1 = git_stdout(&repo, &["rev-parse", "HEAD"]);
+        std::fs::write(repo.join("notes.md"), "second commit\n").expect("write notes");
+        git_commit_all(&repo, "config: notes");
+        let mirror = scratch.path().join(format!("{name}.git"));
+        run_git(
+            scratch.path(),
+            &[
+                "clone",
+                repo.to_str().expect("utf8"),
+                mirror.to_str().expect("utf8"),
+            ],
+        );
+        if with_pin {
+            format!("url = \"{}\"\nrev = \"{r1}\"\n", mirror.display())
+        } else {
+            format!("url = \"{}\"\n", mirror.display())
+        }
+    };
+    let pinned_entry = mk_mirror("pinned", true);
+    let unpinned_entry = mk_mirror("unpinned", false);
+    std::fs::write(
+        src_home.join("config.toml"),
+        format!(
+            "layers = []\n\n[settings]\nhome_version = 2\n\n[configs.pinned]\n{pinned_entry}\n[configs.unpinned]\n{unpinned_entry}"
+        ),
+    )
+    .expect("write src registry");
+    std::fs::write(
+        src_home.join(".gitignore"),
+        "/config-repos/\n/sources/\n/state/\n/cache/\n",
+    )
+    .expect("write src .gitignore");
+    git_commit_all(&src_home, "home: initial");
+    // Deliberately NO workestrate.lock — the legacy path.
+    assert!(
+        !src_home.join("workestrate.lock").exists(),
+        "the legacy source must have no lock"
+    );
+
+    let dest = scratch.path().join("dest-home");
+    let out = home
+        .cmd()
+        .args(["home", "init", "--from"])
+        .arg(&src_home)
+        .arg(&dest)
+        .output()
+        .expect("invoke home init --from");
+    assert!(
+        out.status.success(),
+        "legacy no-lock provisioning failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Registry rev honored: dest pinned repo HEAD == R1 (not the mirror tip).
+    let r1 = git_stdout(
+        &src_home.join("config-repos").join("pinned"),
+        &["rev-parse", "HEAD~1"],
+    );
+    let dest_head = git_stdout(
+        &dest.join("config-repos").join("pinned"),
+        &["rev-parse", "HEAD"],
+    );
+    assert_eq!(
+        dest_head, r1,
+        "the registry rev (R1) must be honored on the legacy path"
+    );
+
+    // No-pin case still warns.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unpinned") && stderr.contains("NOT pinned"),
+        "the no-pin repo must warn; stderr=\n{stderr}"
+    );
+
+    // The dest lock pins the actual checked-out revs (R1 for pinned).
+    let lock = std::fs::read_to_string(dest.join("workestrate.lock")).expect("read dest lock");
+    assert!(
+        lock.contains(&format!("rev = \"{r1}\"")),
+        "dest lock must pin R1:\n{lock}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// local-only copy + lock: the locked rev is checked out in the copied repo
+// ---------------------------------------------------------------------------
+
+#[test]
+fn from_local_src_copy_honors_the_locked_rev() {
+    let home = IsolatedHome::new("cmd-home-prov");
+    let src = build_source_home("cmd-home-prov-src", Some("work"), &[]);
+    let src_home = src.path().join("src-home");
+    let src_repo = src_home.join("config-repos").join("work");
+
+    // build_source_home committed R1 ("config: initial") then R2 ("config:
+    // notes"); the working copy sits at R2. Pin R1 in a source lock.
+    let r1 = git_stdout(&src_repo, &["rev-parse", "HEAD~1"]);
+    let r2 = git_stdout(&src_repo, &["rev-parse", "HEAD"]);
+    assert_ne!(r1, r2, "R1 and R2 must differ");
+    let url = format!("{}/config-repos/work", src_home.display());
+    std::fs::write(
+        src_home.join("workestrate.lock"),
+        format!(
+            "version = 1\nhome_version = 2\ntool_version = \"0.1.0\"\n\n[repos.work]\nurl = \"{url}\"\nrev = \"{r1}\"\n"
+        ),
+    )
+    .expect("write src lock");
+
+    let scratch = TempDir::new("cmd-home-prov");
+    let dest = scratch.path().join("dest-home");
+    let out = home
+        .cmd()
+        .args(["home", "init", "--from"])
+        .arg(&src_home)
+        .arg(&dest)
+        .output()
+        .expect("invoke home init --from");
+    assert!(
+        out.status.success(),
+        "local-copy + lock provisioning failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The copied repo is checked out at the LOCKED rev R1, not the R2 tip.
+    let dest_head = git_stdout(
+        &dest.join("config-repos").join("work"),
+        &["rev-parse", "HEAD"],
+    );
+    assert_eq!(
+        dest_head, r1,
+        "the copied repo must be checked out at the locked rev (R1), not the tip ({r2})"
+    );
+
+    // The dest lock pins R1 (the actual checked-out rev).
+    let lock = std::fs::read_to_string(dest.join("workestrate.lock")).expect("read dest lock");
+    assert!(
+        lock.contains(&format!("rev = \"{r1}\"")),
+        "dest lock must pin the locked rev (R1):\n{lock}"
+    );
+}

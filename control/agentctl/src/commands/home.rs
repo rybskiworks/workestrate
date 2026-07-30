@@ -273,6 +273,11 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
             );
         }
     }
+    // Source lock (spec 11 §2 step 2: read src workestrate.lock if present,
+    // same version rules). Absent file → legacy path (Ok(None)); absent
+    // `version` field → oldest; newer-than-supported → the hard "home created
+    // by a newer workestrate" error. All BEFORE any writes (zero residue).
+    let src_lock = config::load_home_lock_from(&src)?;
 
     // Reproducibility report (per config repo entry).
     let mut repro: Vec<(String, ConfigRepoEntry, ReproKind)> = Vec::new();
@@ -328,19 +333,47 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
     let mut pin_warnings: Vec<String> = Vec::new();
     for (name, entry, kind) in &repro {
         let repo_dest = dest.join("config-repos").join(name);
+        let locked = src_lock.as_ref().and_then(|l| l.repos.get(name));
         match kind {
             ReproKind::ReproducibleViaUrl => {
-                crate::git::git_clone_full(&entry.url, &repo_dest)?;
-                // Pin: registry rev wins; else leave at the recorded ref tip.
-                match (&entry.rev, &entry.r#ref) {
-                    (Some(rev), _) => crate::git::git_checkout_rev(&repo_dest, rev)?,
-                    (None, None) => pin_warnings.push(format!(
-                        "config repo '{name}': no rev or ref recorded in the registry; \
-                         leaving the clone at the default-branch tip (NOT pinned)"
-                    )),
-                    (None, Some(_)) => {}
+                // Pin selection order (spec 11 §2 step 5):
+                //   a. LOCK rev wins — clone from the lock's recorded url when
+                //      the lock entry exists and its url is usable (the lock
+                //      pins what the source home actually ran; the registry
+                //      url may have drifted), else the registry url.
+                //   b. else the registry rev (current behavior).
+                //   c. else leave at the registry ref tip (default main); warn
+                //      when no pin exists (current behavior).
+                let (pin_rev, pin_from_lock) = match locked.and_then(|lr| lr.rev.as_deref()) {
+                    Some(r) => (Some(r), true),
+                    None => (entry.rev.as_deref(), false),
+                };
+                let lock_url = locked
+                    .map(|lr| lr.url.trim())
+                    .filter(|u| !u.is_empty() && config::looks_like_git_url(u));
+                let clone_url = match lock_url {
+                    Some(u) => u.to_string(),
+                    None => entry.url.clone(),
+                };
+                crate::git::git_clone_full(&clone_url, &repo_dest)?;
+                match (pin_rev, &entry.r#ref) {
+                    (Some(rev), _) => {
+                        crate::git::git_checkout_rev(&repo_dest, rev)?;
+                        let origin = if pin_from_lock { "locked" } else { "pinned" };
+                        cloned.push(format!(
+                            "{name} ({origin} rev {})",
+                            crate::git::short_rev(rev)
+                        ));
+                    }
+                    (None, None) => {
+                        pin_warnings.push(format!(
+                            "config repo '{name}': no rev or ref recorded in the registry; \
+                             leaving the clone at the default-branch tip (NOT pinned)"
+                        ));
+                        cloned.push(name.clone());
+                    }
+                    (None, Some(_)) => cloned.push(name.clone()),
                 }
-                cloned.push(name.clone());
             }
             ReproKind::LocalOnlyCopy => {
                 // The registered url points into the src home's tree (e.g.
@@ -364,7 +397,26 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
                     let src_repo = url_path.to_string_lossy().to_string();
                     crate::git::git_remote_add_or_set_url(&repo_dest, "origin", &src_repo)?;
                 }
-                copied.push(name.clone());
+                // A lock pin applies to copies too (spec 11 §2 step 5: the
+                // copy carries full history when the source repo is
+                // unshallowed). A lock that cannot be honored must NOT
+                // silently produce a different rev → hard error naming the
+                // repo and rev.
+                if let Some(rev) = locked.and_then(|lr| lr.rev.as_deref()) {
+                    crate::git::git_checkout_rev(&repo_dest, rev).map_err(|e| {
+                        anyhow::anyhow!(
+                            "config repo '{name}': cannot honor the locked rev {rev} \
+                             in the copied working copy (the source repo may be shallow \
+                             or the rev missing): {e:#}"
+                        )
+                    })?;
+                    copied.push(format!(
+                        "{name} (locked rev {})",
+                        crate::git::short_rev(rev)
+                    ));
+                } else {
+                    copied.push(name.clone());
+                }
             }
             ReproKind::UnreproducibleOnRemoteSource => {
                 skipped_unreproducible.push(format!("{name} (local-path url {})", entry.url));
