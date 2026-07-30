@@ -10,6 +10,19 @@ the `migration/tool-model` branch. It assumes no prior conversation. Everything
 below is drawn from the four cited docs, which are the source of truth — do not
 re-derive their contents.
 
+> **⚠ CONTAINER-HOME WIPE CAVEAT (2026-07-30):** the container `$HOME` is
+> ephemeral. The `~/.workestrate` home built on 2026-07-30 (root commit
+> `a42e597`) was **WIPED by a container restart** — every statement in this
+> handoff that describes the home as present is point-in-time evidence from
+> before the wipe, NOT current state. The personal config content survives at
+> `ai-workbench/.tmp/config-repos-export` (verified `c41a707`). To restore:
+> `workestrate home init` + `workestrate config add
+> <repo>/.tmp/config-repos-export/personal personal` + `workestrate config
+> trust /home/node/Development/ai-workbench` — then verify with
+> `workestrate config list`, `workestrate validate-config`, and confirming
+> all 5 plans render. A parallel task is restoring the home now; the durable
+> fix is the host-side home (operator task).
+
 ---
 
 ## The prompt (copy verbatim)
@@ -93,7 +106,7 @@ re-derive their contents.
 > binary from `cargo build`, from neutral cwd `/tmp`). This runtime-proves the
 > tempest `install_layout` field removal (bundle fix e).
 >
-> **Consumption verification (all run with `WORKESTRATE_HOME` unset, binary
+> **Consumption verification — POINT-IN-TIME EVIDENCE from 2026-07-30 (pre-wipe; the home it ran against no longer exists — see the wipe caveat above; NOT current state). All run with `WORKESTRATE_HOME` unset, binary
 > from `cargo build`, from neutral cwd `/tmp` unless noted):**
 >   - `workestrate config list` → "personal: /home/node/.workestrate/config-repos/personal (ref main, rev unknown, clean) [OK]", Layers: ["personal"], trusted project /home/node/Development/ai-workbench [OK]; exit 0.
 >   - `workestrate validate-config` → "workestrate.toml is valid." exit 0.

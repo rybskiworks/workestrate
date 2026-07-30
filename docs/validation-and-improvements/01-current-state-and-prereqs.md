@@ -66,6 +66,14 @@ it. This vendor symlink is the ADR 0011 open item (deferred; see
 
 ## Tool home layout (verified)
 
+> **⚠ Container-home ephemerality caveat (2026-07-30):** container-local homes
+> are ephemeral — the `~/.workestrate` home described in this section was
+> **WIPED by a container restart** after this snapshot was taken. Everything
+> below is point-in-time evidence, not current state. Persistent copies live
+> only in host-mounted locations (the `.tmp/config-repos-export` export at
+> `ai-workbench/.tmp/config-repos-export`, verified `c41a707`; the worktrees
+> bind mount). The durable fix is the host-side home (operator task).
+
 The workestrate tool home now lives at `~/.workestrate` (the ADR 0023 default),
 resolved with NO `WORKESTRATE_HOME` export (the repo-local bundle and all
 repo-local-home machinery have been retired — see
@@ -325,7 +333,7 @@ Before executing [03-sibling-config-setup.md](03-sibling-config-setup.md),
 [05-host-validation.md](05-host-validation.md):
 
 - [ ] Repo is on branch `migration/tool-model` (verified: `git branch --show-current` → `migration/tool-model`).
-- [x] Tool home at `~/.workestrate` is present (verified: `config.toml`, `config-repos/personal/`, `state/{var,workspaces}`, `secrets/`, `sources/`, `.git/` + `.gitignore` + pre-commit hook). Home migration (spec 08 + spec 10) EXECUTED.
+- [x] Tool home at `~/.workestrate` is present (verified: `config.toml`, `config-repos/personal/`, `state/{var,workspaces}`, `secrets/`, `sources/`, `.git/` + `.gitignore` + pre-commit hook). Home migration (spec 08 + spec 10) EXECUTED. Point-in-time verification from 2026-07-30 — the container home was subsequently WIPED by a container restart; see the ephemerality caveat in "Tool home layout" above.
 - [x] `~/.workestrate/config.toml` is well-formed: `layers=["personal"]`, `default_context="personal"`, `home_version=2`, `configs.personal.url="/home/node/.workestrate/config-repos/personal"` (no `ref`/`rev` — local-path classification), `trusted_projects=[/home/node/Development/ai-workbench]` (verified).
 - [ ] Secrets can be decrypted — **HOST-only**. This container has no sops age key (`~/.config/sops/age/` absent, `SOPS_AGE_KEY` unset, `sops` not on PATH). Secret provisioning and decryption must happen on a host with the age key.
 - [ ] No KVM here — runtime steps (`workestrate litellm up`, `workestrate pi exec`, odysseus first boot) are **deferred** to [05-host-validation.md](05-host-validation.md) on a KVM-capable host.
