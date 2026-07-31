@@ -118,7 +118,7 @@ guard, B2 config-free teardown verification, B3 spawn provenance).
 
 ## Environment honesty
 
-This documentation was authored in a container with **no nix** and **no KVM**,
+This documentation was authored in a container with nix present only at a store path (`/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH) and **no KVM**,
 mirroring the convention in
 [`docs/migration/README.md`](../migration/README.md) §Environment honesty.
 Environment markers (reproduced from
@@ -127,8 +127,8 @@ lines 8-14):
 
 | Marker | Meaning |
 |---|---|
-| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts). NOTE: cargo-linked gates are NOT runnable here — no `cc` linker; they run on the host (HOST-NIX devshell) |
-| `HOST-NIX` | Requires nix on the user's host (this container has no nix) |
+| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts, AND cargo-linked gates via `nix develop` — nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; the devshell provides a full C toolchain, verified 2026-07-29) |
+| `HOST-NIX` | Requires nix on the user's host for the genuine host gates only: `nix build` image builds, `nix run nixpkgs#...` FOD prefetch, `just verify-full`, `just generate-schema` |
 | `HOST-KVM` | Requires KVM on the user's host (this container has no KVM) |
 
 All nix-eval and KVM-runtime gates are marked `HOST-NIX` or `HOST-KVM` in the
@@ -154,7 +154,7 @@ were run in this container and their outputs pasted verbatim).
   `just golden-check` covers only the 3 synthetic `config.reference`
   workloads. Parity for the original 5 is proven by the baseline recovery
   procedure in [`04-baseline-validation.md`](04-baseline-validation.md).
-- **CRITICAL known blocker (edit LANDED; runtime verification PENDING).** The tempest `install_layout = "app"` field has been **REMOVED** from `.workestrate/repos/personal/workestrate.toml:317` (fix e applied, verified via `grep -n install_layout .workestrate/repos/personal/workestrate.toml` → no match). `BinarySpec` rejects it via `deny_unknown_fields` (`control/agentctl/src/config/types.rs:44-52`); the nix-side `installLayout` param was removed as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`). The `master`→`main` rename is also **DONE** (fix a applied; clone on `main`, verified: `git branch --show-current` → `main`, rev `d2cd0c3` unchanged). **PENDING:** runtime parse verification — `workestrate validate-config` cannot run in this container (no `cc` linker; verified: `command -v cc gcc` → not found); it is the **first Lane A action** in the HOST-NIX devshell (`nix develop`). See [`01-current-state-and-prereqs.md`](01-current-state-and-prereqs.md) bundle fixes (a) and (e) and [`07-execution-order.md`](07-execution-order.md) Step 0.
+- **CRITICAL known blocker (edit LANDED; runtime verification PENDING).** The tempest `install_layout = "app"` field has been **REMOVED** from `.workestrate/repos/personal/workestrate.toml:317` (fix e applied, verified via `grep -n install_layout .workestrate/repos/personal/workestrate.toml` → no match). `BinarySpec` rejects it via `deny_unknown_fields` (`control/agentctl/src/config/types.rs:44-52`); the nix-side `installLayout` param was removed as a silent no-op (`nix/lib/recipes/npm-build.nix:16-25`). The `master`→`main` rename is also **DONE** (fix a applied; clone on `main`, verified: `git branch --show-current` → `main`, rev `d2cd0c3` unchanged). **PENDING:** runtime parse verification — `workestrate validate-config` is cargo-linked and RUNS in this container via `nix develop` (nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; store-path PATH prefix then `nix develop -c bash -c 'just workestrate validate-config'`; a bare shell has no `cc`); it is the **first Lane A action**. See [`01-current-state-and-prereqs.md`](01-current-state-and-prereqs.md) bundle fixes (a) and (e) and [`07-execution-order.md`](07-execution-order.md) Step 0.
 
 ## Authoritative design record
 

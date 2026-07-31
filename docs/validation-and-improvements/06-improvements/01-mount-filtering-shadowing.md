@@ -29,7 +29,7 @@ integration, the phased plan, and the security tradeoffs.
 
 | Marker | Meaning |
 |---|---|
-| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts). NOTE: cargo-linked gates are NOT runnable here — no `cc` linker; they run on the host (HOST-NIX devshell) |
+| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts, AND cargo-linked gates via `nix develop` — nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; the devshell provides a full C toolchain, verified 2026-07-29) |
 | `HOST-NIX` | Requires `nix` on the host (e.g. `just generate-schema`). |
 | `HOST-KVM` | Requires KVM on the host (e.g. a live sandbox). |
 
@@ -76,7 +76,7 @@ crate source in the cargo registry
 (`~/.cargo/registry/src/.../microsandbox-0.5.6/lib/sandbox/types.rs`). The
 vendored symlink at `control/agentctl/vendor/microsandbox-filesystem-0.5.6`
 points to a Nix store path (`/nix/store/...-microsandbox-filesystem-patched-0.5.6`)
-that is **absent in this container** (no nix; see
+that is **absent in a bare shell** (the `_setup_vendor_link` devshell hook creates it on `nix develop`; see
 [`01-current-state-and-prereqs.md`](../01-current-state-and-prereqs.md) §Devshell
 / vendor facts). That vendor is the **FUSE passthrough backend**
 (`microsandbox-filesystem`), a different crate from the **SDK crate**

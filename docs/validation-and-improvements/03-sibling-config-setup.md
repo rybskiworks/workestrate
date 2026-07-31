@@ -508,8 +508,8 @@ Reproduced from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.m
 
 | Marker | Meaning |
 |---|---|
-| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts). NOTE: cargo-linked gates are NOT runnable here — no `cc` linker; they run on the host (HOST-NIX devshell) |
-| `HOST-NIX` | Requires nix on the user's host (this container has no nix / no `cc` linker) |
+| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts, AND cargo-linked gates via `nix develop` — nix is at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; the devshell provides a full C toolchain, verified 2026-07-29) |
+| `HOST-NIX` | Requires nix on the user's host for the genuine host gates only: `nix build` image builds, `nix run nixpkgs#...` FOD prefetch, `just verify-full`, `just generate-schema` |
 | `HOST-KVM` | Requires KVM on the user's host (this container has no `/dev/kvm`) |
 
 All probes in §4 are `verifiable-here` (config-plane / plan-plane only). Runtime

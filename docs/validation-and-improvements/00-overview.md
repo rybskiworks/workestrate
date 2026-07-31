@@ -47,14 +47,18 @@ nested mount ordering. Detailed sequencing lives in
   `default_deny = false` entitlement (tempest).
 - **`just golden-check`** covers only the 3 synthetic `config.reference`
   workloads (`example-service/agent/offensive`) — NOT the original 5.
-- **`just verify`** is NOT RUNNABLE in this container (cargo gates require a
-  C toolchain; verified: `command -v cc gcc` → not found). Only the
-  shell/python/git-based subset passes here (`toolchain-check`,
-  `litellm-check`, `lint-nix`, `store-audit` SKIP, `Cargo.lock` stability);
-  run the full `just verify` on the host (HOST-NIX env provides `cc`).
-- **No KVM, no nix** in the authoring container — runtime and nix-build gates
-  are `HOST-KVM` / `HOST-NIX` (see [01](01-current-state-and-prereqs.md)
-  §Environment honesty).
+- **`just verify`** IS runnable in this container via `nix develop`: nix is
+  installed at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`
+  (not on PATH) and the devshell provides a full C toolchain (verified
+  2026-07-29: gcc 15.2.0, cargo 1.97.1). Run cargo gates with the store-path
+  PATH prefix from `control/agentctl/`. A bare shell has no `cc` and runs only
+  the shell/python/git-based subset (`toolchain-check`, `litellm-check`,
+  `lint-nix`, `store-audit` SKIP, `Cargo.lock` stability).
+- **No KVM** in the authoring container (and nix is present but not on PATH) —
+  runtime gates are `HOST-KVM`; the genuine `HOST-NIX` gates are only
+  `nix build` image builds, `nix run nixpkgs#...` FOD prefetch jobs,
+  `just verify-full`, `just generate-schema`, sops secret provisioning, and
+  copier-live (see [01](01-current-state-and-prereqs.md) §Environment honesty).
 
 ## Key risks
 

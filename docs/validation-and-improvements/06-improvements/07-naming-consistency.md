@@ -19,10 +19,12 @@ prose). This spec purges `workestrator` **internally** in favor of
 - `verifiable-here` — grep sweeps, `git status` scope checks, `just lint-nix`
   (nix 2.35.1 is available in this container), `nix eval`/`nix flake show` of
   renamed attrs where the evaluator allows it.
-- `HOST-NIX` — all cargo gates (`cargo check/test`, `just golden-check`,
-  `just scaffold-check`): **no `cc` linker in this container**, so they are
-  PENDING the host devshell. `nix build` of renamed outputs is also a host
-  gate (builds are not run here; eval-only checks are).
+- `HOST-NIX` — only the genuine host gates: `nix build` of renamed outputs
+  (builds are not run here; eval-only checks are). All cargo gates
+  (`cargo check/test`, `just golden-check`, `just scaffold-check`) run in this
+  container via `nix develop` (nix 2.35.1 at
+  `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH;
+  store-path PATH prefix; a bare shell has no `cc` linker).
 
 ---
 
@@ -217,9 +219,9 @@ handle — none of this is done in this effort:
 ### Pending gates (handoff)
 
 - All cargo gates (`just check/test/golden-check/scaffold-check/schema-check`)
-  — **PENDING host devshell** (no `cc` linker in this container). The renamed
-  test assertions (`network.rs`, `scaffold/mod.rs`, `scaffold_template.rs`)
-  must be confirmed green there.
+  — runnable in this container via `nix develop` (store-path PATH prefix; a
+  bare shell has no `cc` linker). The renamed test assertions (`network.rs`,
+  `scaffold/mod.rs`, `scaffold_template.rs`) must be confirmed green there.
 - `nix build` of renamed outputs (`.#workestrate-pi`, `.#workestrate-sandbox`,
   `.#workestrate-sandbox-node`) — HOST-NIX gate; eval-only verified here.
 - Full `nix flake show` is blocked by a PRE-EXISTING unrelated

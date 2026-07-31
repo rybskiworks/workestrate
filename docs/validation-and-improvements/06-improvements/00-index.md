@@ -55,9 +55,9 @@ invariant.
 | [03-dogfooding.md](03-dogfooding.md) | Dogfooding: workestrate developing workestrate (Track C) | `SPEC (Phase 0 env pinning READY-TO-EXECUTE; B1/B2/B3 not implemented)` | Phase 0 is standalone; B1/B2/B3 are independent of each other; references [05](05-config-reference-cwd-fallback.md) for the underlying quirk | Phase 0 = **S** (env pinning); B1/B2/B3 = **M** each (not implemented) | `HOST-KVM` (B3 live-sandbox verification) |
 | [04-cli-config-authoring.md](04-cli-config-authoring.md) | CLI Config Authoring (DEFERRED vision + requirements traceability) | `DEFERRED` — pending sign-off of [02-config-requirements.md](../02-config-requirements.md) | Gated on `02-config-requirements.md` sign-off; must be additive-tolerant of 01's mount exclude/shadow schema (§2 of the spec) | **M** (explicitly stated) | `verifiable-here` |
 | [05-config-reference-cwd-fallback.md](05-config-reference-cwd-fallback.md) | Config-reference cwd-fallback quirk (standalone fix spec) | `SPEC (bug fix candidate, small)` | None — standalone bug fix; referenced by [03](03-dogfooding.md) as the underlying quirk | **S** (explicitly stated) | `verifiable-here` (fix gate: `cargo test`); reproduction is `HOST-NIX` |
-| [06-config-home-flag.md](06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `EXECUTED (2026-07-30; commit d991252)` | None — standalone; referenced by [03](03-dogfooding.md) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) for ergonomics | **S** | `verifiable-here` (fix gate: `cargo test`); runs in HOST-NIX devshell (no `cc` here) |
+| [06-config-home-flag.md](06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `EXECUTED (2026-07-30; commit d991252)` | None — standalone; referenced by [03](03-dogfooding.md) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) for ergonomics | **S** | `verifiable-here` (fix gate: `cargo test`); runnable here via `nix develop` (no `cc` in a bare shell) |
 | [07-naming-consistency.md](07-naming-consistency.md) | Naming consistency: purge `workestrator` residue | `DONE (landed on migration/tool-model, 3 commits; cargo gates PENDING — runnable in-container via nix develop or host devshell)` | None — standalone rename; FLAG: personal config repo image-name coordination (spec §4) | **M** | `verifiable-here` (grep/lint-nix/nix eval); cargo gates `HOST-NIX` |
-| [08-no-repo-local-home.md](08-no-repo-local-home.md) | No repo-local tool home (retire `.workestrate/` inside the checkout) | `EXECUTED (2026-07-30); commits d7c5a83, bd99481, 3894fb7, bef1c37, 418530a; home commit a42e597; ADR-0023-addendum follow-through landed in bef1c37` | None — stepwise internal ordering only (a→d strictly; e is the code step); sequencing-wise it should land EARLY (before Lane A / host batch) because it changes the paths those reference | **S** (steps a–d, f, g) + **code-S** (step e) | `verifiable-here` for a–d/f/g; step (b) verify + step (e) code gates are `HOST-NIX` devshell (no `cc` here) |
+| [08-no-repo-local-home.md](08-no-repo-local-home.md) | No repo-local tool home (retire `.workestrate/` inside the checkout) | `EXECUTED (2026-07-30); commits d7c5a83, bd99481, 3894fb7, bef1c37, 418530a; home commit a42e597; ADR-0023-addendum follow-through landed in bef1c37` | None — stepwise internal ordering only (a→d strictly; e is the code step); sequencing-wise it should land EARLY (before Lane A / host batch) because it changes the paths those reference | **S** (steps a–d, f, g) + **code-S** (step e) | `verifiable-here` for a–d/f/g; step (b) verify + step (e) code gates are runnable here via `nix develop` (no `cc` in a bare shell) |
 | [09-microsandbox-agentd-offline-build.md](09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd offline build (ADR 0011 carrier) | `PR PREPARED, ON HOLD (branch fix/filesystem-agentd-path-override @ a4f8a3b8 ready; docs in .tmp/msb-upstream/; push+open pending user; option 2 REVERSED per ADR 0011 addendum; option 3 NEEDS-DEVSHELL + HOST-NIX)` | None file-level on other improvement specs; option 3 cross-references [01](01-mount-filtering-shadowing.md) | option 1 = **M** (incl. upstream review latency); option 2 = REVERSED; option 3 = **M** | `HOST-NIX` (option 3 build); option 1 is upstream |
 | [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init); docs/spec fully done` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
 | [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home init --from` + positional dest) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
@@ -214,9 +214,10 @@ filesystem sub-crate — upstream inconsistency/oversight, not philosophy. Three
 options: **(1) UPSTREAM FIX** (preferred end-state) — contribute an
 MSB_HOME-based agentd check to `crates/filesystem/build.rs` mirroring the SDK
 crate's own pattern (precedent: #704 merged the identical pattern into the SDK
-crate; #701/#713 show maintainers are responsive); **IN-FLIGHT** — branch
-`fix/filesystem-msb-home-agentd-staging` on
-`github.com/georgrybski/microsandbox`, PR draft at `.tmp/msb-upstream/PR.md`;
+crate; #701/#713 show maintainers are responsive); **PR PREPARED, ON HOLD** —
+branch `fix/filesystem-agentd-path-override` @ `a4f8a3b8` on
+`github.com/georgrybski/microsandbox` ready to push, PR draft at
+`.tmp/msb-upstream/PR.md`, push pending USER;
 **(2) INTERIM CARRIER** (ADR 0011, decided 2026-07-18) — **REVERSED per the
 ADR 0011 addendum (2026-07-30):** the fork is a transient PR vehicle only,
 never consumed as a dependency; the nix-side patch machinery stays as the
@@ -321,7 +322,9 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 09-microsandbox-agentd-offline-build   [no file-level deps on other specs;
       │                                 option 2 REVERSED (ADR 0011 addendum
-      │                                 2026-07-30); option 1 IN-FLIGHT;
+      │                                 2026-07-30); option 1 PR PREPARED/ON
+      │                                 HOLD (`fix/filesystem-agentd-path-override`
+      │                                 @ a4f8a3b8);
       │                                 option 3 ↔ 01 (RESOLVE_BENEATH cross-ref)]
 
 10-config-repos-as-working-copies     [amends 08 step (a) + ../03 topology;
@@ -394,8 +397,8 @@ Reproduced from [../01-current-state-and-prereqs.md](../01-current-state-and-pre
 
 | Marker | Meaning |
 |---|---|
-| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts). NOTE: cargo-linked gates are NOT runnable here — no `cc` linker; they run on the host (HOST-NIX devshell) |
-| `HOST-NIX` | Requires nix on the user's host (this container has no nix / no `cc` linker) |
+| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts, AND cargo-linked gates via `nix develop` — nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; the devshell provides a full C toolchain, verified 2026-07-29) |
+| `HOST-NIX` | Requires nix on the user's host for the genuine host gates only: `nix build` image builds, `nix run nixpkgs#...` FOD prefetch, `just verify-full`, `just generate-schema` |
 | `HOST-KVM` | Requires KVM on the user's host (this container has no `/dev/kvm`) |
 
 ---
@@ -437,7 +440,7 @@ this index but should be reconciled:
    gates; only the shell/python/git-based subset (`toolchain-check`,
    `litellm-check`, `lint-nix`, `store-audit` SKIP, `Cargo.lock` stability)
    is `verifiable-here`. 01's gates table and checklist have been corrected
-   to match 04's verified evidence.
+   to match 04's verified evidence. **Superseded 2026-07-29:** nix IS installed in this container at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin` (not on PATH) and `nix develop` provides a full C toolchain (gcc 15.2.0, cargo 1.97.1) — all cargo-linked gates are `verifiable-here` via the store-path PATH prefix; see [../07-execution-order.md](../07-execution-order.md) Step 2 env-marker resolution.
 
 5. **Tempest `install_layout` config/schema drift — CRITICAL, blocks
    validation.** `.workestrate/repos/personal/workestrate.toml:317` sets

@@ -98,7 +98,7 @@ three options, and a recommended sequence.
 
 ## Options
 
-### Option 1 — UPSTREAM FIX (preferred end-state) — IN-FLIGHT
+### Option 1 — UPSTREAM FIX (preferred end-state) — PR PREPARED, ON HOLD
 
 Contribute an MSB_HOME-based agentd check to `crates/filesystem/build.rs`
 mirroring the SDK crate's own pattern (skip download when
@@ -110,10 +110,10 @@ delete the patch, `microsandbox-filesystem-patched.nix`, the
 `_setup_vendor_link` devshell hook, the agentctl.nix vendor staging, and the
 vendor-unlock/lock justfile recipes.
 
-**IN-FLIGHT (2026-07-30):** branch `fix/filesystem-msb-home-agentd-staging`
-on `github.com/georgrybski/microsandbox`; PR drafted at
+**PR PREPARED, ON HOLD (2026-07-30):** branch `fix/filesystem-agentd-path-override`
+@ `a4f8a3b8` on `github.com/georgrybski/microsandbox` ready to push; PR drafted at
 `.tmp/msb-upstream/PR.md` mirroring upstream #704 (the SDK-crate MSB_HOME
-precedent) with the `var_os` opt-in refinement.
+precedent) with the `var_os` opt-in refinement. Push + PR open pending USER.
 
 Trade-off: gated on upstream responsiveness; until merge+release we stay on
 the compensation machinery.
@@ -157,7 +157,8 @@ NEEDS-DEVSHELL + HOST-NIX (patch rewrite + cargo build/test + runtime
 
 ## Recommended sequence
 
-Option 1 upstream PR (IN-FLIGHT) → upstream release carrying the fix → bump
+Option 1 upstream PR (PR PREPARED, ON HOLD — branch ready @ `a4f8a3b8`, push
+pending USER) → upstream release carrying the fix → bump
 the microsandbox pin + delete ALL compensation machinery (the patch file, the
 patched derivation, the `_setup_vendor_link` devshell hook, the agentctl.nix
 vendor staging + the `.cargo/config.toml` `[patch.crates-io]` path entry, the
@@ -177,8 +178,9 @@ combinable track when runtime validation bandwidth exists.
   consumed as a dependency; the fork is a transient PR vehicle only — see the
   ADR 0011 addendum.
 - [ ] **Option 1 executed:** upstream PR merged referencing #704 precedent
-  (PR IN-FLIGHT 2026-07-30 — branch `fix/filesystem-msb-home-agentd-staging`,
-  draft `.tmp/msb-upstream/PR.md`); released; machinery deleted;
+  (PR PREPARED/ON HOLD 2026-07-30 — branch `fix/filesystem-agentd-path-override`
+  @ `a4f8a3b8`, draft `.tmp/msb-upstream/PR.md`; push pending USER); released;
+  machinery deleted;
   `control/agentctl/Cargo.toml` pin updated.
 - [ ] **Option 3 executed:** `=0.6.8` pin; rewritten patch applies and build
   passes offline (HOST-NIX); `msb --version` match re-validated; mount-filtering

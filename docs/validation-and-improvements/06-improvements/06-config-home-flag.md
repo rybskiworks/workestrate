@@ -18,10 +18,12 @@ changes**.
 
 ### Environment markers
 
-- `verifiable-here` — the fix gate (`cargo test`) runs anywhere with a C
-  toolchain; this container has no `cc` linker, so in practice it runs in the
-  HOST-NIX devshell.
-- `HOST-NIX` — the devshell where `cargo test` actually runs here.
+- `verifiable-here` — the fix gate (`cargo test`) runs in this container via
+  `nix develop` (nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`,
+  not on PATH; the devshell provides a full C toolchain); a bare shell has no
+  `cc` linker.
+- `HOST-NIX` — only the genuine host gates: `nix build` image builds, FOD
+  prefetch, `just verify-full`, `just generate-schema`.
 
 ---
 
@@ -176,8 +178,7 @@ Enumerate:
   `context current`);
 - (e) `--help` output shows `--home <DIR>`.
 
-**Gate:** `cargo test` (HOST-NIX devshell — no `cc` linker in this
-container).
+**Gate:** `cargo test` (runnable in this container via `nix develop` — store-path PATH prefix; a bare shell has no `cc` linker).
 
 ---
 
