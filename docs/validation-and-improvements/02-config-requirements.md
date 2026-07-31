@@ -207,16 +207,25 @@ Exactly one of `value` (literal) or `secret` (reference) is expected. `name`
 must be a valid shell env identifier. Merges union-by-name (last-layer-wins per
 key, `merge.rs:344-362`).
 
-#### 1.3.3 `[[workloads.<name>.secret_env]]` — SecretEnvConfig (`types.rs:82`)
+#### 1.3.3 `workloads.<name>.secret_env` — SecretEnvConfig (`types.rs:82`)
+
+`secret_env` is a **heterogeneous array**: each entry is either a bare
+secret-name string (shorthand) or an inline table (full form). Both forms for
+the litellm workload:
 
 ```toml
-[[workloads.litellm.secret_env]]
-secret = "OPENROUTER_API_KEY"
+[workloads.litellm]
+secret_env = ["OPENROUTER_API_KEY", { secret = "KIMI_CODE_API_KEY" }]
 ```
 
-Names an entry in the top-level `secrets` map whose resolved value is injected
-into the sandbox environment. Merges additive-union by secret name
-(`merge.rs:385-404`).
+The bare string `"NAME"` is shorthand for `{ secret = "NAME" }`; both forms
+normalize to `SecretEnvConfig` at parse time (serde-boundary-only shorthand,
+spec [13](06-improvements/13-secret-env-shorthand.md)), so merge semantics are
+unchanged: additive-union by secret name (`merge.rs:385-404`). The JSON schema
+expresses the two forms as `anyOf` (string | object). The table form is kept as
+forward-compat for future per-entry fields. Each entry names an entry in the
+top-level `secrets` map whose resolved value is injected into the sandbox
+environment.
 
 #### 1.3.4 `[[workloads.<name>.ports]]` — PortMapping (`microsandbox/plan.rs:82`)
 

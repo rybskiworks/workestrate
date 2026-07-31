@@ -236,7 +236,7 @@ schema_version = 1  # integer; workestrate checks compatibility on load
 # entrypoint: string       # "shell" (default; core runs /bin/sh -c "tail -f /dev/null")
 # log_stop_errors: bool    # whether to log errors on stop (default: true)
 # env: [[table]]           # environment variables (see below)
-# secret_env: [[table]]    # host-bound secrets (see below)
+# secret_env: [string | table] # host-bound secrets; bare string = { secret = "NAME" } (see below)
 # ports: [[table]]         # port mappings
 # mounts: [[table]]        # mount declarations
 # network: table           # network policy
@@ -303,6 +303,7 @@ cpus = 2
 memory_mib = 2048
 command = ["/app/.venv/bin/litellm", "--config", "/app/config/config.yaml", "--host", "0.0.0.0"]
 log_stop_errors = true
+secret_env = ["OPENROUTER_API_KEY", "KIMI_CODE_API_KEY", "NEURALWATT_API_KEY", "MINIMAX_CODING_API_KEY"]
 
 [[workloads.litellm.env]]
 name = "PORT"
@@ -315,18 +316,6 @@ value = "True"
 [[workloads.litellm.env]]
 name = "LITELLM_MASTER_KEY"
 secret = "LITELLM_MASTER_KEY"
-
-[[workloads.litellm.secret_env]]
-secret = "OPENROUTER_API_KEY"
-
-[[workloads.litellm.secret_env]]
-secret = "KIMI_CODE_API_KEY"
-
-[[workloads.litellm.secret_env]]
-secret = "NEURALWATT_API_KEY"
-
-[[workloads.litellm.secret_env]]
-secret = "MINIMAX_CODING_API_KEY"
 
 [[workloads.litellm.ports]]
 host = 4000
@@ -367,6 +356,7 @@ cpus = 2
 memory_mib = 2048
 command = ["/app/bin/pi"]
 log_stop_errors = false
+secret_env = ["GITHUB_TOKEN"]
 
 [[workloads.pi.env]]
 name = "PI_CODING_AGENT_DIR"
@@ -379,9 +369,6 @@ value = "0"
 [[workloads.pi.env]]
 name = "LITELLM_MASTER_KEY"
 secret = "LITELLM_MASTER_KEY"
-
-[[workloads.pi.secret_env]]
-secret = "GITHUB_TOKEN"
 
 [[workloads.pi.mounts]]
 host = "workspaces/pi-state"     # state_dir-relative
@@ -417,6 +404,7 @@ cpus = 2
 memory_mib = 2048
 command = ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7000"]
 log_stop_errors = false
+secret_env = ["LITELLM_AUTH", "GITHUB_TOKEN"]
 
 [[workloads.odysseus.env]]
 name = "APP_PORT"
@@ -449,12 +437,6 @@ value = "/app/.deps"
 [[workloads.odysseus.env]]
 name = "ODYSSEUS_ADMIN_PASSWORD"
 secret = "ODYSSEUS_ADMIN_PASSWORD"
-
-[[workloads.odysseus.secret_env]]
-secret = "LITELLM_AUTH"
-
-[[workloads.odysseus.secret_env]]
-secret = "GITHUB_TOKEN"
 
 [[workloads.odysseus.ports]]
 host = 7000
@@ -509,6 +491,7 @@ cpus = 2
 memory_mib = 2048
 command = ["opencode"]
 log_stop_errors = false
+secret_env = ["LITELLM_AUTH", "GITHUB_TOKEN"]
 
 [[workloads.opencode.env]]
 name = "OPENAI_BASE_URL"
@@ -517,12 +500,6 @@ value = "http://host.microsandbox.internal:4000/v1"
 [[workloads.opencode.env]]
 name = "OPENAI_MODEL"
 value = "coding"
-
-[[workloads.opencode.secret_env]]
-secret = "LITELLM_AUTH"
-
-[[workloads.opencode.secret_env]]
-secret = "GITHUB_TOKEN"
 
 [[workloads.opencode.ports]]
 host = 3000

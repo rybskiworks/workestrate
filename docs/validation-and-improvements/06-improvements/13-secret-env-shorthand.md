@@ -1,6 +1,6 @@
 # 13 — Config ergonomics: string-or-table shorthand for `secret_env`
 
-> **STATUS: READY-TO-EXECUTE (design; implementation in-container via nix develop, no KVM)**
+> **STATUS: EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp — separate commit there)**
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [../../migration/50-decisions/0002-toml-config-format.md](../../migration/50-decisions/0002-toml-config-format.md) ·
 > [../../migration/50-decisions/0003-config-purity-closed-vocabulary.md](../../migration/50-decisions/0003-config-purity-closed-vocabulary.md)
@@ -72,8 +72,14 @@ There is **zero** `#[serde(untagged)]` precedent in the codebase
 (`EgressRecipeRef` is internally-tagged; everything else is struct +
 `deny_unknown_fields`). The known untagged warts:
 
-- serde's "did not match any variant" diagnostics are vague;
-- schemars emits a `oneOf` in the JSON schema (editor UX slightly noisier).
+- serde's "did not match any variant" diagnostics are vague — **Implemented:**
+  avoided entirely with a custom `deserialize_secret_env` visitor; a bad element
+  (e.g. `secret_env = [42]`) fails with
+  `secret_env entry at index 0: invalid type: integer \`42\`, expected a bare
+  secret name string, or an inline table like { secret = "NAME" }` (names the
+  index, the offending type, and both expected forms);
+- schemars emits an `anyOf` (not `oneOf`) in the JSON schema (schemars 0.8.22;
+  editor UX slightly noisier).
 
 Both are mitigated here because a typo'd bare name is caught **precisely** by
 `validation.rs:318-326` (secret must exist in `config.secrets`) — the error
@@ -140,12 +146,17 @@ bump the version.
 
 ## 4. Acceptance criteria
 
+**Executed 2026-07-31:** all criteria met — 8 new parse tests in `types.rs` +
+1 typo regression test in `validation.rs`; full suite 492 tests green; golden
+plans byte-unchanged; schema regen committed (`anyOf`); merge/provenance tests
+re-run unchanged.
+
 - Parse tests: bare-only, mixed, table-only, empty array.
 - Typo'd bare name → validation error citing the missing secret name
   (`validation.rs:318-326`).
 - Merge + provenance behavior byte-identical (run the
   `merge.rs:1066-1156` tests).
-- Schema regen committed with the `oneOf` documented (`just schema-check` /
+- Schema regen committed with the `anyOf` (not `oneOf`) documented (`just schema-check` /
   schema_drift passes).
 - Golden plans **BYTE-UNCHANGED** (rendering unaffected; `just golden-check`).
 - Optional follow-up: rewrite the personal config + `config.reference`
@@ -169,5 +180,5 @@ recording anything in ADR 0003).
 |---|---|
 | Effort | **S** (~1 enum + `deserialize_with` + tests; schema regen). |
 | Gate | Cargo-linked gates runnable in-container via `nix develop` (`cargo test`, `just golden-check`, `just schema-check`). `verifiable-here`. |
-| Files touched | `control/agentctl/src/config/types.rs` (the helper enum + normalization); `control/agentctl/src/config/merge.rs` tests (unchanged, re-run); schema artifact regen. |
+| Files touched | `control/agentctl/src/config/types.rs` (the helper enum + `deserialize_secret_env` normalization + parse tests); `control/agentctl/src/config/validation.rs` (shorthand-typo regression test); `control/agentctl/src/merge.rs` tests (unchanged, re-run); `control/agentctl/tests/spec_examples_parse.rs` (promoted to real lib types — mirror deleted); `schemas/workestrate.schema.json` regen (`anyOf`). |
 | Risk | Low. The change is serde-boundary-only; every downstream code path sees the identical post-parse struct. |
