@@ -9,8 +9,9 @@
 //! workload-level keys BEFORE the fragment is re-parsed via
 //! `merge::Layer::from_string`, so override typos remain warnings, not errors.
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 
 use crate::microsandbox::plan::{DenyDomainRule, IngressRule, MountPlan, PortMapping};
@@ -81,6 +82,113 @@ pub struct EnvVarConfig {
 #[allow(dead_code)]
 pub struct SecretEnvConfig {
     pub secret: String,
+}
+
+/// Serde/schemars-boundary-only helper for the `secret_env` string-or-table
+/// shorthand (spec 13): a bare string `"NAME"` is shorthand for the inline
+/// table `{ secret = "NAME" }`. This enum is NEVER stored —
+/// [`deserialize_secret_env`] normalizes every element to [`SecretEnvConfig`]
+/// at parse time, so merge/validation/plan code sees the identical post-parse
+/// struct it saw before. The `Full` (table) variant is kept as forward-compat
+/// for future per-entry fields.
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // serde/schemars-boundary-only: variants are never read in Rust code
+enum SecretEnvShorthand {
+    Bare(String),
+    Full(SecretEnvConfig),
+}
+
+/// Deserialize `secret_env`, accepting both bare secret-name strings
+/// (shorthand for `{ secret = "NAME" }`) and inline tables, normalizing to
+/// `Vec<SecretEnvConfig>`. Elements that are neither produce a precise error
+/// naming the element index, the offending value's type, and the two expected
+/// forms (untagged's default "did not match any variant" error is too vague).
+fn deserialize_secret_env<'de, D>(deserializer: D) -> Result<Vec<SecretEnvConfig>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    struct SecretEnvSeqVisitor;
+
+    impl<'de> de::Visitor<'de> for SecretEnvSeqVisitor {
+        type Value = Vec<SecretEnvConfig>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str(
+                "a sequence of bare secret name strings and/or inline tables like \
+                 { secret = \"NAME\" }",
+            )
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut entries = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+            let mut index = 0usize;
+            while let Some(entry) = seq.next_element::<SecretEnvElement>().map_err(|e| {
+                de::Error::custom(format_args!("secret_env entry at index {index}: {e}"))
+            })? {
+                entries.push(entry.0);
+                index += 1;
+            }
+            Ok(entries)
+        }
+    }
+
+    deserializer.deserialize_seq(SecretEnvSeqVisitor)
+}
+
+/// One `secret_env` array element during deserialization: either a bare
+/// secret-name string or an inline [`SecretEnvConfig`] table. Any other
+/// element type (integer, boolean, array, …) is rejected via serde's
+/// `invalid_type` machinery with [`SecretEnvElementVisitor`]'s `expecting`
+/// message.
+struct SecretEnvElement(SecretEnvConfig);
+
+struct SecretEnvElementVisitor;
+
+impl<'de> de::Visitor<'de> for SecretEnvElementVisitor {
+    type Value = SecretEnvElement;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a bare secret name string, or an inline table like { secret = \"NAME\" }")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(SecretEnvElement(SecretEnvConfig {
+            secret: v.to_string(),
+        }))
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(SecretEnvElement(SecretEnvConfig { secret: v }))
+    }
+
+    fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::MapAccess<'de>,
+    {
+        // Delegate to the real struct so `deny_unknown_fields` errors are
+        // preserved verbatim for table elements.
+        SecretEnvConfig::deserialize(de::value::MapAccessDeserializer::new(map))
+            .map(SecretEnvElement)
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretEnvElement {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(SecretEnvElementVisitor)
+    }
 }
 
 /// A file copied from the host into the sandbox at start time
@@ -166,7 +274,8 @@ pub struct WorkloadConfig {
     pub log_stop_errors: Option<bool>,
     #[serde(default)]
     pub env: Vec<EnvVarConfig>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_secret_env")]
+    #[schemars(with = "Vec<SecretEnvShorthand>")]
     pub secret_env: Vec<SecretEnvConfig>,
     #[serde(default)]
     pub ports: Vec<PortMapping>,
@@ -531,5 +640,178 @@ dependsOn = {}
             err.to_string().contains("unknown field"),
             "workload-level 'dependsOn' must fail: {err}"
         );
+    }
+
+    // ---- Spec 13: secret_env string-or-table shorthand ----
+
+    /// Bare strings are shorthand for `{ secret = "NAME" }`: an all-string
+    /// array must parse to the equivalent `SecretEnvConfig` entries.
+    #[test]
+    fn secret_env_bare_strings_parse() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+secret_env = ["A", "B"]
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let secret_env = &config.workloads["pi"].secret_env;
+        assert_eq!(
+            secret_env,
+            &vec![
+                SecretEnvConfig {
+                    secret: "A".to_string()
+                },
+                SecretEnvConfig {
+                    secret: "B".to_string()
+                },
+            ]
+        );
+    }
+
+    /// The existing table form keeps parsing unchanged.
+    #[test]
+    fn secret_env_table_form_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.secret_env]]
+secret = "A"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let secret_env = &config.workloads["pi"].secret_env;
+        assert_eq!(
+            secret_env,
+            &vec![SecretEnvConfig {
+                secret: "A".to_string()
+            }]
+        );
+    }
+
+    /// Mixed bare-string and inline-table elements are legal and preserve
+    /// order.
+    #[test]
+    fn secret_env_mixed_forms_parse_in_order() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+secret_env = ["A", { secret = "B" }]
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let secret_env = &config.workloads["pi"].secret_env;
+        assert_eq!(
+            secret_env,
+            &vec![
+                SecretEnvConfig {
+                    secret: "A".to_string()
+                },
+                SecretEnvConfig {
+                    secret: "B".to_string()
+                },
+            ]
+        );
+    }
+
+    /// An explicit empty array parses to an empty vec.
+    #[test]
+    fn secret_env_empty_array_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+secret_env = []
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert!(config.workloads["pi"].secret_env.is_empty());
+    }
+
+    /// A non-string/non-table element must fail with a precise error naming
+    /// the element index, the offending value's type, and the two expected
+    /// forms.
+    #[test]
+    fn secret_env_bad_element_error_names_index_type_and_forms() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+secret_env = [42]
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("index 0"), "error must name the index: {msg}");
+        assert!(
+            msg.contains("integer"),
+            "error must name the offending type: {msg}"
+        );
+        assert!(
+            msg.contains("bare secret name string"),
+            "error must name the bare-string form: {msg}"
+        );
+        assert!(
+            msg.contains("{ secret = \"NAME\" }"),
+            "error must name the inline-table form: {msg}"
+        );
+    }
+
+    /// Unknown fields inside an inline-table element still hard-error
+    /// (`deny_unknown_fields` is preserved through the shorthand path).
+    #[test]
+    fn secret_env_table_element_rejects_unknown_field() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+secret_env = [{ secert = "A" }]
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "inline-table typo must fail: {err}"
+        );
+    }
+
+    /// The table form serializes via `toml::to_string` and re-parses
+    /// identical, exactly as before the shorthand was added.
+    #[test]
+    fn secret_env_table_form_serializes_and_round_trips() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.secret_env]]
+secret = "A"
+
+[[workloads.pi.secret_env]]
+secret = "B"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let serialized = toml::to_string(&config).unwrap();
+        let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, config);
     }
 }

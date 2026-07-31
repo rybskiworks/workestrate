@@ -520,6 +520,17 @@
       },
       "additionalProperties": false
     },
+    "SecretEnvShorthand": {
+      "description": "Serde/schemars-boundary-only helper for the `secret_env` string-or-table shorthand (spec 13): a bare string `\"NAME\"` is shorthand for the inline table `{ secret = \"NAME\" }`. This enum is NEVER stored — [`deserialize_secret_env`] normalizes every element to [`SecretEnvConfig`] at parse time, so merge/validation/plan code sees the identical post-parse struct it saw before. The `Full` (table) variant is kept as forward-compat for future per-entry fields.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/SecretEnvConfig"
+        }
+      ]
+    },
     "SeedFileConfig": {
       "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary), `target` the in-sandbox destination; `only_if_missing` skips the copy when the target already exists.",
       "type": "object",
@@ -653,7 +664,7 @@
           "default": [],
           "type": "array",
           "items": {
-            "$ref": "#/definitions/SecretEnvConfig"
+            "$ref": "#/definitions/SecretEnvShorthand"
           }
         },
         "seed_files": {
