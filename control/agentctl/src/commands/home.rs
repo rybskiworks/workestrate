@@ -2,7 +2,7 @@
 //! home as a dotfiles-style git repo (spec 10 Task 3, Decision B — the home
 //! tracks `config.toml` + `overrides.toml`; store dirs and secret material
 //! stay out of the index), and provision a NEW home from an existing one
-//! (`home init --from <src> [dest]`, ADR 0025).
+//! (`home clone <src> [dest]`, ADR 0025).
 
 use std::path::{Path, PathBuf};
 
@@ -62,69 +62,24 @@ const MAX_SUPPORTED_HOME_VERSION: u32 = 2;
 
 pub fn cmd_home(action: HomeAction) -> Result<()> {
     match action {
-        HomeAction::Init {
-            config,
-            name,
-            from,
-            dest,
-        } => cmd_home_init(config.as_deref(), &name, from.as_deref(), dest.as_deref()),
+        HomeAction::Init { config, name } => cmd_home_init(config.as_deref(), &name),
+        HomeAction::Clone { src, dest } => cmd_home_clone(&src, dest.as_deref()),
     }
 }
 
-/// `workestrate home init [--from <src>] [<dest>]`.
+/// `workestrate home init [--config <url>] [--name <n>]`.
 ///
-/// Bare path (no `--from`, no positional dest): scaffold the RESOLVED tool
-/// home (no `--path`; `WORKESTRATE_HOME` / legacy XDG / default resolution
-/// decides which home) as a dotfiles-style git repo. Idempotent: re-running
-/// on an initialized home is a pure no-op.
-///
-/// Positional dest: scaffold a NEW home at dest — a thin wrapper that sets
-/// `WORKESTRATE_HOME=<dest>` and runs the same bare flow.
-///
-/// `--from <src>`: provision the dest home from an existing home (ADR 0025;
-/// see [`provision_home_from`]).
-pub fn cmd_home_init(
-    config_url: Option<&str>,
-    name: &str,
-    from: Option<&str>,
-    dest: Option<&str>,
-) -> Result<()> {
-    let bare = from.is_none() && dest.is_none();
-
-    // Resolve the dest home: positional dest (`~/` expanded; relative paths
-    // resolve against cwd at use time) or the standard resolution.
-    let home = match dest {
-        Some(d) => config::expand_tilde(d),
-        None => config::resolve_home_with_kind().0,
-    };
-
-    // DEST NON-EMPTY GUARD (spec §1: "dest must not exist or be empty — bail
-    // if non-empty"). Only on the non-bare paths: the bare path keeps its
-    // idempotent behavior toward an existing (populated) home.
-    if !bare && dir_exists_and_is_non_empty(&home) {
-        anyhow::bail!(
-            "destination '{}' already exists and is not empty; \
-             'home init --from' / a positional dest requires a missing or empty directory",
-            home.display()
-        );
-    }
-
-    // When a positional dest is given, pin the process home to it EARLY so
-    // every env-based helper (config_repo_dir, save_registry, cmd_config_add,
-    // the post-flight validate) operates on dest.
-    if dest.is_some() {
-        std::env::set_var("WORKESTRATE_HOME", home.to_string_lossy().as_ref());
-    }
-
-    if let Some(src) = from {
-        return provision_home_from(src, &home);
-    }
-
-    // ---- Bare path (unchanged behavior) ----
-
+/// Scaffolds the RESOLVED tool home (no path flag; `WORKESTRATE_HOME` /
+/// legacy XDG / default resolution decides which home) as a dotfiles-style
+/// git repo. Idempotent: re-running on an initialized home is a pure no-op.
+/// For an empty scaffold at a custom path, use the global flag:
+/// `workestrate --home <path> home init`. To provision from an existing
+/// home, use `workestrate home clone <src> [dest]`.
+pub fn cmd_home_init(config_url: Option<&str>, name: &str) -> Result<()> {
     // 1. Resolve the home via the standard precedence (env → legacy XDG →
     //    default). No path flag; resolution is entirely what
     //    resolve_home_with_kind already does.
+    let home = config::resolve_home_with_kind().0;
     std::fs::create_dir_all(&home)?;
 
     // 2. Idempotency: an existing .git means the home is already a repo.
@@ -181,6 +136,41 @@ pub fn cmd_home_init(
     Ok(())
 }
 
+/// `workestrate home clone <src> [<dest>]`.
+///
+/// Provision the dest home from an existing home (ADR 0025; see
+/// [`provision_home_from`]). The positional `<dest>` selects where the new
+/// home is created (default: the resolved tool home); it must not exist or
+/// be empty.
+pub fn cmd_home_clone(src: &str, dest: Option<&str>) -> Result<()> {
+    // Resolve the dest home: positional dest (`~/` expanded; relative paths
+    // resolve against cwd at use time) or the standard resolution.
+    let home = match dest {
+        Some(d) => config::expand_tilde(d),
+        None => config::resolve_home_with_kind().0,
+    };
+
+    // DEST NON-EMPTY GUARD (spec §1: "dest must not exist or be empty — bail
+    // if non-empty"). Cloning is NOT idempotent toward an existing populated
+    // home (unlike `home init`).
+    if dir_exists_and_is_non_empty(&home) {
+        anyhow::bail!(
+            "destination '{}' already exists and is not empty; \
+             'home clone' requires a missing or empty directory",
+            home.display()
+        );
+    }
+
+    // When a positional dest is given, pin the process home to it EARLY so
+    // every env-based helper (config_repo_dir, save_registry, cmd_config_add,
+    // the post-flight validate) operates on dest.
+    if dest.is_some() {
+        std::env::set_var("WORKESTRATE_HOME", home.to_string_lossy().as_ref());
+    }
+
+    provision_home_from(src, &home)
+}
+
 /// True when `dir` exists and contains at least one entry.
 fn dir_exists_and_is_non_empty(dir: &Path) -> bool {
     dir.is_dir()
@@ -220,7 +210,7 @@ enum ReproKind {
     UnreproducibleOnRemoteSource,
 }
 
-/// The `--from <src>` provisioning path (ADR 0025 §2 steps 1–10).
+/// The `home clone <src>` provisioning path (ADR 0025 §2 steps 1–10).
 fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
     // -- Step 1: RESOLVE SRC ---------------------------------------------
     // A git URL (or a local path ending in .git) is cloned to a temp dir and
@@ -468,7 +458,7 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
 
     // -- Step 7: DEST HOME ORIGIN -----------------------------------------
     // The clone already wired origin (to the temp path for a remote src) —
-    // repoint it at the ORIGINAL --from value so pull-based sync tracks the
+    // repoint it at the ORIGINAL <src> value so pull-based sync tracks the
     // real source, not a soon-to-be-deleted temp dir. For a local src the
     // clone's origin IS the src path already; the set is idempotent. For a
     // non-git src the fresh repo has no origin; add one pointing at src.
@@ -525,7 +515,7 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// RAII temp dir holding a full clone of a remote `--from` source. Removed
+/// RAII temp dir holding a full clone of a remote clone source. Removed
 /// on drop (best-effort).
 struct RemoteSrcClone {
     dir: PathBuf,
@@ -580,7 +570,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 
 /// Post-flight `validate-config` against the dest home. The dest home is the
 /// process home at this point whenever a positional dest was given (env was
-/// set early); when `--from` has no positional dest, dest IS the resolved
+/// set early); when `home clone` has no positional dest, dest IS the resolved
 /// home — so `WORKESTRATE_HOME` is pinned explicitly only when it is not
 /// already pointing at dest. Returns the validation result for warn-only
 /// handling by the caller.

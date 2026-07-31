@@ -1,6 +1,6 @@
 //! Integration tests for the generated `workestrate.lock` (ADR 0025(e),
 //! spec 11 §3): `config add`/`config update`/`config remove` mutate the lock,
-//! bare `home init` writes an empty-repos lock, and `home init --from` pins
+//! bare `home init` writes an empty-repos lock, and `home clone` pins
 //! the actual checked-out revs. Legacy tolerance (a home without a lock) is
 //! covered by the pre-existing suites, which never create one and must stay
 //! green.
@@ -331,7 +331,7 @@ fn bare_home_init_writes_a_lock_with_empty_repos() {
 }
 
 // ---------------------------------------------------------------------------
-// home init --from pins the actual checked-out rev
+// home clone pins the actual checked-out rev
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -397,14 +397,14 @@ fn home_init_from_writes_dest_lock_pinning_the_checked_out_rev() {
     let dest = scratch.path().join("dest-home");
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home init --from");
+        .expect("invoke home clone");
     assert!(
         out.status.success(),
-        "home init --from failed: stderr=\n{}",
+        "home clone failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -450,7 +450,7 @@ fn remoteish_as_path(remoteish: &str) -> std::path::PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// home init --from consumes the SOURCE lock: locked rev wins over the registry
+// home clone consumes the SOURCE lock: locked rev wins over the registry
 // ---------------------------------------------------------------------------
 
 /// Build a SOURCE home whose config repo has commits R1 (older) and R2 (tip);
@@ -513,14 +513,14 @@ fn home_init_from_lock_rev_wins_over_registry_rev() {
     let dest = scratch.path().join("dest-home");
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home init --from");
+        .expect("invoke home clone");
     assert!(
         out.status.success(),
-        "home init --from failed: stderr=\n{}",
+        "home clone failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -586,11 +586,11 @@ fn home_init_from_src_with_newer_lock_version_fails_with_no_dest_residue() {
     let dest = scratch.path().join("dest-home");
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home init --from");
+        .expect("invoke home clone");
     assert!(
         !out.status.success(),
         "a too-new source lock must fail; stdout=\n{}",

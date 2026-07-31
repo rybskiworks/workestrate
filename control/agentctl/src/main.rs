@@ -492,19 +492,49 @@ mod tests {
             "home init must NOT have a --path flag (spec 10 §2: operates on the \
              resolved home only); got: {long_names:?}"
         );
-        // ADR 0025: provisioning flags.
         assert!(
-            long_names.contains(&"from".to_string()),
-            "home init missing --from flag (ADR 0025); got: {long_names:?}"
+            !long_names.contains(&"from".to_string()),
+            "home init must NOT have a --from flag (ADR 0025: provisioning moved \
+             to 'home clone'); got: {long_names:?}"
         );
         let positionals: Vec<String> = init
             .get_positionals()
             .map(|a| a.get_id().to_string())
             .collect();
         assert!(
-            positionals.contains(&"dest".to_string()),
-            "home init missing positional <dest> (ADR 0025); got: {positionals:?}"
+            positionals.is_empty(),
+            "home init must have NO positionals (ADR 0025: dest moved to \
+             'home clone'); got: {positionals:?}"
         );
+    }
+
+    #[test]
+    fn home_clone_cli_shape() {
+        let cmd = Cli::command();
+        let clone = cmd
+            .find_subcommand("home")
+            .and_then(|s| s.find_subcommand("clone"))
+            .expect("home clone must exist (ADR 0025)");
+        let positionals: Vec<(String, bool)> = clone
+            .get_positionals()
+            .map(|a| (a.get_id().to_string(), a.is_required_set()))
+            .collect();
+        assert_eq!(
+            positionals,
+            vec![("src".to_string(), true), ("dest".to_string(), false)],
+            "home clone must have a REQUIRED positional <src> and an OPTIONAL \
+             positional <dest>; got: {positionals:?}"
+        );
+        let long_names: Vec<String> = clone
+            .get_arguments()
+            .filter_map(|a| a.get_long().map(|s| s.to_string()))
+            .collect();
+        for flag in ["config", "name", "from"] {
+            assert!(
+                !long_names.contains(&flag.to_string()),
+                "home clone must NOT have a --{flag} flag; got: {long_names:?}"
+            );
+        }
     }
 
     fn check_service_subcommands(cmd: &clap::Command, name: &str) {

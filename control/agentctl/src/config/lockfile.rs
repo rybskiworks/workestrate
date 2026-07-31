@@ -13,7 +13,8 @@
 //! `migrate-home` precedent, ADR 0023).
 //!
 //! Writers: `cmd_config_add`, `cmd_config_update`, `cmd_config_remove`,
-//! `cmd_home_init` (bare + `--from`). Consumers: `--from` provisioning and
+//! `cmd_home_init` (scaffold) and `cmd_home_clone`. Consumers: `home clone`
+//! provisioning and
 //! the future `up --pin` / spawn-provenance work (the lock is THEIR
 //! mechanism; do not build a second one).
 

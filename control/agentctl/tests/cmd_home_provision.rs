@@ -1,4 +1,4 @@
-//! Integration tests for `workestrate home init --from <src> [dest]` — the
+//! Integration tests for `workestrate home clone <src> [dest]` — the
 //! ADR 0025 provisioning path (commit 1: no workestrate.lock yet). Covers
 //! positional dest, usage errors, local absolute/relative sources, local-only
 //! config repos (copy + origin wiring + registry url rewrite), remote sources
@@ -120,11 +120,11 @@ fn build_source_home(label: &str, config_repo: Option<&str>, trusted_projects: &
 }
 
 // ---------------------------------------------------------------------------
-// positional dest
+// empty scaffold at a custom path (the global --home flag)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn positional_dest_scaffolds_at_dest_even_when_resolved_home_is_elsewhere() {
+fn home_flag_scaffolds_at_custom_path_even_when_resolved_home_is_elsewhere() {
     let home = IsolatedHome::new("cmd-home-prov");
     let scratch = TempDir::new("cmd-home-prov");
     let resolved_home = home.dir.join(".workestrate");
@@ -132,14 +132,12 @@ fn positional_dest_scaffolds_at_dest_even_when_resolved_home_is_elsewhere() {
 
     let out = home
         .cmd()
-        .arg("home")
-        .arg("init")
-        .arg(&dest)
+        .args(["--home", dest.to_str().expect("utf8 dest"), "home", "init"])
         .output()
-        .expect("invoke home init <dest>");
+        .expect("invoke --home <path> home init");
     assert!(
         out.status.success(),
-        "home init <dest> failed: stderr=\n{}",
+        "--home <path> home init failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -149,7 +147,7 @@ fn positional_dest_scaffolds_at_dest_even_when_resolved_home_is_elsewhere() {
     }
     assert!(
         !resolved_home.join(".git").exists(),
-        "the resolved home must NOT be initialized when a positional dest is given"
+        "the resolved home must NOT be initialized when --home points elsewhere"
     );
 }
 
@@ -158,28 +156,26 @@ fn positional_dest_scaffolds_at_dest_even_when_resolved_home_is_elsewhere() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn config_and_from_is_a_usage_error() {
+fn init_with_positional_dest_is_a_usage_error() {
     let home = IsolatedHome::new("cmd-home-prov");
     let out = home
         .cmd()
-        .args([
-            "home",
-            "init",
-            "--config",
-            "https://example.invalid/x.git",
-            "--from",
-            "/tmp/whatever",
-        ])
+        .args(["home", "init", "/tmp/some-dest"])
         .output()
         .expect("invoke");
     assert!(
         !out.status.success(),
-        "--config + --from must be rejected by clap"
+        "home init <positional> must be rejected by clap"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error:") && stderr.contains("unexpected argument"),
+        "clap must report an unexpected argument; stderr=\n{stderr}"
     );
 }
 
 #[test]
-fn config_and_positional_dest_is_a_usage_error() {
+fn init_with_config_and_positional_dest_is_a_usage_error() {
     let home = IsolatedHome::new("cmd-home-prov");
     let out = home
         .cmd()
@@ -194,12 +190,17 @@ fn config_and_positional_dest_is_a_usage_error() {
         .expect("invoke");
     assert!(
         !out.status.success(),
-        "--config + positional dest must be rejected by clap"
+        "home init --config + positional dest must be rejected by clap"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error:") && stderr.contains("unexpected argument"),
+        "clap must report an unexpected argument; stderr=\n{stderr}"
     );
 }
 
 #[test]
-fn name_and_positional_dest_is_a_usage_error() {
+fn init_with_name_and_positional_dest_is_a_usage_error() {
     let home = IsolatedHome::new("cmd-home-prov");
     let out = home
         .cmd()
@@ -208,12 +209,42 @@ fn name_and_positional_dest_is_a_usage_error() {
         .expect("invoke");
     assert!(
         !out.status.success(),
-        "--name + positional dest must be rejected by clap"
+        "home init --name + positional dest must be rejected by clap"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error:") && stderr.contains("unexpected argument"),
+        "clap must report an unexpected argument; stderr=\n{stderr}"
+    );
+}
+
+#[test]
+fn clone_with_config_is_a_usage_error() {
+    let home = IsolatedHome::new("cmd-home-prov");
+    let out = home
+        .cmd()
+        .args([
+            "home",
+            "clone",
+            "--config",
+            "https://example.invalid/x.git",
+            "/tmp/whatever",
+        ])
+        .output()
+        .expect("invoke");
+    assert!(
+        !out.status.success(),
+        "home clone --config must be rejected by clap"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error:") && stderr.contains("unexpected argument"),
+        "clap must report an unexpected argument; stderr=\n{stderr}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// --from local (absolute + relative)
+// clone from local src (absolute + relative)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -226,14 +257,14 @@ fn from_absolute_local_path_provisions_dest() {
     let src_path = src.path().join("src-home").canonicalize().unwrap();
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src_path)
         .arg(&dest)
         .output()
-        .expect("invoke home init --from <abs> <dest>");
+        .expect("invoke home clone <abs> <dest>");
     assert!(
         out.status.success(),
-        "absolute --from failed: stderr=\n{}",
+        "absolute clone src failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(dest.join(".git").is_dir(), "dest home must be a git repo");
@@ -254,13 +285,13 @@ fn from_relative_local_path_resolves_against_cwd() {
     let out = home
         .cmd()
         .current_dir(src.path())
-        .args(["home", "init", "--from", "src-home"])
+        .args(["home", "clone", "src-home"])
         .arg(&dest)
         .output()
-        .expect("invoke home init --from <rel> <dest>");
+        .expect("invoke home clone <rel> <dest>");
     assert!(
         out.status.success(),
-        "relative --from failed: stderr=\n{}",
+        "relative clone src failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(dest.join(".git").is_dir(), "dest home must be a git repo");
@@ -268,7 +299,7 @@ fn from_relative_local_path_resolves_against_cwd() {
 }
 
 // ---------------------------------------------------------------------------
-// --from local src with a local-path config repo
+// clone from local src with a local-path config repo
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -281,11 +312,11 @@ fn from_local_src_copies_local_config_repo_and_rewrites_registry() {
 
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home init --from");
+        .expect("invoke home clone");
     assert!(
         out.status.success(),
         "provisioning failed: stderr=\n{}",
@@ -352,7 +383,7 @@ fn from_local_src_copies_local_config_repo_and_rewrites_registry() {
 }
 
 // ---------------------------------------------------------------------------
-// --from a "remote" src (path ending in .git) with a local-path config repo
+// clone from a "remote" src (path ending in .git) with a local-path config repo
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -375,14 +406,14 @@ fn from_remote_src_skips_unreproducible_local_config_repo_loudly() {
     let dest = scratch.path().join("dest-home");
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&remote_mirror)
         .arg(&dest)
         .output()
-        .expect("invoke home init --from <remote>");
+        .expect("invoke home clone <remote>");
     assert!(
         out.status.success(),
-        "remote --from failed: stderr=\n{}",
+        "remote clone src failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -405,12 +436,12 @@ fn from_remote_src_skips_unreproducible_local_config_repo_loudly() {
         !dest.join("config-repos").join("work").exists(),
         "the skipped repo must NOT be materialized"
     );
-    // Dest home origin points at the ORIGINAL --from value, not the temp clone.
+    // Dest home origin points at the ORIGINAL <src> value, not the temp clone.
     let home_origin = git_stdout(&dest, &["remote", "get-url", "origin"]);
     assert_eq!(
         home_origin,
         remote_mirror.to_string_lossy().to_string(),
-        "dest home origin must be the original --from URL"
+        "dest home origin must be the original <src> URL"
     );
 }
 
@@ -428,7 +459,7 @@ fn from_src_missing_config_toml_fails_with_no_dest_residue() {
 
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src)
         .arg(&dest)
         .output()
@@ -456,7 +487,7 @@ fn from_src_unparseable_config_toml_fails_with_no_dest_residue() {
 
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src)
         .arg(&dest)
         .output()
@@ -486,11 +517,11 @@ fn trusted_projects_are_carried_with_loud_per_entry_warning() {
 
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(src.path().join("src-home"))
         .arg(&dest)
         .output()
-        .expect("invoke home init --from");
+        .expect("invoke home clone");
     assert!(
         out.status.success(),
         "provisioning failed: stderr=\n{}",
@@ -515,8 +546,9 @@ fn trusted_projects_are_carried_with_loud_per_entry_warning() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn positional_dest_with_non_empty_existing_dir_fails() {
+fn clone_dest_with_non_empty_existing_dir_fails() {
     let home = IsolatedHome::new("cmd-home-prov");
+    let src = build_source_home("cmd-home-prov-src", None, &[]);
     let scratch = TempDir::new("cmd-home-prov");
     let dest = scratch.path().join("occupied");
     std::fs::create_dir_all(&dest).expect("create dest");
@@ -525,14 +557,20 @@ fn positional_dest_with_non_empty_existing_dir_fails() {
     let out = home
         .cmd()
         .arg("home")
-        .arg("init")
+        .arg("clone")
+        .arg(src.path().join("src-home"))
         .arg(&dest)
         .output()
-        .expect("invoke home init <dest>");
+        .expect("invoke home clone <src> <dest>");
     assert!(
         !out.status.success(),
-        "a non-empty positional dest must fail; stdout=\n{}",
+        "a non-empty clone dest must fail; stdout=\n{}",
         String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("'home clone' requires a missing or empty directory"),
+        "error must name 'home clone'; stderr=\n{stderr}"
     );
     // The sentinel survives — the guard bails BEFORE writing anything.
     assert!(dest.join("sentinel").exists());
@@ -557,7 +595,7 @@ fn from_src_with_newer_home_version_fails() {
 
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
@@ -637,11 +675,11 @@ fn legacy_src_without_lock_honors_registry_rev_and_no_pin_warns() {
     let dest = scratch.path().join("dest-home");
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home init --from");
+        .expect("invoke home clone");
     assert!(
         out.status.success(),
         "legacy no-lock provisioning failed: stderr=\n{}",
@@ -706,11 +744,11 @@ fn from_local_src_copy_honors_the_locked_rev() {
     let dest = scratch.path().join("dest-home");
     let out = home
         .cmd()
-        .args(["home", "init", "--from"])
+        .args(["home", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home init --from");
+        .expect("invoke home clone");
     assert!(
         out.status.success(),
         "local-copy + lock provisioning failed: stderr=\n{}",

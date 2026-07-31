@@ -128,8 +128,8 @@ pub fn entry_is_local_path(entry: &ConfigRepoEntry) -> bool {
 
 /// Classifier: whether `url` names a GIT remote (http(s)/ssh/git protocol or
 /// a `.git`-suffixed path) as opposed to a plain local filesystem path.
-/// Extracted from [`entry_is_local_path`] (ADR 0025): `home init --from`
-/// reuses it to classify the provisioning source (`--from <src>`) and each
+/// Extracted from [`entry_is_local_path`] (ADR 0025): `home clone`
+/// reuses it to classify the provisioning source (the `<src>` positional) and each
 /// registry entry's reproducibility. NOTE: a local path ending in `.git` is
 /// classified remote — git itself treats such paths as cloneable URLs, and
 /// offline tests lean on exactly that behavior.

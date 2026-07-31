@@ -20,7 +20,7 @@ pub fn git_clone(url: &str, dest: &std::path::Path, branch: Option<&str>) -> Res
 }
 
 /// Full (non-shallow) clone of `url` into `dest` on the default branch.
-/// Used by `home init --from` (ADR 0025): reproducing a home needs the full
+/// Used by `home clone` (ADR 0025): reproducing a home needs the full
 /// history so a recorded registry `rev` can be checked out (a `--depth 1`
 /// clone only carries the branch tip).
 pub fn git_clone_full(url: &str, dest: &std::path::Path) -> Result<()> {
@@ -35,7 +35,7 @@ pub fn git_clone_full(url: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Check out `rev` in `repo` (detached HEAD). Used by `home init --from` to
+/// Check out `rev` in `repo` (detached HEAD). Used by `home clone` to
 /// pin a reproduced config repo to the source home's recorded revision.
 pub fn git_checkout_rev(repo: &std::path::Path, rev: &str) -> Result<()> {
     let status = std::process::Command::new("git")
