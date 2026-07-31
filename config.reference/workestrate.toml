@@ -30,13 +30,11 @@ cpus = 2
 memory_mib = 1024
 command = ["python", "-m", "http.server", "8080"]
 log_stop_errors = true
+secret_env = ["LITELLM_AUTH"]
 
 [[workloads.example-service.env]]
 name = "APP_PORT"
 value = "8080"
-
-[[workloads.example-service.secret_env]]
-secret = "LITELLM_AUTH"
 
 [[workloads.example-service.ports]]
 host = 8080
