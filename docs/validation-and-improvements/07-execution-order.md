@@ -225,15 +225,16 @@ Reprodu from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)
 
 ## Remaining improvements — recommended order (2026-07-31)
 
-This section supersedes nothing — it sequences the six not-yet-landed specs
+This section supersedes nothing — it sequences the seven not-yet-landed specs
 (Steps 0.5/8a/8c/8d are DONE). Work it top-to-bottom.
 
 1. **05 — config-reference cwd-fallback** (small) — the only bug-fix improvement; closes a silent config-discovery backdoor; gate `cargo test` runs in-container via `nix develop`.
-2. **01 — mount filtering WP1–WP3** — highest-value hardening; WP1–WP3 are `verifiable-here`; the Phase 0 spike + WP4 are `HOST-KVM` and fold into the Step 6 host batch.
-3. **03 — dogfooding B1/B2** — structural (not convention-based) driver/target isolation; B1/B2 are `verifiable-here` (B3 keeps a `HOST-KVM` tail).
-4. **07 — naming-consistency leftover** (trivial) — mechanical residue sweep + the pending cargo gates via `nix develop`; clears residue before the user's repo rename (spec §6).
-5. **09 — microsandbox agentd post-merge cleanup** — upstream-latency-bound; the PR is PREPARED and ON HOLD (user action), so local work resumes only after merge+release: delete compensation machinery, bump the pin, `nix flake check`.
-6. **04 — CLI config authoring** — DEFERRED by design; gated on `02-config-requirements.md` sign-off, not on any code step.
+2. **14 — env map form** (small) — config ergonomics, same family as the just-executed spec 13; additive serde-only; all gates (`cargo test`, `just golden-check`, `just schema-check`) run in-container via `nix develop`.
+3. **01 — mount filtering WP1–WP3** — highest-value hardening; WP1–WP3 are `verifiable-here`; the Phase 0 spike + WP4 are `HOST-KVM` and fold into the Step 6 host batch.
+4. **03 — dogfooding B1/B2** — structural (not convention-based) driver/target isolation; B1/B2 are `verifiable-here` (B3 keeps a `HOST-KVM` tail).
+5. **07 — naming-consistency leftover** (trivial) — mechanical residue sweep + the pending cargo gates via `nix develop`; clears residue before the user's repo rename (spec §6).
+6. **09 — microsandbox agentd post-merge cleanup** — upstream-latency-bound; the PR is PREPARED and ON HOLD (user action), so local work resumes only after merge+release: delete compensation machinery, bump the pin, `nix flake check`.
+7. **04 — CLI config authoring** — DEFERRED by design; gated on `02-config-requirements.md` sign-off, not on any code step.
 
 ---
 
