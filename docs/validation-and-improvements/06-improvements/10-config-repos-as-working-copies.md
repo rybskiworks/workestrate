@@ -24,7 +24,7 @@
 > [../../migration/60-glossary.md](../../migration/60-glossary.md)
 >
 > Decisions A and B are now ADR'd: [ADR 0024](../../migration/50-decisions/0024-dotfiles-home-and-working-copy-config-repos.md);
-> the `home init --from`/positional-dest extension + `workestrate.lock` are
+> the `home init --from`/positional-dest extension (superseded by the `home clone` verb split @ `c406630`, 2026-07-31) + `workestrate.lock` are
 > [ADR 0025](../../migration/50-decisions/0025-home-provisioning-and-lockfile.md)
 > + [spec 11](11-home-provisioning-and-lockfile.md).
 
@@ -286,7 +286,7 @@ installation, next-steps printout. NEVER auto-git-init (rationale: §2, "Why nev
 **Gates:** `cargo test` (hook content generation, gitignore generation,
 idempotency). The `--from`/positional-`dest` extension of `home init` is
 specified by [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md)
-(ADR 0025).
+(ADR 0025) (superseded: verb split @ `c406630`).
 
 ---
 

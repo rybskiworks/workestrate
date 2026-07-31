@@ -60,7 +60,7 @@ invariant.
 | [08-no-repo-local-home.md](08-no-repo-local-home.md) | No repo-local tool home (retire `.workestrate/` inside the checkout) | `EXECUTED (2026-07-30); commits d7c5a83, bd99481, 3894fb7, bef1c37, 418530a; home commit a42e597; ADR-0023-addendum follow-through landed in bef1c37` | None — stepwise internal ordering only (a→d strictly; e is the code step); sequencing-wise it should land EARLY (before Lane A / host batch) because it changes the paths those reference | **S** (steps a–d, f, g) + **code-S** (step e) | `verifiable-here` for a–d/f/g; step (b) verify + step (e) code gates are runnable here via `nix develop` (no `cc` in a bare shell) |
 | [09-microsandbox-agentd-offline-build.md](09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd offline build (ADR 0011 carrier) | `PR PREPARED, ON HOLD (branch fix/filesystem-agentd-path-override @ a4f8a3b8 ready; docs in .tmp/msb-upstream/; push+open pending user; option 2 REVERSED per ADR 0011 addendum; option 3 NEEDS-DEVSHELL + HOST-NIX)` | None file-level on other improvement specs; option 3 cross-references [01](01-mount-filtering-shadowing.md) | option 1 = **M** (incl. upstream review latency); option 2 = REVERSED; option 3 = **M** | `HOST-NIX` (option 3 build); option 1 is upstream |
 | [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init); docs/spec fully done` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
-| [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home init --from` + positional dest) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
+| [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home clone <src> [<dest>]`) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7; verb split c406630 2026-07-31)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
 | [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
@@ -253,16 +253,21 @@ sync dance.
 
 ### 11 — Home provisioning + lockfile
 
-Execution spec for ADR 0025: extends `home init` with `--from <src>` +
-positional `<dest>` (the `git clone <src> <dest>` idiom; source only via
-`--from`, so a lone positional can only ever be a dest). Introduces the
+Execution spec for ADR 0025: `home clone <src> [<dest>]` provisions a home
+from a source (src required positional; dest optional, default the resolved
+home) — the `git clone <src> [<dest>]` idiom. Bare `home init` is an empty
+scaffold at the resolved home only (zero positionals; custom path via
+`--home`). The earlier `home init --from`/positional-dest shape was superseded
+by the verb split (commit `c406630`, ADR 0025 addendum 2026-07-31). Introduces
+the
 generated `workestrate.lock` (typed serde struct pinning `url`/`ref`/`rev` per
 config repo) — written by `config add`/`update`/`remove`/`home init`, consumed
-by `--from` provisioning (checks out locked revs, not "whatever main is
+by `home clone` provisioning (checks out locked revs, not "whatever main is
 today"). Selective copy: never copies `state/` (ephemeral), excludes
 `sources/`, creates `secrets/` empty. Fail-before-write pre-flight validation
 + reproducibility report. **Key decision:** the lock is the single pin
-mechanism for `--from`, future `up --pin`, and dogfooding B3/B4 — no second
+mechanism for `home clone`, future `up --pin`, and dogfooding B3/B4 — no
+second
 mechanism.
 
 ### 12 — Per-instance addressing + discovery-lite
@@ -376,8 +381,9 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
   CLI/home-resolution surface (`cli_actions.rs` args, `home.rs` init,
   home-resolution precedence prose), so they should be implemented in the same
   wave. It extends [10](10-config-repos-as-working-copies.md) Task 3 (the
-  `home init` scaffolding) with `--from`/positional-dest provisioning and the
-  generated `workestrate.lock`. Its code tasks are NEEDS-DEVSHELL / HOST-NIX.
+   `home init` scaffolding) with `home clone <src> [<dest>]` provisioning
+   (verb split @ `c406630`) and the
+   generated `workestrate.lock`. Its code tasks are NEEDS-DEVSHELL / HOST-NIX.
 - **12 (per-instance addressing)** depends on ADR 0026 and supersedes ADR 0021
   §5 (`--port-offset`, removed pre-release). Wave 1 (12a) is the slot-based
   binding + bind-aware registry + surfacing + `--port-auto` code landing on

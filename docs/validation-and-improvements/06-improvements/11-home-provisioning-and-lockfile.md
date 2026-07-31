@@ -1,6 +1,6 @@
-# 11 — Home provisioning (`home init --from` + positional dest) + `workestrate.lock`
+# 11 — Home provisioning (`home clone <src> [<dest>]`) + `workestrate.lock`
 
-> **STATUS: EXECUTED (2026-07-30 — commits `172d5dd` (provisioning), `19ff272` (lockfile), `be356f7` (lock consumption + version evolution); `--home` flag in `d991252`)**
+> **STATUS: EXECUTED (2026-07-30 — commits `172d5dd` (provisioning), `19ff272` (lockfile), `be356f7` (lock consumption + version evolution); `--home` flag in `d991252`); interface simplified to the home init / home clone verb split in c406630 (2026-07-31)**
 > **Effort:** M
 > Prerequisites / see-also: [README.md](../README.md) ·
 > [00-index.md](00-index.md) · [06-config-home-flag.md](06-config-home-flag.md) ·
@@ -26,39 +26,47 @@ devshell.
 
 ## Summary
 
-Implements ADR 0025: extends `home init` with `--from <src>` + positional
-`<dest>`; introduces the generated `workestrate.lock`. Bare `home init` is
-unchanged (ADR 0024d). Compose with spec 06's `--home` flag — same
-CLI/home-resolution surface, implement in the same wave.
+Implements ADR 0025: `home clone <src> [<dest>]` provisions a home from a
+source; introduces the generated `workestrate.lock`. Bare `home init` is
+unchanged (ADR 0024d) and takes zero positionals (empty scaffold at the
+resolved home only; empty-at-custom-path composes via the global `--home`
+flag, spec 06). The earlier `home init --from`/positional-dest shape was
+superseded by the verb split (implementation commit `c406630`; see the ADR
+0025 addendum 2026-07-31).
 
 ---
 
 ## 1. CLI surface (exact clap shapes)
 
-`HomeAction::Init` GAINS `from: Option<String>` (`#[arg(long)]`) and positional
-`dest: Option<String>`; the existing `config: Option<String>` (`#[arg(long)]`)
-and `name: String` (`#[arg(long), default_value = "personal"]`) fields are
-unchanged. Current definition site: `control/agentctl/src/cli_actions.rs:185`;
-dispatch at `commands/home.rs:57-61`; implementation at
-`commands/home.rs:67` (`cmd_home_init`).
+`HomeAction` is now split into two verbs (commit `c406630`):
+`Init { config: Option<String>, name: String }` — ZERO positionals — and
+`Clone { src: String, dest: Option<String> }`. Definition site
+(historical/superseded by `c406630`): the earlier dual-mode `HomeAction::Init`
+lived at `control/agentctl/src/cli_actions.rs:185` with dispatch at
+`commands/home.rs:57-61` and implementation at `commands/home.rs:67`
+(`cmd_home_init`); the verb split re-shaped the definition in the same files —
+see `c406630`.
 
 Argument semantics:
 
 | Invocation | Meaning |
 |---|---|
-| `home init` | Scaffold resolved home (today's behavior). |
-| `home init <dest>` | Scaffold NEW home at dest (dest must not exist or be empty — bail if non-empty). |
-| `home init --from <src>` | Provision resolved home from src. |
-| `home init --from <src> <dest>` | Provision dest from src. |
+| `home init [--config <url>] [--name <n>]` | Scaffold the resolved home (empty scaffold only). |
+| `workestrate --home <path> home init` | Empty scaffold at a custom path (global `--home`, spec 06). |
+| `home clone <src>` | Provision the resolved home from src (dest defaults to resolved home). |
+| `home clone <src> <dest>` | Provision dest from src (dest must not exist or be empty — non-empty-dest guard). |
 
-`--config`/`--name` remain valid on the bare path only — specifying them with
-`--from` or `dest` is a usage error.
+Usage-error rules: `home init` with ANY positional is a usage error;
+`home clone` requires src (missing src is a usage error); clone takes NO
+`--config`/`--name` — "clone + add a repo" composes as
+`workestrate home clone <src> [<dest>]` then
+`workestrate --home <dest> config add <url> <name>`.
 
 ---
 
 ## 2. Provisioning algorithm (step-by-step)
 
-1. **Resolve src:** if `--from` value passes `looks_like_git_url`
+1. **Resolve src:** if the `<src>` positional passes `looks_like_git_url`
    (`config/registry.rs:126` — note: currently private; make it `pub(crate)` or
    move to a shared module) → clone to a temp dir and treat that as src; else
    resolve path (absolute as-is, relative against cwd).
@@ -136,7 +144,7 @@ struct LockedRepo {
 (`:510` — already re-records rev; extend to lock), `cmd_config_remove` (`:42`
 — drop entry), `cmd_home_init` (`home.rs:67`).
 
-**Consumers:** `--from` (step 5 above); future `up --pin` and spawn provenance
+**Consumers:** `home clone` provisioning (step 5 above); future `up --pin` and spawn provenance
 ([03-dogfooding.md](03-dogfooding.md) B3 §5.3 + the pin-at-spawn item
 designated B4 — the lock is their mechanism; do not build a second one).
 
@@ -151,7 +159,7 @@ gitignored).
 |---|---|
 | `config/registry.rs:11` / `:26` | `load`/`save` — the lock gets its own `load_home_lock`/`save_home_lock` siblings; save must be atomic like `save_registry` (see `registry.rs:667` test). |
 | `config/registry.rs:126` | `looks_like_git_url` visibility (make `pub(crate)` or move to shared module). |
-| `cli_actions.rs:185` | New args (`from`, `dest`) on `HomeAction::Init`. |
+| `cli_actions.rs:185` | New args (`from`, `dest`) on `HomeAction::Init` — SUPERSEDED by the verb split @ `c406630` (`Init` zero positionals / `Clone { src, dest }`). |
 | `commands/home.rs:67` | Provisioning implementation. |
 | `config_cmd.rs:42` / `:188` / `:510` | Lock writers (remove/add/update). |
 
@@ -161,15 +169,19 @@ gitignored).
 
 All `cargo test`, run via `nix develop`:
 
-- positional dest: `home init <dest>` scaffolds at dest; two-arg usage errors
-  rejected (`--config` + `--from` etc.).
-- `--from` local absolute path AND relative path (cwd-resolved) both provision.
-- `--from` with a local-only config repo in src → repo copied, report names it.
-- `--from` git URL with local-only config repo → entry skipped +
+- `home init` with ANY positional → usage error (verb split @ `c406630`;
+  empty-at-custom-path composes via the global `--home` flag).
+- `home clone` missing src → usage error.
+- `home clone <src>` local absolute path AND relative path (cwd-resolved) both
+  provision.
+- `home clone <src>` with a local-only config repo in src → repo copied,
+  report names it.
+- `home clone` from a git URL with local-only config repo → entry skipped +
   "unreproducible, clone manually" in report/summary; dest is NOT hollow
   (everything else present).
 - invalid src (missing/unparseable config.toml) → error and NO dest residue
   (assert dest path does not exist after failure).
+- non-empty dest → `home clone <src> <dest>` refuses (non-empty-dest guard).
 - lock round-trip: add/update/remove mutate the lock; save/load is atomic
   (mirror `registry.rs:667` test).
 - newer lock version → hard error message contains "home created by a newer
@@ -187,10 +199,11 @@ All `cargo test`, run via `nix develop`:
 - [x] [00-index.md](00-index.md), [../README.md](../README.md),
   [../07-execution-order.md](../07-execution-order.md) updated (those land with
   this docs wave).
-- [x] `HomeAction::Init` gains `from: Option<String>` + positional
-  `dest: Option<String>` at `cli_actions.rs:185`.
+- [x] Verb split landed: `home init` (zero positionals) / `home clone <src>
+  [<dest>]` (commit `c406630`).
 - [x] Bare `home init` unchanged (ADR 0024d).
-- [x] `--config`/`--name` with `--from` or `dest` → usage error.
+- [x] Clone has no `--config`/`--name`; init rejects positionals; clone
+  requires src — usage errors verified.
 - [x] Provisioning algorithm steps 1–10 implemented at `commands/home.rs:67`.
 - [x] `looks_like_git_url` made `pub(crate)` or moved to shared module
   (`config/registry.rs:126`).

@@ -39,7 +39,7 @@ re-derive their contents.
   `config-repos/` rename); `bd99481` (dirty-guard test); `3894fb7`
   (`workestrate home init`); `bef1c37` (discovery tier removed); `418530a`
   (repo-local home machinery removed); `172d5dd` / `19ff272` / `be356f7`
-  (`home init --from` + `workestrate.lock` + lock consumption); `d991252`
+  (`home init --from` + `workestrate.lock` + lock consumption) — interface SUPERSEDED by the `home init` / `home clone` verb split @ `c406630` (2026-07-31; ADR 0025 addendum); `d991252`
   (`--home` flag); `9107b87` / `de9aa62` / `f9fd2f0` / `c5837e7` (spec 12
   Wave 1); `4adad3f` / `7b65ad1` / `39c1694` (spec 12 Wave 2); `d1c1293`
   (`MSB_AGENTD_PATH` staging); `f8aa276`; `d938f2e`.

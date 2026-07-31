@@ -139,3 +139,25 @@ The execution spec is
 Gates per commit (all green): `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, full `cargo test` (411 passed at wave end), `just golden-check` / `schema-check` / `spec-examples` / `scaffold-check`, clean `control/agentctl/Cargo.lock`.
 
 Ops verification (2026-07-30): `home init --from ~/.workestrate <scratch-dest>` provisioned a dev home end-to-end — registry cloned (origin → `~/.workestrate`), `config-repos/personal` copied at rev `c41a707` with origin wired to the source repo, registry url rewritten dest-local, `workestrate.lock` written pinning `c41a707`, `state/`/`secrets/` empty, loud per-entry `[[trusted_projects]]` warning, warn-only post-flight `validate-config` passed silently, and `--home <dest> config list` / `--home <dest> litellm plan` both resolved the provisioned home. (Container note: `/home/node/Development` is root-owned, so the scratch dest lived under `/home/node/Development/worktrees/`.)
+
+## Addendum (2026-07-31): interface simplified to verb split (home init / home clone)
+
+**Landed:** `c406630` feat(agentctl)!: split home provisioning into `home clone` (drop `home init --from`) — pre-release interface cleanup.
+
+The `home init [--from <src>] [<dest>]` interface selected in Decision (a) is SUPERSEDED. Final landed shape:
+
+- `workestrate home init [--config <url>] [--name <n>]` — empty scaffold at the resolved home only. Zero positionals; no `--from`.
+- `workestrate home clone <src> [<dest>]` — provision from src (REQUIRED positional) into dest (OPTIONAL positional, default: the resolved home); non-empty-dest guard; the full provisioning of this ADR (selective copy, url rewrite, origin wiring, lock) unchanged.
+- Empty-at-custom-path = `workestrate --home <path> home init` (global `--home` flag, spec 06).
+
+Reasoning chain:
+
+1. **`--from` rejected as redundant.** Empty-at-a-custom-path was already covered by the global `--home` flag (`workestrate --home <path> home init`, ADR 0024d / spec 06). A mode flag that re-implements an existing composition is surface area without leverage.
+2. **Bare positional on a dual-mode command rejected as STRUCTURALLY ambiguous.** The toolchain's own verbs teach opposite single-positional readings: `git init [<dir>]` reads the lone positional as DEST, while `git clone <src>` reads it as SRC. A dual-mode `home init` cannot hold one positional without surprising half of everyone, whichever reading is picked — that ambiguity cannot be documented away, only designed away.
+3. **The verb split mirrors the toolchain's own idiom** (`init` scaffolds, `clone` provisions) and eliminates the ambiguity structurally: each verb now holds exactly the positional semantics its git namesake teaches.
+
+Also removed pre-release: `home init <dest>` (positional dest on init) — the empty-at-custom-path case is the `--home` composition above.
+
+**Option-surface note:** `home clone` intentionally has NO `--config`/`--name` flags. "Clone + add a repo" composes as `workestrate home clone <src> [<dest>]` then `workestrate --home <dest> config add <url> <name>`. Port flags (`--port-auto`) are workload-lifecycle concerns (`up`/`exec`), NOT home commands.
+
+Everything else in this ADR stands: selective copy (never `state/`), fail-before-write validation, url/origin wiring, and the `workestrate.lock` design (Decision (e)) are unchanged; only the CLI surface that triggers provisioning moved from `home init --from` to `home clone`.
