@@ -224,6 +224,8 @@ re-derive their contents.
 
 > **Note (2026-07-29, spec 09):** improvement spec 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier) — is READY-TO-EXECUTE with option 2 blocked on fork push access (`github:georgrybski/microsandbox-filesystem`); see [06-improvements/09-microsandbox-agentd-offline-build.md](06-improvements/09-microsandbox-agentd-offline-build.md).
 
+> **Note (2026-07-30, spec 09):** ADR 0011 vendor→fork-carrier decision REVERSED (see ADR 0011 addendum 2026-07-30) — the georgrybski/microsandbox fork is a transient PR vehicle only, never consumed as a dependency; the upstream PR (MSB_HOME parity for crates/filesystem/build.rs, mirroring #704) is IN-FLIGHT; the nix-side patch interim stays unchanged until the upstream release lands and the machinery is deleted.
+
 > **Note (2026-07-30, spec 10):** **EXECUTED (code tasks landed).** (A)
 > consumed config repos are FIRST-CLASS working copies inside the tool home at
 > `$WORKESTRATE_HOME/config-repos/<name>/` (remote is canonical; supersedes the

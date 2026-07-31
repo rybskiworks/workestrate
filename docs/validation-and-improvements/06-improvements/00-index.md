@@ -58,7 +58,7 @@ invariant.
 | [06-config-home-flag.md](06-config-home-flag.md) | `--home` global CLI flag (idiomatic config-home override) | `EXECUTED (2026-07-30; commit d991252)` | None — standalone; referenced by [03](03-dogfooding.md) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) for ergonomics | **S** | `verifiable-here` (fix gate: `cargo test`); runs in HOST-NIX devshell (no `cc` here) |
 | [07-naming-consistency.md](07-naming-consistency.md) | Naming consistency: purge `workestrator` residue | `IN-PROGRESS THIS BRANCH (migration/tool-model)` | None — standalone rename; FLAG: personal config repo image-name coordination (spec §4) | **M** | `verifiable-here` (grep/lint-nix/nix eval); cargo gates `HOST-NIX` |
 | [08-no-repo-local-home.md](08-no-repo-local-home.md) | No repo-local tool home (retire `.workestrate/` inside the checkout) | `EXECUTED (2026-07-30); commits d7c5a83, bd99481, 3894fb7, bef1c37, 418530a; home commit a42e597; ADR-0023-addendum follow-through landed in bef1c37` | None — stepwise internal ordering only (a→d strictly; e is the code step); sequencing-wise it should land EARLY (before Lane A / host batch) because it changes the paths those reference | **S** (steps a–d, f, g) + **code-S** (step e) | `verifiable-here` for a–d/f/g; step (b) verify + step (e) code gates are `HOST-NIX` devshell (no `cc` here) |
-| [09-microsandbox-agentd-offline-build.md](09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd offline build (ADR 0011 carrier) | `READY-TO-EXECUTE (option 2 gated on fork push access; option 1 gated on upstream responsiveness; option 3 NEEDS-DEVSHELL + HOST-NIX)` | None file-level on other improvement specs; option 2 blocked on fork push access; option 3 cross-references [01](01-mount-filtering-shadowing.md) | option 2 = **S** (once unblocked); option 1 = **M** (incl. upstream review latency); option 3 = **M** | `HOST-NIX` (options 2/3 builds); option 1 is upstream |
+| [09-microsandbox-agentd-offline-build.md](09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd offline build (ADR 0011 carrier) | `IN-FLIGHT (option 1 upstream PR drafted; option 2 fork-carrier REVERSED per ADR 0011 addendum; option 3 NEEDS-DEVSHELL + HOST-NIX)` | None file-level on other improvement specs; option 3 cross-references [01](01-mount-filtering-shadowing.md) | option 1 = **M** (incl. upstream review latency); option 2 = REVERSED; option 3 = **M** | `HOST-NIX` (option 3 build); option 1 is upstream |
 | [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init); docs/spec fully done` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
 | [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home init --from` + positional dest) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
 | [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
@@ -214,17 +214,19 @@ filesystem sub-crate — upstream inconsistency/oversight, not philosophy. Three
 options: **(1) UPSTREAM FIX** (preferred end-state) — contribute an
 MSB_HOME-based agentd check to `crates/filesystem/build.rs` mirroring the SDK
 crate's own pattern (precedent: #704 merged the identical pattern into the SDK
-crate; #701/#713 show maintainers are responsive); **(2) INTERIM CARRIER**
-(ADR 0011, decided 2026-07-18) — fork to
-`github:georgrybski/microsandbox-filesystem`, point `[patch.crates-io]` at the
-fork, delete the patch + patched derivation + `_setup_vendor_link` devshell
-hook + agentctl.nix vendor staging + vendor-unlock/lock justfile recipes
-(BLOCKED on fork push access); **(3) VERSION BUMP** — `=0.5.6` → `=0.6.8`
+crate; #701/#713 show maintainers are responsive); **IN-FLIGHT** — branch
+`fix/filesystem-msb-home-agentd-staging` on
+`github.com/georgrybski/microsandbox`, PR draft at `.tmp/msb-upstream/PR.md`;
+**(2) INTERIM CARRIER** (ADR 0011, decided 2026-07-18) — **REVERSED per the
+ADR 0011 addendum (2026-07-30):** the fork is a transient PR vehicle only,
+never consumed as a dependency; the nix-side patch machinery stays as the
+interim; **(3) VERSION BUMP** — `=0.5.6` → `=0.6.8`
 (requires patch rewrite against 0.6.x build.rs; 0.5.8+ added guest-write quotas,
 0.6.6 added RESOLVE_BENEATH symlink protection — both relevant to
 [01](01-mount-filtering-shadowing.md); NEVER the yanked 0.6.5). **Key
-decision:** option 2 first (once unblocked) → option 1 upstream → delete fork
-+ machinery after release; option 3 is a separate combinable track.
+decision:** option 1 upstream PR → upstream release → bump the microsandbox
+pin + delete ALL compensation machinery; the nix-patch interim stays until
+then; option 3 is a separate combinable track.
 
 ### 10 — Config repos as working copies + dotfiles-style home
 
@@ -318,9 +320,9 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
           (either ship after 01 WP1 lands, or be schema-driven per §4.6)
 
 09-microsandbox-agentd-offline-build   [no file-level deps on other specs;
-      │                                 option 2 BLOCKED on fork push access;
-      │                                 option 3 ↔ 01 (RESOLVE_BENEATH cross-ref);
-      │                                 option 1 is upstream-latency-bound]
+      │                                 option 2 REVERSED (ADR 0011 addendum
+      │                                 2026-07-30); option 1 IN-FLIGHT;
+      │                                 option 3 ↔ 01 (RESOLVE_BENEATH cross-ref)]
 
 10-config-repos-as-working-copies     [amends 08 step (a) + ../03 topology;
                                         code tasks gated on devshell (NEEDS-DEVSHELL);

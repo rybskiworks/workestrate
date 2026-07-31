@@ -1,9 +1,11 @@
 # 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier)
 
-> **STATUS: READY-TO-EXECUTE (option 2 gated on fork push access; option 1
-> gated on upstream responsiveness; option 3 NEEDS-DEVSHELL + HOST-NIX)**
-> **Effort:** option 2 = **S** (once unblocked); option 1 = **M** (including
-> upstream review latency); option 3 = **M** (patch rewrite + re-validation)
+> **STATUS: IN-FLIGHT (option 1 upstream PR drafted; option 2 fork-carrier
+> REVERSED per ADR 0011 addendum 2026-07-30 — transient PR vehicle only;
+> option 3 NEEDS-DEVSHELL + HOST-NIX)**
+> **Effort:** option 1 = **M** (including upstream review latency);
+> option 2 = REVERSED (not executed); option 3 = **M** (patch rewrite +
+> re-validation)
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [../07-execution-order.md](../07-execution-order.md) ·
 > [01-mount-filtering-shadowing.md](01-mount-filtering-shadowing.md) ·
@@ -98,7 +100,7 @@ three options, and a recommended sequence.
 
 ## Options
 
-### Option 1 — UPSTREAM FIX (preferred end-state)
+### Option 1 — UPSTREAM FIX (preferred end-state) — IN-FLIGHT
 
 Contribute an MSB_HOME-based agentd check to `crates/filesystem/build.rs`
 mirroring the SDK crate's own pattern (skip download when
@@ -110,28 +112,31 @@ delete the patch, `microsandbox-filesystem-patched.nix`, the
 `_setup_vendor_link` devshell hook, the agentctl.nix vendor staging, and the
 vendor-unlock/lock justfile recipes.
 
+**IN-FLIGHT (2026-07-30):** branch `fix/filesystem-msb-home-agentd-staging`
+on `github.com/georgrybski/microsandbox`; PR drafted at
+`.tmp/msb-upstream/PR.md` mirroring upstream #704 (the SDK-crate MSB_HOME
+precedent) with the `var_os` opt-in refinement.
+
 Trade-off: gated on upstream responsiveness; until merge+release we stay on
 the compensation machinery.
 
-### Option 2 — INTERIM CARRIER (ADR 0011, already decided 2026-07-18)
+### Option 2 — INTERIM CARRIER (ADR 0011) — REVERSED (2026-07-30)
 
-Fork `microsandbox` (or a minimal fork carrying the patched sub-crate) to
-`github:georgrybski/microsandbox-filesystem`, apply the patch on the fork,
-point `[patch.crates-io]` at the fork git URL, then delete
+**REVERSED per the ADR 0011 addendum (2026-07-30).** The fork
+(`github.com/georgrybski/microsandbox`) exists **only** as the transient
+vehicle to open the upstream PR; it is **NOT** consumed as a dependency — a
+consumed git-fork dependency is maintenance rot (rebase-per-release churn,
+fork accumulation). The `.tmp/microsandbox-fork` 0.5.6+patch branch
+(`448937d4`) is moot as a dependency source (reference only). The nix-side
+patch machinery stays as the interim.
+
+~~Original plan (superseded):~~ Fork `microsandbox` (or a minimal fork
+carrying the patched sub-crate), apply the patch on the fork, point
+`[patch.crates-io]` at the fork git URL, then delete
 `nix/packages/microsandbox-filesystem-patched.nix` + the patch file + the
-`_setup_vendor_link` devshell hook (`nix/devshells/default.nix:132-158`) + the
-agentctl.nix vendor staging (`nix/packages/agentctl.nix:59-84` adjusted) +
+`_setup_vendor_link` devshell hook (`nix/devshells/default.nix:132-158`) +
+the agentctl.nix vendor staging (`nix/packages/agentctl.nix:59-84`) +
 justfile vendor-unlock/lock recipes (`justfile:155-174`).
-
-**PREREQUISITE/BLOCKER:** push access to create the fork
-(`github:georgrybski/microsandbox-filesystem`) — previously recorded as
-blocked.
-
-Trade-offs: removes the devshell symlink machinery and makes the build
-pure-eval friendly (the vendored crate currently blocks any pure-eval Nix
-build claim — see
-[../../migration/70-open-items.md](../../migration/70-open-items.md)); cost is
-maintaining a fork pin; superseded by option 1 once upstream merges.
 
 ### Option 3 — VERSION BUMP (independent, combinable)
 
@@ -154,10 +159,13 @@ NEEDS-DEVSHELL + HOST-NIX (patch rewrite + cargo build/test + runtime
 
 ## Recommended sequence
 
-Option 2 first (once the fork push-access blocker clears) → option 1 upstream
-contribution → after upstream release, delete the fork + all compensation
-machinery. Option 3 runs as a SEPARATE track when runtime validation bandwidth
-exists; it is combinable with 1 or 2.
+Option 1 upstream PR (IN-FLIGHT) → upstream release carrying the fix → bump
+the microsandbox pin + delete ALL compensation machinery (the patch file, the
+patched derivation, the `_setup_vendor_link` devshell hook, the agentctl.nix
+vendor staging + the `.cargo/config.toml` `[patch.crates-io]` path entry, the
+vendor-unlock/lock justfile recipes, the `.gitignore` vendor line). The
+interim nix-side patch stays until then. Option 3 runs as a SEPARATE,
+combinable track when runtime validation bandwidth exists.
 
 ## Acceptance criteria
 
@@ -167,11 +175,13 @@ exists; it is combinable with 1 or 2.
 - [ ] [../../../SPEC.md](../../../SPEC.md) Phase 0b.6 backlog note points here.
 - [ ] [../../migration/70-open-items.md](../../migration/70-open-items.md)
   ADR 0011 entry points here.
-- [ ] **Option 2 executed:** `[patch.crates-io]` points at fork git URL;
-  patch file + patched derivation + `_setup_vendor_link` + vendor staging +
-  vendor-unlock/lock recipes deleted; `nix flake check` green (HOST-NIX).
-- [ ] **Option 1 executed:** upstream PR merged referencing #704 precedent;
-  released; machinery deleted; `control/agentctl/Cargo.toml` pin updated.
+- [ ] **Option 2 — SUPERSEDED/REVERSED (2026-07-30):** fork-carrier NOT
+  consumed as a dependency; the fork is a transient PR vehicle only — see the
+  ADR 0011 addendum.
+- [ ] **Option 1 executed:** upstream PR merged referencing #704 precedent
+  (PR IN-FLIGHT 2026-07-30 — branch `fix/filesystem-msb-home-agentd-staging`,
+  draft `.tmp/msb-upstream/PR.md`); released; machinery deleted;
+  `control/agentctl/Cargo.toml` pin updated.
 - [ ] **Option 3 executed:** `=0.6.8` pin; rewritten patch applies and build
   passes offline (HOST-NIX); `msb --version` match re-validated; mount-filtering
   spec 01 cross-checked for RESOLVE_BENEATH interaction.
@@ -180,7 +190,9 @@ exists; it is combinable with 1 or 2.
 ## Cross-references
 
 - [ADR 0011](../../migration/50-decisions/0011-microsandbox-vendor-to-git-fork.md)
-  (vendor → git-fork dependency; Accepted 2026-07-18) — option 2 is its carrier.
+  (vendor → git-fork dependency; Accepted 2026-07-18; **addendum 2026-07-30
+  REVERSES the fork-carrier** — option 2 is superseded; the fork is a
+  transient PR vehicle only).
 - [../../../SPEC.md](../../../SPEC.md) Phase 0b.6 backlog note (lines 233–235).
 - [../../migration/70-open-items.md](../../migration/70-open-items.md) ADR 0011
   deferral entry (lines 82–89).
