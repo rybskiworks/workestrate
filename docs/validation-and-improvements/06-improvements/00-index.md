@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the twelve post-validation improvement specifications under
+This index catalogs the thirteen post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -62,6 +62,7 @@ invariant.
 | [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init); docs/spec fully done` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
 | [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home clone <src> [<dest>]`) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7; verb split c406630 2026-07-31)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
 | [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
+| [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `READY-TO-EXECUTE (design; implementation in-container via nix develop, no KVM)` | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -341,6 +342,8 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
                                         extends 10 Task 3]
 
 12-per-instance-addressing [deps: ADR 0026; supersedes ADR 0021 §5; E1 ↔ ../05-host-validation.md]
+
+13-secret-env-shorthand [no deps; additive serde-only shorthand; schema_version stays 1]
 ```
 
 **Key dependency notes:**
@@ -390,9 +393,24 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
   `migration/tool-model`; Wave 2 (12b) is `depends_on` discovery-lite — BOTH waves landed (Wave 1: `9107b87`/`de9aa62`/`f9fd2f0`/`c5837e7`; Wave 2: `4adad3f`/`7b65ad1`/`39c1694`). The
   guest-reachability of non-`127.0.0.1` loopbacks is gated on Experiment E1
   ([../05-host-validation.md](../05-host-validation.md)) — the conservative
-  default (shared `127.0.0.1` + `--port-auto` for guest-facing alternates)
-  holds until E1 runs and its outcome is recorded in the spec's
-  §open-decisions.
+   default (shared `127.0.0.1` + `--port-auto` for guest-facing alternates)
+   holds until E1 runs and its outcome is recorded in the spec's
+   §open-decisions.
+
+### 13 — Config ergonomics: string-or-table shorthand for `secret_env`
+
+`secret_env` entries today must be inline tables (`{ secret = "NAME" }`) even
+though `SecretEnvConfig` has exactly one field — the litellm workload alone
+spends 11 lines on nine bare-name tables that collapse to 1 line. The spec
+accepts a heterogeneous array (bare strings as shorthand for
+`{ secret = "NAME" }`, inline tables as the kept full form), implemented via an
+untagged helper enum normalized to `Vec<SecretEnvConfig>` at deserialize time
+— merge, validation, and plan build are untouched. `schema_version` stays 1
+(the shorthand is additive and backward-compatible; the first breaking change,
+if any, would be the schema v2 event). **Key decision:** serde-boundary-only
+expansion — the parsed data model is byte-identical, golden plans stay
+byte-unchanged, and typo'd bare names are caught precisely by
+`validation.rs:318-326`.
 
 ---
 

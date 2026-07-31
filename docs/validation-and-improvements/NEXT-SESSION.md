@@ -31,7 +31,7 @@ re-derive their contents.
 - Gates: green — 478 tests; `just lint-nix` passes.
 - Container home `~/.workestrate` restored after the container-restart wipe,
   but uncommitted in its own git (fine — ephemeral).
-- 12 improvement specs total in `06-improvements/`. IMPLEMENTED/DONE: **02**
+- 13 improvement specs total in `06-improvements/`. IMPLEMENTED/DONE: **02**
   (main rename), **06** (`--home` flag), **08** (no repo-local home), **10**
   (config repos as working copies + dotfiles home), **11** (home provisioning
   + lockfile), **12** (per-instance addressing + discovery-lite).
@@ -87,17 +87,18 @@ re-derive their contents.
 1. **05 cwd-fallback** (small) — the only bug-fix improvement; small, closes a
    silent config-discovery backdoor; gate `cargo test` runnable in-container
    via `nix develop`.
-2. **01 mounts WP1–WP3** (in-container; WP4 + Phase 0 spike are KVM and fold
+2. **13 secret_env shorthand** (small) — additive serde-only ergonomics; `schema_version` stays 1; in-container gates.
+3. **01 mounts WP1–WP3** (in-container; WP4 + Phase 0 spike are KVM and fold
    into the host batch) — highest-value hardening; WP1–3 verifiable
    in-container.
-3. **03 dogfooding B1/B2** — structural isolation for self-development; B1/B2
+4. **03 dogfooding B1/B2** — structural isolation for self-development; B1/B2
    verifiable-here (B3 has a KVM tail).
-4. **07 naming leftover** (trivial) — mechanical residue sweep; banner says
+5. **07 naming leftover** (trivial) — mechanical residue sweep; banner says
    DONE with cargo gates pending (run via `nix develop`).
-5. **09 post-merge cleanup** — upstream-latency-bound; local action resumes
+6. **09 post-merge cleanup** — upstream-latency-bound; local action resumes
    only after the ON-HOLD PR is pushed/merged/released (then delete
    compensation machinery + bump pin).
-6. **04 CLI config authoring** — DEFERRED by design until
+7. **04 CLI config authoring** — DEFERRED by design until
    `02-config-requirements.md` sign-off.
 
 ---
@@ -131,7 +132,7 @@ gate — batch.
 ## How to work
 
 Work `07-execution-order.md` in order, top to bottom (see its
-"Remaining improvements — recommended order (2026-07-31)" section for the six
+"Remaining improvements — recommended order (2026-07-31)" section for the seven
 not-yet-landed specs; Steps 0.5/8a/8c/8d are DONE). Report lane-by-lane
 honestly: `verifiable-here` (this container: TOML, golden files, git,
 shell/python, AND cargo-linked gates via `nix develop`) vs `HOST-NIX` (host
