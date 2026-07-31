@@ -138,6 +138,9 @@ bump the version.
 ## 3. Non-goals
 
 - `env` entries unchanged (they have 3 fields and genuinely need tables).
+  **SUPERSEDED 2026-07-31 by spec 14**
+  ([14-env-map-form.md](14-env-map-form.md)): the map form carries the name in
+  the key, so `env` does NOT genuinely need tables.
 - No map idiom (see the `depends_on` contrast in §1.4).
 - No forced config migration — the old table form keeps parsing indefinitely.
 - No per-entry fields added now.

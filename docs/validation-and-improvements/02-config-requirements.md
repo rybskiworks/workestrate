@@ -191,7 +191,12 @@ fixes needed" item e).
 **BakedFileSpec** (`types.rs:59`): `path` (in-image destination), `content`
 (verbatim string body).
 
-#### 1.3.2 `[[workloads.<name>.env]]` — EnvVarConfig (`types.rs:70`)
+#### 1.3.2 `workloads.<name>.env` — EnvVarConfig (`types.rs:70`)
+
+`env` accepts **EITHER** the classic array-of-tables form **OR** a map table
+(spec 14, landed 2026-07-31; see
+[06-improvements/14-env-map-form.md](06-improvements/14-env-map-form.md)).
+Classic array-of-tables form:
 
 ```toml
 [[workloads.litellm.env]]
@@ -203,8 +208,32 @@ name = "LITELLM_MASTER_KEY"
 secret = "LITELLM_MASTER_KEY"   # reference to a [secrets.<name>] entry
 ```
 
-Exactly one of `value` (literal) or `secret` (reference) is expected. `name`
-must be a valid shell env identifier. Merges union-by-name (last-layer-wins per
+Map form (spec 14, landed 2026-07-31):
+
+```toml
+[workloads.litellm.env]
+PORT = "4000"
+LITELLM_LOCAL_MODEL_COST_MAP = "True"
+LITELLM_MASTER_KEY = { secret = "LITELLM_MASTER_KEY" }   # remap/reference to a [secrets.<name>] entry
+```
+
+Both forms normalize at parse time to `Vec<EnvVarConfig>` (custom
+`deserialize_env` Visitor; serde-only — merge, validation, and plan build are
+untouched). Map-form notes:
+
+- Map form preserves **DOCUMENT ORDER** (toml 0.8.23 → `toml_edit::de` →
+  indexmap; never sorted).
+- Duplicate keys in the map form are a **hard TOML parse error** (stricter
+  than the array form).
+- Mixing `[[workloads.x.env]]` and `[workloads.x.env]` for one workload is a
+  TOML redefinition parse error.
+- Secret remap requires the `{ secret = "..." }` inline-table value — bare
+  strings are always literals and cannot remap.
+- The JSON schema exposes `anyOf` [array, object].
+
+Exactly one of `value` (literal) or `secret` (reference) is expected per
+entry; in the map form the key carries the name. `name` must be a valid shell
+env identifier. Merges union-by-name (last-layer-wins per
 key, `merge.rs:344-362`).
 
 #### 1.3.3 `workloads.<name>.secret_env` — SecretEnvConfig (`types.rs:82`)

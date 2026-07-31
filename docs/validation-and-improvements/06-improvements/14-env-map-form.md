@@ -1,6 +1,6 @@
 # 14 — Config ergonomics: map form for `env` entries (formatting collapse)
 
-> **STATUS: READY-TO-EXECUTE (design; implementation in-container via `nix develop`, no KVM)**
+> **STATUS: EXECUTED (2026-07-31; implementation commit 1035073, spec doc 564deca)**
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [13-secret-env-shorthand.md](13-secret-env-shorthand.md) ·
 > [../../migration/50-decisions/0002-toml-config-format.md](../../migration/50-decisions/0002-toml-config-format.md) ·
@@ -175,6 +175,15 @@ any, would be the schema v2 event.
 ---
 
 ## 6. Acceptance criteria
+
+**Executed 2026-07-31:** all criteria met — 10 new tests in
+`types.rs`/`validation.rs` (incl. document-order assertion with
+non-alphabetical keys ZEBRA/MIDDLE/ALPHA, duplicate-key parse error,
+`[[env]]`+`[env]` redefinition parse error, and the typo regression asserting
+the exact error `workload 'pi' env references undefined secret
+'GITHUB_TOKEN_TYPO'`); full suite 498 tests green; golden plans byte-unchanged;
+schema regen committed (`anyOf` [array, object]); `config.reference`
+example-service converted (golden-equivalent).
 
 - Parse tests: bare values; inline-table `{ secret }` values; mixed
   literal+secret in one map; an **ORDER** test with ≥3 **non-alphabetical**

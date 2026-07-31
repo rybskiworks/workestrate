@@ -63,7 +63,7 @@ invariant.
 | [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home clone <src> [<dest>]`) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7; verb split c406630 2026-07-31)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
 | [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
 | [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately)` | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
-| [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `READY-TO-EXECUTE (design; implementation in-container via nix develop, no KVM)` | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
+| [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca)` | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -439,6 +439,15 @@ feature, no new deps). Merge, validation, and plan build are untouched;
 REJECTED. **Key decision:** never sort — `plan.rs:216` renders env in Vec
 order and fixtures/tempest rely on non-alphabetical, interleaved order, so
 `visit_map` document-order preservation is the gating constraint.
+
+**Executed 2026-07-31** (commits `1035073`, `564deca`): `deserialize_env`
+Visitor + `EnvSecretRef` (deny_unknown_fields) landed in
+`control/agentctl/src/config/types.rs`; 10 new tests (document-order assertion
+ZEBRA/MIDDLE/ALPHA, dup-key parse error, redefinition parse error, typo
+regression with exact error `workload 'pi' env references undefined secret
+'GITHUB_TOKEN_TYPO'`); 498 tests green; golden plans byte-unchanged; schema
+`anyOf` [array, object]; `config.reference` example-service converted
+(golden-equivalent).
 
 ---
 

@@ -235,7 +235,7 @@ schema_version = 1  # integer; workestrate checks compatibility on load
 # command: [string]        # binary + args to exec inside sandbox
 # entrypoint: string       # "shell" (default; core runs /bin/sh -c "tail -f /dev/null")
 # log_stop_errors: bool    # whether to log errors on stop (default: true)
-# env: [[table]]           # environment variables (see below)
+# env: table | [[table]]   # environment variables: map form (document order) or array-of-tables (see below)
 # secret_env: [string | table] # host-bound secrets; bare string = { secret = "NAME" } (see below)
 # ports: [[table]]         # port mappings
 # mounts: [[table]]        # mount declarations
@@ -305,17 +305,10 @@ command = ["/app/.venv/bin/litellm", "--config", "/app/config/config.yaml", "--h
 log_stop_errors = true
 secret_env = ["OPENROUTER_API_KEY", "KIMI_CODE_API_KEY", "NEURALWATT_API_KEY", "MINIMAX_CODING_API_KEY"]
 
-[[workloads.litellm.env]]
-name = "PORT"
-value = "4000"
-
-[[workloads.litellm.env]]
-name = "LITELLM_LOCAL_MODEL_COST_MAP"
-value = "True"
-
-[[workloads.litellm.env]]
-name = "LITELLM_MASTER_KEY"
-secret = "LITELLM_MASTER_KEY"
+[workloads.litellm.env]
+PORT = "4000"
+LITELLM_LOCAL_MODEL_COST_MAP = "True"
+LITELLM_MASTER_KEY = { secret = "LITELLM_MASTER_KEY" }
 
 [[workloads.litellm.ports]]
 host = 4000
@@ -358,17 +351,10 @@ command = ["/app/bin/pi"]
 log_stop_errors = false
 secret_env = ["GITHUB_TOKEN"]
 
-[[workloads.pi.env]]
-name = "PI_CODING_AGENT_DIR"
-value = "/data/agent"
-
-[[workloads.pi.env]]
-name = "PI_TELEMETRY"
-value = "0"
-
-[[workloads.pi.env]]
-name = "LITELLM_MASTER_KEY"
-secret = "LITELLM_MASTER_KEY"
+[workloads.pi.env]
+PI_CODING_AGENT_DIR = "/data/agent"
+PI_TELEMETRY = "0"
+LITELLM_MASTER_KEY = { secret = "LITELLM_MASTER_KEY" }
 
 [[workloads.pi.mounts]]
 host = "workspaces/pi-state"     # state_dir-relative
@@ -406,37 +392,15 @@ command = ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", 
 log_stop_errors = false
 secret_env = ["LITELLM_AUTH", "GITHUB_TOKEN"]
 
-[[workloads.odysseus.env]]
-name = "APP_PORT"
-value = "7000"
-
-[[workloads.odysseus.env]]
-name = "AUTH_ENABLED"
-value = "true"
-
-[[workloads.odysseus.env]]
-name = "LOCALHOST_BYPASS"
-value = "false"
-
-[[workloads.odysseus.env]]
-name = "ODYSSEUS_DATA_DIR"
-value = "/data"
-
-[[workloads.odysseus.env]]
-name = "OPENAI_BASE_URL"
-value = "http://host.microsandbox.internal:4000/v1"
-
-[[workloads.odysseus.env]]
-name = "OPENAI_MODEL"
-value = "coding"
-
-[[workloads.odysseus.env]]
-name = "PYTHONPATH"
-value = "/app/.deps"
-
-[[workloads.odysseus.env]]
-name = "ODYSSEUS_ADMIN_PASSWORD"
-secret = "ODYSSEUS_ADMIN_PASSWORD"
+[workloads.odysseus.env]
+APP_PORT = "7000"
+AUTH_ENABLED = "true"
+LOCALHOST_BYPASS = "false"
+ODYSSEUS_DATA_DIR = "/data"
+OPENAI_BASE_URL = "http://host.microsandbox.internal:4000/v1"
+OPENAI_MODEL = "coding"
+PYTHONPATH = "/app/.deps"
+ODYSSEUS_ADMIN_PASSWORD = { secret = "ODYSSEUS_ADMIN_PASSWORD" }
 
 [[workloads.odysseus.ports]]
 host = 7000
@@ -493,13 +457,9 @@ command = ["opencode"]
 log_stop_errors = false
 secret_env = ["LITELLM_AUTH", "GITHUB_TOKEN"]
 
-[[workloads.opencode.env]]
-name = "OPENAI_BASE_URL"
-value = "http://host.microsandbox.internal:4000/v1"
-
-[[workloads.opencode.env]]
-name = "OPENAI_MODEL"
-value = "coding"
+[workloads.opencode.env]
+OPENAI_BASE_URL = "http://host.microsandbox.internal:4000/v1"
+OPENAI_MODEL = "coding"
 
 [[workloads.opencode.ports]]
 host = 3000
@@ -554,21 +514,11 @@ memory_mib = 2048
 command = ["node", "dist/cli.js"]
 log_stop_errors = false
 
-[[workloads.tempest.env]]
-name = "TEMPEST_LOCAL_BASE_URL"
-value = "http://host.microsandbox.internal:4000/v1"
-
-[[workloads.tempest.env]]
-name = "TEMPEST_LOCAL_MODEL"
-value = "coding"
-
-[[workloads.tempest.env]]
-name = "TEMPEST_LOCAL_API_KEY"
-secret = "LITELLM_MASTER_KEY"   # inline remap: env var name from key, value from secret
-
-[[workloads.tempest.env]]
-name = "T3MP3ST_HOST"
-value = "127.0.0.1"
+[workloads.tempest.env]
+TEMPEST_LOCAL_BASE_URL = "http://host.microsandbox.internal:4000/v1"
+TEMPEST_LOCAL_MODEL = "coding"
+TEMPEST_LOCAL_API_KEY = { secret = "LITELLM_MASTER_KEY" }   # inline remap: env var name from key, value from secret
+T3MP3ST_HOST = "127.0.0.1"
 
 [[workloads.tempest.mounts]]
 host = "workspaces/tempest-state"

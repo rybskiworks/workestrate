@@ -28,15 +28,16 @@ re-derive their contents.
 - HEAD: `f8aa276` (nix + OKF knowledge packs committed) + `d938f2e` (root
   `.cargo/config.toml` hazard fix so repo-root cargo runs resolve the patched
   crate). Branch `migration/tool-model`, working tree clean.
-- Gates: green — 492 tests; `just lint-nix` passes.
+- Gates: green — 498 tests; `just lint-nix` passes.
 - Container home `~/.workestrate` restored after the container-restart wipe,
   but uncommitted in its own git (fine — ephemeral).
 - 14 improvement specs total in `06-improvements/`. IMPLEMENTED/DONE: **02**
   (main rename), **06** (`--home` flag), **08** (no repo-local home), **10**
   (config repos as working copies + dotfiles home), **11** (home provisioning
   + lockfile), **12** (per-instance addressing + discovery-lite), **13**
-  (secret_env shorthand — commits a349d03, 1e7dc25; 492 tests green, golden
-  plans byte-unchanged).
+   (secret_env shorthand — commits a349d03, 1e7dc25; 492 tests green, golden
+   plans byte-unchanged), **14** (env map form — commits 1035073, 564deca;
+   498 tests green, golden plans byte-unchanged).
 - Key commit refs: `421a54a` (docs env claims); `d7c5a83` (`repos/` →
   `config-repos/` rename); `bd99481` (dirty-guard test); `3894fb7`
   (`workestrate home init`); `bef1c37` (discovery tier removed); `418530a`
@@ -44,8 +45,9 @@ re-derive their contents.
   (`home init --from` + `workestrate.lock` + lock consumption) — interface SUPERSEDED by the `home init` / `home clone` verb split @ `c406630` (2026-07-31; ADR 0025 addendum); `d991252`
   (`--home` flag); `9107b87` / `de9aa62` / `f9fd2f0` / `c5837e7` (spec 12
   Wave 1); `4adad3f` / `7b65ad1` / `39c1694` (spec 12 Wave 2); `d1c1293`
-  (`MSB_AGENTD_PATH` staging); `a349d03` / `1e7dc25` (spec 13: secret_env
-  shorthand + spec_examples_parse promotion); `f8aa276`; `d938f2e`.
+   (`MSB_AGENTD_PATH` staging); `a349d03` / `1e7dc25` (spec 13: secret_env
+   shorthand + spec_examples_parse promotion); `1035073` / `564deca` (spec 14:
+   env map form); `f8aa276`; `d938f2e`.
 - The container-home wipe caveat above is updated to current reality: the wipe
   happened 2026-07-30; the home was since RESTORED (3 commands, see caveat);
   the personal config content survives durably at
@@ -90,19 +92,17 @@ re-derive their contents.
 1. **05 cwd-fallback** (small) — the only bug-fix improvement; small, closes a
    silent config-discovery backdoor; gate `cargo test` runnable in-container
    via `nix develop`.
-2. **14 env map form** (small) — spec authored 2026-07-31 (READY-TO-EXECUTE);
-   additive serde-only; gates runnable in-container via `nix develop`.
-3. **01 mounts WP1–WP3** (in-container; WP4 + Phase 0 spike are KVM and fold
+2. **01 mounts WP1–WP3** (in-container; WP4 + Phase 0 spike are KVM and fold
    into the host batch) — highest-value hardening; WP1–3 verifiable
    in-container.
-4. **03 dogfooding B1/B2** — structural isolation for self-development; B1/B2
+3. **03 dogfooding B1/B2** — structural isolation for self-development; B1/B2
    verifiable-here (B3 has a KVM tail).
-5. **07 naming leftover** (trivial) — mechanical residue sweep; banner says
+4. **07 naming leftover** (trivial) — mechanical residue sweep; banner says
    DONE with cargo gates pending (run via `nix develop`).
-6. **09 post-merge cleanup** — upstream-latency-bound; local action resumes
+5. **09 post-merge cleanup** — upstream-latency-bound; local action resumes
    only after the ON-HOLD PR is pushed/merged/released (then delete
    compensation machinery + bump pin).
-7. **04 CLI config authoring** — DEFERRED by design until
+6. **04 CLI config authoring** — DEFERRED by design until
    `02-config-requirements.md` sign-off.
 
 ---
