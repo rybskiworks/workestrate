@@ -96,7 +96,6 @@ pkgs.mkShell {
     done
 
     ln -sfn ${microsandbox}/bin/msb "$_msb_home/bin/msb"
-    ln -sfn ${microsandbox}/libexec/agentd "$_msb_home/bin/agentd"
 
     # libkrunfw may need to be a regular file for mmap. Copy the real shared
     # objects and recreate any version/name symlinks pointing at the copies.
@@ -123,6 +122,7 @@ pkgs.mkShell {
 
     export MSB_HOME="$_msb_home"
     export MSB_PATH="$_msb_home/bin/msb"
+    export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
 
     # Canonical pi build: the standalone Bun binary from `.#pi-bun`.
     # Dev-workestrate reads WORKESTRATE_PI_BUILD so it mounts the bun binary

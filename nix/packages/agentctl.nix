@@ -41,11 +41,11 @@ in
     lockFile = ../../control/agentctl/Cargo.lock;
   };
 
-  # Allow microsandbox-filesystem's build.rs to find a pre-staged agentd
-  # under $MSB_HOME/bin/agentd so the Nix build avoids network downloads.
-  # The patch is applied directly to the vendored crate directory in
-  # preBuild (see below) because buildRustPackage with cargoLock does not
-  # forward `cargoPatches` to the vendored source.
+  # Allow microsandbox-filesystem's build.rs to find agentd via the
+  # explicit MSB_AGENTD_PATH env var so the Nix build avoids network
+  # downloads. The patch is applied directly to the vendored crate
+  # directory in preBuild (see below) because buildRustPackage with
+  # cargoLock does not forward `cargoPatches` to the vendored source.
 
   nativeBuildInputs = with pkgs; [
     makeWrapper
@@ -72,9 +72,9 @@ in
     mkdir -p $MSB_HOME/bin $MSB_HOME/lib
     cp ${microsandbox}/bin/msb $MSB_HOME/bin/msb
 
-    # Also stage the agentd guest-init binary used by microsandbox-filesystem.
-    cp ${microsandbox}/libexec/agentd $MSB_HOME/bin/agentd
-    chmod +x $MSB_HOME/bin/agentd
+    # Provide the agentd guest-init binary to the patched
+    # microsandbox-filesystem build.rs via the explicit MSB_AGENTD_PATH var.
+    export MSB_AGENTD_PATH=${microsandbox}/libexec/agentd
 
     for f in ${microsandbox}/lib/libkrunfw.so*; do
       if [ -f "$f" ] || [ -L "$f" ]; then
