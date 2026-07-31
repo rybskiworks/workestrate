@@ -189,6 +189,47 @@
         }
       ]
     },
+    "EnvFieldShape": {
+      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`deserialize_env`] normalizes both forms to `Vec<EnvVarConfig>` at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map]`.",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EnvVarConfig"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/EnvValueShorthand"
+          }
+        }
+      ]
+    },
+    "EnvSecretRef": {
+      "description": "One secret reference as an `env` map value (spec 14): in the map form `env = { KEY = { secret = \"NAME\" } }`, the inline table may carry ONLY a secret reference — never a `name` (the map key IS the name) and never a literal `value`. Deliberately distinct from [`EnvVarConfig`] so `deny_unknown_fields` rejects `name`/`value`/typos inside a map value.",
+      "type": "object",
+      "required": [
+        "secret"
+      ],
+      "properties": {
+        "secret": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvValueShorthand": {
+      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (spec 14): a bare string `\"value\"` is a literal value, an inline table `{ secret = \"NAME\" }` a secret reference. This enum is NEVER stored — [`deserialize_env`] normalizes every map entry to [`EnvVarConfig`] at parse time, so merge/validation/plan code sees the identical post-parse struct it saw before. It exists so the generated schema can show both value forms.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/EnvSecretRef"
+        }
+      ]
+    },
     "EnvVarConfig": {
       "description": "One environment-variable entry in a workload's `env` list. Exactly one of `value` (literal) or `secret` (reference to a `secrets.<name>` entry) is expected to be set; `name` must be a valid shell env identifier.",
       "type": "object",
@@ -583,10 +624,11 @@
         },
         "env": {
           "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/EnvVarConfig"
-          }
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnvFieldShape"
+            }
+          ]
         },
         "image": {
           "default": {

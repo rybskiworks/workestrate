@@ -690,6 +690,35 @@ default_deny = true
         );
     }
 
+    /// Spec 14: a map-form `env` entry with a typo'd secret name must be
+    /// caught by the same undefined-secret check as the array-of-tables
+    /// form (the check runs on the normalized `Vec<EnvVarConfig>`), and the
+    /// error must name the missing secret.
+    #[test]
+    fn validate_config_rejects_map_form_env_secret_typo() {
+        let toml = r#"
+schema_version = 1
+
+[secrets.GITHUB_TOKEN]
+env_var = "GITHUB_TOKEN"
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+env = { WHATEVER = { secret = "GITHUB_TOKEN_TYPO" } }
+
+[workloads.pi.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' env references undefined secret 'GITHUB_TOKEN_TYPO'"
+        );
+    }
+
     #[test]
     fn env_var_name_helper_matches_posix_shape() {
         for ok in ["A", "_FOO", "ABC_123", "a", "Z9_", "VALID_NAME"] {

@@ -191,6 +191,174 @@ impl<'de> Deserialize<'de> for SecretEnvElement {
     }
 }
 
+/// One secret reference as an `env` map value (spec 14): in the map form
+/// `env = { KEY = { secret = "NAME" } }`, the inline table may carry ONLY a
+/// secret reference — never a `name` (the map key IS the name) and never a
+/// literal `value`. Deliberately distinct from [`EnvVarConfig`] so
+/// `deny_unknown_fields` rejects `name`/`value`/typos inside a map value.
+#[derive(Debug, Clone, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EnvSecretRef {
+    secret: String,
+}
+
+/// Serde/schemars-boundary-only helper for the `env` map value forms
+/// (spec 14): a bare string `"value"` is a literal value, an inline table
+/// `{ secret = "NAME" }` a secret reference. This enum is NEVER stored —
+/// [`deserialize_env`] normalizes every map entry to [`EnvVarConfig`] at
+/// parse time, so merge/validation/plan code sees the identical post-parse
+/// struct it saw before. It exists so the generated schema can show both
+/// value forms.
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // serde/schemars-boundary-only: variants are never read in Rust code
+enum EnvValueShorthand {
+    Bare(String),
+    Full(EnvSecretRef),
+}
+
+/// Schemars-boundary-only helper for the `env` field shape (spec 14): the
+/// field accepts EITHER the classic sequence of `[[env]]` entry tables OR
+/// the map form `{ KEY = "value", KEY2 = { secret = "NAME" } }`. This enum
+/// is NEVER constructed or deserialized — [`deserialize_env`] normalizes
+/// both forms to `Vec<EnvVarConfig>` at parse time; it exists only so
+/// `#[schemars(with = "EnvFieldShape")]` renders the field as
+/// `anyOf [array-of-EnvVarConfig, object-map]`.
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // schemars-boundary-only: variants are never constructed in Rust code
+enum EnvFieldShape {
+    Seq(Vec<EnvVarConfig>),
+    Map(HashMap<String, EnvValueShorthand>),
+}
+
+/// Deserialize `env`, accepting both the classic sequence of `[[env]]` entry
+/// tables and the map form `{ KEY = "value", KEY2 = { secret = "NAME" } }`
+/// (spec 14), normalizing to `Vec<EnvVarConfig>`. Sequence elements are
+/// parsed as [`EnvVarConfig`] exactly as the derived default did (so
+/// `deny_unknown_fields`/unknown-field errors inside `[[env]]` tables are
+/// preserved verbatim). Map entries are collected in DOCUMENT ORDER —
+/// toml_edit's `MapAccess` preserves it, and entries are pushed straight
+/// into the output vec in iteration order (no intermediate map, no sorting;
+/// duplicate keys are a free TOML-level error). Map values that are neither
+/// a bare string literal nor an inline table produce a precise error naming
+/// the entry key, the offending value's type, and the two expected forms.
+fn deserialize_env<'de, D>(deserializer: D) -> Result<Vec<EnvVarConfig>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    struct EnvVisitor;
+
+    impl<'de> de::Visitor<'de> for EnvVisitor {
+        type Value = Vec<EnvVarConfig>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str(
+                "a sequence of env entry tables, or a map of env names to bare string \
+                 literals and/or inline tables like { secret = \"NAME\" }",
+            )
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut entries = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+            let mut index = 0usize;
+            while let Some(entry) = seq
+                .next_element::<EnvVarConfig>()
+                .map_err(|e| de::Error::custom(format_args!("env entry at index {index}: {e}")))?
+            {
+                entries.push(entry);
+                index += 1;
+            }
+            Ok(entries)
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::MapAccess<'de>,
+        {
+            let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
+            while let Some(key) = map.next_key::<String>()? {
+                let value = map
+                    .next_value::<EnvMapValue>()
+                    .map_err(|e| de::Error::custom(format_args!("env map entry '{key}': {e}")))?;
+                entries.push(EnvVarConfig {
+                    name: key,
+                    value: value.value,
+                    secret: value.secret,
+                });
+            }
+            Ok(entries)
+        }
+    }
+
+    deserializer.deserialize_any(EnvVisitor)
+}
+
+/// One `env` map value during deserialization: either a bare string literal
+/// (the variable's value) or an inline [`EnvSecretRef`] table. Any other
+/// value type (integer, boolean, array, …) is rejected via serde's
+/// `invalid_type` machinery with [`EnvMapValueVisitor`]'s `expecting`
+/// message.
+struct EnvMapValue {
+    value: Option<String>,
+    secret: Option<String>,
+}
+
+struct EnvMapValueVisitor;
+
+impl<'de> de::Visitor<'de> for EnvMapValueVisitor {
+    type Value = EnvMapValue;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a bare string literal, or an inline table like { secret = \"NAME\" }")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(EnvMapValue {
+            value: Some(v.to_string()),
+            secret: None,
+        })
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(EnvMapValue {
+            value: Some(v),
+            secret: None,
+        })
+    }
+
+    fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::MapAccess<'de>,
+    {
+        // Delegate to the real struct so `deny_unknown_fields` errors are
+        // preserved verbatim for inline-table values.
+        let secret_ref = EnvSecretRef::deserialize(de::value::MapAccessDeserializer::new(map))?;
+        Ok(EnvMapValue {
+            value: None,
+            secret: Some(secret_ref.secret),
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvMapValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(EnvMapValueVisitor)
+    }
+}
+
 /// A file copied from the host into the sandbox at start time
 /// (`workloads.<name>.seed_files`). `source` is the host path (validated at
 /// the trust boundary), `target` the in-sandbox destination; `only_if_missing`
@@ -272,7 +440,8 @@ pub struct WorkloadConfig {
     #[serde(default)]
     pub command: Vec<String>,
     pub log_stop_errors: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_env")]
+    #[schemars(with = "EnvFieldShape")]
     pub env: Vec<EnvVarConfig>,
     #[serde(default, deserialize_with = "deserialize_secret_env")]
     #[schemars(with = "Vec<SecretEnvShorthand>")]
@@ -813,5 +982,267 @@ secret = "B"
         let serialized = toml::to_string(&config).unwrap();
         let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
         assert_eq!(reparsed, config);
+    }
+
+    // ---- Spec 14: env map form ----
+
+    /// Bare map literals: both the inline-table form `env = { FOO = "bar" }`
+    /// and the standard-table form `[workloads.pi.env]` parse to the
+    /// identical `EnvVarConfig` entry (name from the key, value set, no
+    /// secret).
+    #[test]
+    fn env_map_bare_literals_parse() {
+        let expected = vec![EnvVarConfig {
+            name: "FOO".to_string(),
+            value: Some("bar".to_string()),
+            secret: None,
+        }];
+        for raw in [
+            r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+env = { FOO = "bar" }
+"#,
+            r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.env]
+FOO = "bar"
+"#,
+        ] {
+            let config: ConfigFile = toml::from_str(raw).unwrap();
+            assert_eq!(config.workloads["pi"].env, expected);
+        }
+    }
+
+    /// A map value that is an inline table is a secret reference:
+    /// `env = { API_KEY = { secret = "MY_SECRET" } }` sets `secret`,
+    /// leaving `value` unset.
+    #[test]
+    fn env_map_secret_ref_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+env = { API_KEY = { secret = "MY_SECRET" } }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].env,
+            vec![EnvVarConfig {
+                name: "API_KEY".to_string(),
+                value: None,
+                secret: Some("MY_SECRET".to_string()),
+            }]
+        );
+    }
+
+    /// Mixed literal and secret-ref map entries are legal and preserve
+    /// DOCUMENT order — the deliberately non-alphabetical keys prove no
+    /// sorting (and no map intermediate) happens during normalization.
+    #[test]
+    fn env_map_mixed_entries_preserve_document_order() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+env = { ZEBRA = "z", MIDDLE = { secret = "M_SECRET" }, ALPHA = "a" }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].env,
+            vec![
+                EnvVarConfig {
+                    name: "ZEBRA".to_string(),
+                    value: Some("z".to_string()),
+                    secret: None,
+                },
+                EnvVarConfig {
+                    name: "MIDDLE".to_string(),
+                    value: None,
+                    secret: Some("M_SECRET".to_string()),
+                },
+                EnvVarConfig {
+                    name: "ALPHA".to_string(),
+                    value: Some("a".to_string()),
+                    secret: None,
+                },
+            ]
+        );
+    }
+
+    /// Duplicate keys in a map are a free TOML-level error — no code needed.
+    #[test]
+    fn env_map_duplicate_key_fails() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+env = { FOO = "a", FOO = "b" }
+"#;
+        assert!(
+            toml::from_str::<ConfigFile>(raw).is_err(),
+            "duplicate map key must fail at the TOML level"
+        );
+    }
+
+    /// The classic array-of-tables form parses unchanged (backward compat).
+    #[test]
+    fn env_array_of_tables_still_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.env]]
+name = "FOO"
+value = "bar"
+
+[[workloads.pi.env]]
+name = "BAZ"
+secret = "BAZ_SECRET"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].env,
+            vec![
+                EnvVarConfig {
+                    name: "FOO".to_string(),
+                    value: Some("bar".to_string()),
+                    secret: None,
+                },
+                EnvVarConfig {
+                    name: "BAZ".to_string(),
+                    value: None,
+                    secret: Some("BAZ_SECRET".to_string()),
+                },
+            ]
+        );
+    }
+
+    /// Mixing the array-of-tables form and the map form for the same
+    /// workload is a TOML redefinition error.
+    #[test]
+    fn env_array_plus_map_form_fails() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.env]]
+name = "FOO"
+value = "bar"
+
+[workloads.pi.env]
+BAZ = "qux"
+"#;
+        assert!(
+            toml::from_str::<ConfigFile>(raw).is_err(),
+            "redefining env as a table after an array of tables must fail"
+        );
+    }
+
+    /// The array-of-tables form serializes via `toml::to_string` and
+    /// re-parses identical, exactly as before the map form was added.
+    #[test]
+    fn env_array_form_serializes_and_round_trips() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.env]]
+name = "FOO"
+value = "bar"
+
+[[workloads.pi.env]]
+name = "BAZ"
+secret = "BAZ_SECRET"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let serialized = toml::to_string(&config).unwrap();
+        let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, config);
+    }
+
+    /// A non-string/non-table map value must fail with a precise error
+    /// naming the entry key, the offending value's type, and the two
+    /// expected forms.
+    #[test]
+    fn env_map_bad_value_error_names_key_type_and_forms() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+env = { FOO = 42 }
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("env map entry 'FOO'"),
+            "error must name the entry key: {msg}"
+        );
+        assert!(
+            msg.contains("integer"),
+            "error must name the offending type: {msg}"
+        );
+        assert!(
+            msg.contains("bare string literal"),
+            "error must name the bare-string form: {msg}"
+        );
+        assert!(
+            msg.contains("{ secret = \"NAME\" }"),
+            "error must name the inline-table form: {msg}"
+        );
+    }
+
+    /// Unknown fields inside an inline-table map value still hard-error
+    /// (`deny_unknown_fields` is preserved through the map-form path).
+    #[test]
+    fn env_map_inline_table_rejects_unknown_field() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+env = { API_KEY = { secert = "MY_SECRET" } }
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "inline-table typo must fail: {err}"
+        );
     }
 }
