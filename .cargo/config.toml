@@ -1,0 +1,6 @@
+# Root-level cargo config so cargo commands invoked from the REPO ROOT also
+# resolve the patched microsandbox-filesystem crate (config discovery is
+# cwd-upward; the crate-level .cargo/config.toml is only found when running
+# from control/agentctl/). Paths here are relative to this file's parent dir.
+[patch.crates-io]
+microsandbox-filesystem = { path = "control/agentctl/vendor/microsandbox-filesystem-0.5.6" }
