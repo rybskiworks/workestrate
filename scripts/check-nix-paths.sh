@@ -45,17 +45,29 @@ add_violation() {
     violations+=("$1")
 }
 
-# File-level docs allowlist for Check 6. These three files are whole-document
+# File-level docs allowlist for Check 6. These files are whole-document
 # discussion contexts where the impure patterns appear in narrative prose,
 # code blocks, and rule statements — they document/forbid the pattern rather
 # than invoke it:
 #   docs/nix-purity.md                              — FORBIDS the pattern (rules)
 #   docs/nix-store-accumulation-report.md           — incident narrative
 #   docs/migration/nix-store-gc-remediation-spec.md — spec BEFORE examples
+#   docs/nix/purity-and-sandboxing.md               — corpus purity rules (elevated from nix-purity.md)
+#   docs/nix/store-hygiene-and-gc.md                — corpus incident narrative (elevated from accumulation report)
+#   docs/nix/nix-store-and-paths.md                 — store/GC reference with incident quotes
+#   docs/nix/validation.md                          — validation guard reference (documents check patterns)
+#   docs/nix/overview.md                            — overview mentioning purity rules
+#   docs/nix/cross-compilation.md                   — mentions purity guard in best practices
 DOCS_ALLOWLIST=(
     "docs/nix-purity.md"
     "docs/nix-store-accumulation-report.md"
     "docs/migration/nix-store-gc-remediation-spec.md"
+    "docs/nix/purity-and-sandboxing.md"
+    "docs/nix/store-hygiene-and-gc.md"
+    "docs/nix/nix-store-and-paths.md"
+    "docs/nix/validation.md"
+    "docs/nix/overview.md"
+    "docs/nix/cross-compilation.md"
 )
 
 # Gather the file list (skip this script itself).

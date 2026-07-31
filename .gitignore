@@ -42,3 +42,6 @@ control/agentctl/vendor/
 # Temporary extraction / download cache
 .tmp/
 
+
+# Zed editor settings (IDE-specific, not project config)
+.zed/

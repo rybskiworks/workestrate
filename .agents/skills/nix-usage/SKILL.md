@@ -25,6 +25,36 @@ Load this skill when:
 - Explaining that `msb` is downloaded at runtime by the Microsandbox SDK.
 - Modifying `flake.nix`, `flake.lock`, or files under `nix/`.
 
+## Corpus References
+
+The `docs/nix/` corpus is the canonical source for Nix topic reference. This
+skill is the project-specific entry point; the topic docs below hold the full
+detail, upstream source URLs, and crawl ledgers.
+
+### Topic docs
+
+| Doc | Scope |
+|---|---|
+| [`docs/nix/testing.md`](../../../docs/nix/testing.md) | `nix flake check`, `checks` output, `checkPhase`/`doCheck`, `nixosTests`, `testers`, `runCommand` |
+| [`docs/nix/store-hygiene-and-gc.md`](../../../docs/nix/store-hygiene-and-gc.md) | GC roots, `nix-collect-garbage`, `nix store optimise`, anti-accumulation patterns, store-audit, the 29 GB incident |
+| [`docs/nix/cross-compilation.md`](../../../docs/nix/cross-compilation.md) | `pkgsCross`, `pkgsStatic`, build/host/target, nine dependency types, `qemu-user`, multi-platform flakes |
+| [`docs/nix/ci-cd-integration.md`](../../../docs/nix/ci-cd-integration.md) | GitHub Actions, Cachix, `nix flake check` in CI, `--no-link --print-out-paths`, HOST-NIX gates |
+| [`docs/nix/nix-store-and-paths.md`](../../../docs/nix/nix-store-and-paths.md) | Store layout, path format, closure semantics, inspection commands |
+| [`docs/nix/derivations-and-builds.md`](../../../docs/nix/derivations-and-builds.md) | `mkDerivation`, build phases, dependency attributes, `strictDeps` |
+| [`docs/nix/flake-anatomy.md`](../../../docs/nix/flake-anatomy.md) | Flake inputs, outputs, system keying, `checks`/`packages`/`devShells` |
+| [`docs/nix/devshells.md`](../../../docs/nix/devshells.md) | `mkShell`, `nativeBuildInputs`/`buildInputs` in dev shells |
+| [`docs/nix-purity.md`](../../../docs/nix-purity.md) | Purity rules, `just lint-nix`, source filters, store-growth model |
+
+### Related operational skills
+
+| Skill | Scope |
+|---|---|
+| [`nix-testing`](../nix-testing/SKILL.md) | Writing and running Nix tests — `nix flake check`, `checkPhase`, `nixosTests`, `runCommand` checks |
+| [`nix-store-gc`](../nix-store-gc/SKILL.md) | Store hygiene, GC, `nix-collect-garbage`, `nix store optimise`, store-audit, anti-accumulation |
+| [`nix-cross-compilation`](../nix-cross-compilation/SKILL.md) | `pkgsCross`, `pkgsStatic`, build/host/target, `qemu-user`, multi-platform flakes |
+| [`nix-ci-cd`](../nix-ci-cd/SKILL.md) | GitHub Actions, Cachix, `nix flake check` in CI, `--no-link --print-out-paths`, HOST-NIX gates |
+| [`nix-docker-images`](../nix-docker-images/SKILL.md) | `dockerTools`, `streamLayeredImage`, `buildLayeredImage`, OCI image building |
+
 ## Project Context
 
 - **Project root**: `/home/node/Development/ai-workbench/`
