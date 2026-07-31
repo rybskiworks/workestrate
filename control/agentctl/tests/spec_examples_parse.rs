@@ -1,9 +1,10 @@
 //! Standing CI guard for `docs/migration/20-target-system-spec.md` (WP4 / D1).
 //!
 //! Extracts every fenced `toml` code block from the spec and asserts that each
-//! non-fragment block deserializes into the `ConfigFile` schema shape. This
-//! permanently closes the D1 class of drift (spec examples that do not parse
-//! against the implementation, e.g. the `rw` vs `read_only` field-name split).
+//! non-fragment block deserializes into the real `workestrate::config::ConfigFile`
+//! schema. This permanently closes the D1 class of drift (spec examples that do
+//! not parse against the implementation, e.g. the `rw` vs `read_only`
+//! field-name split).
 //!
 //! Skip policy (a block is skipped if ANY of these hold):
 //!   1. It carries a leading `# spec-test: skip` marker comment, OR
@@ -11,192 +12,22 @@
 //!      override-layer files / single-feature snippets).
 //!
 //! A block that declares `schema_version` and is NOT marked skip MUST parse
-//! cleanly into the schema-mirroring `ConfigFile` defined below. The mirror
-//! intentionally makes `MountPlan.read_only` a required `bool` (no
-//! `#[serde(default)]`) so that any regression to the legacy `rw` field name
-//! fails deserialization with "missing field `read_only`".
+//! cleanly into the real `ConfigFile`. The real `MountPlan.read_only` is a
+//! required `bool` (no `#[serde(default)]`), so any regression to the legacy
+//! `rw` field name fails deserialization with "missing field `read_only`".
 //!
-//! NOTE: the agentctl crate is a binary-only crate (no `[lib]` target), so the
-//! real `ConfigFile` in `src/config.rs` is not importable from this integration
-//! test. The mirror below is field-for-field compatible with the real schema;
-//! promoting it to the crate type requires adding a lib target (out of WP4
-//! scope). The mirror + the explicit `read_only`-required invariant is
-//! sufficient to guard D1.
+//! NOTE: the crate has had a lib target (`workestrate`) since 45a42fb, so this
+//! test now imports the real `workestrate::config::ConfigFile`; the former
+//! local schema mirror is retired (a mirror can drift from the real schema
+//! silently). Consequence: the real types carry
+//! `#[serde(deny_unknown_fields)]` everywhere (the mirror did not), so any
+//! spec example that relied on unknown-field tolerance will now FAIL — that
+//! is intentional and net-positive: spec examples must match the shipped
+//! schema exactly.
 
-use serde::Deserialize;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-
-/// Mirror of `recipes::EgressRecipeRef` — tagged enum on `recipe`.
-#[derive(Debug, Deserialize, PartialEq)]
-#[serde(tag = "recipe", rename_all = "snake_case")]
-enum EgressRecipeRef {
-    Dns,
-    LitellmProxy,
-    Github,
-    AgentBase,
-    Https { hosts: Vec<String> },
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum Protocol {
-    Tcp,
-    Udp,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum Scope {
-    Local,
-    Public,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct DenyDomainRule {
-    domain_suffix: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct IngressRule {
-    protocol: Protocol,
-    port: u16,
-    scope: Scope,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct PortMapping {
-    host: u16,
-    guest: u16,
-}
-
-/// Mirror of `plan::MountPlan`. `read_only` is REQUIRED (no default) so a
-/// regression to `rw = ...` fails deserialization.
-#[derive(Debug, Deserialize, PartialEq)]
-struct MountPlan {
-    host: String,
-    guest: String,
-    read_only: bool,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct EnvVarConfig {
-    name: String,
-    value: Option<String>,
-    secret: Option<String>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct SecretEnvConfig {
-    secret: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct SeedFileConfig {
-    source: String,
-    target: String,
-    only_if_missing: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct LocalBuildConfig {
-    recipe: String,
-    source: String,
-    requirements_file: Option<String>,
-    target: Option<String>,
-    gating_file: Option<String>,
-    env_override: Option<String>,
-    fallback: Option<String>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct BakedFileSpec {
-    path: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct BinarySpec {
-    recipe: String,
-    src: String,
-    entrypoint: Option<String>,
-    worker: Option<String>,
-    npm_deps_hash: Option<String>,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Default)]
-struct ImageSpec {
-    recipe: String,
-    #[serde(rename = "ref")]
-    reference: Option<String>,
-    name: Option<String>,
-    tag: Option<String>,
-    contents: Option<Vec<String>>,
-    binary: Option<BinarySpec>,
-    baked_files: Option<Vec<BakedFileSpec>>,
-    features: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Default)]
-struct NetworkConfig {
-    default_deny: Option<bool>,
-    #[serde(default)]
-    egress: Vec<EgressRecipeRef>,
-    #[serde(default)]
-    deny: Vec<DenyDomainRule>,
-    #[serde(default)]
-    ingress: Vec<IngressRule>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct SecretDefConfig {
-    env_var: Option<String>,
-    hosts: Option<Vec<String>>,
-    required: Option<bool>,
-    placeholder: Option<String>,
-    source: Option<String>,
-    exposed_as: Option<String>,
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct WorkloadConfig {
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    image: ImageSpec,
-    workdir: Option<String>,
-    cpus: Option<u8>,
-    memory_mib: Option<u32>,
-    #[serde(default)]
-    command: Vec<String>,
-    log_stop_errors: Option<bool>,
-    #[serde(default)]
-    env: Vec<EnvVarConfig>,
-    #[serde(default)]
-    secret_env: Vec<SecretEnvConfig>,
-    #[serde(default)]
-    ports: Vec<PortMapping>,
-    #[serde(default)]
-    mounts: Vec<MountPlan>,
-    #[serde(default)]
-    seed_files: Vec<SeedFileConfig>,
-    local_build: Option<LocalBuildConfig>,
-    #[serde(default)]
-    network: NetworkConfig,
-}
-
-/// Mirror of `config::ConfigFile`.
-#[derive(Debug, Deserialize, PartialEq)]
-struct ConfigFile {
-    #[serde(default)]
-    schema_version: u32,
-    #[serde(default)]
-    secrets: HashMap<String, SecretDefConfig>,
-    #[serde(default)]
-    workloads: HashMap<String, WorkloadConfig>,
-}
+use workestrate::config::ConfigFile;
 
 /// A fenced code block extracted from the spec.
 struct CodeBlock {
