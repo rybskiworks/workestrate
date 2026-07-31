@@ -1,8 +1,6 @@
 # 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier)
 
-> **STATUS: IN-FLIGHT (option 1 upstream PR drafted; option 2 fork-carrier
-> REVERSED per ADR 0011 addendum 2026-07-30 — transient PR vehicle only;
-> option 3 NEEDS-DEVSHELL + HOST-NIX)**
+> **STATUS: PR PREPARED, ON HOLD (option 1: branch fix/filesystem-agentd-path-override @ a4f8a3b8 ready to push; issue/PR docs in .tmp/msb-upstream/ — push + open pending USER; option 2 fork-carrier REVERSED per ADR 0011 addendum 2026-07-30 — transient PR vehicle only; option 3 NEEDS-DEVSHELL + HOST-NIX)**
 > **Effort:** option 1 = **M** (including upstream review latency);
 > option 2 = REVERSED (not executed); option 3 = **M** (patch rewrite +
 > re-validation)

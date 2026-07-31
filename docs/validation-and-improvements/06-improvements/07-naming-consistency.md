@@ -1,6 +1,6 @@
 # 07 — Naming consistency: purge `workestrator` residue, standardize on `workestrate`
 
-> **STATUS: DONE (landed on `migration/tool-model`, 3 commits; cargo gates PENDING host devshell — no `cc` here)**
+> **STATUS: DONE (landed on `migration/tool-model`, 3 commits; cargo gates PENDING — runnable in-container via nix develop (store-path prefix) or host devshell)**
 > **Effort:** M (repo-wide mechanical rename + attr-graph care; no behavior change)
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [../07-execution-order.md](../07-execution-order.md) ·
