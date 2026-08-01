@@ -573,7 +573,7 @@ nix build .#workestrate --no-link --print-out-paths | cachix push mycache
 nix develop -c just verify
 
 # Generate the JSON schema (requires devshell RUSTFLAGS)
-nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml -- generate-schema --out schemas/workestrate.schema.json
+nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml -- generate-schema --output schemas/workestrate.schema.json
 
 # Load workload images
 nix develop -c load-images

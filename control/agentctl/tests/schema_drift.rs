@@ -81,7 +81,7 @@ fn committed_schema_matches_generate_schema_output() {
     }
 
     // Both sides carry a trailing newline (cmd_generate_schema writes
-    // "{}\n" to --out; println! adds "\n" to stdout). Trim both to make
+    // "{}\n" to --output; println! adds "\n" to stdout). Trim both to make
     // the comparison robust against trailing-newline differences.
     assert_eq!(
         generated.trim(),

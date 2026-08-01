@@ -97,7 +97,7 @@ golden-check:
 generate-schema:
     #!/usr/bin/env bash
     set -euo pipefail
-    nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --out schemas/workestrate.schema.json
+    nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json
     @echo "schema written to schemas/workestrate.schema.json"
 
 # CI drift guard for schemas/workestrate.schema.json (ADR 0021 §8).

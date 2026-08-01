@@ -50,6 +50,31 @@ fn doctor_json_is_parseable() {
     );
 }
 
+/// W1 regression: the GLOBAL --json placed BEFORE the subcommand
+/// (`workestrate --json doctor`) must also emit JSON — previously a local
+/// --json on the Doctor variant shadowed the global, so this invocation
+/// silently emitted the human report.
+#[test]
+fn doctor_global_json_before_subcommand_emits_json() {
+    let home = IsolatedHome::new("cmd-doctor");
+    let out = home
+        .cmd()
+        .args(["--json", "doctor"])
+        .output()
+        .expect("invoke --json doctor");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let doc: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("--json doctor stdout must be valid JSON: {e}\n{stdout}"));
+
+    let checks = doc["checks"].as_array().expect("checks must be an array");
+    assert!(!checks.is_empty(), "checks array must not be empty");
+    let overall = doc["overall"].as_str().expect("missing overall field");
+    assert!(
+        matches!(overall, "OK" | "WARN" | "FAIL"),
+        "unexpected overall value: {overall}"
+    );
+}
+
 /// The JSON report covers every documented check name.
 #[test]
 fn doctor_json_has_expected_check_names() {

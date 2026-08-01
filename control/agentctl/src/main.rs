@@ -118,13 +118,15 @@ enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Print the JSON Schema for workestrate.toml to stdout (or write to --out).
+    /// Print the JSON Schema for workestrate.toml to stdout (or write to
+    /// --output; `--out` is accepted as a hidden back-compat alias).
     /// The schema is generated from the same serde/schemars types the config
     /// loader uses (single source of truth; ADR 0021 §8).
     GenerateSchema {
         /// Write the schema to this path instead of stdout.
-        #[arg(short, long, value_name = "PATH")]
-        out: Option<std::path::PathBuf>,
+        /// (`--out` is accepted as a hidden back-compat alias.)
+        #[arg(short, long, value_name = "PATH", alias = "out")]
+        output: Option<std::path::PathBuf>,
     },
     /// Manage config repositories and trusted projects
     Config {
@@ -142,11 +144,8 @@ enum Commands {
         name: String,
     },
     /// Diagnose environment and tool health (KVM, nix, sops, age, msb, config repos).
-    Doctor {
-        /// Emit machine-readable JSON.
-        #[arg(long)]
-        json: bool,
-    },
+    /// Use the global --json flag for machine-readable output.
+    Doctor,
     /// Manage agent source checkouts
     Source {
         #[command(subcommand)]
@@ -189,9 +188,6 @@ enum Commands {
         /// Show what would happen; move nothing.
         #[arg(long)]
         dry_run: bool,
-        /// Emit a machine-readable JSON summary instead of human text.
-        #[arg(long)]
-        json: bool,
         /// Allow migrating into a destination that already exists / is non-empty.
         #[arg(long)]
         force: bool,
@@ -303,7 +299,7 @@ async fn async_main() -> Result<()> {
         Commands::DownAll { yes } => cmd_down_all(yes, cli.json).await,
         Commands::Clean { yes } => cmd_clean(yes, cli.json),
         Commands::Context { action } => cmd_context(action, cli.json).await,
-        Commands::GenerateSchema { out } => cmd_generate_schema(out.as_deref()),
+        Commands::GenerateSchema { output } => cmd_generate_schema(output.as_deref()),
         Commands::Config { action } => match action {
             ConfigAction::List => {
                 if cli.json {
@@ -343,7 +339,7 @@ async fn async_main() -> Result<()> {
         },
         Commands::Home { action } => cmd_home(action),
         Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
-        Commands::Doctor { json } => cmd_doctor(json),
+        Commands::Doctor => cmd_doctor(cli.json),
         Commands::Source { action } => cmd_source(action).await,
         Commands::Litellm { action } => {
             let overrides = service_action_use_overrides(&action)?;
@@ -373,9 +369,8 @@ async fn async_main() -> Result<()> {
         Commands::MigrateHome {
             from,
             dry_run,
-            json,
             force,
-        } => cmd_migrate_home(from.as_deref(), dry_run, json, force),
+        } => cmd_migrate_home(from.as_deref(), dry_run, cli.json, force),
         Commands::Workload(mut args) => {
             if args.is_empty() {
                 anyhow::bail!("no workload name given");
@@ -465,6 +460,49 @@ mod tests {
         assert!(
             home.is_global_set(),
             "--home must be a global argument (valid on every subcommand)"
+        );
+    }
+
+    /// W1: `doctor` and `migrate-home` must NOT shadow the global --json with
+    /// a local flag — the --json they see is the propagated global, so both
+    /// `workestrate --json doctor` and `workestrate doctor --json` work.
+    #[test]
+    fn doctor_and_migrate_home_use_global_json_flag() {
+        // build() propagates global args into subcommands, mirroring what
+        // happens at parse time.
+        let mut cmd = Cli::command();
+        cmd.build();
+        for name in ["doctor", "migrate-home"] {
+            let sub = cmd
+                .find_subcommand(name)
+                .unwrap_or_else(|| panic!("missing subcommand: {name}"));
+            let json = sub
+                .get_arguments()
+                .find(|a| a.get_long() == Some("json"))
+                .unwrap_or_else(|| panic!("{name} must expose a --json argument"));
+            assert!(
+                json.is_global_set(),
+                "{name} --json must be the propagated GLOBAL flag, not a local shadow"
+            );
+        }
+    }
+
+    /// W1: `generate-schema` uses canonical `-o/--output`; `--out` remains a
+    /// hidden back-compat alias.
+    #[test]
+    fn generate_schema_output_flag_is_canonical() {
+        let cmd = Cli::command();
+        let sub = cmd
+            .find_subcommand("generate-schema")
+            .expect("generate-schema must exist");
+        let output = sub
+            .get_arguments()
+            .find(|a| a.get_long() == Some("output"))
+            .expect("generate-schema must have a canonical --output argument");
+        let aliases: Vec<&str> = output.get_all_aliases().unwrap_or_default().to_vec();
+        assert!(
+            aliases.contains(&"out"),
+            "--output must carry a hidden back-compat alias `out`; got: {aliases:?}"
         );
     }
 
