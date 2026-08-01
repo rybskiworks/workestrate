@@ -27,9 +27,10 @@ id_rsa*
 ";
 
 /// tombi configuration written into the home repo (spec 15 §2.3):
-/// `config-repos/*/workestrate.toml` is format + schema-linted against the
-/// vendored schema copy under `schemas/`; `config.toml` + `overrides.toml`
-/// are format-only. Store dirs and the lock stay out of the include set.
+/// `config-repos/*/workestrate.toml` and nested capsule files
+/// `config-repos/*/workestrate/**/*.toml` are format + schema-linted against
+/// the vendored schema copy under `schemas/`; `config.toml` +
+/// `overrides.toml` are format-only. Store dirs and the lock stay excluded.
 const HOME_TOMBI_TOML: &str = r#"# tombi configuration for the workestrate tool home.
 # tombi 1.2.5+ — see https://tombi-toml.github.io/tombi/
 
@@ -49,11 +50,12 @@ strict = true
 
 [[schemas]]
 path = "schemas/workestrate.schema.json"
-include = ["config-repos/*/workestrate.toml"]
+include = ["config-repos/*/workestrate.toml", "config-repos/*/workestrate/**/*.toml"]
 
 [files]
 include = [
   "config-repos/*/workestrate.toml",
+  "config-repos/*/workestrate/**/*.toml",
   "config.toml",
   "overrides.toml",
 ]

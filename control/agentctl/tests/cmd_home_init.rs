@@ -140,6 +140,11 @@ fn init_creates_structure_gitignore_and_hook() {
         tombi_toml
     );
     assert!(
+        tombi_toml.contains("config-repos/*/workestrate/**/*.toml"),
+        "home tombi.toml must include config-repos/*/workestrate/**/*.toml:\n{}",
+        tombi_toml
+    );
+    assert!(
         tombi_toml.contains("[[schemas]]"),
         "home tombi.toml must carry a [[schemas]] entry:\n{}",
         tombi_toml
