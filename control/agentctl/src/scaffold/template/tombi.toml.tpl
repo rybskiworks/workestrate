@@ -4,12 +4,12 @@
 toml-version = "v1.0.0"
 
 [format.rules]
-line-width = 100
 indent-width = 2
+line-width = 100
 
 [lint.rules]
-tables-out-of-order = "warn"
 dotted-keys-out-of-order = "warn"
+tables-out-of-order = "warn"
 
 [schema]
 enabled = true

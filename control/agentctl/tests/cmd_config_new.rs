@@ -587,3 +587,99 @@ fn config_new_hook_behavioral() {
         stderr
     );
 }
+
+/// `--empty` must emit the tombi toolchain files too: workestrate.toml
+/// references `#:schema ./schemas/workestrate.schema.json` and the
+/// pre-commit hook runs tombi, so tombi.toml + the schema must not dangle.
+#[test]
+fn config_new_empty_emits_tombi_and_schema_files() {
+    let home = IsolatedHome::new("cmd-config-new");
+    let dest = home.dir.join("empty-dest");
+
+    let out = home
+        .cmd()
+        .args(["config", "new", "emptytest", "--empty", "--path"])
+        .arg(&dest)
+        .args(["--no-register", "--age-recipient", "age1TEST"])
+        .output()
+        .expect("invoke config new --empty");
+    assert!(
+        out.status.success(),
+        "config new --empty failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    for rel in [
+        "workestrate.toml",
+        ".gitignore",
+        "tombi.toml",
+        "schemas/workestrate.schema.json",
+    ] {
+        assert!(
+            dest.join(rel).exists(),
+            "--empty must emit {}; missing at {}",
+            rel,
+            dest.join(rel).display()
+        );
+    }
+
+    // tombi.toml must wire the vendored schema into the catalog.
+    let tombi = std::fs::read_to_string(dest.join("tombi.toml")).expect("read tombi.toml");
+    assert!(
+        tombi.contains("[[schemas]]") && tombi.contains("schemas/workestrate.schema.json"),
+        "tombi.toml must reference the vendored schema; got:\n{}",
+        tombi
+    );
+
+    // When git init succeeded (git binary present), the tombi pre-commit
+    // hook must be installed (mirrors config_new_installs_executable_tombi_hook).
+    if dest.join(".git").exists() {
+        let hook = dest.join(".git").join("hooks").join("pre-commit");
+        assert!(
+            hook.exists(),
+            "pre-commit hook must exist at {} when git init succeeded",
+            hook.display()
+        );
+    }
+}
+
+/// Spec 15 §7: a scaffolded repo must FAIL `tombi lint` when an unknown key
+/// is planted in workestrate.toml (schema strict + additionalProperties:
+/// false). HOST-NIX gate: skipped when `tombi` is not on PATH (mirrors the
+/// tombi-absent pattern in config_new_hook_behavioral).
+#[test]
+fn config_new_scaffolded_repo_tombi_lint_rejects_unknown_key() {
+    if find_tombi().is_none() {
+        eprintln!(
+            "cmd_config_new: SKIP tombi negative-schema test — 'tombi' not on PATH \
+             (HOST-NIX gate; mirrors config_new_hook_behavioral)."
+        );
+        return;
+    }
+
+    let home = IsolatedHome::new("cmd-config-new");
+    let dest = scaffold_repo(&home, "negschema");
+
+    // Plant an unknown top-level key ahead of all tables so it lands at
+    // the document root, where the schema sets additionalProperties: false.
+    let toml_path = dest.join("workestrate.toml");
+    let original = std::fs::read_to_string(&toml_path).expect("read workestrate.toml");
+    std::fs::write(
+        &toml_path,
+        format!("this_key_is_not_in_the_schema = true\n{original}"),
+    )
+    .expect("plant unknown key");
+
+    let out = Command::new("tombi")
+        .arg("lint")
+        .current_dir(&dest)
+        .output()
+        .expect("run tombi lint");
+    assert!(
+        !out.status.success(),
+        "tombi lint must FAIL on an unknown key in workestrate.toml; \
+         stdout=\n{}\nstderr=\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

@@ -410,8 +410,13 @@ pub async fn cmd_config_new(
     };
 
     let mut files: Vec<(String, String)> = if empty {
-        // Minimal: just workestrate.toml (hand-written, no secrets) + .gitignore.
-        vec![
+        // Minimal: just workestrate.toml (hand-written, no secrets) +
+        // .gitignore + the tombi toolchain files. The workestrate.toml
+        // header references `#:schema ./schemas/workestrate.schema.json`
+        // and the pre-commit hook runs tombi, so the schema and tombi.toml
+        // must be emitted too — same consts as the full render, via the
+        // shared helper (no template duplication).
+        let mut files: Vec<(String, String)> = vec![
             (
                 "workestrate.toml".to_string(),
                 format!(
@@ -428,7 +433,13 @@ pub async fn cmd_config_new(
                 ".gitignore".to_string(),
                 scaffold::render(include_str!("../scaffold/template/.gitignore"), &[])?,
             ),
-        ]
+        ];
+        files.extend(
+            scaffold::tombi_files()?
+                .into_iter()
+                .map(|(n, c)| (n.to_string(), c)),
+        );
+        files
     } else {
         scaffold::render_all(&vars)?
             .into_iter()

@@ -99,6 +99,17 @@ pub fn render(template: &str, vars: &[(&str, &str)]) -> Result<String> {
     Ok(out)
 }
 
+/// Render the tombi toolchain files (`tombi.toml` + the vendored JSON
+/// schema) shared by both the full scaffold ([`render_all`]) and the
+/// `--empty` minimal scaffold in `commands::config_cmd`. Single source of
+/// truth so the two paths can never drift apart.
+pub(crate) fn tombi_files() -> Result<Vec<(&'static str, String)>> {
+    Ok(vec![
+        ("tombi.toml", render(T_TOMBI_TOML, &[])?),
+        ("schemas/workestrate.schema.json", T_SCHEMA_JSON.to_string()),
+    ])
+}
+
 /// Render all scaffold files for the given vars. Returns
 /// `(relative_path, content)` pairs in deterministic order. When
 /// `vars.core_flake_url` is `None`, the `flake.nix` entry is omitted.
@@ -131,8 +142,7 @@ pub fn render_all(vars: &ScaffoldVars) -> Result<Vec<(&'static str, String)>> {
         ".copier-answers.yml",
         render(T_COPIER_ANSWERS, copier_vars)?,
     ));
-    out.push(("tombi.toml", render(T_TOMBI_TOML, &[])?));
-    out.push(("schemas/workestrate.schema.json", T_SCHEMA_JSON.to_string()));
+    out.extend(tombi_files()?);
     if let Some(core_flake_url) = vars.core_flake_url.as_deref() {
         let flake_vars: &[(&str, &str)] = &[("{{ core_flake_url }}", core_flake_url)];
         out.push(("flake.nix", render(T_FLAKE_NIX, flake_vars)?));
