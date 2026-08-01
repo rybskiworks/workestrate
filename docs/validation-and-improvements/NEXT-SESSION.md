@@ -23,30 +23,36 @@ re-derive their contents.
 
 ---
 
-## Current state (as of 2026-07-31)
+## Current state (as of 2026-08-01)
 
-- HEAD: `9ffad0e` (spec 15 repo-wide tombi gates — root `tombi.toml`,
-  `scripts/check-toml.sh`, `just tombi-check` in `just verify`,
-  `lib.checks.tombiCheck`, home-hook gate; earlier spec-15 wave: `92b6b6f`
-  tombi 1.2.5 nix package + devshell, `d97576d` scaffold emission, plus the
-  scaffold gap-fix wave in flight). Branch `migration/tool-model`, working
-  tree clean.
-- Gates: green — 498 tests; `just lint-nix` passes.
+- HEAD: `19d94e8` (interim microsandbox-filesystem agentd patch slimmed to
+  match the fork). **Phase B landed (2026-08-01):** final unified secret/env
+  model `19b2cf0` (spec 16 — per-binding `bound`, `true` sugar,
+  `allowed_hosts`, `schema_version` back to 1), directory-mode config repos
+  `e3194d9` (spec 17 — `workestrate/{default,secrets}.toml` + `workloads/`
+  capsules), tombi include globs `ea48f45`, patch slim `19d94e8`.
+  personal-v2 is at directory-mode + final-model; `schema_version = 1`
+  everywhere (v2 retracted pre-release). Branch `migration/tool-model`,
+  working tree clean.
+- Gates: green — ~608 tests; `just lint-nix` passes; `just tombi-check` is part of `just verify`.
 - Container home `~/.workestrate` restored after the container-restart wipe,
   but uncommitted in its own git (fine — ephemeral).
-- 17 improvement specs total in `06-improvements/`. IMPLEMENTED/DONE: **02**
-  (main rename), **06** (`--home` flag), **08** (no repo-local home), **10**
-  (config repos as working copies + dotfiles home), **11** (home provisioning
-  + lockfile), **12** (per-instance addressing + discovery-lite — refuse-only
+- 19 improvement specs total in `06-improvements/`. OBSOLETE: **02** (main
+  rename — applied in Step 0(a), mooted by spec 08 execution). IMPLEMENTED/
+  DONE: **06** (`--home` flag), **08** (no repo-local home), **10** (config
+  repos as working copies + dotfiles home), **11** (home provisioning +
+  lockfile), **12** (per-instance addressing + discovery-lite — refuse-only
   /no-auto-start stance SUPERSEDED 2026-08-01 by the ADR 0026 addendum
   default-on lifecycle; `--use` override retained; W5 config-wiring plan in
-  spec §4), **13**
-   (secret_env shorthand — commits a349d03, 1e7dc25; 492 tests green, golden
-   plans byte-unchanged), **14** (env map form — commits 1035073, 564deca;
-   498 tests green, golden plans byte-unchanged), **15** (TOML toolchain:
-   tombi — commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave;
-   personal-repo apply 0750876). INTENT-TO-EXPLORE: **16** (cross-home
-   dependencies), **17** (visualization + inspection surfaces).
+  spec §4), **13** (secret_env shorthand — commits a349d03, 1e7dc25;
+  shorthand SUPERSEDED by the final model's `true` sugar), **14** (env map
+  form — commits 1035073, 564deca; map survives as the final model's unified
+  env map), **15** (TOML toolchain: tombi — commits 92b6b6f, d97576d,
+  9ffad0e + scaffold gap-fix wave; personal-repo apply 0750876), **16**
+  (final unified secret/env model — commit 19b2cf0, 2026-08-01), **17**
+  (config repo directory mode — commit e3194d9, 2026-08-01; home tombi glob
+  ea48f45). INTENT-TO-EXPLORE: **18** (cross-home dependencies), **19**
+  (visualization + inspection surfaces).
 - **Decisions recorded (2026-08-01, commit 33eeb87):**
   - **ADR 0027** ([../migration/50-decisions/0027-verb-first-workload-dispatch.md](../migration/50-decisions/0027-verb-first-workload-dispatch.md))
     — verb-first workload dispatch: `workestrate workload
@@ -101,7 +107,7 @@ re-derive their contents.
   remaps live at the binding site); the `secret_env` namespace was REMOVED
   from the v2 schema (v1 layers fold via the one-cycle shim
   `fold_legacy_secret_model`); `EXPECTED_SCHEMA_VERSION = 2`; spec **13**
-  SUPERSEDED; spec **14**'s map form became the v2 binding map.
+   SUPERSEDED; spec **14**'s map form became the v2 binding map. *(SUPERSEDED 2026-08-01 by the final model `19b2cf0` — the v2 `delivery`/shim machinery was retracted pre-release; `schema_version` is 1 everywhere.)*
 - **What was done in v2 (4-line summary):**
   1. Unified `SecretDefConfig` + explicit `delivery` field (`1ed2e6d`); workload
      `env` = EnvBindings map; `secret_env` removed from the v2 schema (v1 shim
@@ -132,11 +138,15 @@ re-derive their contents.
   parallel task A — this file defers to
   [06-improvements/00-index.md](06-improvements/00-index.md) for the final
   numbering.
-- **Current wave state (2026-08-01):** spec 17 (directory mode) added as
-  READY-TO-EXECUTE design. PENDING: implementation of the final secret/env
-  model (spec 16), the directory-mode loader (spec 17), the personal config
-  restructure to capsules, fork push + interim-patch slim reconciliation,
-  old-personal removal, and the version-collapse execution.
+- **Phase B state (2026-08-01): LANDED.** Final model `19b2cf0`, directory
+  mode `e3194d9`, tombi globs `ea48f45`, patch slim `19d94e8`; personal-v2
+  at directory-mode + final-model; `schema_version = 1` everywhere.
+  PENDING: the host batch B1–B13 + KVM items (incl. B13 final-model
+  secret-delivery smoke + E1 guest-reachability), the upstream microsandbox
+  PR force-push + open (USER action, branch @ `bc7640b8`), spec 05
+  cwd-fallback fix, spec 01 mounts WP1–WP3 (+ Phase 0 KVM spike), spec 03
+  dogfooding B1/B2, spec 20 (schema-evolution) to be written, and
+  Experiment E1.
 
 ---
 
@@ -182,7 +192,7 @@ re-derive their contents.
     v1, parses via the shim) refreshes as part of the host-side home setup
     (thread 7).
 11. **Schema v2 secret-delivery smoke suite NEEDS-KVM** — full commands + pass
-    criteria in `05-host-validation.md` **B13**; one line per item:
+    criteria in `05-host-validation.md` **B13**; one line per item: *(2026-08-01: re-pointed at the final model per spec 16 §9 — guest-bound verifiers + host-bound placeholders + `allowed_hosts`; the v2 framing below is historical.)*
     (1) litellm: `LITELLM_MASTER_KEY` real value in guest (P0 regression check)
     + `/v1/models` 200;
     (2) pi: `models.json` `${LITELLM_MASTER_KEY}`/`${LITELLM_ADDR}`
@@ -352,3 +362,11 @@ spec-number assignment recorded (16/17; exploration specs renumbered by task
 A — defer to `06-improvements/00-index.md`); pending-implementation wave state
 added (final model, directory-mode loader, personal restructure, fork/interim
 slim reconciliation, old-personal removal, version collapse).
+
+**2026-08-01 refresh (6):** Phase B landed — HEAD `19d94e8`, ~608 tests;
+final model `19b2cf0` (spec 16 EXECUTED), directory mode `e3194d9` (spec 17
+EXECUTED), tombi globs `ea48f45`, patch slim `19d94e8`; personal-v2 at
+directory-mode + final-model; `schema_version = 1` everywhere; spec 02
+flipped OBSOLETE (mooted by spec 08); pending list refreshed (host
+batch/KVM items, upstream PR push, spec 05 cwd-fallback, spec 01 mounts,
+spec 03 dogfooding, spec 20 schema-evolution spec to be written, E1).

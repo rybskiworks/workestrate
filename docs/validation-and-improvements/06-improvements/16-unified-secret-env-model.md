@@ -1,6 +1,6 @@
 # 16 — Final unified secret/env model
 
-> **STATUS: READY-TO-EXECUTE (design locked 2026-08-01; supersedes the intermediate v2 delivery-on-def model of 1ed2e6d; docs-only spec)**
+> **STATUS: EXECUTED (2026-08-01; commit `19b2cf0` — final model landed: per-binding `bound`, `true` sugar, `allowed_hosts`, `schema_version` back to 1; supersedes the intermediate v2 delivery-on-def model of 1ed2e6d)**
 > Prerequisites / see-also: [../README.md](../README.md) ·
 > [00-index.md](00-index.md) ·
 > [13-secret-env-shorthand.md](13-secret-env-shorthand.md) ·

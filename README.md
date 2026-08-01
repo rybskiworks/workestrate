@@ -98,15 +98,16 @@ live in your personal config repo.
    workestrate config new personal
    ```
    The repo is created in the managed store (`<store>/config-repos/personal`)
-   and
-   auto-registered as a layer — no `cd` needed to start using it. Use
-   `workestrate config list` to see the path. Pass `--path <dir>` to
-   scaffold elsewhere (the repo won't be active for layer resolution until
-   moved into the store or re-added via `workestrate config add`).
+   and auto-registered as a layer — no `cd` needed to start using it. Use
+   `workestrate config list` to see the path. Pass a destination positional
+   (`workestrate config new <name> <dest>`) to scaffold elsewhere: the
+   in-store default is registered automatically, while an out-of-store
+   destination is scaffold-only — NOT registered, so the repo is not active
+   for layer resolution until added via `workestrate config add`.
 
    **Import an existing config repo** (e.g. from a dotfiles backup):
    ```bash
-   workestrate init
+   workestrate home init
    workestrate config add <your-config-repo-url> personal
    ```
 5. Initialise encrypted secrets (one-time, see [Secrets setup](#secrets-setup)):
@@ -255,10 +256,17 @@ in every request.
 Egress is locked down to DNS (`tcp/53` and `udp/53`) to the host
 and `tcp/443` to `openrouter.ai`, `api.kimi.com`, `api.neuralwatt.com`, and `api.minimax.io`.
 All OpenRouter models use the same `openrouter.ai` egress host.
-Provider API keys (OpenRouter, Kimi, Neuralwatt, MiniMax) are host-bound via
-`secret_env()`; `LITELLM_MASTER_KEY` is passed as a plain environment
-variable via `env()` (not host-bound) because LiteLLM reads it from
-the process env at startup.
+Secret exposure is decided per binding by the `bound` property: `host` (the
+default) renders the secret's placeholder in the guest and substitutes the
+real value only in host-side traffic to the secret's `allowed_hosts`;
+`guest` injects the real value as a plain environment variable and is
+reserved for workloads that verify the credential. Provider API keys
+(OpenRouter, Kimi, Neuralwatt, MiniMax) and `GITHUB_TOKEN` stay host-bound —
+presenters such as pi receive only the placeholder. The only guest-bound
+real values are the verifiers: `LITELLM_MASTER_KEY` on the LiteLLM proxy
+(it verifies client auth at startup) and `ODYSSEUS_ADMIN_PASSWORD` on
+Odysseus. A secret's `allowed_hosts` is its credential policy — the only
+hosts its real value may be sent to.
 
 ## Running agents
 
@@ -407,13 +415,15 @@ and does not fail, but the corresponding `workestrate workload up <name>` comman
 checkout to exist.
 
 Agents reach the proxy at `http://host.microsandbox.internal:4000`.
-Odysseus and OpenCode receive `OPENAI_API_KEY` (remapped from
-`LITELLM_MASTER_KEY`) host-bound to `host.microsandbox.internal`. Pi
-receives `LITELLM_MASTER_KEY` as a plain process env var (not
-host-bound) because Pi's `models.json` performs
-`${LITELLM_MASTER_KEY}` substitution at startup; host-bound secrets
-are not visible in the guest env and would leave the substitution
-empty. The authoritative security control for all agents is network
+Every agent binding defaults to host-bound (`bound = "host"`): the guest
+sees the secret's placeholder and the real value is substituted only in
+host-side traffic to the secret's `allowed_hosts`. Pi's
+`LITELLM_MASTER_KEY = true` sugar is such a host-bound placeholder binding
+— pi gets the placeholder, not the real key. Odysseus and OpenCode receive
+`OPENAI_API_KEY` (remapped from `LITELLM_MASTER_KEY`), likewise host-bound.
+Guest-bound real values (`bound = "guest"`) are reserved for verifiers: the
+LiteLLM proxy's `LITELLM_MASTER_KEY` and Odysseus's
+`ODYSSEUS_ADMIN_PASSWORD`. The authoritative security control for all agents is network
 segmentation (default-deny egress); an agent that exfiltrates the key
 can only reach the proxy (tcp/4000) and GitHub (tcp/443). Runtime
 enforcement is unverified in M1 (compile-checked only).
@@ -431,10 +441,10 @@ and `agents/odysseus/config/settings.json` →
 `/app/data/settings.json` (read-only, tracked file), and likewise allows DNS (`udp/53`, `tcp/53`) to the host,
 `tcp/4000` to the host for the LiteLLM proxy, and `tcp/443` to
 `github.com` and `api.github.com` for GitHub access. Both plans bind
-`GITHUB_TOKEN` to `github.com` and `api.github.com`. Odysseus binds
-`OPENAI_API_KEY` (remapped from `LITELLM_MASTER_KEY`) to
-`host.microsandbox.internal`; Pi receives `LITELLM_MASTER_KEY` as a
-plain process env var instead (see above).
+`GITHUB_TOKEN` to `github.com` and `api.github.com` (its `allowed_hosts`).
+Odysseus binds `OPENAI_API_KEY` (remapped from `LITELLM_MASTER_KEY`) to
+`host.microsandbox.internal`; Pi's `LITELLM_MASTER_KEY` binding is the
+host-bound placeholder sugar (`= true`, see above).
 
 `agents/pi/repo`, `agents/odysseus/repo`, `agents/opencode/repo`, and
 `agents/tempest/repo` are optional local overrides and are expected to be
@@ -449,7 +459,8 @@ Common `just` recipes:
 |---|---|
 | `just check` | Run `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo check` for `control/agentctl` |
 | `just litellm-check` | Validate `config.reference/infra/litellm/config.yaml` against the schema indexes |
-| `just verify` | Full pre-merge gate: `just check` plus `cargo test`, `just litellm-check`, and `Cargo.lock` stability check |
+| `just tombi-check` | TOML format/lint/schema gate via tombi 1.2.5 (repo, scaffolded config repos, homes) |
+| `just verify` | Full pre-merge gate: `just check` plus `cargo test`, `just litellm-check`, `just tombi-check`, and `Cargo.lock` stability check |
 | `just verify-full` | Heaviest validation: `just verify` plus `nix build .#workestrate` |
 | `just build` | Build the `workestrate` binary |
 | `just fmt` | Format the Rust code |
@@ -602,11 +613,12 @@ Reload your shell (or `source` the completion file) afterwards.
   hermetic.
 - Sandbox plans use a default-deny network policy; only the
   destinations listed above have explicit egress.
-- `LITELLM_MASTER_KEY` is passed to Pi and to the LiteLLM proxy as a
-  plain process env var (`EnvVar::secret`, not host-bound) so Pi's
-  `${LITELLM_MASTER_KEY}` substitution in `models.json` resolves to the
-  actual key. Provider secrets (OpenRouter, Kimi, Neuralwatt) remain
-  host-bound in the LiteLLM proxy via `secret_env`.
+- `LITELLM_MASTER_KEY` is guest-bound (real value) only on the LiteLLM
+  proxy — the verifier that checks client auth at startup. Everywhere else
+  it is host-bound: Pi's binding uses the `LITELLM_MASTER_KEY = true`
+  same-name sugar and pi receives the placeholder, and provider secrets
+  (OpenRouter, Kimi, Neuralwatt) remain host-bound with their real values
+  substituted only toward each secret's `allowed_hosts`.
 - The authoritative security control is network segmentation:
   default-deny egress plus local-only ingress (`local_tcp(4000)` on the
   LiteLLM proxy). An agent inside a VM cannot reach any external host
@@ -746,10 +758,13 @@ require a registered config repo).
 
 | Command | Description |
 |---|---|
-| `workestrate init [url]` | Initialize the registry (optionally from a dotfiles URL) |
+| `workestrate init [url]` | DEPRECATED — use `workestrate home init` (bare `init` warns; `init <url>` errors in favor of `workestrate home clone <src>`) |
+| `workestrate home init` | Initialize the resolved tool home as a dotfiles-style git repo (git init + `.gitignore` + pre-commit hook; idempotent; `--config <url> [--name <n>]` also clones + registers a config repo) |
+| `workestrate home clone <src> [dest]` | Provision a home from an existing one (git-clone semantics; registry urls rewritten to dest-local `config-repos/<name>` paths; dest defaults to the resolved home) |
 | `workestrate config add <url> <name> [--ref main]` | Clone a config repo into the managed store |
-| `workestrate config new <name> [--path <dir>] [--age-recipient <key>] [--with-flake] [--no-register] [--no-git-init] [--from-reference \| --empty] [--json]` | Scaffold a new config repo with a minimal valid `workestrate.toml`, `.sops.yaml`, `.env.example`, README, and `.gitignore`. Auto-registers in the registry and runs `git init`. Writes `.copier-answers.yml` for future `copier update`. |
+| `workestrate config new <name> [dest] [--age-recipient <key>] [--with-flake] [--no-register] [--no-git-init] [--from-reference \| --empty] [--json]` | Scaffold a new config repo with a minimal valid `workestrate.toml`, `.sops.yaml`, `.env.example`, README, and `.gitignore`. The in-store default (`<store>/config-repos/<name>`) auto-registers in the registry and runs `git init`; an out-of-store `[dest]` is scaffold-only (not registered until `config add`). Writes `.copier-answers.yml` for future `copier update`. |
 | `workestrate config update [name]` | Pull latest for a config repo (or all) |
+| `workestrate config remove <name> [--delete] [--force]` | Unregister a config repo (`--delete` also deletes the store clone; `--force` overrides the dirty-clone refusal) |
 | `workestrate config list` | List registered config repos with rev + dirty status |
 | `workestrate config trust <dir>` | Trust a project directory for project-layer config |
 | `workestrate config untrust <dir>` | Remove trust from a project directory |

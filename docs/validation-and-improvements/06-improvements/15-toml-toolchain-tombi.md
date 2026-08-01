@@ -108,8 +108,12 @@ include = ["config.reference/workestrate.toml"]
 
 ### 2.2 Scaffolded config repo (emitted by `config new`)
 
-Include set: the repo's `workestrate.toml` (format + schema-lint against the
-vendored schema copy the scaffold emits — §3).
+Include set: the repo's `workestrate.toml` + `overrides.toml` (format +
+schema-lint against the vendored schema copy the scaffold emits — §3).
+**Updated 2026-08-01 (directory mode, `e3194d9`):** the include set gained
+`workestrate/**/*.toml` so directory-mode files (spec 17) are validated
+individually; the current set is `workestrate.toml`, `overrides.toml`,
+`workestrate/**/*.toml`.
 
 ```toml
 # tombi.toml — scaffolded config repo
@@ -121,11 +125,11 @@ enabled = true
 [lint]
 enabled = true
 
-include = ["workestrate.toml"]
+include = ["workestrate.toml", "overrides.toml", "workestrate/**/*.toml"]
 
 [[schemas]]
 path = "./schemas/workestrate.schema.json"
-include = ["workestrate.toml"]
+include = ["workestrate.toml", "overrides.toml", "workestrate/**/*.toml"]
 ```
 
 ### 2.3 Home (emitted by `home init`)
@@ -135,6 +139,10 @@ the vendored schema copy inside each config repo), `config.toml` +
 `overrides.toml` (format-only). Excludes: `workestrate.lock`, `secrets/`,
 `sources/`, `state/`. Posture: **warn-not-fail** when tombi is absent — a
 home must stay usable on a machine without the toolchain (§4).
+
+**Updated 2026-08-01 (`ea48f45`):** the home include set gained
+`config-repos/*/workestrate/**/*.toml` so directory-mode capsule files
+inside config repos are format + schema-linted.
 
 ```toml
 # tombi.toml — dotfiles-style home
@@ -148,6 +156,7 @@ enabled = true
 
 include = [
   "config-repos/*/workestrate.toml",
+  "config-repos/*/workestrate/**/*.toml",
   "config.toml",
   "overrides.toml",
 ]
@@ -160,7 +169,7 @@ exclude = [
 
 [[schemas]]
 path = "./schemas/workestrate.schema.json"
-include = ["config-repos/*/workestrate.toml"]
+include = ["config-repos/*/workestrate.toml", "config-repos/*/workestrate/**/*.toml"]
 ```
 
 ---

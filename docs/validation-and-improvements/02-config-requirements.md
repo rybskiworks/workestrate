@@ -623,8 +623,11 @@ temp file and diffs against the committed copy. Drift fails `just verify`.
 This catches the class where a `serde` struct change ships without a schema
 update.
 
-**taplo `#:schema` editor integration** (ADR 0021 §9): config repos can add
-a top-level `#:schema` comment pointer to get real-time editor validation:
+**tombi `#:schema` editor integration** (ADR 0021 §9): config repos can add
+a top-level `#:schema` comment pointer to get real-time editor validation.
+**(2026-08-01: taplo superseded by tombi 1.2.5 — spec 15; scaffolded repos
+point the directive at the vendored relative `./schemas/workestrate.schema.json`,
+not the floating GitHub URL shown below.)**
 
 ```toml
 #:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json

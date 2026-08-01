@@ -58,7 +58,7 @@ invariant.
 | Spec | Title | Status (verbatim banner) | Dependencies (file-level) | Effort | Env gate (worst) |
 |---|---|---|---|---|---|
 | [01-mount-filtering-shadowing.md](01-mount-filtering-shadowing.md) | Mount Filtering / Shadowing (Track A) | `SPEC (not yet implemented); Phase 0 spike is NEEDS-KVM` | Phase 0 KVM spike gates WP4; WP5 (staging-copy fallback) is conditional on spike failure only | Phase 0 = **S**; WP1–WP4 = **M** each; WP5 = **L** (conditional) | `HOST-KVM` |
-| [02-main-standardization.md](02-main-standardization.md) | Standardize on `main` (rename the personal clone) | `READY-TO-EXECUTE` (rename is host-local git surgery, no KVM/nix needed; branch-detection is a DEFERRED option) | None — standalone one-shot rename | **S** (one-shot branch rename; branch-detection option deferred) | `verifiable-here` |
+| [02-main-standardization.md](02-main-standardization.md) | Standardize on `main` (rename the personal clone) | `OBSOLETE (2026-08-01)` — rename applied in Step 0(a); mismatch mooted by spec 08 execution (repo-local bundle retired; personal config now at `~/.workestrate/config-repos/personal` on `main`) | None — standalone one-shot rename | **S** (one-shot branch rename; branch-detection option deferred) | `verifiable-here` |
 | [03-dogfooding.md](03-dogfooding.md) | Dogfooding: workestrate developing workestrate (Track C) | `SPEC (Phase 0 env pinning READY-TO-EXECUTE; B1/B2/B3 not implemented)` | Phase 0 is standalone; B1/B2/B3 are independent of each other; references [05](05-config-reference-cwd-fallback.md) for the underlying quirk | Phase 0 = **S** (env pinning); B1/B2/B3 = **M** each (not implemented) | `HOST-KVM` (B3 live-sandbox verification) |
 | [04-cli-config-authoring.md](04-cli-config-authoring.md) | CLI Config Authoring (DEFERRED vision + requirements traceability) | `DEFERRED` — pending sign-off of [02-config-requirements.md](../02-config-requirements.md) | Gated on `02-config-requirements.md` sign-off; must be additive-tolerant of 01's mount exclude/shadow schema (§2 of the spec) | **M** (explicitly stated) | `verifiable-here` |
 | [05-config-reference-cwd-fallback.md](05-config-reference-cwd-fallback.md) | Config-reference cwd-fallback quirk (standalone fix spec) | `SPEC (bug fix candidate, small)` | None — standalone bug fix; referenced by [03](03-dogfooding.md) as the underlying quirk | **S** (explicitly stated) | `verifiable-here` (fix gate: `cargo test`); reproduction is `HOST-NIX` |
@@ -72,8 +72,8 @@ invariant.
 | [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately) — SUPERSEDED 2026-08-01 (v2 model 1ed2e6d removed the `secret_env` namespace; shorthand survives only in the v1 shim)` — shorthand form superseded by the final model's `true` sugar (16-unified-secret-env-model, 2026-08-01) | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca) — annotated 2026-08-01: the map form became the v2 unified binding map with typed EnvBinding (1ed2e6d)` — map form survives as the unified map; binding semantics gained `bound` (16, 2026-08-01) | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes | `EXECUTED (2026-08-01; commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave; personal-repo apply 0750876)` | ↔ [13](13-secret-env-shorthand.md)/[14](14-env-map-form.md) (notation — tombi keeps the collapsed map form tidy + validated; cannot restructure) | **M** | devshell in-container (cargo gates + scripts/check-toml.sh via `nix develop`) + `HOST-NIX` (`nix build .#tombi` package build) |
-| [16-unified-secret-env-model.md](16-unified-secret-env-model.md) | Final unified secret/env model (per-binding bound; delivery-on-def removed) | READY-TO-EXECUTE (design locked 2026-08-01; supersedes intermediate v2 of 1ed2e6d) | supersedes 13/14 notation; ADR 0018 second addendum; contract in ../02-config-requirements.md | M | cargo gates verifiable-here via nix develop; B13 runtime smoke HOST-KVM |
-| [17-config-repo-directory-mode.md](17-config-repo-directory-mode.md) | Config repo directory mode (workestrate/ + workloads/ capsules) | READY-TO-EXECUTE (design) | ↔ [10](10-config-repos-as-working-copies.md), [11](11-home-provisioning-and-lockfile.md), [15](15-toml-toolchain-tombi.md), [16](16-unified-secret-env-model.md) | M | loader/cargo gates verifiable-here via nix develop; runtime smoke HOST-KVM |
+| [16-unified-secret-env-model.md](16-unified-secret-env-model.md) | Final unified secret/env model (per-binding bound; delivery-on-def removed) | `EXECUTED (2026-08-01; commit 19b2cf0)` | supersedes 13/14 notation; ADR 0018 second addendum; contract in ../02-config-requirements.md | M | cargo gates verifiable-here via nix develop; B13 runtime smoke HOST-KVM |
+| [17-config-repo-directory-mode.md](17-config-repo-directory-mode.md) | Config repo directory mode (workestrate/ + workloads/ capsules) | `EXECUTED (2026-08-01; commit e3194d9)` | ↔ [10](10-config-repos-as-working-copies.md), [11](11-home-provisioning-and-lockfile.md), [15](15-toml-toolchain-tombi.md), [16](16-unified-secret-env-model.md) | M | loader/cargo gates verifiable-here via nix develop; runtime smoke HOST-KVM |
 | [18-cross-home-dependencies.md](18-cross-home-dependencies.md) | Cross-home dependencies (wider up across homes/config sets) | INTENT-TO-EXPLORE (2026-08-01 — questions, no decisions) | ADR 0019/0021(addendum)/0023/0026(addendum); builds on [12](12-per-instance-addressing.md) default-on lifecycle | exploration | verifiable-here (docs-only) |
 | [19-visualization-inspection.md](19-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [18](18-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
 | [20-schema-evolution-and-migrations.md](20-schema-evolution-and-migrations.md) | Schema evolution policy + config migration tooling (post-launch) | `SPEC (design; not yet implemented)` | ↔ [15](15-toml-toolchain-tombi.md) (tombi validation + vendored schema) + [16](16-unified-secret-env-model.md) (schema_version collapse to 1) | M (migrate engine) + S (pull+lock) | verifiable-here (docs-only) |
@@ -116,6 +116,11 @@ already declares `ref = "main"`. Branch-detection robustness (auto-detect
 remote default branch in `config add`) is **DEFERRED** as an open decision
 (§7 of the spec) because it partially conflicts with the standardize-on-`main`
 goal.
+
+**OBSOLETE (2026-08-01):** the rename was applied during Step 0(a) and spec
+08's execution retired the repo-local bundle including the
+`.workestrate/repos/personal` clone — the mismatch this spec resolved no
+longer exists. Branch-detection (§7 of the spec) remains a DEFERRED option.
 
 ### 03 — Dogfooding: workestrate developing workestrate (Track C)
 
@@ -317,6 +322,13 @@ migration guide from v1 and intermediate-v2 forms, plus a doc-intent
 requirement: user-facing docs must teach the fail-safe placeholder default,
 the rename-only `secret`, and why `bound` is per-binding — not just syntax.
 
+**EXECUTED 2026-08-01** (commit `19b2cf0`): the final model landed —
+per-binding `bound` (`host` default = placeholder; `guest` = real value for
+verifiers), the `KEY = true` sugar, `allowed_hosts` as the credential
+policy, the intermediate v2 machinery retracted, and `schema_version` back
+to 1; personal-v2 migrated to the final model. The B13 runtime smoke stays
+`HOST-KVM` (host batch).
+
 ### 17 — Config repo directory mode
 
 Specifies directory mode for config repos as an alternative to the single-file
@@ -333,6 +345,14 @@ requires the restructured personal config repo to load to a byte-identical
 merged config with byte-unchanged golden plans. **Key decision:** capsules
 make the config repo a self-contained deployment unit — clone it and every
 artifact every workload needs is inside it, addressed by repo-relative paths.
+
+**EXECUTED 2026-08-01** (commit `e3194d9`; home tombi glob `ea48f45`): the
+directory-mode loader landed with the hard-error semantics (both-modes,
+duplicate names, `schema_version` authority in `default.toml` only), the
+scaffold/copier `tombi.toml` include globs cover `workestrate/**/*.toml`,
+and personal-v2 is restructured to `workestrate/{default,secrets}.toml` +
+`workloads/` capsules. Runtime smoke of the restructured repo stays
+`HOST-KVM`.
 
 ### 18 — Cross-home dependencies
 
@@ -449,7 +469,7 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 16-unified-secret-env-model [supersedes 13/14 notation; ADR 0018 2nd addendum; contract ../02-config-requirements.md]
 
-17-config-repo-directory-mode [↔ 10/11/15/16; READY-TO-EXECUTE design]
+17-config-repo-directory-mode [↔ 10/11/15/16; EXECUTED 2026-08-01 (e3194d9)]
 
 18-cross-home-dependencies [deps: ADR 0019/0021 addendum/0023/0026 addendum; builds on 12 default-on lifecycle; exploration]
 
@@ -512,7 +532,7 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
   notation the author chose (array-of-tables or collapsed map form) — it
   normalizes layout only and never forces a form, so the 13/14 ergonomics are
   unaffected by the toolchain adoption.
-- **16/17 (INTENT-TO-EXPLORE explorations, now 18/19)** are both seeded by the ADR 0026
+- **18/19 (INTENT-TO-EXPLORE explorations)** are both seeded by the ADR 0026
   addendum (2026-08-01) default-on lifecycle: 18 explores cross-home
   composition (the wider
   `workestrate up` across homes/config sets), 19 enumerates inspection
@@ -688,5 +708,6 @@ this index but should be reconciled:
    `install_layout = "app"` field has been REMOVED from
    `.workestrate/repos/personal/workestrate.toml:317` (bundle fix e applied;
    verified: grep for `install_layout` in that file returns no match).
-   Runtime parse verification (`workestrate validate-config`) is PENDING —
-   it requires a `cc` linker (HOST-NIX devshell), the first Lane A action.
+   **RESOLVED:** runtime parse verification DONE — `workestrate
+   validate-config` → "workestrate.toml is valid." exit 0 (Step 0.5,
+   2026-07-30).

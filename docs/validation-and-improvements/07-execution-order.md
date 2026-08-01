@@ -241,7 +241,7 @@ improvement backlog below runs after/parallel to the wave.
 | W6 | propagation/closeout + follow-ups triage (DependsOnSpec scheme/path_suffix; wait-for-port v1 → guest healthchecks v2+; restart posture) | ADR 0026 addendum follow-ups; spec 12 §5 |
 
 This section supersedes nothing else — it sequences the six not-yet-landed specs
-(Steps 0.5/8a/8c/8d are DONE; spec 15 EXECUTED 2026-08-01). Work it
+(Steps 0.5/8a/8c/8d are DONE; spec 15 EXECUTED 2026-08-01; specs 16/17 EXECUTED 2026-08-01). Work it
 top-to-bottom.
 
 1. **05 — config-reference cwd-fallback** (small) — the only bug-fix improvement; closes a silent config-discovery backdoor; gate `cargo test` runs in-container via `nix develop`.
@@ -270,25 +270,25 @@ Docs-only. Landed together:
   `workloads/` capsules), READY-TO-EXECUTE (design).
 - Bookkeeping: `NEXT-SESSION.md` wave-state entries + this section.
 
-### Phase B (implementation) — ordered
+### Phase B (implementation) — LANDED 2026-08-01 (steps 1–4; step 5 partial — interim-patch slim landed, fork push pending user)
 
-1. **Final-model code model** — supersede the v2 delivery/shim: `EnvBinding`
+1. **Final-model code model — LANDED (2026-08-01, `19b2cf0`).** Superseded the v2 delivery/shim: `EnvBinding`
    `delivery` (`env` | `host_bound`) + the `fold_legacy_secret_model` shim fold
    into the final model per spec 16. `verifiable-here` via `nix develop`
    (cargo gates).
-2. **Config conversion to the final model** — `env_var` strip, the
+2. **Config conversion to the final model — LANDED (2026-08-01, `19b2cf0`; personal-v2 restructured to directory mode in `e3194d9`).** The `env_var` strip, the
    personal-v2 migration, and old-personal removal. `verifiable-here` via
    `nix develop` (cargo gates + golden diffs).
-3. **Directory-mode loader per spec 17** + the **personal config restructure**
+3. **Directory-mode loader per spec 17 — LANDED (2026-08-01, `e3194d9`; tombi include globs `ea48f45`)** + the **personal config restructure**
    as the proof case: `workestrate.toml` → `workestrate/{default,secrets}.toml`
    + `workloads/` capsules; the `agents/` + `infra/` trees collapse into
    capsules. Includes the queued `tombi.toml.tpl` include-glob edit (spec 17
    §2.6). `verifiable-here` via `nix develop` (cargo gates + byte-identical
    merged-config golden); runtime smoke of the restructured repo is
    `HOST-KVM` (folds into the Step 6 host batch).
-4. **Version collapse execution** — `schema_version` consolidation.
+4. **Version collapse execution — LANDED (2026-08-01, `19b2cf0` — v2 retracted pre-release; `schema_version = 1` everywhere).**
    `verifiable-here` via `nix develop`.
-5. **Fork push + interim-patch slim reconciliation** — the spec 09 thread:
+5. **Fork push + interim-patch slim reconciliation — interim-patch slim LANDED (`19d94e8`); fork force-push + PR open PENDING USER (branch @ `bc7640b8`).** The spec 09 thread:
    `.tmp/microsandbox` fork branch `fix/filesystem-agentd-path-override` +
    the interim 0.5.6 nix patch `daa5140` (see Step 8b). Upstream-latency-bound;
    local post-merge work is `verifiable-here` via `nix develop` +
@@ -301,13 +301,15 @@ Docs-only. Landed together:
 - [ ] **Lane A green** — `just verify` passes in this container via `nix develop` (store-path prefix; the shell/python/git subset passes in a bare shell, the cargo-based gates run via `nix develop` — both `verifiable-here`). Lane A against the real bundle: the Step 0(e) blocker edit has LANDED (tempest `install_layout` removed); the first Lane A action is now `workestrate validate-config` + `workestrate workload plan tempest` in `nix develop`.
 - [ ] **Baseline parity verdict documented** — all 5 workloads match after normalization, or every delta is justified in a table ([04-baseline-validation.md](04-baseline-validation.md) §5 acceptance criteria).
 - [ ] **Host batch B1–B12 green** — every step in [05-host-validation.md](05-host-validation.md) passes per the capability → proof → acceptance matrix.
-- [x] **Main rename done** — personal clone branch is `main`, `config list` shows `ref main, rev d2cd0c3, clean) [OK]` ([06-improvements/02](06-improvements/02-main-standardization.md)). **(applied; rev `d2cd0c3` unchanged; clone has no origin remote — `config update` pending push)**
+- [x] **Main rename done** — personal clone branch is `main`, `config list` shows `ref main, rev d2cd0c3, clean) [OK]` ([06-improvements/02](06-improvements/02-main-standardization.md)). **(applied; rev `d2cd0c3` unchanged; clone has no origin remote — `config update` pending push)** *(2026-08-01: spec 02 closed as OBSOLETE — the mismatch was mooted by spec 08's execution.)*
 - [x] **Repo-local home retired** — [06-improvements/08](06-improvements/08-no-repo-local-home.md) executed end-to-end: personal config preserved as the in-home working copy at `~/.workestrate/config-repos/personal` (@ `c41a707`) — AMENDED by spec 10 (no standalone sibling), real home at `~/.workestrate` (registry `ref`/`rev` removed — local-path classification), machinery commit `418530a` landed, bundle deleted, discovery tier removed from `paths.rs` (commit `bef1c37`), ADR 0023 addendum follow-through landed in `bef1c37`. **Home adopted into git** as root commit `a42e597`; `workestrate home init` idempotent (commit `3894fb7`); `config-repos/` rename (commit `d7c5a83`); dirty-guard test (commit `bd99481`). `validate-config` → "workestrate.toml is valid." exit 0 (runtime-proves `install_layout` removal). `doctor` → "home: OK (/home/node/.workestrate (Default))". **Cargo.lock** verified stable (no commit needed).
-- [ ] **microsandbox-filesystem agentd offline build (spec 09)** — [06-improvements/09](06-improvements/09-microsandbox-agentd-offline-build.md) executed: option 2 (ADR 0011 fork carrier) landed once fork push access clears (`[patch.crates-io]` → fork git URL; patch + patched derivation + `_setup_vendor_link` + vendor staging + vendor-unlock/lock recipes deleted; `nix flake check` green); option 1 (upstream MSB_HOME fix) merged + released + machinery deleted + Cargo.toml pin updated; option 3 (`=0.6.8` bump) landed with rewritten patch + `msb --version` re-validated + spec 01 RESOLVE_BENEATH cross-check. **(NOT STARTED — option 2 blocked on fork push access)**
+- [ ] **microsandbox-filesystem agentd offline build (spec 09)** — [06-improvements/09](06-improvements/09-microsandbox-agentd-offline-build.md) executed: option 2 (ADR 0011 fork carrier) REVERSED per the ADR 0011 addendum (2026-07-30) — the fork is a transient PR vehicle only, never consumed as a dependency; the nix-side patch machinery stays as the interim (slimmed to match the fork in `19d94e8`); option 1 (upstream MSB_HOME fix) PR HARDENED @ `bc7640b8` — force-push + open PENDING USER PUSH, then merged + released + machinery deleted + Cargo.toml pin updated; option 3 (`=0.6.8` bump) separate combinable track: rewritten patch + `msb --version` re-validated + spec 01 RESOLVE_BENEATH cross-check. **(PENDING — option 1 upstream PR push is a user action)**
 - [x] **Config repos as working copies + dotfiles home (spec 10)** — [06-improvements/10](06-improvements/10-config-repos-as-working-copies.md) executed: docs/decision landed; spec 08 step (a) + `03-sibling-config-setup.md` topology carry AMENDED-by-spec-10 markers; code tasks landed — Task 1 `config-repos/` rename (commit `d7c5a83`), Task 2 dirty-guard regression test (commit `bd99481`), Task 3 `home init` scaffolding (commit `3894fb7`) with cargo gates green in `nix develop`. Home adopted into git as root commit `a42e597`; `home init` idempotent over populated home; pre-commit hook rejects gitlinks/store-dirs/secret material.
 - [x] **--home flag + home provisioning + lockfile (specs 06 + 11, Step 8d)** — commits `172d5dd` / `19ff272` / `be356f7` / `d991252`; per-commit gates green (`cargo fmt --check`, `clippy -D warnings`, full `cargo test` — 411 passed at wave end, `just golden-check`/`schema-check`/`spec-examples`/`scaffold-check`, clean `Cargo.lock`); ops verification 2026-07-30: `home init --from ~/.workestrate` → dev home at locked rev `c41a707` with dest-local url rewrite, empty `state/`/`secrets/`, loud trusted_projects warning; `--home <dest> config list` and `litellm plan` resolve the provisioned home. *(2026-07-31: `home init --from` superseded by the `home clone` verb split @ `c406630`.)*
 - [x] **Per-instance addressing + discovery-lite (spec 12)** — [06-improvements/12](06-improvements/12-per-instance-addressing.md) IMPLEMENTED: Wave 1 (`9107b87`, `de9aa62`, `f9fd2f0`, `c5837e7`) + Wave 2 (`4adad3f`, `7b65ad1`, `39c1694`) landed on `migration/tool-model`. **(E1 guest-reachability probe + the deferred binding decision remain NEEDS-KVM — pending the Step 6 host batch, B10.)**
 - [x] **TOML toolchain: tombi (spec 15)** — [06-improvements/15](06-improvements/15-toml-toolchain-tombi.md) EXECUTED (2026-08-01): tombi 1.2.5 nix package + devshell (`92b6b6f`); scaffold `tombi.toml` + vendored schema + config-repo pre-commit hook (`d97576d` + gap-fix wave); repo-wide gates (`9ffad0e`): root `tombi.toml`, `scripts/check-toml.sh`, `just tombi-check` in `just verify`, `lib.checks.tombiCheck`, home-hook gate + home `tombi.toml`/schema emission; personal config repo applied (`0750876`). Planted-violation evidence: unknown key → "not allowed", `cpus = "two"` → type error, both exit 1.
+- [x] **Final unified secret/env model (spec 16)** — [06-improvements/16](06-improvements/16-unified-secret-env-model.md) EXECUTED (2026-08-01, `19b2cf0`): per-binding `bound` (`host` default placeholder / `guest` real value), `KEY = true` sugar, `allowed_hosts` credential policy, intermediate v2 machinery retracted, `schema_version = 1` everywhere; personal-v2 migrated. **(B13 runtime smoke re-pointed at the final model stays NEEDS-KVM — host batch.)**
+- [x] **Config repo directory mode (spec 17)** — [06-improvements/17](06-improvements/17-config-repo-directory-mode.md) EXECUTED (2026-08-01, `e3194d9`; home tombi glob `ea48f45`): directory-mode loader with hard-error semantics, personal-v2 restructured to `workestrate/{default,secrets}.toml` + `workloads/` capsules, tombi include globs cover capsule files. **(Runtime smoke of the restructured repo stays NEEDS-KVM — host batch.)**
 - [ ] **Dogfooding guardrails active** — Phase 0 env-pinning wrapper in use; B1 self-home mount guard merged (or explicitly deferred with rationale).
 - [ ] **Track A WP1–WP4 merged** (or WP5 triggered) — mount filtering/shadowing schema, policy, render, and runtime shadows landed; or, if the Phase 0 spike failed, the staging-copy fallback (WP5) is landed instead.
 - [ ] **Improvements index statuses updated** — [06-improvements/00-index.md](06-improvements/00-index.md) master table reflects the actual post-execution status of each spec (SPEC → IMPLEMENTED / MERGED / DEFERRED).

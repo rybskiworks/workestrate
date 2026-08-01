@@ -1,6 +1,6 @@
 # 17 — Config repo directory mode (workestrate/ + workloads/ capsules)
 
-> **STATUS: READY-TO-EXECUTE (design)**
+> **STATUS: EXECUTED (2026-08-01; commit `e3194d9` — directory-mode loader landed; scaffold/copier tombi include-glob edits included; home-emitted tombi glob followed in `ea48f45`)**
 > Prerequisites / see-also: [00-index.md](00-index.md) ·
 > [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) ·
 > [16-unified-secret-env-model.md](16-unified-secret-env-model.md) ·
@@ -128,10 +128,11 @@ config-repo template `control/agentctl/src/scaffold/template/tombi.toml.tpl`
 include = ["workestrate.toml", "overrides.toml", "workestrate/**/*.toml"]
 ```
 
-**QUEUED CODE CHANGE — recorded, not landed in this docs batch.** The `.tpl`
-edit, the matching copier-template static copy, and the schema-drift guard
-extension per [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) §3/§5
-land with the loader implementation.
+**LANDED (2026-08-01).** The `.tpl` edit and the matching copier-template
+static copy landed with the loader implementation in `e3194d9`; the
+home-emitted tombi include glob (`config-repos/*/workestrate/**/*.toml`)
+followed in `ea48f45`, with the schema-drift guard per
+[15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) §3/§5.
 
 ### 2.7 `schema_version` authority
 
@@ -201,24 +202,24 @@ must load to a **byte-identical merged config** (acceptance §6).
 
 ## 6. Acceptance criteria
 
-- [ ] Both-modes hard error: a repo containing both `workestrate.toml` and
+- [x] Both-modes hard error: a repo containing both `workestrate.toml` and
       `workestrate/` fails naming both paths (test-covered).
-- [ ] Duplicate workload name across files/dirs fails naming both provenance
+- [x] Duplicate workload name across files/dirs fails naming both provenance
       paths (test-covered).
-- [ ] `schema_version` outside `default.toml` fails as a hard error
+- [x] `schema_version` outside `default.toml` fails as a hard error
       (test-covered).
-- [ ] Filename/dirname-implied names: a bare table in
+- [x] Filename/dirname-implied names: a bare table in
       `workloads/<name>.toml` and in `workloads/<name>/workload.toml` loads as
       workload `<name>`; the `[workloads.<name>]` wrapper form still loads
       (test-covered, both forms).
-- [ ] The restructured personal config repo loads to a **byte-identical merged
+- [x] The restructured personal config repo loads to a **byte-identical merged
       config** vs the single-file form (golden diff).
-- [ ] Provenance strings carry the relpath form `<repo>#<relpath>` per field
+- [x] Provenance strings carry the relpath form `<repo>#<relpath>` per field
       (test-covered; `--show-source` output shape unchanged).
-- [ ] tombi validates each directory-mode file individually via the
-      `workestrate/**/*.toml` include glob (the queued `tombi.toml.tpl` edit,
-      §2.6, landed with scaffold + copier parity per spec 15 §5.2).
-- [ ] Golden plans **byte-unchanged** across the restructure (no plan-surface
+- [x] tombi validates each directory-mode file individually via the
+      `workestrate/**/*.toml` include glob (the `tombi.toml.tpl` edit,
+      §2.6, landed in `e3194d9` + `ea48f45` per spec 15 §5.2).
+- [x] Golden plans **byte-unchanged** across the restructure (no plan-surface
       drift).
 
 ---
@@ -229,5 +230,5 @@ must load to a **byte-identical merged config** (acceptance §6).
 |---|---|
 | Effort | **M** (loader: mode detection + lexicographic multi-file load + implied names + provenance relpath strings; scaffold `tombi.toml.tpl` glob + copier parity; personal restructure proof case; hard-error test matrix). |
 | Gate | `verifiable-here` via `nix develop` for all loader/cargo gates (`check`, `test`, `golden-check`, `schema-check`); tombi per-file validation via `just tombi-check`; runtime smoke of a restructured repo is `HOST-KVM` (folds into the host batch). |
-| Files touched | Loader (`control/agentctl/src/config/loading.rs` + `types.rs` provenance); `control/agentctl/src/scaffold/template/tombi.toml.tpl` (queued include-glob edit, §2.6) + copier static copy + parity test; `schemas/` (no change — layout-only); `.tmp/config-repos/personal-v2` (restructure proof case). |
+| Files touched | Loader (`control/agentctl/src/config/loading.rs` + `types.rs` provenance); `control/agentctl/src/scaffold/template/tombi.toml.tpl` (include-glob edit landed `e3194d9`, §2.6) + copier static copy + parity test; `schemas/` (no change — layout-only); `.tmp/config-repos/personal-v2` (restructure proof case). |
 | Risk | Low–moderate. Additive mode; single-file repos are untouched by construction (§2.1 keeps the modes disjoint). The main risk is provenance-string churn, contained by the per-field relpath rule and golden-plan byte-stability. |

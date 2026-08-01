@@ -1,7 +1,11 @@
 # 02 — Standardize on `main` (rename the personal clone)
 
-> **STATUS: READY-TO-EXECUTE** (rename is host-local git surgery, no KVM/nix
-> needed; branch-detection is a DEFERRED option)
+> **STATUS: OBSOLETE** (2026-08-01 — the rename was applied during Step 0(a)
+> (`git branch -m master main`), and spec 08's execution retired the
+> repo-local bundle including the `.workestrate/repos/personal` clone, so the
+> registry/clone mismatch this spec resolved no longer exists; the personal
+> config now lives on `main` at `~/.workestrate/config-repos/personal`.
+> Branch-detection remains a DEFERRED option — see §7.)
 > **Effort:** S (one-shot branch rename; branch-detection option deferred)
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [01-current-state-and-prereqs.md](../01-current-state-and-prereqs.md)

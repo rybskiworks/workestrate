@@ -91,6 +91,13 @@ single source of truth for the 0b.6 work is
 `../validation-and-improvements/06-improvements/09-microsandbox-agentd-offline-build.md`
 (spec 09), which supersedes the ad-hoc notes here for that step.
 
+**2026-08-01 update:** the fork-carrier option (spec 09 option 2) is REVERSED
+per the ADR 0011 addendum (2026-07-30) — the fork is a transient PR vehicle
+only, never consumed as a dependency; the nix-side patch machinery stays as
+the interim (slimmed to match the fork in `19d94e8`). Option 1 (upstream
+MSB_HOME fix) is HARDENED @ `bc7640b8` — force-push + PR open PENDING USER
+PUSH. Spec 09 remains the source of truth.
+
 ## Pending user defaults
 
 These are decisions that genuinely need user input. Recommended defaults are
@@ -106,7 +113,7 @@ until ready to distribute).
 
 ### 2. Dotfiles repo for `workestrate init`
 
-**Needed for**: Phase 1, step 1.4 (`workestrate init <url>`).
+**Needed for**: Phase 1, step 1.4 (`workestrate init <url>`). **(2026-08-01: `workestrate init <url>` is retired — use `workestrate home init` (scaffold) / `workestrate home clone <src>` (provision from an existing home); the dotfiles recommendation otherwise stands.)**
 **Recommended**: add `$WORKESTRATE_HOME/config.toml` to the user's
 existing dotfiles repo (chezmoi/yadm/stow). If no dotfiles repo exists,
 `$WORKESTRATE_HOME/` can be a standalone git repo.
@@ -268,7 +275,7 @@ and diffs against the committed copy on every change (mirroring the
 schema-layer drift class that `schema_version` alone cannot catch (a struct
 field added without a schema bump still drifts the schema). Config-repo CI
 may validate `workestrate.toml` against the committed schema directly, and
-editors may consume it via taplo `#:schema` (see spec §14).
+editors may consume it via tombi `#:schema` (taplo superseded by tombi, spec 15, 2026-08-01).
 
 ### lib API drift (Phase 2)
 
@@ -344,7 +351,22 @@ secret unsatisfied → hard fail naming the secret + layers tried + remediation.
 
 See ADR 0018 for the full decision and rationale.
 
+**2026-08-01 note (final secret/env model, spec 16 @ `19b2cf0`):** the
+layering/merge above still applies; what changed is the exposure surface —
+secret defs are a pure catalog (`env_var`/`allowed_hosts`/`required`/
+`placeholder`), and workload env bindings decide exposure per-binding via
+`bound` (`host` default = placeholder; `guest` = real value) with the
+`KEY = true` same-name sugar. The `secret_env` namespace and the
+intermediate v2 `delivery` field are gone; `schema_version` is 1 everywhere.
+
 ## Environment note: container persistence
+
+> **STALE (2026-08-01):** the repo-local home described below was retired by
+> spec 08 (executed 2026-07-30) — the single tool home is the user-global
+> `~/.workestrate` (ADR 0023), never inside the checkout; the `.envrc` pin,
+> `scripts/local-xdg.sh`, `scripts/migrate-xdg-to-repo.sh`, and the
+> `.gitignore` entry were removed (commits `418530a`, `bef1c37`). The
+> age-key guidance below still holds.
 
 workestrate state (registry, config repos, encrypted secrets, runtime state)
 lives in a gitignored `.workestrate/` directory inside the repo. This
