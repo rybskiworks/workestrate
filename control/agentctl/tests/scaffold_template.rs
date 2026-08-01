@@ -167,11 +167,15 @@ fn copier_template_byte_matches_native_render() {
     // Compare overlap files (after trimming trailing whitespace per line).
     // README is excluded — copier has a richer copier-update section; native
     // points users at `workestrate config new`.
+    // Schema parity (schemas/workestrate.schema.json) is guarded on the
+    // native side by schema_drift.rs (schemars vs committed schema); the
+    // copier-side vendored copy is a static snapshot.
     let overlap = [
         "workestrate.toml",
         ".sops.yaml",
         ".env.example",
         ".gitignore",
+        "tombi.toml",
     ];
     let mut mismatches = Vec::new();
     for fname in &overlap {

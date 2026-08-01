@@ -12,7 +12,7 @@ let
   # Closing the nix-purity guard: every excluded basename here corresponds
   # to an entry in `control/agentctl/.gitignore` so the working-tree state
   # and the nix-source view agree.
-  src = pkgs.lib.cleanSourceWith {
+  agentctlSrc = pkgs.lib.cleanSourceWith {
     filter = path: type:
       let base = baseNameOf path; in
       !(base == "target"
@@ -23,6 +23,17 @@ let
             && pkgs.lib.hasSuffix "/.cargo/config.toml" path));
     src = ../../control/agentctl;
   };
+
+  # The scaffold embeds the committed JSON schema via
+  # `include_str!("../../../../schemas/workestrate.schema.json")` (relative to
+  # control/agentctl/src/scaffold/mod.rs), so the build source must be the
+  # repo-level subtree that contains BOTH control/agentctl and schemas/.
+  src = pkgs.runCommand "source" { } ''
+    mkdir -p $out/control
+    cp -r ${agentctlSrc} $out/control/agentctl
+    chmod -R u+w $out/control/agentctl
+    cp -r ${../../schemas} $out/schemas
+  '';
 
   # Use the fenix-pinned toolchain so nix builds and the dev shell agree on
   # the exact rustc version (currently 1.97.1).
@@ -36,6 +47,10 @@ in
   version = "0.1.0";
 
   inherit src;
+
+  # The composite src root contains control/agentctl + schemas/ (see above);
+  # the crate builds from the agentctl subtree.
+  sourceRoot = "source/control/agentctl";
 
   cargoLock = {
     lockFile = ../../control/agentctl/Cargo.lock;

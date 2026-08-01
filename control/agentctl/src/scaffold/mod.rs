@@ -14,7 +14,8 @@
 //!   list fails loudly instead of leaking template syntax into the world.
 //! - The minimal-personal render is byte-compatible with the copier
 //!   template at `templates/workestrate-config/` for the overlap files
-//!   (workestrate.toml, .sops.yaml, .env.example, .gitignore). The CI
+//!   (workestrate.toml, .sops.yaml, .env.example, .gitignore, tombi.toml).
+//!   The CI
 //!   guard at `tests/scaffold_template.rs` enforces this parity when
 //!   `copier` is available (HOST-NIX gate; SKIPs otherwise).
 
@@ -52,6 +53,8 @@ const T_GITIGNORE: &str = include_str!("template/.gitignore");
 const T_README: &str = include_str!("template/README.md.tpl");
 const T_COPIER_ANSWERS: &str = include_str!("template/.copier-answers.yml.tpl");
 const T_FLAKE_NIX: &str = include_str!("template/flake.nix.tpl");
+const T_TOMBI_TOML: &str = include_str!("template/tombi.toml.tpl");
+const T_SCHEMA_JSON: &str = include_str!("../../../../schemas/workestrate.schema.json");
 
 /// Variables needed to render the scaffold. Each field maps 1:1 to a
 /// `{{ var }}` token in one or more templates.
@@ -118,7 +121,7 @@ pub fn render_all(vars: &ScaffoldVars) -> Result<Vec<(&'static str, String)>> {
         ("{{ age_recipient }}", age_recipient),
     ];
 
-    let mut out: Vec<(&'static str, String)> = Vec::with_capacity(8);
+    let mut out: Vec<(&'static str, String)> = Vec::with_capacity(10);
     out.push(("workestrate.toml", render(T_WORKESTRATE_TOML, toml_vars)?));
     out.push((".sops.yaml", render(T_SOPS_YAML, sops_vars)?));
     out.push((".env.example", render(T_ENV_EXAMPLE, &[])?));
@@ -128,6 +131,8 @@ pub fn render_all(vars: &ScaffoldVars) -> Result<Vec<(&'static str, String)>> {
         ".copier-answers.yml",
         render(T_COPIER_ANSWERS, copier_vars)?,
     ));
+    out.push(("tombi.toml", render(T_TOMBI_TOML, &[])?));
+    out.push(("schemas/workestrate.schema.json", T_SCHEMA_JSON.to_string()));
     if let Some(core_flake_url) = vars.core_flake_url.as_deref() {
         let flake_vars: &[(&str, &str)] = &[("{{ core_flake_url }}", core_flake_url)];
         out.push(("flake.nix", render(T_FLAKE_NIX, flake_vars)?));
@@ -175,6 +180,8 @@ mod tests {
         assert!(names.contains(&".gitignore"));
         assert!(names.contains(&"README.md"));
         assert!(names.contains(&".copier-answers.yml"));
+        assert!(names.contains(&"tombi.toml"));
+        assert!(names.contains(&"schemas/workestrate.schema.json"));
         assert!(
             !names.contains(&"flake.nix"),
             "flake.nix should be omitted when core_flake_url is None"
@@ -221,6 +228,31 @@ mod tests {
             "age_recipient not substituted"
         );
         assert!(!sops.contains("{{"), "unsubstituted token in .sops.yaml");
+    }
+
+    #[test]
+    fn render_all_tombi_and_schema_content() {
+        let out = render_all(&vars()).expect("render_all");
+        let tombi = out
+            .iter()
+            .find(|(n, _)| *n == "tombi.toml")
+            .map(|(_, c)| c.as_str())
+            .expect("tombi.toml");
+        assert!(
+            tombi.contains("[[schemas]]"),
+            "tombi.toml must wire the schema catalog; got:\n{}",
+            tombi
+        );
+        assert!(!tombi.contains("{{"), "unsubstituted token in tombi.toml");
+        let schema = out
+            .iter()
+            .find(|(n, _)| *n == "schemas/workestrate.schema.json")
+            .map(|(_, c)| c.as_str())
+            .expect("schemas/workestrate.schema.json");
+        assert!(
+            schema.contains("\"$schema\"") || schema.contains("\"title\""),
+            "schemas/workestrate.schema.json must be the vendored JSON schema"
+        );
     }
 
     #[test]
@@ -292,7 +324,7 @@ mod tests {
         // --empty branch and assert on its output.
         let name = "testrepo";
         let rendered = format!(
-            "#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json\n\
+            "#:schema ./schemas/workestrate.schema.json\n\
              \n\
              schema_version = 1\n\
              \n\

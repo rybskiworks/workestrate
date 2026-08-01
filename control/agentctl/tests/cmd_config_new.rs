@@ -11,8 +11,9 @@
 
 mod common;
 
-use common::IsolatedHome;
+use common::{IsolatedHome, TempDir};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 fn unique_dest(parent: &Path, label: &str) -> PathBuf {
     let p = parent.join(format!(
         "{}-{}",
@@ -419,5 +420,170 @@ fn config_new_symlinked_path_registers_canonical_url_with_note() {
         "registry should record the canonical url {}:\n{}",
         canonical.display(),
         registry_raw
+    );
+}
+
+/// Run git in `dir` with the system config disabled; assert success.
+/// (Mirrors the helper idiom in cmd_home_init.rs.)
+fn run_git(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .expect("spawn git");
+    assert!(
+        status.success(),
+        "git {:?} failed in {}",
+        args,
+        dir.display()
+    );
+}
+
+/// Scaffold a config repo with default git-init behavior (no registration)
+/// and return its destination path.
+fn scaffold_repo(home: &IsolatedHome, name: &str) -> PathBuf {
+    let dest = home.dir.join(format!("{name}-dest"));
+    let out = home
+        .cmd()
+        .args(["config", "new", name, "--path"])
+        .arg(&dest)
+        .args(["--no-register", "--age-recipient", "age1TEST"])
+        .output()
+        .expect("invoke config new");
+    assert!(
+        out.status.success(),
+        "config new failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    dest
+}
+
+/// `config new` installs the tombi pre-commit hook, executable on unix.
+#[test]
+fn config_new_installs_executable_tombi_hook() {
+    let home = IsolatedHome::new("cmd-config-new");
+    let dest = scaffold_repo(&home, "hooktest");
+
+    let hook = dest.join(".git").join("hooks").join("pre-commit");
+    assert!(
+        hook.exists(),
+        "pre-commit hook must exist at {}",
+        hook.display()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&hook).unwrap().permissions().mode();
+        assert!(
+            mode & 0o111 != 0,
+            "pre-commit hook must be executable (mode {:o})",
+            mode
+        );
+    }
+}
+
+/// The installed hook's canonical content references tombi.
+#[test]
+fn config_new_hook_content_mentions_tombi() {
+    let home = IsolatedHome::new("cmd-config-new");
+    let dest = scaffold_repo(&home, "hookcontent");
+
+    let hook = dest.join(".git").join("hooks").join("pre-commit");
+    let content = std::fs::read_to_string(&hook).expect("read pre-commit hook");
+    assert!(
+        content.contains("tombi format --check"),
+        "hook must run tombi format --check:\n{}",
+        content
+    );
+    assert!(
+        content.contains("TOMBI_REQUIRED"),
+        "hook must record the required tombi version:\n{}",
+        content
+    );
+}
+
+/// Locate `tombi` on PATH (which-style lookup).
+fn find_tombi() -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join("tombi");
+        if candidate.is_file() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if candidate.metadata().ok()?.permissions().mode() & 0o111 == 0 {
+                    continue;
+                }
+            }
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Behavioral: the installed hook fails on malformed TOML when tombi is
+/// present, and warns-and-skips (exit 0) when tombi is absent from PATH.
+#[test]
+fn config_new_hook_behavioral() {
+    let home = IsolatedHome::new("cmd-config-new");
+    let dest = scaffold_repo(&home, "hookbehav");
+    let installed_hook = dest.join(".git").join("hooks").join("pre-commit");
+    let hook_content = std::fs::read_to_string(&installed_hook).expect("read installed hook");
+
+    // A scratch repo with a deliberately malformed TOML file.
+    let scratch = TempDir::new("cmd-config-new-hook");
+    let repo = scratch.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git").join("hooks")).expect("create scratch repo .git");
+    run_git(&repo, &["init"]);
+    std::fs::write(
+        repo.join(".git").join("hooks").join("pre-commit"),
+        hook_content,
+    )
+    .expect("install hook into scratch repo");
+    std::fs::write(repo.join("workestrate.toml"), "bad = [unclosed\n").expect("write bad toml");
+
+    // Case tombi-present (HOST-NIX style gate): the hook must FAIL on the
+    // malformed TOML.
+    if find_tombi().is_some() {
+        let out = Command::new("/bin/sh")
+            .arg(repo.join(".git").join("hooks").join("pre-commit"))
+            .current_dir(&repo)
+            .output()
+            .expect("run pre-commit hook (tombi present)");
+        assert!(
+            !out.status.success(),
+            "hook must fail on malformed TOML when tombi is present; stdout=\n{}\nstderr=\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    } else {
+        eprintln!(
+            "cmd_config_new: SKIP tombi-present case — 'tombi' not on PATH \
+             (HOST-NIX gate; mirrors schema_drift.rs bootstrap-skip)."
+        );
+    }
+
+    // Case tombi-absent (always runs): PATH points at an empty temp dir so
+    // `command -v tombi` fails inside the hook; it must warn and exit 0.
+    let empty_path = TempDir::new("cmd-config-new-empty-path");
+    let out = Command::new("/bin/sh")
+        .arg(repo.join(".git").join("hooks").join("pre-commit"))
+        .current_dir(&repo)
+        .env("PATH", empty_path.path())
+        .output()
+        .expect("run pre-commit hook (tombi absent)");
+    assert!(
+        out.status.success(),
+        "hook must exit 0 when tombi is absent; stdout=\n{}\nstderr=\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tombi not found"),
+        "hook stderr should note the missing tombi; got:\n{}",
+        stderr
     );
 }

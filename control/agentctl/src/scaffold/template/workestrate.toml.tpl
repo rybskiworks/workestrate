@@ -1,4 +1,4 @@
-#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json
+#:schema ./schemas/workestrate.schema.json
 
 schema_version = 1
 

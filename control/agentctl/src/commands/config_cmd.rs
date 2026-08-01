@@ -1,7 +1,7 @@
 //! Config-repo and context commands (`workestrate config …`,
 //! `workestrate context …`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -11,6 +11,34 @@ use crate::commands::secrets_target::derive_age_recipient;
 use crate::config;
 use crate::git::{git_clone, git_init, git_is_dirty, git_pull, git_rev_parse, short_rev};
 use crate::scaffold;
+
+/// Pre-commit hook installed into new config repos: TOML format + lint +
+/// schema validation via tombi. Warns-and-skips (exit 0) when tombi is not
+/// on PATH — hooks run on arbitrary machines; fails (exit 1) on tombi
+/// check failures. Kept as a const so tests can assert on canonical content.
+const CONFIG_PRE_COMMIT_HOOK: &str = r#"#!/bin/sh
+# workestrate config-repo pre-commit: TOML format + lint + schema validation.
+TOMBI_REQUIRED="1.2.5"
+if ! command -v tombi >/dev/null 2>&1; then
+    echo "pre-commit: tombi not found (need $TOMBI_REQUIRED); skipping tombi checks" >&2
+    exit 0
+fi
+tombi format --check || exit 1
+tombi lint --error-on-warnings || exit 1
+"#;
+
+/// Write the pre-commit hook into `<dest>/.git/hooks/pre-commit` and mark it
+/// executable (unix: mode 0o755). Only called when git init succeeded.
+fn install_config_pre_commit_hook(dest: &Path) -> Result<()> {
+    let hook = dest.join(".git").join("hooks").join("pre-commit");
+    std::fs::write(&hook, CONFIG_PRE_COMMIT_HOOK)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
 
 pub async fn cmd_config(action: ConfigAction) -> Result<()> {
     match action {
@@ -387,7 +415,7 @@ pub async fn cmd_config_new(
             (
                 "workestrate.toml".to_string(),
                 format!(
-                    "#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json\n\
+                    "#:schema ./schemas/workestrate.schema.json\n\
                      \n\
                      schema_version = 1\n\
                      \n\
@@ -451,6 +479,12 @@ pub async fn cmd_config_new(
                 }
             }
         }
+    }
+
+    // Install the tombi pre-commit hook when git init succeeded (skipped on
+    // --no-git-init or when the git binary is missing).
+    if git_initialized {
+        install_config_pre_commit_hook(&dest)?;
     }
 
     // Register in workestrate registry.
@@ -521,6 +555,9 @@ pub async fn cmd_config_new(
         println!();
         println!(
             "git initialized (no initial commit; `git add . && git commit -m init` when ready)"
+        );
+        println!(
+            "  .git/hooks/pre-commit installed (tombi format + lint checks; skips when tombi absent)"
         );
     }
     if registered {

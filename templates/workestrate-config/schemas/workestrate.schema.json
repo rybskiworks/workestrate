@@ -1,0 +1,729 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ConfigFile",
+  "description": "Top-level schema root of a `workestrate.toml` layer: `schema_version` (must equal `EXPECTED_SCHEMA_VERSION`; absent warns and is treated as legacy), plus the `secrets` and `workloads` maps. Layers are merged by `merge::merge_layers` into one effective `ConfigFile`.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "default": 0,
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "secrets": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/SecretDefConfig"
+      }
+    },
+    "workloads": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/WorkloadConfig"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "BakedFileSpec": {
+      "description": "A single file baked into the image at build time (`image.baked_files`). `path` is the in-image destination and `content` is the verbatim file body.",
+      "type": "object",
+      "required": [
+        "content",
+        "path"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BinarySpec": {
+      "description": "A binary built from source and baked into the image (`image.binary`). `recipe` selects the build strategy and `src` locates the source; the optional fields tune the produced artifact (`entrypoint`, `worker`, `npm_deps_hash`).",
+      "type": "object",
+      "required": [
+        "recipe",
+        "src"
+      ],
+      "properties": {
+        "entrypoint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "npm_deps_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "src": {
+          "type": "string"
+        },
+        "worker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DenyDomainRule": {
+      "type": "object",
+      "required": [
+        "domain_suffix"
+      ],
+      "properties": {
+        "domain_suffix": {
+          "type": "string"
+        }
+      }
+    },
+    "DependsOnSpec": {
+      "description": "A single dependency declaration of a workload (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d) discovery-lite). `env` names the environment variable the resolved address of dependency `<dep>` is injected as; `required` (default false) makes a not-running dependency a plan-time refusal instead of a skip.",
+      "type": "object",
+      "required": [
+        "env"
+      ],
+      "properties": {
+        "env": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressRecipeRef": {
+      "description": "Egress recipe reference as declared in config.\n\nConfig may only reference named recipes; each is expanded by core into the concrete `EgressRule`s it represents.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "recipe"
+          ],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "dns"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "recipe"
+          ],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "litellm_proxy"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "recipe"
+          ],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "github"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "recipe"
+          ],
+          "properties": {
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "agent_base"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "hosts",
+            "recipe"
+          ],
+          "properties": {
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "recipe": {
+              "type": "string",
+              "enum": [
+                "https"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "EnvFieldShape": {
+      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`deserialize_env`] normalizes both forms to `Vec<EnvVarConfig>` at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map]`.",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EnvVarConfig"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/EnvValueShorthand"
+          }
+        }
+      ]
+    },
+    "EnvSecretRef": {
+      "description": "One secret reference as an `env` map value (spec 14): in the map form `env = { KEY = { secret = \"NAME\" } }`, the inline table may carry ONLY a secret reference — never a `name` (the map key IS the name) and never a literal `value`. Deliberately distinct from [`EnvVarConfig`] so `deny_unknown_fields` rejects `name`/`value`/typos inside a map value.",
+      "type": "object",
+      "required": [
+        "secret"
+      ],
+      "properties": {
+        "secret": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvValueShorthand": {
+      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (spec 14): a bare string `\"value\"` is a literal value, an inline table `{ secret = \"NAME\" }` a secret reference. This enum is NEVER stored — [`deserialize_env`] normalizes every map entry to [`EnvVarConfig`] at parse time, so merge/validation/plan code sees the identical post-parse struct it saw before. It exists so the generated schema can show both value forms.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/EnvSecretRef"
+        }
+      ]
+    },
+    "EnvVarConfig": {
+      "description": "One environment-variable entry in a workload's `env` list. Exactly one of `value` (literal) or `secret` (reference to a `secrets.<name>` entry) is expected to be set; `name` must be a valid shell env identifier.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "secret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImageSpec": {
+      "description": "How to obtain the sandbox image for a workload (`image = { ... }` inline table in workestrate.toml). `recipe` selects the acquisition strategy (e.g. `registry`, `local`); the remaining optional fields narrow it (`ref`/`name`/`tag`/`contents`) or extend the image (`binary`, `baked_files`, `features`). Unknown fields are rejected at parse time.",
+      "type": "object",
+      "required": [
+        "recipe"
+      ],
+      "properties": {
+        "baked_files": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/BakedFileSpec"
+          }
+        },
+        "binary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BinarySpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contents": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "features": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "IngressRule": {
+      "type": "object",
+      "required": [
+        "port",
+        "protocol",
+        "scope"
+      ],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "protocol": {
+          "$ref": "#/definitions/Protocol"
+        },
+        "scope": {
+          "$ref": "#/definitions/Scope"
+        }
+      }
+    },
+    "LocalBuildConfig": {
+      "description": "Build the workload from a local source checkout instead of pulling an image (`workloads.<name>.local_build`). `recipe` selects the build strategy, `source` the checkout location; the optional fields drive incremental-build gating and fallback behaviour.",
+      "type": "object",
+      "required": [
+        "recipe",
+        "source"
+      ],
+      "properties": {
+        "env_override": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gating_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "requirements_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MountPlan": {
+      "type": "object",
+      "required": [
+        "guest",
+        "host",
+        "read_only"
+      ],
+      "properties": {
+        "guest": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "read_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "NetworkConfig": {
+      "description": "Per-workload network policy (`workloads.<name>.network`). `default_deny` is the egress fail-closed switch (monotonic-true across layers for non-entitled workloads); `egress` lists allowed egress recipes, `deny` explicit domain-suffix denials, and `ingress` inbound exposure rules.",
+      "type": "object",
+      "properties": {
+        "default_deny": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "deny": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DenyDomainRule"
+          }
+        },
+        "egress": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EgressRecipeRef"
+          }
+        },
+        "ingress": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/IngressRule"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PortMapping": {
+      "type": "object",
+      "required": [
+        "guest",
+        "host"
+      ],
+      "properties": {
+        "bind_ip": {
+          "description": "Host bind address (ADR 0026). Defaults to 127.0.0.1 (the shared singleton bind).",
+          "default": "127.0.0.1",
+          "type": "string",
+          "format": "ip"
+        },
+        "guest": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "host": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      }
+    },
+    "Protocol": {
+      "description": "Network protocol for ingress/egress rules.",
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    },
+    "Scope": {
+      "description": "Network scope for ingress rules.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "local"
+          ]
+        },
+        {
+          "description": "Public ingress (not yet used by any workload).",
+          "type": "string",
+          "enum": [
+            "public"
+          ]
+        }
+      ]
+    },
+    "SecretDefConfig": {
+      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml). `env_var` is the environment variable the resolved value is injected as; `hosts` constrains which egress hosts may receive it; `required` makes a missing value a hard error; `source`/`exposed_as`/`placeholder`/ `description` drive resolution and UX.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env_var": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exposed_as": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hosts": {
+          "default": null,
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "placeholder": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecretEnvConfig": {
+      "description": "One secret reference in a workload's `secret_env` list: names an entry in the top-level `secrets` map whose resolved value is injected into the sandbox environment.",
+      "type": "object",
+      "required": [
+        "secret"
+      ],
+      "properties": {
+        "secret": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecretEnvShorthand": {
+      "description": "Serde/schemars-boundary-only helper for the `secret_env` string-or-table shorthand (spec 13): a bare string `\"NAME\"` is shorthand for the inline table `{ secret = \"NAME\" }`. This enum is NEVER stored — [`deserialize_secret_env`] normalizes every element to [`SecretEnvConfig`] at parse time, so merge/validation/plan code sees the identical post-parse struct it saw before. The `Full` (table) variant is kept as forward-compat for future per-entry fields.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/SecretEnvConfig"
+        }
+      ]
+    },
+    "SeedFileConfig": {
+      "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary), `target` the in-sandbox destination; `only_if_missing` skips the copy when the target already exists.",
+      "type": "object",
+      "required": [
+        "source",
+        "target"
+      ],
+      "properties": {
+        "only_if_missing": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadConfig": {
+      "description": "A single workload definition (`workloads.<name>` in workestrate.toml). `kind` is `\"agent\"` (interactive TUI attach) or `\"service\"` (headless, detached by default); the remaining fields describe the image, resources, command, env/secret wiring, mounts, ports, seed files, local-build override, network policy, and dependency declarations. All fields merge layer-by-layer via `merge::merge_layers`.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cpus": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "depends_on": {
+          "description": "Dependency declarations (`workloads.<name>.depends_on.<dep>`; ADR 0026(d)): each entry names another workload whose address is resolved from the port registry and injected as the declared env var at plan time. Layers merge union-by-dependency-name, last layer wins per dep.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/DependsOnSpec"
+          }
+        },
+        "env": {
+          "default": [],
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnvFieldShape"
+            }
+          ]
+        },
+        "image": {
+          "default": {
+            "baked_files": null,
+            "binary": null,
+            "contents": null,
+            "features": null,
+            "name": null,
+            "recipe": "",
+            "ref": null,
+            "tag": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ImageSpec"
+            }
+          ]
+        },
+        "kind": {
+          "default": "",
+          "type": "string"
+        },
+        "local_build": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LocalBuildConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "log_stop_errors": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "memory_mib": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "mounts": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MountPlan"
+          }
+        },
+        "network": {
+          "default": {
+            "default_deny": null,
+            "deny": [],
+            "egress": [],
+            "ingress": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/NetworkConfig"
+            }
+          ]
+        },
+        "ports": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortMapping"
+          }
+        },
+        "secret_env": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SecretEnvShorthand"
+          }
+        },
+        "seed_files": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SeedFileConfig"
+          }
+        },
+        "workdir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
