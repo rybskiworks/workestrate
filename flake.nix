@@ -152,6 +152,34 @@
               workestrate validate-config
               touch $out/ok
             '';
+
+          # B14 filtered-src pattern (mirror nix/lib/config.nix:10-15): the
+          # builtins.path filter copies ONLY *.toml + *.schema.json into the
+          # store (directories pass the filter so their subtrees are
+          # traversed; non-TOML leaves are dropped). The schema lint resolves
+          # [[schemas]] path = schemas/workestrate.schema.json relative to
+          # the filtered root, so the schema file must survive the filter.
+          # tombi is the 1.2.5 let-bound package (nix/packages/tombi.nix) —
+          # passed as an argument like workestrate in validateConfig because
+          # the nixpkgs pin ships tombi 0.11.6 (wrong config-key era).
+          checks.tombiCheck = { pkgs, src, tombi }:
+            pkgs.runCommand "tombi-check" {
+              nativeBuildInputs = [ tombi ];
+            } ''
+              mkdir -p $out
+              cd ${builtins.path {
+                path = src;
+                filter = path: type:
+                  type == "directory"
+                  || pkgs.lib.hasSuffix ".toml" (baseNameOf path)
+                  || pkgs.lib.hasSuffix ".schema.json" (baseNameOf path);
+                name = "tombi-check-src";
+              }}
+              export TOMBI_OFFLINE=true
+              tombi format --check
+              tombi lint --error-on-warnings
+              touch $out/ok
+            '';
         };
 
       microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {};

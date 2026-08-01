@@ -68,7 +68,7 @@ spec-examples:
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # config validation, golden-check, schema drift, lock-file stability, AND
 # nix-purity lint.
-verify: toolchain-check check test spec-examples litellm-check golden-check schema-check scaffold-check lint-nix store-audit
+verify: toolchain-check check test spec-examples litellm-check tombi-check golden-check schema-check scaffold-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
@@ -336,3 +336,9 @@ store-delta-check:
 # enforcement of the anti-accumulation invariants — wired into `verify`.
 lint-nix:
     ./scripts/check-nix-paths.sh
+
+# tombi TOML gates: format + lint (+ schema validation for
+# config.reference/workestrate.toml) via scripts/check-toml.sh.
+# Wired into `verify`.
+tombi-check:
+    ./scripts/check-toml.sh

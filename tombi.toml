@@ -1,0 +1,47 @@
+# tombi configuration for the ai-workbench repo.
+# tombi 1.2.5+ — see https://tombi-toml.github.io/tombi/
+
+toml-version = "v1.0.0"
+
+[files]
+include = [
+  "config.reference/**/*.toml",
+  "control/agentctl/Cargo.toml",
+  ".cargo/config.toml",
+  "control/agentctl/.cargo/config.toml",
+  "tombi.toml",
+]
+exclude = [
+  "control/agentctl/tests/fixtures/**",
+  ".tmp/**",
+  "target/**",
+  "vendor/**",
+  "node_modules/**",
+  "agents/*/repo/**",
+  "agents/*/build/**",
+]
+
+[format.rules]
+indent-width = 2
+line-width = 100
+
+[lint.rules]
+dotted-keys-out-of-order = "warn"
+tables-out-of-order = "warn"
+
+[schema]
+enabled = true
+strict = true
+
+# Offline-pinned gate: disable the schemastore catalog. Only the explicit
+# [[schemas]] entry below applies; Cargo.toml et al. get format + plain lint
+# (no remote schema, no dangling sub-schema reference warnings).
+[schema.catalog]
+paths = []
+
+# Schema lint applies ONLY to the tracked reference config. tests/fixtures
+# are deliberately OUT of both [files].include and [[schemas]].include —
+# hostile fixtures must not be schema-validated or linted.
+[[schemas]]
+path = "schemas/workestrate.schema.json"
+include = ["config.reference/workestrate.toml"]

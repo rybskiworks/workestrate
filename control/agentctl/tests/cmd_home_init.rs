@@ -120,6 +120,36 @@ fn init_creates_structure_gitignore_and_hook() {
         "hook must reject store-dir paths:\n{}",
         hook_content
     );
+    // tombi gates (spec 15): optional block, runs when tombi is on PATH.
+    assert!(
+        hook_content.contains("tombi format --check"),
+        "hook must run the tombi format gate:\n{}",
+        hook_content
+    );
+    assert!(
+        hook_content.contains("--error-on-warnings"),
+        "hook must run the tombi lint gate with --error-on-warnings:\n{}",
+        hook_content
+    );
+
+    // tombi toolchain files: home tombi.toml + vendored schema (spec 15).
+    let tombi_toml = std::fs::read_to_string(store.join("tombi.toml")).expect("read tombi.toml");
+    assert!(
+        tombi_toml.contains("config-repos/*/workestrate.toml"),
+        "home tombi.toml must include config-repos/*/workestrate.toml:\n{}",
+        tombi_toml
+    );
+    assert!(
+        tombi_toml.contains("[[schemas]]"),
+        "home tombi.toml must carry a [[schemas]] entry:\n{}",
+        tombi_toml
+    );
+    let schema = std::fs::read_to_string(store.join("schemas").join("workestrate.schema.json"))
+        .expect("read vendored schema");
+    assert!(
+        schema.contains("\"$schema\"") || schema.contains("\"title\""),
+        "vendored schema must look like a JSON Schema document"
+    );
 }
 
 #[test]
@@ -140,6 +170,8 @@ fn second_run_is_idempotent_noop() {
     );
     let gitignore_before =
         std::fs::read_to_string(store.join(".gitignore")).expect("read .gitignore (first)");
+    let tombi_before =
+        std::fs::read_to_string(store.join("tombi.toml")).expect("read tombi.toml (first)");
 
     let second = home
         .cmd()
@@ -164,6 +196,12 @@ fn second_run_is_idempotent_noop() {
     assert_eq!(
         gitignore_before, gitignore_after,
         ".gitignore must be identical between runs (no rewrite on the no-op path)"
+    );
+    let tombi_after =
+        std::fs::read_to_string(store.join("tombi.toml")).expect("read tombi.toml (second)");
+    assert_eq!(
+        tombi_before, tombi_after,
+        "tombi.toml must be identical between runs (no rewrite on the no-op path)"
     );
 }
 

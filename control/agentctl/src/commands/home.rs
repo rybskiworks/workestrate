@@ -26,6 +26,50 @@ id_rsa*
 .env
 ";
 
+/// tombi configuration written into the home repo (spec 15 §2.3):
+/// `config-repos/*/workestrate.toml` is format + schema-linted against the
+/// vendored schema copy under `schemas/`; `config.toml` + `overrides.toml`
+/// are format-only. Store dirs and the lock stay out of the include set.
+const HOME_TOMBI_TOML: &str = r#"# tombi configuration for the workestrate tool home.
+# tombi 1.2.5+ — see https://tombi-toml.github.io/tombi/
+
+toml-version = "v1.0.0"
+
+[format.rules]
+line-width = 100
+indent-width = 2
+
+[lint.rules]
+tables-out-of-order = "warn"
+dotted-keys-out-of-order = "warn"
+
+[schema]
+enabled = true
+strict = true
+
+[[schemas]]
+path = "schemas/workestrate.schema.json"
+include = ["config-repos/*/workestrate.toml"]
+
+[files]
+include = [
+  "config-repos/*/workestrate.toml",
+  "config.toml",
+  "overrides.toml",
+]
+exclude = [
+  "workestrate.lock",
+  "secrets/**",
+  "sources/**",
+  "state/**",
+]
+"#;
+
+/// Vendored JSON Schema for `workestrate.toml`, embedded at compile time so
+/// the home's tombi schema lint works offline. Same relative path as the
+/// scaffold copy (`src/scaffold/mod.rs`) — home.rs sits at the same depth.
+const HOME_SCHEMA_JSON: &str = include_str!("../../../../schemas/workestrate.schema.json");
+
 /// Pre-commit hook installed into the home repo: rejects embedded git repos
 /// (gitlinks, mode 160000), store-dir paths, and secret material. Kept as a
 /// const so tests can assert on the canonical content.
@@ -52,6 +96,11 @@ if printf '%s\n' "$staged" | grep -qE '(^|/)([^/]*\.agekey|age\.txt|[^/]*\.pem|i
     fail=1
 fi
 [ "$fail" -eq 0 ] || exit 1
+# tombi TOML gates (optional — skipped when tombi is absent).
+if command -v tombi >/dev/null 2>&1; then
+    tombi format --check || exit 1
+    tombi lint --error-on-warnings || exit 1
+fi
 exit 0
 "#;
 
@@ -110,6 +159,16 @@ pub fn cmd_home_init(config_url: Option<&str>, name: &str) -> Result<()> {
     // 5. .gitignore: store dirs + secret material untracked; age ciphertext
     //    (*.enc) stays committable.
     std::fs::write(home.join(".gitignore"), HOME_GITIGNORE)?;
+
+    // 5b. tombi toolchain files (spec 15): home tombi.toml + the vendored
+    //     schema the home's [[schemas]] entry resolves against. The
+    //     pre-commit hook below runs the tombi gates when tombi is present.
+    std::fs::write(home.join("tombi.toml"), HOME_TOMBI_TOML)?;
+    std::fs::create_dir_all(home.join("schemas"))?;
+    std::fs::write(
+        home.join("schemas").join("workestrate.schema.json"),
+        HOME_SCHEMA_JSON,
+    )?;
 
     // 6. Pre-commit hook (executable on unix).
     install_pre_commit_hook(&home)?;
@@ -677,6 +736,7 @@ fn print_summary(home: &Path, with_config: bool, name: &str, ensured: &[&str]) {
     println!("Installed:");
     println!("  .gitignore (store dirs + secret material untracked; *.enc committable)");
     println!("  .git/hooks/pre-commit (rejects gitlinks, store-dir paths, secret material)");
+    println!("  tombi.toml + schemas/workestrate.schema.json (tombi TOML gates; hook runs them when tombi is present)");
     if !ensured.is_empty() {
         println!();
         println!("Ensured dirs: {}", ensured.join(", "));
