@@ -1,9 +1,11 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use workestrate::cli_actions::{
     AgentAction, ConfigAction, ContextAction, HomeAction, ServiceAction, SourceAction,
+    WorkloadAction,
 };
 use workestrate::cli_error::{classify_exit_code, emit_error};
 use workestrate::commands::config_cmd::{
@@ -11,13 +13,13 @@ use workestrate::commands::config_cmd::{
 };
 use workestrate::commands::diagnostics::{
     cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_ps, cmd_run, cmd_validate_config,
+    cmd_workloads,
 };
 use workestrate::commands::doctor::cmd_doctor;
 use workestrate::commands::home::cmd_home;
 use workestrate::commands::init::{cmd_init, cmd_new};
 use workestrate::commands::lifecycle::{
-    cmd_clean, cmd_down_all, dispatch_agent, dispatch_service, parse_agent_action,
-    parse_service_action,
+    cmd_clean, cmd_down_all, dispatch_agent, dispatch_service, workload_route, WorkloadRoute,
 };
 use workestrate::commands::migrate::cmd_migrate_home;
 use workestrate::commands::secrets_target::{cmd_secrets_schema, cmd_secrets_target};
@@ -192,9 +194,15 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Catch-all for config-defined workloads
-    #[command(external_subcommand)]
-    Workload(Vec<String>),
+    /// Run a configured workload: up/exec/plan/down/logs <name> (ADR 0027).
+    /// Workload names are ARGUMENTS, never subcommands, so a config-defined
+    /// workload can never be shadowed by a built-in verb.
+    Workload {
+        #[command(subcommand)]
+        action: WorkloadAction,
+    },
+    /// List configured workloads (name, kind, image, running status).
+    Workloads,
 }
 
 /// Extract the typed `--use <dep>@<instance>` overrides from a clap-parsed
@@ -237,12 +245,150 @@ fn json_mode_from_args(args: &[String]) -> bool {
     false
 }
 
+/// One-cycle deprecation shim for the pre-ADR-0027 invocation shape
+/// `workestrate <name> <verb> ...` → `workestrate workload <verb> <name> ...`.
+///
+/// Pure and total: it NEVER makes a valid invocation fail. A rewrite happens
+/// only when ALL of these hold:
+///   - `args[1]` exists, does not start with `-` (a leading global flag at
+///     the subcommand position leaves argv untouched), and is NOT a known
+///     built-in subcommand name (built-ins ALWAYS win — clap precedence is
+///     preserved by never shimming a name clap would match),
+///   - `args[2]` is one of the five workload verbs,
+///   - `is_workload(args[1])` confirms the name is a configured workload.
+///
+/// Any doubt → the argv is returned unchanged with no warning.
+///
+/// Returns the (possibly rewritten) argv plus an optional deprecation
+/// warning for the caller to emit on stderr.
+fn rewrite_legacy_workload_argv(
+    args: Vec<String>,
+    known: &HashSet<String>,
+    is_workload: impl Fn(&str) -> bool,
+) -> (Vec<String>, Option<String>) {
+    const VERBS: [&str; 5] = ["up", "exec", "plan", "down", "logs"];
+    let Some(name) = args.get(1) else {
+        return (args, None);
+    };
+    if name.starts_with('-') || known.contains(name.as_str()) {
+        return (args, None);
+    }
+    let Some(verb) = args.get(2) else {
+        return (args, None);
+    };
+    if !VERBS.contains(&verb.as_str()) {
+        return (args, None);
+    }
+    if !is_workload(name) {
+        return (args, None);
+    }
+    let warning = format!(
+        "warning: `workestrate {name} {verb} ...` is deprecated; use `workestrate workload {verb} {name} ...`"
+    );
+    let mut rewritten = Vec::with_capacity(args.len() + 1);
+    rewritten.push(args[0].clone());
+    rewritten.push("workload".to_string());
+    rewritten.push(verb.clone());
+    rewritten.push(name.clone());
+    rewritten.extend(args.iter().skip(3).cloned());
+    (rewritten, Some(warning))
+}
+
+/// Translate a clap-parsed verb-first [`WorkloadAction`] into the legacy
+/// [`ServiceAction`] shape (pure field mapping — the caller has already
+/// kind-checked the route via [`workload_route`]).
+fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
+    match action {
+        WorkloadAction::Up {
+            foreground,
+            replace,
+            instance,
+            new,
+            port_auto,
+            use_,
+            ..
+        } => ServiceAction::Up {
+            foreground,
+            replace,
+            instance,
+            new,
+            port_auto,
+            use_,
+        },
+        WorkloadAction::Plan { instance, use_, .. } => ServiceAction::Plan { instance, use_ },
+        WorkloadAction::Down {
+            instance,
+            all_instances,
+            ..
+        } => ServiceAction::Down {
+            instance,
+            all_instances,
+        },
+        WorkloadAction::Logs { instance, .. } => ServiceAction::Logs { instance },
+        WorkloadAction::Exec { .. } => {
+            unreachable!("workload_route guarantees exec only routes to agents")
+        }
+    }
+}
+
+/// The [`AgentAction`] counterpart of [`workload_action_as_service`]. The
+/// parity `foreground` flag on `workload exec` is accepted but unused
+/// downstream (agents always run in the foreground).
+fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
+    match action {
+        WorkloadAction::Exec {
+            replace,
+            instance,
+            new,
+            port_auto,
+            use_,
+            ..
+        } => AgentAction::Exec {
+            replace,
+            instance,
+            new,
+            port_auto,
+            use_,
+        },
+        WorkloadAction::Plan { instance, use_, .. } => AgentAction::Plan { instance, use_ },
+        WorkloadAction::Down {
+            instance,
+            all_instances,
+            ..
+        } => AgentAction::Down {
+            instance,
+            all_instances,
+        },
+        WorkloadAction::Up { .. } | WorkloadAction::Logs { .. } => {
+            unreachable!("workload_route guarantees up/logs only route to services")
+        }
+    }
+}
+
 fn main() {
     // Pre-scan argv for --json so we can format ANY error (incl. clap parse
     // errors via Cli::parse()) as the JSON envelope when requested. The
     // global --json on Cli does not help here because Cli::parse() calls
     // process::exit on usage errors before we'd see the parsed value.
-    let json_mode = json_mode_from_args(&std::env::args().collect::<Vec<_>>());
+    let args: Vec<String> = std::env::args().collect();
+    let json_mode = json_mode_from_args(&args);
+
+    // ADR 0027 one-cycle deprecation shim: rewrite the legacy
+    // `workestrate <name> <verb> ...` shape to verb-first BEFORE clap parses.
+    // Best-effort: the config probe failures (or any doubt) leave argv
+    // untouched, and built-in subcommand names always win.
+    let known: HashSet<String> = Cli::command()
+        .get_subcommands()
+        .map(|s| s.get_name().to_string())
+        .collect();
+    let (args, shim_warning) = rewrite_legacy_workload_argv(args, &known, |name| {
+        workestrate::config::load_config()
+            .map(|cfg| cfg.workloads.contains_key(name))
+            .unwrap_or(false)
+    });
+    if let Some(warning) = shim_warning {
+        eprintln!("{warning}");
+    }
 
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -257,7 +403,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let result = rt.block_on(async_main());
+    let result = rt.block_on(async_main(args));
     match result {
         Ok(()) => {}
         Err(e) => {
@@ -267,8 +413,8 @@ fn main() {
     }
 }
 
-async fn async_main() -> Result<()> {
-    let cli = Cli::parse();
+async fn async_main(args: Vec<String>) -> Result<()> {
+    let cli = Cli::parse_from(args);
     if cli.no_project_config {
         std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
     }
@@ -371,39 +517,44 @@ async fn async_main() -> Result<()> {
             dry_run,
             force,
         } => cmd_migrate_home(from.as_deref(), dry_run, cli.json, force),
-        Commands::Workload(mut args) => {
-            if args.is_empty() {
-                anyhow::bail!("no workload name given");
-            }
-            // Pull --json out of the raw args so it works in any position. The
-            // global --json on Cli does not see inside external_subcommand args.
-            let json = cli.json || args.iter().any(|a| a == "--json");
-            args.retain(|a| a != "--json");
-
-            let name = args.remove(0);
-            let action = args.first().cloned().unwrap_or_else(|| "plan".to_string());
-            // ADR 0026(d): extract the raw `--use <dep>@<instance>` values
-            // BEFORE constructing the workload — resolution runs INSIDE the
-            // constructor, so the overrides must reach it. The raw
-            // parse_service_action/parse_agent_action parsers are pure and
-            // re-collect `--use` from the same args after construction, so
-            // the action the dispatch sees carries them too (detached `up`
-            // forwarding consumes them from the action via build_instance_spec).
-            let raw_use = workestrate::commands::lifecycle::parse_flag_values(&args, "--use");
-            let overrides = workestrate::microsandbox::discovery::parse_use_overrides(&raw_use)?;
+        Commands::Workload { action } => {
+            // ADR 0027 verb-first dispatch: the workload name is a clap
+            // positional, so `--json` and every flag is parsed by clap
+            // directly (no raw-args extraction). The `--use` values reach
+            // the workload constructor BEFORE resolution runs (ADR 0026(d)).
+            let (name, verb, use_values): (String, &'static str, Vec<String>) = match &action {
+                WorkloadAction::Up { name, use_, .. } => (name.clone(), "up", use_.clone()),
+                WorkloadAction::Exec { name, use_, .. } => (name.clone(), "exec", use_.clone()),
+                WorkloadAction::Plan { name, use_, .. } => (name.clone(), "plan", use_.clone()),
+                WorkloadAction::Down { name, .. } => (name.clone(), "down", Vec::new()),
+                WorkloadAction::Logs { name, .. } => (name.clone(), "logs", Vec::new()),
+            };
+            let overrides = workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
             let workload = ConfigWorkload::new_with_use_overrides(&name, &overrides)?;
-            match workload.kind() {
-                "service" => {
-                    let service_action = parse_service_action(&action, &args)?;
-                    dispatch_service(&workload, service_action, cli.show_source, json).await
+            // Kind-check at dispatch (ADR 0027): wrong-kind usage names the
+            // correct invocation; plan/down are universal.
+            match workload_route(workload.kind(), verb, &name)? {
+                WorkloadRoute::Service => {
+                    dispatch_service(
+                        &workload,
+                        workload_action_as_service(action),
+                        cli.show_source,
+                        cli.json,
+                    )
+                    .await
                 }
-                "agent" => {
-                    let agent_action = parse_agent_action(&action, &args)?;
-                    dispatch_agent(&workload, agent_action, cli.show_source, json).await
+                WorkloadRoute::Agent => {
+                    dispatch_agent(
+                        &workload,
+                        workload_action_as_agent(action),
+                        cli.show_source,
+                        cli.json,
+                    )
+                    .await
                 }
-                other => anyhow::bail!("unknown workload kind '{}' for '{}'", other, name),
             }
         }
+        Commands::Workloads => cmd_workloads(cli.json),
     }
 }
 
@@ -445,6 +596,8 @@ mod tests {
             "opencode",
             "tempest",
             "migrate-home",
+            "workload",
+            "workloads",
         ] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
         }
@@ -700,16 +853,24 @@ mod tests {
         use workestrate::microsandbox::workload::Workload;
         let litellm = ConfigWorkload::new("litellm")?;
 
-        // Singleton, no flags: just `<name> up --foreground`.
+        // Singleton, no flags: verb-first `workload up <name> --foreground`
+        // (ADR 0027).
         let args = litellm.detach_args(&spec_for_detach("litellm", false));
-        assert_eq!(args, vec!["litellm", "up", "--foreground"]);
+        assert_eq!(args, vec!["workload", "up", "litellm", "--foreground"]);
 
         // Parallel instance: forward `--instance <id>` with the BARE id, never
         // `slot@id`. `--new` must NOT appear (already materialized by parent).
         let args = litellm.detach_args(&spec_for_detach("litellm@canary", false));
         assert_eq!(
             args,
-            vec!["litellm", "up", "--foreground", "--instance", "canary"]
+            vec![
+                "workload",
+                "up",
+                "litellm",
+                "--foreground",
+                "--instance",
+                "canary"
+            ]
         );
         assert!(
             !args.contains(&"--new".to_string()),
@@ -718,15 +879,19 @@ mod tests {
 
         // `--replace` is forwarded when requested.
         let args = litellm.detach_args(&spec_for_detach("litellm", true));
-        assert_eq!(args, vec!["litellm", "up", "--foreground", "--replace"]);
+        assert_eq!(
+            args,
+            vec!["workload", "up", "litellm", "--foreground", "--replace"]
+        );
 
         // `--replace` and `--instance` compose.
         let args = litellm.detach_args(&spec_for_detach("litellm@ab2z", true));
         assert_eq!(
             args,
             vec![
-                "litellm",
+                "workload",
                 "up",
+                "litellm",
                 "--foreground",
                 "--replace",
                 "--instance",
@@ -734,10 +899,13 @@ mod tests {
             ]
         );
 
-        // A workload other than litellm uses its own name as argv[0].
+        // A workload other than litellm uses its own name as the <name>
+        // positional (the argv prefix stays `workload up`).
         let pi = ConfigWorkload::new("pi")?;
         let args = pi.detach_args(&spec_for_detach("pi@xy7", false));
-        assert_eq!(args.first(), Some(&"pi".to_string()));
+        assert_eq!(args.first(), Some(&"workload".to_string()));
+        assert_eq!(args.get(1), Some(&"up".to_string()));
+        assert_eq!(args.get(2), Some(&"pi".to_string()));
         assert!(args.contains(&"--foreground".to_string()));
         assert!(args.contains(&"--instance".to_string()));
         assert_eq!(args[args.len() - 1], "xy7");
@@ -752,8 +920,9 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "litellm",
+                "workload",
                 "up",
+                "litellm",
                 "--foreground",
                 "--port-auto",
                 "--instance",
@@ -769,8 +938,8 @@ mod tests {
     }
 
     /// ADR 0026(d)/C3-W2: `--use <dep>@<instance>` overrides ride the spec so
-    /// the DETACHED child re-enters `up --foreground` with the same
-    /// instance-selection the parent resolved (the child re-parses via
+    /// the DETACHED child re-enters `workload up <name> --foreground` with the
+    /// same instance-selection the parent resolved (the child re-parses via
     /// parse_service_action, which collects every --use).
     #[test]
     fn detach_args_forwards_use_overrides() -> Result<()> {
@@ -787,8 +956,9 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "pi",
+                "workload",
                 "up",
+                "pi",
                 "--foreground",
                 "--use",
                 "litellm@canary",
@@ -805,15 +975,16 @@ mod tests {
         );
 
         // The forwarded args round-trip through the raw-args parser the
-        // detached child uses.
-        let parsed = workestrate::commands::lifecycle::parse_service_action("up", &args[1..])?;
+        // detached-child path uses: the flags sit after
+        // ["workload", "up", <name>] (i.e. &args[3..]).
+        let parsed = workestrate::commands::lifecycle::parse_service_action("up", &args[3..])?;
         match parsed {
             ServiceAction::Up { use_, .. } => assert!(use_.is_empty()),
             _ => panic!("expected Up variant"),
         }
         let round_trip = workestrate::commands::lifecycle::parse_service_action(
             "up",
-            &pi.detach_args(&spec)[1..],
+            &pi.detach_args(&spec)[3..],
         )?;
         match round_trip {
             ServiceAction::Up { use_, .. } => {
@@ -959,5 +1130,243 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert!(json_mode_from_args(&args));
+    }
+
+    // --- ADR 0027: verb-first `workload` dispatch surface ------------------
+
+    /// The `workload` group exposes exactly the five verbs, each with the
+    /// workload name as the FIRST positional argument.
+    #[test]
+    fn workload_group_exposes_five_verbs_with_name_positional() {
+        let cmd = Cli::command();
+        let workload = cmd
+            .find_subcommand("workload")
+            .expect("workload subcommand must exist");
+        let verbs: HashSet<_> = workload
+            .get_subcommands()
+            .map(|s| s.get_name().to_string())
+            .collect();
+        for v in ["up", "exec", "plan", "down", "logs"] {
+            assert!(verbs.contains(v), "workload missing verb: {v}");
+        }
+        for v in ["up", "exec", "plan", "down", "logs"] {
+            let sub = workload.find_subcommand(v).unwrap();
+            let positionals: Vec<String> = sub
+                .get_positionals()
+                .map(|a| a.get_id().to_string())
+                .collect();
+            assert_eq!(
+                positionals.first().map(|s| s.as_str()),
+                Some("name"),
+                "workload {v} must take the workload name as its first positional"
+            );
+        }
+    }
+
+    /// `workload up` and `workload exec` expose the full lifecycle flag set
+    /// (parity per ADR 0027); plan/down/logs expose their subsets.
+    #[test]
+    fn workload_verbs_expose_lifecycle_flags() {
+        let cmd = Cli::command();
+        let workload = cmd.find_subcommand("workload").unwrap();
+        let flag_names = |verb: &str| -> Vec<String> {
+            workload
+                .find_subcommand(verb)
+                .unwrap_or_else(|| panic!("workload {verb} must exist"))
+                .get_arguments()
+                .filter_map(|a| a.get_long().map(|s| s.to_string()))
+                .collect()
+        };
+        for verb in ["up", "exec"] {
+            let flags = flag_names(verb);
+            for f in [
+                "replace",
+                "instance",
+                "new",
+                "foreground",
+                "port-auto",
+                "use",
+            ] {
+                assert!(
+                    flags.contains(&f.to_string()),
+                    "workload {verb} missing flag: {f}; got: {flags:?}"
+                );
+            }
+        }
+        let plan_flags = flag_names("plan");
+        for f in ["instance", "use"] {
+            assert!(
+                plan_flags.contains(&f.to_string()),
+                "workload plan missing flag: {f}; got: {plan_flags:?}"
+            );
+        }
+        let down_flags = flag_names("down");
+        for f in ["instance", "all-instances"] {
+            assert!(
+                down_flags.contains(&f.to_string()),
+                "workload down missing flag: {f}; got: {down_flags:?}"
+            );
+        }
+        let logs_flags = flag_names("logs");
+        assert!(
+            logs_flags.contains(&"instance".to_string()),
+            "workload logs missing flag: instance; got: {logs_flags:?}"
+        );
+    }
+
+    /// `--json` is a global flag: `workestrate workload up <name> --json`
+    /// must parse with cli.json set (the removed catch-all had to pull
+    /// --json out of raw args by hand; clap now propagates it).
+    #[test]
+    fn workload_up_parses_trailing_global_json_flag() {
+        let cli = Cli::try_parse_from(["workestrate", "workload", "up", "pi", "--json"])
+            .expect("workload up <name> --json must parse");
+        assert!(cli.json, "global --json must propagate into workload up");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Up { name, .. },
+            } => assert_eq!(name, "pi"),
+            _ => panic!("expected workload up"),
+        }
+    }
+
+    /// The detached-child argv shape (`workload up <name> --foreground ...`,
+    /// ADR 0027) parses through clap into the same action the legacy raw-args
+    /// parser produced.
+    #[test]
+    fn detach_child_argv_parses_through_clap() {
+        let cli = Cli::try_parse_from([
+            "workestrate",
+            "workload",
+            "up",
+            "litellm",
+            "--foreground",
+            "--replace",
+            "--port-auto",
+            "--use",
+            "redis@blue",
+            "--instance",
+            "canary",
+        ])
+        .expect("detach-child argv must parse");
+        match cli.command {
+            Commands::Workload {
+                action:
+                    WorkloadAction::Up {
+                        name,
+                        foreground,
+                        replace,
+                        instance,
+                        port_auto,
+                        use_,
+                        ..
+                    },
+            } => {
+                assert_eq!(name, "litellm");
+                assert!(foreground && replace && port_auto);
+                assert_eq!(instance.as_deref(), Some("canary"));
+                assert_eq!(use_, vec!["redis@blue"]);
+            }
+            _ => panic!("expected workload up"),
+        }
+    }
+
+    // --- ADR 0027: legacy-shape deprecation shim ---------------------------
+
+    fn known_subcommand_names() -> HashSet<String> {
+        Cli::command()
+            .get_subcommands()
+            .map(|s| s.get_name().to_string())
+            .collect()
+    }
+
+    fn argv(tokens: &[&str]) -> Vec<String> {
+        tokens.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn shim_rewrites_legacy_name_first_shape() {
+        // `redis` is a config-defined workload with NO built-in subcommand —
+        // the exact case the shim exists for. (`pi`/`litellm` are built-in
+        // typed subcommands, so built-ins win and the shim never fires.)
+        let args = argv(&["workestrate", "redis", "exec", "--instance", "x"]);
+        let (rewritten, warning) =
+            rewrite_legacy_workload_argv(args, &known_subcommand_names(), |n| n == "redis");
+        assert_eq!(
+            rewritten,
+            argv(&[
+                "workestrate",
+                "workload",
+                "exec",
+                "redis",
+                "--instance",
+                "x"
+            ])
+        );
+        let warning = warning.expect("a rewrite must carry a deprecation warning");
+        assert_eq!(
+            warning,
+            "warning: `workestrate redis exec ...` is deprecated; use `workestrate workload exec redis ...`"
+        );
+    }
+
+    #[test]
+    fn shim_never_rewrites_builtin_subcommand_names() {
+        // Built-ins ALWAYS win: even when is_workload claims `ps` is a
+        // configured workload, the name-first shape is left for clap.
+        let args = argv(&["workestrate", "ps", "up"]);
+        let (rewritten, warning) =
+            rewrite_legacy_workload_argv(args.clone(), &known_subcommand_names(), |_| true);
+        assert_eq!(rewritten, args);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn shim_never_rewrites_the_workload_group_itself() {
+        // The detached child argv already uses the verb-first shape; the
+        // shim must never fire for it ("workload" is a known subcommand).
+        let args = argv(&["workestrate", "workload", "up", "litellm", "--foreground"]);
+        let (rewritten, warning) =
+            rewrite_legacy_workload_argv(args.clone(), &known_subcommand_names(), |_| true);
+        assert_eq!(rewritten, args);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn shim_ignores_unknown_verb() {
+        let args = argv(&["workestrate", "redis", "bogus"]);
+        let (rewritten, warning) =
+            rewrite_legacy_workload_argv(args.clone(), &known_subcommand_names(), |n| n == "redis");
+        assert_eq!(rewritten, args);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn shim_ignores_missing_verb() {
+        let args = argv(&["workestrate", "redis"]);
+        let (rewritten, warning) =
+            rewrite_legacy_workload_argv(args.clone(), &known_subcommand_names(), |n| n == "redis");
+        assert_eq!(rewritten, args);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn shim_ignores_leading_global_flag() {
+        // A leading global flag at the subcommand position leaves argv
+        // untouched (best-effort: never risk breaking a valid invocation).
+        let args = argv(&["workestrate", "--json", "redis", "up"]);
+        let (rewritten, warning) =
+            rewrite_legacy_workload_argv(args.clone(), &known_subcommand_names(), |n| n == "redis");
+        assert_eq!(rewritten, args);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn shim_ignores_names_that_are_not_configured_workloads() {
+        let args = argv(&["workestrate", "nosuch", "up"]);
+        let (rewritten, warning) =
+            rewrite_legacy_workload_argv(args.clone(), &known_subcommand_names(), |_| false);
+        assert_eq!(rewritten, args);
+        assert!(warning.is_none());
     }
 }

@@ -132,6 +132,127 @@ pub enum AgentAction {
     },
 }
 
+/// Verb-first workload dispatch (ADR 0027): `workestrate workload
+/// {up,exec,plan,down,logs} <name>`. The workload name is a positional
+/// ARGUMENT (never a subcommand), so config-defined workloads can never be
+/// shadowed by built-in verbs. The `name`-first flag set mirrors
+/// [`ServiceAction`]/[`AgentAction`] exactly; `main.rs` kind-checks at
+/// dispatch and translates into the legacy per-kind action enums.
+#[derive(Subcommand)]
+pub enum WorkloadAction {
+    /// Start a service workload (detached by default; --foreground to block)
+    Up {
+        /// Workload name from the merged config.
+        name: String,
+
+        #[arg(short, long, help = "Run in foreground (block until Ctrl-C)")]
+        foreground: bool,
+
+        /// Tear down any existing instance at this slot before starting
+        /// (destructive; the ADR 0021 explicit-replace escape hatch).
+        #[arg(long)]
+        replace: bool,
+
+        /// Target a parallel instance `<slot>@<id>`. Refuses if that exact
+        /// instance name is already running.
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+
+        /// Auto-allocate the lowest free integer id >= 2 and target
+        /// `<slot>@<id>`.
+        #[arg(long)]
+        new: bool,
+
+        /// Publish each port on a lock-probed free port on the slot's bind
+        /// (the chosen ports are recorded in the instance record).
+        #[arg(long)]
+        port_auto: bool,
+
+        /// Instance-selection override `<dep>@<instance>` for depends_on
+        /// resolution (ADR 0026(d)). PURE selection: discovery is activated
+        /// by the depends_on declaration alone — `--use` only picks WHICH
+        /// running instance of a declared dependency supplies the injected
+        /// address. Repeatable (one per dep).
+        #[arg(long = "use", value_name = "DEP@INSTANCE")]
+        use_: Vec<String>,
+    },
+    /// Attach to an agent workload interactively (TUI)
+    Exec {
+        /// Workload name from the merged config.
+        name: String,
+
+        /// Accepted for flag parity with `up` (agents always run in
+        /// foreground).
+        #[arg(short, long, help = "Run in foreground (block until Ctrl-C)")]
+        foreground: bool,
+
+        /// Tear down any existing instance at this slot before starting.
+        #[arg(long)]
+        replace: bool,
+
+        /// Target a parallel instance `<slot>@<id>`.
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+
+        /// Auto-allocate the lowest free integer id >= 2.
+        #[arg(long)]
+        new: bool,
+
+        /// Publish each port on a lock-probed free port on the slot's bind
+        /// (the chosen ports are recorded in the instance record).
+        #[arg(long)]
+        port_auto: bool,
+
+        /// Instance-selection override `<dep>@<instance>` for depends_on
+        /// resolution (ADR 0026(d)). PURE selection: discovery is activated
+        /// by the depends_on declaration alone — `--use` only picks WHICH
+        /// running instance of a declared dependency supplies the injected
+        /// address. Repeatable (one per dep).
+        #[arg(long = "use", value_name = "DEP@INSTANCE")]
+        use_: Vec<String>,
+    },
+    /// Print the planned sandbox workload
+    Plan {
+        /// Workload name from the merged config.
+        name: String,
+
+        /// Render the plan as parallel slot <slot>@<id> would see it
+        /// (prospective per-instance bind).
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+
+        /// Instance-selection override `<dep>@<instance>` for depends_on
+        /// resolution (ADR 0026(d)). PURE selection: discovery is activated
+        /// by the depends_on declaration alone — `--use` only picks WHICH
+        /// running instance of a declared dependency supplies the injected
+        /// address. Repeatable (one per dep).
+        #[arg(long = "use", value_name = "DEP@INSTANCE")]
+        use_: Vec<String>,
+    },
+    /// Stop and remove the sandbox
+    Down {
+        /// Workload name from the merged config.
+        name: String,
+
+        /// Stop the parallel instance `<slot>@<id>`.
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+
+        /// Stop the singleton AND every parallel instance of this workload.
+        #[arg(long)]
+        all_instances: bool,
+    },
+    /// Tail the detached service's log file
+    Logs {
+        /// Workload name from the merged config.
+        name: String,
+
+        /// Tail the parallel instance `<slot>@<id>` (default: the singleton).
+        #[arg(long, value_name = "ID")]
+        instance: Option<String>,
+    },
+}
+
 /// Actions for managing config repositories and trust.
 #[derive(Subcommand)]
 pub enum ConfigAction {

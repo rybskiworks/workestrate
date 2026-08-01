@@ -34,19 +34,19 @@ fn config_reference_dir() -> PathBuf {
     std::fs::canonicalize(&dir).unwrap_or(dir)
 }
 
-/// Render `workestrate <name> plan` against config.reference.
+/// Render `workestrate workload plan <name>` against config.reference.
 fn render_plan(name: &str) -> Vec<u8> {
     let out = Command::new(BIN)
-        .args([name, "plan"])
+        .args(["workload", "plan", name])
         .env("WORKESTRATE_CONFIG_DIR", config_reference_dir())
         .env_remove("WORKESTRATE_NO_PROJECT_CONFIG")
         .env_remove("WORKESTRATE_HOME")
         .env_remove("WORKESTRATE_CONTEXT")
         .output()
-        .unwrap_or_else(|e| panic!("failed to invoke `workestrate {name} plan`: {e}"));
+        .unwrap_or_else(|e| panic!("failed to invoke `workestrate workload plan {name}`: {e}"));
     assert!(
         out.status.success(),
-        "`workestrate {name} plan` failed: stderr=\n{}",
+        "`workestrate workload plan {name}` failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     out.stdout
@@ -126,7 +126,7 @@ fn golden_parallel_instance_plan_matches_byte_for_byte() {
         .unwrap_or_else(|e| panic!("failed to create temp state dir: {e}"));
 
     let out = Command::new(BIN)
-        .args(["example-service", "plan", "--instance", "canary"])
+        .args(["workload", "plan", "example-service", "--instance", "canary"])
         .env("WORKESTRATE_CONFIG_DIR", config_reference_dir())
         .env("WORKESTRATE_STATE_DIR", &state_dir)
         .env_remove("WORKESTRATE_NO_PROJECT_CONFIG")
@@ -134,23 +134,23 @@ fn golden_parallel_instance_plan_matches_byte_for_byte() {
         .env_remove("WORKESTRATE_CONTEXT")
         .output()
         .unwrap_or_else(|e| {
-            panic!("failed to invoke `workestrate example-service plan --instance canary`: {e}")
+            panic!("failed to invoke `workestrate workload plan example-service --instance canary`: {e}")
         });
     let _ = std::fs::remove_dir_all(&state_dir);
 
     assert!(
         out.status.success(),
-        "`workestrate example-service plan --instance canary` failed: stderr=\n{}",
+        "`workestrate workload plan example-service --instance canary` failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
         out.stdout == golden.as_bytes(),
-        "golden drift for `example-service plan --instance canary`: output no longer \
+        "golden drift for `workload plan example-service --instance canary`: output no longer \
          matches control/agentctl/tests/golden/example-service.plan-instance.txt \
          byte-for-byte.\n{}\nIf the Display change is intended, regenerate the fixture \
          (WORKESTRATE_CONFIG_DIR=config.reference WORKESTRATE_STATE_DIR=$(mktemp -d) \
-         cargo run --manifest-path control/agentctl/Cargo.toml -- example-service plan \
-         --instance canary).",
+         cargo run --manifest-path control/agentctl/Cargo.toml -- workload plan \
+         example-service --instance canary).",
         first_diff_context(&out.stdout, golden.as_bytes()),
     );
 }

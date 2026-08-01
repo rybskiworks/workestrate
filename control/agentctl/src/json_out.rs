@@ -75,3 +75,28 @@ pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec
         })
         .collect()
 }
+
+/// One row of `workestrate workloads --json` (ADR 0027): the configured
+/// workload name, kind, image summary, and the instance names currently
+/// registered in the port registry (empty = not running).
+#[derive(serde::Serialize)]
+pub struct WorkloadJson {
+    name: String,
+    kind: String,
+    image: String,
+    instances: Vec<String>,
+}
+
+pub fn workloads_json(
+    entries: &[crate::commands::diagnostics::WorkloadListEntry],
+) -> Vec<WorkloadJson> {
+    entries
+        .iter()
+        .map(|e| WorkloadJson {
+            name: e.name.clone(),
+            kind: e.kind.clone(),
+            image: e.image.clone(),
+            instances: e.instances.clone(),
+        })
+        .collect()
+}

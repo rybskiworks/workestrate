@@ -337,10 +337,13 @@ fn production_two_layer_merge_with_provenance() {
          cpus = 3\n",
     );
 
-    // --show-source is a global clap flag; with the external-subcommand
-    // catch-all, args after the workload name are captured raw, so the flag
-    // must come BEFORE the workload name to reach clap's global parse.
-    let out = env.run(env.cmd().args(["--show-source", "example-service", "plan"]));
+    // --show-source is a global clap flag; under verb-first dispatch (ADR
+    // 0027) the workload name is a clap positional of `workload plan`, so
+    // global flags parse in any position.
+    let out = env.run(
+        env.cmd()
+            .args(["--show-source", "workload", "plan", "example-service"]),
+    );
     let stdout = expect_ok(&out, "example-service plan --show-source");
 
     // Merged values: team wins memory_mib (last layer wins), team adds cpus,
@@ -567,7 +570,7 @@ fn production_schema_version_2_refused_at_load() {
         "schema_version = 2\n\n[workloads.example-service]\ncpus = 3\n",
     );
 
-    let out = env.run(env.cmd().args(["example-service", "plan"]));
+    let out = env.run(env.cmd().args(["workload", "plan", "example-service"]));
     assert!(
         !out.status.success(),
         "schema_version=2 must fail; got success:\n{}",
@@ -599,7 +602,7 @@ fn production_schema_version_2_refused_from_project_layer() {
 
     let out = env.run(
         env.cmd()
-            .args(["example-service", "plan"])
+            .args(["workload", "plan", "example-service"])
             .current_dir(&proj),
     );
     assert!(

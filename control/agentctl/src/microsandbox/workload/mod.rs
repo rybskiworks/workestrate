@@ -70,9 +70,10 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
 
     /// Args to pass when re-exec'ing in detached (background) mode.
     ///
-    /// Reconstructs the CLI from `spec` so the detached child re-enters the
-    /// `up --foreground` path with the SAME identity and flags the parent
-    /// resolved:
+    /// Reconstructs the CLI from `spec` in the verb-first shape (ADR 0027)
+    /// — `workload up <name> --foreground ...` — so the detached child
+    /// re-enters the `up --foreground` path with the SAME identity and flags
+    /// the parent resolved:
     ///   - `--replace` (when `spec.replace`),
     ///   - `--port-auto` (when `spec.port_auto`, ADR 0026(c)),
     ///   - `--instance <id>` for a parallel instance — the **bare id**, not
@@ -81,15 +82,20 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     ///     override (`spec.use_overrides`, ADR 0026(d)) so the child resolves
     ///     the SAME records the parent did.
     ///
+    /// Detach is service-only: only `spawn_detached_service` calls this
+    /// (agents run in foreground), so `up` is the only verb emitted.
+    ///
     /// `--new` is intentionally NOT forwarded: the parent has already
     /// materialized the slug into `spec.instance`, so the child must target
     /// that concrete instance rather than allocate a fresh one. The child
-    /// re-parses these args via the existing `parse_service_action` /
-    /// `parse_agent_action` path; no child-side change is required.
+    /// parses these args via clap's `workload up` subcommand; the raw-args
+    /// `parse_service_action` parser still round-trips the same flags for
+    /// the detach tests.
     fn detach_args(&self, spec: &crate::microsandbox::runtime::InstanceSpec) -> Vec<String> {
         let mut args: Vec<String> = vec![
-            self.name().to_string(),
+            "workload".to_string(),
             "up".to_string(),
+            self.name().to_string(),
             "--foreground".to_string(),
         ];
         if spec.replace {

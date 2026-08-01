@@ -69,6 +69,40 @@ pub fn build_instance_spec(
     })
 }
 
+/// Where a verb-first `workestrate workload <verb> <name>` action routes
+/// (ADR 0027): services take `up`/`down`/`logs`/`plan`, agents take
+/// `exec`/`down`/`plan`; `plan` and `down` are universal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadRoute {
+    /// Dispatch through [`dispatch_service`] ([`ServiceAction`]).
+    Service,
+    /// Dispatch through [`dispatch_agent`] ([`AgentAction`]).
+    Agent,
+}
+
+/// Kind-check a verb-first workload action at dispatch (ADR 0027). Pure:
+/// given the workload's configured `kind`, the verb, and the workload name,
+/// decide the dispatch route or produce a clear wrong-kind error. Wrong-kind
+/// usage names the correct invocation (e.g. "pi is an agent; use
+/// `workestrate workload exec pi`").
+pub fn workload_route(kind: &str, verb: &str, name: &str) -> Result<WorkloadRoute> {
+    match (kind, verb) {
+        ("service", "up" | "down" | "logs" | "plan") => Ok(WorkloadRoute::Service),
+        ("service", "exec") => anyhow::bail!(
+            "{} is a service; use `workestrate workload up {}` (services do not support exec)",
+            name,
+            name
+        ),
+        ("agent", "exec" | "down" | "plan") => Ok(WorkloadRoute::Agent),
+        ("agent", "up" | "logs") => anyhow::bail!(
+            "{} is an agent; use `workestrate workload exec {}`",
+            name,
+            name
+        ),
+        (other, _) => anyhow::bail!("unknown workload kind '{}' for '{}'", other, name),
+    }
+}
+
 pub async fn dispatch_service<W: Workload>(
     workload: &W,
     action: ServiceAction,
@@ -672,6 +706,58 @@ mod tests {
         assert_eq!(spec.use_overrides, overrides);
         let spec = build_instance_spec("pi", false, None, None, false, &[]).unwrap();
         assert!(spec.use_overrides.is_empty());
+    }
+
+    // ---- ADR 0027: verb-first kind-check routing ----
+
+    #[test]
+    fn workload_route_allows_all_service_verbs_on_services() {
+        for verb in ["up", "down", "logs", "plan"] {
+            assert_eq!(
+                workload_route("service", verb, "litellm").unwrap(),
+                WorkloadRoute::Service,
+                "service + {verb} must route to the service dispatch"
+            );
+        }
+    }
+
+    #[test]
+    fn workload_route_rejects_exec_on_services() {
+        let err = workload_route("service", "exec", "litellm").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("litellm is a service") && msg.contains("workestrate workload up litellm"),
+            "service+exec error must point at `workload up`; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn workload_route_allows_exec_down_plan_on_agents() {
+        for verb in ["exec", "down", "plan"] {
+            assert_eq!(
+                workload_route("agent", verb, "pi").unwrap(),
+                WorkloadRoute::Agent,
+                "agent + {verb} must route to the agent dispatch"
+            );
+        }
+    }
+
+    #[test]
+    fn workload_route_rejects_up_and_logs_on_agents() {
+        for verb in ["up", "logs"] {
+            let err = workload_route("agent", verb, "pi").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("pi is an agent") && msg.contains("workestrate workload exec pi"),
+                "agent+{verb} error must point at `workload exec`; got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn workload_route_rejects_unknown_kind() {
+        let err = workload_route("worker", "up", "foo").unwrap_err();
+        assert_eq!(err.to_string(), "unknown workload kind 'worker' for 'foo'");
     }
 }
 

@@ -76,6 +76,98 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     Ok(())
 }
 
+/// One row of the `workestrate workloads` listing (ADR 0027): the configured
+/// workload name, its kind, a short image summary, and the instance names
+/// currently registered in the port registry (empty = not running).
+#[derive(Debug, Clone)]
+pub struct WorkloadListEntry {
+    pub name: String,
+    pub kind: String,
+    pub image: String,
+    pub instances: Vec<String>,
+}
+
+/// Short image summary for the listing: `<recipe>:<ref>`, falling back to
+/// `name[:tag]`, then the bare recipe when no ref/name/tag is set.
+fn image_summary(image: &crate::config::ImageSpec) -> String {
+    let detail = image
+        .reference
+        .clone()
+        .or_else(|| match (&image.name, &image.tag) {
+            (Some(n), Some(t)) => Some(format!("{n}:{t}")),
+            (Some(n), None) => Some(n.clone()),
+            (None, Some(t)) => Some(t.clone()),
+            (None, None) => None,
+        });
+    match detail {
+        Some(d) => format!("{}:{}", image.recipe, d),
+        None => image.recipe.clone(),
+    }
+}
+
+/// `workestrate workloads` (ADR 0027): list every configured workload with
+/// its kind, image summary, and running status (instances registered in the
+/// port registry). Deterministic order: sorted by workload name (the config
+/// workloads map is unordered). Running status is registry-based (no msb
+/// liveness probe) — this is a discovery view, not a health check.
+pub fn cmd_workloads(json: bool) -> Result<()> {
+    let cfg = config::load_config()?;
+    let state_dir = config::resolve_state_dir();
+    let records = crate::microsandbox::port_registry::list_records(&state_dir)?;
+
+    let mut names: Vec<&String> = cfg.workloads.keys().collect();
+    names.sort();
+    let entries: Vec<WorkloadListEntry> = names
+        .into_iter()
+        .map(|name| {
+            let wl = &cfg.workloads[name];
+            let mut instances: Vec<String> = records
+                .iter()
+                .filter(|r| &r.workload == name)
+                .map(|r| r.instance.clone())
+                .collect();
+            instances.sort();
+            WorkloadListEntry {
+                name: name.clone(),
+                kind: wl.kind.clone(),
+                image: image_summary(&wl.image),
+                instances,
+            }
+        })
+        .collect();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&crate::json_out::workloads_json(&entries))?
+        );
+    } else {
+        print_workloads_text_to(&entries, &mut std::io::stdout())?;
+    }
+    Ok(())
+}
+
+/// Render `workloads` rows to `out`. Pure I/O: no env, no registry.
+/// `cmd_workloads` passes `&mut std::io::stdout()`; tests pass a `Vec<u8>`.
+pub fn print_workloads_text_to<W: std::io::Write>(
+    entries: &[WorkloadListEntry],
+    out: &mut W,
+) -> std::io::Result<()> {
+    if entries.is_empty() {
+        writeln!(out, "(no configured workloads)")?;
+        return Ok(());
+    }
+    for e in entries {
+        let running = if e.instances.is_empty() {
+            "(none running)".to_string()
+        } else {
+            format!("running: {}", e.instances.join(", "))
+        };
+        writeln!(out, "{}\t{}\t{}\t{}", e.name, e.kind, e.image, running)?;
+    }
+    Ok(())
+}
+
 pub async fn cmd_ps(json: bool) -> Result<()> {
     use crate::microsandbox::runtime::{probe_liveness, ps};
     let state_dir = crate::config::resolve_state_dir();
