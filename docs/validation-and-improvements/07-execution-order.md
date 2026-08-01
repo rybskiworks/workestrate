@@ -253,6 +253,49 @@ top-to-bottom.
 
 ---
 
+## Phase A / Phase B — final-model + directory-mode waves (2026-08-01)
+
+The unified secret/env model and the config-repo directory-mode layout are
+sequenced as two waves on top of the W-wave above.
+
+### Phase A (docs waves) — THIS batch
+
+Docs-only. Landed together:
+
+- **Spec 16** — [06-improvements/16-unified-secret-env-model.md](06-improvements/16-unified-secret-env-model.md):
+  the FINAL unified secret/env model (unified secrets catalog; the four env
+  value forms; bound defaults; per-secret `allowed_hosts`).
+- **Spec 17** — [06-improvements/17-config-repo-directory-mode.md](06-improvements/17-config-repo-directory-mode.md):
+  config-repo directory mode (`workestrate/{default,secrets}.toml` +
+  `workloads/` capsules), READY-TO-EXECUTE (design).
+- Bookkeeping: `NEXT-SESSION.md` wave-state entries + this section.
+
+### Phase B (implementation) — ordered
+
+1. **Final-model code model** — supersede the v2 delivery/shim: `EnvBinding`
+   `delivery` (`env` | `host_bound`) + the `fold_legacy_secret_model` shim fold
+   into the final model per spec 16. `verifiable-here` via `nix develop`
+   (cargo gates).
+2. **Config conversion to the final model** — `env_var` strip, the
+   personal-v2 migration, and old-personal removal. `verifiable-here` via
+   `nix develop` (cargo gates + golden diffs).
+3. **Directory-mode loader per spec 17** + the **personal config restructure**
+   as the proof case: `workestrate.toml` → `workestrate/{default,secrets}.toml`
+   + `workloads/` capsules; the `agents/` + `infra/` trees collapse into
+   capsules. Includes the queued `tombi.toml.tpl` include-glob edit (spec 17
+   §2.6). `verifiable-here` via `nix develop` (cargo gates + byte-identical
+   merged-config golden); runtime smoke of the restructured repo is
+   `HOST-KVM` (folds into the Step 6 host batch).
+4. **Version collapse execution** — `schema_version` consolidation.
+   `verifiable-here` via `nix develop`.
+5. **Fork push + interim-patch slim reconciliation** — the spec 09 thread:
+   `.tmp/microsandbox` fork branch `fix/filesystem-agentd-path-override` +
+   the interim 0.5.6 nix patch `daa5140` (see Step 8b). Upstream-latency-bound;
+   local post-merge work is `verifiable-here` via `nix develop` +
+   `HOST-NIX` (`nix flake check`).
+
+---
+
 ## Definition of done (whole effort)
 
 - [ ] **Lane A green** — `just verify` passes in this container via `nix develop` (store-path prefix; the shell/python/git subset passes in a bare shell, the cargo-based gates run via `nix develop` — both `verifiable-here`). Lane A against the real bundle: the Step 0(e) blocker edit has LANDED (tempest `install_layout` removed); the first Lane A action is now `workestrate validate-config` + `workestrate workload plan tempest` in `nix develop`.

@@ -116,6 +116,27 @@ re-derive their contents.
   4. Personal config migrated to native v2 (export `56f3557`, `personal-v2`
      `99c9985`); docs wave `92a3d1f`; 588 gates green in-container; the KVM
      runtime smoke is pending (05 B13 — open thread 11).
+- **2026-08-01: the FINAL secret/env model + config-repo layout docs wave.**
+  Two new specs added: **spec 16**
+  ([06-improvements/16-unified-secret-env-model.md](06-improvements/16-unified-secret-env-model.md)
+  — authored by a parallel task; authoritative for the definitions below) and
+  **spec 17**
+  ([06-improvements/17-config-repo-directory-mode.md](06-improvements/17-config-repo-directory-mode.md)).
+  Final-model summary (spec 16 is authoritative — do not re-derive here):
+  a unified secrets CATALOG; env values take **the four env value forms defined
+  in spec 16**; **bound defaults** are supported; **`allowed_hosts`** is
+  declared per secret.
+- **Spec-number assignment (2026-08-01):** **16 = unified-secret-env-model**,
+  **17 = config-repo-directory-mode**. The previous exploration specs 16/17
+  (cross-home dependencies; visualization + inspection) are renumbered by
+  parallel task A — this file defers to
+  [06-improvements/00-index.md](06-improvements/00-index.md) for the final
+  numbering.
+- **Current wave state (2026-08-01):** spec 17 (directory mode) added as
+  READY-TO-EXECUTE design. PENDING: implementation of the final secret/env
+  model (spec 16), the directory-mode loader (spec 17), the personal config
+  restructure to capsules, fork push + interim-patch slim reconciliation,
+  old-personal removal, and the version-collapse execution.
 
 ---
 
@@ -321,3 +342,13 @@ W2a (personal config repo native-v2 migration) added as open thread 10.
 export `56f3557`, `personal-v2` `99c9985`); v2 4-line summary block added to
 Current state; host batch widened to B1–B13; v2 secret-delivery smoke suite
 added as open thread 11 (05 B13).
+
+**2026-08-01 refresh (5):** final secret/env model + config-repo layout docs
+wave — spec 16 (unified-secret-env-model, parallel task A) + spec 17
+(config-repo-directory-mode, READY-TO-EXECUTE design) added to Current state;
+final-model 4-line summary recorded (unified secrets catalog, the four env
+value forms per spec 16, bound defaults, per-secret `allowed_hosts`);
+spec-number assignment recorded (16/17; exploration specs renumbered by task
+A — defer to `06-improvements/00-index.md`); pending-implementation wave state
+added (final model, directory-mode loader, personal restructure, fork/interim
+slim reconciliation, old-personal removal, version collapse).
