@@ -170,8 +170,8 @@ table below summarizes each workload; line citations refer to that file.
 | `image` | `recipe = "registry"`, `ref = "python:3.12-slim"` | 162 |
 | `ports` | host 7000 → guest 7000 | 207-209 |
 | `mounts` | `${WORKESTRATE_ODYSSEUS_BUILD}` → `/app` (ro); `workspaces/odysseus-state` → `/data` (rw) | 211-219 |
-| `env` (secret) | `ODYSSEUS_ADMIN_PASSWORD` (secret=) | 197-199 |
-| `secret_env` | `LITELLM_AUTH`, `GITHUB_TOKEN` | 201-205 |
+| `env` (secret) | `ODYSSEUS_ADMIN_PASSWORD` (secret=), `OPENAI_API_KEY` (secret=`LITELLM_MASTER_KEY`, env delivery — v2 flip) | migrated v2 config @ `56f3557` |
+| `secret_env` | `GITHUB_TOKEN` host-bound via env-map binding (`LITELLM_AUTH` remap def removed in v2) | migrated v2 config @ `56f3557` |
 | `network` | `default_deny = true`; egress `agent_base` + `https` to huggingface.co + cdn-lfs; ingress tcp/7000 local | 221-234 |
 | `local_build` | `recipe = "pip-install"`, `source = "flake://odysseus"`, `requirements_file = "requirements.txt"`, `target = ".deps"`, `env_override = "WORKESTRATE_ODYSSEUS_BUILD"`, `fallback = "agents/odysseus/build"` | 241-248 |
 | `seed_files` | `agents/odysseus/config/settings.json` → `workspaces/odysseus-state/settings.json` (only_if_missing) | 236-239 |
@@ -184,8 +184,8 @@ table below summarizes each workload; line citations refer to that file.
 | `image` | `recipe = "registry"`, `ref = "node:24-bookworm-slim"` | 252 |
 | `ports` | host 3000 → guest 3000 | 273-275 |
 | `mounts` | `${WORKESTRATE_OPENCODE_BUILD}` → `/app` (ro); `${CWD}` → `/workspace` (rw); `agents/opencode/config/opencode.jsonc` → `/home/node/.config/opencode/opencode.jsonc` (ro); `${MSB_HOME}/sandboxes/opencode/state` → `/home/node/.local/share/opencode` (rw) | 277-295 |
-| `env` (secret) | none (plain env only) | — |
-| `secret_env` | `LITELLM_AUTH`, `GITHUB_TOKEN` | 267-271 |
+| `env` (secret) | `OPENAI_API_KEY` (secret=`LITELLM_MASTER_KEY`, env delivery — v2 flip) | migrated v2 config @ `56f3557` |
+| `secret_env` | `GITHUB_TOKEN` host-bound via env-map binding | migrated v2 config @ `56f3557` |
 | `network` | `default_deny = true`; egress `agent_base`; ingress tcp/3000 local | 297-306 |
 | `local_build` | `recipe = "bun-install"`, `source = "flake://opencode"`, `gating_file = "bun.lock"`, `env_override = "WORKESTRATE_OPENCODE_BUILD"`, `fallback = "agents/opencode/build"` | 308-313 |
 | `seed_files` | none | — |

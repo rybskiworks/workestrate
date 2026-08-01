@@ -102,6 +102,20 @@ re-derive their contents.
   from the v2 schema (v1 layers fold via the one-cycle shim
   `fold_legacy_secret_model`); `EXPECTED_SCHEMA_VERSION = 2`; spec **13**
   SUPERSEDED; spec **14**'s map form became the v2 binding map.
+- **What was done in v2 (4-line summary):**
+  1. Unified `SecretDefConfig` + explicit `delivery` field (`1ed2e6d`); workload
+     `env` = EnvBindings map; `secret_env` removed from the v2 schema (v1 shim
+     folds with warnings); `EXPECTED_SCHEMA_VERSION = 2`.
+  2. P0 fix (`d635ef0`): secret-backed env entries resolve against the merged
+     secrets map — no more literal `"${LITELLM_MASTER_KEY}"` reaching guests.
+  3. Delivery assignments: `LITELLM_MASTER_KEY` + `ODYSSEUS_ADMIN_PASSWORD` +
+     the odysseus/opencode `OPENAI_API_KEY` binding are `delivery = "env"`
+     (OPENAI_API_KEY flipped from host-bound — on 0.5.6 plain-HTTP the old
+     host-bound path substituted nothing); provider keys + `GITHUB_TOKEN` stay
+     host-bound (`$MSB_*` placeholders + TLS substitution).
+  4. Personal config migrated to native v2 (export `56f3557`, `personal-v2`
+     `99c9985`); docs wave `92a3d1f`; 588 gates green in-container; the KVM
+     runtime smoke is pending (05 B13 — open thread 11).
 
 ---
 
@@ -129,7 +143,7 @@ re-derive their contents.
 5. **Experiment E1 NEEDS-KVM** (guest-reachability of non-`127.0.0.1`
    loopbacks; in `05-host-validation.md` B10; the deferred binding decision
    stays NEEDS-KVM per ADR 0026).
-6. **Host batch B1–B12** (single KVM-host pass per `07-execution-order.md`
+6. **Host batch B1–B13** (single KVM-host pass per `07-execution-order.md`
    Step 6).
 7. **Host-side home setup (operator task):** `workestrate home init` +
    `workestrate config add` from `.tmp/config-repos-export` + trust + compose
@@ -138,11 +152,32 @@ re-derive their contents.
    restore = 3 commands (see caveat note in Current state).
 9. **Re-enter `nix develop` after pulling** — the `MSB_AGENTD_PATH` export is
    new (commit `d1c1293`); stale devshells lack it.
-10. **W2a: migrate the personal config repo to native `schema_version = 2`** —
-    drop the LITELLM_AUTH remap def + `description` fields; move remaps to
-    binding sites (`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`). The
-    `.tmp/config-repos/personal-v2` repo (init commit `1448778`) is still
-    `schema_version = 1` form and parses via the v1 shim.
+10. **W2a: migrate the personal config repo to native `schema_version = 2` —
+    CLOSED (2026-08-01).** Landed: `.tmp/config-repos-export/personal` @
+    `56f3557` and `.tmp/config-repos/personal-v2` @ `99c9985` — LITELLM_AUTH
+    remap def + `description` fields dropped; remaps live at binding sites
+    (`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`). Remaining tail: the
+    live home checkout (`~/.workestrate/config-repos/personal`, still `c41a707`
+    v1, parses via the shim) refreshes as part of the host-side home setup
+    (thread 7).
+11. **Schema v2 secret-delivery smoke suite NEEDS-KVM** — full commands + pass
+    criteria in `05-host-validation.md` **B13**; one line per item:
+    (1) litellm: `LITELLM_MASTER_KEY` real value in guest (P0 regression check)
+    + `/v1/models` 200;
+    (2) pi: `models.json` `${LITELLM_MASTER_KEY}`/`${LITELLM_ADDR}`
+    substitutions resolve to the port-registry address;
+    (3) odysseus: `ODYSSEUS_ADMIN_PASSWORD` real value in guest env
+    (`delivery = "env"`, no hosts);
+    (4) odysseus/opencode: `OPENAI_API_KEY` real value in guest env (the
+    env-delivery flip; first working litellm auth on 0.5.6);
+    (5) provider keys: `$MSB_*` placeholders only in guest + a chat completion
+    per provider succeeds (TLS substitution);
+    (6) `GITHUB_TOKEN`: placeholder in guest + git/gh to
+    github.com/api.github.com succeed from an agent sandbox;
+    (7) failure semantics: missing required secret → start refuses naming it;
+    placeholder value → rejected;
+    (8) v1 shim: legacy forms load with stderr deprecation warnings and fold
+    correctly.
 
 ---
 
@@ -281,3 +316,8 @@ ADR 0026/0021 addenda, commit 33eeb87).
 **2026-08-01 refresh (3):** v2 unified secret/env model landed (`1ed2e6d`, P1
 Wave 1) — Current-state bullet added; spec 13 SUPERSEDED + spec 14 annotated;
 W2a (personal config repo native-v2 migration) added as open thread 10.
+
+**2026-08-01 refresh (4):** W2a CLOSED (personal config migrated to native v2 —
+export `56f3557`, `personal-v2` `99c9985`); v2 4-line summary block added to
+Current state; host batch widened to B1–B13; v2 secret-delivery smoke suite
+added as open thread 11 (05 B13).

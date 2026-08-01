@@ -252,6 +252,19 @@ Golden-plan consequence: `LITELLM_MASTER_KEY` is `delivery = "env"`, so the
 former LITELLM_AUTH→OPENAI_API_KEY host-bound `secret_env` line now renders
 as a plan `env` line in the example-service / example-offensive plans.
 
+**Verification status (2026-08-01):** the v2 secret/env model is **proven
+in-container** — 588 gates green (`cargo test` via `nix develop`), including
+plan-shape preservation (golden plans byte-identical except the intended
+LITELLM_AUTH→OPENAI_API_KEY host-bound → env delivery-mapping change), golden
+diff review, tombi gates, v1-shim unit tests (`fold_legacy_secret_model`), and
+the P0 regression pin (`d635ef0`: secret-backed env entries resolve against
+the merged secrets map). **Pending runtime (HOST-KVM):** the eight
+secret-delivery smoke items in
+[05-host-validation.md](05-host-validation.md) **B13** — env-delivery values
+reaching guests (master key, admin password, OPENAI_API_KEY), `models.json`
+substitutions, host-bound `$MSB_*` placeholders + TLS substitution, failure
+semantics, and the v1-shim load.
+
 #### 1.3.5 `[[workloads.<name>.ports]]` — PortMapping (`microsandbox/plan.rs:82`)
 
 ```toml
@@ -668,10 +681,12 @@ lives at the binding site (`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`)
 `GITHUB_TOKEN`, `ODYSSEUS_ADMIN_PASSWORD`. (The v1 `LITELLM_AUTH` remap def
 is gone — the remap is a binding-site map key.)
 
-**W2a follow-up (open):** the LIVE personal config is migrating to native
-v2 in follow-up W2a — the `.tmp/config-repos/personal-v2` repo (init commit
-`1448778`) is still `schema_version = 1` form (with the LITELLM_AUTH remap
-def + `description` fields) and parses via the v1 shim.
+**W2a follow-up (LANDED 2026-08-01):** the personal config is migrated to
+native v2 — `.tmp/config-repos-export/personal` @ `56f3557` and
+`.tmp/config-repos/personal-v2` @ `99c9985` (LITELLM_AUTH remap def +
+`description` fields dropped; remaps at binding sites). The live home checkout
+(`~/.workestrate/config-repos/personal` @ `c41a707`) is still v1 form and
+parses via the shim until the host-side home refresh.
 
 This deployment exercises every config surface: both image recipes, three
 build recipes, both `delivery` modes (`env` and host-bound), binding-site
