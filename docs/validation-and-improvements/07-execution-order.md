@@ -235,7 +235,7 @@ improvement backlog below runs after/parallel to the wave.
 |---|---|---|
 | W1 | default-on dependency lifecycle core — deps start by default on up/exec, topo-ordered closure, singleton slots, `--no-deps` opt-out, occupied = satisfied, plan never starts | [ADR 0026 addendum (2026-08-01)](../migration/50-decisions/0026-per-instance-addressing-and-discovery.md); spec 12 §3 supersession |
 | W2 | readiness posture — service-kind detached + wait-for-port (~15s); agent-kind refuse | [ADR 0026 addendum (2026-08-01)](../migration/50-decisions/0026-per-instance-addressing-and-discovery.md) |
-| W3 | `workestrate workloads` discovery verb | [ADR 0027](../migration/50-decisions/0027-verb-first-workload-dispatch.md); successors explored in [06-improvements/17](06-improvements/17-visualization-inspection.md) |
+| W3 | `workestrate workloads` discovery verb | [ADR 0027](../migration/50-decisions/0027-verb-first-workload-dispatch.md); successors explored in [06-improvements/19](06-improvements/19-visualization-inspection.md) |
 | W4 | actual-record injection — depends_on env injection reads the ACTUAL port-registry record (actual assigned port, not declared) | ADR 0026 addendum (2026-08-01); spec 12 §4 |
 | W5 | config wiring — declare `depends_on` in config.reference + personal (agents → litellm, required=true); retire hardcoded URLs via `${VAR}` templating (`OPENAI_BASE_URL = "http://${LITELLM_ADDR}/v1"`) | spec 12 §4 ([06-improvements/12](06-improvements/12-per-instance-addressing.md)) |
 | W6 | propagation/closeout + follow-ups triage (DependsOnSpec scheme/path_suffix; wait-for-port v1 → guest healthchecks v2+; restart posture) | ADR 0026 addendum follow-ups; spec 12 §5 |

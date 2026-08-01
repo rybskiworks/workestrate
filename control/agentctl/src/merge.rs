@@ -1,4 +1,4 @@
-use crate::config::{ConfigFile, EnvBinding, SecretDefConfig, WorkloadConfig};
+use crate::config::{ConfigFile, SecretDefConfig, WorkloadConfig};
 use crate::policy;
 use crate::recipes::EgressRecipeRef;
 use anyhow::{Context, Result};
@@ -59,51 +59,12 @@ impl Layer {
             .with_context(|| format!("failed to parse raw TOML for layer '{}'", name))?;
         let config: ConfigFile = toml::from_str(content)
             .with_context(|| format!("failed to parse typed config for layer '{}'", name))?;
-        // v2 layers are native: the legacy v1 secret forms are hard-rejected
-        // at layer parse (the v1 shim only applies to schema_version 0/1).
-        if config.schema_version >= crate::config::EXPECTED_SCHEMA_VERSION {
-            reject_legacy_secret_forms(name, &config)?;
-        }
         Ok(Self {
             name: name.to_string(),
             config,
             raw,
         })
     }
-}
-
-/// schema_version >= 2 rejection of the legacy v1 secret forms (P1 Wave 1):
-/// `secret_env` bindings and the legacy secret-def fields `source` /
-/// `exposed_as` / `description` are removed in v2 and must not appear in a
-/// native layer (they still PARSE for the one-cycle v1 shim — schema_version
-/// 0/1 layers — where the post-merge fold normalizes them instead).
-fn reject_legacy_secret_forms(layer_name: &str, config: &ConfigFile) -> Result<()> {
-    for (wl_name, wl) in &config.workloads {
-        if !wl.secret_env.is_empty() {
-            anyhow::bail!(
-                "layer '{}': workload '{}': secret_env is not supported in schema_version 2; use env = {{ NAME = {{ secret = \"...\" }} }}",
-                layer_name,
-                wl_name
-            );
-        }
-    }
-    for (secret_name, def) in &config.secrets {
-        for (field, present) in [
-            ("source", def.source.is_some()),
-            ("exposed_as", def.exposed_as.is_some()),
-            ("description", def.description.is_some()),
-        ] {
-            if present {
-                anyhow::bail!(
-                    "layer '{}': secret '{}' field '{}' is not supported in schema_version 2 (legacy v1-only field; removed from the v2 schema)",
-                    layer_name,
-                    secret_name,
-                    field
-                );
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Merge an ordered list of layers (earlier = lower precedence).
@@ -144,85 +105,7 @@ pub fn merge_layers(layers: &[Layer]) -> Result<(ConfigFile, Provenance)> {
         merge_workloads(&mut merged, layer, &mut provenance)?;
     }
 
-    // P1 Wave 1 v1-compat shim: fold legacy secret_env bindings / remap
-    // secret defs into v2 env bindings, then drop the legacy forms.
-    fold_legacy_secret_model(&mut merged, &mut provenance)?;
-
     Ok((merged, provenance))
-}
-
-/// Post-merge v1-compat fold (one cycle; P1 Wave 1). Normalizes the merged
-/// config into the v2 secret model:
-///
-/// - For each workload, each legacy `secret_env` entry becomes an env
-///   binding: a direct def yields `SECRET = { secret = "SECRET" }`; a remap
-///   def (`source` set) yields `EXPOSED_AS = { secret = "SOURCE" }` (the
-///   binding replaces the remap). Each fold emits a deprecation warning on
-///   stderr; an undefined reference is a hard error (same message shape as
-///   the v1 validator).
-/// - Every remap def (a def with `source` set) is then DELETED from the
-///   merged secrets map, and every legacy `description` is stripped (one
-///   warning).
-/// - Provenance is re-keyed: each `workloads.{wl}.secret_env.{SECRET}` entry
-///   is copied to the new binding site `workloads.{wl}.env.{BINDING_KEY}`.
-fn fold_legacy_secret_model(merged: &mut ConfigFile, provenance: &mut Provenance) -> Result<()> {
-    // Snapshot the merged secrets map: the fold reads defs while mutating
-    // workloads, and deletes remap defs from the map at the end.
-    let secrets = merged.secrets.clone();
-
-    for (wl_name, wl) in merged.workloads.iter_mut() {
-        let secret_env = std::mem::take(&mut wl.secret_env);
-        for se in &secret_env {
-            let def = secrets.get(&se.secret).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "workload '{}' secret_env references undefined secret '{}'",
-                    wl_name,
-                    se.secret
-                )
-            })?;
-            let (key, target) = if let Some(ref source) = def.source {
-                // Remap def: the binding `EXPOSED_AS = { secret = "SOURCE" }`
-                // replaces the remap; the remap def itself is dropped below.
-                let exposed_as = def.exposed_as.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("remapped secret '{}' has no exposed_as", se.secret)
-                })?;
-                eprintln!(
-                    "WARNING: workload '{}' secret_env '{}' uses a remap secret def; remap defs \
-                     are deprecated and dropped — use env = {{ {} = {{ secret = \"{}\" }} }}",
-                    wl_name, se.secret, exposed_as, source
-                );
-                (exposed_as.to_string(), source.clone())
-            } else {
-                eprintln!(
-                    "WARNING: workload '{}' secret_env is deprecated; \
-                     use env = {{ {} = {{ secret = \"{}\" }} }}",
-                    wl_name, se.secret, se.secret
-                );
-                (se.secret.clone(), se.secret.clone())
-            };
-            // Re-key provenance from the legacy binding site to the env map.
-            let legacy_key = format!("workloads.{wl_name}.secret_env.{}", se.secret);
-            if let Some(layer) = provenance.get(&legacy_key).cloned() {
-                provenance.insert(format!("workloads.{wl_name}.env.{key}"), layer);
-            }
-            wl.env.upsert(&key, EnvBinding::Secret(target));
-        }
-    }
-
-    // Delete every remap def and strip legacy descriptions from the merged view.
-    merged.secrets.retain(|_, def| def.source.is_none());
-    let mut stripped = false;
-    for def in merged.secrets.values_mut() {
-        if def.description.take().is_some() {
-            stripped = true;
-        }
-    }
-    if stripped {
-        eprintln!(
-            "WARNING: secrets 'description' fields are deprecated and ignored (removed in schema_version 2)"
-        );
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -349,9 +232,12 @@ fn merge_secret_def(
         merged.env_var = layer.env_var.clone();
         provenance.insert(format!("secrets.{name}.env_var"), layer_ctx.name.clone());
     }
-    if table.contains_key("hosts") {
-        merged.hosts = layer.hosts.clone();
-        provenance.insert(format!("secrets.{name}.hosts"), layer_ctx.name.clone());
+    if table.contains_key("allowed_hosts") {
+        merged.allowed_hosts = layer.allowed_hosts.clone();
+        provenance.insert(
+            format!("secrets.{name}.allowed_hosts"),
+            layer_ctx.name.clone(),
+        );
     }
     if table.contains_key("required") {
         merged.required = layer.required;
@@ -361,25 +247,6 @@ fn merge_secret_def(
         merged.placeholder = layer.placeholder.clone();
         provenance.insert(
             format!("secrets.{name}.placeholder"),
-            layer_ctx.name.clone(),
-        );
-    }
-    if table.contains_key("delivery") {
-        merged.delivery = layer.delivery;
-        provenance.insert(format!("secrets.{name}.delivery"), layer_ctx.name.clone());
-    }
-    if table.contains_key("source") {
-        merged.source = layer.source.clone();
-        provenance.insert(format!("secrets.{name}.source"), layer_ctx.name.clone());
-    }
-    if table.contains_key("exposed_as") {
-        merged.exposed_as = layer.exposed_as.clone();
-        provenance.insert(format!("secrets.{name}.exposed_as"), layer_ctx.name.clone());
-    }
-    if table.contains_key("description") {
-        merged.description = layer.description.clone();
-        provenance.insert(
-            format!("secrets.{name}.description"),
             layer_ctx.name.clone(),
         );
     }
@@ -464,9 +331,10 @@ fn merge_workload(
     }
     if table.contains_key("env") {
         // WP6(a): env bindings merge union-by-name, last layer wins per key
-        // — mirroring the secret_env union semantics below. Base order is
-        // preserved for existing keys; brand-new keys are appended in
-        // override order. (Previously wholesale replace.)
+        // — atomic per key (a binding replaces a same-key binding wholesale;
+        // it never field-merges, spec 16 §5). Base order is preserved for
+        // existing keys; brand-new keys are appended in override order.
+        // (Previously wholesale replace.)
         for (key, binding) in layer.env.iter() {
             merged.env.upsert(key, binding.clone());
             // Per-key provenance (WP11 renders env provenance end-to-end).
@@ -499,27 +367,6 @@ fn merge_workload(
             layer_ctx.name.clone(),
         );
     }
-    if table.contains_key("secret_env") {
-        // FN-3: secret_env lists merge union-by-secret-name with LAST layer
-        // wins per secret — mirroring the env union semantics above (an
-        // existing entry is replaced IN PLACE; brand-new secrets are
-        // appended in override order). Provenance is updated on EVERY
-        // (re)declaration, so it always names the layer that set the final
-        // value. (Previously first-layer-wins with first-declaration-only
-        // provenance — the opposite of env.)
-        for se in &layer.secret_env {
-            if let Some(existing) = merged.secret_env.iter_mut().find(|m| m.secret == se.secret) {
-                *existing = se.clone();
-            } else {
-                merged.secret_env.push(se.clone());
-            }
-            provenance.insert(
-                format!("workloads.{name}.secret_env.{}", se.secret),
-                layer_ctx.name.clone(),
-            );
-        }
-    }
-
     if table.contains_key("depends_on") {
         // ADR 0026(d): depends_on maps merge union-by-dependency-name, last
         // layer wins per dep — mirroring the env union semantics above (for
@@ -692,6 +539,7 @@ fn merge_network(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::config::EnvBinding;
     use std::path::PathBuf;
 
     fn fixture(path: &str) -> PathBuf {
@@ -1185,267 +1033,184 @@ mod tests {
         let _: fn() -> Option<Provenance> = get_secret_provenance;
         let _: fn() -> Option<Provenance> = take_secret_provenance;
     }
-    // ---- FN-3: secret_env is last-layer-wins per secret, like env ----
+    // ---- Spec 16: final unified secret/env model — merge rules ----
 
-    /// A layer declaring `secret_env` entries (by secret name) for workload
-    /// `pi`, plus the matching (empty) `[secrets.*]` defs the post-merge fold
-    /// resolves against. `SecretEnvConfig` carries only the `secret` key, so
-    /// the win/lose signal is which declaration SURVIVES: on a redeclaration
-    /// the later layer's entry replaces the earlier one in place (observable
-    /// via provenance + single entry), while a first declaration appends.
-    fn secret_env_layer(name: &str, secrets: &[&str]) -> Layer {
-        let entries: String = secrets
-            .iter()
-            .map(|s| format!("[[workloads.pi.secret_env]]\nsecret = \"{s}\"\n\n"))
-            .collect();
-        let defs: String = secrets
-            .iter()
-            .map(|s| format!("[secrets.{s}]\n\n"))
-            .collect();
-        Layer::from_string(
-            name,
-            &format!(
-                "schema_version = 1\n\n{defs}[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\ncommand = []\nlog_stop_errors = false\n\n{entries}[workloads.pi.network]\ndefault_deny = true"
-            ),
-        )
-        .expect("secret_env layer must parse")
-    }
-
+    /// `allowed_hosts` merges presence-gated like the other def scalars: an
+    /// upper layer that does not declare it INHERITS the lower layer's list;
+    /// declaring it REPLACES wholesale (arrays never partial-merge).
     #[test]
-    fn secret_env_union_last_layer_wins_per_secret() -> Result<()> {
-        // FN-3 regression: base secret_env [A] + later layer [A] → exactly
-        // one entry survives (in-place replace, no duplicate) and provenance
-        // attributes the (re)declared secret to the LATER layer. Under the
-        // old first-layer-wins semantics the entry was kept and provenance
-        // stayed at "base". P1 Wave 1: the post-merge fold converts the
-        // surviving entry into an env binding and clears secret_env.
-        let base = secret_env_layer("base", &["GH_TOKEN"]);
-        let team = secret_env_layer("team", &["GH_TOKEN"]);
+    fn secret_def_allowed_hosts_inherit_and_replace() -> Result<()> {
+        let base = || {
+            Layer::from_string(
+                "base",
+                "schema_version = 1\n\n[secrets.A]\nenv_var = \"A\"\nallowed_hosts = [\"example.com\"]\n",
+            )
+            .expect("base layer must parse")
+        };
+        let inherit = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[secrets.A]\nrequired = false\n",
+        )?;
+        let replace = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[secrets.A]\nallowed_hosts = [\"other.com\", \"third.com\"]\n",
+        )?;
 
-        let (merged, provenance) = merge_layers(&[base, team])?;
-        let pi = merged.workloads.get("pi").unwrap();
-        assert!(
-            pi.secret_env.is_empty(),
-            "the fold must clear legacy secret_env entries"
-        );
-        assert_eq!(pi.env.len(), 1, "redeclared secret must not be duplicated");
+        let (merged, provenance) = merge_layers(&[base(), inherit])?;
         assert_eq!(
-            pi.env.get("GH_TOKEN"),
-            Some(&EnvBinding::Secret("GH_TOKEN".to_string())),
-            "the folded env binding references the secret by name"
+            merged.secrets["A"].allowed_hosts.as_deref(),
+            Some(&["example.com".to_string()][..]),
+            "undeclared allowed_hosts is inherited"
         );
         assert_eq!(
-            provenance.get("workloads.pi.secret_env.GH_TOKEN"),
-            Some(&"team".to_string()),
-            "provenance must attribute the redeclared secret to the later layer"
-        );
-        assert_eq!(
-            provenance.get("workloads.pi.env.GH_TOKEN"),
-            Some(&"team".to_string()),
-            "the fold re-keys provenance to the env binding site"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn secret_env_union_appends_new_secrets_in_order() -> Result<()> {
-        // Union still holds: a secret declared only in the base survives a
-        // later layer declaring a different secret; the new secret appends
-        // after the base entry, each with its own per-secret provenance.
-        let base = secret_env_layer("base", &["GH_TOKEN"]);
-        let team = secret_env_layer("team", &["NPM_TOKEN"]);
-
-        let (merged, provenance) = merge_layers(&[base, team])?;
-        let pi = merged.workloads.get("pi").unwrap();
-        let names: Vec<&str> = pi.env.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["GH_TOKEN", "NPM_TOKEN"],
-            "base secrets preserved; new secrets appended in override order"
-        );
-        assert_eq!(
-            provenance.get("workloads.pi.secret_env.GH_TOKEN"),
+            provenance.get("secrets.A.allowed_hosts"),
             Some(&"base".to_string())
         );
+
+        let (merged, provenance) = merge_layers(&[base(), replace])?;
         assert_eq!(
-            provenance.get("workloads.pi.secret_env.NPM_TOKEN"),
+            merged.secrets["A"].allowed_hosts.as_deref(),
+            Some(&["other.com".to_string(), "third.com".to_string()][..]),
+            "declared allowed_hosts replaces wholesale"
+        );
+        assert_eq!(
+            provenance.get("secrets.A.allowed_hosts"),
             Some(&"team".to_string())
         );
         Ok(())
     }
 
+    /// Explicit `allowed_hosts = []` is NOT a no-op: it CLEARS the inherited
+    /// list (the only way an upper layer revokes a lower layer's
+    /// substitution grants) and resolves to deny-all — the resolved
+    /// SecretDefinition has an EMPTY allowed_hosts.
     #[test]
-    fn secret_env_three_layer_stack_latest_declaration_wins() -> Result<()> {
-        // Three layers declaring the same secret: one entry survives and
-        // provenance tracks every (re)declaration, ending at the top layer.
-        let base = secret_env_layer("base", &["KEY"]);
-        let mid = secret_env_layer("mid", &["KEY"]);
-        let top = secret_env_layer("top", &["KEY"]);
-
-        let (merged, provenance) = merge_layers(&[base, mid, top])?;
-        let pi = merged.workloads.get("pi").unwrap();
-        assert_eq!(pi.env.len(), 1, "no duplicate secret entries");
-        assert_eq!(
-            pi.env.get("KEY"),
-            Some(&EnvBinding::Secret("KEY".to_string()))
-        );
-        assert_eq!(
-            provenance.get("workloads.pi.secret_env.KEY"),
-            Some(&"top".to_string()),
-            "provenance must reflect the final (top) declaration"
-        );
-        Ok(())
-    }
-
-    // ---- P1 Wave 1: the v1-compat fold + v2 rejection ----
-
-    /// A legacy remap def (`source`/`exposed_as`) bound via `secret_env`
-    /// folds into `EXPOSED_AS = { secret = "SOURCE" }`; the remap def is
-    /// deleted and the legacy description stripped from the merged view.
-    #[test]
-    fn fold_converts_remap_secret_env_to_env_binding() -> Result<()> {
+    fn secret_def_allowed_hosts_explicit_empty_clears_to_deny_all() -> Result<()> {
         let base = Layer::from_string(
             "base",
-            "schema_version = 1\n\n[secrets.LITELLM_MASTER_KEY]\nenv_var = \"LITELLM_MASTER_KEY\"\ndescription = \"legacy doc\"\n\n[secrets.LITELLM_AUTH]\nsource = \"LITELLM_MASTER_KEY\"\nexposed_as = \"OPENAI_API_KEY\"\n\n[workloads.odysseus]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"python:3.12-slim\" }\ncommand = []\nsecret_env = [\"LITELLM_AUTH\"]\n\n[workloads.odysseus.network]\ndefault_deny = true",
+            "schema_version = 1\n\n[secrets.A]\nenv_var = \"A\"\nallowed_hosts = [\"example.com\"]\n",
+        )?;
+        let clear = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[secrets.A]\nallowed_hosts = []\n",
         )?;
 
-        let (merged, provenance) = merge_layers(&[base])?;
-        let odysseus = merged.workloads.get("odysseus").unwrap();
-        assert!(odysseus.secret_env.is_empty(), "secret_env is cleared");
+        let (merged, provenance) = merge_layers(&[base, clear])?;
         assert_eq!(
-            odysseus.env.get("OPENAI_API_KEY"),
-            Some(&EnvBinding::Secret("LITELLM_MASTER_KEY".to_string())),
-            "the binding replaces the remap: EXPOSED_AS = {{ secret = SOURCE }}"
-        );
-        assert!(
-            !merged.secrets.contains_key("LITELLM_AUTH"),
-            "the remap def is deleted from the merged secrets map"
-        );
-        assert!(
-            merged.secrets["LITELLM_MASTER_KEY"].description.is_none(),
-            "legacy descriptions are stripped from the merged view"
+            merged.secrets["A"].allowed_hosts.as_deref(),
+            Some(&[][..]),
+            "explicit [] clears the inherited list"
         );
         assert_eq!(
-            provenance.get("workloads.odysseus.env.OPENAI_API_KEY"),
-            Some(&"base".to_string()),
-            "provenance is re-keyed to the env binding site"
+            provenance.get("secrets.A.allowed_hosts"),
+            Some(&"team".to_string())
+        );
+        // Post-merge resolution: the cleared list resolves to deny-all
+        // (empty allowed_hosts on the SecretDefinition).
+        let defs = crate::microsandbox::workload::secrets::build_secret_definitions(&merged)?;
+        assert!(
+            defs["A"].allowed_hosts.is_empty(),
+            "explicit [] resolves to deny-all"
         );
         Ok(())
     }
 
-    /// A direct def bound via legacy `secret_env` folds into
-    /// `SECRET = { secret = "SECRET" }`; the def survives untouched.
+    /// Env bindings are ATOMIC: a same-key binding replaces the lower
+    /// layer's binding wholesale — `X = { secret = "A" }` followed by
+    /// `X = "lit"` yields the literal, never a merged hybrid.
     #[test]
-    fn fold_converts_direct_secret_env_to_env_binding() -> Result<()> {
+    fn env_binding_merge_is_atomic_same_key_replace() -> Result<()> {
         let base = Layer::from_string(
             "base",
-            "schema_version = 1\n\n[secrets.GITHUB_TOKEN]\nenv_var = \"GITHUB_TOKEN\"\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\nsecret_env = [\"GITHUB_TOKEN\"]\n\n[workloads.pi.network]\ndefault_deny = true",
-        )?;
-
-        let (merged, provenance) = merge_layers(&[base])?;
-        let pi = merged.workloads.get("pi").unwrap();
-        assert_eq!(
-            pi.env.get("GITHUB_TOKEN"),
-            Some(&EnvBinding::Secret("GITHUB_TOKEN".to_string()))
-        );
-        assert!(
-            merged.secrets.contains_key("GITHUB_TOKEN"),
-            "direct defs are kept"
-        );
-        assert_eq!(
-            provenance.get("workloads.pi.env.GITHUB_TOKEN"),
-            Some(&"base".to_string())
-        );
-        Ok(())
-    }
-
-    /// A legacy `secret_env` entry referencing an undefined secret is a hard
-    /// error at fold time (same message shape as the v1 validator).
-    #[test]
-    fn fold_rejects_undefined_secret_env_reference() {
-        let base = Layer::from_string(
-            "base",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\nsecret_env = [\"NOPE\"]\n\n[workloads.pi.network]\ndefault_deny = true",
-        )
-        .unwrap();
-
-        let err = merge_layers(&[base]).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "workload 'pi' secret_env references undefined secret 'NOPE'"
-        );
-    }
-
-    /// schema_version = 2 layers reject `secret_env` at parse (the shim only
-    /// covers schema_version 0/1).
-    #[test]
-    fn v2_layer_rejects_secret_env() {
-        let err = Layer::from_string(
-            "v2",
-            "schema_version = 2\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\nsecret_env = [\"A\"]\n\n[workloads.pi.network]\ndefault_deny = true",
-        )
-        .map(|_| ())
-        .unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("secret_env is not supported in schema_version 2"),
-            "error must name the removed namespace: {msg}"
-        );
-        assert!(
-            msg.contains("env = { NAME = { secret ="),
-            "error must point at the v2 env-map form: {msg}"
-        );
-    }
-
-    /// schema_version = 2 layers reject the legacy secret-def fields
-    /// (`source`/`exposed_as`/`description`), naming the offending field.
-    #[test]
-    fn v2_layer_rejects_legacy_secret_def_fields() {
-        for (field, snippet) in [
-            ("source", "source = \"A\""),
-            ("exposed_as", "exposed_as = \"B\""),
-            ("description", "description = \"doc\""),
-        ] {
-            let toml = format!(
-                "schema_version = 2\n\n[secrets.A]\nenv_var = \"A\"\n\n[secrets.B]\n{snippet}\n"
-            );
-            let err = Layer::from_string("v2", &toml).map(|_| ()).unwrap_err();
-            let msg = err.to_string();
-            assert!(
-                msg.contains(&format!("secret 'B' field '{field}'")),
-                "error must name the secret and field: {msg}"
-            );
-            assert!(
-                msg.contains("not supported in schema_version 2"),
-                "error must name the version: {msg}"
-            );
-        }
-    }
-
-    /// The merge engine gains a `delivery` arm: a later layer's `delivery`
-    /// declaration wins per secret, with provenance.
-    #[test]
-    fn secret_def_delivery_merges_with_provenance() -> Result<()> {
-        let base = Layer::from_string(
-            "base",
-            "schema_version = 1\n\n[secrets.A]\nenv_var = \"A\"\nhosts = [\"example.com\"]\n",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.env]\nX = { secret = \"A\" }\n\n[workloads.pi.network]\ndefault_deny = true",
         )?;
         let team = Layer::from_string(
             "team",
-            "schema_version = 1\n\n[secrets.A]\ndelivery = \"env\"\n",
+            "schema_version = 1\n\n[workloads.pi.env]\nX = \"lit\"",
         )?;
 
-        let (merged, provenance) = merge_layers(&[base, team])?;
-        let a = &merged.secrets["A"];
-        assert_eq!(a.delivery, Some(crate::config::Delivery::Env));
+        let (merged, _) = merge_layers(&[base, team])?;
+        let pi = merged.workloads.get("pi").unwrap();
         assert_eq!(
-            a.hosts.as_deref(),
-            Some(&["example.com".to_string()][..]),
-            "presence-gated: undeclared fields keep the base value"
+            pi.env.get("X"),
+            Some(&EnvBinding::Literal("lit".to_string())),
+            "the upper literal replaces the secret binding wholesale"
         );
         assert_eq!(
-            provenance.get("secrets.A.delivery"),
-            Some(&"team".to_string())
+            pi.env.iter().filter(|(k, _)| k == "X").count(),
+            1,
+            "X must not be duplicated"
+        );
+        Ok(())
+    }
+
+    /// Atomicity across the desugar boundary: the upper layer's sugar
+    /// (`X = { bound = "guest" }`) resolves against ITS OWN key — the lower
+    /// layer's `secret = "A"` is NOT inherited (defaults apply post-merge,
+    /// to the final binding).
+    #[test]
+    fn env_binding_merge_upper_sugar_resolves_against_key_not_lower_secret() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.env]\nX = { secret = \"A\" }\n\n[workloads.pi.network]\ndefault_deny = true",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[workloads.pi.env]\nX = { bound = \"guest\" }",
+        )?;
+
+        let (merged, _) = merge_layers(&[base, team])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.env.get("X"),
+            Some(&EnvBinding::Secret(crate::config::EnvSecretRef {
+                secret: "X".to_string(),
+                bound: Some(crate::config::Bound::Guest),
+            })),
+            "the upper sugar binds secret X (key-name default); the lower secret A is gone"
+        );
+        Ok(())
+    }
+
+    /// Defaults are applied ONLY after the full merge: the lower layer's
+    /// `required = false` survives an upper layer that sets only
+    /// `placeholder` (presence-gated scalar merge), and the resolution
+    /// default (`required → true`) applies only when the merged value is
+    /// None.
+    #[test]
+    fn defaults_apply_after_full_merge_not_per_layer() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[secrets.A]\nenv_var = \"A\"\nrequired = false\n",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[secrets.A]\nplaceholder = \"CHANGEME\"\n",
+        )?;
+
+        let (merged, _) = merge_layers(&[base, team])?;
+        let a = &merged.secrets["A"];
+        assert_eq!(
+            a.required,
+            Some(false),
+            "the merged def keeps the lower layer's required = false"
+        );
+        assert_eq!(a.placeholder.as_deref(), Some("CHANGEME"));
+
+        // Post-merge resolution honors the merged value; the default fires
+        // only for a def that never declared required.
+        let defs = crate::microsandbox::workload::secrets::build_secret_definitions(&merged)?;
+        assert!(!defs["A"].required);
+
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[secrets.B]\nenv_var = \"B\"\n",
+        )?;
+        let (merged, _) = merge_layers(&[base])?;
+        let defs = crate::microsandbox::workload::secrets::build_secret_definitions(&merged)?;
+        assert!(
+            defs["B"].required,
+            "required defaults to true only when the merged value is None"
         );
         Ok(())
     }

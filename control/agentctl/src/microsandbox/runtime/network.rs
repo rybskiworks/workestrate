@@ -255,27 +255,29 @@ mod tests {
     }
 
     #[test]
-    fn pi_plan_exposes_litellm_master_key_as_env_not_host_bound() -> anyhow::Result<()> {
+    fn pi_plan_host_binds_litellm_master_key_as_placeholder_not_env() -> anyhow::Result<()> {
         let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("pi")?.plan();
-        // The key must be a process env var so `${LITELLM_MASTER_KEY}` in
-        // models.json resolves; otherwise Pi sends no auth key and LiteLLM
-        // rejects with "No connected db".
+        // Spec 16: pi is a PRESENTER workload — it binds the master key as a
+        // host-bound placeholder (`LITELLM_MASTER_KEY = true`), never the real
+        // value. The v2 def-global `delivery = "env"` over-exposed the real
+        // key to pi; per-binding `bound` fixes that (only verifier workloads
+        // opt into `bound = "guest"`).
         let in_env = plan
             .env
             .iter()
             .any(|e| e.name == "LITELLM_MASTER_KEY" && e.is_secret);
         assert!(
-            in_env,
-            "pi must expose LITELLM_MASTER_KEY as a secret EnvVar so models.json substitution resolves"
+            !in_env,
+            "pi must NOT expose LITELLM_MASTER_KEY as a guest env var (presenter posture: placeholder only)"
         );
         let in_secret_env = plan
             .secret_env
             .iter()
             .any(|s| s.name == "LITELLM_MASTER_KEY");
         assert!(
-            !in_secret_env,
-            "pi must NOT host-bind LITELLM_MASTER_KEY (host-bound secrets are not exposed as guest env vars)"
+            in_secret_env,
+            "pi must host-bind LITELLM_MASTER_KEY (placeholder in-sandbox; substitution at egress)"
         );
         Ok(())
     }

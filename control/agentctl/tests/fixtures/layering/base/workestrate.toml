@@ -2,7 +2,7 @@ schema_version = 1
 
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
-hosts = ["host.microsandbox.internal"]
+allowed_hosts = ["host.microsandbox.internal"]
 required = true
 
 [workloads.pi]

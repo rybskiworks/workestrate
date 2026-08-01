@@ -358,7 +358,6 @@ mod tests {
             allowed_hosts: vec!["example.com".to_string()],
             required: true,
             placeholder: Some("CHANGEME".to_string()),
-            delivery: crate::config::Delivery::HostBound,
         }
     }
 

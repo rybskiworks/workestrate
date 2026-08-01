@@ -14,6 +14,14 @@ infra/litellm/       # LiteLLM config values (config.yaml, models.yaml)
 agents/*/config/     # agent config files (models.json, settings.json, etc.)
 ```
 
+## Secrets & env (the model in three lines)
+
+Env bindings default to the **placeholder** — workloads never see a real
+credential unless you opt in. The real value in-sandbox is an explicit
+`bound = "guest"` on the binding, reserved for workloads that **verify** the
+credential (e.g. litellm itself). `secret` appears at a binding only when
+**renaming** (env name ≠ secret ID); same-name bindings are just `KEY = true`.
+
 ## Setup
 
 1. Generate your age key (if not already done):

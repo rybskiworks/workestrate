@@ -42,9 +42,9 @@ pub use trust::is_dir_trusted_via_base_registry;
 pub use trust::{is_trusted_project, trust_project, untrust_project};
 #[allow(unused_imports)]
 pub use types::{
-    BakedFileSpec, BinarySpec, ConfigFile, ConfigRepoEntry, Context, Delivery, DependsOnSpec,
-    EnvBinding, EnvBindings, EnvVarConfig, ImageSpec, LocalBuildConfig, NetworkConfig, Registry,
-    RegistrySettings, SecretDefConfig, SecretEnvConfig, SecretsLayer, SeedFileConfig,
+    BakedFileSpec, BinarySpec, Bound, ConfigFile, ConfigRepoEntry, Context, DependsOnSpec,
+    EnvBinding, EnvBindings, EnvSecretRef, EnvVarConfig, ImageSpec, LocalBuildConfig,
+    NetworkConfig, Registry, RegistrySettings, SecretDefConfig, SecretsLayer, SeedFileConfig,
     TrustedProject, WorkloadConfig,
 };
 #[allow(unused_imports)]

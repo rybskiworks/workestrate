@@ -1,6 +1,6 @@
 #:schema ../schemas/workestrate.schema.json
 
-schema_version = 2
+schema_version = 1
 
 # Synthetic reference config. This is a machine-independent fixture that
 # exercises every recipe type and policy feature the core understands. It is
@@ -8,12 +8,11 @@ schema_version = 2
 
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
-delivery = "env"
 required = true
 
 [secrets.GITHUB_TOKEN]
 env_var = "GITHUB_TOKEN"
-hosts = ["github.com", "api.github.com"]
+allowed_hosts = ["github.com", "api.github.com"]
 required = false
 
 [workloads.litellm]
@@ -59,7 +58,7 @@ log_stop_errors = true
 
 [workloads.example-service.env]
 APP_PORT = "8080"
-OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
 
 [[workloads.example-service.ports]]
 host = 8080
@@ -121,8 +120,8 @@ command = ["node", "dist/cli.js"]
 log_stop_errors = false
 
 [workloads.example-agent.env]
-API_KEY = { secret = "LITELLM_MASTER_KEY" }
-GITHUB_TOKEN = { secret = "GITHUB_TOKEN" }
+API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
+GITHUB_TOKEN = true
 
 [[workloads.example-agent.mounts]]
 host = "workspaces/example-agent-state"
@@ -169,7 +168,7 @@ log_stop_errors = false
 
 [workloads.example-offensive.env]
 T3MP3ST_HOST = "127.0.0.1"
-OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
 
 [[workloads.example-offensive.mounts]]
 host = "workspaces/example-offensive-state"

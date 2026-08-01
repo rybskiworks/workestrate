@@ -216,15 +216,13 @@ The workload definition file. Lives in each config repo at
 
 ```toml
 # spec-test: skip
-schema_version = 2  # integer; workestrate checks compatibility on load
+schema_version = 1  # integer; workestrate checks compatibility on load
 
 [secrets.<NAME>]           # secret definition (replaces secrets.rs const)
 # env_var: string          # environment variable in the host process (default: the secret ID)
-# hosts: [string]          # egress hosts this secret is bound to (validated against policy.rs); omitted = deny-all
+# allowed_hosts: [string]  # egress hosts whose rewrites may substitute the real value (validated against policy.rs); omitted = deny-all
 # required: bool           # whether the secret must be set (default: true)
 # placeholder: string?     # known-bad placeholder value to reject
-# delivery: "env" | "host_bound"?  # default "host_bound" (secure-by-default);
-                           #   "env" exposes the value as a sandbox env var and takes NO hosts
 
 [workloads.<name>]          # workload definition
 # kind: string             # "service" | "agent"
@@ -236,7 +234,10 @@ schema_version = 2  # integer; workestrate checks compatibility on load
 # entrypoint: string       # "shell" (default; core runs /bin/sh -c "tail -f /dev/null")
 # log_stop_errors: bool    # whether to log errors on stop (default: true)
 # env: table | [[table]]   # env bindings: map form (document order; bare string = literal,
-                           #   { secret = "ID" } = secret binding) or legacy array-of-tables
+                           #   KEY = true = host-bound placeholder for secret KEY,
+                           #   { secret = "ID" } = renamed placeholder,
+                           #   { bound = "guest" } = real value (verifier opt-in))
+                           #   or legacy array-of-tables (no `bound`)
 # ports: [[table]]         # port mappings
 # mounts: [[table]]        # mount declarations
 # network: table           # network policy
@@ -247,45 +248,45 @@ schema_version = 2  # integer; workestrate checks compatibility on load
 ### Complete annotated example (all 5 current workloads)
 
 ```toml
-schema_version = 2
+schema_version = 1
 
 # ─── Secret definitions ────────────────────────────────────────────────────
 # Replaces secrets.rs:33-92 const definitions. Config declares; core validates
-# against policy.rs SECRET_HOST_BINDINGS allowlist.
+# against policy.rs SECRET_HOST_BINDINGS allowlist. A def is a pure catalog of
+# intrinsic credential properties — exposure is declared per workload at the
+# binding site (`bound` on the env binding).
 
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
-delivery = "env"
 required = true
 
 [secrets.OPENROUTER_API_KEY]
 env_var = "OPENROUTER_API_KEY"
-hosts = ["openrouter.ai"]
+allowed_hosts = ["openrouter.ai"]
 required = true
 
 [secrets.KIMI_CODE_API_KEY]
 env_var = "KIMI_CODE_API_KEY"
-hosts = ["api.kimi.com"]
+allowed_hosts = ["api.kimi.com"]
 required = true
 
 [secrets.NEURALWATT_API_KEY]
 env_var = "NEURALWATT_API_KEY"
-hosts = ["api.neuralwatt.com"]
+allowed_hosts = ["api.neuralwatt.com"]
 required = true
 
 [secrets.MINIMAX_CODING_API_KEY]
 env_var = "MINIMAX_CODING_API_KEY"
-hosts = ["api.minimax.io"]
+allowed_hosts = ["api.minimax.io"]
 required = true
 
 [secrets.GITHUB_TOKEN]
 env_var = "GITHUB_TOKEN"
-hosts = ["github.com", "api.github.com"]
+allowed_hosts = ["github.com", "api.github.com"]
 required = false
 
 [secrets.ODYSSEUS_ADMIN_PASSWORD]
 env_var = "ODYSSEUS_ADMIN_PASSWORD"
-delivery = "env"
 required = true
 placeholder = "change_me_before_first_boot"
 
@@ -303,11 +304,11 @@ log_stop_errors = true
 [workloads.litellm.env]
 PORT = "4000"
 LITELLM_LOCAL_MODEL_COST_MAP = "True"
-LITELLM_MASTER_KEY = { secret = "LITELLM_MASTER_KEY" }
-OPENROUTER_API_KEY = { secret = "OPENROUTER_API_KEY" }       # host-bound (default delivery)
-KIMI_CODE_API_KEY = { secret = "KIMI_CODE_API_KEY" }         # host-bound
-NEURALWATT_API_KEY = { secret = "NEURALWATT_API_KEY" }       # host-bound
-MINIMAX_CODING_API_KEY = { secret = "MINIMAX_CODING_API_KEY" } # host-bound
+LITELLM_MASTER_KEY = { bound = "guest" }                    # real value — litellm verifies its callers
+OPENROUTER_API_KEY = true                                   # placeholder (bound defaults to host)
+KIMI_CODE_API_KEY = true                                    # placeholder
+NEURALWATT_API_KEY = true                                   # placeholder
+MINIMAX_CODING_API_KEY = true                               # placeholder
 
 [[workloads.litellm.ports]]
 host = 4000
@@ -352,8 +353,8 @@ log_stop_errors = false
 [workloads.pi.env]
 PI_CODING_AGENT_DIR = "/data/agent"
 PI_TELEMETRY = "0"
-LITELLM_MASTER_KEY = { secret = "LITELLM_MASTER_KEY" }
-GITHUB_TOKEN = { secret = "GITHUB_TOKEN" }                   # host-bound (default delivery)
+LITELLM_MASTER_KEY = true                                   # placeholder (presenter posture)
+GITHUB_TOKEN = true                                         # placeholder (bound defaults to host)
 
 [[workloads.pi.mounts]]
 host = "workspaces/pi-state"     # state_dir-relative
@@ -398,9 +399,9 @@ ODYSSEUS_DATA_DIR = "/data"
 OPENAI_BASE_URL = "http://host.microsandbox.internal:4000/v1"
 OPENAI_MODEL = "coding"
 PYTHONPATH = "/app/.deps"
-ODYSSEUS_ADMIN_PASSWORD = { secret = "ODYSSEUS_ADMIN_PASSWORD" }
-OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }           # env delivery (replaces the v1 LITELLM_AUTH remap)
-GITHUB_TOKEN = { secret = "GITHUB_TOKEN" }                   # host-bound (default delivery)
+ODYSSEUS_ADMIN_PASSWORD = { bound = "guest" }               # real value — odysseus verifies admin requests
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }          # renamed placeholder (replaces the v1 LITELLM_AUTH remap)
+GITHUB_TOKEN = true                                         # placeholder (bound defaults to host)
 
 [[workloads.odysseus.ports]]
 host = 7000
@@ -459,8 +460,8 @@ log_stop_errors = false
 [workloads.opencode.env]
 OPENAI_BASE_URL = "http://host.microsandbox.internal:4000/v1"
 OPENAI_MODEL = "coding"
-OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }           # env delivery
-GITHUB_TOKEN = { secret = "GITHUB_TOKEN" }                   # host-bound (default delivery)
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }          # renamed placeholder
+GITHUB_TOKEN = true                                         # placeholder (bound defaults to host)
 
 [[workloads.opencode.ports]]
 host = 3000
@@ -518,7 +519,7 @@ log_stop_errors = false
 [workloads.tempest.env]
 TEMPEST_LOCAL_BASE_URL = "http://host.microsandbox.internal:4000/v1"
 TEMPEST_LOCAL_MODEL = "coding"
-TEMPEST_LOCAL_API_KEY = { secret = "LITELLM_MASTER_KEY" }   # inline remap: env var name from key, value from secret
+TEMPEST_LOCAL_API_KEY = { secret = "LITELLM_MASTER_KEY" }   # renamed placeholder: env var name from key, value from secret
 T3MP3ST_HOST = "127.0.0.1"
 
 [[workloads.tempest.mounts]]
@@ -574,7 +575,7 @@ skeletons, single-feature snippets, override-layer fragments) are marked
 with a leading `# spec-test: skip` comment and are skipped by the guard.
 A block without `schema_version` is also skipped automatically. To add a
 new full-config example, omit the skip marker and include
-`schema_version = 2`.
+`schema_version = 1`.
 
 ## 4. Recipe vocabulary reference
 
@@ -1228,7 +1229,7 @@ Add a top-level schema pointer to `workestrate.toml`:
 ```toml
 # spec-test: skip
 #:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json
-schema_version = 2
+schema_version = 1
 # …rest of file
 ```
 

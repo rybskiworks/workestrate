@@ -79,12 +79,12 @@
       },
       "additionalProperties": false
     },
-    "Delivery": {
-      "description": "How a secret is delivered into the sandbox (v2). `host_bound` (the default; secure-by-default) injects the value only for the declared egress `hosts` — with `hosts` omitted the secret is deny-all (it never leaves the host). `env` exposes the value as a plain sandbox environment variable; `hosts` must then be ABSENT on the definition (reachability is governed by egress rules, not host bindings).\n\nTOML values: `delivery = \"env\"` / `delivery = \"host_bound\"`.",
+    "Bound": {
+      "description": "Exposure mode of a workload env binding to a secret (spec 16). `host` (the default; secure-by-default) renders the placeholder — the real value is substituted by the egress rewrite only for hosts in the credential's `allowed_hosts`. `guest` injects the real resolved value as a plain sandbox env var (the explicit opt-in for verifier workloads).\n\nTOML values: `bound = \"host\"` / `bound = \"guest\"`.",
       "type": "string",
       "enum": [
-        "env",
-        "host_bound"
+        "host",
+        "guest"
       ]
     },
     "DenyDomainRule": {
@@ -198,18 +198,21 @@
       ]
     },
     "EnvBinding": {
-      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (spec 14): a bare string `\"value\"` is a literal value, an inline table `{ secret = \"NAME\" }` a secret reference. This enum is NEVER stored — it backs the schemars rendering of [`EnvBinding`] (the map value in the v2 env map), so the generated schema shows both value forms.",
+      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (specs 14/16): a bare string `\"value\"` is a literal value, a bare `true` the same-name host-bound sugar, an inline table `{ secret = \"NAME\", bound = \"guest\" }` a secret reference. This enum is NEVER stored — it backs the schemars rendering of [`EnvBinding`] (the map value in the env map), so the generated schema shows all value forms (`string | boolean | { secret?, bound? }`).",
       "anyOf": [
         {
           "type": "string"
         },
         {
-          "$ref": "#/definitions/EnvSecretRef"
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/EnvSecretRefShape"
         }
       ]
     },
     "EnvFieldShape": {
-      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`EnvBindings`]'s custom deserializer normalizes both forms at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map-of-EnvBinding]`. BOTH forms stay in the emitted schema for one cycle because v1 still parses.",
+      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`EnvBindings`]'s custom deserializer normalizes both forms at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map-of-EnvBinding]`.",
       "anyOf": [
         {
           "type": "array",
@@ -225,15 +228,25 @@
         }
       ]
     },
-    "EnvSecretRef": {
-      "description": "One secret reference as an `env` map value (spec 14): in the map form `env = { KEY = { secret = \"NAME\" } }`, the inline table may carry ONLY a secret reference — never a `name` (the map key IS the name) and never a literal `value`. Deliberately distinct from [`EnvVarConfig`] so `deny_unknown_fields` rejects `name`/`value`/typos inside a map value.",
+    "EnvSecretRefShape": {
+      "description": "Schemars-boundary-only shape of the secret-binding inline table (spec 16): BOTH fields are optional on the wire (`secret` defaults to the map key, `bound` defaults to `host` — neither default is visible in the wire format). Distinct from the real [`EnvSecretRef`], whose `secret` is required in Rust because the key-name default has already been applied at parse time.",
       "type": "object",
-      "required": [
-        "secret"
-      ],
       "properties": {
+        "bound": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Bound"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "secret": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -504,26 +517,10 @@
       ]
     },
     "SecretDefConfig": {
-      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml). `env_var` is the host environment variable the resolved value is read from (default: the secret ID); `hosts` constrains which egress hosts may receive a host-bound secret; `required` makes a missing value a hard error; `placeholder` is a known-bad value to reject; `delivery` selects env vs host-bound injection (default host-bound).\n\n`source`/`exposed_as`/`description` are LEGACY v1-only fields: they stay parseable for the one-cycle v1 shim (the post-merge fold turns remap defs into env bindings and strips descriptions), are hard-rejected for schema_version = 2 layers, and are removed from the emitted v2 schema.",
+      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml) — the final unified model (spec 16): a pure catalog of the credential's intrinsic properties. `env_var` is the host environment variable the resolved value is read from (default: the secret ID); `allowed_hosts` constrains which egress hosts may receive the value by substitution (omitted → deny-all; valid regardless of binding mode); `required` makes a missing value a hard error; `placeholder` is a known-bad value to reject. Exposure mode is NOT a def property — it lives at the binding site (`EnvSecretRef.bound`). The retired v1/v2 keys (`hosts`, `delivery`, `source`, `exposed_as`, `description`, stray `bound`) hard-error at parse via `deny_unknown_fields`.",
       "type": "object",
       "properties": {
-        "delivery": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Delivery"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "env_var": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "hosts": {
+        "allowed_hosts": {
           "default": null,
           "type": [
             "array",
@@ -532,6 +529,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "env_var": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "placeholder": {
           "type": [

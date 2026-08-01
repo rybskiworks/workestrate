@@ -533,7 +533,7 @@ pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> 
     let config = config::load_config()?;
     // Bare sorted key list: the resolved source env var of every secret def
     // (raw env_var, defaulting to the secret ID). No description comments —
-    // the legacy `description` field is gone in v2.
+    // the legacy `description` field is gone in the final model.
     let mut keys: Vec<String> = config
         .secrets
         .iter()
@@ -547,6 +547,20 @@ pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> 
     buf.push_str(
         "# Real secrets live in .env.enc (encrypted) and are loaded by workestrate at runtime.\n",
     );
+    buf.push_str("#\n");
+    buf.push_str("# How these values reach a workload (spec 16):\n");
+    buf.push_str(
+        "#   - env bindings default to the PLACEHOLDER (least exposure); the real value\n",
+    );
+    buf.push_str("#     is substituted by the egress rewrite only for hosts in `allowed_hosts`.\n");
+    buf.push_str("#   - the real value in-sandbox is an explicit `bound = \"guest\"` opt-in,\n");
+    buf.push_str(
+        "#     reserved for workloads that verify the credential (e.g. litellm itself).\n",
+    );
+    buf.push_str(
+        "#   - `secret` appears at a binding only when RENAMING (env name != secret ID);\n",
+    );
+    buf.push_str("#     same-name bindings are just `KEY = true`.\n");
     for key in &keys {
         buf.push_str(&format!("{}=\n", key));
     }

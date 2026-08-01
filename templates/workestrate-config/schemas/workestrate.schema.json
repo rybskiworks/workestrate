@@ -79,6 +79,14 @@
       },
       "additionalProperties": false
     },
+    "Bound": {
+      "description": "Exposure mode of a workload env binding to a secret (spec 16). `host` (the default; secure-by-default) renders the placeholder — the real value is substituted by the egress rewrite only for hosts in the credential's `allowed_hosts`. `guest` injects the real resolved value as a plain sandbox env var (the explicit opt-in for verifier workloads).\n\nTOML values: `bound = \"host\"` / `bound = \"guest\"`.",
+      "type": "string",
+      "enum": [
+        "host",
+        "guest"
+      ]
+    },
     "DenyDomainRule": {
       "type": "object",
       "required": [
@@ -189,8 +197,22 @@
         }
       ]
     },
+    "EnvBinding": {
+      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (specs 14/16): a bare string `\"value\"` is a literal value, a bare `true` the same-name host-bound sugar, an inline table `{ secret = \"NAME\", bound = \"guest\" }` a secret reference. This enum is NEVER stored — it backs the schemars rendering of [`EnvBinding`] (the map value in the env map), so the generated schema shows all value forms (`string | boolean | { secret?, bound? }`).",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/EnvSecretRefShape"
+        }
+      ]
+    },
     "EnvFieldShape": {
-      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`deserialize_env`] normalizes both forms to `Vec<EnvVarConfig>` at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map]`.",
+      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`EnvBindings`]'s custom deserializer normalizes both forms at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map-of-EnvBinding]`.",
       "anyOf": [
         {
           "type": "array",
@@ -201,34 +223,33 @@
         {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/EnvValueShorthand"
+            "$ref": "#/definitions/EnvBinding"
           }
         }
       ]
     },
-    "EnvSecretRef": {
-      "description": "One secret reference as an `env` map value (spec 14): in the map form `env = { KEY = { secret = \"NAME\" } }`, the inline table may carry ONLY a secret reference — never a `name` (the map key IS the name) and never a literal `value`. Deliberately distinct from [`EnvVarConfig`] so `deny_unknown_fields` rejects `name`/`value`/typos inside a map value.",
+    "EnvSecretRefShape": {
+      "description": "Schemars-boundary-only shape of the secret-binding inline table (spec 16): BOTH fields are optional on the wire (`secret` defaults to the map key, `bound` defaults to `host` — neither default is visible in the wire format). Distinct from the real [`EnvSecretRef`], whose `secret` is required in Rust because the key-name default has already been applied at parse time.",
       "type": "object",
-      "required": [
-        "secret"
-      ],
       "properties": {
+        "bound": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Bound"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "secret": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
-    },
-    "EnvValueShorthand": {
-      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (spec 14): a bare string `\"value\"` is a literal value, an inline table `{ secret = \"NAME\" }` a secret reference. This enum is NEVER stored — [`deserialize_env`] normalizes every map entry to [`EnvVarConfig`] at parse time, so merge/validation/plan code sees the identical post-parse struct it saw before. It exists so the generated schema can show both value forms.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "$ref": "#/definitions/EnvSecretRef"
-        }
-      ]
     },
     "EnvVarConfig": {
       "description": "One environment-variable entry in a workload's `env` list. Exactly one of `value` (literal) or `secret` (reference to a `secrets.<name>` entry) is expected to be set; `name` must be a valid shell env identifier.",
@@ -496,28 +517,10 @@
       ]
     },
     "SecretDefConfig": {
-      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml). `env_var` is the environment variable the resolved value is injected as; `hosts` constrains which egress hosts may receive it; `required` makes a missing value a hard error; `source`/`exposed_as`/`placeholder`/ `description` drive resolution and UX.",
+      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml) — the final unified model (spec 16): a pure catalog of the credential's intrinsic properties. `env_var` is the host environment variable the resolved value is read from (default: the secret ID); `allowed_hosts` constrains which egress hosts may receive the value by substitution (omitted → deny-all; valid regardless of binding mode); `required` makes a missing value a hard error; `placeholder` is a known-bad value to reject. Exposure mode is NOT a def property — it lives at the binding site (`EnvSecretRef.bound`). The retired v1/v2 keys (`hosts`, `delivery`, `source`, `exposed_as`, `description`, stray `bound`) hard-error at parse via `deny_unknown_fields`.",
       "type": "object",
       "properties": {
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "env_var": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "exposed_as": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "hosts": {
+        "allowed_hosts": {
           "default": null,
           "type": [
             "array",
@@ -526,6 +529,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "env_var": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "placeholder": {
           "type": [
@@ -538,39 +547,9 @@
             "boolean",
             "null"
           ]
-        },
-        "source": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "additionalProperties": false
-    },
-    "SecretEnvConfig": {
-      "description": "One secret reference in a workload's `secret_env` list: names an entry in the top-level `secrets` map whose resolved value is injected into the sandbox environment.",
-      "type": "object",
-      "required": [
-        "secret"
-      ],
-      "properties": {
-        "secret": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "SecretEnvShorthand": {
-      "description": "Serde/schemars-boundary-only helper for the `secret_env` string-or-table shorthand (spec 13): a bare string `\"NAME\"` is shorthand for the inline table `{ secret = \"NAME\" }`. This enum is NEVER stored — [`deserialize_secret_env`] normalizes every element to [`SecretEnvConfig`] at parse time, so merge/validation/plan code sees the identical post-parse struct it saw before. The `Full` (table) variant is kept as forward-compat for future per-entry fields.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "$ref": "#/definitions/SecretEnvConfig"
-        }
-      ]
     },
     "SeedFileConfig": {
       "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary), `target` the in-sandbox destination; `only_if_missing` skips the copy when the target already exists.",
@@ -623,7 +602,7 @@
           }
         },
         "env": {
-          "default": [],
+          "default": {},
           "allOf": [
             {
               "$ref": "#/definitions/EnvFieldShape"
@@ -700,13 +679,6 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/PortMapping"
-          }
-        },
-        "secret_env": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/SecretEnvShorthand"
           }
         },
         "seed_files": {

@@ -560,9 +560,9 @@ fn production_env_union_by_name_end_to_end() {
 
 /// A context layer with `schema_version = 3` must fail validate_config at
 /// config-load time — non-zero exit and the exact
-/// `is not supported (expected 2)` message on stderr — before any KVM work.
-/// (P1 Wave 1: schema_version 2 is native; 1 is deprecated-but-accepted; 3+
-/// is refused.)
+/// `is not supported (expected 1)` message on stderr — before any KVM work.
+/// (Spec 16: schema_version 1 is the native and only version; 2+ is
+/// refused.)
 #[test]
 fn production_schema_version_3_refused_at_load() {
     let env = ProdHome::new("schema-version-refused");
@@ -580,7 +580,7 @@ fn production_schema_version_3_refused_at_load() {
     );
     let stderr = stderr_of(&out);
     assert!(
-        stderr.contains("is not supported (expected 2)"),
+        stderr.contains("is not supported (expected 1)"),
         "stderr must carry the schema_version refusal; got:\n{stderr}"
     );
 
@@ -614,7 +614,7 @@ fn production_schema_version_3_refused_from_project_layer() {
     );
     let stderr = stderr_of(&out);
     assert!(
-        stderr.contains("is not supported (expected 2)"),
+        stderr.contains("is not supported (expected 1)"),
         "stderr must carry the schema_version refusal; got:\n{stderr}"
     );
 

@@ -1,27 +1,25 @@
-use crate::config::Delivery;
-
-/// Resolved definition of a secret (v2), built from the merged
-/// `[secrets.<NAME>]` config at load time.
+/// Resolved definition of a secret (final unified model, spec 16), built
+/// from the merged `[secrets.<NAME>]` config at load time.
 ///
 /// In the migrated config-driven model, secrets are declared in the
-/// `[secrets.<NAME>]` section of `workestrate.toml`. Core validates them
-/// against `policy.rs` and builds these definitions at load time.
+/// `[secrets.<NAME>]` section of `workestrate.toml` as a pure catalog of
+/// intrinsic credential properties. Core validates them against `policy.rs`
+/// and builds these definitions at load time. Exposure mode is NOT part of
+/// the definition — it is declared per workload at the binding site
+/// (`bound` on the env binding).
 #[derive(Debug, Clone)]
 pub struct SecretDefinition {
     /// The host environment variable the resolved value is read from (the
     /// raw `env_var`, defaulting to the secret ID when absent).
     pub source_env_var: String,
-    /// Egress hosts this secret is bound to (host-bound delivery only; an
-    /// omitted `hosts` resolves to deny-all — an explicit zero allowed
-    /// hosts).
+    /// Egress hosts whose rewrites may substitute the real value (an
+    /// omitted `allowed_hosts` resolves to deny-all — an explicit zero
+    /// allowed hosts).
     pub allowed_hosts: Vec<String>,
     /// Whether the secret must be set (true) or can be missing (false).
     pub required: bool,
     /// Known-bad placeholder value to reject.
     pub placeholder: Option<String>,
-    /// Delivery mode: env var vs host-bound injection (default host-bound;
-    /// secure-by-default).
-    pub delivery: Delivery,
 }
 
 #[cfg(test)]
@@ -41,7 +39,6 @@ mod tests {
             allowed_hosts: vec!["a.com".to_string(), "b.com".to_string()],
             required: false,
             placeholder: None,
-            delivery: Delivery::HostBound,
         };
         assert_eq!(def.source_env_var, "MY_KEY");
         assert_eq!(
@@ -50,7 +47,6 @@ mod tests {
         );
         assert!(!def.required);
         assert!(def.placeholder.is_none());
-        assert_eq!(def.delivery, Delivery::HostBound);
     }
 
     #[test]
@@ -60,7 +56,6 @@ mod tests {
             allowed_hosts: vec![],
             required: true,
             placeholder: Some("PLACEHOLDER".to_string()),
-            delivery: Delivery::Env,
         };
         let cloned = def.clone();
         assert_eq!(cloned.source_env_var, def.source_env_var);
@@ -71,6 +66,5 @@ mod tests {
             "debug names the type: {dbg}"
         );
         assert!(dbg.contains("\"K\""), "debug shows source_env_var: {dbg}");
-        assert!(dbg.contains("Env"), "debug shows the delivery mode: {dbg}");
     }
 }

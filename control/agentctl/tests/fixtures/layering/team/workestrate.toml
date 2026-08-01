@@ -31,5 +31,5 @@ domain_suffix = ".evil.com"
 # Team adds a secret
 [secrets.GITHUB_TOKEN]
 env_var = "GITHUB_TOKEN"
-hosts = ["github.com", "api.github.com"]
+allowed_hosts = ["github.com", "api.github.com"]
 required = false
