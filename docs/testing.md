@@ -17,9 +17,9 @@ just check
 
 # Run the four milestone-1 commands
 cargo run --manifest-path control/agentctl/Cargo.toml -- check
-cargo run --manifest-path control/agentctl/Cargo.toml -- litellm plan
-cargo run --manifest-path control/agentctl/Cargo.toml -- pi plan
-cargo run --manifest-path control/agentctl/Cargo.toml -- odysseus plan
+cargo run --manifest-path control/agentctl/Cargo.toml -- workload plan litellm
+cargo run --manifest-path control/agentctl/Cargo.toml -- workload plan pi
+cargo run --manifest-path control/agentctl/Cargo.toml -- workload plan odysseus
 ```
 
 ## What should pass
@@ -32,7 +32,7 @@ cargo run --manifest-path control/agentctl/Cargo.toml -- odysseus plan
 
 ## What is NOT expected to work in M1
 
-- Actual sandbox runtime (`workestrate litellm up`, etc.) is implemented in code but can only be tested on a host with KVM.
+- Actual sandbox runtime (`workestrate workload up litellm`, etc.) is implemented in code but can only be tested on a host with KVM.
 - Pi/Odysseus doing real model calls through LiteLLM without seeding their native config files (`models.json` / `data/settings.json`).
 
 ## Optional: Nix package build

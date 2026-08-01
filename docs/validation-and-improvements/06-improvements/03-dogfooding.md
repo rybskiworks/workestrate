@@ -303,7 +303,7 @@ test ! -d .workestrate && echo "OK: worktree is clean of tool brain" \
 cd "${HOME}/ai-workbench-dogfood"
 
 # Run the driver via the Phase 0 wrapper (§4):
-workestrate-driver.sh pi up
+workestrate-driver.sh workload up pi
 #   → driver home = ~/.workestrate-driver (isolated)
 #   → config loaded from $WORKESTRATE_CONFIG_DIR (no worktree discovery)
 #   → ${CWD} = the worktree (mounted rw into the sandbox)
@@ -317,7 +317,7 @@ workestrate-driver.sh pi up
 | 1 | `.workestrate/` is absent from the worktree cwd | `test ! -d .workestrate` in the worktree |
 | 2 | Driver home is not the worktree | `echo $WORKESTRATE_HOME` ≠ the worktree path |
 | 3 | `WORKESTRATE_CONFIG_DIR` is set | `test -n "$WORKESTRATE_CONFIG_DIR"` |
-| 4 | The reference layer is NOT loaded from the worktree | `workestrate-driver.sh pi plan --show-source` — provenance must not list a `reference` layer sourced from the worktree's `config.reference/` (`diagnostics.rs:30-31` renders provenance via `workload.show_source()`, `workload/config.rs:129`) |
+| 4 | The reference layer is NOT loaded from the worktree | `workestrate-driver.sh workload plan pi --show-source` — provenance must not list a `reference` layer sourced from the worktree's `config.reference/` (`diagnostics.rs:30-31` renders provenance via `workload.show_source()`, `workload/config.rs:129`) |
 | 5 | The agent sandbox cannot read the driver home | From inside the sandbox: `ls ~/.workestrate-driver` → not found (not mounted) |
 
 ---

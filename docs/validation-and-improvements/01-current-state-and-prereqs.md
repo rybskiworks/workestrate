@@ -325,9 +325,9 @@ the `Cargo.lock` stability `git diff` — passes in a bare shell).
 
 | Gate | Command | Notes |
 |---|---|---|
-| LiteLLM runtime | `workestrate litellm up` | Phase 1 step 1.11 / M.12 (`40-migration-process.md:103,230`) |
-| Agent exec | `workestrate pi exec` | Phase 1 step 1.11 / M.12 |
-| Odysseus first boot | `workestrate odysseus up` | requires real `ODYSSEUS_ADMIN_PASSWORD` (Bundle fix d) |
+| LiteLLM runtime | `workestrate workload up litellm` | Phase 1 step 1.11 / M.12 (`40-migration-process.md:103,230`) |
+| Agent exec | `workestrate workload exec pi` | Phase 1 step 1.11 / M.12 |
+| Odysseus first boot | `workestrate workload up odysseus` | requires real `ODYSSEUS_ADMIN_PASSWORD` (Bundle fix d) |
 
 ## Prerequisites checklist
 
@@ -339,7 +339,7 @@ Before executing [03-sibling-config-setup.md](03-sibling-config-setup.md),
 - [x] Tool home at `~/.workestrate` is present (verified: `config.toml`, `config-repos/personal/`, `state/{var,workspaces}`, `secrets/`, `sources/`, `.git/` + `.gitignore` + pre-commit hook). Home migration (spec 08 + spec 10) EXECUTED. Point-in-time verification from 2026-07-30 — the container home was subsequently WIPED by a container restart; see the ephemerality caveat in "Tool home layout" above.
 - [x] `~/.workestrate/config.toml` is well-formed: `layers=["personal"]`, `default_context="personal"`, `home_version=2`, `configs.personal.url="/home/node/.workestrate/config-repos/personal"` (no `ref`/`rev` — local-path classification), `trusted_projects=[/home/node/Development/ai-workbench]` (verified).
 - [ ] Secrets can be decrypted — **HOST-only**. This container has no sops age key (`~/.config/sops/age/` absent, `SOPS_AGE_KEY` unset, `sops` not on PATH). Secret provisioning and decryption must happen on a host with the age key.
-- [ ] No KVM here — runtime steps (`workestrate litellm up`, `workestrate pi exec`, odysseus first boot) are **deferred** to [05-host-validation.md](05-host-validation.md) on a KVM-capable host.
+- [ ] No KVM here — runtime steps (`workestrate workload up litellm`, `workestrate workload exec pi`, odysseus first boot) are **deferred** to [05-host-validation.md](05-host-validation.md) on a KVM-capable host.
 - [ ] `just verify` is runnable in this container via `nix develop` (nix installed at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; verified 2026-07-29: `nix develop -c bash -c 'cc --version'` → gcc 15.2.0, `cargo check` compiles in ~27s). Prefix with `export PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"` then `nix develop -c bash -c 'just verify'` (first devshell build takes minutes). A bare shell lacks `cc` and runs only the shell/python/git subset (`toolchain-check`, `litellm-check`, `lint-nix`, `store-audit` SKIP, `Cargo.lock` stability). `just verify-full` (adds `nix build .#workestrate`) remains HOST-NIX.
 - [ ] tempest `npm_deps_hash` placeholder is understood — the real FOD hash must be computed on a nix-capable host before `nix build .#tempest` will succeed (Bundle fix c, `HOST-NIX`).
 - [ ] `ODYSSEUS_ADMIN_PASSWORD` placeholder is understood — must be replaced with a real SOPS secret before odysseus first boot (Bundle fix d, `HOST-KVM` runtime).

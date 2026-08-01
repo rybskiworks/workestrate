@@ -132,7 +132,7 @@ These steps require a host with KVM (`/dev/kvm`). This container has no KVM.
 
 | Gate | Phase | Step | What it verifies |
 |---|---|---|---|
-| Runtime sandbox execution | 1 | 1.11 | `workestrate litellm up` + `workestrate pi exec` succeed on KVM host |
+| Runtime sandbox execution | 1 | 1.11 | `workestrate workload up litellm` + `workestrate workload exec pi` succeed on KVM host |
 | Runtime sandbox execution (M-step) | 1 | M.12 | Same as 1.11 |
 
 All other gates are verifiable in this container (cargo, TOML, golden files)
@@ -291,8 +291,8 @@ on documented Nix semantics, not runtime verification in this session.
 ### No KVM in this container
 
 This container has no `/dev/kvm`. All HOST-KVM gates (Phase 1, step 1.11/M.12)
-cannot be runtime-verified here. `workestrate <name> up`/`exec` cannot be
-runtime-tested. Plan output (`workestrate <name> plan`) is verifiable; runtime
+cannot be runtime-verified here. `workestrate workload up <name>`/`workestrate workload exec <name>` cannot be
+runtime-tested. Plan output (`workestrate workload plan <name>`) is verifiable; runtime
 execution is not.
 
 ### External precedents live-verified

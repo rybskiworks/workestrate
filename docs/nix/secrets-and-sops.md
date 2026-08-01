@@ -165,7 +165,7 @@ From `flake.nix`, the wrappers are `pkgs.writeShellApplication` derivations:
 #### Canonical invocation pattern
 
 ```bash
-nix develop -c with-secrets nix run . -- litellm up
+nix develop -c with-secrets nix run . -- workload up litellm
 ```
 
 #### Security rules
@@ -398,20 +398,20 @@ rm .env
 
 ```shell
 # Inside the dev shell:
-nix develop -c with-secrets nix run . -- litellm up
+nix develop -c with-secrets nix run . -- workload up litellm
 
 # Or the dev-shell convenience wrapper:
-nix develop -c run-with-secrets litellm up
+nix develop -c run-with-secrets workload up litellm
 
 # Outside the dev shell:
-nix run .#with-secrets -- nix run . -- litellm up
+nix run .#with-secrets -- nix run . -- workload up litellm
 ```
 
 ### Plan-only commands (no secrets needed)
 
 ```shell
-nix run . -- litellm plan
-nix run . -- pi plan
+nix run . -- workload plan litellm
+nix run . -- workload plan pi
 ```
 
 ### sops-nix module (NixOS) — for reference

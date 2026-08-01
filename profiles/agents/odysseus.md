@@ -23,21 +23,21 @@ Python 3.12
 From the repo root:
 ```bash
 # Start the LiteLLM proxy first
-nix develop -c workestrate litellm up
+nix develop -c workestrate workload up litellm
 
 # Start Odysseus in the foreground
-nix develop -c workestrate odysseus up
+nix develop -c workestrate workload up odysseus
 ```
 
 ## Background mode
-Odysseus (a service workload) starts detached by default; `workestrate odysseus up` returns immediately and the sandbox keeps running in the background. Use `workestrate odysseus up --foreground` (or `-f`) to block until Ctrl-C. The detached service writes logs to `~/.microsandbox/sandboxes/<name>/workestrate.log`; tail with `workestrate odysseus logs`.
+Odysseus (a service workload) starts detached by default; `workestrate workload up odysseus` returns immediately and the sandbox keeps running in the background. Use `workestrate workload up odysseus --foreground` (or `-f`) to block until Ctrl-C. The detached service writes logs to `~/.microsandbox/sandboxes/<name>/workestrate.log`; tail with `workestrate workload logs odysseus`.
 
 ```bash
-nix develop -c workestrate odysseus up
-nix develop -c workestrate litellm up
+nix develop -c workestrate workload up odysseus
+nix develop -c workestrate workload up litellm
 ```
 
-**Note:** Detached mode works through `workestrate` — the detached child inherits the parent's decrypted environment, so `workestrate odysseus up` starts detached and works without `nohup`.
+**Note:** Detached mode works through `workestrate` — the detached child inherits the parent's decrypted environment, so `workestrate workload up odysseus` starts detached and works without `nohup`.
 
 ## Expected Integration
 Odysseus should call LiteLLM if it acts as an agent/client.

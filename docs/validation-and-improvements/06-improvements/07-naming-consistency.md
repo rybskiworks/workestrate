@@ -139,7 +139,8 @@ foreign nix skills under `.agents/skills/` (22: `nix-ci-cd`,
   `image = { name = "workestrator-pi", tag = "latest", ... }`. After this
   effort, the nix-built image is `workestrate-pi:latest`. The personal
   config repo lives OUTSIDE this repo and must be updated in the same push
-  window (`name = "workestrate-pi"`), or `workestrate pi plan/up` against
+  window (`name = "workestrate-pi"`), or `workestrate workload plan pi` /
+  `workestrate workload up pi` against
   the real bundle will reference a non-existent image. Noted here instead
   of left silent.
 - **Personal config repo flake (if generated from the old template):** the

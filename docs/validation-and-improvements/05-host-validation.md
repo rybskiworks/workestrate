@@ -144,13 +144,13 @@ allowlist/schema rule; fix `workestrate.toml` and re-run.
 ### B5 — Boot the LiteLLM proxy `HOST-KVM`
 
 ```bash
-workestrate litellm up          # detached by default (ServiceAction::Up, cli_actions.rs:14-38)
-workestrate litellm logs        # tail the detached log (cli_actions.rs:49-54)
+workestrate workload up litellm          # detached by default (ServiceAction::Up, cli_actions.rs:14-38)
+workestrate workload logs litellm        # tail the detached log (cli_actions.rs:49-54)
 curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/health/liveliness
 ```
 
-**Expected:** `workestrate litellm up` returns after detaching the sandbox;
-`litellm logs` shows the proxy boot sequence ending in `LiteLLM Proxy running
+**Expected:** `workestrate workload up litellm` returns after detaching the sandbox;
+`workestrate workload logs litellm` shows the proxy boot sequence ending in `LiteLLM Proxy running
 on http://0.0.0.0:4000`; the curl returns `200`.
 
 Port 4000 is from `workestrate.toml:83-85` (`host = 4000, guest = 4000`) and
@@ -158,7 +158,7 @@ the `PORT` env (`workestrate.toml:59-61`). The `/health/liveliness` route is
 served by the LiteLLM proxy image
 (`ghcr.io/berriai/litellm:v1.89.4`, `workestrate.toml:52`).
 
-**Failure triage:** if `up` exits non-zero, check `workestrate litellm logs`
+**Failure triage:** if `up` exits non-zero, check `workestrate workload logs litellm`
 for the proxy's stderr; a config parse error points at
 `infra/litellm/config.yaml` (mounted at `/app/config`, `workestrate.toml:92-95`).
 
@@ -208,11 +208,11 @@ chat call → provider credential invalid (check the `secret_env` block,
 ### B7 — Boot Odysseus `HOST-KVM`
 
 ```bash
-workestrate odysseus up
+workestrate workload up odysseus
 curl -s -o /dev/null -w "%{http_code}" http://localhost:7000/api/health
 ```
 
-**Expected:** `workestrate odysseus up` detaches; the curl returns `200` with
+**Expected:** `workestrate workload up odysseus` detaches; the curl returns `200` with
 a body of `{"status":"healthy",...}`.
 
 Port 7000 is from `workestrate.toml:207-209` (`host = 7000, guest = 7000`)
@@ -229,7 +229,7 @@ async def health_check() -> Dict[str, str]:
 (A readiness probe `GET /api/ready` also exists at `app.py:868`, returning 503
 until every critical dependency is up — useful as a stricter check.)
 
-**Failure triage:** if `up` fails, `workestrate odysseus logs`; the
+**Failure triage:** if `up` fails, `workestrate workload logs odysseus`; the
 `local_build` recipe (`workestrate.toml:241-248`) runs `pip-install` into
 `.deps` — a missing `WORKESTRATE_ODYSSEUS_BUILD` falls back to
 `agents/odysseus/build`.
@@ -237,7 +237,7 @@ until every critical dependency is up — useful as a stricter check.)
 ### B8 — Pi agent attach smoke `HOST-KVM` (manual / interactive)
 
 ```bash
-workestrate pi exec
+workestrate workload exec pi
 ```
 
 **Expected:** the pi sandbox boots and attaches an interactive TUI
@@ -256,15 +256,15 @@ Therefore B8 is a **manual verification step**: the operator attaches
 interactively, confirms the prompt, then detaches (`Ctrl-C` or the agent's
 exit command). There is no scriptable one-liner for this with the current CLI.
 
-**Failure triage:** if the TUI fails to attach, `workestrate pi plan` to
+**Failure triage:** if the TUI fails to attach, `workestrate workload plan pi` to
 confirm the image (`workestrate-pi:latest`) is loaded (`just load-images`);
 a missing image → re-run B2 + `just load-images`.
 
 ### B9 — OpenCode and Tempest agent attach smoke `HOST-KVM` (manual / interactive)
 
 ```bash
-workestrate opencode exec
-workestrate tempest exec
+workestrate workload exec opencode
+workestrate workload exec tempest
 ```
 
 **Expected:** each attaches an interactive TUI (`AgentAction::Exec`). The
@@ -296,7 +296,7 @@ python3 -m http.server 8084 --bind 0.0.0.0 &
 ss -tlnp | grep 808   # verify all four are listening
 ```
 
-**From INSIDE a pi sandbox** (`workestrate pi exec`, interactive — same CLI
+**From INSIDE a pi sandbox** (`workestrate workload exec pi`, interactive — same CLI
 limitation as B8/B9: no headless in-sandbox exec):
 
 ```bash
@@ -335,17 +335,17 @@ This step exercises the ADR 0021 instance-lifecycle model
 workestrate ps
 
 # 2. Start a parallel litellm instance (--new auto-allocates a slug id >= 2).
-workestrate litellm up --new
-#    Equivalent explicit form: workestrate litellm up --instance <id>
+workestrate workload up litellm --new
+#    Equivalent explicit form: workestrate workload up litellm --instance <id>
 #    The instance name becomes <slot>@<id> (lifecycle.rs:59, main.rs:534-570).
 
 # 3. Start a parallel instance publishing on its own per-instance IP.
-workestrate litellm up --new
+workestrate workload up litellm --new
 #    The parallel instance publishes 127.0.0.2:4000 (same guest port 4000,
 #    bind differs; ADR 0026).
 
 # 4. Stop the singleton AND every parallel instance of litellm.
-workestrate litellm down --all-instances
+workestrate workload down litellm --all-instances
 
 # 5. Stop every running workestrate sandbox across ALL workloads/contexts.
 workestrate down-all --yes
@@ -384,7 +384,7 @@ or pick a different id.
 Compare runtime behavior against the pre-migration baseline established in
 [`04-baseline-validation.md`](04-baseline-validation.md) (Lane A).
 
-**Plan parity (already done in Lane A):** `workestrate <name> plan` output
+**Plan parity (already done in Lane A):** `workestrate workload plan <name>` output
 for all 5 workloads was diffed against the baseline in
 `04-baseline-validation.md`. This step does **not** re-run plans.
 
@@ -405,7 +405,7 @@ secrets, not inside a sandbox. Therefore:
 - **Mounts / env parity** is verified via **plan parity** (Lane A) + successful
   service boot (B5/B7). The plan output shows every mount and env entry; if
   the plan matches the baseline and the sandbox boots, the mounts are wired.
-- **Egress parity** requires **interactive** `workestrate pi exec` (B8). From
+- **Egress parity** requires **interactive** `workestrate workload exec pi` (B8). From
   inside the pi TUI, the operator verifies:
   - a denied domain fails: `curl https://evil.pi.dev` → connection refused
     (the `deny` rule at `workestrate.toml:152-153` blocks `.pi.dev`).
@@ -438,7 +438,7 @@ workestrate ps                 # confirm empty
 
 **Failure triage:** if `down-all` reports "one or more instances failed to
 stop" (`lifecycle.rs:407-409`), re-run `workestrate ps` to identify the
-stragglers and `workestrate <name> down --instance <id>` them individually.
+stragglers and `workestrate workload down <name> --instance <id>` them individually.
 
 ## Capability → proof → acceptance matrix
 
@@ -447,19 +447,19 @@ stragglers and `workestrate <name> down --instance <id>` them individually.
 | Image build (pi) | B2: `nix build .#workestrate-pi` | `result` symlink produced; `just load-images` loads `workestrate-pi:latest` into microsandbox |
 | Image build (tempest) | B2: `nix build .#tempest` (after FOD hash pin) | `result` symlink produced; `just load-images` loads `tempest:latest` |
 | Config load | B4: `workestrate validate-config` | exit 0, no schema/policy violations |
-| Secrets injection | B5: `workestrate litellm up` boots with `LITELLM_MASTER_KEY` from `.env.enc` | proxy boots and `/v1/models` returns 200 with `Authorization: Bearer $LITELLM_MASTER_KEY` |
-| LiteLLM service boot | B5: `workestrate litellm up` + `curl /health/liveliness` | HTTP 200 |
+| Secrets injection | B5: `workestrate workload up litellm` boots with `LITELLM_MASTER_KEY` from `.env.enc` | proxy boots and `/v1/models` returns 200 with `Authorization: Bearer $LITELLM_MASTER_KEY` |
+| LiteLLM service boot | B5: `workestrate workload up litellm` + `curl /health/liveliness` | HTTP 200 |
 | Provider egress | B6: `POST /v1/chat/completions` with a model alias | HTTP 200, non-empty `choices[0].message.content` |
-| Odysseus service boot | B7: `workestrate odysseus up` + `curl /api/health` | HTTP 200, `{"status":"healthy"}` |
-| Agent attach (pi) | B8: `workestrate pi exec` (interactive) | TUI prompt appears; `/work` mount visible |
-| Agent attach (opencode) | B9: `workestrate opencode exec` (interactive) | TUI prompt appears |
-| Agent attach (tempest) | B9: `workestrate tempest exec` (interactive) | TUI prompt appears |
-| Parallel instances | B10: `workestrate litellm up --new` | `workestrate ps` lists `<slot>@<id>` with distinct bind IP |
-| Per-instance IP | B10: `workestrate litellm up --new` (second parallel) | `ps` shows `127.0.0.2:4000` vs singleton `127.0.0.1:4000`; guest port unchanged |
+| Odysseus service boot | B7: `workestrate workload up odysseus` + `curl /api/health` | HTTP 200, `{"status":"healthy"}` |
+| Agent attach (pi) | B8: `workestrate workload exec pi` (interactive) | TUI prompt appears; `/work` mount visible |
+| Agent attach (opencode) | B9: `workestrate workload exec opencode` (interactive) | TUI prompt appears |
+| Agent attach (tempest) | B9: `workestrate workload exec tempest` (interactive) | TUI prompt appears |
+| Parallel instances | B10: `workestrate workload up litellm --new` | `workestrate ps` lists `<slot>@<id>` with distinct bind IP |
+| Per-instance IP | B10: `workestrate workload up litellm --new` (second parallel) | `ps` shows `127.0.0.2:4000` vs singleton `127.0.0.1:4000`; guest port unchanged |
 | Teardown | B12: `workestrate down-all --yes` | `workestrate ps` empty |
-| Plan parity (original-5) | B11 (Lane A baseline in `04-baseline-validation.md`) | `workestrate <name> plan` matches baseline for all 5 workloads |
+| Plan parity (original-5) | B11 (Lane A baseline in `04-baseline-validation.md`) | `workestrate workload plan <name>` matches baseline for all 5 workloads |
 | Runtime parity (mounts/env) | B11: inferred from plan parity + service boot | plan matches baseline AND services boot (no headless in-sandbox exec exists) |
-| Runtime parity (egress) | B11: interactive `workestrate pi exec` | denied domain (`.pi.dev`) fails; allowed domain (`github.com`) succeeds |
+| Runtime parity (egress) | B11: interactive `workestrate workload exec pi` | denied domain (`.pi.dev`) fails; allowed domain (`github.com`) succeeds |
 
 ## Environment honesty footer
 

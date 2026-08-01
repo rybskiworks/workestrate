@@ -12,7 +12,7 @@ workload modules and the TOML-driven `ConfigWorkload` that replaced them.
 A contextless reader should know two things up front:
 
 - **What a golden plan is.** A *golden plan* is a committed text file that
-  captures the exact output of `workestrate <name> plan` for a workload. The
+  captures the exact output of `workestrate workload plan <name>` for a workload. The
   `plan` subcommand prints the `SandboxPlan` via its `Display` impl
   (`control/agentctl/src/microsandbox/plan.rs:156-200`). A golden file is the
   frozen reference; `just golden-check` regenerates the plan and diffs it
@@ -167,6 +167,14 @@ afterwards with `git worktree remove /tmp/workestrate-base`.
 
 ### Step 2 — Build and run the OLD binary; capture baseline plans
 
+> **Note (2026-08-01, ADR 0027):** the CLI is now verb-first —
+> `workestrate workload {up,exec,plan,down,logs} <name>`; the old
+> `workestrate <wl> <verb>` shape still works via a one-cycle stderr alias
+> shim. The baseline-capture commands in this step are transcripts of
+> commands actually run against the old binary pinned at commit `840e8b7`,
+> which only understands the old argv — the old shape is preserved verbatim
+> below.
+
 In the worktree, build and run the old binary for each of the 5 workloads:
 
 ```sh
@@ -235,7 +243,7 @@ done
 mkdir -p /tmp/new
 for name in litellm pi odysseus opencode tempest; do
   WORKESTRATE_HOME=/home/node/Development/ai-workbench/.workestrate \
-    just workestrate "$name" plan > "/tmp/new/${name}.plan.txt"
+    just workestrate workload plan "$name" > "/tmp/new/${name}.plan.txt"
 done
 ```
 
@@ -492,7 +500,7 @@ WORKESTRATE_HOME=/home/node/Development/ai-workbench/.workestrate just workestra
 ```sh
 for name in litellm pi odysseus opencode tempest; do
   WORKESTRATE_HOME=/home/node/Development/ai-workbench/.workestrate \
-    just workestrate "$name" plan > "/tmp/new/${name}.plan.txt"
+    just workestrate workload plan "$name" > "/tmp/new/${name}.plan.txt"
   test -s "/tmp/new/${name}.plan.txt" || echo "EMPTY: $name"
 done
 ```

@@ -195,9 +195,11 @@ dev-build-pi:
 # Run pi from the local agents/pi/build (overrides the canonical bun path).
 # Overrides the dev-shell's exported WORKESTRATE_PI_BUILD for this one command,
 # pointing at the local agents/pi/build populated by `just dev-build-pi` — no
-# manual export/unset needed.
+# manual export/unset needed. Callers pass the verb + name (ADR 0027
+# verb-first shape), e.g. `just dev-run-pi exec pi` or
+# `just dev-run-pi up pi --new` (flags after the name).
 dev-run-pi *args:
-    WORKESTRATE_PI_BUILD=agents/pi/build workestrate pi {{args}}
+    WORKESTRATE_PI_BUILD=agents/pi/build workestrate workload {{args}}
 
 # Build and load ALL nix-built workload images into microsandbox.
 # Driven by the `workload-images` attrset in flake.nix — adding an image

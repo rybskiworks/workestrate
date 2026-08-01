@@ -123,7 +123,7 @@ pub const ALLOWED_PACKAGES: &[&str] = &[
 | Point | When | What it checks | Failure behavior |
 |---|---|---|---|
 | `workestrate validate-config` | Pre-flight (user-invoked or CI) | All egress hosts against `ALLOWED_EGRESS_HOSTS`; all secret bindings against `SECRET_HOST_BINDINGS`; all package names against `ALLOWED_PACKAGES`; schema validity; cross-references (secret refs exist, mount sources exist, port conflicts) | Exits non-zero with clear error citing the allowlist |
-| `workestrate <name> plan` | Pre-flight (fail-closed) | Same checks as validate-config, plus: required secrets present (or placeholder); mount sources exist | Fails with error citing the violated invariant |
+| `workestrate workload plan <name>` | Pre-flight (fail-closed) | Same checks as validate-config, plus: required secrets present (or placeholder); mount sources exist | Fails with error citing the violated invariant |
 | `apply_plan_secrets` (`runtime.rs:107-145`) | Runtime (before sandbox start) | Each secret's `allowed_hosts` against `SECRET_HOST_BINDINGS`; `reject_if_placeholder` (`runtime.rs:10-22`); required secrets non-empty | Refuses to start sandbox; clear error |
 
 ## Trust gating — `[trusted_projects]`
@@ -145,8 +145,8 @@ hatch for running in untrusted directories).
 ### Malicious-project scenario
 
 An attacker creates a project directory with a `workestrate.toml` that widens
-egress or rebinds secrets. The user `cd`s into it and runs `workestrate pi
-exec`.
+egress or rebinds secrets. The user `cd`s into it and runs `workestrate workload
+exec pi`.
 
 **Without trust gating**: the malicious config is loaded as a project layer.
 **Mitigation**: the project layer is bounded by the policy.rs ceiling (same as

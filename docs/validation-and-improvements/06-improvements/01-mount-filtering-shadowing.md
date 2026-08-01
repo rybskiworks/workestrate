@@ -530,7 +530,7 @@ Two new flags on the `Plan` action, clearly marked as proposed:
 **`--show-mounts`** output shape (proposed):
 
 ```
-$ workestrate pi plan --show-mounts
+$ workestrate workload plan pi --show-mounts
 mount: workspaces/pi-state:/data
 mount: ${CWD}:/work
   shadow: /work/.env (empty-file) [policy:SENSITIVE_MOUNT_EXCLUDE_PATTERNS]
@@ -543,7 +543,7 @@ mount: ${CWD}:/work
 **`--mount-ls`** output shape (proposed):
 
 ```
-$ workestrate pi plan --mount-ls
+$ workestrate workload plan pi --mount-ls
 evaluating mounts for workload "pi" (host root: /home/node/Development/ai-workbench)
 mount /work <- ${CWD} (/home/node/Development/ai-workbench)
   [policy] .env           -> empty-file (host file exists, 412 bytes)

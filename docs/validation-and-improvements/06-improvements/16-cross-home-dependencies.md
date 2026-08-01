@@ -24,7 +24,7 @@ This spec is docs-only exploration (`verifiable-here`); it gates no code.
 
 ## Summary
 
-A wider `workestrate up` across homes / config sets: the default-on
+A wider `workestrate workload up` across homes / config sets: the default-on
 lifecycle ([ADR 0026 addendum (2026-08-01)](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md);
 the spec 12 supersession in
 [12-per-instance-addressing.md](12-per-instance-addressing.md) §3) makes

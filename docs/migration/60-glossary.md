@@ -142,7 +142,7 @@ side-by-side execution. See ADR 0021.
 
 **Singleton (instance)**
 The instance occupying a workload's singleton slot (no `@<id>` suffix). At
-most one per slot. `workestrate <name> up` with no instance flags targets the
+most one per slot. `workestrate workload up <name>` with no instance flags targets the
 singleton slot and refuses if it is occupied. See ADR 0021.
 
 **Parallel instance**

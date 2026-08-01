@@ -290,7 +290,7 @@ just workestrate --context secondary context current
 # Expected: Active context: secondary, source: env (--context flag or WORKESTRATE_CONTEXT), layers: [exp]
 
 # Provenance: --show-source prints each plan field with its source layer.
-just workestrate --context secondary probe-svc plan --show-source
+just workestrate --context secondary workload plan probe-svc --show-source
 # Expected: plan output with [exp] (or [core]) source annotations per field
 # (show_source_render, microsandbox/workload/show_source.rs:6-178).
 ```
@@ -316,13 +316,13 @@ the registry view, read-only).
 
 ```sh
 # Plan a parallel-slot instance (config-plane, no KVM):
-just workestrate probe-svc plan --instance canary
+just workestrate workload plan probe-svc --instance canary
 # Expected: the plan renders the prospective per-instance bind (127.0.0.2)
 # when the bind differs from 127.0.0.1 (conditional additive rendering,
 # ADR 0026). The singleton plan stays byte-identical.
 
 # Plan with --show-source + --instance:
-just workestrate probe-svc plan --show-source --instance canary
+just workestrate workload plan probe-svc --show-source --instance canary
 ```
 
 > **`--new` and `--instance` are runtime-only** (they allocate/target a
@@ -347,7 +347,7 @@ read_only = false
 **Command:**
 
 ```sh
-just workestrate probe-svc plan
+just workestrate workload plan probe-svc
 # Expected: includes "mount: ${MSB_HOME}/sandboxes/probe/logs:/var/log/probe"
 # (MountPlan Display, plan.rs:89).
 ```
@@ -385,7 +385,7 @@ just workestrate validate-config
 # Expected: workestrate.toml is valid.
 
 # plan renders the secret as redacted (no decrypted value needed):
-just workestrate probe-svc plan
+just workestrate workload plan probe-svc
 ```
 
 **Toggle `secrets = "none"` on the registry entry** — edit
@@ -437,7 +437,7 @@ just workestrate validate-config
 # for no `..`, no absolute, no template tokens — validate.rs:72-96. The source
 # file need NOT exist for validate-config/plan; it is resolved at runtime.)
 
-just workestrate probe-svc plan
+just workestrate workload plan probe-svc
 # Expected: plan renders normally (seed_files do not appear in the SandboxPlan
 # Display format; they are applied at runtime, not in plan output).
 ```

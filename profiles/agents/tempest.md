@@ -26,7 +26,7 @@ The compiled tree (dist/ + node_modules/ + package.json) is baked into the
 image.
 
 ## Modes
-- CLI interactive (default) — `workestrate tempest exec`
+- CLI interactive (default) — `workestrate workload exec tempest`
 - Server mode (future) — `node dist/server.js` (Express API, loopback only
   via `T3MP3ST_HOST=127.0.0.1`)
 

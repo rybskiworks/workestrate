@@ -61,7 +61,7 @@ if [[ "$DISK_GB" -lt 20 ]]; then
 fi
 
 if [[ "$ERRORS" -eq 0 ]]; then
-  log "Host looks ready for ai-workbench. Run: nix run . -- litellm plan"
+  log "Host looks ready for ai-workbench. Run: nix run . -- workload plan litellm"
   exit 0
 else
   fail "$ERRORS check(s) failed; fix above issues before running the workbench"

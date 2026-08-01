@@ -63,7 +63,7 @@ before continuing.
 ## Quick start
 
 A fresh clone ships a **synthetic reference config** in `config.reference/`. It
-lets you run `workestrate validate-config` and `workestrate example-service plan`
+lets you run `workestrate validate-config` and `workestrate workload plan example-service`
 immediately, but it does not contain real workloads like `pi` or `litellm` — those
 live in your personal config repo.
 
@@ -74,8 +74,8 @@ live in your personal config repo.
    `control/agentctl/vendor/microsandbox-filesystem-0.5.6` symlink.
    The dev shell pins `nodejs_24` (was `nodejs_22`; fixes pi's gondolin
    `EBADENGINE`) and exports `WORKESTRATE_PI_BUILD` pointing at the
-   canonical `.#pi-bun` standalone binary, so dev-shell `workestrate pi
-   exec` mounts the bun binary at `/app/bin/pi` (once a personal config repo
+   canonical `.#pi-bun` standalone binary, so dev-shell `workestrate workload
+   exec pi` mounts the bun binary at `/app/bin/pi` (once a personal config repo
    is registered).
    ```bash
    git clone <repo-url> workestrate
@@ -115,20 +115,20 @@ live in your personal config repo.
    ```
 6. Start the LiteLLM proxy (starts detached; add `--foreground` to block):
    ```bash
-   workestrate litellm up
+   workestrate workload up litellm
    ```
 7. Attach to an agent (for example Pi):
    ```bash
-   workestrate pi exec
+   workestrate workload exec pi
    ```
 
-   Services start detached by default: `workestrate <svc> up` returns
+   Services start detached by default: `workestrate workload up <svc>` returns
    immediately and the sandbox keeps running in the background. Use
-   `workestrate <svc> up --foreground` (or `-f`) to block until Ctrl-C.
-   Tail a detached service's logs with `workestrate <svc> logs` (written to
+   `workestrate workload up <svc> --foreground` (or `-f`) to block until Ctrl-C.
+   Tail a detached service's logs with `workestrate workload logs <svc>` (written to
    `~/.microsandbox/sandboxes/<svc>/workestrate.log`). Detached mode works
    through `workestrate` — the detached child inherits the parent's
-   decrypted environment, so `workestrate litellm up` starts detached
+   decrypted environment, so `workestrate workload up litellm` starts detached
    and works without `nohup`.
 
 ## Secrets setup
@@ -189,10 +189,10 @@ For the full threat model and wrapper reference, see
 Inside the dev shell:
 
 ```bash
-workestrate litellm up      # start (detached by default)
-workestrate litellm down    # stop
-workestrate litellm logs    # tail the detached service's log
-nix run . -- litellm plan        # show the sandbox plan without secrets
+workestrate workload up litellm      # start (detached by default)
+workestrate workload down litellm    # stop
+workestrate workload logs litellm    # tail the detached service's log
+nix run . -- workload plan litellm        # show the sandbox plan without secrets
 ```
 
 Once the proxy is up, you can talk to it directly on the host:
@@ -275,20 +275,20 @@ interactively with `exec`).
 
 ```bash
 # Services (start detached, tail with `logs`)
-workestrate litellm up          # LiteLLM proxy (requires config repo defining litellm)
-workestrate odysseus up         # Odysseus agent (service)
-workestrate odysseus logs       # tail Odysseus's detached log
+workestrate workload up litellm          # LiteLLM proxy (requires config repo defining litellm)
+workestrate workload up odysseus         # Odysseus agent (service)
+workestrate workload logs odysseus       # tail Odysseus's detached log
 
 # Agents (interactive TUI attach)
-workestrate pi exec            # attach to the Pi coding agent
-workestrate opencode exec      # attach to the OpenCode coding agent
-workestrate tempest exec       # attach to the T3MP3ST offensive-security agent
+workestrate workload exec pi            # attach to the Pi coding agent
+workestrate workload exec opencode      # attach to the OpenCode coding agent
+workestrate workload exec tempest       # attach to the T3MP3ST offensive-security agent
 
 # Stop any workload
-workestrate <name> down
+workestrate workload down <name>
 
 # Show a sandbox plan without secrets
-nix run . -- <name> plan            # e.g. nix run . -- example-service plan
+nix run . -- workload plan <name>            # e.g. nix run . -- workload plan example-service
 ```
 
 ### Instance lifecycle: slots, parallel instances, refuse-on-occupied
@@ -305,16 +305,16 @@ accidentally nuke a running baseline by re-running `up`.
 
 ```bash
 # Refuse-safe defaults
-workestrate litellm up                       # refuses if litellm slot is occupied
-workestrate litellm up --replace             # explicit recycle (was the old default)
-workestrate litellm up --instance canary   # parallel canary on 127.0.0.2:4000
-workestrate litellm up --new               # auto-named canary on 127.0.0.N:4000
+workestrate workload up litellm                       # refuses if litellm slot is occupied
+workestrate workload up litellm --replace             # explicit recycle (was the old default)
+workestrate workload up litellm --instance canary   # parallel canary on 127.0.0.2:4000
+workestrate workload up litellm --new               # auto-named canary on 127.0.0.N:4000
 
 # Listing + teardown
 workestrate ps                               # list running instances for the active context
 workestrate ps --json                        # machine-readable (agents, CI)
-workestrate litellm down --instance canary   # stop one parallel instance
-workestrate litellm down --all-instances     # stop singleton + all parallel instances
+workestrate workload down litellm --instance canary   # stop one parallel instance
+workestrate workload down litellm --all-instances     # stop singleton + all parallel instances
 workestrate down --all                       # stop everything (confirms unless --yes)
 ```
 
@@ -338,7 +338,7 @@ serving proxy.
 ```bash
 # 1. Edit the candidate config in your config repo (or a working copy).
 # 2. Bring up a canary on its own per-instance IP alongside the live proxy.
-workestrate litellm up --new
+workestrate workload up litellm --new
 #    → live proxy stays on 127.0.0.1:4000; canary on 127.0.0.2:4000 (guest still :4000).
 
 # 3. Smoke-test the canary.
@@ -349,10 +349,10 @@ workestrate run -- bash -c \
    -d "{\"model\":\"coding\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
 
 # 4a. Promote: stop the old singleton, start the new one on the singleton slot.
-workestrate litellm down                     # stop the old singleton
-workestrate litellm up --replace             # (slot is now free; --replace is belt-and-suspenders)
+workestrate workload down litellm                     # stop the old singleton
+workestrate workload up litellm --replace             # (slot is now free; --replace is belt-and-suspenders)
 # 4b. Or roll back: stop the canary, leave the singleton untouched.
-workestrate litellm down --all-instances     # or target the canary id from `ps`
+workestrate workload down litellm --all-instances     # or target the canary id from `ps`
 ```
 
 This workflow is the reason per-instance addressing exists (ADR 0026): it
@@ -364,9 +364,9 @@ host long enough to compare them.
 On a fresh clone without a config repo, you can still exercise the machinery:
 
 ```bash
-workestrate example-service plan
-workestrate example-agent plan
-workestrate example-offensive plan
+workestrate workload plan example-service
+workestrate workload plan example-agent
+workestrate workload plan example-offensive
 workestrate validate-config
 ```
 
@@ -402,8 +402,8 @@ compile- and plan-verified but pending KVM runtime validation; `.#pi`
 
 Note: `agents/pi/repo`, `agents/odysseus/repo`, `agents/opencode/repo`, and
 `agents/tempest/repo` must be cloned into the `agents/` directory before
-`<name> up` will work; `workestrate check` reports them as `[MISSING] (optional)`
-and does not fail, but the corresponding `<name> up` command requires the
+`workestrate workload up <name>` will work; `workestrate check` reports them as `[MISSING] (optional)`
+and does not fail, but the corresponding `workestrate workload up <name>` command requires the
 checkout to exist.
 
 Agents reach the proxy at `http://host.microsandbox.internal:4000`.
@@ -456,7 +456,7 @@ Common `just` recipes:
 | `just fmt-check` | Check formatting without modifying files |
 | `just clippy` | Run Clippy with `-D warnings` |
 | `just test` | Run unit tests for `control/agentctl` |
-| `just workestrate …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just workestrate litellm plan`) |
+| `just workestrate …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just workestrate workload plan litellm`) |
 | `just plan` | Run synthetic workload plans (`example-service`, `example-agent`, `example-offensive`) via `cargo run` |
 | `just host-check` | Verify KVM, Nix, memory, and disk prerequisites |
 | `just validate-secrets` | Exercise the SOPS/age workflow against ephemeral test values |
@@ -504,7 +504,7 @@ full `nix build` produces ready-to-run artifacts without `nix develop`:
   uses the env-var-driven local LLM provider (no conf-store secrets).
 - `.#workestrate-sandbox` — `runCommand` + `makeWrapper` wrapper around
   `.#workestrate` that bakes `WORKESTRATE_PI_BUILD=${pi-bun}` into the
-  environment, so `nix build .#workestrate-sandbox && ./result/bin/workestrate pi exec`
+  environment, so `nix build .#workestrate-sandbox && ./result/bin/workestrate workload exec pi`
   runs the hermetic bun-binary pi sandbox with no `nix develop` and no
   extra env. `apps.default` points at this wrapped binary.
 
@@ -673,8 +673,8 @@ clone the agent repos into `agents/<name>/repo` only if you intend to run them.
   plan-verified but not yet runtime-validated.
 - **In-memory LiteLLM.** No Postgres, no virtual keys, no persistent
   state. Agents reuse `LITELLM_MASTER_KEY` for the lifetime of the
-  proxy; rotating the master key requires a `litellm down` followed by
-  `litellm up` with the new `.env.enc`.
+  proxy; rotating the master key requires a `workestrate workload down litellm` followed by
+  `workestrate workload up litellm` with the new `.env.enc`.
 - **No Docker.** Microsandbox talks to KVM directly, so the host does
   not need Docker, `containerd`, or any other container runtime.
 - **Optional agent checkouts.** `agents/pi/repo`, `agents/odysseus/repo`,
@@ -720,7 +720,7 @@ workestrate config trust $(pwd)
 
 # Verify
 workestrate check
-workestrate pi plan
+workestrate workload plan pi
 ```
 
 ### Config resolution order
@@ -761,6 +761,7 @@ require a registered config repo).
 | `workestrate secrets-schema` | Print secret env_var names from config |
 | `workestrate generate-env-example` | Generate `.env.example` from config secrets section |
 | `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes (instance records) |
+| `workestrate workloads` | List configured workloads with kind + running status (discovery verb, ADR 0027) |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox (destructive; confirms unless `--yes`) |
 | `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` (schemars-derived; committed at `control/agentctl/schema/workestrate.toml.json`) |
 | `workestrate --no-project-config <cmd>` | Disable project-layer config loading |

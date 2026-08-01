@@ -58,7 +58,7 @@ nix build .#workestrate
 #    nix-installed binary with NO AGENTCTL_ROOT and NO WORKESTRATE_CONFIG_DIR:
 cd /home/node/Development/ai-workbench
 unset AGENTCTL_ROOT WORKESTRATE_CONFIG_DIR
-result/bin/workestrate pi plan --show-source
+result/bin/workestrate workload plan pi --show-source
 ```
 
 **Expected (buggy) behavior:** the `reference` layer appears in the provenance

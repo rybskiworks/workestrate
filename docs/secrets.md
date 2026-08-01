@@ -142,9 +142,9 @@ to decrypt `.env.enc` and run `workestrate` subcommands:
 
 ```bash
 nix develop
-run-with-secrets litellm up      # service: starts detached
-run-with-secrets odysseus up     # service: starts detached
-run-with-secrets pi exec         # agent: interactive TUI attach
+run-with-secrets workload up litellm      # service: starts detached
+run-with-secrets workload up odysseus     # service: starts detached
+run-with-secrets workload exec pi         # agent: interactive TUI attach
 ```
 
 `run-with-secrets` always requires `.env.enc` to exist, so it is only for
@@ -152,26 +152,26 @@ commands that need decrypted secrets. For plan-only commands that do not
 need secrets, use plain `nix run`:
 
 ```bash
-nix run . -- litellm plan
-nix run . -- pi plan
+nix run . -- workload plan litellm
+nix run . -- workload plan pi
 ```
 
 For arbitrary commands inside the dev shell that need the same secrets:
 
 ```bash
-nix develop -c with-secrets nix run . -- litellm up
+nix develop -c with-secrets nix run . -- workload up litellm
 ```
 
 Outside the dev shell you can also run:
 
 ```bash
 # 'with-secrets' works anywhere; 'run-with-secrets' only inside the dev shell
-nix run .#with-secrets -- nix run . -- litellm up
+nix run .#with-secrets -- nix run . -- workload up litellm
 ```
 
 ## How workestrate validates secrets
 
-When you run `with-secrets nix run . -- litellm up`, the CLI validates that
+When you run `with-secrets nix run . -- workload up litellm`, the CLI validates that
 `LITELLM_MASTER_KEY` and the provider keys defined in the config's secrets
 section are present. Service `up` and agent `exec` commands require
 `LITELLM_MASTER_KEY`. If a required secret is missing, the CLI prints a

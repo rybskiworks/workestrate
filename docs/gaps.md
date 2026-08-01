@@ -27,7 +27,7 @@
   `MSB_PATH` pointing at the Nix-managed `msb` from `.#microsandbox`. The SDK's
   `build.rs` is satisfied at build time by staging `msb` and `libkrunfw.so.5.2.1` in
   `$MSB_HOME` (no network download), and at run time by `MSB_PATH`. So
-  `nix run .#workestrate -- litellm plan` (or `nix run . -- litellm plan`) works
+  `nix run .#workestrate -- workload plan litellm` (or `nix run . -- workload plan litellm`) works
   without `nix develop` and without a pre-existing `~/.microsandbox/`.
 - `microsandbox-filesystem`'s build.rs would normally download `agentd-x86_64` at
   compile time. We patch it to honor `$MSB_HOME/bin/agentd` and stage the binary

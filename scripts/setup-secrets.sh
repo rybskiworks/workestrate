@@ -675,7 +675,7 @@ cmd_init() {
 
   init_via_editor
   log "done. If you use direnv, ensure you've run 'direnv allow'; otherwise use 'nix develop'."
-  log "You can now run: workestrate litellm up"
+  log "You can now run: workestrate workload up litellm"
 }
 
 cmd_update() {

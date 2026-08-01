@@ -119,7 +119,7 @@ injection / egress: `7b65ad1`; `--use` overrides: `39c1694`):
       `--use` naming an undeclared dep, and `--use` naming an instance that
       is not running all refuse (no declared-port fallback) — `39c1694`.
 - [x] `required = true` and not running → refuse at plan time with
-      remediation (`workestrate <dep> up`), no auto-start v1 — `7b65ad1`.
+      remediation (`workestrate workload up <dep>`), no auto-start v1 — `7b65ad1`.
 
 > **SUPERSEDED (2026-08-01, ADR 0026 addendum):** the refuse-only
 > "no auto-start v1" stance above is superseded by the compose-mirrored

@@ -15,7 +15,7 @@ values, runtime state). This coupling creates three problems:
    repo — which is a solved problem (chezmoi, yadm, stow, kubeconfig).
 
 2. **Distribution friction.** The tool is coupled to a specific workspace
-   checkout. Running `workestrate pi exec` from a different project requires
+   checkout. Running `workestrate workload exec pi` from a different project requires
    `cd`-ing into the workspace repo. Distributing the tool to a teammate
    means distributing the workspace (or surgically extracting the tool).
 

@@ -694,9 +694,9 @@ collisions between contexts.
 On a fresh install with no registry, no config repos:
 - Falls back to `config.reference/workestrate.toml` (shipped with tool, tracked,
   **synthetic**).
-- `workestrate plan` works (prints the synthetic reference plan, no secrets needed).
+- `workestrate workload plan <name>` works (prints the synthetic reference plan, no secrets needed).
 - `workestrate validate-config` works (validates the synthetic reference config).
-- `workestrate pi exec` / `workestrate litellm up` REFUSE if the workload is not
+- `workestrate workload exec pi` / `workestrate workload up litellm` REFUSE if the workload is not
   defined in the active config. With only the synthetic reference loaded, those
   names do not exist; the user must add a config repo via
   `workestrate config add <url> personal`.
@@ -713,13 +713,20 @@ On a fresh install with no registry, no config repos:
 | `workestrate new <name>` | Scaffold a new workload (appends to active config) | `main.rs:178-227` |
 | `workestrate completions <shell>` | Generate shell completions | `main.rs:236-239` |
 | `workestrate run -- <cmd>` | Run arbitrary command with decrypted secrets | `main.rs:266-297` |
-| `workestrate <name> plan` | Print sandbox plan | `main.rs:131-135` |
-| `workestrate <name> up [--foreground] [--replace\|--instance <id>\|--new] [--port-offset N] [--json]` | Start service (service kind). Default: refuse if slot occupied (ADR 0021) | `main.rs:126-136` |
-| `workestrate <name> down [--instance <id>\|--all-instances]` | Stop and remove sandbox (singleton, named parallel instance, or all) | `main.rs:129` |
-| `workestrate <name> logs [--instance <id>]` | Tail detached service log (service kind) | `main.rs:130` |
-| `workestrate <name> exec [--replace\|--instance <id>\|--new] [--port-offset N] [--json]` | Attach interactively (agent kind). Default: refuse if slot occupied (ADR 0021) | `main.rs:138-147` |
+| `workestrate workload plan <name> [--show-source]` | Print sandbox plan (optionally with per-field provenance) | `main.rs:131-135` |
+| `workestrate workload up <name> [--foreground] [--replace\|--instance <id>\|--new] [--port-offset N] [--json]` | Start service (service kind). Default: refuse if slot occupied (ADR 0021) | `main.rs:126-136` |
+| `workestrate workload down <name> [--instance <id>\|--all-instances]` | Stop and remove sandbox (singleton, named parallel instance, or all) | `main.rs:129` |
+| `workestrate workload logs <name> [--instance <id>]` | Tail detached service log (service kind) | `main.rs:130` |
+| `workestrate workload exec <name> [--replace\|--instance <id>\|--new] [--port-offset N] [--json]` | Attach interactively (agent kind). Default: refuse if slot occupied (ADR 0021) | `main.rs:138-147` |
+| `workestrate workloads` | List configured workloads with kind + running status (discovery verb, ADR 0027) | — |
 
 ### Hybrid CLI dispatch (ADR 0006)
+
+> **Superseded (2026-08-01) by ADR 0027** — grouped verb-first dispatch
+> (`workestrate workload {up,exec,plan,down,logs} <name>`); the per-workload
+> typed subcommands and the `external_subcommand` catch-all are removed; a
+> one-cycle stderr alias shim covers the old shape. The sketch below is kept
+> as a historical design record.
 
 Typed clap subcommands for known workload names (litellm, pi, odysseus,
 opencode, tempest) + catch-all for config-defined names. This preserves the
@@ -768,7 +775,6 @@ enum Commands {
 | `workestrate validate-config` | Validate active config against schema + policy.rs allowlist |
 | `workestrate secrets-schema` | Print REQUIRED_KEYS from config `secrets:` section (replaces `.env.example` grep) |
 | `workestrate generate-env-example` | Generate `.env.example` from config `secrets:` section |
-| `workestrate plan <name> [--show-source]` | Print plan (optionally with per-field provenance) |
 | `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes for the active context (or all contexts). `--json` emits the instance-record array (ADR 0021 §7) |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes` |
 | `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived; ADR 0021 §8). Committed copy at `schemas/workestrate.schema.json` |
@@ -1115,9 +1121,9 @@ refuses. Existing scripts that relied on `up` as an idempotent restart must add
 
 | Command | Behavior |
 |---|---|
-| `workestrate <name> down` | Stop the singleton slot's instance. Refuses (with names) if the slot has parallel instances. |
-| `workestrate <name> down --instance <id>` | Stop the parallel instance `<slot>@<id>`. |
-| `workestrate <name> down --all-instances` | Stop the singleton AND every parallel instance of `<name>`. Destructive; explicit. |
+| `workestrate workload down <name>` | Stop the singleton slot's instance. Refuses (with names) if the slot has parallel instances. |
+| `workestrate workload down <name> --instance <id>` | Stop the parallel instance `<slot>@<id>`. |
+| `workestrate workload down <name> --all-instances` | Stop the singleton AND every parallel instance of `<name>`. Destructive; explicit. |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes`. |
 
 ### `--port-offset` semantics
@@ -1186,9 +1192,9 @@ sandboxes are reported with `stale: true` and a remediation hint.
   "slot": "personal-litellm",
   "occupying_instance": "personal-litellm",
   "remediation": {
-    "replace": "workestrate litellm up --replace",
-    "instance": "workestrate litellm up --instance <id> [--port-offset N]",
-    "new": "workestrate litellm up --new [--port-offset N]",
+    "replace": "workestrate workload up litellm --replace",
+    "instance": "workestrate workload up litellm --instance <id> [--port-offset N]",
+    "new": "workestrate workload up litellm --new [--port-offset N]",
     "list": "workestrate ps --json"
   }
 }
