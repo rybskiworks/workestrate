@@ -91,29 +91,46 @@ pub fn active_context_name() -> Option<String> {
         .and_then(|ctx| ctx.name.clone())
 }
 
+/// Which tier resolved the project root in [`project_root_with_source`].
+///
+/// The `Cwd` variant is the security-relevant one (spec 05): a cwd-derived
+/// root is operator-unpinned, so consumers like `reference_config_path()`
+/// gate behavior behind an explicit opt-in when it is the source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootSource {
+    /// Tier 1: `AGENTCTL_ROOT` env var.
+    AgentctlRoot,
+    /// Tier 2: two directories up from `CARGO_MANIFEST_DIR` (cargo run/test).
+    /// Also covers the tier-2 edge case where `CARGO_MANIFEST_DIR` is set but
+    /// the double-pop fails and the current directory is used instead.
+    ManifestDir,
+    /// Tier 3: current working directory (unpinned).
+    Cwd,
+}
+
 /// Resolve the AI-workbench project root (the checkout containing
-/// `flake.nix`). Precedence: `AGENTCTL_ROOT` env var, then two directories up
-/// from `CARGO_MANIFEST_DIR` (cargo run/test), then the current working
-/// directory. Hard-errors when the resolved root does not contain
-/// `flake.nix`; callers that can degrade gracefully should use
-/// [`project_root_optional`] instead.
-pub fn project_root() -> Result<PathBuf> {
+/// `flake.nix`) and report which tier resolved it. Precedence:
+/// `AGENTCTL_ROOT` env var, then two directories up from `CARGO_MANIFEST_DIR`
+/// (cargo run/test), then the current working directory. Hard-errors when the
+/// resolved root does not contain `flake.nix`; callers that can degrade
+/// gracefully should use [`project_root_optional`] instead.
+pub(crate) fn project_root_with_source() -> Result<(PathBuf, RootSource)> {
     // 1. AGENTCTL_ROOT env var
-    let root = if let Ok(root) = std::env::var("AGENTCTL_ROOT") {
-        PathBuf::from(root)
+    let (root, source) = if let Ok(root) = std::env::var("AGENTCTL_ROOT") {
+        (PathBuf::from(root), RootSource::AgentctlRoot)
     }
     // 2. Walk up from CARGO_MANIFEST_DIR (compile-time, works in cargo run)
     else if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let mut path = PathBuf::from(manifest);
         if path.pop() && path.pop() {
-            path
+            (path, RootSource::ManifestDir)
         } else {
-            std::env::current_dir()?
+            (std::env::current_dir()?, RootSource::ManifestDir)
         }
     }
     // 3. Current working directory
     else {
-        std::env::current_dir()?
+        (std::env::current_dir()?, RootSource::Cwd)
     };
 
     // Validate: the root must contain flake.nix
@@ -125,7 +142,21 @@ pub fn project_root() -> Result<PathBuf> {
         );
     }
 
-    Ok(root)
+    Ok((root, source))
+}
+
+/// Resolve the AI-workbench project root (the checkout containing
+/// `flake.nix`). Precedence: `AGENTCTL_ROOT` env var, then two directories up
+/// from `CARGO_MANIFEST_DIR` (cargo run/test), then the current working
+/// directory. Hard-errors when the resolved root does not contain
+/// `flake.nix`; callers that can degrade gracefully should use
+/// [`project_root_optional`] instead.
+///
+/// This is the root-only projection of [`project_root_with_source`]; use that
+/// variant when the caller needs to know which tier resolved the root (e.g.
+/// the spec-05 cwd-reference gate in `reference_config_path()`).
+pub fn project_root() -> Result<PathBuf> {
+    project_root_with_source().map(|(root, _)| root)
 }
 
 /// Best-effort variant of [`project_root`] for the standalone-installed-tool

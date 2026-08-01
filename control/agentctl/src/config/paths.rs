@@ -296,11 +296,55 @@ fn emit_tilde_home_unset_warn() {
     });
 }
 
+/// One-time stderr warning for the opt-in cwd-derived reference load
+/// (spec 05 option (c), companion to the option (d) gate below).
+static CWD_REFERENCE_LOADED_WARN: std::sync::Once = std::sync::Once::new();
+
+/// One-time stderr note for the gated (not-loaded) cwd-derived reference
+/// (spec 05 option (d)).
+static CWD_REFERENCE_IGNORED_NOTE: std::sync::Once = std::sync::Once::new();
+
+/// Resolve the reference config (`<root>/config.reference/workestrate.toml`),
+/// the base layer of every non-bypassed `load_config()`.
+///
+/// Spec-05 security gate (fix options (d) + (c)): when the project root was
+/// resolved from the **current working directory** (tier 3 of
+/// `project_root_with_source()` — i.e. neither `AGENTCTL_ROOT` nor
+/// `CARGO_MANIFEST_DIR` was set), the cwd-derived reference is only loaded
+/// with the explicit opt-in `WORKESTRATE_ALLOW_CWD_REFERENCE=1`. Without the
+/// opt-in the path is ignored (a one-time stderr note is emitted) and the
+/// function falls through to the `CARGO_MANIFEST_DIR` probe. With the opt-in
+/// the path is loaded and a one-time stderr warning names the cwd source.
+/// Roots pinned via `AGENTCTL_ROOT` or `CARGO_MANIFEST_DIR` never require the
+/// opt-in.
 pub(crate) fn reference_config_path() -> Option<PathBuf> {
-    if let Ok(root) = crate::config::project_root() {
+    if let Ok((root, source)) = crate::config::project_root_with_source() {
         let path = root.join("config.reference").join("workestrate.toml");
         if path.exists() {
-            return Some(path);
+            match source {
+                crate::config::RootSource::AgentctlRoot
+                | crate::config::RootSource::ManifestDir => {
+                    return Some(path);
+                }
+                crate::config::RootSource::Cwd => {
+                    if std::env::var("WORKESTRATE_ALLOW_CWD_REFERENCE").as_deref() == Ok("1") {
+                        CWD_REFERENCE_LOADED_WARN.call_once(|| {
+                            eprintln!(
+                                "warning: reference config loaded from cwd '{}'; set AGENTCTL_ROOT to pin the root",
+                                path.display()
+                            );
+                        });
+                        return Some(path);
+                    }
+                    CWD_REFERENCE_IGNORED_NOTE.call_once(|| {
+                        eprintln!(
+                            "note: ignoring {} found in cwd (set WORKESTRATE_ALLOW_CWD_REFERENCE=1 to use it)",
+                            path.display()
+                        );
+                    });
+                    // Fall through to the CARGO_MANIFEST_DIR probe below.
+                }
+            }
         }
     }
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
@@ -615,6 +659,123 @@ pub(crate) mod tests {
         assert_eq!(resolve_store_dir(), home.join(".workestrate"));
 
         let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    // ---- Spec 05: cwd-derived reference config is opt-in gated ----
+
+    /// Env keys every spec-05 test captures/clears. CARGO_MANIFEST_DIR is
+    /// removed in tests 1–3 so tier 2 cannot win over the cwd tier;
+    /// WORKESTRATE_CONFIG_DIR is removed so load-layer bypass cannot mask the
+    /// reference resolution.
+    const SPEC05_ENV_KEYS: &[&str] = &[
+        "AGENTCTL_ROOT",
+        "CARGO_MANIFEST_DIR",
+        "WORKESTRATE_ALLOW_CWD_REFERENCE",
+        "WORKESTRATE_CONFIG_DIR",
+    ];
+
+    /// Build a tempdir shaped like a workbench checkout (flake.nix +
+    /// config.reference/workestrate.toml), chdir into it, and clear the
+    /// spec-05 env keys. Returns the tempdir path (caller cleans up).
+    fn spec05_cwd_fixture(label: &str) -> Result<PathBuf> {
+        let tmp = uniq_dir(label);
+        std::fs::create_dir_all(tmp.join("config.reference"))?;
+        std::fs::write(tmp.join("flake.nix"), "")?;
+        std::fs::write(
+            tmp.join("config.reference").join("workestrate.toml"),
+            "schema_version = 1\n",
+        )?;
+        std::env::set_current_dir(&tmp)?;
+        for k in SPEC05_ENV_KEYS {
+            std::env::remove_var(k);
+        }
+        Ok(tmp)
+    }
+
+    #[test]
+    fn cwd_reference_ignored_without_opt_in() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(SPEC05_ENV_KEYS);
+
+        let tmp = spec05_cwd_fixture("spec05-no-opt-in")?;
+
+        // Root resolves from cwd (tier 3); without the opt-in env the
+        // cwd-derived reference must NOT be returned. CARGO_MANIFEST_DIR is
+        // removed, so the manifest fallback below cannot win either.
+        assert_eq!(
+            reference_config_path(),
+            None,
+            "cwd-derived reference must be ignored without WORKESTRATE_ALLOW_CWD_REFERENCE=1"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn cwd_reference_loaded_with_opt_in() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(SPEC05_ENV_KEYS);
+
+        let tmp = spec05_cwd_fixture("spec05-opt-in")?;
+        std::env::set_var("WORKESTRATE_ALLOW_CWD_REFERENCE", "1");
+
+        assert_eq!(
+            reference_config_path(),
+            Some(tmp.join("config.reference").join("workestrate.toml")),
+            "cwd-derived reference must load with WORKESTRATE_ALLOW_CWD_REFERENCE=1"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn agentctl_root_tier_unaffected() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(SPEC05_ENV_KEYS);
+
+        let tmp = spec05_cwd_fixture("spec05-pinned-root")?;
+        // A pinned root never requires the opt-in.
+        std::env::set_var("AGENTCTL_ROOT", &tmp);
+
+        assert_eq!(
+            reference_config_path(),
+            Some(tmp.join("config.reference").join("workestrate.toml")),
+            "AGENTCTL_ROOT-pinned reference must load without the cwd opt-in"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_dir_tier_unaffected() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(SPEC05_ENV_KEYS);
+
+        // Empty tempdir as cwd (NO flake.nix, NO config.reference) so tier 3
+        // cannot resolve; CARGO_MANIFEST_DIR (tier 2 / manifest fallback)
+        // resolves the real repo fixture without any opt-in.
+        let tmp = uniq_dir("spec05-manifest-tier");
+        std::fs::create_dir_all(&tmp)?;
+        std::env::set_current_dir(&tmp)?;
+        std::env::remove_var("AGENTCTL_ROOT");
+        std::env::remove_var("WORKESTRATE_ALLOW_CWD_REFERENCE");
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        std::env::set_var("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"));
+
+        let path = reference_config_path()
+            .expect("manifest-tier reference must resolve without the cwd opt-in");
+        assert!(
+            path.ends_with("config.reference/workestrate.toml"),
+            "expected …/config.reference/workestrate.toml, got {}",
+            path.display()
+        );
+        assert!(path.exists(), "{} must exist", path.display());
+
+        let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
     }
 }
