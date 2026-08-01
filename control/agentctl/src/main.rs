@@ -314,7 +314,7 @@ async fn async_main() -> Result<()> {
             }
             ConfigAction::New {
                 name,
-                path,
+                dest,
                 age_recipient,
                 age_key_file,
                 with_flake,
@@ -326,7 +326,7 @@ async fn async_main() -> Result<()> {
             } => {
                 cmd_config_new(
                     &name,
-                    path.as_deref(),
+                    dest.as_deref(),
                     age_recipient.as_deref(),
                     age_key_file.as_deref(),
                     with_flake,
@@ -533,6 +533,39 @@ mod tests {
             assert!(
                 !long_names.contains(&flag.to_string()),
                 "home clone must NOT have a --{flag} flag; got: {long_names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_new_cli_shape() {
+        let cmd = Cli::command();
+        let new = cmd
+            .find_subcommand("config")
+            .and_then(|s| s.find_subcommand("new"))
+            .expect("config new must exist");
+        let positionals: Vec<(String, bool)> = new
+            .get_positionals()
+            .map(|a| (a.get_id().to_string(), a.is_required_set()))
+            .collect();
+        assert_eq!(
+            positionals,
+            vec![("name".to_string(), true), ("dest".to_string(), false)],
+            "config new must have a REQUIRED positional <name> and an \
+             OPTIONAL positional <dest>; got: {positionals:?}"
+        );
+        let long_names: Vec<String> = new
+            .get_arguments()
+            .filter_map(|a| a.get_long().map(|s| s.to_string()))
+            .collect();
+        assert!(
+            !long_names.contains(&"path".to_string()),
+            "config new must NOT have a --path flag; got: {long_names:?}"
+        );
+        for flag in ["age-recipient", "empty", "from-reference"] {
+            assert!(
+                long_names.contains(&flag.to_string()),
+                "config new must keep the --{flag} flag; got: {long_names:?}"
             );
         }
     }

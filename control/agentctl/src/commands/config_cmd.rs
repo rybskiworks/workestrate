@@ -304,7 +304,7 @@ pub struct ConfigNewResult<'a> {
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_config_new(
     name: &str,
-    path: Option<&std::path::Path>,
+    dest: Option<&str>,
     age_recipient: Option<&str>,
     age_key_file: Option<&std::path::Path>,
     with_flake: bool,
@@ -336,12 +336,12 @@ pub async fn cmd_config_new(
 
     // Resolve destination directory. Default is the managed store
     // (<store>/config-repos/<name>) so the repo is immediately active for
-    // layer resolution once registered. An explicit --path overrides this.
+    // layer resolution once registered. An explicit positional dest
+    // overrides this.
     let store_path = config::config_repo_dir(name);
-    let dest: std::path::PathBuf = match path {
-        Some(p) => p.to_path_buf(),
-        None => store_path.clone(),
-    };
+    let dest: std::path::PathBuf = dest
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| store_path.clone());
     if dest.exists() {
         // Refuse if non-empty. An empty existing directory is OK (init in
         // a pre-created dir); a populated one likely means we'd clobber.
@@ -351,21 +351,20 @@ pub async fn cmd_config_new(
         if is_non_empty {
             anyhow::bail!(
                 "destination '{}' exists and is non-empty; refusing to overwrite \
-                 (remove it or pass a different --path)",
+                 (remove it or pass a different dest)",
                 dest.display()
             );
         }
     }
 
-    // Warn when an explicit --path places the repo outside the managed
-    // store. The repo won't be active for layer resolution until moved into
-    // the store or re-added via `config add` after pushing to a remote.
+    // Outside the managed store the repo is scaffolded but NOT registered:
+    // it can't be active for layer resolution anyway. Print guidance instead.
     if !no_register && dest != store_path {
         eprintln!(
-            "warning: '{}' is outside the config store ('{}'); \
-             the repo won't be active for layer resolution until moved into \
-             the store or re-added via `workestrate config add` after pushing \
-             to a remote.",
+            "note: '{}' is outside the config store ('{}'); scaffolded but \
+             NOT registered. To activate: push to a remote and run \
+             `workestrate config add <url> <name>`, or re-run without a dest \
+             to create it in the store.",
             dest.display(),
             store_path.display()
         );
@@ -498,14 +497,16 @@ pub async fn cmd_config_new(
         install_config_pre_commit_hook(&dest)?;
     }
 
-    // Register in workestrate registry.
+    // Register in workestrate registry — only when the repo lives at the
+    // in-store default (out-of-store dests are scaffolded but NOT registered;
+    // the guidance note was printed above).
     let mut registered = false;
-    if !no_register {
+    if !no_register && dest == store_path {
         // The already-registered check ran above (fail-fast, before any
         // filesystem writes).
         let canonical = dest.canonicalize()?;
         let url = canonical.to_string_lossy().to_string();
-        // FS-25: canonicalize() silently rewrites a user-supplied --path
+        // FS-25: canonicalize() silently rewrites a user-supplied dest
         // (symlink resolution, `.`/`..` collapse, case) into a DIFFERENT
         // registered url. Surface that rewrite instead of registering the
         // silent rewrite — the operator should know the registry records
@@ -529,7 +530,7 @@ pub async fn cmd_config_new(
         next_steps.push("edit .sops.yaml and replace age1PLACEHOLDER with your real age1... key");
     }
     next_steps.push("cd into the new directory and edit workestrate.toml");
-    if !no_register {
+    if registered {
         next_steps.push(
             "to enable `workestrate config update`, push to a remote and edit the registry's url + ref",
         );

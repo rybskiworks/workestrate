@@ -34,7 +34,7 @@ fn rejects_invalid_name() {
     let dest = home.dir.join("bad-name-dest");
     let out = home
         .cmd()
-        .args(["config", "new", "Bad Name", "--path"])
+        .args(["config", "new", "Bad Name"])
         .arg(&dest)
         .args(["--no-register", "--no-git-init"])
         .output()
@@ -65,7 +65,7 @@ fn rejects_non_empty_dest() {
 
     let out = home
         .cmd()
-        .args(["config", "new", "goodname", "--path"])
+        .args(["config", "new", "goodname"])
         .arg(&dest)
         .args(["--no-register", "--no-git-init"])
         .output()
@@ -75,6 +75,11 @@ fn rejects_non_empty_dest() {
     assert!(
         stderr.contains("exists and is non-empty"),
         "expected non-empty-dest error, got: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("--path"),
+        "refusal message must not reference the removed --path flag; got: {}",
         stderr
     );
 }
@@ -87,7 +92,7 @@ fn no_register_skips_registry() {
 
     let out = home
         .cmd()
-        .args(["config", "new", "noreg", "--path"])
+        .args(["config", "new", "noreg"])
         .arg(&dest)
         .args([
             "--no-register",
@@ -128,7 +133,7 @@ fn no_git_init_skips_git() {
 
     let out = home
         .cmd()
-        .args(["config", "new", "nogit", "--path"])
+        .args(["config", "new", "nogit"])
         .arg(&dest)
         .args([
             "--no-register",
@@ -160,7 +165,7 @@ fn placeholder_recipient_when_derivation_fails() {
 
     let out = home
         .cmd()
-        .args(["config", "new", "pholder", "--path"])
+        .args(["config", "new", "pholder"])
         .arg(&dest)
         .args(["--no-register", "--no-git-init"])
         .output()
@@ -190,14 +195,13 @@ fn placeholder_recipient_when_derivation_fails() {
 #[test]
 fn already_registered_bails_before_writes() {
     let home = IsolatedHome::new("cmd-config-new");
-    let dest1 = home.dir.join("dest1");
     let dest2 = home.dir.join("dest2");
 
-    // First invocation registers "dupe".
+    // First invocation registers "dupe" (in-store default dest, so
+    // registration happens).
     let out1 = home
         .cmd()
-        .args(["config", "new", "dupe", "--path"])
-        .arg(&dest1)
+        .args(["config", "new", "dupe"])
         .args(["--no-git-init", "--age-recipient", "age1TEST"])
         .output()
         .expect("first config new");
@@ -207,10 +211,12 @@ fn already_registered_bails_before_writes() {
         String::from_utf8_lossy(&out1.stderr)
     );
 
-    // Second invocation with the same name must fail AND leave dest2 empty.
+    // Second invocation with the same name must fail AND leave dest2 empty
+    // (the fail-fast dupe check runs before any filesystem writes, even
+    // though an out-of-store dest would not register anyway).
     let out2 = home
         .cmd()
-        .args(["config", "new", "dupe", "--path"])
+        .args(["config", "new", "dupe"])
         .arg(&dest2)
         .args(["--no-git-init", "--age-recipient", "age1TEST"])
         .output()
@@ -236,7 +242,7 @@ fn json_envelope_is_valid() {
 
     let out = home
         .cmd()
-        .args(["config", "new", "jsontest", "--path"])
+        .args(["config", "new", "jsontest"])
         .arg(&dest)
         .args([
             "--no-register",
@@ -327,10 +333,10 @@ fn config_new_default_path_is_store() {
     );
 }
 
-/// WP-C: explicit --path outside the store prints a warning when
-/// registration is enabled.
+/// WP-C: an explicit dest outside the store is scaffolded but NOT
+/// registered; stderr prints the not-registered guidance note.
 #[test]
-fn config_new_explicit_path_outside_store_warns() {
+fn config_new_explicit_dest_outside_store_not_registered() {
     let home = IsolatedHome::new("cmd-config-new");
     let store = home.dir.join(".workestrate");
     let dest = home.dir.join("outside-store-dest");
@@ -338,7 +344,7 @@ fn config_new_explicit_path_outside_store_warns() {
     let out = home
         .cmd()
         .env("WORKESTRATE_HOME", &store)
-        .args(["config", "new", "personal", "--path"])
+        .args(["config", "new", "personal"])
         .arg(&dest)
         .args(["--no-git-init", "--age-recipient", "age1TEST"])
         .output()
@@ -346,26 +352,26 @@ fn config_new_explicit_path_outside_store_warns() {
 
     assert!(
         out.status.success(),
-        "config new with explicit --path should succeed; stderr=\n{}",
+        "config new with explicit dest should succeed; stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("warning") && stderr.contains("outside the config store"),
-        "stderr should warn about path outside store; got:\n{}",
+        stderr.contains("outside the config store") && stderr.contains("NOT registered"),
+        "stderr should note the repo is outside the store and NOT registered; got:\n{}",
         stderr
     );
     assert!(
-        stderr.contains("won't be active for layer resolution"),
-        "stderr should explain the consequence; got:\n{}",
+        stderr.contains("workestrate config add"),
+        "stderr should explain how to activate the repo; got:\n{}",
         stderr
     );
 
-    // The repo should be at the explicit path, not in the store.
+    // The repo should be at the explicit dest, not in the store.
     assert!(
         dest.join("workestrate.toml").exists(),
-        "repo should be at explicit --path"
+        "repo should be at explicit dest"
     );
     assert!(
         !store
@@ -373,35 +379,49 @@ fn config_new_explicit_path_outside_store_warns() {
             .join("personal")
             .join("workestrate.toml")
             .exists(),
-        "repo should NOT be in the store when --path is explicit"
+        "repo should NOT be in the store when dest is explicit"
     );
+
+    // The registry must NOT contain the name.
+    let reg_path = store.join("config.toml");
+    if reg_path.exists() {
+        let content = std::fs::read_to_string(&reg_path).unwrap();
+        assert!(
+            !content.contains("personal"),
+            "registry should not contain 'personal' for an out-of-store dest; got:\n{}",
+            content
+        );
+    }
 }
 
-/// FS-25: when `--path` contains a symlink component, canonicalize() resolves
-/// it to a DIFFERENT registered url — the CLI must emit the "canonicalized
-/// path" note on stderr, and the registry records the canonical form.
+/// FS-25: when WORKESTRATE_HOME contains a symlink component, the default
+/// in-store dest canonicalizes to a DIFFERENT registered url — the CLI must
+/// emit the "canonicalized path" note on stderr, and the registry records
+/// the canonical form.
 #[cfg(unix)]
 #[test]
-fn config_new_symlinked_path_registers_canonical_url_with_note() {
+fn config_new_symlinked_home_registers_canonical_url_with_note() {
     let home = IsolatedHome::new("cmd-config-new");
-    let store = home.dir.join(".workestrate");
-    let real_parent = unique_dest(&home.dir, "fs25-real");
+    let real_store = home.dir.join("fs25-real-store");
+    std::fs::create_dir_all(&real_store).expect("create real store");
     let link = home.dir.join("fs25-link");
-    std::os::unix::fs::symlink(&real_parent, &link).expect("create symlink");
-    let dest_via_link = link.join("dest");
+    std::os::unix::fs::symlink(&real_store, &link).expect("create symlink");
 
+    // WORKESTRATE_HOME via the symlink: config_repo_dir(name) resolves to
+    // the LITERAL path <link>/config-repos/personal, which equals the
+    // default dest (so registration still triggers), but canonicalize()
+    // rewrites it to the symlink-resolved form.
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["config", "new", "personal", "--path"])
-        .arg(&dest_via_link)
+        .env("WORKESTRATE_HOME", &link)
+        .args(["config", "new", "personal"])
         .args(["--no-git-init", "--age-recipient", "age1TEST"])
         .output()
         .expect("invoke config new");
 
     assert!(
         out.status.success(),
-        "config new via symlinked --path should succeed; stderr=\n{}",
+        "config new via symlinked WORKESTRATE_HOME should succeed; stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -413,8 +433,9 @@ fn config_new_symlinked_path_registers_canonical_url_with_note() {
     );
 
     // The registry records the CANONICAL (symlink-resolved) url.
-    let registry_raw = std::fs::read_to_string(store.join("config.toml")).expect("read registry");
-    let canonical = std::fs::canonicalize(real_parent.join("dest")).unwrap();
+    let registry_raw =
+        std::fs::read_to_string(real_store.join("config.toml")).expect("read registry");
+    let canonical = std::fs::canonicalize(link.join("config-repos").join("personal")).unwrap();
     assert!(
         registry_raw.contains(&canonical.to_string_lossy().to_string()),
         "registry should record the canonical url {}:\n{}",
@@ -447,7 +468,7 @@ fn scaffold_repo(home: &IsolatedHome, name: &str) -> PathBuf {
     let dest = home.dir.join(format!("{name}-dest"));
     let out = home
         .cmd()
-        .args(["config", "new", name, "--path"])
+        .args(["config", "new", name])
         .arg(&dest)
         .args(["--no-register", "--age-recipient", "age1TEST"])
         .output()
@@ -598,7 +619,7 @@ fn config_new_empty_emits_tombi_and_schema_files() {
 
     let out = home
         .cmd()
-        .args(["config", "new", "emptytest", "--empty", "--path"])
+        .args(["config", "new", "emptytest", "--empty"])
         .arg(&dest)
         .args(["--no-register", "--age-recipient", "age1TEST"])
         .output()

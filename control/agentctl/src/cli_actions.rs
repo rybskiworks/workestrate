@@ -159,8 +159,8 @@ pub enum ConfigAction {
         name: String,
 
         /// Destination directory (default: <store>/config-repos/<name>).
-        #[arg(long, value_name = "DIR")]
-        path: Option<std::path::PathBuf>,
+        /// Outside the store the repo is scaffolded but NOT registered.
+        dest: Option<String>,
 
         /// Age public recipient (age1...). If omitted, derived via
         /// `age-keygen -y` from `--age-key-file` (default

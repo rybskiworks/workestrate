@@ -41,7 +41,7 @@ fn tempdir_for_test() -> TempDir {
 fn render_via_subprocess(dest: &Path) -> std::process::Output {
     let bin = env!("CARGO_BIN_EXE_workestrate");
     Command::new(bin)
-        .args(["config", "new", "scaffoldtest", "--path"])
+        .args(["config", "new", "scaffoldtest"])
         .arg(dest)
         .args([
             "--no-register",
