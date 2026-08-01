@@ -102,3 +102,30 @@ outcomes documented in the E1 decision table).
 The execution spec is
 `docs/validation-and-improvements/06-improvements/12-per-instance-addressing.md`
 (IN-PROGRESS; guest-reachability parts NEEDS-KVM).
+
+---
+
+## Addendum (2026-08-01): dependency lifecycle is compose-mirrored, default-on
+
+This addendum SUPERSEDES the "(d) NO auto-start in v1" stance of the original
+decision.
+
+- Declared `depends_on` deps now START BY DEFAULT on `up`/`exec`:
+  topological-order closure over the dependency graph; singleton slots only;
+  service-kind deps start detached with a bounded wait-for-port (~15s);
+  agent-kind deps REFUSE with a remediation message (agents are interactive
+  and cannot be auto-started detached).
+- `--no-deps` opt-out: for a required dep, refuse-with-remediation; for an
+  optional dep, fall back per convention + warn.
+- An occupied dep slot counts as SATISFIED (no restart of an already-running
+  dep).
+- `plan` NEVER starts anything (plan-time resolution remains pure discovery).
+- `--use` remains a pure instance-selection override: unknown instance → hard
+  error; NO parallel auto-start.
+- CYCLE DETECTION becomes MANDATORY in config validation: it is currently
+  ABSENT (A→B→A loads cleanly today — discovery-lite has no topological need;
+  ordering does).
+- Construction-order rule: deps must start BEFORE the dependent's
+  `ConfigWorkload` is constructed (otherwise the required-refusal fires
+  first).
+- The E1 deferral (per-IP guest-reachability, ADR 0026 (f)) is UNCHANGED.

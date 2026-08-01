@@ -1,6 +1,6 @@
 # ADR 0006: Hybrid CLI dispatch
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 0027](0027-verb-first-workload-dispatch.md)
 **Date:** 2026-07-18
 
 ## Context

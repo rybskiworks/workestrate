@@ -330,3 +330,19 @@ there are no released users to keep compat for. The §5 and §7 references
 (including the `port_offset` JSON field) are historical: they describe the
 model as originally decided and are retained for the record. The ADR 0026
 addendum above + ADR 0026 itself are the supersession of record.
+
+---
+
+## Addendum (2026-08-01): bare `workload up` starts all service-kind workloads
+
+- Bare `workestrate workload up` (no `<name>` argument) performs a
+  topo-ordered start of ALL service-kind workloads in the active context:
+  detached, singleton slots.
+- Agent-kind workloads are printed as SKIPPED (they are interactive; use
+  `workestrate workload exec <wl>`).
+- Refuse-on-occupied and `--replace`/`--instance`/`--new` semantics are
+  UNCHANGED per slot (this ADR's §2 still governs each individual start).
+- This is a single-context batch operation; it does NOT reopen ADR 0019's
+  multi-context deferral.
+- `down --all` remains unordered BY DESIGN (teardown independence — down
+  order must not depend on the dependency graph).

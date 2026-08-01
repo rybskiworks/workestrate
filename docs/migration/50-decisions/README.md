@@ -9,7 +9,7 @@ Architecture Decision Records for the workestrator tool+XDG migration.
 | 0003 | Config purity + closed recipe vocabulary | Accepted | Config = data+secrets+static files only; all logic = named recipes in core (Kustomize no-templating anchor) |
 | 0004 | Security allowlist in policy.rs | Accepted | Rust consts (`ALLOWED_EGRESS_HOSTS`, `SECRET_HOST_BINDINGS`, `ALLOWED_PACKAGES`) + per-recipe scoping |
 | 0005 | Security-aware merge | Accepted | Monotonic `default_deny` + additive deny/egress/secret_env; RFC 7396 for non-security fields only |
-| 0006 | Hybrid CLI dispatch | Accepted | Typed clap subcommands for known names + catch-all for config-defined (not pure external_subcommand, not build.rs codegen) |
+| 0006 | Hybrid CLI dispatch | Superseded by 0027 | Typed clap subcommands for known names + catch-all for config-defined (not pure external_subcommand, not build.rs codegen) |
 | 0007 | Tool+XDG+dotfiles organization model | Accepted | workestrate-as-tool + XDG paths + registry in `~/.config/workestrate/config.toml` (user's dotfiles) |
 | 0008 | Config repos via uniform `workestrate config add` | Accepted | All config repos consumed via git clone into managed store (no parent-flake-input editing) |
 | 0009 | Agent configs move to config repo | Accepted | `agents/*/config/` moves to config repo; mount resolution becomes config-relative |
@@ -30,3 +30,4 @@ Architecture Decision Records for the workestrator tool+XDG migration.
 | 0024 | Dotfiles-style home repo + working-copy config repos | Accepted | Home config-repo clones are working copies (remote is canonical, dirty-safe `config update`); home itself is an explicit-init git repo (never auto-init); `repos/` → `config-repos/` |
 | 0025 | Home provisioning (`home clone`) + `workestrate.lock` | Accepted | `home init` (empty scaffold, zero positionals) + `home clone <src> [<dest>]` (provisioning; verb split per the 2026-07-31 addendum, supersedes `home init --from`); selective copy (never `state/`); generated `workestrate.lock` pins url/ref/rev — the single pin mechanism for `home clone`/`up --pin`/spawn provenance |
 | 0026 | Per-instance addressing + discovery-lite | Accepted | Slot-based binding: singleton on shared 127.0.0.1, parallel slots on 127.0.0.N (locked allocator); collisions keyed (bind_ip, port); --port-auto; depends_on discovery-lite; --port-offset removed pre-release |
+| 0027 | Verb-first workload dispatch | Accepted | `workestrate workload {up,exec,plan,down,logs} <name>` + `workestrate workloads` discovery; names are args not subcommands; supersedes 0006 |
