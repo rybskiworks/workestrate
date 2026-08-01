@@ -14,6 +14,7 @@ mod ps;
 mod run;
 mod spawn;
 mod time;
+mod wait;
 
 pub use network::network_plan_to_policy;
 pub use ps::probe_liveness;
@@ -22,6 +23,7 @@ pub use ps::{format_refuse_message, occupancy_from_state, ps, Occupancy, PsEntry
 pub use run::{exec_agent_with_spec, up_service_with_spec};
 pub use spawn::logs;
 pub use spawn::spawn_detached_service;
+pub use wait::{wait_for_port, DEFAULT_WAIT};
 
 use anyhow::Result;
 use microsandbox::sandbox::{SandboxHandle, SandboxStatus};
@@ -78,6 +80,10 @@ pub struct InstanceSpec {
     /// resolution; forwarded to a detached `up` child so it resolves
     /// identically to the parent.
     pub use_overrides: Vec<(String, String)>,
+    /// `--no-deps` (ADR 0026 addendum 2026-08-01). When true, the detached
+    /// child must NOT re-run dependency auto-start (the parent was told to
+    /// skip it); forwarded by `detach_args` as the `--no-deps` flag.
+    pub no_deps: bool,
 }
 
 /// Outcome of stopping one instance. Used by `down --instance`, `down

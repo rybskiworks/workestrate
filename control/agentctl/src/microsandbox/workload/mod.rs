@@ -104,6 +104,11 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         if spec.port_auto {
             args.push("--port-auto".to_string());
         }
+        // ADR 0026 addendum: forward --no-deps so the detached child does
+        // NOT re-run dependency auto-start the parent was told to skip.
+        if spec.no_deps {
+            args.push("--no-deps".to_string());
+        }
         for (dep, id) in &spec.use_overrides {
             args.push("--use".to_string());
             args.push(format!("{}@{}", dep, id));

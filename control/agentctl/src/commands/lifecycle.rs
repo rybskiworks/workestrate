@@ -26,6 +26,7 @@ pub fn build_instance_spec(
     new_id: Option<&str>,
     port_auto: bool,
     use_overrides: &[(String, String)],
+    no_deps: bool,
 ) -> Result<crate::microsandbox::runtime::InstanceSpec> {
     use crate::microsandbox::runtime::InstanceSpec;
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
@@ -66,6 +67,7 @@ pub fn build_instance_spec(
         replace,
         port_auto,
         use_overrides: use_overrides.to_vec(),
+        no_deps,
     })
 }
 
@@ -122,6 +124,7 @@ pub async fn dispatch_service<W: Workload>(
             new,
             port_auto,
             use_,
+            no_deps,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -142,6 +145,7 @@ pub async fn dispatch_service<W: Workload>(
                 new_id.as_deref(),
                 port_auto,
                 &crate::microsandbox::discovery::parse_use_overrides(&use_)?,
+                no_deps,
             )?;
             crate::microsandbox::runtime::up_service_with_spec(workload, &spec, foreground).await
         }
@@ -187,6 +191,7 @@ pub async fn dispatch_agent<W: Workload>(
             new,
             port_auto,
             use_,
+            no_deps,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -207,6 +212,7 @@ pub async fn dispatch_agent<W: Workload>(
                 new_id.as_deref(),
                 port_auto,
                 &crate::microsandbox::discovery::parse_use_overrides(&use_)?,
+                no_deps,
             )?;
             crate::microsandbox::runtime::exec_agent_with_spec(workload, &spec).await
         }
@@ -227,6 +233,7 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
             let replace = args.iter().any(|a| a == "--replace");
             let new = args.iter().any(|a| a == "--new");
             let port_auto = args.iter().any(|a| a == "--port-auto");
+            let no_deps = args.iter().any(|a| a == "--no-deps");
             let instance = parse_flag_value(args, "--instance");
             let use_ = parse_flag_values(args, "--use");
             Ok(ServiceAction::Up {
@@ -236,6 +243,7 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
                 new,
                 port_auto,
                 use_,
+                no_deps,
             })
         }
         "down" => {
@@ -265,6 +273,7 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
             let replace = args.iter().any(|a| a == "--replace");
             let new = args.iter().any(|a| a == "--new");
             let port_auto = args.iter().any(|a| a == "--port-auto");
+            let no_deps = args.iter().any(|a| a == "--no-deps");
             let instance = parse_flag_value(args, "--instance");
             let use_ = parse_flag_values(args, "--use");
             Ok(AgentAction::Exec {
@@ -273,6 +282,7 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
                 new,
                 port_auto,
                 use_,
+                no_deps,
             })
         }
         "down" => {
@@ -694,6 +704,36 @@ mod tests {
         }
     }
 
+    // ---- ADR 0026 addendum: --no-deps raw-args parsing ----
+
+    #[test]
+    fn parse_service_action_up_reads_no_deps() {
+        let args: Vec<String> = vec!["--no-deps".into()];
+        match parse_service_action("up", &args).unwrap() {
+            ServiceAction::Up { no_deps, .. } => assert!(no_deps),
+            _ => panic!("expected Up variant"),
+        }
+        let args: Vec<String> = vec!["--foreground".into()];
+        match parse_service_action("up", &args).unwrap() {
+            ServiceAction::Up { no_deps, .. } => assert!(!no_deps),
+            _ => panic!("expected Up variant"),
+        }
+    }
+
+    #[test]
+    fn parse_agent_action_exec_reads_no_deps() {
+        let args: Vec<String> = vec!["--no-deps".into()];
+        match parse_agent_action("exec", &args).unwrap() {
+            AgentAction::Exec { no_deps, .. } => assert!(no_deps),
+            _ => panic!("expected Exec variant"),
+        }
+        let args: Vec<String> = vec!["--replace".into()];
+        match parse_agent_action("exec", &args).unwrap() {
+            AgentAction::Exec { no_deps, .. } => assert!(!no_deps),
+            _ => panic!("expected Exec variant"),
+        }
+    }
+
     /// build_instance_spec stores the typed overrides on the spec so
     /// detach_args can forward them to the detached child (ADR 0021/0026(d)).
     #[test]
@@ -702,10 +742,19 @@ mod tests {
             ("litellm".to_string(), "canary".to_string()),
             ("redis".to_string(), "blue".to_string()),
         ];
-        let spec = build_instance_spec("pi", false, None, None, false, &overrides).unwrap();
+        let spec = build_instance_spec("pi", false, None, None, false, &overrides, false).unwrap();
         assert_eq!(spec.use_overrides, overrides);
-        let spec = build_instance_spec("pi", false, None, None, false, &[]).unwrap();
+        assert!(!spec.no_deps);
+        let spec = build_instance_spec("pi", false, None, None, false, &[], false).unwrap();
         assert!(spec.use_overrides.is_empty());
+    }
+
+    /// build_instance_spec stores --no-deps on the spec so detach_args can
+    /// forward it to the detached child (ADR 0026 addendum).
+    #[test]
+    fn build_instance_spec_stores_no_deps() {
+        let spec = build_instance_spec("pi", false, None, None, false, &[], true).unwrap();
+        assert!(spec.no_deps);
     }
 
     // ---- ADR 0027: verb-first kind-check routing ----

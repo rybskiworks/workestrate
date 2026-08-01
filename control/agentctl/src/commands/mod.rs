@@ -1,6 +1,7 @@
 //! Command handlers (`workestrate <cmd>`).
 
 pub mod config_cmd;
+pub mod deps;
 pub mod diagnostics;
 pub mod doctor;
 pub mod home;

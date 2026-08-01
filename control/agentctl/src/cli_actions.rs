@@ -44,6 +44,12 @@ pub enum ServiceAction {
         /// address. Repeatable (one per dep).
         #[arg(long = "use", value_name = "DEP@INSTANCE")]
         use_: Vec<String>,
+
+        /// Do not auto-start declared depends_on dependencies (ADR 0026
+        /// addendum); required deps then refuse-with-remediation at plan
+        /// time, optional deps fall back per convention + warn.
+        #[arg(long)]
+        no_deps: bool,
     },
     /// Stop and remove the sandbox
     Down {
@@ -107,6 +113,12 @@ pub enum AgentAction {
         /// address. Repeatable (one per dep).
         #[arg(long = "use", value_name = "DEP@INSTANCE")]
         use_: Vec<String>,
+
+        /// Do not auto-start declared depends_on dependencies (ADR 0026
+        /// addendum); required deps then refuse-with-remediation at plan
+        /// time, optional deps fall back per convention + warn.
+        #[arg(long)]
+        no_deps: bool,
     },
     /// Stop and remove the sandbox
     Down {
@@ -140,10 +152,14 @@ pub enum AgentAction {
 /// dispatch and translates into the legacy per-kind action enums.
 #[derive(Subcommand)]
 pub enum WorkloadAction {
-    /// Start a service workload (detached by default; --foreground to block)
+    /// Start a service workload (detached by default; --foreground to block).
+    /// Omit the name to start ALL service-kind workloads in the active
+    /// context (ADR 0021 addendum 2026-08-01).
     Up {
-        /// Workload name from the merged config.
-        name: String,
+        /// Workload name from the merged config. Omit for the batch form:
+        /// topo-ordered start of every service-kind workload in the active
+        /// context (agent-kind workloads are printed as SKIPPED).
+        name: Option<String>,
 
         #[arg(short, long, help = "Run in foreground (block until Ctrl-C)")]
         foreground: bool,
@@ -175,6 +191,12 @@ pub enum WorkloadAction {
         /// address. Repeatable (one per dep).
         #[arg(long = "use", value_name = "DEP@INSTANCE")]
         use_: Vec<String>,
+
+        /// Do not auto-start declared depends_on dependencies (ADR 0026
+        /// addendum); required deps then refuse-with-remediation at plan
+        /// time, optional deps fall back per convention + warn.
+        #[arg(long)]
+        no_deps: bool,
     },
     /// Attach to an agent workload interactively (TUI)
     Exec {
@@ -210,6 +232,12 @@ pub enum WorkloadAction {
         /// address. Repeatable (one per dep).
         #[arg(long = "use", value_name = "DEP@INSTANCE")]
         use_: Vec<String>,
+
+        /// Do not auto-start declared depends_on dependencies (ADR 0026
+        /// addendum); required deps then refuse-with-remediation at plan
+        /// time, optional deps fall back per convention + warn.
+        #[arg(long)]
+        no_deps: bool,
     },
     /// Print the planned sandbox workload
     Plan {

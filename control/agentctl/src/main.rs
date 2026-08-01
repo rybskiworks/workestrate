@@ -11,6 +11,7 @@ use workestrate::cli_error::{classify_exit_code, emit_error};
 use workestrate::commands::config_cmd::{
     cmd_config, cmd_config_list_json, cmd_config_new, cmd_context,
 };
+use workestrate::commands::deps::{auto_start_dependencies, cmd_workload_up_all};
 use workestrate::commands::diagnostics::{
     cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_ps, cmd_run, cmd_validate_config,
     cmd_workloads,
@@ -227,6 +228,24 @@ fn agent_action_use_overrides(action: &AgentAction) -> Result<Vec<(String, Strin
     workestrate::microsandbox::discovery::parse_use_overrides(raw)
 }
 
+/// The start verb + `--no-deps` flag of a clap-parsed [`ServiceAction`]
+/// (ADR 0026 addendum). Non-start actions yield no verb; the caller skips
+/// dependency auto-start for them.
+fn service_action_verb_no_deps(action: &ServiceAction) -> (Option<&'static str>, bool) {
+    match action {
+        ServiceAction::Up { no_deps, .. } => (Some("up"), *no_deps),
+        _ => (None, false),
+    }
+}
+
+/// The [`AgentAction`] counterpart of [`service_action_verb_no_deps`].
+fn agent_action_verb_no_deps(action: &AgentAction) -> (Option<&'static str>, bool) {
+    match action {
+        AgentAction::Exec { no_deps, .. } => (Some("exec"), *no_deps),
+        _ => (None, false),
+    }
+}
+
 /// Pre-scan argv for a global `--json` flag so ANY error (including clap
 /// parse errors, which call process::exit before `cli.json` is available) can
 /// be formatted as the JSON envelope. Scanning stops at the first `--`
@@ -306,6 +325,7 @@ fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
             new,
             port_auto,
             use_,
+            no_deps,
             ..
         } => ServiceAction::Up {
             foreground,
@@ -314,6 +334,7 @@ fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
             new,
             port_auto,
             use_,
+            no_deps,
         },
         WorkloadAction::Plan { instance, use_, .. } => ServiceAction::Plan { instance, use_ },
         WorkloadAction::Down {
@@ -342,6 +363,7 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
             new,
             port_auto,
             use_,
+            no_deps,
             ..
         } => AgentAction::Exec {
             replace,
@@ -349,6 +371,7 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
             new,
             port_auto,
             use_,
+            no_deps,
         },
         WorkloadAction::Plan { instance, use_, .. } => AgentAction::Plan { instance, use_ },
         WorkloadAction::Down {
@@ -489,26 +512,46 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::Source { action } => cmd_source(action).await,
         Commands::Litellm { action } => {
             let overrides = service_action_use_overrides(&action)?;
+            let (verb, no_deps) = service_action_verb_no_deps(&action);
+            if let Some(verb) = verb {
+                auto_start_dependencies("litellm", verb, no_deps, &overrides).await?;
+            }
             let workload = ConfigWorkload::new_with_use_overrides("litellm", &overrides)?;
             dispatch_service(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Pi { action } => {
             let overrides = agent_action_use_overrides(&action)?;
+            let (verb, no_deps) = agent_action_verb_no_deps(&action);
+            if let Some(verb) = verb {
+                auto_start_dependencies("pi", verb, no_deps, &overrides).await?;
+            }
             let workload = ConfigWorkload::new_with_use_overrides("pi", &overrides)?;
             dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Odysseus { action } => {
             let overrides = service_action_use_overrides(&action)?;
+            let (verb, no_deps) = service_action_verb_no_deps(&action);
+            if let Some(verb) = verb {
+                auto_start_dependencies("odysseus", verb, no_deps, &overrides).await?;
+            }
             let workload = ConfigWorkload::new_with_use_overrides("odysseus", &overrides)?;
             dispatch_service(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Opencode { action } => {
             let overrides = agent_action_use_overrides(&action)?;
+            let (verb, no_deps) = agent_action_verb_no_deps(&action);
+            if let Some(verb) = verb {
+                auto_start_dependencies("opencode", verb, no_deps, &overrides).await?;
+            }
             let workload = ConfigWorkload::new_with_use_overrides("opencode", &overrides)?;
             dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
         Commands::Tempest { action } => {
             let overrides = agent_action_use_overrides(&action)?;
+            let (verb, no_deps) = agent_action_verb_no_deps(&action);
+            if let Some(verb) = verb {
+                auto_start_dependencies("tempest", verb, no_deps, &overrides).await?;
+            }
             let workload = ConfigWorkload::new_with_use_overrides("tempest", &overrides)?;
             dispatch_agent(&workload, action, cli.show_source, cli.json).await
         }
@@ -518,18 +561,75 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             force,
         } => cmd_migrate_home(from.as_deref(), dry_run, cli.json, force),
         Commands::Workload { action } => {
+            // ADR 0021 addendum 2026-08-01: bare `workload up` (no name) is
+            // the batch form — a topo-ordered start of ALL service-kind
+            // workloads in the active context. Per-slot/per-dependent flags
+            // are not meaningful for batch up and are hard errors naming
+            // the offending flag.
+            if let WorkloadAction::Up { name: None, .. } = &action {
+                let WorkloadAction::Up {
+                    foreground,
+                    replace,
+                    instance,
+                    new,
+                    port_auto,
+                    use_,
+                    no_deps,
+                    ..
+                } = &action
+                else {
+                    unreachable!("matched WorkloadAction::Up above");
+                };
+                for (present, flag) in [
+                    (*foreground, "--foreground"),
+                    (*replace, "--replace"),
+                    (instance.is_some(), "--instance"),
+                    (*new, "--new"),
+                    (*port_auto, "--port-auto"),
+                    (!use_.is_empty(), "--use"),
+                    (*no_deps, "--no-deps"),
+                ] {
+                    if present {
+                        anyhow::bail!(
+                            "{flag} is not meaningful for bare `workestrate workload up` (batch mode); pass a workload name to use it"
+                        );
+                    }
+                }
+                return cmd_workload_up_all(cli.json).await;
+            }
             // ADR 0027 verb-first dispatch: the workload name is a clap
             // positional, so `--json` and every flag is parsed by clap
             // directly (no raw-args extraction). The `--use` values reach
             // the workload constructor BEFORE resolution runs (ADR 0026(d)).
-            let (name, verb, use_values): (String, &'static str, Vec<String>) = match &action {
-                WorkloadAction::Up { name, use_, .. } => (name.clone(), "up", use_.clone()),
-                WorkloadAction::Exec { name, use_, .. } => (name.clone(), "exec", use_.clone()),
-                WorkloadAction::Plan { name, use_, .. } => (name.clone(), "plan", use_.clone()),
-                WorkloadAction::Down { name, .. } => (name.clone(), "down", Vec::new()),
-                WorkloadAction::Logs { name, .. } => (name.clone(), "logs", Vec::new()),
-            };
+            let (name, verb, use_values, no_deps): (String, &'static str, Vec<String>, bool) =
+                match &action {
+                    WorkloadAction::Up {
+                        name: Some(n),
+                        use_,
+                        no_deps,
+                        ..
+                    } => (n.clone(), "up", use_.clone(), *no_deps),
+                    WorkloadAction::Up { name: None, .. } => {
+                        unreachable!("bare up is handled above")
+                    }
+                    WorkloadAction::Exec {
+                        name,
+                        use_,
+                        no_deps,
+                        ..
+                    } => (name.clone(), "exec", use_.clone(), *no_deps),
+                    WorkloadAction::Plan { name, use_, .. } => {
+                        (name.clone(), "plan", use_.clone(), false)
+                    }
+                    WorkloadAction::Down { name, .. } => (name.clone(), "down", Vec::new(), false),
+                    WorkloadAction::Logs { name, .. } => (name.clone(), "logs", Vec::new(), false),
+                };
             let overrides = workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
+            // Construction-order rule (ADR 0026 addendum): declared deps
+            // start BEFORE the dependent's ConfigWorkload is constructed —
+            // construction runs resolve_depends_on, which refuses a
+            // required-not-running dep, so the dep must already be up.
+            auto_start_dependencies(&name, verb, no_deps, &overrides).await?;
             let workload = ConfigWorkload::new_with_use_overrides(&name, &overrides)?;
             // Kind-check at dispatch (ADR 0027): wrong-kind usage names the
             // correct invocation; plan/down are universal.
@@ -844,6 +944,7 @@ mod tests {
             replace,
             port_auto,
             use_overrides: Vec::new(),
+            no_deps: false,
         }
     }
 
@@ -995,6 +1096,40 @@ mod tests {
         Ok(())
     }
 
+    /// ADR 0026 addendum: `--no-deps` rides the spec into the detached-child
+    /// argv so the child does NOT re-run dependency auto-start the parent
+    /// was told to skip (CRITICAL: the child re-enters `workload up`).
+    #[test]
+    fn detach_args_forwards_no_deps() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        use workestrate::microsandbox::workload::Workload;
+        let litellm = ConfigWorkload::new("litellm")?;
+
+        let mut spec = spec_for_detach("litellm", false);
+        spec.no_deps = true;
+        let args = litellm.detach_args(&spec);
+        assert!(
+            args.contains(&"--no-deps".to_string()),
+            "--no-deps must be forwarded to the detached child: {args:?}"
+        );
+
+        // And it round-trips through the raw-args parser the detached-child
+        // path uses.
+        let parsed = workestrate::commands::lifecycle::parse_service_action("up", &args[3..])?;
+        match parsed {
+            ServiceAction::Up { no_deps, .. } => assert!(no_deps),
+            _ => panic!("expected Up variant"),
+        }
+
+        // Unset → no --no-deps token.
+        let args = litellm.detach_args(&spec_for_detach("litellm", false));
+        assert!(
+            !args.contains(&"--no-deps".to_string()),
+            "--no-deps must not appear when unset: {args:?}"
+        );
+        Ok(())
+    }
+
     /// Round-trip (ADR 0021 WP-B): `--new` allocates a base32 slug, build_instance_spec
     /// composes `<slot>@<slug>` and passes it through `validate_instance_id` uniformly,
     /// and the resulting instance name is exactly what `down --instance <slug>` would
@@ -1023,7 +1158,7 @@ mod tests {
         assert_eq!(slug.len(), 4);
         validate_instance_id(&slug).expect("allocated slug must satisfy the slug rule");
 
-        let spec = build_instance_spec("litellm", false, None, Some(&slug), false, &[])?;
+        let spec = build_instance_spec("litellm", false, None, Some(&slug), false, &[], false)?;
         assert_eq!(
             spec.instance,
             format!("litellm@{slug}"),
@@ -1186,6 +1321,7 @@ mod tests {
                 "foreground",
                 "port-auto",
                 "use",
+                "no-deps",
             ] {
                 assert!(
                     flags.contains(&f.to_string()),
@@ -1225,9 +1361,42 @@ mod tests {
         match cli.command {
             Commands::Workload {
                 action: WorkloadAction::Up { name, .. },
-            } => assert_eq!(name, "pi"),
+            } => assert_eq!(name.as_deref(), Some("pi")),
             _ => panic!("expected workload up"),
         }
+    }
+
+    /// W4 (ADR 0021 addendum 2026-08-01): bare `workload up` (no name)
+    /// parses with `name: None` (the batch form); a named up keeps
+    /// `Some(name)`.
+    #[test]
+    fn workload_up_without_name_parses_as_batch_form() {
+        let cli = Cli::try_parse_from(["workestrate", "workload", "up"])
+            .expect("bare workload up must parse");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Up { name, .. },
+            } => assert_eq!(name, None),
+            _ => panic!("expected workload up"),
+        }
+        let cli = Cli::try_parse_from(["workestrate", "workload", "up", "web"])
+            .expect("named workload up must parse");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Up { name, .. },
+            } => assert_eq!(name.as_deref(), Some("web")),
+            _ => panic!("expected workload up"),
+        }
+    }
+
+    /// `workload exec` still REQUIRES a name — only `up` gained the batch
+    /// form.
+    #[test]
+    fn workload_exec_without_name_still_fails_to_parse() {
+        assert!(
+            Cli::try_parse_from(["workestrate", "workload", "exec"]).is_err(),
+            "workload exec without a name must fail to parse"
+        );
     }
 
     /// The detached-child argv shape (`workload up <name> --foreground ...`,
@@ -1262,7 +1431,7 @@ mod tests {
                         ..
                     },
             } => {
-                assert_eq!(name, "litellm");
+                assert_eq!(name.as_deref(), Some("litellm"));
                 assert!(foreground && replace && port_auto);
                 assert_eq!(instance.as_deref(), Some("canary"));
                 assert_eq!(use_, vec!["redis@blue"]);
