@@ -21,7 +21,7 @@ Architecture Decision Records for the workestrator tool+XDG migration.
 | 0015 | Per-workload repos rejected | Accepted | Workload defs are ~20-line data entries; recipe vocabulary is the distribution unit |
 | 0016 | Additive migration / deferred repo strip-down | Accepted | Root `workestrate.toml` keeps working as project layer; migration is additive |
 | 0017 | Synthetic reference config and final strip-down | Accepted | `config.reference/` becomes synthetic fixture; root user files move to personal config repo; flake outputs stay explicit |
-| 0018 | Secrets layering + per-repo secrets config | Accepted | Per-key value merge across layers; per-repo secrets_file/age_key_file; process env lowest precedence |
+| 0018 | Secrets layering + per-repo secrets config | Accepted | Per-key value merge across layers; per-repo secrets_file/age_key_file; process env lowest precedence; 2026-08-01 addenda: unified secret model, then final per-binding bound model (delivery-on-def removed; hosts→allowed_hosts; schema_version stays 1) |
 | 0019 | Contexts + user-global overrides | Accepted | `[contexts.<name>] layers=[...]` in registry; one context per invocation (`--context`/env/settings/default); instance namespacing; user-global overrides + secrets |
 | 0020 | Review adjudications (2026-07) | Accepted | env union-by-name; entitlement checked before monotonic-true; `run`/`WORKESTRATE_CONFIG_DIR` = document-not-harden (with `local.toml` exception); spec-code consistency CI guard |
 | 0021 | Instance lifecycle + AI-native surfaces | Accepted | Refuse-on-occupied default with `--replace`/`--instance`/`--new`; `ps`/`down --all`/`--port-offset`/`--json`; `generate-schema` + committed schema + CI drift guard + taplo `#:schema` |

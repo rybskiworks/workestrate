@@ -100,3 +100,44 @@ possible future extension. Provenance is re-keyed to binding sites
 
 This addendum does not change the per-repo layering/merge decisions above;
 it replaces the per-secret definition shape those decisions operate on.
+
+## Addendum (2026-08-01, second): final unified secret/env model — supersedes delivery-on-def
+
+The intermediate v2 `delivery` field on the definition is REMOVED. Exposure
+mode moves to the binding as a per-binding `bound` property
+(`bound = guest | host`, default `host`): `host` renders the placeholder
+(least exposure; the egress rewrite substitutes the real value only for
+hosts in `allowed_hosts`), and `guest` injects the real value as a plain
+sandbox env var — the explicit opt-in for verifier workloads. The unified
+workload env map gains cascading sugar: `KEY = true` desugars to a host-bound
+placeholder for the same-named secret; `KEY = { bound = "guest" }` is the
+bound-only object for a same-name real value (no name repeat); the `secret`
+property is rename-only (written only when the exposed name differs from the
+secret ID). `hosts` on the definition is RENAMED to `allowed_hosts` — always
+valid regardless of binding mode (no binding-mode validation), omitted =
+deny-all, explicit `[]` = clear-then-deny-all. `schema_version` collapses
+back to `1`: the v2 shim/delivery machinery (commit `1ed2e6d`, the
+`fold_legacy_secret_model` fold, `delivery` on the def) is retracted
+pre-release — there was no production deployment and no migration to
+preserve, so v1 remains the native and only schema version and `>= 2` is a
+hard error.
+
+**Rationale:** delivery-on-def over-exposed. Because the mode was def-global,
+any workload binding the def inherited the def's mode — the pi workload
+received the real `LITELLM_MASTER_KEY` it never needed, simply because the
+def said `delivery = "env"` so that litellm itself could verify callers.
+Per-binding `bound` is fail-safe (the natural write — `KEY = true`,
+`KEY = { secret = "ID" }` — yields the placeholder) and correctly scoped
+(only verifier workloads opt into the real value, e.g. litellm's
+`LITELLM_MASTER_KEY = { bound = "guest" }` and odysseus's
+`ODYSSEUS_ADMIN_PASSWORD = { bound = "guest" }`). The runtime security
+posture is preserved exactly: presenter workloads keep placeholders plus
+egress rewrite; real values reach verifiers only.
+
+The execution spec is
+`docs/validation-and-improvements/06-improvements/16-unified-secret-env-model.md`;
+the requirements contract is
+`docs/validation-and-improvements/02-config-requirements.md`. Neither this
+addendum nor the first changes the per-repo layering/merge decisions above;
+they replace the per-secret definition shape and binding surface those
+decisions operate on.

@@ -1,11 +1,13 @@
-# 17 — Visualization + inspection surfaces
+# 19 — Visualization + inspection surfaces
 
 > **STATUS: INTENT-TO-EXPLORE (2026-08-01 — enumerates view candidates + data sources, NO decisions)**
+> Renumbered 17→19 (2026-08-01): spec 16 is now the unified secret/env model;
+> spec 17 is reserved for the directory-mode spec.
 > **Effort:** exploration
 > Prerequisites / see-also: [../README.md](../README.md) ·
 > [00-index.md](00-index.md) ·
 > [12-per-instance-addressing.md](12-per-instance-addressing.md) ·
-> [16-cross-home-dependencies.md](16-cross-home-dependencies.md) ·
+> [18-cross-home-dependencies.md](18-cross-home-dependencies.md) ·
 > [ADR 0026](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md) ·
 > [ADR 0027](../../migration/50-decisions/0027-verb-first-workload-dispatch.md) (verb-first workload dispatch — the W3 `workestrate workloads` verb anchor).
 
@@ -67,4 +69,4 @@ port registry.
 2. What `--json` schema stability guarantees apply for external consumers?
 3. Is the dependency-graph render text-only or dot/mermaid?
 4. How does home inspect compose with the cross-home questions in
-   [spec 16](16-cross-home-dependencies.md)?
+   [spec 18](18-cross-home-dependencies.md)?

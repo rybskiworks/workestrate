@@ -1,6 +1,7 @@
 # 14 — Config ergonomics: map form for `env` entries (formatting collapse)
 
 > **STATUS: EXECUTED (2026-07-31; implementation commit 1035073, spec doc 564deca) — annotated 2026-08-01: the map form this spec introduced became the v2 unified binding map with typed `EnvBinding` (`Literal | Secret`; 1ed2e6d); the legacy array-of-tables form still parses via the same visitor for one shim cycle.**
+> **Annotated 2026-08-01 (final model):** the map form this spec introduced SURVIVES as the one unified env map, but `{ secret }` binding semantics now include `bound` (default `host` = placeholder; `guest` = real value) and the `true` sugar exists for same-name placeholders — see [16-unified-secret-env-model.md](16-unified-secret-env-model.md). History kept.
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [13-secret-env-shorthand.md](13-secret-env-shorthand.md) ·
 > [../../migration/50-decisions/0002-toml-config-format.md](../../migration/50-decisions/0002-toml-config-format.md) ·

@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the seventeen post-validation improvement specifications under
+This index catalogs the nineteen post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -69,11 +69,13 @@ invariant.
 | [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init); docs/spec fully done` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
 | [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home clone <src> [<dest>]`) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7; verb split c406630 2026-07-31)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
 | [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM; refuse-only/no-auto-start SUPERSEDED 2026-08-01 (ADR 0026 addendum default-on); `--use` override retained; W5 wiring plan in spec §4` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
-| [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately) — SUPERSEDED 2026-08-01 (v2 model 1ed2e6d removed the `secret_env` namespace; shorthand survives only in the v1 shim)` | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
-| [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca) — annotated 2026-08-01: the map form became the v2 unified binding map with typed EnvBinding (1ed2e6d)` | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
+| [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately) — SUPERSEDED 2026-08-01 (v2 model 1ed2e6d removed the `secret_env` namespace; shorthand survives only in the v1 shim)` — shorthand form superseded by the final model's `true` sugar (16-unified-secret-env-model, 2026-08-01) | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
+| [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca) — annotated 2026-08-01: the map form became the v2 unified binding map with typed EnvBinding (1ed2e6d)` — map form survives as the unified map; binding semantics gained `bound` (16, 2026-08-01) | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes | `EXECUTED (2026-08-01; commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave; personal-repo apply 0750876)` | ↔ [13](13-secret-env-shorthand.md)/[14](14-env-map-form.md) (notation — tombi keeps the collapsed map form tidy + validated; cannot restructure) | **M** | devshell in-container (cargo gates + scripts/check-toml.sh via `nix develop`) + `HOST-NIX` (`nix build .#tombi` package build) |
-| [16-cross-home-dependencies.md](16-cross-home-dependencies.md) | Cross-home dependencies (wider up across homes/config sets) | INTENT-TO-EXPLORE (2026-08-01 — questions, no decisions) | ADR 0019/0021(addendum)/0023/0026(addendum); builds on [12](12-per-instance-addressing.md) default-on lifecycle | exploration | verifiable-here (docs-only) |
-| [17-visualization-inspection.md](17-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [16](16-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
+| [16-unified-secret-env-model.md](16-unified-secret-env-model.md) | Final unified secret/env model (per-binding bound; delivery-on-def removed) | READY-TO-EXECUTE (design locked 2026-08-01; supersedes intermediate v2 of 1ed2e6d) | supersedes 13/14 notation; ADR 0018 second addendum; contract in ../02-config-requirements.md | M | cargo gates verifiable-here via nix develop; B13 runtime smoke HOST-KVM |
+| 17-directory-mode (task B) | Directory-mode config (SPEC FORTHCOMING — parallel task B authors this file) | DESIGN (placeholder row; file not yet authored) | — | — | — |
+| [18-cross-home-dependencies.md](18-cross-home-dependencies.md) | Cross-home dependencies (wider up across homes/config sets) | INTENT-TO-EXPLORE (2026-08-01 — questions, no decisions) | ADR 0019/0021(addendum)/0023/0026(addendum); builds on [12](12-per-instance-addressing.md) default-on lifecycle | exploration | verifiable-here (docs-only) |
+| [19-visualization-inspection.md](19-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [18](18-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -300,7 +302,25 @@ of non-`127.0.0.1` loopbacks is KVM-unverified (DEFERRED-PENDING-E1) —
 conservative default: guest-facing alternates share `127.0.0.1` + `--port-auto`
 until Experiment E1 runs.
 
-### 16 — Cross-home dependencies
+### 16 — Final unified secret/env model
+
+Locks the final secret/env surface: ONE unified `[workloads.<name>.env]` map
+with a desugar table (the `KEY = true` sugar for same-name placeholders) and
+a per-binding `bound` property (`host` default = placeholder; `guest` = real
+value for verifiers) replacing the intermediate v2's delivery-on-def. Secret
+defs become a pure catalog (`env_var`/`allowed_hosts`/`required`/
+`placeholder`; `hosts` renamed to `allowed_hosts`; `delivery`/`description`/
+remap fields removed), and `schema_version` collapses back to 1 with the v2
+machinery retracted pre-release. The spec carries the full per-construct
+migration guide from v1 and intermediate-v2 forms, plus a doc-intent
+requirement: user-facing docs must teach the fail-safe placeholder default,
+the rename-only `secret`, and why `bound` is per-binding — not just syntax.
+
+### 17 — Directory-mode (placeholder)
+
+Spec forthcoming — authored by the parallel task B.
+
+### 18 — Cross-home dependencies
 
 Explores a wider `workestrate up` across homes / config sets: the ADR 0026
 addendum (2026-08-01) default-on lifecycle makes dependency-closure start
@@ -316,7 +336,7 @@ E1/dynamic-port interaction) and the questions to
 investigate. **Key decision:** none — INTENT-TO-EXPLORE; open questions
 enumerated in the spec.
 
-### 17 — Visualization + inspection surfaces
+### 19 — Visualization + inspection surfaces
 
 Enumerates which home / config / dependency views should exist beyond the
 W3 `workestrate workloads` discovery verb (ADR 0027, verb-first workload
@@ -325,7 +345,7 @@ feeds each — merged config, home registry, port registry, and
 `workestrate.lock`. Records view candidates (`--json`-first surfaces,
 dependency-graph render, home inspect, `ps --json` consumers) and the open
 questions (verbs vs flags, `--json` schema stability, render format,
-cross-home composition with spec 16). **Key decision:** none —
+cross-home composition with spec 18). **Key decision:** none —
 INTENT-TO-EXPLORE; open questions enumerated in the spec.
 
 ---
@@ -390,9 +410,13 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 15-toml-toolchain-tombi [↔ 13/14 notation; additive toolchain; no schema_version change]
 
-16-cross-home-dependencies [deps: ADR 0019/0021 addendum/0023/0026 addendum; builds on 12 default-on lifecycle; exploration]
+16-unified-secret-env-model [supersedes 13/14 notation; ADR 0018 2nd addendum; contract ../02-config-requirements.md]
 
-17-visualization-inspection [deps: ADR 0026 addendum / 0027 W3 anchor; ↔ 12/16; exploration]
+17-directory-mode [placeholder — task B]
+
+18-cross-home-dependencies [deps: ADR 0019/0021 addendum/0023/0026 addendum; builds on 12 default-on lifecycle; exploration]
+
+19-visualization-inspection [deps: ADR 0026 addendum / 0027 W3 anchor; ↔ 12/18; exploration]
 ```
 
 **Key dependency notes:**
@@ -449,10 +473,10 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
   notation the author chose (array-of-tables or collapsed map form) — it
   normalizes layout only and never forces a form, so the 13/14 ergonomics are
   unaffected by the toolchain adoption.
-- **16/17 (INTENT-TO-EXPLORE explorations)** are both seeded by the ADR 0026
-  addendum (2026-08-01) default-on lifecycle: 16 explores cross-home
+- **16/17 (INTENT-TO-EXPLORE explorations, now 18/19)** are both seeded by the ADR 0026
+  addendum (2026-08-01) default-on lifecycle: 18 explores cross-home
   composition (the wider
-  `workestrate up` across homes/config sets), 17 enumerates inspection
+  `workestrate up` across homes/config sets), 19 enumerates inspection
   surfaces beyond the W3 `workestrate workloads` verb (anchored by ADR 0027,
   verb-first workload dispatch). Neither gates code.
 
@@ -482,7 +506,9 @@ personal config converted in `.tmp` (separate commit there).
 **SUPERSEDED 2026-08-01** by the v2 unified secret/env model (1ed2e6d): the
 `secret_env` namespace was removed from the v2 schema; the bare-string
 shorthand survives only inside the one-cycle v1 compat shim
-(`fold_legacy_secret_model`).
+(`fold_legacy_secret_model`). **Annotated 2026-08-01 (final model):** the
+final unified secret/env model ([16](16-unified-secret-env-model.md))
+replaces the shorthand entirely with the `true` sugar (`KEY = true`).
 
 ### 14 — Config ergonomics: map form for `env` entries (formatting collapse)
 
@@ -511,7 +537,11 @@ regression with exact error `workload 'pi' env references undefined secret
 
 **Annotated 2026-08-01:** the map form became the v2 unified env binding map
 with typed `EnvBinding { Literal | Secret }` (1ed2e6d); the array-of-tables
-form still parses via the same visitor for one shim cycle.
+form still parses via the same visitor for one shim cycle. **Annotated
+2026-08-01 (final model):** the map survives as the ONE unified env map in
+the final model ([16](16-unified-secret-env-model.md)); binding semantics
+gained `bound` (default `host` = placeholder; `guest` = real value) and the
+`true` sugar.
 
 ### 15 — TOML toolchain: tombi format/lint/schema-validation
 

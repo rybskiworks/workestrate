@@ -54,7 +54,7 @@ The schema root of a single `workestrate.toml` layer is `ConfigFile`
 (`control/agentctl/src/config/types.rs:194`):
 
 ```toml
-schema_version = 2
+schema_version = 1
 
 [secrets.<NAME>]      # secret definitions (map, deep-merged per field)
 
@@ -68,51 +68,56 @@ time. The user-global overrides path stays lenient (warn + strip) — see §5.
 ### 1.1 `schema_version`
 
 ```toml
-schema_version = 2
+schema_version = 1
 ```
 
 - Type: `u32` (`types.rs`, `ConfigFile.schema_version`).
-- Currently `2` (`EXPECTED_SCHEMA_VERSION`, `config/validation.rs:23`).
+- Currently `1` (`EXPECTED_SCHEMA_VERSION`, `config/validation.rs`).
 - Missing/`0` is accepted as legacy with a stderr warning (backward compat).
-- `1` is accepted with a stderr deprecation warning; the legacy secret forms
-  (`secret_env`, `source`/`exposed_as`/`description`) are shimmed for ONE
-  cycle (see §1.3.3).
-- `2` is the native form.
-- `>= 3` is a hard error (`validation.rs:117-145`).
+- `1` is the native and only form.
+- `>= 2` is a hard error.
+- The intermediate v2 model (delivery-on-def plus the one-cycle v1 shim) was
+  retracted pre-release — there was no production deployment and no migration
+  to preserve, so the v2 event is withdrawn and `schema_version` stays at 1
+  (see the ADR 0018 second addendum, 2026-08-01, and
+  `06-improvements/16-unified-secret-env-model.md`).
 
 ### 1.2 `[secrets.<NAME>]` — secret definitions
 
-Each named secret is a `SecretDefConfig` (`types.rs:574`):
+Each named secret is a `SecretDefConfig` (`types.rs`) — a pure catalog of the
+credential's intrinsic properties; exposure is the workload's business,
+declared at the binding site (§1.3.2–§1.3.4):
 
 ```toml
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"          # optional; default = the secret ID
-delivery = "env"                        # optional; default "host_bound"
 required = true                         # optional; default true
 placeholder = "change_me_before_first_boot"   # optional
 
 [secrets.GITHUB_TOKEN]
-hosts = ["host.microsandbox.internal"]  # host-bound delivery only
+allowed_hosts = ["host.microsandbox.internal"]  # substitution restriction
 required = true
 ```
 
 | Field | Type | Required | Semantics |
 |---|---|---|---|
 | `env_var` | `Option<String>` | no | Host env var the resolved value is read from (default: the secret ID). |
-| `hosts` | `Option<Vec<String>>` | no | Host-bound delivery only: egress hosts that may receive the value (validated against `SECRET_HOST_BINDINGS`). Omitted = deny-all (never leaves the host). Hard error with `delivery = "env"`. |
+| `allowed_hosts` | `Option<Vec<String>>` | no | Credential-level substitution restriction: the egress hosts whose rewrites may substitute the real value. ALWAYS valid regardless of binding mode — there is NO binding-mode validation on it. Omitted = deny-all (the value is never substituted anywhere). Explicit `[]` = clears any inherited value, then deny-all. |
 | `required` | `Option<bool>` | no | Missing value is a hard error when `true` (default `true`). |
-| `placeholder` | `Option<String>` | no | Known-bad placeholder value to reject. |
-| `delivery` | `Option<"env" \| "host_bound">` | no | Default `host_bound` (secure-by-default). `env` exposes the value as a plain sandbox env var and rejects `hosts`. |
+| `placeholder` | `Option<String>` | no | Known-bad placeholder value to reject; merge tri-state (inherit / set / clear). |
 
-Remap/alias defs (`source` + `exposed_as`) and `description` are DELETED in
-v2: the remap now lives at the binding site — the workload `env` map key IS
-the exposed name, e.g. `OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`
-(see §1.3.2). The legacy fields stay parseable for the one-cycle v1 shim
-only, are hard-rejected in `schema_version = 2` layers, and are absent from
-the emitted v2 JSON schema (`#[schemars(skip)]`).
+Naming: `hosts` is RENAMED to `allowed_hosts` — the restriction is intrinsic
+to the credential, not coupled to any binding mode.
+
+REMOVED fields (no shim — the intermediate v2 was retracted pre-release, so
+these are unknown fields and hard-error at parse time): `description`, the
+`source`/`exposed_as` remap pair, and the intermediate-v2 `delivery` field.
+The remap lives at the binding site — the workload `env` map key IS the
+exposed name, e.g. `OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }` (see
+§1.3.2); exposure mode is the per-binding `bound` property (see §1.3.2).
 
 Merge: secrets are a map deep-merged per-field (last-layer-wins per field,
-`merge_secrets` / `merge_secret_def` in `merge.rs`).
+`merge.rs`).
 
 ### 1.3 `[workloads.<name>]` — workload definitions
 
@@ -186,84 +191,91 @@ fixes needed" item e).
 **BakedFileSpec** (`types.rs:59`): `path` (in-image destination), `content`
 (verbatim string body).
 
-#### 1.3.2 `workloads.<name>.env` — EnvBindings (`types.rs:318`)
+#### 1.3.2 `workloads.<name>.env` — the unified env map (`types.rs`)
 
-In v2, `env` is a name-keyed, document-order-ordered map of `EnvBinding`
-(`types.rs:227`) — `Literal(String)` | `Secret(String)`. The map form is the
-native v2 form:
+`env` is ONE unified, name-keyed, document-order-ordered map of `EnvBinding`
+— a literal, or a secret binding with cascading defaults (the secret defaults
+to the KEY name; `bound` defaults to `host`):
 
 ```toml
 [workloads.litellm.env]
-PORT = "4000"                                                 # literal
-LITELLM_LOCAL_MODEL_COST_MAP = "True"                         # literal
-LITELLM_MASTER_KEY = { secret = "LITELLM_MASTER_KEY" }        # secret reference
-OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }            # remap at the binding site
+PORT = "4000"                                          # literal
+LITELLM_LOCAL_MODEL_COST_MAP = "True"                  # literal
+LITELLM_MASTER_KEY = { bound = "guest" }               # real value (verifier)
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }     # rename, placeholder (host)
 ```
 
+Desugar table:
+
+| You write | Desugars to | Meaning |
+|---|---|---|
+| KEY = "value" | literal | plain env value |
+| KEY = true | { bound: host } | host-bound placeholder for secret KEY (no secret property → secret defaults to key name; false → hard error "did you mean true?") |
+| KEY = { bound = "guest" } | { secret: KEY, bound: guest } | real value for secret KEY |
+| KEY = { secret = "ID" } | { secret: ID, bound: host } | placeholder for ID ≠ KEY (rename) |
+| KEY = { secret = "ID", bound = "guest" } | full form | real value for ID ≠ KEY (renamed real value) |
+
 The map KEY is the exposed env name, so a remap lives in the binding (no
-separate remap def — see §1.2). A `{ secret = "ID" }` value references a
-`[secrets.ID]` definition whose `delivery` decides how the binding is
-delivered (see §1.3.4).
+separate remap def — see §1.2). The `secret` property is RENAME-ONLY (names
+never repeat unless renaming); `bound = guest|host` defaults to `host` (the
+placeholder — the least-exposure default; `guest` is the explicit opt-in for
+verifier workloads). `KEY = false` is a hard error ("did you mean true?").
+See `06-improvements/16-unified-secret-env-model.md` for the full model and
+rationale.
 
 The legacy `[[env]]` array-of-tables form still parses via the same custom
 deserializer (the `EnvBindings` visitor), normalized per entry: value-only →
-`Literal`, secret-only → `Secret`, both → hard error ("cannot have both
-value and secret"), neither → `Literal("")`. Map-form notes:
+literal, secret-only → host-bound binding, both → hard error ("cannot have
+both value and secret"), neither → `Literal("")`. Map-form notes:
 
 - Document order is preserved (never sorted; `EnvBindings` is a Vec of
   `(name, binding)` pairs).
 - Duplicate keys in the map form are a **hard TOML parse error**.
 - Mixing `[[workloads.x.env]]` and `[workloads.x.env]` for one workload is a
   TOML redefinition parse error.
-- The JSON schema still exposes `anyOf` [array, object] for one cycle
-  because v1 still parses (see the `EnvFieldShape` comment, `types.rs:204-218`).
 
 `name` must be a valid shell env identifier. Merges union-by-name
-(last-layer-wins per key, `merge_workload` in `merge.rs`); provenance is
+(last-layer-wins per key, `merge.rs`); env bindings are ATOMIC — a binding
+replaces a same-key binding wholesale, never field-merges. Provenance is
 keyed on binding sites `workloads.{wl}.env.{NAME}`.
 
-#### 1.3.3 `workloads.<name>.secret_env` — REMOVED in v2 (v1 shim only)
+#### 1.3.3 `workloads.<name>.secret_env` — REMOVED
 
-The `secret_env` namespace is REMOVED from the v2 schema. A
-`schema_version = 2` layer declaring it is a hard error
-(`merge.rs:82-84`). v1 layers get the post-merge fold
-(`fold_legacy_secret_model`, `merge.rs:147-208`): each legacy `secret_env`
-entry becomes an env binding (a direct def `SECRET` →
-`SECRET = { secret = "SECRET" }`; a remap def with `source` + `exposed_as` →
-`EXPOSED_AS = { secret = "SOURCE" }` and the remap def is dropped). Each
-fold emits a deprecation warning, and provenance is re-keyed from
-`workloads.{wl}.secret_env.{SECRET}` to `workloads.{wl}.env.{BINDING_KEY}`.
+The `secret_env` namespace is REMOVED entirely. A layer declaring it is a
+hard error. The one-cycle v1 shim from the intermediate v2
+(`fold_legacy_secret_model`) was retracted with it — pre-release, nothing to
+migrate: v1 `secret_env` entries are written directly as `NAME = true` in the
+unified env map (see §1.3.2 and the migration guide in
+`06-improvements/16-unified-secret-env-model.md` §8).
 
-#### 1.3.4 Delivery resolution (plan build)
+#### 1.3.4 Binding resolution (plan build)
 
-At plan build (`build_env_and_secret_env`,
-`microsandbox/workload/secrets.rs:40-72`) a single ordered pass over the
-workload's env bindings dispatches:
+At plan build, a single ordered pass over the workload's env bindings splits
+three ways:
 
-- `Literal` → plan `env` entry (plain value).
-- `Secret` binding → dispatch on the DEFINITION's `delivery`:
-  - `Env` → plan `env` entry marked is-secret (the real resolved value is
-    templated on the host env var).
-  - `HostBound` → plan `secret_env` entry keyed by the MAP KEY, carrying the
-    def's `hosts`/`required`/`placeholder` (renders the placeholder; the
-    real value is injected only for the bound egress hosts at runtime).
+- **Literal** → `builder.env` (plain value).
+- **Host-bound** (`bound = "host"`, the default) → `builder.secret_env`:
+  renders the placeholder in the sandbox env; the egress rewrite substitutes
+  the real value only for hosts in the credential's `allowed_hosts` (omitted
+  or cleared = deny-all, so the value never leaves the host).
+- **Guest-bound** (`bound = "guest"`) → real-value env injection: the
+  resolved value lands in `builder.env` as the actual credential for that
+  workload only.
 
-Golden-plan consequence: `LITELLM_MASTER_KEY` is `delivery = "env"`, so the
-former LITELLM_AUTH→OPENAI_API_KEY host-bound `secret_env` line now renders
-as a plan `env` line in the example-service / example-offensive plans.
+Golden-plan consequence: the `OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`
+binding renders as a host-bound placeholder (the `secret_env` plan line keyed
+by the map key), while litellm's own `LITELLM_MASTER_KEY = { bound = "guest" }`
+renders as a real-value `builder.env` injection — verifier-only exposure,
+per-binding.
 
-**Verification status (2026-08-01):** the v2 secret/env model is **proven
-in-container** — 588 gates green (`cargo test` via `nix develop`), including
-plan-shape preservation (golden plans byte-identical except the intended
-LITELLM_AUTH→OPENAI_API_KEY host-bound → env delivery-mapping change), golden
-diff review, tombi gates, v1-shim unit tests (`fold_legacy_secret_model`), and
-the P0 regression pin (`d635ef0`: secret-backed env entries resolve against
-the merged secrets map). **Pending runtime (HOST-KVM):** the eight
-secret-delivery smoke items in
-[05-host-validation.md](05-host-validation.md) **B13** — env-delivery values
-reaching guests (master key, admin password, OPENAI_API_KEY), `models.json`
-substitutions, host-bound `$MSB_*` placeholders + TLS substitution, failure
-semantics, and the v1-shim load.
+**Verification status (2026-08-01):** the in-container gates (588 cargo gates
+green via `nix develop`, golden-plan diff review, tombi gates) prove the
+intermediate v2 model. The final model in this section is the
+READY-TO-EXECUTE target of
+[06-improvements/16-unified-secret-env-model.md](06-improvements/16-unified-secret-env-model.md);
+the B13 HOST-KVM smoke items in
+[05-host-validation.md](05-host-validation.md) remain pending and now target
+the final model.
 
 #### 1.3.5 `[[workloads.<name>.ports]]` — PortMapping (`microsandbox/plan.rs:82`)
 
@@ -443,8 +455,8 @@ The merge engine (`merge.rs`) applies field-specific rules:
 | `default_deny` | **Monotonic-true**: once `true`, stays `true`. `false` requires core entitlement (`DEFAULT_DENY_FALSE_ENTITLEMENT`). Entitlement is checked BEFORE monotonic-true (ADR 0020 Ruling 2). | `merge.rs` (`merge_network`) |
 | `deny` (deny_rules) | **Additive-union** within policy.rs ceiling. Cannot remove a more-trusted layer's deny rule. | `merge.rs` (`merge_network`) |
 | `egress` (egress_rules) | **Additive-union** with canonical dedup (sorted+deduped hosts for `https`) within `ALLOWED_EGRESS_HOSTS` ceiling. | `merge.rs` (`merge_network`) |
-| `secret_env` (legacy v1 only) | Removed in v2: a `schema_version = 2` layer declaring it hard-errors; v1 entries **fold into `env`** post-merge (`fold_legacy_secret_model`, `merge.rs:147-208`) and then follow the `env` rule. | `merge.rs:82-84`, `merge.rs:147-208` |
-| `env` | **Union-by-name** (last-layer-wins per env-var key). ADR 0020 Ruling 1. | `merge.rs` (`merge_workload`) |
+| `secret_env` | **Removed.** The namespace is gone (§1.3.3); a layer declaring it hard-errors. | — |
+| `env` | **Union-by-name** (last-layer-wins per env-var key); bindings are **atomic** (a binding replaces a same-key binding wholesale, never field-merges). ADR 0020 Ruling 1. | `merge.rs` (`merge_workload`) |
 | `ports`, `mounts`, `seed_files`, `local_build`, `network.ingress` | **REPLACE** (wholesale replace, no partial row merge). ADR 0020 Ruling 1. | `merge.rs` (`merge_workload`, `merge_network`) |
 | All other scalars/maps | **RFC 7396**: last-wins scalars, deep-merge maps. | `merge.rs` (`merge_workload`, `merge_secrets`) |
 
@@ -453,12 +465,24 @@ The merge engine (`merge.rs`) applies field-specific rules:
 - A less-trusted layer **cannot** weaken `default_deny` (monotonic-true).
 - A less-trusted layer **cannot** remove a deny rule or egress rule (additive).
 - A less-trusted layer **cannot** deprive a workload of required secret
-  BINDINGS (`env` union-by-name; v1 `secret_env` folds into the same map).
+  BINDINGS (`env` union-by-name).
 - `default_deny = false` requires the workload name to be in
   `DEFAULT_DENY_FALSE_ENTITLEMENT` (currently `["tempest", "example-offensive"]`,
   `policy.rs:45`). For non-entitled workloads, the entitlement check rejects
   `false` before monotonic-true even applies — they can never reach
   `Some(false)`.
+
+**Merge algebra (the full contract):**
+
+- Scalars **replace** (last-layer-wins).
+- Maps **merge by key** (deep-merge per key).
+- Arrays **wholesale-replace** (no partial row merge).
+- Env bindings are **atomic** — replace wholesale per key, never field-merge.
+- **Omission = inherit**; **explicit empty = clear** (e.g.
+  `allowed_hosts = []` clears a lower layer's host list, then deny-all).
+- Defaults are applied **only after the full merge** (keeps overlay
+  inheritance intact; see `06-improvements/16-unified-secret-env-model.md` §5).
+- **Deletion is a separate layer operation**, not a merge value.
 
 ---
 
@@ -604,7 +628,7 @@ a top-level `#:schema` comment pointer to get real-time editor validation:
 
 ```toml
 #:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json
-schema_version = 2
+schema_version = 1
 ```
 
 ---
@@ -659,7 +683,7 @@ they must target.
 
 ## 10. Running example: the personal deployment
 
-The v2 target deployment (see `../migration/20-target-system-spec.md`)
+The target deployment (see `../migration/20-target-system-spec.md`)
 defines **5 workloads** and **7 secret definitions** with no `secret_env`
 blocks — secret bindings live in the workload `env` maps, and the remap
 lives at the binding site (`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`).
@@ -676,10 +700,14 @@ lives at the binding site (`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`)
 
 **Secret definitions (7):**
 
-`LITELLM_MASTER_KEY` (`delivery = "env"`), `OPENROUTER_API_KEY`,
-`KIMI_CODE_API_KEY`, `NEURALWATT_API_KEY`, `MINIMAX_CODING_API_KEY`,
-`GITHUB_TOKEN`, `ODYSSEUS_ADMIN_PASSWORD`. (The v1 `LITELLM_AUTH` remap def
-is gone — the remap is a binding-site map key.)
+`LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `KIMI_CODE_API_KEY`,
+`NEURALWATT_API_KEY`, `MINIMAX_CODING_API_KEY`, `GITHUB_TOKEN`,
+`ODYSSEUS_ADMIN_PASSWORD`. Definitions carry no `delivery` (the field is
+removed). Two bindings are guest-bound real-value injections — litellm's
+`LITELLM_MASTER_KEY = { bound = "guest" }` and odysseus's
+`ODYSSEUS_ADMIN_PASSWORD = { bound = "guest" }` (the verifier workloads);
+the other five secrets are bound as host-bound placeholders. (The v1
+`LITELLM_AUTH` remap def is gone — the remap is a binding-site map key.)
 
 **W2a follow-up (LANDED 2026-08-01):** the personal config is migrated to
 native v2 — `.tmp/config-repos-export/personal` @ `56f3557` and
@@ -687,9 +715,14 @@ native v2 — `.tmp/config-repos-export/personal` @ `56f3557` and
 `description` fields dropped; remaps at binding sites). The live home checkout
 (`~/.workestrate/config-repos/personal` @ `c41a707`) is still v1 form and
 parses via the shim until the host-side home refresh.
+**Note (2026-08-01):** the v2 target this paragraph describes is SUPERSEDED
+by the final unified secret/env model before landing — see
+`06-improvements/16-unified-secret-env-model.md`; the migration destination
+is the final model, not v2.
 
 This deployment exercises every config surface: both image recipes, three
-build recipes, both `delivery` modes (`env` and host-bound), binding-site
+build recipes, both `bound` modes (guest real-value and host-bound
+placeholder), binding-site
 remaps, `default_deny = false` entitlement (tempest), `env` with literal and
 secret bindings, mounts with `${CWD}` and `${WORKESTRATE_*_BUILD}`
 templates, `seed_files`, `local_build`, `deny` rules, `ingress`, and `https`
@@ -706,7 +739,7 @@ egress with multiple hosts.
 | 0004 | Security allowlist in policy.rs | `ALLOWED_EGRESS_HOSTS`, `SECRET_HOST_BINDINGS`, etc. |
 | 0005 | Security-aware merge | Monotonic-true `default_deny`, additive deny/egress. |
 | 0014 | Trust-gated project config | `[[trusted_projects]]`; `config trust/untrust`. |
-| 0018 | Secrets layering + per-repo config | Per-key value merge; v2 unified secret model addendum (delivery field; remap/description deleted). |
+| 0018 | Secrets layering + per-repo config | Per-key value merge; two 2026-08-01 addenda: the v2 unified secret model (delivery field; remap/description deleted), then the final unified secret/env model superseding it (per-binding `bound`; `hosts`→`allowed_hosts`; `schema_version` stays 1). |
 | 0019 | Contexts + user-global overrides | `[contexts.*]`, `overrides.toml`, instance namespacing. |
 | 0020 | Review adjudications | env union-by-name; entitlement before monotonic-true; local.toml trust-gated. |
 | 0021 | Instance lifecycle model | `generate-schema`, committed schema, `#:schema` editor integration. |

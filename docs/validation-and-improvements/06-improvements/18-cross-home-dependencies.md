@@ -1,6 +1,8 @@
-# 16 — Cross-home dependencies
+# 18 — Cross-home dependencies
 
 > **STATUS: INTENT-TO-EXPLORE (2026-08-01 — questions to investigate, NO decisions)**
+> Renumbered 16→18 (2026-08-01): spec 16 is now the unified secret/env model;
+> spec 17 is reserved for the directory-mode spec.
 > **Effort:** exploration
 > Prerequisites / see-also: [../README.md](../README.md) ·
 > [00-index.md](00-index.md) ·
