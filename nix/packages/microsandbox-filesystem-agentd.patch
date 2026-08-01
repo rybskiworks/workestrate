@@ -1,11 +1,9 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -25,6 +25,40 @@
-     #[cfg(feature = "prebuilt")]
-     {
-         let dest = out_dir.join(AGENTD_BINARY);
-+        let marker = out_dir.join(".agentd-from-msb-agentd-path");
-+
+@@ -29,6 +29,27 @@
+             return;
+         }
+ 
 +        // MSB_AGENTD_PATH is authoritative: when set it must point to a real
 +        // agentd binary and takes precedence over any workspace/CI-local
 +        // artifact or download. There is no fallthrough on an invalid path.
@@ -24,20 +22,9 @@
 +            let _ = std::fs::remove_file(&dest);
 +            std::fs::copy(&staged, &dest)
 +                .expect("failed to copy agentd from MSB_AGENTD_PATH");
-+            std::fs::write(&marker, staged.display().to_string())
-+                .expect("failed to write .agentd-from-msb-agentd-path marker");
 +            return;
 +        }
 +
-+        // MSB_AGENTD_PATH is unset: if dest was previously provisioned from
-+        // it, that artifact is now stale — remove it (and the marker) so the
-+        // normal provisioning below re-creates it. A dest without the marker
-+        // was provisioned normally and is left untouched.
-+        if marker.exists() {
-+            let _ = std::fs::remove_file(&dest);
-+            let _ = std::fs::remove_file(&marker);
-+        }
-+
-         if dest.exists() {
-             return;
-         }
+         // In CI, prefer the locally-built agentd from workspace build/.
+         // Check both CI (standard) and GITHUB_ACTIONS (set inside maturin Docker containers
+         // where CI is not forwarded).
