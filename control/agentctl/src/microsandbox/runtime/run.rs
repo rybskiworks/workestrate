@@ -90,16 +90,29 @@ pub(crate) fn apply_plan_secrets(
 
 /// Resolve every plan env entry to its final `(name, value)` pair.
 ///
-/// Templated `${VAR}` references resolve against a map of ALL plan env
-/// entries FIRST — including depends_on-injected vars appended by
-/// `discovery::apply_resolution` (spec 12 §4: the templated composition is
-/// the declared env consuming the injected var) — falling back to the
-/// process env for names the plan does not carry.
+/// Resolution order is SPLIT by `is_secret`:
+///
+/// - `is_secret == true` entries resolve `${VAR}` references against the
+///   merged `secrets` map ONLY (map lookup, NO process-env fallback — FN-9
+///   semantics, matching `apply_plan_secrets`). This is load-bearing: a
+///   self-referential secret entry like
+///   `EnvVar { name: "LITELLM_MASTER_KEY", value: "${LITELLM_MASTER_KEY}" }`
+///   must NOT resolve against the plan env map, where it would self-match
+///   its own RAW template and emit the literal `${LITELLM_MASTER_KEY}`
+///   string, shadowing the decrypted secret.
+/// - `is_secret == false` entries resolve `${VAR}` references against a map
+///   of ALL plan env entries FIRST — including depends_on-injected vars
+///   appended by `discovery::apply_resolution` (spec 12 §4: the templated
+///   composition is the declared env consuming the injected var) — falling
+///   back to the process env for names the plan does not carry.
 ///
 /// KNOWN LIMITATION: map values are RAW (unresolved) — a var referencing
 /// another templated plan var gets its raw `${...}` form; there is no
 /// recursive resolution.
-fn resolve_plan_envs(plan: &SandboxPlan) -> Result<Vec<(String, String)>> {
+fn resolve_plan_envs(
+    plan: &SandboxPlan,
+    secrets: &HashMap<String, String>,
+) -> Result<Vec<(String, String)>> {
     let vars: HashMap<String, String> = plan
         .env
         .iter()
@@ -107,7 +120,11 @@ fn resolve_plan_envs(plan: &SandboxPlan) -> Result<Vec<(String, String)>> {
         .collect();
     let mut resolved = Vec::with_capacity(plan.env.len());
     for e in &plan.env {
-        let value = resolve_templated_value_with_env_fallback(&e.value, &vars)?;
+        let value = if e.is_secret {
+            resolve_templated_value_with(&e.value, secrets)?
+        } else {
+            resolve_templated_value_with_env_fallback(&e.value, &vars)?
+        };
         reject_if_placeholder(&value, &e.reject_placeholder, &e.name)?;
         resolved.push((e.name.clone(), value));
     }
@@ -117,9 +134,10 @@ fn resolve_plan_envs(plan: &SandboxPlan) -> Result<Vec<(String, String)>> {
 pub(crate) fn apply_plan_envs(
     builder: SandboxBuilder,
     plan: &SandboxPlan,
+    secrets: &HashMap<String, String>,
 ) -> Result<SandboxBuilder> {
     let mut b = builder;
-    for (name, value) in resolve_plan_envs(plan)? {
+    for (name, value) in resolve_plan_envs(plan, secrets)? {
         b = b.env(name, value);
     }
     Ok(b)
@@ -354,7 +372,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
         };
     }
 
-    builder = apply_plan_envs(builder, &plan)?;
+    builder = apply_plan_envs(builder, &plan, &secrets)?;
     builder = apply_plan_mounts(builder, &root, &plan)?;
     builder = apply_plan_secrets(builder, &plan, &secrets)?;
 
@@ -470,6 +488,13 @@ mod tests {
         }
     }
 
+    fn secrets_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     // ---- spec 12 §4: injected depends_on vars are visible to templated
     // declared env (W5) ----
 
@@ -488,7 +513,7 @@ mod tests {
                 injected_by: Some("litellm".to_string()),
             },
         ]);
-        let resolved = resolve_plan_envs(&plan)?;
+        let resolved = resolve_plan_envs(&plan, &secrets_map(&[]))?;
         assert_eq!(
             resolved,
             vec![
@@ -511,11 +536,120 @@ mod tests {
         std::env::set_var(unique, "process-value");
         let plan =
             empty_plan_with_env(vec![EnvVar::literal("AD_HOC", &format!("${{{}}}", unique))]);
-        let resolved = resolve_plan_envs(&plan)?;
+        let resolved = resolve_plan_envs(&plan, &secrets_map(&[]))?;
         std::env::remove_var(unique);
         assert_eq!(
             resolved,
             vec![("AD_HOC".to_string(), "process-value".to_string())]
+        );
+        Ok(())
+    }
+
+    // ---- P0 regression: secret-backed plan env entries resolve against the
+    // merged secrets map ONLY, never self-matching their own raw template in
+    // the plan env map ----
+
+    #[test]
+    fn resolve_plan_envs_self_referential_secret_uses_secrets_map() -> Result<()> {
+        // The entry's name matches its own template var: resolving against
+        // the plan env map would return the raw literal "${LITELLM_MASTER_KEY}".
+        let plan = empty_plan_with_env(vec![EnvVar {
+            name: "LITELLM_MASTER_KEY".to_string(),
+            value: "${LITELLM_MASTER_KEY}".to_string(),
+            is_secret: true,
+            reject_placeholder: None,
+            injected_by: None,
+        }]);
+        let secrets = secrets_map(&[("LITELLM_MASTER_KEY", "real-key")]);
+        let resolved = resolve_plan_envs(&plan, &secrets)?;
+        assert_eq!(
+            resolved,
+            vec![("LITELLM_MASTER_KEY".to_string(), "real-key".to_string())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_plan_envs_remapped_secret_uses_secrets_map() -> Result<()> {
+        // The entry's name DIFFERS from its template var: still resolves to
+        // the secret value from the secrets map.
+        let plan = empty_plan_with_env(vec![EnvVar {
+            name: "TEMPEST_LOCAL_API_KEY".to_string(),
+            value: "${LITELLM_MASTER_KEY}".to_string(),
+            is_secret: true,
+            reject_placeholder: None,
+            injected_by: None,
+        }]);
+        let secrets = secrets_map(&[("LITELLM_MASTER_KEY", "real-key")]);
+        let resolved = resolve_plan_envs(&plan, &secrets)?;
+        assert_eq!(
+            resolved,
+            vec![("TEMPEST_LOCAL_API_KEY".to_string(), "real-key".to_string())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_plan_envs_non_secret_still_uses_injected_plan_var() -> Result<()> {
+        // W5 preserved: a non-secret templated entry consumes a
+        // depends_on-injected plan var.
+        let plan = empty_plan_with_env(vec![
+            EnvVar::literal("OPENAI_BASE_URL", "http://${LITELLM_ADDR}/v1"),
+            EnvVar {
+                name: "LITELLM_ADDR".to_string(),
+                value: "127.0.0.1:4000".to_string(),
+                is_secret: false,
+                reject_placeholder: None,
+                injected_by: Some("litellm".to_string()),
+            },
+        ]);
+        let resolved = resolve_plan_envs(&plan, &secrets_map(&[]))?;
+        assert_eq!(
+            resolved,
+            vec![
+                (
+                    "OPENAI_BASE_URL".to_string(),
+                    "http://127.0.0.1:4000/v1".to_string()
+                ),
+                ("LITELLM_ADDR".to_string(), "127.0.0.1:4000".to_string()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_plan_envs_composition_of_secret_injected_and_templated() -> Result<()> {
+        // One call resolves all three shapes correctly: the injected var,
+        // the non-secret templated consumer, and the self-referential secret.
+        let plan = empty_plan_with_env(vec![
+            EnvVar::literal("OPENAI_BASE_URL", "http://${LITELLM_ADDR}/v1"),
+            EnvVar {
+                name: "LITELLM_ADDR".to_string(),
+                value: "127.0.0.1:4000".to_string(),
+                is_secret: false,
+                reject_placeholder: None,
+                injected_by: Some("litellm".to_string()),
+            },
+            EnvVar {
+                name: "LITELLM_MASTER_KEY".to_string(),
+                value: "${LITELLM_MASTER_KEY}".to_string(),
+                is_secret: true,
+                reject_placeholder: None,
+                injected_by: None,
+            },
+        ]);
+        let secrets = secrets_map(&[("LITELLM_MASTER_KEY", "real-key")]);
+        let resolved = resolve_plan_envs(&plan, &secrets)?;
+        assert_eq!(
+            resolved,
+            vec![
+                (
+                    "OPENAI_BASE_URL".to_string(),
+                    "http://127.0.0.1:4000/v1".to_string()
+                ),
+                ("LITELLM_ADDR".to_string(), "127.0.0.1:4000".to_string()),
+                ("LITELLM_MASTER_KEY".to_string(), "real-key".to_string()),
+            ]
         );
         Ok(())
     }
