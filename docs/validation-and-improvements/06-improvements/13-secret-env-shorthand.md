@@ -1,6 +1,6 @@
 # 13 — Config ergonomics: string-or-table shorthand for `secret_env`
 
-> **STATUS: EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp — separate commit there)**
+> **STATUS: EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp — separate commit there) — SUPERSEDED 2026-08-01 by the v2 unified secret/env model (1ed2e6d): the `secret_env` namespace this spec shorthandened was removed from the v2 schema; the shorthand lives on only inside the one-cycle v1 compat shim (`fold_legacy_secret_model`, merge.rs).**
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [../../migration/50-decisions/0002-toml-config-format.md](../../migration/50-decisions/0002-toml-config-format.md) ·
 > [../../migration/50-decisions/0003-config-purity-closed-vocabulary.md](../../migration/50-decisions/0003-config-purity-closed-vocabulary.md)

@@ -72,3 +72,31 @@ Implement per-key value merge across layers:
 
 First-layer-wins: cannot override values; cannot have per-repo secrets.
 Prefix-based: breaks env-name contracts; requires config changes per layer.
+
+## Addendum (2026-08-01): v2 unified secret model (P1 Wave 1, commit 1ed2e6d)
+
+The secret definition surface was unified into a single `SecretDefConfig`
+(`control/agentctl/src/config/types.rs:574`) with an explicit `delivery`
+field (`env` | `host_bound`, snake_case TOML; default `host_bound` —
+secure-by-default; `types.rs:555`). Remap defs (`source` / `exposed_as`) and
+`description` were REMOVED from the v2 schema — they remain parseable for
+one shim cycle only (the post-merge `fold_legacy_secret_model` fold,
+`merge.rs:147-208`), are hard-rejected for `schema_version = 2` layers, and
+are `#[schemars(skip)]` (absent from the emitted v2 JSON schema). `env_var`
+now defaults from the secret ID (it names the HOST env var the resolved
+value is read from). `hosts` is scoped to host-bound delivery only: omitted
+= deny-all (the value never leaves the host); `delivery = "env"` + `hosts`
+is a hard error (reachability is then governed by egress rules, not host
+bindings).
+
+**Rationale:** the LITELLM_AUTH remap was a workload-exposure concern, not
+definition material — the remap now lives at the binding site
+(`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`; the map key IS the
+exposed name). The two delivery mechanisms are irreducible (local
+consumption as an env var vs egress injection to bound hosts), so `delivery`
+is declared on the DEFINITION, with a per-binding override reserved as a
+possible future extension. Provenance is re-keyed to binding sites
+`workloads.{wl}.env.{NAME}` (the def-name indirection is gone).
+
+This addendum does not change the per-repo layering/merge decisions above;
+it replaces the per-secret definition shape those decisions operate on.

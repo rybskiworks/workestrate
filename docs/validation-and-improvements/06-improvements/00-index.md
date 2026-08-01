@@ -69,8 +69,8 @@ invariant.
 | [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init); docs/spec fully done` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
 | [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home clone <src> [<dest>]`) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7; verb split c406630 2026-07-31)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
 | [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM; refuse-only/no-auto-start SUPERSEDED 2026-08-01 (ADR 0026 addendum default-on); `--use` override retained; W5 wiring plan in spec §4` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
-| [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately)` | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
-| [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca)` | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
+| [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately) — SUPERSEDED 2026-08-01 (v2 model 1ed2e6d removed the `secret_env` namespace; shorthand survives only in the v1 shim)` | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
+| [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca) — annotated 2026-08-01: the map form became the v2 unified binding map with typed EnvBinding (1ed2e6d)` | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes | `EXECUTED (2026-08-01; commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave; personal-repo apply 0750876)` | ↔ [13](13-secret-env-shorthand.md)/[14](14-env-map-form.md) (notation — tombi keeps the collapsed map form tidy + validated; cannot restructure) | **M** | devshell in-container (cargo gates + scripts/check-toml.sh via `nix develop`) + `HOST-NIX` (`nix build .#tombi` package build) |
 | [16-cross-home-dependencies.md](16-cross-home-dependencies.md) | Cross-home dependencies (wider up across homes/config sets) | INTENT-TO-EXPLORE (2026-08-01 — questions, no decisions) | ADR 0019/0021(addendum)/0023/0026(addendum); builds on [12](12-per-instance-addressing.md) default-on lifecycle | exploration | verifiable-here (docs-only) |
 | [17-visualization-inspection.md](17-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [16](16-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
@@ -479,6 +479,11 @@ tests green; golden plans byte-unchanged; schema regen committed (`anyOf`, not
 `oneOf`); `spec_examples_parse.rs` promoted to real lib types (mirror deleted);
 personal config converted in `.tmp` (separate commit there).
 
+**SUPERSEDED 2026-08-01** by the v2 unified secret/env model (1ed2e6d): the
+`secret_env` namespace was removed from the v2 schema; the bare-string
+shorthand survives only inside the one-cycle v1 compat shim
+(`fold_legacy_secret_model`).
+
 ### 14 — Config ergonomics: map form for `env` entries (formatting collapse)
 
 `env` entries today must be `[[workloads.x.env]]` array-of-tables blocks even
@@ -503,6 +508,10 @@ regression with exact error `workload 'pi' env references undefined secret
 'GITHUB_TOKEN_TYPO'`); 498 tests green; golden plans byte-unchanged; schema
 `anyOf` [array, object]; `config.reference` example-service converted
 (golden-equivalent).
+
+**Annotated 2026-08-01:** the map form became the v2 unified env binding map
+with typed `EnvBinding { Literal | Secret }` (1ed2e6d); the array-of-tables
+form still parses via the same visitor for one shim cycle.
 
 ### 15 — TOML toolchain: tombi format/lint/schema-validation
 

@@ -54,7 +54,7 @@ The schema root of a single `workestrate.toml` layer is `ConfigFile`
 (`control/agentctl/src/config/types.rs:194`):
 
 ```toml
-schema_version = 1
+schema_version = 2
 
 [secrets.<NAME>]      # secret definitions (map, deep-merged per field)
 
@@ -68,55 +68,51 @@ time. The user-global overrides path stays lenient (warn + strip) — see §5.
 ### 1.1 `schema_version`
 
 ```toml
-schema_version = 1
+schema_version = 2
 ```
 
-- Type: `u32` (`types.rs:196`).
-- Currently `1` (`EXPECTED_SCHEMA_VERSION`, `config/validation.rs:21`).
+- Type: `u32` (`types.rs`, `ConfigFile.schema_version`).
+- Currently `2` (`EXPECTED_SCHEMA_VERSION`, `config/validation.rs:23`).
 - Missing/`0` is accepted as legacy with a stderr warning (backward compat).
-- Any other value (`>= 2`) is a hard error (`validation.rs:121-137`).
+- `1` is accepted with a stderr deprecation warning; the legacy secret forms
+  (`secret_env`, `source`/`exposed_as`/`description`) are shimmed for ONE
+  cycle (see §1.3.3).
+- `2` is the native form.
+- `>= 3` is a hard error (`validation.rs:117-145`).
 
 ### 1.2 `[secrets.<NAME>]` — secret definitions
 
-Each named secret is a `SecretDefConfig` (`types.rs:176`):
+Each named secret is a `SecretDefConfig` (`types.rs:574`):
 
 ```toml
 [secrets.LITELLM_MASTER_KEY]
-env_var = "LITELLM_MASTER_KEY"
-hosts = ["host.microsandbox.internal"]
-required = true
+env_var = "LITELLM_MASTER_KEY"          # optional; default = the secret ID
+delivery = "env"                        # optional; default "host_bound"
+required = true                         # optional; default true
 placeholder = "change_me_before_first_boot"   # optional
-source = "LITELLM_MASTER_KEY"                 # optional: alias source
-exposed_as = "OPENAI_API_KEY"                 # optional: alias target env var
-description = "LiteLLM proxy authentication."  # optional
+
+[secrets.GITHUB_TOKEN]
+hosts = ["host.microsandbox.internal"]  # host-bound delivery only
+required = true
 ```
 
 | Field | Type | Required | Semantics |
 |---|---|---|---|
-| `env_var` | `Option<String>` | no | Env var the resolved value is injected as. |
-| `hosts` | `Option<Vec<String>>` | no | Constrains which egress hosts may receive it (validated against `SECRET_HOST_BINDINGS`). |
-| `required` | `Option<bool>` | no | Missing value is a hard error when `true`. |
-| `placeholder` | `Option<String>` | no | Placeholder shown when value is absent. |
-| `source` | `Option<String>` | no | Name of another secret to alias the value from. |
-| `exposed_as` | `Option<String>` | no | Env var name to expose the aliased value as (instead of `env_var`). |
-| `description` | `Option<String>` | no | Human-readable description. |
+| `env_var` | `Option<String>` | no | Host env var the resolved value is read from (default: the secret ID). |
+| `hosts` | `Option<Vec<String>>` | no | Host-bound delivery only: egress hosts that may receive the value (validated against `SECRET_HOST_BINDINGS`). Omitted = deny-all (never leaves the host). Hard error with `delivery = "env"`. |
+| `required` | `Option<bool>` | no | Missing value is a hard error when `true` (default `true`). |
+| `placeholder` | `Option<String>` | no | Known-bad placeholder value to reject. |
+| `delivery` | `Option<"env" \| "host_bound">` | no | Default `host_bound` (secure-by-default). `env` exposes the value as a plain sandbox env var and rejects `hosts`. |
 
-**Alias pattern (LITELLM_AUTH):** a secret with `source` + `exposed_as` and no
-`env_var` is an alias — it takes the resolved value of the `source` secret and
-exposes it under the `exposed_as` env var name. The live example
-(`.workestrate/repos/personal/workestrate.toml:9-11`):
-
-```toml
-[secrets.LITELLM_AUTH]
-source = "LITELLM_MASTER_KEY"
-exposed_as = "OPENAI_API_KEY"
-```
-
-This lets agent workloads consume the LiteLLM master key as `OPENAI_API_KEY`
-(pointing at the in-sandbox proxy) without receiving the raw provider keys.
+Remap/alias defs (`source` + `exposed_as`) and `description` are DELETED in
+v2: the remap now lives at the binding site — the workload `env` map key IS
+the exposed name, e.g. `OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`
+(see §1.3.2). The legacy fields stay parseable for the one-cycle v1 shim
+only, are hard-rejected in `schema_version = 2` layers, and are absent from
+the emitted v2 JSON schema (`#[schemars(skip)]`).
 
 Merge: secrets are a map deep-merged per-field (last-layer-wins per field,
-`merge.rs:195-267`).
+`merge_secrets` / `merge_secret_def` in `merge.rs`).
 
 ### 1.3 `[workloads.<name>]` — workload definitions
 
@@ -131,7 +127,7 @@ cpus = 2                    # optional, u8
 memory_mib = 2048           # optional, u32
 command = ["..."]           # Vec<String>
 log_stop_errors = true      # optional
-# ... env, secret_env, ports, mounts, seed_files, local_build, network
+# ... env, ports, mounts, seed_files, local_build, network
 ```
 
 | Field | Type | Merge rule |
@@ -143,8 +139,7 @@ log_stop_errors = true      # optional
 | `memory_mib` | `Option<u32>` | last-layer-wins |
 | `command` | `Vec<String>` | REPLACE (last-layer-wins) |
 | `log_stop_errors` | `Option<bool>` | last-layer-wins |
-| `env` | `Vec<EnvVarConfig>` | union-by-name (ADR 0020 Ruling 1) |
-| `secret_env` | `Vec<SecretEnvConfig>` | additive-union (ADR 0005) |
+| `env` | `EnvBindings` (name-keyed map) | union-by-name (ADR 0020 Ruling 1) |
 | `ports` | `Vec<PortMapping>` | REPLACE |
 | `mounts` | `Vec<MountPlan>` | REPLACE |
 | `seed_files` | `Vec<SeedFileConfig>` | REPLACE |
@@ -191,72 +186,73 @@ fixes needed" item e).
 **BakedFileSpec** (`types.rs:59`): `path` (in-image destination), `content`
 (verbatim string body).
 
-#### 1.3.2 `workloads.<name>.env` — EnvVarConfig (`types.rs:70`)
+#### 1.3.2 `workloads.<name>.env` — EnvBindings (`types.rs:318`)
 
-`env` accepts **EITHER** the classic array-of-tables form **OR** a map table
-(spec 14, landed 2026-07-31; see
-[06-improvements/14-env-map-form.md](06-improvements/14-env-map-form.md)).
-Classic array-of-tables form:
-
-```toml
-[[workloads.litellm.env]]
-name = "PORT"
-value = "4000"
-
-[[workloads.litellm.env]]
-name = "LITELLM_MASTER_KEY"
-secret = "LITELLM_MASTER_KEY"   # reference to a [secrets.<name>] entry
-```
-
-Map form (spec 14, landed 2026-07-31):
+In v2, `env` is a name-keyed, document-order-ordered map of `EnvBinding`
+(`types.rs:227`) — `Literal(String)` | `Secret(String)`. The map form is the
+native v2 form:
 
 ```toml
 [workloads.litellm.env]
-PORT = "4000"
-LITELLM_LOCAL_MODEL_COST_MAP = "True"
-LITELLM_MASTER_KEY = { secret = "LITELLM_MASTER_KEY" }   # remap/reference to a [secrets.<name>] entry
+PORT = "4000"                                                 # literal
+LITELLM_LOCAL_MODEL_COST_MAP = "True"                         # literal
+LITELLM_MASTER_KEY = { secret = "LITELLM_MASTER_KEY" }        # secret reference
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }            # remap at the binding site
 ```
 
-Both forms normalize at parse time to `Vec<EnvVarConfig>` (custom
-`deserialize_env` Visitor; serde-only — merge, validation, and plan build are
-untouched). Map-form notes:
+The map KEY is the exposed env name, so a remap lives in the binding (no
+separate remap def — see §1.2). A `{ secret = "ID" }` value references a
+`[secrets.ID]` definition whose `delivery` decides how the binding is
+delivered (see §1.3.4).
 
-- Map form preserves **DOCUMENT ORDER** (toml 0.8.23 → `toml_edit::de` →
-  indexmap; never sorted).
-- Duplicate keys in the map form are a **hard TOML parse error** (stricter
-  than the array form).
+The legacy `[[env]]` array-of-tables form still parses via the same custom
+deserializer (the `EnvBindings` visitor), normalized per entry: value-only →
+`Literal`, secret-only → `Secret`, both → hard error ("cannot have both
+value and secret"), neither → `Literal("")`. Map-form notes:
+
+- Document order is preserved (never sorted; `EnvBindings` is a Vec of
+  `(name, binding)` pairs).
+- Duplicate keys in the map form are a **hard TOML parse error**.
 - Mixing `[[workloads.x.env]]` and `[workloads.x.env]` for one workload is a
   TOML redefinition parse error.
-- Secret remap requires the `{ secret = "..." }` inline-table value — bare
-  strings are always literals and cannot remap.
-- The JSON schema exposes `anyOf` [array, object].
+- The JSON schema still exposes `anyOf` [array, object] for one cycle
+  because v1 still parses (see the `EnvFieldShape` comment, `types.rs:204-218`).
 
-Exactly one of `value` (literal) or `secret` (reference) is expected per
-entry; in the map form the key carries the name. `name` must be a valid shell
-env identifier. Merges union-by-name (last-layer-wins per
-key, `merge.rs:344-362`).
+`name` must be a valid shell env identifier. Merges union-by-name
+(last-layer-wins per key, `merge_workload` in `merge.rs`); provenance is
+keyed on binding sites `workloads.{wl}.env.{NAME}`.
 
-#### 1.3.3 `workloads.<name>.secret_env` — SecretEnvConfig (`types.rs:82`)
+#### 1.3.3 `workloads.<name>.secret_env` — REMOVED in v2 (v1 shim only)
 
-`secret_env` is a **heterogeneous array**: each entry is either a bare
-secret-name string (shorthand) or an inline table (full form). Both forms for
-the litellm workload:
+The `secret_env` namespace is REMOVED from the v2 schema. A
+`schema_version = 2` layer declaring it is a hard error
+(`merge.rs:82-84`). v1 layers get the post-merge fold
+(`fold_legacy_secret_model`, `merge.rs:147-208`): each legacy `secret_env`
+entry becomes an env binding (a direct def `SECRET` →
+`SECRET = { secret = "SECRET" }`; a remap def with `source` + `exposed_as` →
+`EXPOSED_AS = { secret = "SOURCE" }` and the remap def is dropped). Each
+fold emits a deprecation warning, and provenance is re-keyed from
+`workloads.{wl}.secret_env.{SECRET}` to `workloads.{wl}.env.{BINDING_KEY}`.
 
-```toml
-[workloads.litellm]
-secret_env = ["OPENROUTER_API_KEY", { secret = "KIMI_CODE_API_KEY" }]
-```
+#### 1.3.4 Delivery resolution (plan build)
 
-The bare string `"NAME"` is shorthand for `{ secret = "NAME" }`; both forms
-normalize to `SecretEnvConfig` at parse time (serde-boundary-only shorthand,
-spec [13](06-improvements/13-secret-env-shorthand.md)), so merge semantics are
-unchanged: additive-union by secret name (`merge.rs:385-404`). The JSON schema
-expresses the two forms as `anyOf` (string | object). The table form is kept as
-forward-compat for future per-entry fields. Each entry names an entry in the
-top-level `secrets` map whose resolved value is injected into the sandbox
-environment.
+At plan build (`build_env_and_secret_env`,
+`microsandbox/workload/secrets.rs:40-72`) a single ordered pass over the
+workload's env bindings dispatches:
 
-#### 1.3.4 `[[workloads.<name>.ports]]` — PortMapping (`microsandbox/plan.rs:82`)
+- `Literal` → plan `env` entry (plain value).
+- `Secret` binding → dispatch on the DEFINITION's `delivery`:
+  - `Env` → plan `env` entry marked is-secret (the real resolved value is
+    templated on the host env var).
+  - `HostBound` → plan `secret_env` entry keyed by the MAP KEY, carrying the
+    def's `hosts`/`required`/`placeholder` (renders the placeholder; the
+    real value is injected only for the bound egress hosts at runtime).
+
+Golden-plan consequence: `LITELLM_MASTER_KEY` is `delivery = "env"`, so the
+former LITELLM_AUTH→OPENAI_API_KEY host-bound `secret_env` line now renders
+as a plan `env` line in the example-service / example-offensive plans.
+
+#### 1.3.5 `[[workloads.<name>.ports]]` — PortMapping (`microsandbox/plan.rs:82`)
 
 ```toml
 [[workloads.litellm.ports]]
@@ -266,7 +262,7 @@ guest = 4000
 
 REPLACE merge (wholesale replace, no partial row merge, ADR 0020 Ruling 1).
 
-#### 1.3.5 `[[workloads.<name>.mounts]]` — MountPlan (`microsandbox/plan.rs:89`)
+#### 1.3.6 `[[workloads.<name>.mounts]]` — MountPlan (`microsandbox/plan.rs:89`)
 
 ```toml
 [[workloads.litellm.mounts]]
@@ -277,7 +273,7 @@ read_only = false
 
 REPLACE merge. Host paths support template variables (see §6).
 
-#### 1.3.6 `[[workloads.<name>.seed_files]]` — SeedFileConfig (`types.rs:93`)
+#### 1.3.7 `[[workloads.<name>.seed_files]]` — SeedFileConfig (`types.rs:93`)
 
 ```toml
 [[workloads.pi.seed_files]]
@@ -291,7 +287,7 @@ template tokens — `validate.rs:72-96`). `target` starting with `workspaces/`
 or `var/` is resolved relative to the state dir (`config.rs:150`).
 REPLACE merge.
 
-#### 1.3.7 `[workloads.<name>.local_build]` — LocalBuildConfig (`types.rs:106`)
+#### 1.3.8 `[workloads.<name>.local_build]` — LocalBuildConfig (`types.rs:106`)
 
 ```toml
 [workloads.odysseus.local_build]
@@ -316,7 +312,7 @@ fallback = "agents/odysseus/build"
 
 REPLACE merge.
 
-#### 1.3.8 `[workloads.<name>.network]` — NetworkConfig (`types.rs:123`)
+#### 1.3.9 `[workloads.<name>.network]` — NetworkConfig (`types.rs:123`)
 
 ```toml
 [workloads.litellm.network]
@@ -431,20 +427,20 @@ The merge engine (`merge.rs`) applies field-specific rules:
 
 | Field | Merge rule | Source |
 |---|---|---|
-| `default_deny` | **Monotonic-true**: once `true`, stays `true`. `false` requires core entitlement (`DEFAULT_DENY_FALSE_ENTITLEMENT`). Entitlement is checked BEFORE monotonic-true (ADR 0020 Ruling 2). | `merge.rs:449-479` |
-| `deny` (deny_rules) | **Additive-union** within policy.rs ceiling. Cannot remove a more-trusted layer's deny rule. | `merge.rs:524-538` |
-| `egress` (egress_rules) | **Additive-union** with canonical dedup (sorted+deduped hosts for `https`) within `ALLOWED_EGRESS_HOSTS` ceiling. | `merge.rs:481-522` |
-| `secret_env` | **Additive-union** by secret name (last-layer-wins per secret). Cannot deprive a workload of required secrets. | `merge.rs:385-404` |
-| `env` | **Union-by-name** (last-layer-wins per env-var key). ADR 0020 Ruling 1. | `merge.rs:344-362` |
-| `ports`, `mounts`, `seed_files`, `local_build`, `network.ingress` | **REPLACE** (wholesale replace, no partial row merge). ADR 0020 Ruling 1. | `merge.rs:363-384`, `merge.rs:540-546` |
-| All other scalars/maps | **RFC 7396**: last-wins scalars, deep-merge maps. | `merge.rs:310-343`, `merge.rs:195-267` |
+| `default_deny` | **Monotonic-true**: once `true`, stays `true`. `false` requires core entitlement (`DEFAULT_DENY_FALSE_ENTITLEMENT`). Entitlement is checked BEFORE monotonic-true (ADR 0020 Ruling 2). | `merge.rs` (`merge_network`) |
+| `deny` (deny_rules) | **Additive-union** within policy.rs ceiling. Cannot remove a more-trusted layer's deny rule. | `merge.rs` (`merge_network`) |
+| `egress` (egress_rules) | **Additive-union** with canonical dedup (sorted+deduped hosts for `https`) within `ALLOWED_EGRESS_HOSTS` ceiling. | `merge.rs` (`merge_network`) |
+| `secret_env` (legacy v1 only) | Removed in v2: a `schema_version = 2` layer declaring it hard-errors; v1 entries **fold into `env`** post-merge (`fold_legacy_secret_model`, `merge.rs:147-208`) and then follow the `env` rule. | `merge.rs:82-84`, `merge.rs:147-208` |
+| `env` | **Union-by-name** (last-layer-wins per env-var key). ADR 0020 Ruling 1. | `merge.rs` (`merge_workload`) |
+| `ports`, `mounts`, `seed_files`, `local_build`, `network.ingress` | **REPLACE** (wholesale replace, no partial row merge). ADR 0020 Ruling 1. | `merge.rs` (`merge_workload`, `merge_network`) |
+| All other scalars/maps | **RFC 7396**: last-wins scalars, deep-merge maps. | `merge.rs` (`merge_workload`, `merge_secrets`) |
 
 **Key invariants:**
 
 - A less-trusted layer **cannot** weaken `default_deny` (monotonic-true).
 - A less-trusted layer **cannot** remove a deny rule or egress rule (additive).
-- A less-trusted layer **cannot** deprive a workload of required secrets
-  (additive `secret_env`).
+- A less-trusted layer **cannot** deprive a workload of required secret
+  BINDINGS (`env` union-by-name; v1 `secret_env` folds into the same map).
 - `default_deny = false` requires the workload name to be in
   `DEFAULT_DENY_FALSE_ENTITLEMENT` (currently `["tempest", "example-offensive"]`,
   `policy.rs:45`). For non-entitled workloads, the entitlement check rejects
@@ -595,7 +591,7 @@ a top-level `#:schema` comment pointer to get real-time editor validation:
 
 ```toml
 #:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json
-schema_version = 1
+schema_version = 2
 ```
 
 ---
@@ -650,9 +646,10 @@ they must target.
 
 ## 10. Running example: the personal deployment
 
-The real current deployment lives at
-`.workestrate/repos/personal/workestrate.toml` and defines **5 workloads**
-and **8 secret definitions**:
+The v2 target deployment (see `../migration/20-target-system-spec.md`)
+defines **5 workloads** and **7 secret definitions** with no `secret_env`
+blocks — secret bindings live in the workload `env` maps, and the remap
+lives at the binding site (`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`).
 
 **Workloads:**
 
@@ -664,17 +661,24 @@ and **8 secret definitions**:
 | `opencode` | agent | `registry` (`node:24-bookworm-slim`) | `bun-install` local_build; `agent_base` egress. |
 | `tempest` | agent | `nix-layered` (`tempest`) | `npm-build` binary; `default_deny = false` (entitled). |
 
-**Secret definitions (8):**
+**Secret definitions (7):**
 
-`LITELLM_MASTER_KEY`, `LITELLM_AUTH` (alias → `OPENAI_API_KEY`),
-`OPENROUTER_API_KEY`, `KIMI_CODE_API_KEY`, `NEURALWATT_API_KEY`,
-`MINIMAX_CODING_API_KEY`, `GITHUB_TOKEN`, `ODYSSEUS_ADMIN_PASSWORD`.
+`LITELLM_MASTER_KEY` (`delivery = "env"`), `OPENROUTER_API_KEY`,
+`KIMI_CODE_API_KEY`, `NEURALWATT_API_KEY`, `MINIMAX_CODING_API_KEY`,
+`GITHUB_TOKEN`, `ODYSSEUS_ADMIN_PASSWORD`. (The v1 `LITELLM_AUTH` remap def
+is gone — the remap is a binding-site map key.)
+
+**W2a follow-up (open):** the LIVE personal config is migrating to native
+v2 in follow-up W2a — the `.tmp/config-repos/personal-v2` repo (init commit
+`1448778`) is still `schema_version = 1` form (with the LITELLM_AUTH remap
+def + `description` fields) and parses via the v1 shim.
 
 This deployment exercises every config surface: both image recipes, three
-build recipes, the alias pattern, `default_deny = false` entitlement
-(tempest), `secret_env`, `env` with secret refs, mounts with `${CWD}` and
-`${WORKESTRATE_*_BUILD}` templates, `seed_files`, `local_build`, `deny`
-rules, `ingress`, and `https` egress with multiple hosts.
+build recipes, both `delivery` modes (`env` and host-bound), binding-site
+remaps, `default_deny = false` entitlement (tempest), `env` with literal and
+secret bindings, mounts with `${CWD}` and `${WORKESTRATE_*_BUILD}`
+templates, `seed_files`, `local_build`, `deny` rules, `ingress`, and `https`
+egress with multiple hosts.
 
 ---
 
@@ -685,8 +689,9 @@ rules, `ingress`, and `https` egress with multiple hosts.
 | 0002 | TOML config format | `workestrate.toml` is TOML (Nix `builtins.fromTOML` compat). |
 | 0003 | Config purity + closed vocabulary | No arbitrary shell; closed recipe vocabulary. |
 | 0004 | Security allowlist in policy.rs | `ALLOWED_EGRESS_HOSTS`, `SECRET_HOST_BINDINGS`, etc. |
-| 0005 | Security-aware merge | Monotonic-true `default_deny`, additive deny/egress/secret_env. |
+| 0005 | Security-aware merge | Monotonic-true `default_deny`, additive deny/egress. |
 | 0014 | Trust-gated project config | `[[trusted_projects]]`; `config trust/untrust`. |
+| 0018 | Secrets layering + per-repo config | Per-key value merge; v2 unified secret model addendum (delivery field; remap/description deleted). |
 | 0019 | Contexts + user-global overrides | `[contexts.*]`, `overrides.toml`, instance namespacing. |
 | 0020 | Review adjudications | env union-by-name; entitlement before monotonic-true; local.toml trust-gated. |
 | 0021 | Instance lifecycle model | `generate-schema`, committed schema, `#:schema` editor integration. |

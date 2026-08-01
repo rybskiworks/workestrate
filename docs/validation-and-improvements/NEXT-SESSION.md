@@ -94,6 +94,14 @@ re-derive their contents.
   the personal config content survives durably at
   `ai-workbench/.tmp/config-repos-export` (verified `c41a707`); the durable fix
   is the host-side home (operator task — open thread ⑦).
+- **2026-08-01: the v2 secret/env model landed** (commit `1ed2e6d`, P1 Wave 1):
+  unified `SecretDefConfig` with an explicit `delivery` field
+  (`env` | `host_bound`, default `host_bound`); workload `env` is now
+  `EnvBindings` (name-keyed map of typed `EnvBinding` = `Literal | Secret`;
+  remaps live at the binding site); the `secret_env` namespace was REMOVED
+  from the v2 schema (v1 layers fold via the one-cycle shim
+  `fold_legacy_secret_model`); `EXPECTED_SCHEMA_VERSION = 2`; spec **13**
+  SUPERSEDED; spec **14**'s map form became the v2 binding map.
 
 ---
 
@@ -130,6 +138,11 @@ re-derive their contents.
    restore = 3 commands (see caveat note in Current state).
 9. **Re-enter `nix develop` after pulling** — the `MSB_AGENTD_PATH` export is
    new (commit `d1c1293`); stale devshells lack it.
+10. **W2a: migrate the personal config repo to native `schema_version = 2`** —
+    drop the LITELLM_AUTH remap def + `description` fields; move remaps to
+    binding sites (`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`). The
+    `.tmp/config-repos/personal-v2` repo (init commit `1448778`) is still
+    `schema_version = 1` form and parses via the v1 shim.
 
 ---
 
@@ -264,3 +277,7 @@ dependencies) + 17 (visualization + inspection surfaces) added as
 INTENT-TO-EXPLORE (17 specs total); W-wave W1→W6 order recorded (ADR 0027 =
 verb-first workload dispatch, the W3 anchor; lifecycle semantics live in the
 ADR 0026/0021 addenda, commit 33eeb87).
+
+**2026-08-01 refresh (3):** v2 unified secret/env model landed (`1ed2e6d`, P1
+Wave 1) — Current-state bullet added; spec 13 SUPERSEDED + spec 14 annotated;
+W2a (personal config repo native-v2 migration) added as open thread 10.
