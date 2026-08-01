@@ -141,7 +141,7 @@ gate — batch.
 ## How to work
 
 Work `07-execution-order.md` in order, top to bottom (see its
-"Remaining improvements — recommended order (2026-07-31)" section for the six
+"Remaining improvements — recommended order (2026-07-31)" section for the seven
 not-yet-landed specs; Steps 0.5/8a/8c/8d are DONE). Report lane-by-lane
 honestly: `verifiable-here` (this container: TOML, golden files, git,
 shell/python, AND cargo-linked gates via `nix develop`) vs `HOST-NIX` (host

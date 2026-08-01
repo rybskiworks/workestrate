@@ -168,7 +168,7 @@ include = ["config-repos/*/workestrate.toml"]
 ## 3. Schema strategy
 
 - **Vendored into the binary via `include_str!`.** The JSON schema becomes a
-  new const `include_str!("../../../schemas/workestrate.schema.json")`
+  new const `include_str!("../../../../schemas/workestrate.schema.json")`
   alongside the existing template consts at
   `control/agentctl/src/scaffold/mod.rs:48-54`, so **template and schema
   versions match at compile time**. Freshness is guarded by
@@ -262,7 +262,7 @@ Tests follow the `control/agentctl/tests/cmd_home_init.rs` 3-layer pattern:
 ### 5.1 Native path (`config new`)
 
 - New `include_str!` consts at `scaffold/mod.rs:48-54` for `tombi.toml` and
-  the schema (`../../../schemas/workestrate.schema.json`).
+  the schema (`../../../../schemas/workestrate.schema.json`).
 - `pub fn render_all` (`scaffold/mod.rs:102`) emits the new artifacts:
   `tombi.toml`, `schemas/workestrate.schema.json`, `.git/hooks/pre-commit`.
 - `#:schema` directive switch at the 3 sites (§3).
