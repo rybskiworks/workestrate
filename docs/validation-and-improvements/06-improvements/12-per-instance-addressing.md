@@ -1,10 +1,11 @@
 # 12 — Per-instance addressing + discovery-lite
 
-> **STATUS: IMPLEMENTED (Waves 1+2 landed — Wave 1: 9107b87 / de9aa62 / f9fd2f0 / c5837e7; Wave 2: 4adad3f / 7b65ad1 / 39c1694; Experiment E1 guest-reachability + the deferred binding decision remain NEEDS-KVM per ADR 0026)**
+> **STATUS: IMPLEMENTED (Waves 1+2 landed — Wave 1: 9107b87 / de9aa62 / f9fd2f0 / c5837e7; Wave 2: 4adad3f / 7b65ad1 / 39c1694; Experiment E1 guest-reachability + the deferred binding decision remain NEEDS-KVM per ADR 0026; refuse-only no-auto-start semantics SUPERSEDED 2026-08-01 by the compose-mirrored default-on dependency lifecycle (ADR 0026 addendum); `--use` override retained; W5 config-wiring plan added (§4))**
 > **Effort:** M
 > Prerequisites / see-also: [README.md](../README.md) ·
 > [00-index.md](00-index.md) ·
 > [ADR 0026](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md) ·
+> [ADR 0026 addendum (2026-08-01)](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md) (compose-mirrored default-on dependency lifecycle) ·
 > [ADR 0021](../../migration/50-decisions/0021-instance-lifecycle-model.md) ·
 > [../05-host-validation.md](../05-host-validation.md) Experiment E1.
 
@@ -119,6 +120,87 @@ injection / egress: `7b65ad1`; `--use` overrides: `39c1694`):
       is not running all refuse (no declared-port fallback) — `39c1694`.
 - [x] `required = true` and not running → refuse at plan time with
       remediation (`workestrate <dep> up`), no auto-start v1 — `7b65ad1`.
+
+> **SUPERSEDED (2026-08-01, ADR 0026 addendum):** the refuse-only
+> "no auto-start v1" stance above is superseded by the compose-mirrored
+> default-on dependency lifecycle
+> ([ADR 0026 addendum (2026-08-01)](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md)).
+> Superseded rule:
+>
+> - "`required = true` and not running → refuse at plan time with
+>   remediation, no auto-start v1" — replaced by default-on start.
+>
+> **RETAINED:** `--use` REMAINS a pure instance-selection override (unknown
+> instance → hard error; NO parallel auto-start) per the same addendum.
+>
+> The default-on lifecycle semantics (ADR 0026 addendum): declared
+> `depends_on` deps start **by default** on `up`/`exec` — topo-ordered
+> closure, singleton slots only; service-kind dependencies start detached
+> with bounded wait-for-port readiness (~15s); agent-kind dependencies
+> **refuse** with remediation; `--no-deps` opts out (required dep →
+> refuse-with-remediation; optional dep → fall back per convention + warn);
+> an occupied slot counts as satisfied; `plan` **never** starts anything.
+>
+> Two new mandatory rules from the addendum: **cycle detection** becomes
+> MANDATORY in config validation (currently ABSENT — A→B→A loads cleanly
+> today); and the **construction-order rule** — deps must start BEFORE the
+> dependent's `ConfigWorkload` is constructed.
+>
+> The landed Wave 2 record above is kept verbatim as **HISTORY**. The
+> env-injection + egress-derivation mechanics (declaration-driven
+> unconditional plan-time resolution) are **NOT superseded** — they compose
+> with the default-on lifecycle. The declared-port fallback leg of the
+> refusal/fallback matrix (`discovery.rs:22-29`) **is** superseded by the
+> actual-record read (W4). E1 deferral is UNCHANGED.
+
+---
+
+## 4. W5 — config wiring: declare depends_on, retire hardcoded URLs (2026-08-01, ADR 0026 addendum)
+
+The W5 wave of the default-on W-wave wires the lifecycle from the
+[ADR 0026 addendum (2026-08-01)](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md)
+into the real configs and retires the hardcoded URLs it replaces.
+
+1. **Declare `depends_on` in `config.reference/workestrate.toml` and the
+   personal config (`.tmp/config-repos-export/personal/workestrate.toml`).**
+   Every agent workload (pi, odysseus, opencode, tempest) gains
+   `[workloads.<agent>.depends_on.litellm]` with `required = true` and an
+   address env var (e.g. `env = "LITELLM_ADDR"`).
+2. **Retire the hardcoded URLs** — four literals to remove:
+   - pi `models.json` `"baseUrl": "http://host.microsandbox.internal:4000/v1"`
+     at `config.reference/agents/pi/config/models.json:5` and
+     `.tmp/config-repos-export/personal/agents/pi/config/models.json:5`
+     (also the live copy `workspaces/pi-state/agent/models.json:5`);
+   - odysseus `OPENAI_BASE_URL` at
+     `.tmp/config-repos-export/personal/workestrate.toml:159`;
+   - opencode `OPENAI_BASE_URL` at
+     `.tmp/config-repos-export/personal/workestrate.toml:218`;
+   - tempest `TEMPEST_LOCAL_BASE_URL` at
+     `.tmp/config-repos-export/personal/workestrate.toml:282`.
+3. **Switch to the injected address.** `depends_on` env injection reads the
+   ACTUAL running record from the port registry — the actual assigned port
+   (`SandboxInstanceRecord.port_pairs`, `port_registry/mod.rs:24-41`), NOT
+   the declared port — and the dependent composes its URL via env templating
+   (`${VAR}` resolution, `env.rs:18-41`), pattern
+   `OPENAI_BASE_URL = "http://${LITELLM_ADDR}/v1"`. The injected value is
+   the guest-visible form `host.microsandbox.internal:<actual-port>`
+   (`discovery.rs:12-15`, `discovery.rs:45`). Declared env still wins over
+   injection (`discovery.rs:597-610`) — the templated composition is the
+   declared env consuming the injected var.
+
+---
+
+## 5. Follow-ups
+
+- `DependsOnSpec` gains additive `scheme` / `path_suffix` fields (today only
+  `env` + `required`, `types.rs:409-421`; additive via `#[serde(default)]`
+  per ADR 0021 §8) — retiring URL composition entirely: the dependency
+  declaration carries scheme + path suffix and injection renders the full
+  URL, so no dependent templates `http://${LITELLM_ADDR}/v1` by hand.
+- Readiness/restart posture note: v1 readiness is wait-for-port (~15s) on
+  the host-published port; guest healthchecks (image-declared,
+  compose-style) are v2+. Restart posture is undecided — today an occupied
+  slot = satisfied and a crashed dependency is not restarted.
 
 ---
 

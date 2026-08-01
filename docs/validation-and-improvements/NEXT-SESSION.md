@@ -34,15 +34,48 @@ re-derive their contents.
 - Gates: green — 498 tests; `just lint-nix` passes.
 - Container home `~/.workestrate` restored after the container-restart wipe,
   but uncommitted in its own git (fine — ephemeral).
-- 15 improvement specs total in `06-improvements/`. IMPLEMENTED/DONE: **02**
+- 17 improvement specs total in `06-improvements/`. IMPLEMENTED/DONE: **02**
   (main rename), **06** (`--home` flag), **08** (no repo-local home), **10**
   (config repos as working copies + dotfiles home), **11** (home provisioning
-  + lockfile), **12** (per-instance addressing + discovery-lite), **13**
+  + lockfile), **12** (per-instance addressing + discovery-lite — refuse-only
+  /no-auto-start stance SUPERSEDED 2026-08-01 by the ADR 0026 addendum
+  default-on lifecycle; `--use` override retained; W5 config-wiring plan in
+  spec §4), **13**
    (secret_env shorthand — commits a349d03, 1e7dc25; 492 tests green, golden
    plans byte-unchanged), **14** (env map form — commits 1035073, 564deca;
    498 tests green, golden plans byte-unchanged), **15** (TOML toolchain:
    tombi — commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave;
-   personal-repo apply 0750876).
+   personal-repo apply 0750876). INTENT-TO-EXPLORE: **16** (cross-home
+   dependencies), **17** (visualization + inspection surfaces).
+- **Decisions recorded (2026-08-01, commit 33eeb87):**
+  - **ADR 0027** ([../migration/50-decisions/0027-verb-first-workload-dispatch.md](../migration/50-decisions/0027-verb-first-workload-dispatch.md))
+    — verb-first workload dispatch: `workestrate workload
+    {up,exec,plan,down,logs} <name>` + the `workestrate workloads` discovery
+    verb; names are args not subcommands; supersedes ADR 0006.
+  - **ADR 0026 addendum (2026-08-01)**
+    ([../migration/50-decisions/0026-per-instance-addressing-and-discovery.md](../migration/50-decisions/0026-per-instance-addressing-and-discovery.md))
+    — compose-mirrored default-on dependency lifecycle: declared `depends_on`
+    deps start BY DEFAULT on `up`/`exec` (topological-order closure, singleton
+    slots only; service-kind deps start detached with bounded wait-for-port
+    ~15s; agent-kind deps REFUSE with remediation); `--no-deps` opts out
+    (required dep → refuse-with-remediation; optional dep → fall back per
+    convention + warn); an occupied slot counts as satisfied; `plan` NEVER
+    starts anything; `--use` RETAINED as a pure instance-selection override
+    (unknown instance → hard error; NO parallel auto-start); cycle detection
+    becomes MANDATORY in config validation (currently absent — A→B→A loads
+    cleanly today); construction-order rule (deps start before the
+    dependent's `ConfigWorkload` is constructed); E1 deferral unchanged.
+  - **ADR 0021 addendum (2026-08-01)**
+    ([../migration/50-decisions/0021-instance-lifecycle-model.md](../migration/50-decisions/0021-instance-lifecycle-model.md))
+    — bare `workload up` topo-starts ALL service-kind workloads in the active
+    context (detached, singleton slots; agent-kind printed SKIPPED);
+    single-context batch — does NOT reopen ADR 0019's multi-context deferral;
+    `down --all` remains unordered BY DESIGN.
+  - 17 improvement specs total (16 + 17 added as INTENT-TO-EXPLORE).
+  - Implementation sequenced as the **W-wave W1→W6** (W3 = the `workestrate
+    workloads` discovery verb per ADR 0027; W5 = config wiring retiring
+    hardcoded URLs; wave contents per the 2026-08-01 session brief — the
+    ADRs are authoritative for semantics, the wave split is recorded here).
 - tombi 1.2.5 is on PATH in the devshell (`nix develop`); `just tombi-check`
   is wired into `just verify` (`justfile:71`).
 - Key commit refs: `421a54a` (docs env claims); `d7c5a83` (`repos/` →
@@ -96,6 +129,10 @@ re-derive their contents.
 ---
 
 ## Remaining specs + recommended execution order
+
+The remaining work is now sequenced as the W-wave (W1→W6 — see
+`07-execution-order.md` "Remaining improvements"), with the six-spec backlog
+below running after/parallel.
 
 1. **05 cwd-fallback** (small) — the only bug-fix improvement; small, closes a
    silent config-discovery backdoor; gate `cargo test` runnable in-container
@@ -214,3 +251,11 @@ spec 09 re-framed as PR PREPARED, ON HOLD.
 **2026-08-01 refresh:** spec 15 (tombi TOML toolchain) EXECUTED — removed from
 the remaining list (now six specs); tombi 1.2.5 noted in the devshell;
 `just tombi-check` wired into `just verify`.
+
+**2026-08-01 refresh (2):** ADR 0026 addendum default-on lifecycle supersession
+annotated on spec 12 (refuse-only /no-auto-start stance SUPERSEDED; `--use`
+retained; W5 config-wiring plan in spec §4); exploration specs 16 (cross-home
+dependencies) + 17 (visualization + inspection surfaces) added as
+INTENT-TO-EXPLORE (17 specs total); W-wave W1→W6 order recorded (ADR 0027 =
+verb-first workload dispatch, the W3 anchor; lifecycle semantics live in the
+ADR 0026/0021 addenda, commit 33eeb87).

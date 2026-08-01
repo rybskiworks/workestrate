@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the fifteen post-validation improvement specifications under
+This index catalogs the seventeen post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -37,7 +37,14 @@ home), [0024](../../migration/50-decisions/0024-dotfiles-home-and-working-copy-c
 [0025](../../migration/50-decisions/0025-home-provisioning-and-lockfile.md)
 (home provisioning + lockfile), and
 [0026](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md)
-(per-instance addressing + discovery-lite). The ADR index is at
+(per-instance addressing + discovery-lite), and
+[0027](../../migration/50-decisions/0027-verb-first-workload-dispatch.md)
+(verb-first workload dispatch; supersedes 0006). The 2026-08-01 addenda to
+[0026](../../migration/50-decisions/0026-per-instance-addressing-and-discovery.md)
+(compose-mirrored default-on dependency lifecycle) and
+[0021](../../migration/50-decisions/0021-instance-lifecycle-model.md)
+(bare `workload up` topo-starts all service-kind workloads) also govern.
+The ADR index is at
 [`../../migration/50-decisions/README.md`](../../migration/50-decisions/README.md).
 No spec here contradicts an ADR; where a spec extends the config surface, it
 does so via `#[serde(default)]` additive fields (ADR 0021 §8) and post-merge
@@ -61,10 +68,12 @@ invariant.
 | [09-microsandbox-agentd-offline-build.md](09-microsandbox-agentd-offline-build.md) | microsandbox-filesystem agentd offline build (ADR 0011 carrier) | `PR PREPARED, ON HOLD (branch fix/filesystem-agentd-path-override @ a4f8a3b8 ready; docs in .tmp/msb-upstream/; push+open pending user; option 2 REVERSED per ADR 0011 addendum; option 3 NEEDS-DEVSHELL + HOST-NIX)` | None file-level on other improvement specs; option 3 cross-references [01](01-mount-filtering-shadowing.md) | option 1 = **M** (incl. upstream review latency); option 2 = REVERSED; option 3 = **M** | `HOST-NIX` (option 3 build); option 1 is upstream |
 | [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) | Config repos as working copies + dotfiles-style home | `EXECUTED (2026-07-30); code tasks landed (d7c5a83 rename, bd99481 dirty-guard test, 3894fb7 home init); docs/spec fully done` | amends [08](08-no-repo-local-home.md) step (a) + [../03-sibling-config-setup.md](../03-sibling-config-setup.md) topology; the `config-repos/` rename gates the final paths | **S** (docs/decision) + **M** (code: rename + home-init scaffolding) | `verifiable-here` (docs); code tasks HOST-NIX devshell |
 | [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) | Home provisioning (`home clone <src> [<dest>]`) + `workestrate.lock` (ADR 0025 execution spec) | `EXECUTED (2026-07-30; commits 172d5dd, 19ff272, be356f7; verb split c406630 2026-07-31)` | ADR 0025; composes with [06](06-config-home-flag.md) (`--home` flag — same CLI/home-resolution surface, implement in the same wave); extends [10](10-config-repos-as-working-copies.md) Task 3 | **M** | `HOST-NIX` (cargo gates via `nix develop`) |
-| [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
+| [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM; refuse-only/no-auto-start SUPERSEDED 2026-08-01 (ADR 0026 addendum default-on); `--use` override retained; W5 wiring plan in spec §4` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
 | [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately)` | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca)` | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes | `EXECUTED (2026-08-01; commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave; personal-repo apply 0750876)` | ↔ [13](13-secret-env-shorthand.md)/[14](14-env-map-form.md) (notation — tombi keeps the collapsed map form tidy + validated; cannot restructure) | **M** | devshell in-container (cargo gates + scripts/check-toml.sh via `nix develop`) + `HOST-NIX` (`nix build .#tombi` package build) |
+| [16-cross-home-dependencies.md](16-cross-home-dependencies.md) | Cross-home dependencies (wider up across homes/config sets) | INTENT-TO-EXPLORE (2026-08-01 — questions, no decisions) | ADR 0019/0021(addendum)/0023/0026(addendum); builds on [12](12-per-instance-addressing.md) default-on lifecycle | exploration | verifiable-here (docs-only) |
+| [17-visualization-inspection.md](17-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [16](16-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -285,10 +294,38 @@ picks a lock-probed free port on the slot's bind. Wave 1 (12a) = slot-based
 binding + bind-aware registry + surfacing + `--port-auto` + `--port-offset`
 removal; Wave 2 (12b) = `depends_on` discovery-lite (unconditional plan-time
 resolution, env injection, egress derivation, `--use <dep>@<instance>`
-override, refuse-if-required-not-running). **LANDED (2026-07-30):** Wave 1 commits `9107b87` / `de9aa62` / `f9fd2f0` / `c5837e7`; Wave 2 commits `4adad3f` / `7b65ad1` / `39c1694`; only Experiment E1 (guest-reachability) remains, NEEDS-KVM. **Key decision:** guest-reachability
+override, refuse-if-required-not-running). **LANDED (2026-07-30):** Wave 1 commits `9107b87` / `de9aa62` / `f9fd2f0` / `c5837e7`; Wave 2 commits `4adad3f` / `7b65ad1` / `39c1694`; only Experiment E1 (guest-reachability) remains, NEEDS-KVM. The refuse-only "no auto-start v1" stance is SUPERSEDED (2026-08-01, ADR 0026 addendum) by the compose-mirrored default-on dependency lifecycle (deps start by default on up/exec, topo-ordered closure, singleton slots, service-kind detached + wait-for-port ~15s, agent-kind refuse, `--no-deps` opt-out, occupied = satisfied, plan never starts; `--use` RETAINED as a pure instance-selection override; mandatory cycle detection + construction-order rule added); spec §4 carries the W5 config-wiring plan (declare depends_on in config.reference + personal; retire hardcoded URLs via `${VAR}`-templated injection reading the actual port-registry record); §5 follow-ups (DependsOnSpec scheme/path_suffix; wait-for-port v1, guest healthchecks v2+). **Key decision:** guest-reachability
 of non-`127.0.0.1` loopbacks is KVM-unverified (DEFERRED-PENDING-E1) —
 conservative default: guest-facing alternates share `127.0.0.1` + `--port-auto`
 until Experiment E1 runs.
+
+### 16 — Cross-home dependencies
+
+Explores a wider `workestrate up` across homes / config sets: the ADR 0026
+addendum (2026-08-01) default-on lifecycle makes dependency-closure start
+automatic within one
+home, but homes are isolated by design (ADR 0023) — per-home port
+registries and per-home loopback allocators cannot see each other, so a
+cross-home `depends_on` finds no running record and bind allocations can
+collide across homes. Enumerates the design space (cross-home discovery,
+shared vs per-home bind allocation, the ADR 0019 multi-context
+relationship — the ADR 0021 addendum's single-context bare `workload up`
+batch explicitly does NOT reopen it,
+E1/dynamic-port interaction) and the questions to
+investigate. **Key decision:** none — INTENT-TO-EXPLORE; open questions
+enumerated in the spec.
+
+### 17 — Visualization + inspection surfaces
+
+Enumerates which home / config / dependency views should exist beyond the
+W3 `workestrate workloads` discovery verb (ADR 0027, verb-first workload
+dispatch), and which data source
+feeds each — merged config, home registry, port registry, and
+`workestrate.lock`. Records view candidates (`--json`-first surfaces,
+dependency-graph render, home inspect, `ps --json` consumers) and the open
+questions (verbs vs flags, `--json` schema stability, render format,
+cross-home composition with spec 16). **Key decision:** none —
+INTENT-TO-EXPLORE; open questions enumerated in the spec.
 
 ---
 
@@ -351,6 +388,10 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
                   supersedes 13 §3 "env genuinely needs tables" non-goal]
 
 15-toml-toolchain-tombi [↔ 13/14 notation; additive toolchain; no schema_version change]
+
+16-cross-home-dependencies [deps: ADR 0019/0021 addendum/0023/0026 addendum; builds on 12 default-on lifecycle; exploration]
+
+17-visualization-inspection [deps: ADR 0026 addendum / 0027 W3 anchor; ↔ 12/16; exploration]
 ```
 
 **Key dependency notes:**
@@ -407,6 +448,12 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
   notation the author chose (array-of-tables or collapsed map form) — it
   normalizes layout only and never forces a form, so the 13/14 ergonomics are
   unaffected by the toolchain adoption.
+- **16/17 (INTENT-TO-EXPLORE explorations)** are both seeded by the ADR 0026
+  addendum (2026-08-01) default-on lifecycle: 16 explores cross-home
+  composition (the wider
+  `workestrate up` across homes/config sets), 17 enumerates inspection
+  surfaces beyond the W3 `workestrate workloads` verb (anchored by ADR 0027,
+  verb-first workload dispatch). Neither gates code.
 
 ### 13 — Config ergonomics: string-or-table shorthand for `secret_env`
 
