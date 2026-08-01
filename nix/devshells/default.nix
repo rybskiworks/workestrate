@@ -14,6 +14,7 @@
 , odysseus
 , opencode
 , tempest
+, tombi
 , referenceConfig
 }:
 
@@ -70,6 +71,7 @@ pkgs.mkShell {
     rustToolchain.rust-analyzer
     rustToolchain.rustfmt
     sops
+    tombi  # TOML formatter/linter/LSP (spec 15)
     write-env
     setup-secrets
   ];

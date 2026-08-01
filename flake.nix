@@ -155,6 +155,7 @@
         };
 
       microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {};
+      tombi = pkgs.callPackage ./nix/packages/tombi.nix {};
       microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix {};
       workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
         inherit microsandbox microsandbox-filesystem-patched rustToolchain;
@@ -339,7 +340,7 @@
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
         inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped decrypt-env write-env setup-secrets load-images
-          odysseus opencode pi-bun-built tempest referenceConfig rustToolchain;
+          odysseus opencode pi-bun-built tempest tombi referenceConfig rustToolchain;
         # devshell populates agents/pi/repo from the canonical remote fork.
         pi = pi;
         imageNames = builtins.attrNames workload-images;
@@ -349,7 +350,7 @@
 
       packages.${system} = workload-images // {
         inherit workload-images;
-        inherit workestrate workestrate-sandbox workestrate-sandbox-node microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets load-images;
+        inherit workestrate workestrate-sandbox workestrate-sandbox-node microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets load-images tombi;
         # .#pi = npm/node JS tree (canonical remote fork).
         # .#pi-bun = standalone Bun binary (Bun runtime embedded).
         # Both from one source, one npmDepsHash. Local dev: `just dev-build-pi`.
