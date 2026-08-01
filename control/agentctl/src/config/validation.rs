@@ -355,6 +355,17 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
+    // ADR 0026 addendum (2026-08-01): dependency CYCLE detection is MANDATORY
+    // in config validation — before this, A→B→A loaded cleanly (discovery-lite
+    // has no topological need; the W4 compose-mirrored dependency lifecycle's
+    // ORDERING does). Delegates to the three-color (white/gray/black) DFS in
+    // `microsandbox::depgraph::topo_all` (deterministic: sorted roots, sorted
+    // dep iteration) so validation and the runtime graph share exactly one
+    // implementation and one error shape. PRECEDENCE: a self-dependency never
+    // reaches here — the self-dep check above fires first and reports the
+    // self-dep error (deliberate: it is the more specific diagnostic).
+    crate::microsandbox::depgraph::topo_all(config)?;
+
     // WP1 trust-boundary validators (closes A2, C2, C3, C4). These run at
     // config-load time so hostile layers are rejected BEFORE merge / plan /
     // sandbox-start. See `80-remediation-plan.md` WP1.
@@ -816,5 +827,56 @@ default_deny = true
             err,
             "workload 'pi' depends_on 'litellm' env 'BAD-NAME' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)"
         );
+    }
+
+    // ---- ADR 0026 addendum (2026-08-01): dependency CYCLE detection ----
+    //
+    // Precedence note: a SELF-dependency still reports the self-dep error
+    // ("... depends_on references itself ..."), NOT the cycle error — the
+    // self-dep check runs first in `validate_config` and that precedence is
+    // kept deliberately (it is the more specific diagnostic). The cycle
+    // check below is what rejects MULTI-node cycles (A→B→A, A→B→C→A), which
+    // loaded cleanly before this addendum.
+
+    /// Cycle fixture builder: workloads a/b(/c) with the given edges.
+    fn cycle_config(edges: &[(&str, &str)]) -> ConfigFile {
+        let mut toml = String::from("schema_version = 1\n");
+        for name in ["a", "b", "c"] {
+            toml.push_str(&format!(
+                "\n[workloads.{name}]\nkind = \"service\"\nimage = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\ncommand = []\n\n[workloads.{name}.network]\ndefault_deny = true\n"
+            ));
+        }
+        for (from, to) in edges {
+            toml.push_str(&format!(
+                "\n[workloads.{from}.depends_on.{to}]\nenv = \"{}_URL\"\n",
+                to.to_uppercase()
+            ));
+        }
+        toml::from_str(&toml).expect("cycle fixture must parse")
+    }
+
+    #[test]
+    fn validate_config_rejects_two_node_dependency_cycle() {
+        let config = cycle_config(&[("a", "b"), ("b", "a")]);
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("dependency cycle detected") && err.contains('a') && err.contains('b'),
+            "error must name the check and both workloads: {err}"
+        );
+        assert_eq!(err, "dependency cycle detected: a → b → a");
+    }
+
+    #[test]
+    fn validate_config_rejects_three_node_dependency_cycle() {
+        let config = cycle_config(&[("a", "b"), ("b", "c"), ("c", "a")]);
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(err, "dependency cycle detected: a → b → c → a");
+    }
+
+    #[test]
+    fn validate_config_accepts_dependency_dag_diamond() -> Result<()> {
+        // Diamond DAG: a → {b, c}, b → c — deps before dependents, no cycle.
+        let config = cycle_config(&[("a", "b"), ("a", "c"), ("b", "c")]);
+        validate_config(&config)
     }
 }

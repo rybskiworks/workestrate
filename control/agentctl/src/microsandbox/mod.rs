@@ -1,3 +1,4 @@
+pub mod depgraph;
 pub mod discovery;
 mod env;
 mod mounts;
