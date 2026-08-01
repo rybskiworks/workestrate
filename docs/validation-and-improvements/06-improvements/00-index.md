@@ -64,7 +64,7 @@ invariant.
 | [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
 | [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately)` | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca)` | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
-| [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes | `IN-FLIGHT (implementation wave in progress)` | ↔ [13](13-secret-env-shorthand.md)/[14](14-env-map-form.md) (notation — tombi keeps the collapsed map form tidy + validated; cannot restructure) | **M** | devshell in-container (cargo gates + scripts/check-toml.sh via `nix develop`) + `HOST-NIX` (`nix build .#tombi` package build) |
+| [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes | `EXECUTED (2026-08-01; commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave; personal-repo apply 0750876)` | ↔ [13](13-secret-env-shorthand.md)/[14](14-env-map-form.md) (notation — tombi keeps the collapsed map form tidy + validated; cannot restructure) | **M** | devshell in-container (cargo gates + scripts/check-toml.sh via `nix develop`) + `HOST-NIX` (`nix build .#tombi` package build) |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -479,6 +479,18 @@ tombi absent). Flake wiring: `lib.checks.tombiCheck` (mirroring
 `flake.nix:140-154`), `scripts/check-toml.sh`, and a `tombi-check` just
 recipe wired into `just verify`. **Key decision:** package the pinned v1.2.5
 binary rather than rely on the nixpkgs pin's 0.11.6.
+
+**EXECUTED 2026-08-01** (commits `92b6b6f` — tombi 1.2.5 nix package +
+devshell; `d97576d` — scaffold `tombi.toml` + vendored schema + config-repo
+pre-commit hook; `9ffad0e` — repo-wide gates: root `tombi.toml`,
+`scripts/check-toml.sh`, `just tombi-check` wired into `just verify`,
+`lib.checks.tombiCheck`, home-hook gate + home `tombi.toml`/schema emission;
+plus the `--empty`-mode and template self-format gap fixes in this wave;
+personal config repo applied at `0750876`). Planted-violation evidence:
+unknown key → "not allowed" error; `cpus = "two"` → type error; both exit 1.
+Deviations recorded in spec §7.1 (`[schema.catalog] paths = []`,
+`TOMBI_OFFLINE=true`, fixtures format-only + excluded from schema globs,
+template self-formatting, copier parity HOST-NIX-gated).
 
 ---
 

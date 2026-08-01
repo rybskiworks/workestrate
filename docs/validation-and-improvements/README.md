@@ -63,7 +63,7 @@ files. Read in this order:
 | [`06-improvements/12-per-instance-addressing.md`](06-improvements/12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (executes ADR 0026; supersedes ADR 0021 §5 `--port-offset`) | `STATUS: IMPLEMENTED (Waves 1+2 landed; Experiment E1 guest-reachability NEEDS-KVM)` |
 | [`06-improvements/13-secret-env-shorthand.md`](06-improvements/13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` (additive; `schema_version` stays 1) | `STATUS: EXECUTED (2026-07-31; commits a349d03, 1e7dc25)` |
 | [`06-improvements/14-env-map-form.md`](06-improvements/14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse; additive; `schema_version` stays 1) | `STATUS: EXECUTED (2026-07-31; commits 1035073, 564deca)` |
-| [`06-improvements/15-toml-toolchain-tombi.md`](06-improvements/15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes (pinned v1.2.5 via nix/packages/tombi.nix) | `STATUS: IN-FLIGHT (implementation wave in progress)` |
+| [`06-improvements/15-toml-toolchain-tombi.md`](06-improvements/15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes (pinned v1.2.5 via nix/packages/tombi.nix) | `STATUS: EXECUTED (2026-08-01; commits 92b6b6f, d97576d, 9ffad0e + gap-fix wave)` |
 | [`07-execution-order.md`](07-execution-order.md) | Recommended sequencing across all tracks | STATUS: READY-TO-EXECUTE |
 | [`NEXT-SESSION.md`](NEXT-SESSION.md) | Self-contained handoff prompt for the next contextless session | `STATUS: HANDOFF` |
 

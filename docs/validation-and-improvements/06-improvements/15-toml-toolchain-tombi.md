@@ -1,6 +1,6 @@
 # 15 — TOML toolchain: tombi format/lint/schema-validation for config repos + homes
 
-> **STATUS: IN-FLIGHT (implementation wave in progress)**
+> **STATUS: EXECUTED (2026-08-01; commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave; personal-repo apply 0750876)**
 > Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
 > [13-secret-env-shorthand.md](13-secret-env-shorthand.md) ·
 > [14-env-map-form.md](14-env-map-form.md) ·
@@ -298,22 +298,51 @@ match.
 
 ---
 
-## 7. Acceptance criteria
+## 7. Acceptance criteria — executed outcomes
 
-This spec is **IN-FLIGHT** — the checklist below is the acceptance bar for
-the implementation wave, not a record of completed work.
+This spec is **EXECUTED (2026-08-01)** — every acceptance item below landed in
+the implementation wave and was verified as recorded.
 
-- [ ] `nix build .#tombi` succeeds (`HOST-NIX`).
-- [ ] `tombi format --check` clean on the repo include set (§2.1).
-- [ ] `tombi lint` clean on the repo include set.
-- [ ] Schema validation negative tests: a planted **unknown key** AND a
-      **bad secret type** in `config.reference/workestrate.toml` are both
-      caught by `tombi lint` (then reverted).
-- [ ] `config new` emits `tombi.toml` + `schemas/workestrate.schema.json` +
-      the pre-commit hook (3-layer hook tests green per §4.3).
-- [ ] `home init` hook includes the tombi gate (warn-not-fail when tombi
-      absent; substring + execute-sh tests green).
-- [ ] `just verify` passes with `tombi-check` wired in (`justfile:71`).
+- [x] `nix build .#tombi` succeeds (`HOST-NIX`) — tombi **1.2.5** packaged via
+      `nix/packages/tombi.nix` (commit `92b6b6f`), host build verified.
+- [x] `tombi format --check` clean on the repo include set (§2.1) — root
+      `tombi.toml` + `scripts/check-toml.sh` (commit `9ffad0e`); root repo
+      format clean.
+- [x] `tombi lint` clean on the repo include set (same wave).
+- [x] Schema validation negative tests — planted-violation evidence: an
+      **unknown key** produced a "not allowed" error and **`cpus = "two"`**
+      produced a type error; **both exit 1** under `tombi lint
+      --error-on-warnings` (then reverted).
+- [x] `config new` emits `tombi.toml` + `schemas/workestrate.schema.json` +
+      the pre-commit hook in **both modes** (default and `--empty`) —
+      scaffold wave `d97576d` plus the `--empty`-mode and template
+      self-format gap fixes in this wave (3-layer hook tests green per §4.3).
+- [x] `home init` emits `tombi.toml` + the vendored schema + the tombi gate
+      in the home pre-commit hook (warn-not-fail when tombi absent; substring
+      + execute-sh tests green; commit `9ffad0e`).
+- [x] `just verify` passes with `tombi-check` wired in (`justfile:71`, commit
+      `9ffad0e`).
+- [x] The personal config repo is tombi-clean — toolchain applied there
+      (personal-repo commit `0750876`).
+
+### 7.1 Implementation deviations (recorded)
+
+Deviations from the §2–§6 design that shaped the landed implementation:
+
+- **`[schema.catalog] paths = []`** in the `tombi.toml` designs — the default
+  schema-catalog fetch would be a network dependency; emptying it keeps every
+  gate hermetic (offline determinism).
+- **`TOMBI_OFFLINE=true`** (not `1`) is the env spelling used by the scripts
+  and hooks.
+- **Fixtures are format-only AND excluded from the schema globs** — hostile
+  fixtures may be schema-invalid; they get `tombi format --check` coverage
+  only, never `tombi lint` schema validation.
+- **Template self-formatting requirement** — the emitted scaffold files must
+  themselves pass `tombi format --check`; the template is pre-formatted so a
+  freshly scaffolded repo is clean on first commit (gap fix in this wave).
+- **Copier parity is HOST-NIX gated** — the native-vs-copier parity test
+  extension (§5.2) skips when copier is absent (same gating as the existing
+  scaffold CI guards), so in-container runs exercise the native path only.
 
 ---
 
@@ -335,9 +364,8 @@ the implementation wave, not a record of completed work.
 Additive to [ADR 0002](../../migration/50-decisions/0002-toml-config-format.md)
 (TOML config format) and [ADR 0022](../../migration/50-decisions/0022-config-repo-scaffolding.md)
 (config-repo scaffolding) — a toolchain adoption, no vocabulary expansion, no
-new ADR required. When the implementation wave lands, an **ADR 0022 addendum
-line** will record the template additions (`tombi.toml` + `schemas/` +
-pre-commit hook).
+new ADR required. The **ADR 0022 addendum (2026-08-01)** records the template additions
+(`tombi.toml` + `schemas/` + pre-commit hook).
 
 ---
 

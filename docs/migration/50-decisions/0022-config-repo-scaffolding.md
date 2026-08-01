@@ -152,3 +152,21 @@ that path). An explicit `--path` still overrides the default; when
     store or re-added via `workestrate config add` after pushing to a remote.
 
 The non-empty destination refusal is unchanged.
+
+**Addendum (2026-08-01) — tombi TOML toolchain template additions (spec 15):**
+the scaffold gained four artifacts in the spec-15 implementation wave:
+`tombi.toml` (strict format + lint + schema-validation config for the new
+repo), a vendored `schemas/workestrate.schema.json` copy (compile-time-matched
+to the template via `include_str!`; freshness guarded by `schema_drift.rs`), a
+relative `#:schema ./schemas/workestrate.schema.json` directive at all 3
+template sites (native `.tpl`, copier `.jinja`, `--empty` inline string —
+replacing the floating `raw.githubusercontent.com` URL so validation never
+fetches over the network), and a config-repo pre-commit hook (version-pinned
+`TOMBI_REQUIRED=1.2.5`, `command -v`-guarded, `tombi format --check` +
+`tombi lint --error-on-warnings`; a distinct const from `HOME_PRE_COMMIT_HOOK`).
+Commits: `d97576d` (scaffold emission) plus the `--empty`-mode and template
+self-format gap fixes in this wave; the repo-wide gates (root `tombi.toml`,
+`scripts/check-toml.sh`, `lib.checks.tombiCheck`, `just tombi-check` wired
+into `just verify`, home-hook gate + home `tombi.toml`/schema emission) landed
+in `9ffad0e`; the tombi 1.2.5 nix package in `92b6b6f`. Full record:
+[06-improvements/15-toml-toolchain-tombi.md](../../validation-and-improvements/06-improvements/15-toml-toolchain-tombi.md).

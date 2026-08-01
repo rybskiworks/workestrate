@@ -25,9 +25,12 @@ re-derive their contents.
 
 ## Current state (as of 2026-07-31)
 
-- HEAD: `f8aa276` (nix + OKF knowledge packs committed) + `d938f2e` (root
-  `.cargo/config.toml` hazard fix so repo-root cargo runs resolve the patched
-  crate). Branch `migration/tool-model`, working tree clean.
+- HEAD: `9ffad0e` (spec 15 repo-wide tombi gates — root `tombi.toml`,
+  `scripts/check-toml.sh`, `just tombi-check` in `just verify`,
+  `lib.checks.tombiCheck`, home-hook gate; earlier spec-15 wave: `92b6b6f`
+  tombi 1.2.5 nix package + devshell, `d97576d` scaffold emission, plus the
+  scaffold gap-fix wave in flight). Branch `migration/tool-model`, working
+  tree clean.
 - Gates: green — 498 tests; `just lint-nix` passes.
 - Container home `~/.workestrate` restored after the container-restart wipe,
   but uncommitted in its own git (fine — ephemeral).
@@ -37,9 +40,11 @@ re-derive their contents.
   + lockfile), **12** (per-instance addressing + discovery-lite), **13**
    (secret_env shorthand — commits a349d03, 1e7dc25; 492 tests green, golden
    plans byte-unchanged), **14** (env map form — commits 1035073, 564deca;
-   498 tests green, golden plans byte-unchanged).
-- Spec **15** (TOML toolchain: tombi) exists and is IN-FLIGHT (implementation
-  wave in progress).
+   498 tests green, golden plans byte-unchanged), **15** (TOML toolchain:
+   tombi — commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave;
+   personal-repo apply 0750876).
+- tombi 1.2.5 is on PATH in the devshell (`nix develop`); `just tombi-check`
+  is wired into `just verify` (`justfile:71`).
 - Key commit refs: `421a54a` (docs env claims); `d7c5a83` (`repos/` →
   `config-repos/` rename); `bd99481` (dirty-guard test); `3894fb7`
   (`workestrate home init`); `bef1c37` (discovery tier removed); `418530a`
@@ -49,7 +54,8 @@ re-derive their contents.
   Wave 1); `4adad3f` / `7b65ad1` / `39c1694` (spec 12 Wave 2); `d1c1293`
    (`MSB_AGENTD_PATH` staging); `a349d03` / `1e7dc25` (spec 13: secret_env
    shorthand + spec_examples_parse promotion); `1035073` / `564deca` (spec 14:
-   env map form); `f8aa276`; `d938f2e`.
+   env map form); `f8aa276`; `d938f2e`; `92b6b6f` / `d97576d` / `9ffad0e`
+   (spec 15: tombi 1.2.5 package, scaffold emission, repo-wide gates).
 - The container-home wipe caveat above is updated to current reality: the wipe
   happened 2026-07-30; the home was since RESTORED (3 commands, see caveat);
   the personal config content survives durably at
@@ -91,23 +97,20 @@ re-derive their contents.
 
 ## Remaining specs + recommended execution order
 
-1. **15 tombi TOML toolchain** (IN-FLIGHT) — land the implementation wave;
-   cargo gates + scripts/check-toml.sh run in-container via `nix develop`;
-   `nix build .#tombi` is HOST-NIX.
-2. **05 cwd-fallback** (small) — the only bug-fix improvement; small, closes a
+1. **05 cwd-fallback** (small) — the only bug-fix improvement; small, closes a
    silent config-discovery backdoor; gate `cargo test` runnable in-container
    via `nix develop`.
-3. **01 mounts WP1–WP3** (in-container; WP4 + Phase 0 spike are KVM and fold
+2. **01 mounts WP1–WP3** (in-container; WP4 + Phase 0 spike are KVM and fold
    into the host batch) — highest-value hardening; WP1–3 verifiable
    in-container.
-4. **03 dogfooding B1/B2** — structural isolation for self-development; B1/B2
+3. **03 dogfooding B1/B2** — structural isolation for self-development; B1/B2
    verifiable-here (B3 has a KVM tail).
-5. **07 naming leftover** (trivial) — mechanical residue sweep; banner says
+4. **07 naming leftover** (trivial) — mechanical residue sweep; banner says
    DONE with cargo gates pending (run via `nix develop`).
-6. **09 post-merge cleanup** — upstream-latency-bound; local action resumes
+5. **09 post-merge cleanup** — upstream-latency-bound; local action resumes
    only after the ON-HOLD PR is pushed/merged/released (then delete
    compensation machinery + bump pin).
-7. **04 CLI config authoring** — DEFERRED by design until
+6. **04 CLI config authoring** — DEFERRED by design until
    `02-config-requirements.md` sign-off.
 
 ---
@@ -141,8 +144,8 @@ gate — batch.
 ## How to work
 
 Work `07-execution-order.md` in order, top to bottom (see its
-"Remaining improvements — recommended order (2026-07-31)" section for the seven
-not-yet-landed specs; Steps 0.5/8a/8c/8d are DONE). Report lane-by-lane
+"Remaining improvements — recommended order (2026-08-01)" section for the six
+not-yet-landed specs; Steps 0.5/8a/8c/8d and spec 15 are DONE). Report lane-by-lane
 honestly: `verifiable-here` (this container: TOML, golden files, git,
 shell/python, AND cargo-linked gates via `nix develop`) vs `HOST-NIX` (host
 only: nix builds, FOD hashes, `just verify-full`, `just generate-schema`) vs
@@ -207,3 +210,7 @@ removed (those waves are done); Current state, the nine-item pending-points
 register (Open threads), and the six-spec recommended execution order added;
 the container-home wipe caveat updated (wipe 2026-07-30, home since restored);
 spec 09 re-framed as PR PREPARED, ON HOLD.
+
+**2026-08-01 refresh:** spec 15 (tombi TOML toolchain) EXECUTED — removed from
+the remaining list (now six specs); tombi 1.2.5 noted in the devshell;
+`just tombi-check` wired into `just verify`.

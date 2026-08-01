@@ -223,18 +223,18 @@ Reprodu from [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)
 
 ---
 
-## Remaining improvements — recommended order (2026-07-31)
+## Remaining improvements — recommended order (2026-08-01)
 
-This section supersedes nothing — it sequences the seven not-yet-landed specs
-(Steps 0.5/8a/8c/8d are DONE). Work it top-to-bottom.
+This section supersedes nothing — it sequences the six not-yet-landed specs
+(Steps 0.5/8a/8c/8d are DONE; spec 15 EXECUTED 2026-08-01). Work it
+top-to-bottom.
 
-1. **15 — TOML toolchain (tombi)** — IN-FLIGHT; land the in-progress implementation wave first: nix/packages/tombi.nix (HOST-NIX build), scaffold/hook changes + cargo gates via `nix develop`, then `just verify` with tombi-check.
-2. **05 — config-reference cwd-fallback** (small) — the only bug-fix improvement; closes a silent config-discovery backdoor; gate `cargo test` runs in-container via `nix develop`.
-3. **01 — mount filtering WP1–WP3** — highest-value hardening; WP1–WP3 are `verifiable-here`; the Phase 0 spike + WP4 are `HOST-KVM` and fold into the Step 6 host batch.
-4. **03 — dogfooding B1/B2** — structural (not convention-based) driver/target isolation; B1/B2 are `verifiable-here` (B3 keeps a `HOST-KVM` tail).
-5. **07 — naming-consistency leftover** (trivial) — mechanical residue sweep + the pending cargo gates via `nix develop`; clears residue before the user's repo rename (spec §6).
-6. **09 — microsandbox agentd post-merge cleanup** — upstream-latency-bound; the PR is PREPARED and ON HOLD (user action), so local work resumes only after merge+release: delete compensation machinery, bump the pin, `nix flake check`.
-7. **04 — CLI config authoring** — DEFERRED by design; gated on `02-config-requirements.md` sign-off, not on any code step.
+1. **05 — config-reference cwd-fallback** (small) — the only bug-fix improvement; closes a silent config-discovery backdoor; gate `cargo test` runs in-container via `nix develop`.
+2. **01 — mount filtering WP1–WP3** — highest-value hardening; WP1–WP3 are `verifiable-here`; the Phase 0 spike + WP4 are `HOST-KVM` and fold into the Step 6 host batch.
+3. **03 — dogfooding B1/B2** — structural (not convention-based) driver/target isolation; B1/B2 are `verifiable-here` (B3 keeps a `HOST-KVM` tail).
+4. **07 — naming-consistency leftover** (trivial) — mechanical residue sweep + the pending cargo gates via `nix develop`; clears residue before the user's repo rename (spec §6).
+5. **09 — microsandbox agentd post-merge cleanup** — upstream-latency-bound; the PR is PREPARED and ON HOLD (user action), so local work resumes only after merge+release: delete compensation machinery, bump the pin, `nix flake check`.
+6. **04 — CLI config authoring** — DEFERRED by design; gated on `02-config-requirements.md` sign-off, not on any code step.
 
 ---
 
@@ -249,6 +249,7 @@ This section supersedes nothing — it sequences the seven not-yet-landed specs
 - [x] **Config repos as working copies + dotfiles home (spec 10)** — [06-improvements/10](06-improvements/10-config-repos-as-working-copies.md) executed: docs/decision landed; spec 08 step (a) + `03-sibling-config-setup.md` topology carry AMENDED-by-spec-10 markers; code tasks landed — Task 1 `config-repos/` rename (commit `d7c5a83`), Task 2 dirty-guard regression test (commit `bd99481`), Task 3 `home init` scaffolding (commit `3894fb7`) with cargo gates green in `nix develop`. Home adopted into git as root commit `a42e597`; `home init` idempotent over populated home; pre-commit hook rejects gitlinks/store-dirs/secret material.
 - [x] **--home flag + home provisioning + lockfile (specs 06 + 11, Step 8d)** — commits `172d5dd` / `19ff272` / `be356f7` / `d991252`; per-commit gates green (`cargo fmt --check`, `clippy -D warnings`, full `cargo test` — 411 passed at wave end, `just golden-check`/`schema-check`/`spec-examples`/`scaffold-check`, clean `Cargo.lock`); ops verification 2026-07-30: `home init --from ~/.workestrate` → dev home at locked rev `c41a707` with dest-local url rewrite, empty `state/`/`secrets/`, loud trusted_projects warning; `--home <dest> config list` and `litellm plan` resolve the provisioned home. *(2026-07-31: `home init --from` superseded by the `home clone` verb split @ `c406630`.)*
 - [x] **Per-instance addressing + discovery-lite (spec 12)** — [06-improvements/12](06-improvements/12-per-instance-addressing.md) IMPLEMENTED: Wave 1 (`9107b87`, `de9aa62`, `f9fd2f0`, `c5837e7`) + Wave 2 (`4adad3f`, `7b65ad1`, `39c1694`) landed on `migration/tool-model`. **(E1 guest-reachability probe + the deferred binding decision remain NEEDS-KVM — pending the Step 6 host batch, B10.)**
+- [x] **TOML toolchain: tombi (spec 15)** — [06-improvements/15](06-improvements/15-toml-toolchain-tombi.md) EXECUTED (2026-08-01): tombi 1.2.5 nix package + devshell (`92b6b6f`); scaffold `tombi.toml` + vendored schema + config-repo pre-commit hook (`d97576d` + gap-fix wave); repo-wide gates (`9ffad0e`): root `tombi.toml`, `scripts/check-toml.sh`, `just tombi-check` in `just verify`, `lib.checks.tombiCheck`, home-hook gate + home `tombi.toml`/schema emission; personal config repo applied (`0750876`). Planted-violation evidence: unknown key → "not allowed", `cpus = "two"` → type error, both exit 1.
 - [ ] **Dogfooding guardrails active** — Phase 0 env-pinning wrapper in use; B1 self-home mount guard merged (or explicitly deferred with rationale).
 - [ ] **Track A WP1–WP4 merged** (or WP5 triggered) — mount filtering/shadowing schema, policy, render, and runtime shadows landed; or, if the Phase 0 spike failed, the staging-copy fallback (WP5) is landed instead.
 - [ ] **Improvements index statuses updated** — [06-improvements/00-index.md](06-improvements/00-index.md) master table reflects the actual post-execution status of each spec (SPEC → IMPLEMENTED / MERGED / DEFERRED).

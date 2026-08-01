@@ -264,9 +264,11 @@ HOST-NIX image builds and HOST-KVM runtime.
 `just verify` (`justfile:71-72`) runs:
 
 ```
-toolchain-check → check → test → spec-examples → litellm-check →
+toolchain-check → check → test → spec-examples → litellm-check → tombi-check →
 golden-check → schema-check → scaffold-check → lint-nix → store-audit
 ```
+
+(this matches justfile:71 verbatim)
 
 followed by a `git diff --exit-code HEAD -- control/agentctl/Cargo.lock`
 stability check (`justfile:72`).
@@ -300,6 +302,7 @@ shell/python/git-based gates run in a bare shell directly.
 | Schema drift | `just schema-check` (`justfile:106-107`) | Runnable here via `nix develop` (store-path prefix; bare shell lacks `cc`) |
 | Scaffold template | `just scaffold-check` (`justfile:114-115`) | Runnable here via `nix develop` (store-path prefix; bare shell lacks `cc`) |
 | Nix purity lint | `just lint-nix` (`justfile:343-344`) | Pass (runs `scripts/check-nix-paths.sh`) |
+| TOML format/lint/schema | `just tombi-check` (`justfile:340-343`; wired into `just verify`, `justfile:71`) | Runnable here via `nix develop` (tombi 1.2.5 in the devshell; spec 15) |
 | Store audit | `just store-audit` (`justfile:266-291`) | SKIP (nix not on PATH — non-blocking, `justfile:273-275`; runnable via the store-path prefix if desired) |
 | Cargo.lock stability | `git diff --exit-code` (`justfile:72`) | Pass |
 
