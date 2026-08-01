@@ -118,13 +118,31 @@ pub fn cmd_config_remove(name: &str, delete: bool, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// `workestrate context list|current` — inspect defined contexts and the
-/// currently-resolved active context.
+/// `workestrate context list|current|use` — inspect defined contexts, the
+/// currently-resolved active context, and set the default context.
 pub async fn cmd_context(action: ContextAction, json: bool) -> Result<()> {
     match action {
         ContextAction::List => cmd_context_list(json),
         ContextAction::Current => cmd_context_current(json),
+        ContextAction::Use { name } => cmd_context_use(&name, json),
     }
+}
+
+/// `workestrate context use <name>` — persist `settings.default_context` in
+/// the registry. The setter validates that `<name>` is a defined context.
+pub fn cmd_context_use(name: &str, json: bool) -> Result<()> {
+    config::set_default_context(name)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "default_context": name,
+            }))?
+        );
+    } else {
+        println!("Default context set to '{}'", name);
+    }
+    Ok(())
 }
 
 pub fn cmd_context_list(json: bool) -> Result<()> {

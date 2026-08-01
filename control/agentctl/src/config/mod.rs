@@ -34,6 +34,7 @@ pub(crate) use registry::looks_like_git_url;
 #[allow(unused_imports)]
 pub use registry::{
     entry_is_local_path, load_registry, register_config, resolve_active_context, save_registry,
+    set_default_context,
 };
 #[allow(unused_imports)]
 pub use trust::is_dir_trusted_via_base_registry;

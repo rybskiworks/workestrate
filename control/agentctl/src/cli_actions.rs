@@ -145,7 +145,7 @@ pub enum AgentAction {
 }
 
 /// Verb-first workload dispatch (ADR 0027): `workestrate workload
-/// {up,exec,plan,down,logs} <name>`. The workload name is a positional
+/// {up,exec,plan,down,logs,new} <name>`. The workload name is a positional
 /// ARGUMENT (never a subcommand), so config-defined workloads can never be
 /// shadowed by built-in verbs. The `name`-first flag set mirrors
 /// [`ServiceAction`]/[`AgentAction`] exactly; `main.rs` kind-checks at
@@ -279,6 +279,14 @@ pub enum WorkloadAction {
         #[arg(long, value_name = "ID")]
         instance: Option<String>,
     },
+    /// Scaffold a new workload (agent dir + [workloads.<name>] entry).
+    New {
+        /// Name for the new workload (e.g., "my-agent").
+        name: String,
+        /// Workload kind to scaffold.
+        #[arg(long, value_parser = ["agent", "service"], default_value = "agent")]
+        kind: String,
+    },
 }
 
 /// Actions for managing config repositories and trust.
@@ -408,6 +416,11 @@ pub enum ContextAction {
     List,
     /// Show the currently-resolved context and why it was selected.
     Current,
+    /// Set the default context (persists settings.default_context in the registry).
+    Use {
+        /// Context name to make the default.
+        name: String,
+    },
 }
 
 /// Actions for managing agent source checkouts.

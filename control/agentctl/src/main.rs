@@ -63,12 +63,14 @@ struct Cli {
 enum Commands {
     /// Runtime/config sanity check
     Check,
-    /// Initialize workestrate configuration
+    /// Initialize workestrate configuration (DEPRECATED: use `home init`;
+    /// the [url] dotfiles positional errors — use `home clone <src>`)
     Init {
-        /// Optional dotfiles repo URL to clone as the registry source
+        /// DEPRECATED: passing a url errors; use `home clone <src>` instead
         url: Option<String>,
     },
-    /// Scaffold a new agent project
+    /// Scaffold a new agent project (DEPRECATED: use `workload new <name>`)
+    #[command(hide = true)]
     New {
         /// Name for the new agent (e.g., "my-agent")
         name: String,
@@ -195,7 +197,8 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Run a configured workload: up/exec/plan/down/logs <name> (ADR 0027).
+    /// Run a configured workload: up/exec/plan/down/logs <name>, or scaffold
+    /// one with `new <name>` (ADR 0027).
     /// Workload names are ARGUMENTS, never subcommands, so a config-defined
     /// workload can never be shadowed by a built-in verb.
     Workload {
@@ -349,6 +352,9 @@ fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
         WorkloadAction::Exec { .. } => {
             unreachable!("workload_route guarantees exec only routes to agents")
         }
+        WorkloadAction::New { .. } => {
+            unreachable!("workload new is dispatched before workload translation")
+        }
     }
 }
 
@@ -384,6 +390,9 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
         },
         WorkloadAction::Up { .. } | WorkloadAction::Logs { .. } => {
             unreachable!("workload_route guarantees up/logs only route to services")
+        }
+        WorkloadAction::New { .. } => {
+            unreachable!("workload new is dispatched before workload translation")
         }
     }
 }
@@ -454,7 +463,12 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     match cli.command {
         Commands::Check => cmd_check(),
         Commands::Init { url } => cmd_init(url.as_deref()),
-        Commands::New { name } => cmd_new(&name),
+        Commands::New { name } => {
+            eprintln!(
+                "warning: `workestrate new <name>` is deprecated; use `workestrate workload new <name>`"
+            );
+            cmd_new(&name, "agent")
+        }
         Commands::Completions { shell, for_name } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, &for_name, &mut std::io::stdout());
@@ -561,6 +575,12 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             force,
         } => cmd_migrate_home(from.as_deref(), dry_run, cli.json, force),
         Commands::Workload { action } => {
+            // `workload new` is a scaffold verb, not a lifecycle verb: it has
+            // no --use/--no-deps flags and must not reach the name-verb match
+            // below.
+            if let WorkloadAction::New { name, kind } = &action {
+                return cmd_new(name, kind);
+            }
             // ADR 0021 addendum 2026-08-01: bare `workload up` (no name) is
             // the batch form — a topo-ordered start of ALL service-kind
             // workloads in the active context. Per-slot/per-dependent flags
@@ -623,6 +643,9 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                     }
                     WorkloadAction::Down { name, .. } => (name.clone(), "down", Vec::new(), false),
                     WorkloadAction::Logs { name, .. } => (name.clone(), "logs", Vec::new(), false),
+                    WorkloadAction::New { .. } => {
+                        unreachable!("workload new is dispatched above")
+                    }
                 };
             let overrides = workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
             // Construction-order rule (ADR 0026 addendum): declared deps
@@ -1272,7 +1295,7 @@ mod tests {
     /// The `workload` group exposes exactly the five verbs, each with the
     /// workload name as the FIRST positional argument.
     #[test]
-    fn workload_group_exposes_five_verbs_with_name_positional() {
+    fn workload_group_exposes_six_verbs_with_name_positional() {
         let cmd = Cli::command();
         let workload = cmd
             .find_subcommand("workload")
@@ -1281,10 +1304,10 @@ mod tests {
             .get_subcommands()
             .map(|s| s.get_name().to_string())
             .collect();
-        for v in ["up", "exec", "plan", "down", "logs"] {
+        for v in ["up", "exec", "plan", "down", "logs", "new"] {
             assert!(verbs.contains(v), "workload missing verb: {v}");
         }
-        for v in ["up", "exec", "plan", "down", "logs"] {
+        for v in ["up", "exec", "plan", "down", "logs", "new"] {
             let sub = workload.find_subcommand(v).unwrap();
             let positionals: Vec<String> = sub
                 .get_positionals()
@@ -1296,6 +1319,80 @@ mod tests {
                 "workload {v} must take the workload name as its first positional"
             );
         }
+    }
+
+    /// W6a: `workload new` takes `name` as its first positional and exposes
+    /// a `--kind` flag (value-constrained to agent|service).
+    #[test]
+    fn workload_new_exposes_name_positional_and_kind_flag() {
+        let cmd = Cli::command();
+        let new = cmd
+            .find_subcommand("workload")
+            .and_then(|s| s.find_subcommand("new"))
+            .expect("workload new must exist");
+        let positionals: Vec<String> = new
+            .get_positionals()
+            .map(|a| a.get_id().to_string())
+            .collect();
+        assert_eq!(
+            positionals.first().map(|s| s.as_str()),
+            Some("name"),
+            "workload new must take the workload name as its first positional"
+        );
+        let long_names: Vec<String> = new
+            .get_arguments()
+            .filter_map(|a| a.get_long().map(|s| s.to_string()))
+            .collect();
+        assert!(
+            long_names.contains(&"kind".to_string()),
+            "workload new missing --kind flag; got: {long_names:?}"
+        );
+        // Parse-level check: --kind service is accepted and lands in the
+        // New action; an unconstrained kind value is rejected by clap.
+        let cli = Cli::try_parse_from([
+            "workestrate",
+            "workload",
+            "new",
+            "my-agent",
+            "--kind",
+            "service",
+        ])
+        .expect("workload new <name> --kind service must parse");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::New { name, kind },
+            } => {
+                assert_eq!(name, "my-agent");
+                assert_eq!(kind, "service");
+            }
+            _ => panic!("expected Commands::Workload/New"),
+        }
+        assert!(
+            Cli::try_parse_from([
+                "workestrate",
+                "workload",
+                "new",
+                "my-agent",
+                "--kind",
+                "banana",
+            ])
+            .is_err(),
+            "clap must reject an unconstrained --kind value"
+        );
+    }
+
+    /// W6a: top-level `workestrate new` remains a parseable deprecated alias
+    /// but is hidden from help output.
+    #[test]
+    fn top_level_new_is_hidden_deprecated_alias() {
+        let cmd = Cli::command();
+        let new = cmd
+            .find_subcommand("new")
+            .expect("top-level new must remain (deprecated alias)");
+        assert!(
+            new.is_hide_set(),
+            "top-level new must be hidden (deprecated alias for `workload new`)"
+        );
     }
 
     /// `workload up` and `workload exec` expose the full lifecycle flag set

@@ -1,27 +1,27 @@
-//! Bootstrap commands: `workestrate init` (registry seed) and
-//! `workestrate new` (workload scaffold), plus the reference-fixture walker
-//! shared with `config new --from-reference`.
+//! Bootstrap commands: `workestrate init` (DEPRECATED registry seed —
+//! replaced by `workestrate home init`; the legacy `[url]` dotfiles-clone
+//! positional now errors in favor of `workestrate home clone <src>`) and
+//! `workestrate workload new` (workload scaffold), plus the
+//! reference-fixture walker shared with `config new --from-reference`.
 
 use std::io::Write;
 
 use anyhow::Result;
 
 use crate::config;
-use crate::git::git_clone;
-
-/// RAII temp-dir cleanup guard (FS-12). Removes the directory on drop —
-/// including the early-`?` return paths, which the old sequential code
-/// leaked on (a failed `git_clone`/`fs::copy`/`save_registry` left the
-/// partial clone in `/tmp`).
-struct TempDirGuard(std::path::PathBuf);
-
-impl Drop for TempDirGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 pub fn cmd_init(url: Option<&str>) -> Result<()> {
+    if url.is_some() {
+        anyhow::bail!(
+            "`workestrate init <url>` (dotfiles clone) is no longer supported; \
+             use `workestrate home clone <src>` to provision a home from an existing one"
+        );
+    }
+    eprintln!(
+        "warning: `workestrate init` is deprecated; use `workestrate home init` \
+         (or `workestrate home clone <src>`)"
+    );
+
     let registry_path = config::registry_path();
     if registry_path.exists() {
         println!(
@@ -43,54 +43,7 @@ pub fn cmd_init(url: Option<&str>) -> Result<()> {
     std::fs::create_dir_all(config::resolve_store_dir().join("sources"))?;
     std::fs::create_dir_all(config::resolve_state_dir())?;
 
-    if let Some(url) = url {
-        let temp_dir =
-            std::env::temp_dir().join(format!("workestrate-init-{}", std::process::id()));
-        // FS-12: guard/finally-style cleanup — the temp dir is removed even
-        // when a `?` early-returns (previously git_clone/copy/save failures
-        // leaked the clone). Guard is ARMED after the clone (removing a dir
-        // that does not exist is harmless, but arming late keeps the intent
-        // obvious).
-        git_clone(url, &temp_dir, None)?;
-        let _temp_guard = TempDirGuard(temp_dir.clone());
-
-        // FS-12: probe the ADR-0023 single-home layout (.workestrate/) in
-        // addition to the legacy workestrate/ and .config/workestrate/
-        // layouts.
-        let probe = |rel: &[&str]| {
-            let candidate = rel.iter().fold(temp_dir.clone(), |acc, seg| acc.join(seg));
-            candidate.exists().then_some(candidate)
-        };
-        let found = probe(&[".workestrate", "config.toml"])
-            .or_else(|| probe(&["workestrate", "config.toml"]))
-            .or_else(|| probe(&[".config", "workestrate", "config.toml"]));
-
-        let registry_parent = registry_path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("invalid registry path: {}", registry_path.display()))?;
-        std::fs::create_dir_all(registry_parent)?;
-
-        match found {
-            Some(src) => {
-                std::fs::copy(&src, &registry_path)?;
-                println!(
-                    "Cloned {} and copied workestrate config to {}",
-                    url,
-                    registry_path.display()
-                );
-            }
-            None => {
-                println!(
-                    "Cloned {} but no workestrate config found; created empty registry",
-                    url
-                );
-                config::save_registry(&registry)?;
-            }
-        }
-        // `_temp_guard` drops here (success path), removing the temp dir.
-    } else {
-        config::save_registry(&registry)?;
-    }
+    config::save_registry(&registry)?;
 
     println!(
         "Initialized workestrate registry at {}",
@@ -146,7 +99,15 @@ pub fn validate_workload_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_new(name: &str) -> Result<()> {
+pub fn cmd_new(name: &str, kind: &str) -> Result<()> {
+    // Defense in depth: clap's value_parser constrains --kind at the CLI
+    // boundary, but cmd_new is a library entry point — validate here too.
+    if !matches!(kind, "agent" | "service") {
+        anyhow::bail!(
+            "invalid workload kind '{}' (expected \"agent\" or \"service\")",
+            kind
+        );
+    }
     // WP1 / A20: validate the workload name BEFORE using it as a directory
     // name or interpolating it into TOML. Reject everything that is not a
     // safe lowercase-hyphen identifier; this prevents both path escape
@@ -187,7 +148,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
     let config_path = config_dir.join("workestrate.toml");
     let toml_entry = format!(
         "\n[workloads.{}]\n\
-        kind = \"agent\"\n\
+        kind = \"{}\"\n\
         image = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\n\
         workdir = \"/work\"\n\
         cpus = 2\n\
@@ -202,7 +163,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
         default_deny = true\n\n\
         [[workloads.{}.network.egress]]\n\
         recipe = \"agent_base\"\n",
-        name, name, name, name
+        name, kind, name, name, name
     );
 
     // Write the TOML entry atomically (FS-17): read the current content,
@@ -406,122 +367,50 @@ mod tests {
         );
     }
 
-    // ---- FS-12: cmd_init temp-dir cleanup + .workestrate/ probe ----
+    // ---- W6a: deprecated `workestrate init` behavior ----
 
-    /// FS-12: the TempDirGuard removes the temp dir on drop — the mechanism
-    /// that closes the temp-dir leak when a mid-init step early-returns via
-    /// `?` (previously the sequential `remove_dir_all` at the end was the
-    /// ONLY cleanup, so failures leaked the clone).
+    /// `workestrate init <url>` (the legacy dotfiles-clone flow) is removed:
+    /// passing a url is a hard error that names the replacement command.
     #[test]
-    fn temp_dir_guard_removes_dir_on_drop() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!(
-            "workestrate-fs12-guard-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("marker"), b"x")?;
-        {
-            let _guard = TempDirGuard(dir.clone());
-            assert!(dir.exists(), "dir must exist while the guard is alive");
-        }
+    fn cmd_init_with_url_errors_and_names_home_clone() {
+        let result = cmd_init(Some("https://example.invalid/dotfiles.git"));
+        assert!(result.is_err(), "init <url> must error");
+        let err = result.unwrap_err().to_string();
         assert!(
-            !dir.exists(),
-            "guard drop must remove the temp dir (even on the early-return path)"
+            err.contains("home clone"),
+            "error must name `workestrate home clone`: {err}"
         );
-        Ok(())
+        assert!(
+            err.contains("no longer supported"),
+            "error must state the dotfiles flow is unsupported: {err}"
+        );
     }
 
-    /// FS-12: the cloned-repo probe order prefers the ADR-0023 single-home
-    /// layout (`.workestrate/config.toml`) over the legacy `workestrate/`
-    /// and `.config/workestrate/` layouts, and falls back through them.
+    /// Bare `workestrate init` (deprecated shim) still seeds a registry with
+    /// default_context "personal" in a fresh tool home.
+    // ENV_TEST_LOCK held for the whole body: this test mutates process env
+    // and must not race any other env-mutating test.
     #[test]
-    fn init_probe_order_prefers_dot_workestrate_layout() -> Result<()> {
-        let root = std::env::temp_dir().join(format!(
-            "workestrate-fs12-probe-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&root)?;
-
-        // Mirror the production probe closure from cmd_init.
-        let probe = |temp_dir: &std::path::Path, rel: &[&str]| {
-            let candidate = rel
-                .iter()
-                .fold(temp_dir.to_path_buf(), |acc, seg| acc.join(seg));
-            candidate.exists().then_some(candidate)
-        };
-        let find = |temp_dir: &std::path::Path| {
-            probe(temp_dir, &[".workestrate", "config.toml"])
-                .or_else(|| probe(temp_dir, &["workestrate", "config.toml"]))
-                .or_else(|| probe(temp_dir, &[".config", "workestrate", "config.toml"]))
-        };
-
-        // Only legacy .config layout → found there.
-        let legacy_dotconfig = root.join("c1");
-        std::fs::create_dir_all(legacy_dotconfig.join(".config").join("workestrate"))?;
-        std::fs::write(
-            legacy_dotconfig
-                .join(".config")
-                .join("workestrate")
-                .join("config.toml"),
-            "layers = []\n",
-        )?;
-        assert_eq!(
-            find(&legacy_dotconfig).unwrap(),
-            legacy_dotconfig
-                .join(".config")
-                .join("workestrate")
-                .join("config.toml")
+    fn cmd_init_bare_seeds_registry_with_personal_default() -> Result<()> {
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
         );
 
-        // Both legacy layouts → workestrate/ wins over .config/workestrate/.
-        let both_legacy = root.join("c2");
-        std::fs::create_dir_all(both_legacy.join("workestrate"))?;
-        std::fs::create_dir_all(both_legacy.join(".config").join("workestrate"))?;
-        std::fs::write(
-            both_legacy.join("workestrate").join("config.toml"),
-            "layers = []\n",
-        )?;
-        std::fs::write(
-            both_legacy
-                .join(".config")
-                .join("workestrate")
-                .join("config.toml"),
-            "layers = []\n",
-        )?;
+        let home = crate::config::test_support::uniq_dir("w6a-init-bare");
+        std::fs::create_dir_all(&home)?;
+        std::env::set_var("WORKESTRATE_HOME", &home);
+
+        cmd_init(None)?;
+
+        let registry = config::load_registry()?.expect("registry must exist after init");
         assert_eq!(
-            find(&both_legacy).unwrap(),
-            both_legacy.join("workestrate").join("config.toml")
+            registry.settings.default_context.as_deref(),
+            Some("personal"),
+            "bare init must seed default_context = \"personal\""
         );
 
-        // All three layouts → .workestrate/ wins (ADR-0023 preferred).
-        let all = root.join("c3");
-        std::fs::create_dir_all(all.join(".workestrate"))?;
-        std::fs::create_dir_all(all.join("workestrate"))?;
-        std::fs::create_dir_all(all.join(".config").join("workestrate"))?;
-        std::fs::write(
-            all.join(".workestrate").join("config.toml"),
-            "layers = []\n",
-        )?;
-        std::fs::write(all.join("workestrate").join("config.toml"), "layers = []\n")?;
-        std::fs::write(
-            all.join(".config").join("workestrate").join("config.toml"),
-            "layers = []\n",
-        )?;
-        assert_eq!(
-            find(&all).unwrap(),
-            all.join(".workestrate").join("config.toml"),
-            "ADR-0023 .workestrate/ layout must be probed first"
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }
 
@@ -545,7 +434,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("agents").join("dupe"))?;
         std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
 
-        let result = cmd_new("dupe");
+        let result = cmd_new("dupe", "agent");
         assert!(result.is_err(), "existing agents/dupe must fail");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -576,7 +465,7 @@ mod tests {
         )?;
         std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
 
-        cmd_new("fresh-agent")?;
+        cmd_new("fresh-agent", "agent")?;
 
         let content = std::fs::read_to_string(tmp.join("workestrate.toml"))?;
         assert!(
@@ -613,6 +502,53 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
+    }
+
+    /// W6a: `workload new --kind service` interpolates the kind into the
+    /// generated [workloads.<name>] entry.
+    #[test]
+    fn cmd_new_with_service_kind_writes_service_entry() -> Result<()> {
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+
+        let tmp = crate::config::test_support::uniq_dir("w6a-new-service");
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+
+        cmd_new("svc", "service")?;
+
+        let content = std::fs::read_to_string(tmp.join("workestrate.toml"))?;
+        assert!(
+            content.contains("[workloads.svc]"),
+            "the new workload entry must be appended"
+        );
+        assert!(
+            content.contains("kind = \"service\""),
+            "the generated entry must carry kind = \"service\":\n{content}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// W6a: cmd_new is a library entry point — an invalid kind is rejected
+    /// even though clap's value_parser already constrains --kind.
+    #[test]
+    fn cmd_new_rejects_invalid_kind() {
+        let result = cmd_new("ok-name", "banana");
+        assert!(result.is_err(), "invalid kind must error");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid workload kind"),
+            "error must name the invalid kind: {err}"
+        );
+        assert!(
+            err.contains("agent") && err.contains("service"),
+            "error must list the valid kinds: {err}"
+        );
     }
 
     // ---- A20 regression: cmd_new rejects invalid workload names ----

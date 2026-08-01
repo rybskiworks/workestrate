@@ -173,6 +173,33 @@ pub fn register_config(
     })
 }
 
+/// Persist `settings.default_context = name` in the registry. Errors if no
+/// registry exists or if `name` is not a defined context (the message lists
+/// the available contexts). The load → mutate → save critical section runs
+/// under the advisory registry lock (FN-5), same as [`register_config`].
+pub fn set_default_context(name: &str) -> Result<()> {
+    let _lock = RegistryLock::acquire()?;
+    let mut registry = load_registry()?
+        .ok_or_else(|| anyhow::anyhow!("no registry found; run 'workestrate init' first"))?;
+    if !registry.contexts.contains_key(name) {
+        let mut available: Vec<String> = registry.contexts.keys().cloned().collect();
+        available.sort();
+        let available = if available.is_empty() {
+            "(none defined)".to_string()
+        } else {
+            available.join(", ")
+        };
+        anyhow::bail!(
+            "context '{}' is not defined; available contexts: {}",
+            name,
+            available
+        );
+    }
+    registry.settings.default_context = Some(name.to_string());
+    save_registry(&registry)?;
+    Ok(())
+}
+
 /// Resolve the active context.
 ///
 /// Precedence:
@@ -788,6 +815,110 @@ pub(crate) mod tests {
         );
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&project);
+        Ok(())
+    }
+
+    // ---- W6a: set_default_context (`workestrate context use`) ----
+
+    /// Seed a registry with `personal` + `work` contexts (default:
+    /// `personal`) in the pinned home and return the home dir. Caller must
+    /// hold ENV_TEST_LOCK + an EnvGuard for HOME_ENV_KEYS.
+    fn seed_two_context_home(label: &str) -> std::path::PathBuf {
+        let home = pin_home(label);
+        let mut registry = Registry::default();
+        registry.settings.default_context = Some("personal".to_string());
+        registry.contexts.insert(
+            "personal".to_string(),
+            crate::config::Context {
+                layers: vec!["personal".to_string()],
+            },
+        );
+        registry.contexts.insert(
+            "work".to_string(),
+            crate::config::Context {
+                layers: vec!["team".to_string(), "personal".to_string()],
+            },
+        );
+        save_registry(&registry).expect("seed registry");
+        home
+    }
+
+    #[test]
+    fn set_default_context_persists() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = seed_two_context_home("w6a-use-persist");
+
+        set_default_context("work")?;
+
+        let registry = load_registry()?.expect("registry must exist");
+        assert_eq!(
+            registry.settings.default_context.as_deref(),
+            Some("work"),
+            "settings.default_context must persist as \"work\""
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn set_default_context_then_resolves_as_active_default() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = seed_two_context_home("w6a-use-resolve");
+        // No env override may shadow the persisted default.
+        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
+        std::env::remove_var("WORKESTRATE_CONTEXT");
+
+        set_default_context("work")?;
+        let active = resolve_active_context()?;
+
+        match old_ctx {
+            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
+            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+
+        assert_eq!(active.name.as_deref(), Some("work"));
+        assert_eq!(active.layers, vec!["team", "personal"]);
+        Ok(())
+    }
+
+    #[test]
+    fn set_default_context_unknown_name_errors_and_lists_available() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = seed_two_context_home("w6a-use-unknown");
+
+        let result = set_default_context("nonexistent");
+
+        let _ = std::fs::remove_dir_all(&home);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not defined"),
+            "error must state the context is not defined: {err}"
+        );
+        assert!(
+            err.contains("personal") && err.contains("work"),
+            "error must list the available contexts: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_default_context_without_registry_errors() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("w6a-use-noreg");
+
+        let result = set_default_context("work");
+
+        let _ = std::fs::remove_dir_all(&home);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no registry found"),
+            "error must state no registry exists: {err}"
+        );
         Ok(())
     }
 }
