@@ -42,6 +42,7 @@ files. Read in this order:
 | File | Description | Status banner |
 |---|---|---|
 | `README.md` (this file) | Index + entry protocol | ACTIVE — execution-ready tree |
+| [`STATUS.md`](STATUS.md) | Comprehensive state report for the next contextless session — snapshot, the model, artifacts map, per-spec status, remaining work, host setup, rules | `STATUS: CURRENT (2026-08-01, HEAD 7624aaf)` |
 | [`00-overview.md`](00-overview.md) | The whole effort in ≤2 pages | `STATUS: READY-TO-EXECUTE` |
 | [`01-current-state-and-prereqs.md`](01-current-state-and-prereqs.md) | Verified current-state snapshot + prerequisites checklist | `STATUS: READY-TO-EXECUTE` |
 | [`02-config-requirements.md`](02-config-requirements.md) | The `workestrate.toml` contract: schema, merge/layering, policy ceiling, trust model, planned extensions | `STATUS: READY-TO-EXECUTE (requirements frozen pending sign-off)` |
