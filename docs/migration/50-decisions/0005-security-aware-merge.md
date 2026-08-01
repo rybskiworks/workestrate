@@ -64,3 +64,28 @@ Two clarifications recorded permanently in ADR 0020:
 See ADR 0020 for full rationale. This ADR's original decision table is
 unchanged; this addendum clarifies two details that the original text
 left ambiguous.
+
+---
+
+## Addendum (2026-08-01): `secret_env` removed; env bindings merge atomically per exposed name
+
+Two updates from the final unified secret/env model (ADR 0018's second
+2026-08-01 addendum; spec 16):
+
+1. **The `secret_env` namespace is REMOVED.** The `secret_env` additive-union
+   row in the decision table above no longer exists — loading a config that
+   declares `secret_env` is a HARD ERROR per the final model. The 2026-07-19
+   addendum's "aligns env with `secret_env`'s union-by-secret-name pattern"
+   comparison is superseded in that respect (env's union-by-name rule
+   itself stands).
+2. **env bindings merge ATOMICALLY per exposed name.** In the final model,
+   exposure is declared on the env binding itself (`KEY = true`,
+   `{ secret = "ID" }`, `{ bound = "guest" }`). A binding merges
+   union-by-name per exposed env-var name, but each binding is replaced
+   WHOLESALE by a later layer — never field-merged (no partial merge of a
+   binding's `secret`/`bound`/value parts).
+
+The security-aware invariants of this ADR stand UNCHANGED: monotonic
+`default_deny` (with entitlement-before-monotonic ordering per the 2026-07-19
+addendum), additive deny/egress unions within the `policy.rs` allowlist
+ceilings, and the entitlement checks.

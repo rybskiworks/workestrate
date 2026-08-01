@@ -170,3 +170,14 @@ self-format gap fixes in this wave; the repo-wide gates (root `tombi.toml`,
 into `just verify`, home-hook gate + home `tombi.toml`/schema emission) landed
 in `9ffad0e`; the tombi 1.2.5 nix package in `92b6b6f`. Full record:
 [06-improvements/15-toml-toolchain-tombi.md](../../validation-and-improvements/06-improvements/15-toml-toolchain-tombi.md).
+
+**Addendum (2026-08-01, second) — `config new <name> [dest]` positional dest + registration semantics:** the scaffold destination is now a positional
+argument, `workestrate config new <name> [dest]` (commit `d9ad5b9`); the
+`--path` flag is REMOVED. Registration happens ONLY for in-store destinations
+(the default `<store>/config-repos/<name>`); an out-of-store positional dest
+scaffolds WITHOUT registering and prints a guidance note (the repo won't be
+active for layer resolution until moved into the store or re-added via
+`workestrate config add` after pushing to a remote). The store path itself is
+renamed `<store>/repos/` → `<store>/config-repos/` (commit `d7c5a83`; ADR
+0023's 2026-07-30 addendum). The WP-C amendment text above is retained for
+history — it describes the `--path` flag this addendum removes.

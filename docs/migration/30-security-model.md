@@ -25,7 +25,7 @@ All executable logic = named, versioned, reviewable recipes in core.
 | `baked_files: [{ path, content }]` (string content only) | Baked files with executable content or templating that evaluates code |
 | `seed_files: [{ source, target, only_if_missing }]` | Arbitrary file operations |
 | `egress: [{ recipe, hosts? }]` (recipe from core vocabulary) | Custom egress rules not expressible as recipes |
-| `secret_env: [{ secret }]` (secret from `secrets:` section) | Inline secret values |
+| `env` map bindings: `KEY = true` (host-bound placeholder), `{ secret = "ID" }` (rename), `{ bound = "guest" }` (real value, verifier opt-in) | Inline secret values |
 
 **Escape hatch**: if a workload needs custom logic not expressible with the
 named recipe vocabulary, a new named recipe is added to core (reviewed,
@@ -86,7 +86,8 @@ pub const ALLOWED_EGRESS_HOSTS: &[&str] = &[
 ];
 
 /// Core-defined secret→host binding allowlist. Each secret may only bind
-/// to listed hosts. Replaces the const SecretDefinition hosts field.
+/// to listed hosts. Replaces the const SecretDefinition hosts field
+/// (config-side rename: `allowed_hosts`).
 pub const SECRET_HOST_BINDINGS: &[(&str, &[&str])] = &[
     ("LITELLM_MASTER_KEY",        &["host.microsandbox.internal"]),
     ("OPENROUTER_API_KEY",        &["openrouter.ai"]),
@@ -117,6 +118,19 @@ pub const ALLOWED_PACKAGES: &[&str] = &[
   fails with: "host 'evil.com' is not in the core egress allowlist."
 - Each secret's bindable hosts are fixed in `SECRET_HOST_BINDINGS`. Config
   declares which secrets to use; core validates the binding.
+
+### `bound` on env bindings + `allowed_hosts` as credential policy
+
+Secret definitions are a pure catalog of intrinsic credential properties;
+exposure is declared per workload at the binding site via `bound` on the env
+binding. `bound = "guest"` injects the REAL secret value into the guest
+(verifier opt-in — for workloads like litellm/odysseus that verify their
+callers); the default `bound = "host"` injects a placeholder (the guest sees
+a non-secret marker; the host-side rewrite substitutes the real value only
+for allowlisted hosts). The definition-side `allowed_hosts` list (renamed
+from the old SecretDefinition `hosts` field) is the credential policy: it
+caps which egress hosts' rewrites may substitute the real value, validated
+against `SECRET_HOST_BINDINGS` at all three enforcement points below.
 
 ## Enforcement points (three-layer defense)
 
@@ -210,8 +224,9 @@ tracked, non-secret config:
 
 ### What nix never reads
 
-- User config repos (`~/.local/share/workestrate/repos/<name>/`) — these are
-  runtime-only, consumed by the Rust CLI, never by nix eval.
+- User config repos (`$WORKESTRATE_HOME/config-repos/<name>/`, ADR
+  0023/0024) — these are runtime-only, consumed by the Rust CLI, never by
+  nix eval.
 - `.env.enc` (encrypted secrets) — never in nix store.
 - `.sops.yaml` (public recipient keys + path rules) — metadata, but not read
   by nix.
@@ -220,7 +235,7 @@ tracked, non-secret config:
 ### Pure-eval invisibility (confirmed by construction)
 
 Nix flakes in pure evaluation copy only git-tracked files to the store.
-User config repos are at `~/.local/share/workestrate/repos/` (outside the
+User config repos are at `$WORKESTRATE_HOME/config-repos/` (outside the
 flake tree entirely). Even if they were inside the tree as gitignored paths,
 they would be invisible to pure eval. **The nix-store-leak concern is
 neutralized by construction**: nix simply cannot ingest user config at eval

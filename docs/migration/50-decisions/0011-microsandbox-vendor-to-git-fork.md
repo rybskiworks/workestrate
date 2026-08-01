@@ -3,6 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-07-18
 
+> **Status note (added 2026-08-01):** carrier decision REVERSED — the fork is
+> never consumed as a dependency; the interim nix-side patch apparatus is
+> retained unchanged; the upstream PR is pending user push. See the 2026-07-30
+> addendum below.
+
 ## Context
 
 The microsandbox-filesystem crate is currently vendored via a symlink:

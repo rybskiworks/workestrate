@@ -13,12 +13,12 @@ tool home (`$WORKESTRATE_HOME`) with a flat layout (ADR 0023).
 ### Directory trees
 
 ```
-$WORKESTRATE_HOME/                    # default: ~/.workestrate; container: <repo>/.workestrate
+$WORKESTRATE_HOME/                    # default: ~/.workestrate
 ├── config.toml                       # REGISTRY: tool settings + config-repo registry + layers + trusted_projects
 ├── overrides.toml                   # user-global overrides (optional)
 ├── secrets/                          # machine-local secrets
 │   └── .env.local.enc               # SOPS-encrypted (optional; setup-secrets --global)
-├── repos/                            # managed config-repo clones
+├── config-repos/                     # managed config-repo clones
 │   ├── personal/                     # personal config repo
 │   │   ├── workestrate.toml
 │   │   ├── .env.enc
@@ -62,26 +62,27 @@ $WORKESTRATE_HOME/                    # default: ~/.workestrate; container: <rep
 
 The tool home is resolved per invocation in this order:
 
-1. `WORKESTRATE_HOME` env var (explicit override)
-2. Auto-discovery (walk-up from cwd, trust-gated — finds a `.workestrate/`
-   in a parent dir), but only when no `XDG_*_HOME` var is set; an explicit
-   XDG var is a deliberate legacy-layout signal that discovery must not
-   override
+1. `--home <path>` CLI flag (explicit per-invocation override)
+2. `WORKESTRATE_HOME` env var
 3. Legacy XDG (read-only compat + deprecation note — reads old
    `XDG_CONFIG_HOME/workestrate/` etc. if present, does NOT write)
 4. Default: `~/.workestrate`
+
+The trusted-ancestor auto-discovery tier (walk-up from cwd, trust-gated) is
+REMOVED — repo-local homes and discovery caused split-brain/shadow-home
+ambiguity (ADR 0023 addendum 2026-07-30).
 
 The `home_version` field in `config.toml` tracks the home layout version.
 `workestrate migrate-home` migrates a legacy XDG three-home layout
 (config/data/state split) into the single home, stamps `home_version = 2`,
 clears `store_dir`/`state_dir`, and rewrites `configs.<name>.url` fields
-pointing into the old layout to the new `dest/repos/<name>` path (remote
+pointing into the old layout to the new `dest/config-repos/<name>` path (remote
 URLs are left untouched). See ADR 0023.
 
 **Note:** `WORKESTRATE_CONFIG_DIR` remains as a dev/testing override that
 bypasses config layering and loads a single config layer directly (used by
 golden-check and tests). It is separate from `WORKESTRATE_HOME`, which
-resolves the tool home (registry, repos, sources, state).
+resolves the tool home (registry, config-repos, sources, state).
 
 ### Tool repo (ai-workbench) — what stays
 
@@ -202,13 +203,13 @@ path = "/home/node/Development/another-project"
 
 `store_dir` and `state_dir` are home-relative by default (`$WORKESTRATE_HOME`
 and `$WORKESTRATE_HOME/state` respectively). They remain overridable for users
-who want to point repos/sources or state at a different location (e.g. a
+who want to point config-repos/sources or state at a different location (e.g. a
 separate disk). When overridden, the paths are treated as absolute.
 
 ## 3. workestrate.toml full schema
 
 The workload definition file. Lives in each config repo at
-`$WORKESTRATE_HOME/repos/<name>/workestrate.toml`. Also at
+`$WORKESTRATE_HOME/config-repos/<name>/workestrate.toml`. Also at
 `config.reference/workestrate.toml` (tracked, sanitized) and optionally at
 `./workestrate.toml` (project layer, trust-gated).
 
@@ -643,7 +644,7 @@ Closed vocabulary — new packages added via core review (ADR 0003).
 ```rust
 fn discover_config() -> Result<Config> {
     // 1. Resolve the tool home (ADR 0023)
-    let home = resolve_home()?;  // WORKESTRATE_HOME env → auto-discovery → legacy XDG (read-only) → default ~/.workestrate
+    let home = resolve_home()?;  // --home flag → WORKESTRATE_HOME env → legacy XDG (read-only) → default ~/.workestrate
 
     // 2. Load registry
     let registry = load_registry(&home.join("config.toml"))?;  // $WORKESTRATE_HOME/config.toml
@@ -651,7 +652,7 @@ fn discover_config() -> Result<Config> {
     // 3. Load + merge layers (in order)
     let mut config = load_reference_config()?;  // config.reference/workestrate.toml
     for layer_name in &registry.layers {
-        let repo_path = registry.store_dir.join("repos").join(layer_name);
+        let repo_path = registry.store_dir.join("config-repos").join(layer_name);
         let layer_config = load_single(&repo_path)?;
         config = merge(config, layer_config)?;  // security-aware merge (§11)
     }
@@ -716,10 +717,10 @@ On a fresh install with no registry, no config repos:
 | `workestrate completions <shell>` | Generate shell completions | `main.rs:236-239` |
 | `workestrate run -- <cmd>` | Run arbitrary command with decrypted secrets | `main.rs:266-297` |
 | `workestrate workload plan <name> [--show-source]` | Print sandbox plan (optionally with per-field provenance) | `main.rs:131-135` |
-| `workestrate workload up <name> [--foreground] [--replace\|--instance <id>\|--new] [--port-offset N] [--json]` | Start service (service kind). Default: refuse if slot occupied (ADR 0021) | `main.rs:126-136` |
+| `workestrate workload up [<name>] [--foreground] [--replace\|--instance <id>\|--new] [--port-auto] [--no-deps] [--use <slot@id>] [--json]` | Start service(s) (service kind). Default: refuse if slot occupied (ADR 0021). Bare `up` (no `<name>`) starts ALL service-kind workloads in the active context, topo-ordered (ADR 0021 addendum 2026-08-01). Declared `depends_on` deps start by default (topo-ordered closure, singleton slots; `--no-deps` opts out — ADR 0026 addendum 2026-08-01) | `main.rs:126-136` |
 | `workestrate workload down <name> [--instance <id>\|--all-instances]` | Stop and remove sandbox (singleton, named parallel instance, or all) | `main.rs:129` |
 | `workestrate workload logs <name> [--instance <id>]` | Tail detached service log (service kind) | `main.rs:130` |
-| `workestrate workload exec <name> [--replace\|--instance <id>\|--new] [--port-offset N] [--json]` | Attach interactively (agent kind). Default: refuse if slot occupied (ADR 0021) | `main.rs:138-147` |
+| `workestrate workload exec <name> [--replace\|--instance <id>\|--new] [--no-deps] [--use <slot@id>] [--json]` | Attach interactively (agent kind). Default: refuse if slot occupied (ADR 0021). `depends_on` deps start by default (ADR 0026 addendum 2026-08-01; agent-kind deps refuse — agents are interactive) | `main.rs:138-147` |
 | `workestrate workloads` | List configured workloads with kind + running status (discovery verb, ADR 0027) | — |
 
 ### Hybrid CLI dispatch (ADR 0006)
@@ -765,11 +766,17 @@ enum Commands {
 
 | Command | Behavior |
 |---|---|
-| `workestrate config add <url> <name> [--ref main]` | Clone config repo to `$WORKESTRATE_HOME/repos/<name>/`, add to registry |
+| `workestrate config add <url> <name> [--ref main]` | Clone config repo to `$WORKESTRATE_HOME/config-repos/<name>/`, add to registry |
 | `workestrate config update [name]` | Pull latest ref for named repo (or all), update `rev` in registry |
 | `workestrate config list` | List registered config repos with rev + dirty status |
+| `workestrate config new <name> [<dest>]` | Scaffold a new config repo (ADR 0022). Defaults to in-store `$WORKESTRATE_HOME/config-repos/<name>` and registers; an out-of-store `<dest>` scaffolds WITHOUT registering + prints guidance (ADR 0022 addendum 2026-08-01) |
+| `workestrate config remove <name>` | Remove a config repo from the registry |
 | `workestrate config trust <dir>` | Add project directory to `[trusted_projects]` |
+| `workestrate config untrust <dir>` | Remove a project directory from `[trusted_projects]` |
 | `workestrate init <dotfiles-url>` | Bootstrap: clone dotfiles, read registry, clone config repos, run setup-secrets |
+| `workestrate home init` | Initialize an empty tool home (zero positionals; explicit init, never auto-init — ADR 0025) |
+| `workestrate home clone <src> [<dest>]` | Provision a tool home from a source (url/bundle); selective copy (never `state/`); generates `workestrate.lock` (ADR 0025) |
+| `workestrate migrate-home` | Migrate a legacy XDG three-home layout into the single tool home; stamps `home_version = 2` (ADR 0023) |
 | `workestrate source clone <name> [<path>]` | Clone agent source to store (or user-chosen path) |
 | `workestrate source build <name>` | Build agent from source in store |
 | `workestrate source list` | List agent source checkouts with build status |
@@ -867,10 +874,10 @@ internally, `pi-image.nix:35-50`).
 
 ### Per-config-repo layout
 
-Each config repo at `$WORKESTRATE_HOME/repos/<name>/` contains:
+Each config repo at `$WORKESTRATE_HOME/config-repos/<name>/` contains:
 
 ```
-repos/personal/
+config-repos/personal/
 ├── .env.enc          # SOPS-encrypted secrets (personal key)
 ├── .sops.yaml        # SOPS config (personal recipient)
 ├── .env.example      # generated by `workestrate generate-env-example`
@@ -894,7 +901,7 @@ grep intermediate (`setup-secrets.sh:39-44`).
 For shared secrets (team + personal access):
 
 ```yaml
-# $WORKESTRATE_HOME/repos/personal/.sops.yaml
+# $WORKESTRATE_HOME/config-repos/personal/.sops.yaml
 keys:
   - &personal age1<personal-key>
   - &team age1<team-key>
@@ -935,6 +942,56 @@ workestrate-config-personal/
 ├── profiles/                 # optional human-readable docs
 └── flake.nix                 # OPTIONAL: inverted-dependency flake (Phase 2)
 ```
+
+### Directory-mode config repos (spec 17; ADR 0017)
+
+A config repo uses **either** the single `workestrate.toml` at its root
+(file mode, above) **or** **directory mode**: a `workestrate/` directory of
+cross-cutting files plus a `workloads/` tree of per-workload files or
+capsule directories that colocate each workload's definition with its
+app-native artifacts:
+
+```
+workestrate-config-personal/
+├── workestrate/
+│   ├── default.toml            # schema_version + cross-cutting config
+│   ├── secrets.toml            # OPTIONAL — the [secrets.*] catalog only
+│   └── workloads/
+│       ├── <name>.toml         # flat single-workload file, OR
+│       └── <name>/             # workload CAPSULE directory
+│           ├── workload.toml   # the capsule entry file (the workload def)
+│           ├── config.yaml     # app-native artifacts, colocated
+│           ├── models.yaml     #   (litellm: config.yaml, models.yaml;
+│           ├── opencode.jsonc  #    opencode: opencode.jsonc;
+│           ├── settings.json   #    odysseus: settings.json; pi: models.json)
+│           └── flake.nix       #   image-build flake for the workload
+└── ... (repo plumbing: tombi.toml, schemas/, .sops.yaml, .env.enc)
+```
+
+Rules:
+
+- **Either/or detection:** if both `workestrate.toml` and `workestrate/`
+  exist in the same config repo, the loader HARD-ERRORS naming both paths.
+  No precedence, no merge across modes — one config repo, one mode.
+- **Load order:** `default.toml` → `secrets.toml` → `workloads/` entries in
+  lexicographic order (flat files and capsule directories interleaved).
+- **Filename-implied names:** a bare table (no `[workloads.<name>]` wrapper)
+  in `workloads/<name>.toml` or `workloads/<name>/workload.toml` implies the
+  workload name from the filename/dirname. The same workload name defined in
+  more than one file/dir is a hard error.
+- **Zero schema change:** the workload schema, merge semantics (§11), and
+  the secret/env model (§3) are unchanged — directory mode is purely a
+  loader + layout concern. Mount/seed/local_build paths stay repo-relative
+  strings pointing into the capsule dir.
+- **Provenance is per-FILE:** provenance strings carry the repo-relative
+  path (`<repo>#<relpath>`, e.g.
+  `personal#workestrate/workloads/litellm/workload.toml`), recorded per
+  field — strictly better than layer-level provenance and composing with
+  the `plan --show-source` surface (§11) unchanged in shape.
+
+Full semantics: spec 17
+(`docs/validation-and-improvements/06-improvements/17-config-repo-directory-mode.md`);
+see ADR 0017 (`50-decisions/0017-synthetic-reference-and-strip-down.md`).
 
 ### Optional flake.nix (inverted dependency, Phase 2)
 
@@ -1094,7 +1151,8 @@ A workload's sandbox identity is a **slot**, not a bare name. A slot is one of:
 
 - `^[a-z0-9][a-z0-9-]*$`, lowercase, length 1–32.
 - MUST NOT be `all` (reserved by `down --all` / `--all-instances`).
-- MUST NOT be purely numeric (avoid ambiguity with `--port-offset N`).
+- MUST NOT be purely numeric (avoids ambiguity with numeric slot/port
+  addressing).
 - Case-normalized to lowercase on parse.
 
 Examples: `litellm`, `personal-litellm`, `litellm@canary`,
@@ -1128,20 +1186,14 @@ refuses. Existing scripts that relied on `up` as an idempotent restart must add
 | `workestrate workload down <name> --all-instances` | Stop the singleton AND every parallel instance of `<name>`. Destructive; explicit. |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes`. |
 
-### `--port-offset` semantics
+### Parallel-instance addressing (ADR 0026)
 
-`--port-offset N` (non-negative integer) shifts **host** ports by `+= N` for
-the duration of that `up`/`exec` invocation. **Guest ports are unchanged.**
-
-- For each `[[workloads.<name>.ports]]` entry, the published host port becomes
-  `host + N`; the guest port stays `guest`.
-- `N = 0` is the default (singleton behavior, no shift).
-- The shifted host port is checked against the port registry for collisions.
-- `--port-offset` is only meaningful for workloads that publish ports. For
-  agents (no `ports`), it is accepted but a no-op (INFO log).
-- `--port-offset` is per-invocation. The port-registry record stores the
-  effective offset (`port_offset: Option<u16>`; `None` for offset 0 / legacy
-  records) so `down`/`logs`/`ps` recover it without re-passing the flag.
+> **Supersession note:** the `--port-offset` semantics section formerly here
+> is REMOVED pre-release (ADR 0021 addendum 2026-07-30). Parallel instances
+> bind to `127.0.0.N` slots from a locked allocator (singleton on shared
+> `127.0.0.1`), collisions are keyed `(bind_ip, port)`, and `--port-auto`
+> probes a lock-protected free port on the slot's bind. See ADR 0026 and its
+> 2026-08-01 addendum (default-on dependency lifecycle).
 
 ### `ps` output
 
@@ -1178,7 +1230,6 @@ sandboxes are reported with `stale: true` and a remediation hint.
     "kind": "parallel",
     "started_at": "2026-07-20T14:05:42Z",
     "ports": [{"host": 14000, "guest": 4000}],
-    "port_offset": 10000,
     "stale": false
   }
 ]
@@ -1195,14 +1246,14 @@ sandboxes are reported with `stale: true` and a remediation hint.
   "occupying_instance": "personal-litellm",
   "remediation": {
     "replace": "workestrate workload up litellm --replace",
-    "instance": "workestrate workload up litellm --instance <id> [--port-offset N]",
-    "new": "workestrate workload up litellm --new [--port-offset N]",
+    "instance": "workestrate workload up litellm --instance <id> [--port-auto]",
+    "new": "workestrate workload up litellm --new [--port-auto]",
     "list": "workestrate ps --json"
   }
 }
 ```
 
-## 14. Config schema + taplo editor integration (ADR 0021)
+## 14. Config schema + tombi editor integration (ADR 0021)
 
 ### `generate-schema`
 
@@ -1222,28 +1273,44 @@ and all sub-structs; `generate-schema` calls
   its `workestrate.toml` against the committed schema directly with any
   JSON-Schema validator.
 
-### taplo `#:schema` wiring (user's config repo)
+### tombi `#:schema` wiring (user's config repo)
 
-Add a top-level schema pointer to `workestrate.toml`:
+Add a top-level schema pointer to `workestrate.toml`. Scaffolded repos use a
+RELATIVE pointer to the vendored schema copy, so validation never fetches
+over the network (ADR 0022 addendum 2026-08-01):
 
 ```toml
 # spec-test: skip
-#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json
+#:schema ./schemas/workestrate.schema.json
 schema_version = 1
 # …rest of file
 ```
 
-taplo (and any editor using taplo as the TOML language server — VS Code,
-Helix, Neovim via LSP) reads the `#:schema` comment and validates the file
-against the published schema in real time. For air-gapped / local-first
-workflows, reference a vendored copy:
+tombi 1.2.5 (and any editor using tombi as the TOML language server — VS
+Code, Helix, Neovim via LSP) reads the `#:schema` comment and validates the
+file against the referenced schema in real time. A published absolute URL
+also works when a network fetch is acceptable:
 
 ```toml
 # spec-test: skip
-#:schema ../schemas/workestrate.schema.json
+#:schema https://raw.githubusercontent.com/georgrybski/ai-workbench/main/schemas/workestrate.schema.json
 ```
 
-The `#:schema` pointer is a taplo convention (not a TOML standard) and is
+The `#:schema` pointer is a tombi convention (not a TOML standard) and is
 ignored by the `workestrate` config loader — it is a comment. The
 `spec_examples_parse` guard (ADR 0020) skips `#`-prefixed lines, so the
 pointer does not interfere with the spec-code CI guard.
+
+### tombi toolchain
+
+tombi 1.2.5 is the repo-wide TOML toolchain (strict format + lint +
+schema-validation; supersedes the earlier taplo plan — ADR 0022 addendum
+2026-08-01, spec 15):
+
+- Root `tombi.toml` — strict format/lint/schema config for the tool repo.
+- `nix/packages/tombi.nix` — the pinned tombi 1.2.5 nix package.
+- `templates/workestrate-config/tombi.toml` — per-config-repo tombi config
+  emitted by the scaffold (plus a version-pinned `TOMBI_REQUIRED=1.2.5`
+  pre-commit hook).
+- `just tombi-check` — `tombi format --check` + `tombi lint
+  --error-on-warnings`, wired into `just verify`.
