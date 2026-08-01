@@ -2,7 +2,7 @@
   "providers": {
     "litellm": {
       "api": "openai-completions",
-      "baseUrl": "http://host.microsandbox.internal:4000/v1",
+      "baseUrl": "http://${LITELLM_ADDR}/v1",
       "apiKey": "${LITELLM_MASTER_KEY}",
       "models": [
         { "id": "coding" },

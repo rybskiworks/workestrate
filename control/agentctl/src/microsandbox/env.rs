@@ -15,6 +15,26 @@ pub(crate) fn resolve_templated_value_with(
     })
 }
 
+/// Resolve `${VAR}` templates against `vars` FIRST, falling back to process
+/// env for variables the map does not carry. Used for plan `env` entries so
+/// injected depends_on vars (appended to the plan by
+/// `discovery::apply_resolution`, NOT present in the process env) are visible
+/// to templated declared values (spec 12 §4: the templated composition is the
+/// declared env consuming the injected var).
+///
+/// KNOWN LIMITATION: map values are RAW (unresolved) — a var referencing
+/// another templated var in the map gets its raw `${...}` form; there is no
+/// recursive resolution.
+pub(crate) fn resolve_templated_value_with_env_fallback(
+    templated: &str,
+    vars: &std::collections::HashMap<String, String>,
+) -> Result<String> {
+    resolve_templated_value_by(templated, move |name: &str| match vars.get(name) {
+        Some(v) => Ok(v.clone()),
+        None => std::env::var(name),
+    })
+}
+
 /// Shared engine: resolve `${VAR}` templates through `lookup`.
 fn resolve_templated_value_by<F>(templated: &str, lookup: F) -> Result<String>
 where
@@ -42,14 +62,6 @@ where
         }
     }
     Ok(result)
-}
-
-/// Process-env-only resolution (plan `env` entries, which are not secrets).
-pub(crate) fn resolve_templated_value(templated: &str) -> Result<String> {
-    // The closure (not `std::env::var` directly) so the higher-ranked
-    // `for<'a> Fn(&'a str)` bound unifies: `env::var` is generic over its
-    // key type, which does not satisfy the higher-ranked fn-pointer shape.
-    resolve_templated_value_by(templated, |name: &str| std::env::var(name))
 }
 
 #[cfg(test)]
@@ -143,6 +155,40 @@ mod tests {
         assert_eq!(
             resolve_templated_value_with("costs $5 or $A", &m).unwrap(),
             "costs $5 or $A"
+        );
+    }
+
+    #[test]
+    fn env_fallback_prefers_map_over_process_env() {
+        let m = vars(&[("LITELLM_ADDR", "host.microsandbox.internal:4000")]);
+        assert_eq!(
+            resolve_templated_value_with_env_fallback("http://${LITELLM_ADDR}/v1", &m).unwrap(),
+            "http://host.microsandbox.internal:4000/v1"
+        );
+    }
+
+    #[test]
+    fn env_fallback_uses_process_env_when_map_lacks_the_var() {
+        // A name the map does not carry falls back to the process env.
+        let unique = "WORKESTRATE_TEST_ENV_FALLBACK_VAR";
+        std::env::set_var(unique, "from-process-env");
+        let m = vars(&[]);
+        let templated = format!("${{{}}}", unique);
+        assert_eq!(
+            resolve_templated_value_with_env_fallback(&templated, &m).unwrap(),
+            "from-process-env"
+        );
+        std::env::remove_var(unique);
+    }
+
+    #[test]
+    fn env_fallback_errors_when_neither_map_nor_process_env_has_the_var() {
+        let m = vars(&[]);
+        let err = resolve_templated_value_with_env_fallback("${NOPE_NEVER_SET}", &m).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("NOPE_NEVER_SET"),
+            "error should name the missing var: {msg}"
         );
     }
 }

@@ -1,4 +1,4 @@
-use super::super::env::{resolve_templated_value, resolve_templated_value_with};
+use super::super::env::{resolve_templated_value_with, resolve_templated_value_with_env_fallback};
 use super::super::mounts::{apply_plan_mounts, ensure_mount_sources};
 use super::super::plan::{PortMapping, SandboxPlan};
 use super::super::workload::{EntrypointSpec, SandboxCommand, Workload};
@@ -6,6 +6,7 @@ use super::{check_occupied_or_replace, ForegroundConfig, InstanceSpec};
 use anyhow::Result;
 use microsandbox::sandbox::{exec::ExecEvent, SandboxBuilder};
 use microsandbox::Sandbox;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
@@ -87,15 +88,39 @@ pub(crate) fn apply_plan_secrets(
     Ok(b)
 }
 
+/// Resolve every plan env entry to its final `(name, value)` pair.
+///
+/// Templated `${VAR}` references resolve against a map of ALL plan env
+/// entries FIRST — including depends_on-injected vars appended by
+/// `discovery::apply_resolution` (spec 12 §4: the templated composition is
+/// the declared env consuming the injected var) — falling back to the
+/// process env for names the plan does not carry.
+///
+/// KNOWN LIMITATION: map values are RAW (unresolved) — a var referencing
+/// another templated plan var gets its raw `${...}` form; there is no
+/// recursive resolution.
+fn resolve_plan_envs(plan: &SandboxPlan) -> Result<Vec<(String, String)>> {
+    let vars: HashMap<String, String> = plan
+        .env
+        .iter()
+        .map(|e| (e.name.clone(), e.value.clone()))
+        .collect();
+    let mut resolved = Vec::with_capacity(plan.env.len());
+    for e in &plan.env {
+        let value = resolve_templated_value_with_env_fallback(&e.value, &vars)?;
+        reject_if_placeholder(&value, &e.reject_placeholder, &e.name)?;
+        resolved.push((e.name.clone(), value));
+    }
+    Ok(resolved)
+}
+
 pub(crate) fn apply_plan_envs(
     builder: SandboxBuilder,
     plan: &SandboxPlan,
 ) -> Result<SandboxBuilder> {
     let mut b = builder;
-    for e in &plan.env {
-        let value = resolve_templated_value(&e.value)?;
-        reject_if_placeholder(&value, &e.reject_placeholder, &e.name)?;
-        b = b.env(&e.name, value);
+    for (name, value) in resolve_plan_envs(plan)? {
+        b = b.env(name, value);
     }
     Ok(b)
 }
@@ -422,6 +447,78 @@ pub async fn exec_agent_with_spec<W: Workload>(workload: &W, spec: &InstanceSpec
 mod tests {
     use super::*;
     use crate::config::test_support::unique_state_dir;
+    use crate::microsandbox::plan::{EnvVar, NetworkPlan};
+
+    fn empty_plan_with_env(env: Vec<EnvVar>) -> SandboxPlan {
+        SandboxPlan {
+            name: "test".to_string(),
+            image: None,
+            workdir: None,
+            command: Vec::new(),
+            cpus: None,
+            memory_mib: None,
+            env,
+            secret_env: Vec::new(),
+            ports: Vec::new(),
+            mounts: Vec::new(),
+            network: NetworkPlan {
+                default_deny: false,
+                egress_rules: Vec::new(),
+                deny_rules: Vec::new(),
+                ingress_rules: Vec::new(),
+            },
+        }
+    }
+
+    // ---- spec 12 §4: injected depends_on vars are visible to templated
+    // declared env (W5) ----
+
+    #[test]
+    fn resolve_plan_envs_sees_injected_depends_on_var() -> Result<()> {
+        // Declared env FIRST (templated, consuming the injected var), the
+        // depends_on-injected var appended AFTER — the exact ordering
+        // `discovery::apply_resolution` produces.
+        let plan = empty_plan_with_env(vec![
+            EnvVar::literal("OPENAI_BASE_URL", "http://${LITELLM_ADDR}/v1"),
+            EnvVar {
+                name: "LITELLM_ADDR".to_string(),
+                value: "host.microsandbox.internal:4000".to_string(),
+                is_secret: false,
+                reject_placeholder: None,
+                injected_by: Some("litellm".to_string()),
+            },
+        ]);
+        let resolved = resolve_plan_envs(&plan)?;
+        assert_eq!(
+            resolved,
+            vec![
+                (
+                    "OPENAI_BASE_URL".to_string(),
+                    "http://host.microsandbox.internal:4000/v1".to_string()
+                ),
+                (
+                    "LITELLM_ADDR".to_string(),
+                    "host.microsandbox.internal:4000".to_string()
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_plan_envs_falls_back_to_process_env_for_names_not_in_plan() -> Result<()> {
+        let unique = "WORKESTRATE_TEST_PLAN_ENV_FALLBACK";
+        std::env::set_var(unique, "process-value");
+        let plan =
+            empty_plan_with_env(vec![EnvVar::literal("AD_HOC", &format!("${{{}}}", unique))]);
+        let resolved = resolve_plan_envs(&plan)?;
+        std::env::remove_var(unique);
+        assert_eq!(
+            resolved,
+            vec![("AD_HOC".to_string(), "process-value".to_string())]
+        );
+        Ok(())
+    }
 
     // ---- ADR 0026(a)/C2: slot_bind_ip ----
 

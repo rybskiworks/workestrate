@@ -22,6 +22,38 @@ hosts = ["github.com", "api.github.com"]
 required = false
 description = "GitHub Personal Access Token for agent sandboxes (git operations + API)."
 
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "ghcr.io/berriai/litellm:v1.89.4" }
+workdir = "/app"
+cpus = 2
+memory_mib = 2048
+command = ["/app/.venv/bin/litellm", "--config", "/app/config/config.yaml", "--host", "0.0.0.0"]
+log_stop_errors = true
+
+[workloads.litellm.env]
+PORT = "4000"
+
+[[workloads.litellm.ports]]
+host = 4000
+guest = 4000
+
+[[workloads.litellm.mounts]]
+host = "config.reference/infra/litellm"
+guest = "/app/config"
+read_only = true
+
+[workloads.litellm.network]
+default_deny = true
+
+[[workloads.litellm.network.egress]]
+recipe = "dns"
+
+[[workloads.litellm.network.ingress]]
+protocol = "tcp"
+port = 4000
+scope = "local"
+
 [workloads.example-service]
 kind = "service"
 image = { recipe = "registry", ref = "python:3.12-slim" }
@@ -69,6 +101,16 @@ protocol = "tcp"
 port = 8080
 scope = "local"
 
+# required = false (here and on the other example workloads below) because
+# this reference fixture must render golden plans with NO instances running:
+# required = true refuses at plan time (discovery.rs resolve_depends_on),
+# which would break golden generation. The fixture deliberately exercises the
+# declared-port convention-fallback path instead; real deployments (personal
+# config repos) use required = true per spec 12 §4.
+[workloads.example-service.depends_on.litellm]
+env = "LITELLM_ADDR"
+required = false
+
 [workloads.example-agent]
 kind = "agent"
 image = { recipe = "nix-layered", name = "example-agent", tag = "latest", contents = [
@@ -111,6 +153,10 @@ source = "flake://example-agent"
 gating_file = "package-lock.json"
 env_override = "WORKESTRATE_EXAMPLE_AGENT_BUILD"
 fallback = "agents/example-agent/build"
+
+[workloads.example-agent.depends_on.litellm]
+env = "LITELLM_ADDR"
+required = false
 
 [workloads.example-offensive]
 kind = "agent"
@@ -165,3 +211,7 @@ source = "flake://example-offensive"
 gating_file = "package-lock.json"
 env_override = "WORKESTRATE_EXAMPLE_OFFENSIVE_BUILD"
 fallback = "agents/example-offensive/build"
+
+[workloads.example-offensive.depends_on.litellm]
+env = "LITELLM_ADDR"
+required = false
