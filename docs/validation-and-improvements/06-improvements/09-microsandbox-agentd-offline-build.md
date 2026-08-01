@@ -1,6 +1,6 @@
 # 09 — microsandbox-filesystem agentd offline build (ADR 0011 carrier)
 
-> **STATUS: PR PREPARED, ON HOLD (option 1: branch fix/filesystem-agentd-path-override @ a4f8a3b8 ready to push; issue/PR docs in .tmp/msb-upstream/ — push + open pending USER; option 2 fork-carrier REVERSED per ADR 0011 addendum 2026-07-30 — transient PR vehicle only; option 3 NEEDS-DEVSHELL + HOST-NIX)**
+> **STATUS: PR PREPARED, READY TO OPEN (option 1: branch fix/filesystem-agentd-path-override @ bc7640b8 (amended 2026-08-01: review hardening) ready to force-push; issue/PR docs in .tmp/msb-upstream/ — force-push + open pending USER; option 2 fork-carrier REVERSED per ADR 0011 addendum 2026-07-30 — transient PR vehicle only; option 3 NEEDS-DEVSHELL + HOST-NIX)**
 > **Effort:** option 1 = **M** (including upstream review latency);
 > option 2 = REVERSED (not executed); option 3 = **M** (patch rewrite +
 > re-validation)
@@ -98,7 +98,7 @@ three options, and a recommended sequence.
 
 ## Options
 
-### Option 1 — UPSTREAM FIX (preferred end-state) — PR PREPARED, ON HOLD
+### Option 1 — UPSTREAM FIX (preferred end-state) — PR HARDENED, READY TO OPEN
 
 Contribute an MSB_HOME-based agentd check to `crates/filesystem/build.rs`
 mirroring the SDK crate's own pattern (skip download when
@@ -110,10 +110,10 @@ delete the patch, `microsandbox-filesystem-patched.nix`, the
 `_setup_vendor_link` devshell hook, the agentctl.nix vendor staging, and the
 vendor-unlock/lock justfile recipes.
 
-**PR PREPARED, ON HOLD (2026-07-30):** branch `fix/filesystem-agentd-path-override`
-@ `a4f8a3b8` on `github.com/georgrybski/microsandbox` ready to push; PR drafted at
+**PR PREPARED, READY TO OPEN (2026-08-01):** branch `fix/filesystem-agentd-path-override`
+@ `bc7640b8` (amended 2026-08-01 — 8-point review hardening + tests; force-push pending USER) on `github.com/georgrybski/microsandbox` ready to push; PR drafted at
 `.tmp/msb-upstream/PR.md` mirroring upstream #704 (the SDK-crate MSB_HOME
-precedent) with the `var_os` opt-in refinement. Push + PR open pending USER.
+precedent) with the `var_os` opt-in refinement. Force-push + PR open pending USER.
 
 Trade-off: gated on upstream responsiveness; until merge+release we stay on
 the compensation machinery.
@@ -157,7 +157,7 @@ NEEDS-DEVSHELL + HOST-NIX (patch rewrite + cargo build/test + runtime
 
 ## Recommended sequence
 
-Option 1 upstream PR (PR PREPARED, ON HOLD — branch ready @ `a4f8a3b8`, push
+Option 1 upstream PR (PR PREPARED, READY TO OPEN — branch ready @ `bc7640b8` (amended 2026-08-01 — 8-point review hardening + tests), force-push
 pending USER) → upstream release carrying the fix → bump
 the microsandbox pin + delete ALL compensation machinery (the patch file, the
 patched derivation, the `_setup_vendor_link` devshell hook, the agentctl.nix
@@ -165,6 +165,50 @@ vendor staging + the `.cargo/config.toml` `[patch.crates-io]` path entry, the
 vendor-unlock/lock justfile recipes, the `.gitignore` vendor line). The
 interim nix-side patch stays until then. Option 3 runs as a SEPARATE,
 combinable track when runtime validation bandwidth exists.
+
+## Review hardening — EXECUTED (2026-08-01)
+
+The 8-point review of the prepared upstream PR was executed on BOTH tracks
+(fork branch and interim 0.5.6 nix patch). Fork branch
+`fix/filesystem-agentd-path-override` amended to `bc7640b8` (force-push
+pending USER — the PR is READY to open immediately after the force-push).
+Interim patch rewritten to the same semantics and committed `daa5140`
+(patched derivation rebuilt; all gates green — 574 tests).
+
+The 8 review points, one-line verdicts:
+
+1. `MSB_AGENTD_PATH` authoritative — checked BEFORE the workspace-local
+   path — **DONE**.
+2. Fail-loud panic on an invalid env path
+   (`MSB_AGENTD_PATH does not point to an agentd file: {}`) — **DONE**.
+3. `cargo:rerun-if-changed` emitted only POST-validation (no watch on a
+   rejected path) — **DONE**.
+4. Marker file `.agentd-from-msb-agentd-path` — set → copy + mark; unset +
+   marker → remove dest + marker; unset + no marker → preserve dest —
+   **DONE**.
+5. `cargo:rerun-if-env-changed=MSB_AGENTD_PATH` scoped to the prebuilt cfg —
+   **DONE**.
+6. 6 build-script tests — run via `rustc --test` because cargo does not
+   execute build-script tests (disclosed in PR.md) — **DONE**.
+7. PR.md updated to match the hardened semantics — **DONE**.
+8. PR.md unset-fingerprint wording corrected: "byte-for-byte identical when
+   unset" → "on a clean build with the variable unset, artifact selection
+   and download behavior remain unchanged" — **DONE**.
+
+Final semantics: `MSB_AGENTD_PATH` set + valid → copy + write marker, skip
+download; set + invalid → panic BEFORE any download (offline-verified);
+unset + marker → remove dest + marker, fall through to default behavior;
+unset + no marker → preserve dest.
+
+**Adaptation beyond the review (both tracks hit it independently):**
+read-only dest EACCES — `fs::copy` inherits the immutable Nix-store source's
+read-only mode, so build-script reruns fail without remove-before-copy.
+Fork: `copy_agentd` unlinks the dest first. 0.5.6 patch: explicit
+`remove_file` before the copy.
+
+**Known test-env artifact:** 3 `not(prebuilt)` lib tests fail with the
+12-byte dummy staged agentd (ELF offset assertion) — they would fail
+identically pre-amend; disclosed in PR.md.
 
 ## Acceptance criteria
 
@@ -178,8 +222,8 @@ combinable track when runtime validation bandwidth exists.
   consumed as a dependency; the fork is a transient PR vehicle only — see the
   ADR 0011 addendum.
 - [ ] **Option 1 executed:** upstream PR merged referencing #704 precedent
-  (PR PREPARED/ON HOLD 2026-07-30 — branch `fix/filesystem-agentd-path-override`
-  @ `a4f8a3b8`, draft `.tmp/msb-upstream/PR.md`; push pending USER); released;
+  (PR PREPARED/READY TO OPEN 2026-08-01 — branch `fix/filesystem-agentd-path-override`
+  @ `bc7640b8` (amended 2026-08-01 — 8-point review hardening + tests), draft `.tmp/msb-upstream/PR.md`; force-push pending USER); released;
   machinery deleted;
   `control/agentctl/Cargo.toml` pin updated.
 - [ ] **Option 3 executed:** `=0.6.8` pin; rewritten patch applies and build

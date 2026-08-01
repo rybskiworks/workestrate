@@ -99,10 +99,15 @@ re-derive their contents.
 
 ## Open threads (pending-points register)
 
-1. **Upstream microsandbox PR — ON HOLD.** Fork branch
-   `fix/filesystem-agentd-path-override` @ `a4f8a3b8` is ready to push; PR +
-   issue docs drafted in `.tmp/msb-upstream/` (ISSUE.md, PR.md, REASONING.md).
-   Push + open issue/PR is a pending USER action; issue/PR ON HOLD per user.
+1. **Upstream microsandbox PR — HARDENED, READY TO OPEN.** Fork branch
+   `fix/filesystem-agentd-path-override` amended to `bc7640b8` with the
+   8-point review hardening + 6 build-script tests; PR draft
+   `.tmp/msb-upstream/PR.md` updated. Next actions (pending USER):
+   force-push with `git -C .tmp/microsandbox push --force-with-lease origin
+   fix/filesystem-agentd-path-override`, then open the PR from
+   `.tmp/msb-upstream/PR.md`. Interim 0.5.6 nix patch aligned to the same
+   semantics + the read-only-dest remove fix (`daa5140`; gates green —
+   574 tests). See spec 09 §"Review hardening — EXECUTED (2026-08-01)".
 2. **Upstream perpetual-rebuild finding (upstream's bug, NOT our PR).** Their
    `crates/filesystem/build.rs` watches a nonexistent `<workspace>/build/agentd`
    path, so the build script re-runs on every cargo invocation. Possible
