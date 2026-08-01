@@ -73,7 +73,7 @@ invariant.
 | [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca) — annotated 2026-08-01: the map form became the v2 unified binding map with typed EnvBinding (1ed2e6d)` — map form survives as the unified map; binding semantics gained `bound` (16, 2026-08-01) | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes | `EXECUTED (2026-08-01; commits 92b6b6f, d97576d, 9ffad0e + scaffold gap-fix wave; personal-repo apply 0750876)` | ↔ [13](13-secret-env-shorthand.md)/[14](14-env-map-form.md) (notation — tombi keeps the collapsed map form tidy + validated; cannot restructure) | **M** | devshell in-container (cargo gates + scripts/check-toml.sh via `nix develop`) + `HOST-NIX` (`nix build .#tombi` package build) |
 | [16-unified-secret-env-model.md](16-unified-secret-env-model.md) | Final unified secret/env model (per-binding bound; delivery-on-def removed) | READY-TO-EXECUTE (design locked 2026-08-01; supersedes intermediate v2 of 1ed2e6d) | supersedes 13/14 notation; ADR 0018 second addendum; contract in ../02-config-requirements.md | M | cargo gates verifiable-here via nix develop; B13 runtime smoke HOST-KVM |
-| 17-directory-mode (task B) | Directory-mode config (SPEC FORTHCOMING — parallel task B authors this file) | DESIGN (placeholder row; file not yet authored) | — | — | — |
+| [17-config-repo-directory-mode.md](17-config-repo-directory-mode.md) | Config repo directory mode (workestrate/ + workloads/ capsules) | READY-TO-EXECUTE (design) | ↔ [10](10-config-repos-as-working-copies.md), [11](11-home-provisioning-and-lockfile.md), [15](15-toml-toolchain-tombi.md), [16](16-unified-secret-env-model.md) | M | loader/cargo gates verifiable-here via nix develop; runtime smoke HOST-KVM |
 | [18-cross-home-dependencies.md](18-cross-home-dependencies.md) | Cross-home dependencies (wider up across homes/config sets) | INTENT-TO-EXPLORE (2026-08-01 — questions, no decisions) | ADR 0019/0021(addendum)/0023/0026(addendum); builds on [12](12-per-instance-addressing.md) default-on lifecycle | exploration | verifiable-here (docs-only) |
 | [19-visualization-inspection.md](19-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [18](18-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
 
@@ -316,9 +316,22 @@ migration guide from v1 and intermediate-v2 forms, plus a doc-intent
 requirement: user-facing docs must teach the fail-safe placeholder default,
 the rename-only `secret`, and why `bound` is per-binding — not just syntax.
 
-### 17 — Directory-mode (placeholder)
+### 17 — Config repo directory mode
 
-Spec forthcoming — authored by the parallel task B.
+Specifies directory mode for config repos as an alternative to the single-file
+`workestrate.toml`: a `workestrate/` directory of cross-cutting files
+(`default.toml`, optional `secrets.toml`) plus a `workloads/` tree of flat
+per-workload files or **capsule directories** that colocate each workload's
+definition with its app-native artifacts (`config.yaml`, `opencode.jsonc`,
+seed files, `flake.nix`) — a layout/loader change only, with zero schema or
+secret/env-model change. Hard semantics: both modes present in one repo → hard
+error; duplicate workload names across files/dirs → hard error naming both
+provenance paths; `schema_version` is authoritative in `default.toml` only;
+provenance strings carry per-file `<repo>#<relpath>` granularity. Acceptance
+requires the restructured personal config repo to load to a byte-identical
+merged config with byte-unchanged golden plans. **Key decision:** capsules
+make the config repo a self-contained deployment unit — clone it and every
+artifact every workload needs is inside it, addressed by repo-relative paths.
 
 ### 18 — Cross-home dependencies
 
@@ -412,7 +425,7 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 16-unified-secret-env-model [supersedes 13/14 notation; ADR 0018 2nd addendum; contract ../02-config-requirements.md]
 
-17-directory-mode [placeholder — task B]
+17-config-repo-directory-mode [↔ 10/11/15/16; READY-TO-EXECUTE design]
 
 18-cross-home-dependencies [deps: ADR 0019/0021 addendum/0023/0026 addendum; builds on 12 default-on lifecycle; exploration]
 
