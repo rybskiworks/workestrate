@@ -558,27 +558,29 @@ fn production_env_union_by_name_end_to_end() {
 // 7. SCHEMA_VERSION ERROR PATH
 // ---------------------------------------------------------------------------
 
-/// A context layer with `schema_version = 2` must fail validate_config at
+/// A context layer with `schema_version = 3` must fail validate_config at
 /// config-load time — non-zero exit and the exact
-/// `is not supported (expected 1)` message on stderr — before any KVM work.
+/// `is not supported (expected 2)` message on stderr — before any KVM work.
+/// (P1 Wave 1: schema_version 2 is native; 1 is deprecated-but-accepted; 3+
+/// is refused.)
 #[test]
-fn production_schema_version_2_refused_at_load() {
+fn production_schema_version_3_refused_at_load() {
     let env = ProdHome::new("schema-version-refused");
     env.write_registry(&registry_bare_layers(&["bad"]));
     env.write_layer(
         "bad",
-        "schema_version = 2\n\n[workloads.example-service]\ncpus = 3\n",
+        "schema_version = 3\n\n[workloads.example-service]\ncpus = 3\n",
     );
 
     let out = env.run(env.cmd().args(["workload", "plan", "example-service"]));
     assert!(
         !out.status.success(),
-        "schema_version=2 must fail; got success:\n{}",
+        "schema_version=3 must fail; got success:\n{}",
         stdout_of(&out)
     );
     let stderr = stderr_of(&out);
     assert!(
-        stderr.contains("is not supported (expected 1)"),
+        stderr.contains("is not supported (expected 2)"),
         "stderr must carry the schema_version refusal; got:\n{stderr}"
     );
 
@@ -586,14 +588,14 @@ fn production_schema_version_2_refused_at_load() {
 }
 
 /// Same refusal via the (higher-precedence) project layer: trusted project
-/// with schema_version = 2 outranks both reference and context layers.
+/// with schema_version = 3 outranks both reference and context layers.
 #[test]
-fn production_schema_version_2_refused_from_project_layer() {
+fn production_schema_version_3_refused_from_project_layer() {
     let env = ProdHome::new("schema-version-project");
     env.write_registry("[settings]\n");
 
-    let proj = env.project_dir("schema2");
-    std::fs::write(proj.join("workestrate.toml"), "schema_version = 2\n")
+    let proj = env.project_dir("schema3");
+    std::fs::write(proj.join("workestrate.toml"), "schema_version = 3\n")
         .expect("write project layer");
 
     // Trust it so the layer actually loads (the gate must not mask the test).
@@ -607,12 +609,12 @@ fn production_schema_version_2_refused_from_project_layer() {
     );
     assert!(
         !out.status.success(),
-        "schema_version=2 (project layer) must fail; got success:\n{}",
+        "schema_version=3 (project layer) must fail; got success:\n{}",
         stdout_of(&out)
     );
     let stderr = stderr_of(&out);
     assert!(
-        stderr.contains("is not supported (expected 1)"),
+        stderr.contains("is not supported (expected 2)"),
         "stderr must carry the schema_version refusal; got:\n{stderr}"
     );
 

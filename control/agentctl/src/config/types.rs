@@ -9,6 +9,7 @@
 //! workload-level keys BEFORE the fragment is re-parsed via
 //! `merge::Layer::from_string`, so override typos remain warnings, not errors.
 
+use serde::ser::SerializeMap;
 use serde::{de, Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -82,21 +83,6 @@ pub struct EnvVarConfig {
 #[allow(dead_code)]
 pub struct SecretEnvConfig {
     pub secret: String,
-}
-
-/// Serde/schemars-boundary-only helper for the `secret_env` string-or-table
-/// shorthand (spec 13): a bare string `"NAME"` is shorthand for the inline
-/// table `{ secret = "NAME" }`. This enum is NEVER stored —
-/// [`deserialize_secret_env`] normalizes every element to [`SecretEnvConfig`]
-/// at parse time, so merge/validation/plan code sees the identical post-parse
-/// struct it saw before. The `Full` (table) variant is kept as forward-compat
-/// for future per-entry fields.
-#[derive(Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-#[allow(dead_code)] // serde/schemars-boundary-only: variants are never read in Rust code
-enum SecretEnvShorthand {
-    Bare(String),
-    Full(SecretEnvConfig),
 }
 
 /// Deserialize `secret_env`, accepting both bare secret-name strings
@@ -204,11 +190,9 @@ struct EnvSecretRef {
 
 /// Serde/schemars-boundary-only helper for the `env` map value forms
 /// (spec 14): a bare string `"value"` is a literal value, an inline table
-/// `{ secret = "NAME" }` a secret reference. This enum is NEVER stored —
-/// [`deserialize_env`] normalizes every map entry to [`EnvVarConfig`] at
-/// parse time, so merge/validation/plan code sees the identical post-parse
-/// struct it saw before. It exists so the generated schema can show both
-/// value forms.
+/// `{ secret = "NAME" }` a secret reference. This enum is NEVER stored — it
+/// backs the schemars rendering of [`EnvBinding`] (the map value in the v2
+/// env map), so the generated schema shows both value forms.
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 #[allow(dead_code)] // serde/schemars-boundary-only: variants are never read in Rust code
@@ -220,97 +204,37 @@ enum EnvValueShorthand {
 /// Schemars-boundary-only helper for the `env` field shape (spec 14): the
 /// field accepts EITHER the classic sequence of `[[env]]` entry tables OR
 /// the map form `{ KEY = "value", KEY2 = { secret = "NAME" } }`. This enum
-/// is NEVER constructed or deserialized — [`deserialize_env`] normalizes
-/// both forms to `Vec<EnvVarConfig>` at parse time; it exists only so
+/// is NEVER constructed or deserialized — [`EnvBindings`]'s custom
+/// deserializer normalizes both forms at parse time; it exists only so
 /// `#[schemars(with = "EnvFieldShape")]` renders the field as
-/// `anyOf [array-of-EnvVarConfig, object-map]`.
+/// `anyOf [array-of-EnvVarConfig, object-map-of-EnvBinding]`. BOTH forms
+/// stay in the emitted schema for one cycle because v1 still parses.
 #[derive(schemars::JsonSchema)]
 #[serde(untagged)]
 #[allow(dead_code)] // schemars-boundary-only: variants are never constructed in Rust code
 enum EnvFieldShape {
     Seq(Vec<EnvVarConfig>),
-    Map(HashMap<String, EnvValueShorthand>),
+    Map(HashMap<String, EnvBinding>),
 }
 
-/// Deserialize `env`, accepting both the classic sequence of `[[env]]` entry
-/// tables and the map form `{ KEY = "value", KEY2 = { secret = "NAME" } }`
-/// (spec 14), normalizing to `Vec<EnvVarConfig>`. Sequence elements are
-/// parsed as [`EnvVarConfig`] exactly as the derived default did (so
-/// `deny_unknown_fields`/unknown-field errors inside `[[env]]` tables are
-/// preserved verbatim). Map entries are collected in DOCUMENT ORDER —
-/// toml_edit's `MapAccess` preserves it, and entries are pushed straight
-/// into the output vec in iteration order (no intermediate map, no sorting;
-/// duplicate keys are a free TOML-level error). Map values that are neither
-/// a bare string literal nor an inline table produce a precise error naming
-/// the entry key, the offending value's type, and the two expected forms.
-fn deserialize_env<'de, D>(deserializer: D) -> Result<Vec<EnvVarConfig>, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    struct EnvVisitor;
-
-    impl<'de> de::Visitor<'de> for EnvVisitor {
-        type Value = Vec<EnvVarConfig>;
-
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str(
-                "a sequence of env entry tables, or a map of env names to bare string \
-                 literals and/or inline tables like { secret = \"NAME\" }",
-            )
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-        where
-            A: de::SeqAccess<'de>,
-        {
-            let mut entries = Vec::with_capacity(seq.size_hint().unwrap_or(0));
-            let mut index = 0usize;
-            while let Some(entry) = seq
-                .next_element::<EnvVarConfig>()
-                .map_err(|e| de::Error::custom(format_args!("env entry at index {index}: {e}")))?
-            {
-                entries.push(entry);
-                index += 1;
-            }
-            Ok(entries)
-        }
-
-        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-        where
-            A: de::MapAccess<'de>,
-        {
-            let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
-            while let Some(key) = map.next_key::<String>()? {
-                let value = map
-                    .next_value::<EnvMapValue>()
-                    .map_err(|e| de::Error::custom(format_args!("env map entry '{key}': {e}")))?;
-                entries.push(EnvVarConfig {
-                    name: key,
-                    value: value.value,
-                    secret: value.secret,
-                });
-            }
-            Ok(entries)
-        }
-    }
-
-    deserializer.deserialize_any(EnvVisitor)
+/// A single workload env binding (v2): the value of one entry in the
+/// name-keyed, document-order-ordered `workloads.<name>.env` map. A bare
+/// string is a literal value; an inline table `{ secret = "ID" }` references
+/// the `[secrets.ID]` definition whose `delivery` decides whether the
+/// binding becomes a plan `env` entry (`delivery = "env"`) or a host-bound
+/// plan `secret_env` entry (`delivery = "host_bound"`, the default).
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnvBinding {
+    /// Literal value: `env = { KEY = "value" }`.
+    Literal(String),
+    /// Secret reference: `env = { KEY = { secret = "ID" } }`.
+    Secret(String),
 }
 
-/// One `env` map value during deserialization: either a bare string literal
-/// (the variable's value) or an inline [`EnvSecretRef`] table. Any other
-/// value type (integer, boolean, array, …) is rejected via serde's
-/// `invalid_type` machinery with [`EnvMapValueVisitor`]'s `expecting`
-/// message.
-struct EnvMapValue {
-    value: Option<String>,
-    secret: Option<String>,
-}
+struct EnvBindingVisitor;
 
-struct EnvMapValueVisitor;
-
-impl<'de> de::Visitor<'de> for EnvMapValueVisitor {
-    type Value = EnvMapValue;
+impl<'de> de::Visitor<'de> for EnvBindingVisitor {
+    type Value = EnvBinding;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("a bare string literal, or an inline table like { secret = \"NAME\" }")
@@ -320,20 +244,14 @@ impl<'de> de::Visitor<'de> for EnvMapValueVisitor {
     where
         E: de::Error,
     {
-        Ok(EnvMapValue {
-            value: Some(v.to_string()),
-            secret: None,
-        })
+        Ok(EnvBinding::Literal(v.to_string()))
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(EnvMapValue {
-            value: Some(v),
-            secret: None,
-        })
+        Ok(EnvBinding::Literal(v))
     }
 
     fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
@@ -343,19 +261,176 @@ impl<'de> de::Visitor<'de> for EnvMapValueVisitor {
         // Delegate to the real struct so `deny_unknown_fields` errors are
         // preserved verbatim for inline-table values.
         let secret_ref = EnvSecretRef::deserialize(de::value::MapAccessDeserializer::new(map))?;
-        Ok(EnvMapValue {
-            value: None,
-            secret: Some(secret_ref.secret),
-        })
+        Ok(EnvBinding::Secret(secret_ref.secret))
     }
 }
 
-impl<'de> Deserialize<'de> for EnvMapValue {
+impl<'de> Deserialize<'de> for EnvBinding {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: de::Deserializer<'de>,
     {
-        deserializer.deserialize_any(EnvMapValueVisitor)
+        deserializer.deserialize_any(EnvBindingVisitor)
+    }
+}
+
+impl Serialize for EnvBinding {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            EnvBinding::Literal(value) => serializer.serialize_str(value),
+            EnvBinding::Secret(id) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("secret", id)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl schemars::JsonSchema for EnvBinding {
+    fn schema_name() -> String {
+        "EnvBinding".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
+        // Render as the two accepted wire forms (bare string | secret-ref
+        // inline table), identical to the pre-v2 map value shape.
+        EnvValueShorthand::json_schema(gen)
+    }
+}
+
+/// The name-keyed, document-order-ordered `workloads.<name>.env` map (v2),
+/// implemented as a Vec of `(name, binding)` pairs so document order is
+/// preserved exactly (no `indexmap` dependency — the same trick the spec-14
+/// map visitor used).
+///
+/// The custom deserializer accepts BOTH:
+///   (a) the v2 map form `env = { KEY = "literal", KEY2 = { secret = "ID" } }`, and
+///   (b) the legacy `[[env]]` array-of-[`EnvVarConfig`] form, normalized per
+///       entry: value only → [`EnvBinding::Literal`], secret only →
+///       [`EnvBinding::Secret`], neither → `Literal("")`, both → a precise
+///       hard error ("cannot have both value and secret").
+/// Serialization always emits the v2 map form.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EnvBindings(Vec<(String, EnvBinding)>);
+
+impl EnvBindings {
+    /// Ordered iteration over `(name, binding)` pairs in document/merge order.
+    pub fn iter(&self) -> std::slice::Iter<'_, (String, EnvBinding)> {
+        self.0.iter()
+    }
+
+    /// Look up a binding by env-var name.
+    pub fn get(&self, name: &str) -> Option<&EnvBinding> {
+        self.0.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+    }
+
+    /// Replace the binding for `name` in place (preserving position) when it
+    /// exists, else append it. This is the merge primitive (union-by-name,
+    /// last layer wins per key).
+    pub fn upsert(&mut self, name: &str, binding: EnvBinding) {
+        if let Some(slot) = self.0.iter_mut().find(|(k, _)| k == name) {
+            slot.1 = binding;
+        } else {
+            self.0.push((name.to_string(), binding));
+        }
+    }
+
+    /// Whether the map holds no bindings.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The number of bindings.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+struct EnvBindingsVisitor;
+
+impl<'de> de::Visitor<'de> for EnvBindingsVisitor {
+    type Value = EnvBindings;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(
+            "a sequence of env entry tables, or a map of env names to bare string \
+             literals and/or inline tables like { secret = \"NAME\" }",
+        )
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::SeqAccess<'de>,
+    {
+        // Legacy `[[env]]` array-of-tables form. Elements are parsed as
+        // `EnvVarConfig` exactly as the derived default did (so
+        // `deny_unknown_fields`/unknown-field errors inside `[[env]]` tables
+        // are preserved verbatim), then normalized to bindings.
+        let mut entries = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        let mut index = 0usize;
+        while let Some(entry) = seq
+            .next_element::<EnvVarConfig>()
+            .map_err(|e| de::Error::custom(format_args!("env entry at index {index}: {e}")))?
+        {
+            let binding = match (entry.value, entry.secret) {
+                (Some(value), None) => EnvBinding::Literal(value),
+                (None, Some(secret)) => EnvBinding::Secret(secret),
+                (None, None) => EnvBinding::Literal(String::new()),
+                (Some(_), Some(_)) => {
+                    return Err(de::Error::custom(format_args!(
+                        "env '{}' cannot have both value and secret",
+                        entry.name
+                    )));
+                }
+            };
+            entries.push((entry.name, binding));
+            index += 1;
+        }
+        Ok(EnvBindings(entries))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::MapAccess<'de>,
+    {
+        // v2 map form. Entries are collected in DOCUMENT ORDER — toml_edit's
+        // `MapAccess` preserves it, and entries are pushed straight into the
+        // output vec in iteration order (no intermediate map, no sorting;
+        // duplicate keys are a free TOML-level error).
+        let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some(key) = map.next_key::<String>()? {
+            let binding = map
+                .next_value::<EnvBinding>()
+                .map_err(|e| de::Error::custom(format_args!("env map entry '{key}': {e}")))?;
+            entries.push((key, binding));
+        }
+        Ok(EnvBindings(entries))
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvBindings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(EnvBindingsVisitor)
+    }
+}
+
+impl Serialize for EnvBindings {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, binding) in &self.0 {
+            map.serialize_entry(key, binding)?;
+        }
+        map.end()
     }
 }
 
@@ -440,11 +515,15 @@ pub struct WorkloadConfig {
     #[serde(default)]
     pub command: Vec<String>,
     pub log_stop_errors: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_env")]
+    #[serde(default)]
     #[schemars(with = "EnvFieldShape")]
-    pub env: Vec<EnvVarConfig>,
+    pub env: EnvBindings,
+    /// LEGACY v1 secret bindings (`secret_env = ["NAME"]` /
+    /// `[[secret_env]]`). Kept parseable for the one-cycle v1 shim — folded
+    /// into `env` bindings post-merge and then cleared; hard-rejected for
+    /// schema_version = 2 layers and REMOVED from the emitted v2 schema.
     #[serde(default, deserialize_with = "deserialize_secret_env")]
-    #[schemars(with = "Vec<SecretEnvShorthand>")]
+    #[schemars(skip)]
     pub secret_env: Vec<SecretEnvConfig>,
     #[serde(default)]
     pub ports: Vec<PortMapping>,
@@ -463,11 +542,32 @@ pub struct WorkloadConfig {
     pub depends_on: HashMap<String, DependsOnSpec>,
 }
 
+/// How a secret is delivered into the sandbox (v2). `host_bound` (the
+/// default; secure-by-default) injects the value only for the declared
+/// egress `hosts` — with `hosts` omitted the secret is deny-all (it never
+/// leaves the host). `env` exposes the value as a plain sandbox environment
+/// variable; `hosts` must then be ABSENT on the definition (reachability is
+/// governed by egress rules, not host bindings).
+///
+/// TOML values: `delivery = "env"` / `delivery = "host_bound"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    Env,
+    HostBound,
+}
+
 /// Definition of one named secret (`secrets.<name>` in workestrate.toml).
-/// `env_var` is the environment variable the resolved value is injected as;
-/// `hosts` constrains which egress hosts may receive it; `required` makes a
-/// missing value a hard error; `source`/`exposed_as`/`placeholder`/
-/// `description` drive resolution and UX.
+/// `env_var` is the host environment variable the resolved value is read
+/// from (default: the secret ID); `hosts` constrains which egress hosts may
+/// receive a host-bound secret; `required` makes a missing value a hard
+/// error; `placeholder` is a known-bad value to reject; `delivery` selects
+/// env vs host-bound injection (default host-bound).
+///
+/// `source`/`exposed_as`/`description` are LEGACY v1-only fields: they stay
+/// parseable for the one-cycle v1 shim (the post-merge fold turns remap defs
+/// into env bindings and strips descriptions), are hard-rejected for
+/// schema_version = 2 layers, and are removed from the emitted v2 schema.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -477,8 +577,15 @@ pub struct SecretDefConfig {
     pub hosts: Option<Vec<String>>,
     pub required: Option<bool>,
     pub placeholder: Option<String>,
+    pub delivery: Option<Delivery>,
+    /// LEGACY v1 remap source (`source = "OTHER_SECRET"`). See struct docs.
+    #[schemars(skip)]
     pub source: Option<String>,
+    /// LEGACY v1 remap target env name. See struct docs.
+    #[schemars(skip)]
     pub exposed_as: Option<String>,
+    /// LEGACY v1 human-readable description. See struct docs.
+    #[schemars(skip)]
     pub description: Option<String>,
 }
 
@@ -988,18 +1095,16 @@ secret = "B"
 
     /// Bare map literals: both the inline-table form `env = { FOO = "bar" }`
     /// and the standard-table form `[workloads.pi.env]` parse to the
-    /// identical `EnvVarConfig` entry (name from the key, value set, no
-    /// secret).
+    /// identical binding (name from the key, literal value).
     #[test]
     fn env_map_bare_literals_parse() {
-        let expected = vec![EnvVarConfig {
-            name: "FOO".to_string(),
-            value: Some("bar".to_string()),
-            secret: None,
-        }];
+        let expected = EnvBindings(vec![(
+            "FOO".to_string(),
+            EnvBinding::Literal("bar".to_string()),
+        )]);
         for raw in [
             r#"
-schema_version = 1
+schema_version = 2
 
 [workloads.pi]
 kind = "agent"
@@ -1008,7 +1113,7 @@ command = []
 env = { FOO = "bar" }
 "#,
             r#"
-schema_version = 1
+schema_version = 2
 
 [workloads.pi]
 kind = "agent"
@@ -1025,12 +1130,11 @@ FOO = "bar"
     }
 
     /// A map value that is an inline table is a secret reference:
-    /// `env = { API_KEY = { secret = "MY_SECRET" } }` sets `secret`,
-    /// leaving `value` unset.
+    /// `env = { API_KEY = { secret = "MY_SECRET" } }` binds the secret ID.
     #[test]
     fn env_map_secret_ref_parses() {
         let raw = r#"
-schema_version = 1
+schema_version = 2
 
 [workloads.pi]
 kind = "agent"
@@ -1041,11 +1145,10 @@ env = { API_KEY = { secret = "MY_SECRET" } }
         let config: ConfigFile = toml::from_str(raw).unwrap();
         assert_eq!(
             config.workloads["pi"].env,
-            vec![EnvVarConfig {
-                name: "API_KEY".to_string(),
-                value: None,
-                secret: Some("MY_SECRET".to_string()),
-            }]
+            EnvBindings(vec![(
+                "API_KEY".to_string(),
+                EnvBinding::Secret("MY_SECRET".to_string())
+            )])
         );
     }
 
@@ -1055,7 +1158,7 @@ env = { API_KEY = { secret = "MY_SECRET" } }
     #[test]
     fn env_map_mixed_entries_preserve_document_order() {
         let raw = r#"
-schema_version = 1
+schema_version = 2
 
 [workloads.pi]
 kind = "agent"
@@ -1066,23 +1169,14 @@ env = { ZEBRA = "z", MIDDLE = { secret = "M_SECRET" }, ALPHA = "a" }
         let config: ConfigFile = toml::from_str(raw).unwrap();
         assert_eq!(
             config.workloads["pi"].env,
-            vec![
-                EnvVarConfig {
-                    name: "ZEBRA".to_string(),
-                    value: Some("z".to_string()),
-                    secret: None,
-                },
-                EnvVarConfig {
-                    name: "MIDDLE".to_string(),
-                    value: None,
-                    secret: Some("M_SECRET".to_string()),
-                },
-                EnvVarConfig {
-                    name: "ALPHA".to_string(),
-                    value: Some("a".to_string()),
-                    secret: None,
-                },
-            ]
+            EnvBindings(vec![
+                ("ZEBRA".to_string(), EnvBinding::Literal("z".to_string())),
+                (
+                    "MIDDLE".to_string(),
+                    EnvBinding::Secret("M_SECRET".to_string())
+                ),
+                ("ALPHA".to_string(), EnvBinding::Literal("a".to_string())),
+            ])
         );
     }
 
@@ -1090,7 +1184,7 @@ env = { ZEBRA = "z", MIDDLE = { secret = "M_SECRET" }, ALPHA = "a" }
     #[test]
     fn env_map_duplicate_key_fails() {
         let raw = r#"
-schema_version = 1
+schema_version = 2
 
 [workloads.pi]
 kind = "agent"
@@ -1104,7 +1198,8 @@ env = { FOO = "a", FOO = "b" }
         );
     }
 
-    /// The classic array-of-tables form parses unchanged (backward compat).
+    /// The legacy array-of-tables form still parses (v1 compat shim):
+    /// value-only entries normalize to Literal, secret-only to Secret.
     #[test]
     fn env_array_of_tables_still_parses() {
         let raw = r#"
@@ -1126,18 +1221,59 @@ secret = "BAZ_SECRET"
         let config: ConfigFile = toml::from_str(raw).unwrap();
         assert_eq!(
             config.workloads["pi"].env,
-            vec![
-                EnvVarConfig {
-                    name: "FOO".to_string(),
-                    value: Some("bar".to_string()),
-                    secret: None,
-                },
-                EnvVarConfig {
-                    name: "BAZ".to_string(),
-                    value: None,
-                    secret: Some("BAZ_SECRET".to_string()),
-                },
-            ]
+            EnvBindings(vec![
+                ("FOO".to_string(), EnvBinding::Literal("bar".to_string())),
+                (
+                    "BAZ".to_string(),
+                    EnvBinding::Secret("BAZ_SECRET".to_string())
+                ),
+            ])
+        );
+    }
+
+    /// A legacy `[[env]]` entry with neither value nor secret normalizes to
+    /// an empty literal; one with BOTH is a precise hard error (the message
+    /// the pre-v2 plan builder emitted, moved to parse time).
+    #[test]
+    fn env_array_entry_normalization_edge_cases() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.env]]
+name = "EMPTY"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].env,
+            EnvBindings(vec![(
+                "EMPTY".to_string(),
+                EnvBinding::Literal(String::new())
+            )])
+        );
+
+        let both = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.env]]
+name = "BAD"
+value = "x"
+secret = "S"
+"#;
+        let err = toml::from_str::<ConfigFile>(both).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("env 'BAD' cannot have both value and secret"),
+            "both-fields entry must fail with the precise message: {msg}"
         );
     }
 
@@ -1166,8 +1302,8 @@ BAZ = "qux"
         );
     }
 
-    /// The array-of-tables form serializes via `toml::to_string` and
-    /// re-parses identical, exactly as before the map form was added.
+    /// The array-of-tables form serializes via `toml::to_string` (always the
+    /// v2 MAP form) and re-parses to the identical bindings.
     #[test]
     fn env_array_form_serializes_and_round_trips() {
         let raw = r#"
@@ -1198,7 +1334,7 @@ secret = "BAZ_SECRET"
     #[test]
     fn env_map_bad_value_error_names_key_type_and_forms() {
         let raw = r#"
-schema_version = 1
+schema_version = 2
 
 [workloads.pi]
 kind = "agent"
@@ -1231,7 +1367,7 @@ env = { FOO = 42 }
     #[test]
     fn env_map_inline_table_rejects_unknown_field() {
         let raw = r#"
-schema_version = 1
+schema_version = 2
 
 [workloads.pi]
 kind = "agent"
@@ -1244,5 +1380,44 @@ env = { API_KEY = { secert = "MY_SECRET" } }
             err.to_string().contains("unknown field"),
             "inline-table typo must fail: {err}"
         );
+    }
+
+    // ---- EnvBindings methods ----
+
+    /// `get`/`upsert`/`len`/`is_empty`: upsert replaces in place (position
+    /// preserved) or appends, matching the merge union-by-name semantics.
+    #[test]
+    fn env_bindings_upsert_replaces_in_place_or_appends() {
+        let mut bindings = EnvBindings(vec![
+            ("A".to_string(), EnvBinding::Literal("1".to_string())),
+            ("B".to_string(), EnvBinding::Literal("2".to_string())),
+        ]);
+        assert_eq!(bindings.len(), 2);
+        assert!(!bindings.is_empty());
+        assert_eq!(
+            bindings.get("A"),
+            Some(&EnvBinding::Literal("1".to_string()))
+        );
+        assert_eq!(bindings.get("MISSING"), None);
+
+        // Replace in place: A keeps position 0.
+        bindings.upsert("A", EnvBinding::Secret("S".to_string()));
+        // Append: C lands at the end.
+        bindings.upsert("C", EnvBinding::Literal("3".to_string()));
+
+        let names: Vec<&str> = bindings.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(names, vec!["A", "B", "C"], "order must be preserved");
+        assert_eq!(
+            bindings.get("A"),
+            Some(&EnvBinding::Secret("S".to_string()))
+        );
+        assert_eq!(
+            bindings.get("C"),
+            Some(&EnvBinding::Literal("3".to_string()))
+        );
+
+        let empty = EnvBindings::default();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
     }
 }

@@ -5,8 +5,8 @@ command: node dist/cli.js
 cpus: 2
 memory: 2048 MiB
 env: T3MP3ST_HOST=127.0.0.1
+env: OPENAI_API_KEY=(redacted)
 env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'litellm')
-secret_env: OPENAI_API_KEY (value redacted, allowed: host.microsandbox.internal, required)
 mount: workspaces/example-offensive-state:/data
 network: default_deny=false
   egress: tcp:53 -> host

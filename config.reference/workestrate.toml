@@ -1,6 +1,6 @@
 #:schema ../schemas/workestrate.schema.json
 
-schema_version = 1
+schema_version = 2
 
 # Synthetic reference config. This is a machine-independent fixture that
 # exercises every recipe type and policy feature the core understands. It is
@@ -8,19 +8,13 @@ schema_version = 1
 
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
-hosts = ["host.microsandbox.internal"]
+delivery = "env"
 required = true
-description = "LiteLLM proxy authentication. Agents use this in milestone 1."
-
-[secrets.LITELLM_AUTH]
-source = "LITELLM_MASTER_KEY"
-exposed_as = "OPENAI_API_KEY"
 
 [secrets.GITHUB_TOKEN]
 env_var = "GITHUB_TOKEN"
 hosts = ["github.com", "api.github.com"]
 required = false
-description = "GitHub Personal Access Token for agent sandboxes (git operations + API)."
 
 [workloads.litellm]
 kind = "service"
@@ -62,10 +56,10 @@ cpus = 2
 memory_mib = 1024
 command = ["python", "-m", "http.server", "8080"]
 log_stop_errors = true
-secret_env = ["LITELLM_AUTH"]
 
 [workloads.example-service.env]
 APP_PORT = "8080"
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }
 
 [[workloads.example-service.ports]]
 host = 8080
@@ -126,12 +120,9 @@ memory_mib = 512
 command = ["node", "dist/cli.js"]
 log_stop_errors = false
 
-[[workloads.example-agent.env]]
-name = "API_KEY"
-secret = "LITELLM_MASTER_KEY"
-
-[[workloads.example-agent.secret_env]]
-secret = "GITHUB_TOKEN"
+[workloads.example-agent.env]
+API_KEY = { secret = "LITELLM_MASTER_KEY" }
+GITHUB_TOKEN = { secret = "GITHUB_TOKEN" }
 
 [[workloads.example-agent.mounts]]
 host = "workspaces/example-agent-state"
@@ -176,12 +167,9 @@ memory_mib = 2048
 command = ["node", "dist/cli.js"]
 log_stop_errors = false
 
-[[workloads.example-offensive.secret_env]]
-secret = "LITELLM_AUTH"
-
-[[workloads.example-offensive.env]]
-name = "T3MP3ST_HOST"
-value = "127.0.0.1"
+[workloads.example-offensive.env]
+T3MP3ST_HOST = "127.0.0.1"
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }
 
 [[workloads.example-offensive.mounts]]
 host = "workspaces/example-offensive-state"

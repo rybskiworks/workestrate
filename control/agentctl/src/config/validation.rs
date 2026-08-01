@@ -11,14 +11,16 @@ use crate::recipes::EgressRecipeRef;
 // workestrate.toml schema
 // ---------------------------------------------------------------------------
 
-/// The schema_version this build supports (WP6(f)/E2).
+/// The schema_version this build supports (P1 Wave 1).
 ///
 /// `ConfigFile.schema_version` is `#[serde(default)]`, so a MISSING version
 /// parses as 0 — `validate_config` treats 0 as "absent/legacy" and accepts it
-/// as 1 with a stderr warning (backward compat). An explicit
-/// `schema_version = 0` is a degenerate case that falls into the same
-/// warn+accept bucket. Any other value (>= 2) is a hard error.
-pub const EXPECTED_SCHEMA_VERSION: u32 = 1;
+/// with a stderr warning (backward compat). An explicit `schema_version = 0`
+/// is a degenerate case that falls into the same warn+accept bucket.
+/// `schema_version = 1` is accepted with a stderr deprecation warning (legacy
+/// secret forms are shimmed for one cycle). `schema_version = 2` is native.
+/// Anything >= 3 is a hard error.
+pub const EXPECTED_SCHEMA_VERSION: u32 = 2;
 
 /// Validate a config repo name for `workestrate config new`. Same safe-set
 /// as workload names: names flow into both filesystem paths (the registry
@@ -112,16 +114,24 @@ fn is_valid_env_var_name(name: &str) -> bool {
 /// and mount/env/secret rules. Returns the first violation found as a hard
 /// error.
 pub fn validate_config(config: &ConfigFile) -> Result<()> {
-    // WP6(f)/E2: schema_version enforcement. `ConfigFile.schema_version` is
-    // #[serde(default)], so a MISSING version parses as 0 — treated as
-    // "absent/legacy": accepted as EXPECTED_SCHEMA_VERSION with a stderr
+    // WP6(f)/E2 + P1 Wave 1: schema_version enforcement.
+    // `ConfigFile.schema_version` is #[serde(default)], so a MISSING version
+    // parses as 0 — treated as "absent/legacy": accepted with a stderr
     // warning (backward compat). An explicit `schema_version = 0` is a
-    // degenerate case that falls into the same warn+accept bucket. Any other
-    // unsupported value (>= 2) is a hard error.
+    // degenerate case that falls into the same warn+accept bucket. Version 1
+    // is accepted with a deprecation warning (the legacy secret forms are
+    // shimmed for one cycle). Version 2 is native. Anything above is a hard
+    // error.
     match config.schema_version {
         0 => {
             eprintln!(
                 "WARNING: schema_version missing; assuming {} (backward compat)",
+                EXPECTED_SCHEMA_VERSION
+            );
+        }
+        1 => {
+            eprintln!(
+                "WARNING: schema_version 1 is deprecated; legacy secret forms are shimmed for one cycle; emit {}",
                 EXPECTED_SCHEMA_VERSION
             );
         }
@@ -246,6 +256,18 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
+    // P1 Wave 1: a secret with `delivery = "env"` must NOT declare `hosts` —
+    // reachability of an env-delivered secret is governed by egress rules,
+    // not host bindings.
+    for (secret_name, secret) in &config.secrets {
+        if secret.delivery == Some(crate::config::Delivery::Env) && secret.hosts.is_some() {
+            anyhow::bail!(
+                "secret '{}': delivery 'env' does not take hosts; reachability is governed by egress rules",
+                secret_name
+            );
+        }
+    }
+
     // WP10/A11: `secrets.{name}.env_var` values become real environment
     // variables (read from the host and injected into the sandbox); reject
     // names no shell or `exec` could set.
@@ -290,8 +312,8 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
 
     // Secret references must be defined in the secrets section.
     for (workload_name, workload) in &config.workloads {
-        for env in &workload.env {
-            if let Some(ref secret_name) = env.secret {
+        for (env_name, binding) in workload.env.iter() {
+            if let crate::config::EnvBinding::Secret(secret_name) = binding {
                 if !config.secrets.contains_key(secret_name) {
                     anyhow::bail!(
                         "workload '{}' env references undefined secret '{}'",
@@ -300,21 +322,18 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                     );
                 }
             }
-        }
-        // WP10/A11: env entry names become real environment variables in the
-        // sandbox; reject anything that is not a valid env-var name. (The
-        // `secret_env` field holds only a `secret` reference — no name to
-        // check here; the env var it produces is the secret's own `env_var` /
-        // `exposed_as`, validated in the secrets section below.)
-        for env in &workload.env {
-            if !is_valid_env_var_name(&env.name) {
+            // WP10/A11: env binding keys become real environment variables in
+            // the sandbox; reject anything that is not a valid env-var name.
+            if !is_valid_env_var_name(env_name) {
                 anyhow::bail!(
                     "workload '{}' env name '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
                     workload_name,
-                    env.name
+                    env_name
                 );
             }
         }
+        // Legacy v1 `secret_env` (pre-fold path only — the post-merge fold
+        // clears these; a directly-parsed ConfigFile can still carry them).
         for se in &workload.secret_env {
             if !config.secrets.contains_key(&se.secret) {
                 anyhow::bail!(
@@ -502,33 +521,42 @@ pub(crate) mod tests {
             .unwrap_or_else(|e| panic!("reference config should validate clean: {e}"));
     }
 
-    // ---- WP6(f)/E2: schema_version enforcement ----
+    // ---- WP6(f)/E2 + P1 Wave 1: schema_version enforcement ----
 
     #[test]
     fn validate_rejects_unsupported_schema_version() {
-        let toml = MINIMAL_VALID_TOML.replace("schema_version = 1", "schema_version = 2");
+        let toml = MINIMAL_VALID_TOML.replace("schema_version = 1", "schema_version = 3");
         let config: ConfigFile = toml::from_str(&toml).unwrap();
         let err = validate_config(&config).unwrap_err().to_string();
         assert!(
-            err.contains("is not supported (expected 1)"),
-            "error must contain 'is not supported (expected 1)': {err}"
+            err.contains("is not supported (expected 2)"),
+            "error must contain 'is not supported (expected 2)': {err}"
         );
         assert_eq!(
             err,
-            "schema_version 2 is not supported (expected 1). This workestrate build supports schema_version 1 only."
+            "schema_version 3 is not supported (expected 2). This workestrate build supports schema_version 2 only."
         );
     }
 
     #[test]
-    fn validate_accepts_schema_version_1() {
+    fn validate_accepts_schema_version_1_with_deprecation_warning() {
+        // v1 is accepted (legacy secret forms shimmed for one cycle); the
+        // deprecation notice goes to stderr.
         let config: ConfigFile = toml::from_str(MINIMAL_VALID_TOML).unwrap();
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn validate_accepts_schema_version_2_native() {
+        let toml = MINIMAL_VALID_TOML.replace("schema_version = 1", "schema_version = 2");
+        let config: ConfigFile = toml::from_str(&toml).unwrap();
         validate_config(&config).unwrap();
     }
 
     #[test]
     fn validate_accepts_missing_schema_version_as_legacy() {
         // schema_version is #[serde(default)] → missing parses as 0 → accepted
-        // as 1 with a stderr warning (backward compat).
+        // with a stderr warning (backward compat).
         let toml = MINIMAL_VALID_TOML.replace("schema_version = 1\n\n", "");
         let config: ConfigFile = toml::from_str(&toml).unwrap();
         assert_eq!(config.schema_version, 0);
@@ -536,10 +564,36 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn load_config_rejects_schema_version_2() -> Result<()> {
+    fn validate_rejects_env_delivery_with_hosts() {
+        let toml = r#"
+schema_version = 2
+
+[secrets.LITELLM_MASTER_KEY]
+env_var = "LITELLM_MASTER_KEY"
+delivery = "env"
+hosts = ["host.microsandbox.internal"]
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "secret 'LITELLM_MASTER_KEY': delivery 'env' does not take hosts; reachability is governed by egress rules"
+        );
+    }
+
+    #[test]
+    fn load_config_rejects_schema_version_3() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!(
-            "workestrate-sv2-{}-{}",
+            "workestrate-sv3-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -549,7 +603,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&tmp)?;
         std::fs::write(
             tmp.join("workestrate.toml"),
-            MINIMAL_VALID_TOML.replace("schema_version = 1", "schema_version = 2"),
+            MINIMAL_VALID_TOML.replace("schema_version = 1", "schema_version = 3"),
         )?;
         let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
         std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
@@ -564,7 +618,7 @@ pub(crate) mod tests {
 
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("is not supported (expected 1)"),
+            err.contains("is not supported (expected 2)"),
             "load_config must propagate the schema_version error: {err}"
         );
         Ok(())
@@ -611,11 +665,7 @@ pub(crate) mod tests {
             .get_mut("pi")
             .unwrap()
             .env
-            .push(crate::config::EnvVarConfig {
-                name: "1FOO".to_string(),
-                value: Some("x".to_string()),
-                secret: None,
-            });
+            .upsert("1FOO", crate::config::EnvBinding::Literal("x".to_string()));
         let err = validate_config(&config).unwrap_err();
         let msg = err.to_string();
         assert_eq!(
@@ -627,16 +677,10 @@ pub(crate) mod tests {
     #[test]
     fn validate_config_accepts_valid_env_name() -> Result<()> {
         let mut config = base_config_for_validation();
-        config
-            .workloads
-            .get_mut("pi")
-            .unwrap()
-            .env
-            .push(crate::config::EnvVarConfig {
-                name: "VALID_NAME".to_string(),
-                value: Some("x".to_string()),
-                secret: None,
-            });
+        config.workloads.get_mut("pi").unwrap().env.upsert(
+            "VALID_NAME",
+            crate::config::EnvBinding::Literal("x".to_string()),
+        );
         validate_config(&config)
     }
 

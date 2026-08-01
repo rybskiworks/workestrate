@@ -531,16 +531,15 @@ pub fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
 
 pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> {
     let config = config::load_config()?;
-    let mut entries: Vec<(&str, &str)> = config
+    // Bare sorted key list: the resolved source env var of every secret def
+    // (raw env_var, defaulting to the secret ID). No description comments —
+    // the legacy `description` field is gone in v2.
+    let mut keys: Vec<String> = config
         .secrets
-        .values()
-        .filter_map(|s| {
-            let env_var = s.env_var.as_deref()?;
-            let description = s.description.as_deref().unwrap_or("");
-            Some((env_var, description))
-        })
+        .iter()
+        .map(|(id, s)| s.env_var.clone().unwrap_or_else(|| id.clone()))
         .collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
+    keys.sort();
 
     let mut buf = String::new();
     buf.push_str("# ai-workbench environment schema.\n");
@@ -548,13 +547,8 @@ pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> 
     buf.push_str(
         "# Real secrets live in .env.enc (encrypted) and are loaded by workestrate at runtime.\n",
     );
-    for (env_var, description) in entries {
-        if !description.is_empty() {
-            buf.push_str(&format!("\n# {}\n", description));
-        } else {
-            buf.push('\n');
-        }
-        buf.push_str(&format!("{}=\n", env_var));
+    for key in &keys {
+        buf.push_str(&format!("{}=\n", key));
     }
     buf.push_str("\n# Optional local paths\n");
     buf.push_str("AI_WORKBENCH_WORKSPACES_DIR=workspaces\n");

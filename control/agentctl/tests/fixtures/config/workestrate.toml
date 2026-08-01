@@ -1,51 +1,40 @@
-schema_version = 1
+schema_version = 2
 
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
-hosts = ["host.microsandbox.internal"]
+delivery = "env"
 required = true
-description = "LiteLLM proxy authentication. Agents use this in milestone 1."
-
-[secrets.LITELLM_AUTH]
-source = "LITELLM_MASTER_KEY"
-exposed_as = "OPENAI_API_KEY"
 
 [secrets.OPENROUTER_API_KEY]
 env_var = "OPENROUTER_API_KEY"
 hosts = ["openrouter.ai"]
 required = true
-description = "Provider keys used by LiteLLM only. Agents never receive these."
 
 [secrets.KIMI_CODE_API_KEY]
 env_var = "KIMI_CODE_API_KEY"
 hosts = ["api.kimi.com"]
 required = true
-description = "Provider keys used by LiteLLM only. Agents never receive these."
 
 [secrets.NEURALWATT_API_KEY]
 env_var = "NEURALWATT_API_KEY"
 hosts = ["api.neuralwatt.com"]
 required = true
-description = "Neuralwatt provider key used by LiteLLM only."
 
 [secrets.MINIMAX_CODING_API_KEY]
 env_var = "MINIMAX_CODING_API_KEY"
 hosts = ["api.minimax.io"]
 required = true
-description = "MiniMax Coding provider key used by LiteLLM only."
 
 [secrets.GITHUB_TOKEN]
 env_var = "GITHUB_TOKEN"
 hosts = ["github.com", "api.github.com"]
 required = false
-description = "GitHub Personal Access Token for agent sandboxes (git operations + API)."
 
 [secrets.ODYSSEUS_ADMIN_PASSWORD]
 env_var = "ODYSSEUS_ADMIN_PASSWORD"
-hosts = []
+delivery = "env"
 required = true
 placeholder = "change_me_before_first_boot"
-description = "Odysseus admin login password (AUTH_ENABLED is on by default)."
 
 [workloads.litellm]
 kind = "service"
@@ -68,16 +57,20 @@ value = "True"
 name = "LITELLM_MASTER_KEY"
 secret = "LITELLM_MASTER_KEY"
 
-[[workloads.litellm.secret_env]]
+[[workloads.litellm.env]]
+name = "OPENROUTER_API_KEY"
 secret = "OPENROUTER_API_KEY"
 
-[[workloads.litellm.secret_env]]
+[[workloads.litellm.env]]
+name = "KIMI_CODE_API_KEY"
 secret = "KIMI_CODE_API_KEY"
 
-[[workloads.litellm.secret_env]]
+[[workloads.litellm.env]]
+name = "NEURALWATT_API_KEY"
 secret = "NEURALWATT_API_KEY"
 
-[[workloads.litellm.secret_env]]
+[[workloads.litellm.env]]
+name = "MINIMAX_CODING_API_KEY"
 secret = "MINIMAX_CODING_API_KEY"
 
 [[workloads.litellm.ports]]
@@ -130,7 +123,8 @@ value = "0"
 name = "LITELLM_MASTER_KEY"
 secret = "LITELLM_MASTER_KEY"
 
-[[workloads.pi.secret_env]]
+[[workloads.pi.env]]
+name = "GITHUB_TOKEN"
 secret = "GITHUB_TOKEN"
 
 [[workloads.pi.mounts]]
@@ -198,10 +192,12 @@ value = "/app/.deps"
 name = "ODYSSEUS_ADMIN_PASSWORD"
 secret = "ODYSSEUS_ADMIN_PASSWORD"
 
-[[workloads.odysseus.secret_env]]
-secret = "LITELLM_AUTH"
+[[workloads.odysseus.env]]
+name = "OPENAI_API_KEY"
+secret = "LITELLM_MASTER_KEY"
 
-[[workloads.odysseus.secret_env]]
+[[workloads.odysseus.env]]
+name = "GITHUB_TOKEN"
 secret = "GITHUB_TOKEN"
 
 [[workloads.odysseus.ports]]
@@ -264,10 +260,12 @@ value = "http://host.microsandbox.internal:4000/v1"
 name = "OPENAI_MODEL"
 value = "coding"
 
-[[workloads.opencode.secret_env]]
-secret = "LITELLM_AUTH"
+[[workloads.opencode.env]]
+name = "OPENAI_API_KEY"
+secret = "LITELLM_MASTER_KEY"
 
-[[workloads.opencode.secret_env]]
+[[workloads.opencode.env]]
+name = "GITHUB_TOKEN"
 secret = "GITHUB_TOKEN"
 
 [[workloads.opencode.ports]]

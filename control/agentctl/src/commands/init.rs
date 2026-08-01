@@ -205,7 +205,7 @@ pub fn cmd_new(name: &str, kind: &str) -> Result<()> {
     println!("Edit {} to configure:", config_path.display());
     println!("  - Set image (recipe + ref, or recipe + contents for nix-layered)");
     println!("  - Set command");
-    println!("  - Add env/secret_env/mounts as needed");
+    println!("  - Add env/mounts as needed");
     println!();
     println!("Test: workestrate {} plan", name);
 

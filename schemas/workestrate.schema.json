@@ -79,6 +79,14 @@
       },
       "additionalProperties": false
     },
+    "Delivery": {
+      "description": "How a secret is delivered into the sandbox (v2). `host_bound` (the default; secure-by-default) injects the value only for the declared egress `hosts` — with `hosts` omitted the secret is deny-all (it never leaves the host). `env` exposes the value as a plain sandbox environment variable; `hosts` must then be ABSENT on the definition (reachability is governed by egress rules, not host bindings).\n\nTOML values: `delivery = \"env\"` / `delivery = \"host_bound\"`.",
+      "type": "string",
+      "enum": [
+        "env",
+        "host_bound"
+      ]
+    },
     "DenyDomainRule": {
       "type": "object",
       "required": [
@@ -189,8 +197,19 @@
         }
       ]
     },
+    "EnvBinding": {
+      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (spec 14): a bare string `\"value\"` is a literal value, an inline table `{ secret = \"NAME\" }` a secret reference. This enum is NEVER stored — it backs the schemars rendering of [`EnvBinding`] (the map value in the v2 env map), so the generated schema shows both value forms.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/EnvSecretRef"
+        }
+      ]
+    },
     "EnvFieldShape": {
-      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`deserialize_env`] normalizes both forms to `Vec<EnvVarConfig>` at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map]`.",
+      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`EnvBindings`]'s custom deserializer normalizes both forms at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map-of-EnvBinding]`. BOTH forms stay in the emitted schema for one cycle because v1 still parses.",
       "anyOf": [
         {
           "type": "array",
@@ -201,7 +220,7 @@
         {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/EnvValueShorthand"
+            "$ref": "#/definitions/EnvBinding"
           }
         }
       ]
@@ -218,17 +237,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "EnvValueShorthand": {
-      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (spec 14): a bare string `\"value\"` is a literal value, an inline table `{ secret = \"NAME\" }` a secret reference. This enum is NEVER stored — [`deserialize_env`] normalizes every map entry to [`EnvVarConfig`] at parse time, so merge/validation/plan code sees the identical post-parse struct it saw before. It exists so the generated schema can show both value forms.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "$ref": "#/definitions/EnvSecretRef"
-        }
-      ]
     },
     "EnvVarConfig": {
       "description": "One environment-variable entry in a workload's `env` list. Exactly one of `value` (literal) or `secret` (reference to a `secrets.<name>` entry) is expected to be set; `name` must be a valid shell env identifier.",
@@ -496,22 +504,20 @@
       ]
     },
     "SecretDefConfig": {
-      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml). `env_var` is the environment variable the resolved value is injected as; `hosts` constrains which egress hosts may receive it; `required` makes a missing value a hard error; `source`/`exposed_as`/`placeholder`/ `description` drive resolution and UX.",
+      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml). `env_var` is the host environment variable the resolved value is read from (default: the secret ID); `hosts` constrains which egress hosts may receive a host-bound secret; `required` makes a missing value a hard error; `placeholder` is a known-bad value to reject; `delivery` selects env vs host-bound injection (default host-bound).\n\n`source`/`exposed_as`/`description` are LEGACY v1-only fields: they stay parseable for the one-cycle v1 shim (the post-merge fold turns remap defs into env bindings and strips descriptions), are hard-rejected for schema_version = 2 layers, and are removed from the emitted v2 schema.",
       "type": "object",
       "properties": {
-        "description": {
-          "type": [
-            "string",
-            "null"
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Delivery"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "env_var": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "exposed_as": {
           "type": [
             "string",
             "null"
@@ -538,39 +544,9 @@
             "boolean",
             "null"
           ]
-        },
-        "source": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "additionalProperties": false
-    },
-    "SecretEnvConfig": {
-      "description": "One secret reference in a workload's `secret_env` list: names an entry in the top-level `secrets` map whose resolved value is injected into the sandbox environment.",
-      "type": "object",
-      "required": [
-        "secret"
-      ],
-      "properties": {
-        "secret": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "SecretEnvShorthand": {
-      "description": "Serde/schemars-boundary-only helper for the `secret_env` string-or-table shorthand (spec 13): a bare string `\"NAME\"` is shorthand for the inline table `{ secret = \"NAME\" }`. This enum is NEVER stored — [`deserialize_secret_env`] normalizes every element to [`SecretEnvConfig`] at parse time, so merge/validation/plan code sees the identical post-parse struct it saw before. The `Full` (table) variant is kept as forward-compat for future per-entry fields.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "$ref": "#/definitions/SecretEnvConfig"
-        }
-      ]
     },
     "SeedFileConfig": {
       "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary), `target` the in-sandbox destination; `only_if_missing` skips the copy when the target already exists.",
@@ -623,7 +599,7 @@
           }
         },
         "env": {
-          "default": [],
+          "default": {},
           "allOf": [
             {
               "$ref": "#/definitions/EnvFieldShape"
@@ -700,13 +676,6 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/PortMapping"
-          }
-        },
-        "secret_env": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/SecretEnvShorthand"
           }
         },
         "seed_files": {

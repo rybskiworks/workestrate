@@ -24,12 +24,13 @@ pub fn load_secrets() -> Result<std::collections::HashMap<String, String>> {
     let mut merged: HashMap<String, String> = HashMap::new();
     let mut provenance: HashMap<String, String> = HashMap::new();
 
-    // Load secret definitions to know which env vars are secrets.
+    // Load secret definitions to know which env vars are secrets. v2: the
+    // source env var is the raw `env_var`, defaulting to the secret ID.
     let config = crate::config::load_config()?;
     let secret_env_vars: HashSet<String> = config
         .secrets
-        .values()
-        .filter_map(|s| s.env_var.as_deref().map(String::from))
+        .iter()
+        .map(|(id, s)| s.env_var.clone().unwrap_or_else(|| id.clone()))
         .collect();
 
     // Process env as lowest precedence (only for defined secrets).
@@ -74,36 +75,39 @@ pub fn load_secrets() -> Result<std::collections::HashMap<String, String>> {
     // Store provenance for --show-source.
     crate::merge::set_secret_provenance(Some(provenance));
 
-    // Check required secrets (fail-closed) against the merged map.
-    for secret_def in config.secrets.values() {
+    // Check required secrets (fail-closed) against the merged map. v2: a def
+    // without `env_var` reads from the env var named after the secret ID.
+    for (secret_id, secret_def) in &config.secrets {
         let required = secret_def.required.unwrap_or(true);
         if !required {
             continue;
         }
-        if let Some(ref env_var) = secret_def.env_var {
-            let value = merged.get(env_var).cloned().unwrap_or_default();
-            let is_empty = value.is_empty() || value.trim().is_empty();
-            let is_placeholder = secret_def
-                .placeholder
-                .as_ref()
-                .map(|p| value == *p)
-                .unwrap_or(false);
-            if is_empty || is_placeholder {
-                let layers_tried: Vec<String> = layers
-                    .iter()
-                    .filter(|l| !l.skip)
-                    .map(|l| l.name.clone())
-                    .collect();
-                anyhow::bail!(
-                    "required secret '{}' is not satisfied.\n\
-                     Layers tried: {}\n\
-                     Remediation: run 'setup-secrets --config <name> update',\n\
-                     set the env var directly, or add an age recipient to the\n\
-                     config repo's .sops.yaml.",
-                    env_var,
-                    layers_tried.join(", ")
-                );
-            }
+        let env_var = secret_def
+            .env_var
+            .clone()
+            .unwrap_or_else(|| secret_id.clone());
+        let value = merged.get(&env_var).cloned().unwrap_or_default();
+        let is_empty = value.is_empty() || value.trim().is_empty();
+        let is_placeholder = secret_def
+            .placeholder
+            .as_ref()
+            .map(|p| value == *p)
+            .unwrap_or(false);
+        if is_empty || is_placeholder {
+            let layers_tried: Vec<String> = layers
+                .iter()
+                .filter(|l| !l.skip)
+                .map(|l| l.name.clone())
+                .collect();
+            anyhow::bail!(
+                "required secret '{}' is not satisfied.\n\
+                 Layers tried: {}\n\
+                 Remediation: run 'setup-secrets --config <name> update',\n\
+                 set the env var directly, or add an age recipient to the\n\
+                 config repo's .sops.yaml.",
+                env_var,
+                layers_tried.join(", ")
+            );
         }
     }
 

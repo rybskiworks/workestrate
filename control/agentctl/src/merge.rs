@@ -1,4 +1,4 @@
-use crate::config::{ConfigFile, SecretDefConfig, WorkloadConfig};
+use crate::config::{ConfigFile, EnvBinding, SecretDefConfig, WorkloadConfig};
 use crate::policy;
 use crate::recipes::EgressRecipeRef;
 use anyhow::{Context, Result};
@@ -59,12 +59,51 @@ impl Layer {
             .with_context(|| format!("failed to parse raw TOML for layer '{}'", name))?;
         let config: ConfigFile = toml::from_str(content)
             .with_context(|| format!("failed to parse typed config for layer '{}'", name))?;
+        // v2 layers are native: the legacy v1 secret forms are hard-rejected
+        // at layer parse (the v1 shim only applies to schema_version 0/1).
+        if config.schema_version >= crate::config::EXPECTED_SCHEMA_VERSION {
+            reject_legacy_secret_forms(name, &config)?;
+        }
         Ok(Self {
             name: name.to_string(),
             config,
             raw,
         })
     }
+}
+
+/// schema_version >= 2 rejection of the legacy v1 secret forms (P1 Wave 1):
+/// `secret_env` bindings and the legacy secret-def fields `source` /
+/// `exposed_as` / `description` are removed in v2 and must not appear in a
+/// native layer (they still PARSE for the one-cycle v1 shim — schema_version
+/// 0/1 layers — where the post-merge fold normalizes them instead).
+fn reject_legacy_secret_forms(layer_name: &str, config: &ConfigFile) -> Result<()> {
+    for (wl_name, wl) in &config.workloads {
+        if !wl.secret_env.is_empty() {
+            anyhow::bail!(
+                "layer '{}': workload '{}': secret_env is not supported in schema_version 2; use env = {{ NAME = {{ secret = \"...\" }} }}",
+                layer_name,
+                wl_name
+            );
+        }
+    }
+    for (secret_name, def) in &config.secrets {
+        for (field, present) in [
+            ("source", def.source.is_some()),
+            ("exposed_as", def.exposed_as.is_some()),
+            ("description", def.description.is_some()),
+        ] {
+            if present {
+                anyhow::bail!(
+                    "layer '{}': secret '{}' field '{}' is not supported in schema_version 2 (legacy v1-only field; removed from the v2 schema)",
+                    layer_name,
+                    secret_name,
+                    field
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Merge an ordered list of layers (earlier = lower precedence).
@@ -105,7 +144,85 @@ pub fn merge_layers(layers: &[Layer]) -> Result<(ConfigFile, Provenance)> {
         merge_workloads(&mut merged, layer, &mut provenance)?;
     }
 
+    // P1 Wave 1 v1-compat shim: fold legacy secret_env bindings / remap
+    // secret defs into v2 env bindings, then drop the legacy forms.
+    fold_legacy_secret_model(&mut merged, &mut provenance)?;
+
     Ok((merged, provenance))
+}
+
+/// Post-merge v1-compat fold (one cycle; P1 Wave 1). Normalizes the merged
+/// config into the v2 secret model:
+///
+/// - For each workload, each legacy `secret_env` entry becomes an env
+///   binding: a direct def yields `SECRET = { secret = "SECRET" }`; a remap
+///   def (`source` set) yields `EXPOSED_AS = { secret = "SOURCE" }` (the
+///   binding replaces the remap). Each fold emits a deprecation warning on
+///   stderr; an undefined reference is a hard error (same message shape as
+///   the v1 validator).
+/// - Every remap def (a def with `source` set) is then DELETED from the
+///   merged secrets map, and every legacy `description` is stripped (one
+///   warning).
+/// - Provenance is re-keyed: each `workloads.{wl}.secret_env.{SECRET}` entry
+///   is copied to the new binding site `workloads.{wl}.env.{BINDING_KEY}`.
+fn fold_legacy_secret_model(merged: &mut ConfigFile, provenance: &mut Provenance) -> Result<()> {
+    // Snapshot the merged secrets map: the fold reads defs while mutating
+    // workloads, and deletes remap defs from the map at the end.
+    let secrets = merged.secrets.clone();
+
+    for (wl_name, wl) in merged.workloads.iter_mut() {
+        let secret_env = std::mem::take(&mut wl.secret_env);
+        for se in &secret_env {
+            let def = secrets.get(&se.secret).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "workload '{}' secret_env references undefined secret '{}'",
+                    wl_name,
+                    se.secret
+                )
+            })?;
+            let (key, target) = if let Some(ref source) = def.source {
+                // Remap def: the binding `EXPOSED_AS = { secret = "SOURCE" }`
+                // replaces the remap; the remap def itself is dropped below.
+                let exposed_as = def.exposed_as.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("remapped secret '{}' has no exposed_as", se.secret)
+                })?;
+                eprintln!(
+                    "WARNING: workload '{}' secret_env '{}' uses a remap secret def; remap defs \
+                     are deprecated and dropped — use env = {{ {} = {{ secret = \"{}\" }} }}",
+                    wl_name, se.secret, exposed_as, source
+                );
+                (exposed_as.to_string(), source.clone())
+            } else {
+                eprintln!(
+                    "WARNING: workload '{}' secret_env is deprecated; \
+                     use env = {{ {} = {{ secret = \"{}\" }} }}",
+                    wl_name, se.secret, se.secret
+                );
+                (se.secret.clone(), se.secret.clone())
+            };
+            // Re-key provenance from the legacy binding site to the env map.
+            let legacy_key = format!("workloads.{wl_name}.secret_env.{}", se.secret);
+            if let Some(layer) = provenance.get(&legacy_key).cloned() {
+                provenance.insert(format!("workloads.{wl_name}.env.{key}"), layer);
+            }
+            wl.env.upsert(&key, EnvBinding::Secret(target));
+        }
+    }
+
+    // Delete every remap def and strip legacy descriptions from the merged view.
+    merged.secrets.retain(|_, def| def.source.is_none());
+    let mut stripped = false;
+    for def in merged.secrets.values_mut() {
+        if def.description.take().is_some() {
+            stripped = true;
+        }
+    }
+    if stripped {
+        eprintln!(
+            "WARNING: secrets 'description' fields are deprecated and ignored (removed in schema_version 2)"
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +364,10 @@ fn merge_secret_def(
             layer_ctx.name.clone(),
         );
     }
+    if table.contains_key("delivery") {
+        merged.delivery = layer.delivery;
+        provenance.insert(format!("secrets.{name}.delivery"), layer_ctx.name.clone());
+    }
     if table.contains_key("source") {
         merged.source = layer.source.clone();
         provenance.insert(format!("secrets.{name}.source"), layer_ctx.name.clone());
@@ -342,19 +463,15 @@ fn merge_workload(
         );
     }
     if table.contains_key("env") {
-        // WP6(a): env lists merge union-by-name (deduped by EnvVarConfig.name),
-        // last layer wins per key — mirroring the secret_env union semantics
-        // below. Base order is preserved for existing keys; brand-new keys are
-        // appended in override order. (Previously wholesale replace.)
-        for e in &layer.env {
-            if let Some(existing) = merged.env.iter_mut().find(|m| m.name == e.name) {
-                *existing = e.clone();
-            } else {
-                merged.env.push(e.clone());
-            }
+        // WP6(a): env bindings merge union-by-name, last layer wins per key
+        // — mirroring the secret_env union semantics below. Base order is
+        // preserved for existing keys; brand-new keys are appended in
+        // override order. (Previously wholesale replace.)
+        for (key, binding) in layer.env.iter() {
+            merged.env.upsert(key, binding.clone());
             // Per-key provenance (WP11 renders env provenance end-to-end).
             provenance.insert(
-                format!("workloads.{name}.env.{}", e.name),
+                format!("workloads.{name}.env.{key}"),
                 layer_ctx.name.clone(),
             );
         }
@@ -892,6 +1009,21 @@ mod tests {
         Ok(())
     }
 
+    /// Extract `(name, literal-value)` pairs from an EnvBindings for
+    /// order-sensitive assertions (secret bindings yield `None` values).
+    fn env_pairs(wl: &WorkloadConfig) -> Vec<(&str, Option<&str>)> {
+        wl.env
+            .iter()
+            .map(|(k, v)| {
+                let value = match v {
+                    EnvBinding::Literal(s) => Some(s.as_str()),
+                    EnvBinding::Secret(_) => None,
+                };
+                (k.as_str(), value)
+            })
+            .collect()
+    }
+
     #[test]
     fn env_union_appends_new_keys() -> Result<()> {
         // WP6(a): base env [A=1,B=2] + override env [C=3] → A=1, B=2, C=3.
@@ -906,13 +1038,8 @@ mod tests {
 
         let (merged, provenance) = merge_layers(&[base, team])?;
         let pi = merged.workloads.get("pi").unwrap();
-        let env_pairs: Vec<(&str, Option<&str>)> = pi
-            .env
-            .iter()
-            .map(|e| (e.name.as_str(), e.value.as_deref()))
-            .collect();
         assert_eq!(
-            env_pairs,
+            env_pairs(pi),
             vec![("A", Some("1")), ("B", Some("2")), ("C", Some("3"))],
             "override env entries should append after base entries in order"
         );
@@ -943,18 +1070,13 @@ mod tests {
 
         let (merged, provenance) = merge_layers(&[base, team])?;
         let pi = merged.workloads.get("pi").unwrap();
-        let env_pairs: Vec<(&str, Option<&str>)> = pi
-            .env
-            .iter()
-            .map(|e| (e.name.as_str(), e.value.as_deref()))
-            .collect();
         assert_eq!(
-            env_pairs,
+            env_pairs(pi),
             vec![("A", Some("9")), ("B", Some("2"))],
             "A should be replaced in place (last layer wins), B preserved, no duplicate A"
         );
         assert_eq!(
-            pi.env.iter().filter(|e| e.name == "A").count(),
+            pi.env.iter().filter(|(k, _)| k == "A").count(),
             1,
             "A must not be duplicated"
         );
@@ -1066,19 +1188,24 @@ mod tests {
     // ---- FN-3: secret_env is last-layer-wins per secret, like env ----
 
     /// A layer declaring `secret_env` entries (by secret name) for workload
-    /// `pi`. `SecretEnvConfig` carries only the `secret` key, so the win/lose
-    /// signal is which declaration SURVIVES: on a redeclaration the later
-    /// layer's entry replaces the earlier one in place (observable via
-    /// provenance + single entry), while a first declaration appends.
+    /// `pi`, plus the matching (empty) `[secrets.*]` defs the post-merge fold
+    /// resolves against. `SecretEnvConfig` carries only the `secret` key, so
+    /// the win/lose signal is which declaration SURVIVES: on a redeclaration
+    /// the later layer's entry replaces the earlier one in place (observable
+    /// via provenance + single entry), while a first declaration appends.
     fn secret_env_layer(name: &str, secrets: &[&str]) -> Layer {
         let entries: String = secrets
             .iter()
             .map(|s| format!("[[workloads.pi.secret_env]]\nsecret = \"{s}\"\n\n"))
             .collect();
+        let defs: String = secrets
+            .iter()
+            .map(|s| format!("[secrets.{s}]\n\n"))
+            .collect();
         Layer::from_string(
             name,
             &format!(
-                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\ncommand = []\nlog_stop_errors = false\n\n{entries}[workloads.pi.network]\ndefault_deny = true"
+                "schema_version = 1\n\n{defs}[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\ncommand = []\nlog_stop_errors = false\n\n{entries}[workloads.pi.network]\ndefault_deny = true"
             ),
         )
         .expect("secret_env layer must parse")
@@ -1090,22 +1217,32 @@ mod tests {
         // one entry survives (in-place replace, no duplicate) and provenance
         // attributes the (re)declared secret to the LATER layer. Under the
         // old first-layer-wins semantics the entry was kept and provenance
-        // stayed at "base".
+        // stayed at "base". P1 Wave 1: the post-merge fold converts the
+        // surviving entry into an env binding and clears secret_env.
         let base = secret_env_layer("base", &["GH_TOKEN"]);
         let team = secret_env_layer("team", &["GH_TOKEN"]);
 
         let (merged, provenance) = merge_layers(&[base, team])?;
         let pi = merged.workloads.get("pi").unwrap();
-        let names: Vec<&str> = pi.secret_env.iter().map(|se| se.secret.as_str()).collect();
+        assert!(
+            pi.secret_env.is_empty(),
+            "the fold must clear legacy secret_env entries"
+        );
+        assert_eq!(pi.env.len(), 1, "redeclared secret must not be duplicated");
         assert_eq!(
-            names,
-            vec!["GH_TOKEN"],
-            "redeclared secret must not be duplicated"
+            pi.env.get("GH_TOKEN"),
+            Some(&EnvBinding::Secret("GH_TOKEN".to_string())),
+            "the folded env binding references the secret by name"
         );
         assert_eq!(
             provenance.get("workloads.pi.secret_env.GH_TOKEN"),
             Some(&"team".to_string()),
             "provenance must attribute the redeclared secret to the later layer"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.env.GH_TOKEN"),
+            Some(&"team".to_string()),
+            "the fold re-keys provenance to the env binding site"
         );
         Ok(())
     }
@@ -1120,7 +1257,7 @@ mod tests {
 
         let (merged, provenance) = merge_layers(&[base, team])?;
         let pi = merged.workloads.get("pi").unwrap();
-        let names: Vec<&str> = pi.secret_env.iter().map(|se| se.secret.as_str()).collect();
+        let names: Vec<&str> = pi.env.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
             names,
             vec!["GH_TOKEN", "NPM_TOKEN"],
@@ -1147,12 +1284,168 @@ mod tests {
 
         let (merged, provenance) = merge_layers(&[base, mid, top])?;
         let pi = merged.workloads.get("pi").unwrap();
-        assert_eq!(pi.secret_env.len(), 1, "no duplicate secret entries");
-        assert_eq!(pi.secret_env[0].secret, "KEY");
+        assert_eq!(pi.env.len(), 1, "no duplicate secret entries");
+        assert_eq!(
+            pi.env.get("KEY"),
+            Some(&EnvBinding::Secret("KEY".to_string()))
+        );
         assert_eq!(
             provenance.get("workloads.pi.secret_env.KEY"),
             Some(&"top".to_string()),
             "provenance must reflect the final (top) declaration"
+        );
+        Ok(())
+    }
+
+    // ---- P1 Wave 1: the v1-compat fold + v2 rejection ----
+
+    /// A legacy remap def (`source`/`exposed_as`) bound via `secret_env`
+    /// folds into `EXPOSED_AS = { secret = "SOURCE" }`; the remap def is
+    /// deleted and the legacy description stripped from the merged view.
+    #[test]
+    fn fold_converts_remap_secret_env_to_env_binding() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[secrets.LITELLM_MASTER_KEY]\nenv_var = \"LITELLM_MASTER_KEY\"\ndescription = \"legacy doc\"\n\n[secrets.LITELLM_AUTH]\nsource = \"LITELLM_MASTER_KEY\"\nexposed_as = \"OPENAI_API_KEY\"\n\n[workloads.odysseus]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"python:3.12-slim\" }\ncommand = []\nsecret_env = [\"LITELLM_AUTH\"]\n\n[workloads.odysseus.network]\ndefault_deny = true",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base])?;
+        let odysseus = merged.workloads.get("odysseus").unwrap();
+        assert!(odysseus.secret_env.is_empty(), "secret_env is cleared");
+        assert_eq!(
+            odysseus.env.get("OPENAI_API_KEY"),
+            Some(&EnvBinding::Secret("LITELLM_MASTER_KEY".to_string())),
+            "the binding replaces the remap: EXPOSED_AS = {{ secret = SOURCE }}"
+        );
+        assert!(
+            !merged.secrets.contains_key("LITELLM_AUTH"),
+            "the remap def is deleted from the merged secrets map"
+        );
+        assert!(
+            merged.secrets["LITELLM_MASTER_KEY"].description.is_none(),
+            "legacy descriptions are stripped from the merged view"
+        );
+        assert_eq!(
+            provenance.get("workloads.odysseus.env.OPENAI_API_KEY"),
+            Some(&"base".to_string()),
+            "provenance is re-keyed to the env binding site"
+        );
+        Ok(())
+    }
+
+    /// A direct def bound via legacy `secret_env` folds into
+    /// `SECRET = { secret = "SECRET" }`; the def survives untouched.
+    #[test]
+    fn fold_converts_direct_secret_env_to_env_binding() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[secrets.GITHUB_TOKEN]\nenv_var = \"GITHUB_TOKEN\"\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\nsecret_env = [\"GITHUB_TOKEN\"]\n\n[workloads.pi.network]\ndefault_deny = true",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.env.get("GITHUB_TOKEN"),
+            Some(&EnvBinding::Secret("GITHUB_TOKEN".to_string()))
+        );
+        assert!(
+            merged.secrets.contains_key("GITHUB_TOKEN"),
+            "direct defs are kept"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.env.GITHUB_TOKEN"),
+            Some(&"base".to_string())
+        );
+        Ok(())
+    }
+
+    /// A legacy `secret_env` entry referencing an undefined secret is a hard
+    /// error at fold time (same message shape as the v1 validator).
+    #[test]
+    fn fold_rejects_undefined_secret_env_reference() {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\nsecret_env = [\"NOPE\"]\n\n[workloads.pi.network]\ndefault_deny = true",
+        )
+        .unwrap();
+
+        let err = merge_layers(&[base]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "workload 'pi' secret_env references undefined secret 'NOPE'"
+        );
+    }
+
+    /// schema_version = 2 layers reject `secret_env` at parse (the shim only
+    /// covers schema_version 0/1).
+    #[test]
+    fn v2_layer_rejects_secret_env() {
+        let err = Layer::from_string(
+            "v2",
+            "schema_version = 2\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\nsecret_env = [\"A\"]\n\n[workloads.pi.network]\ndefault_deny = true",
+        )
+        .map(|_| ())
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("secret_env is not supported in schema_version 2"),
+            "error must name the removed namespace: {msg}"
+        );
+        assert!(
+            msg.contains("env = { NAME = { secret ="),
+            "error must point at the v2 env-map form: {msg}"
+        );
+    }
+
+    /// schema_version = 2 layers reject the legacy secret-def fields
+    /// (`source`/`exposed_as`/`description`), naming the offending field.
+    #[test]
+    fn v2_layer_rejects_legacy_secret_def_fields() {
+        for (field, snippet) in [
+            ("source", "source = \"A\""),
+            ("exposed_as", "exposed_as = \"B\""),
+            ("description", "description = \"doc\""),
+        ] {
+            let toml = format!(
+                "schema_version = 2\n\n[secrets.A]\nenv_var = \"A\"\n\n[secrets.B]\n{snippet}\n"
+            );
+            let err = Layer::from_string("v2", &toml).map(|_| ()).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(&format!("secret 'B' field '{field}'")),
+                "error must name the secret and field: {msg}"
+            );
+            assert!(
+                msg.contains("not supported in schema_version 2"),
+                "error must name the version: {msg}"
+            );
+        }
+    }
+
+    /// The merge engine gains a `delivery` arm: a later layer's `delivery`
+    /// declaration wins per secret, with provenance.
+    #[test]
+    fn secret_def_delivery_merges_with_provenance() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[secrets.A]\nenv_var = \"A\"\nhosts = [\"example.com\"]\n",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[secrets.A]\ndelivery = \"env\"\n",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let a = &merged.secrets["A"];
+        assert_eq!(a.delivery, Some(crate::config::Delivery::Env));
+        assert_eq!(
+            a.hosts.as_deref(),
+            Some(&["example.com".to_string()][..]),
+            "presence-gated: undeclared fields keep the base value"
+        );
+        assert_eq!(
+            provenance.get("secrets.A.delivery"),
+            Some(&"team".to_string())
         );
         Ok(())
     }

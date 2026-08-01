@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::microsandbox::secrets::{RemappedSecret, SecretDefinition};
+use crate::microsandbox::secrets::SecretDefinition;
 
 /// Default host bind address for published ports (ADR 0026): `127.0.0.1`,
 /// the shared singleton bind. Parallel slots bind per-instance loopbacks
@@ -288,26 +288,15 @@ impl EnvVar {
 }
 
 impl HostBoundSecret {
-    /// Direct binding — the secret is exposed under its own name.
-    /// All metadata comes from the definition.
+    /// Host-bound binding of a secret definition under its own resolved
+    /// name (`source_env_var`). All metadata comes from the definition.
     pub fn from(definition: &SecretDefinition) -> Self {
         Self {
-            name: definition.env_var.clone(),
-            value: format!("${{{}}}", definition.env_var),
-            allowed_hosts: definition.hosts.clone(),
+            name: definition.source_env_var.clone(),
+            value: format!("${{{}}}", definition.source_env_var),
+            allowed_hosts: definition.allowed_hosts.clone(),
             required: definition.required,
             reject_placeholder: definition.placeholder.clone(),
-        }
-    }
-
-    /// Remapped binding — the source secret is exposed under a different name.
-    pub fn remapped(mapping: &RemappedSecret) -> Self {
-        Self {
-            name: mapping.exposed_as.clone(),
-            value: format!("${{{}}}", mapping.source.env_var),
-            allowed_hosts: mapping.source.hosts.clone(),
-            required: mapping.source.required,
-            reject_placeholder: mapping.source.placeholder.clone(),
         }
     }
 }
@@ -365,10 +354,11 @@ mod tests {
 
     fn definition(env_var: &str) -> SecretDefinition {
         SecretDefinition {
-            env_var: env_var.to_string(),
-            hosts: vec!["example.com".to_string()],
+            source_env_var: env_var.to_string(),
+            allowed_hosts: vec!["example.com".to_string()],
             required: true,
             placeholder: Some("CHANGEME".to_string()),
+            delivery: crate::config::Delivery::HostBound,
         }
     }
 
@@ -667,23 +657,6 @@ network: default_deny=true
         let bound = HostBoundSecret::from(&def);
         assert_eq!(bound.name, "MY_SECRET");
         assert_eq!(bound.value, "${MY_SECRET}");
-        assert_eq!(bound.allowed_hosts, vec!["example.com".to_string()]);
-        assert!(bound.required);
-        assert_eq!(bound.reject_placeholder, Some("CHANGEME".to_string()));
-    }
-
-    #[test]
-    fn host_bound_secret_remapped_uses_exposed_name_and_source_template() {
-        let mapping = RemappedSecret {
-            source: definition("SOURCE_KEY"),
-            exposed_as: "OPENAI_API_KEY".to_string(),
-        };
-        let bound = HostBoundSecret::remapped(&mapping);
-        assert_eq!(bound.name, "OPENAI_API_KEY");
-        assert_eq!(
-            bound.value, "${SOURCE_KEY}",
-            "remapped value must template the SOURCE env var"
-        );
         assert_eq!(bound.allowed_hosts, vec!["example.com".to_string()]);
         assert!(bound.required);
         assert_eq!(bound.reject_placeholder, Some("CHANGEME".to_string()));

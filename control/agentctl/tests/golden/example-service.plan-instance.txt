@@ -5,8 +5,8 @@ command: python -m http.server 8080
 cpus: 2
 memory: 1024 MiB
 env: APP_PORT=8080
+env: OPENAI_API_KEY=(redacted)
 env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'litellm')
-secret_env: OPENAI_API_KEY (value redacted, allowed: host.microsandbox.internal, required)
 port: 127.0.0.2:8080:8080
 mount: workspaces/example-service-state:/data
 mount: config.reference/infra/litellm:/app/config (ro)

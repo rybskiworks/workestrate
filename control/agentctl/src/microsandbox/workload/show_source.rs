@@ -85,11 +85,11 @@ impl ConfigWorkload {
                 // declared the depends_on entry, not the env layer.
                 source_of(&format!("workloads.{}.depends_on.{}", self.name, dep))
             } else if e.is_secret {
-                // WP6(b)/A5: resolve via the SECRET DEF NAME so remapped
-                // secrets attribute to their true layer, not "core".
+                // P1 Wave 1: resolve via the rendered name — secret-load
+                // provenance first, then the binding-site merge provenance
+                // `workloads.{wl}.env.{NAME}`.
                 secret_line_source(
                     &e.name,
-                    &self.secret_def_names,
                     &self.name,
                     self.provenance.as_ref(),
                     secret_prov.as_ref(),
@@ -101,12 +101,8 @@ impl ConfigWorkload {
             write_line(&mut out, "", &format!("env: {}", e), source);
         }
         for se in &plan.secret_env {
-            // WP6(b)/A5: se.name is the EXPOSED name (e.g. OPENAI_API_KEY);
-            // merge provenance is keyed by the SECRET DEF NAME (e.g.
-            // LITELLM_AUTH). Resolve via the def-name map.
             let source = secret_line_source(
                 &se.name,
-                &self.secret_def_names,
                 &self.name,
                 self.provenance.as_ref(),
                 secret_prov.as_ref(),

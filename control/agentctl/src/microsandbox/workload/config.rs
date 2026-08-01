@@ -1,12 +1,9 @@
-use super::secrets::{
-    build_env, build_secret_def_name_map, build_secret_definitions, build_secret_env,
-};
+use super::secrets::{build_env_and_secret_env, build_secret_definitions};
 use super::validate::resolve_mount_host_template;
 use super::{SandboxCommand, Workload};
 use crate::config::WorkloadConfig;
 use crate::microsandbox::plan::{EgressRule, EnvVar, HostBoundSecret, NetworkPlan, SandboxPlan};
 use anyhow::Result;
-use std::collections::HashMap;
 
 /// Workload implementation driven by `workestrate.toml`. This replaces the
 /// per-agent `workloads/*.rs` modules with a single generic implementation.
@@ -16,14 +13,6 @@ pub struct ConfigWorkload {
     pub(super) workload: WorkloadConfig,
     pub(super) env: Vec<EnvVar>,
     pub(super) secret_env: Vec<HostBoundSecret>,
-    /// Maps the rendered env/secret_env name (for a remapped secret, the
-    /// `exposed_as` name) back to the originating `[secrets.NAME]` definition
-    /// name. Merge provenance is recorded under the SECRET DEF NAME
-    /// (`workloads.{wl}.secret_env.{SECRET_DEF_NAME}`), while the rendered
-    /// `HostBoundSecret.name` is the EXPOSED name — without this map a
-    /// remapped secret like LITELLM_AUTH (exposed as OPENAI_API_KEY) looked up
-    /// the wrong provenance key and fell back to "core" (WP6(b)/A5).
-    pub(super) secret_def_names: HashMap<String, String>,
     pub(super) provenance: Option<crate::merge::Provenance>,
     /// ADR 0026(d) discovery-lite: depends_on resolutions computed at
     /// construction (declaration triggers resolution on every up/exec/plan
@@ -69,16 +58,13 @@ impl ConfigWorkload {
         )?;
 
         let secrets = build_secret_definitions(&config)?;
-        let env = build_env(&workload, &secrets)?;
-        let secret_env = build_secret_env(&workload, &secrets)?;
-        let secret_def_names = build_secret_def_name_map(&workload, &secrets);
+        let (env, secret_env) = build_env_and_secret_env(&workload, &secrets)?;
 
         Ok(Self {
             name: name.to_string(),
             workload,
             env,
             secret_env,
-            secret_def_names,
             provenance,
             depends_resolved,
         })
