@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the nineteen post-validation improvement specifications under
+This index catalogs the twenty post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -76,6 +76,7 @@ invariant.
 | [17-config-repo-directory-mode.md](17-config-repo-directory-mode.md) | Config repo directory mode (workestrate/ + workloads/ capsules) | READY-TO-EXECUTE (design) | ↔ [10](10-config-repos-as-working-copies.md), [11](11-home-provisioning-and-lockfile.md), [15](15-toml-toolchain-tombi.md), [16](16-unified-secret-env-model.md) | M | loader/cargo gates verifiable-here via nix develop; runtime smoke HOST-KVM |
 | [18-cross-home-dependencies.md](18-cross-home-dependencies.md) | Cross-home dependencies (wider up across homes/config sets) | INTENT-TO-EXPLORE (2026-08-01 — questions, no decisions) | ADR 0019/0021(addendum)/0023/0026(addendum); builds on [12](12-per-instance-addressing.md) default-on lifecycle | exploration | verifiable-here (docs-only) |
 | [19-visualization-inspection.md](19-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [18](18-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
+| [20-schema-evolution-and-migrations.md](20-schema-evolution-and-migrations.md) | Schema evolution policy + config migration tooling (post-launch) | `SPEC (design; not yet implemented)` | ↔ [15](15-toml-toolchain-tombi.md) (tombi validation + vendored schema) + [16](16-unified-secret-env-model.md) (schema_version collapse to 1) | M (migrate engine) + S (pull+lock) | verifiable-here (docs-only) |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -361,6 +362,29 @@ questions (verbs vs flags, `--json` schema stability, render format,
 cross-home composition with spec 18). **Key decision:** none —
 INTENT-TO-EXPLORE; open questions enumerated in the spec.
 
+### 20 — Schema evolution policy + config migration tooling (post-launch)
+
+Pins the post-launch version policy for the config schema: `schema_version`
+stays `1` pre-launch, and the first shipped breaking change (field removed,
+semantics changed, validation strictly tightened) earns `2`, while additive
+changes (new `#[serde(default)]` optional fields per ADR 0021 §8, sugar forms,
+permitted enum variants, loosened validation) never bump. Specifies a schema
+pull command that refreshes the config repo's vendored
+`schemas/workestrate.schema.json` from the installed binary only (no network),
+locks provenance (header comment + additive `schema` section on
+`HomeLock`/`workestrate.lock`), and fail-closed refuses to pull when the
+installed tool's `EXPECTED_SCHEMA_VERSION` is lower than the locked version.
+Specifies the `workestrate config migrate [--dry-run] [--to <version>]`
+framework: a registry of versioned pure-function toml_edit document steps
+applied linearly, with guided-migration dry-run output per the v1-shim
+deprecation-warning pattern, idempotent re-runs, a `.bak` backup plus
+dirty-tree warning (the user commits; the tool never auto-commits), and
+refusal when the config's declared version is newer than the tool's.
+Non-goals: no runtime auto-migration on load, no network schema fetching, no
+half-applied multi-version chains. **Key decision:** the bump trigger is user
+exposure — pre-release breaking changes are absorbed and the version retracts
+(spec 16 collapse precedent), not bumped.
+
 ---
 
 ## Dependency graph
@@ -430,6 +454,8 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 18-cross-home-dependencies [deps: ADR 0019/0021 addendum/0023/0026 addendum; builds on 12 default-on lifecycle; exploration]
 
 19-visualization-inspection [deps: ADR 0026 addendum / 0027 W3 anchor; ↔ 12/18; exploration]
+
+20-schema-evolution-and-migrations [↔ 15 (tombi/vendored schema), 16 (schema_version collapse); docs-only spec]
 ```
 
 **Key dependency notes:**
