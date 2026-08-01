@@ -31,13 +31,15 @@ re-derive their contents.
 - Gates: green — 498 tests; `just lint-nix` passes.
 - Container home `~/.workestrate` restored after the container-restart wipe,
   but uncommitted in its own git (fine — ephemeral).
-- 14 improvement specs total in `06-improvements/`. IMPLEMENTED/DONE: **02**
+- 15 improvement specs total in `06-improvements/`. IMPLEMENTED/DONE: **02**
   (main rename), **06** (`--home` flag), **08** (no repo-local home), **10**
   (config repos as working copies + dotfiles home), **11** (home provisioning
   + lockfile), **12** (per-instance addressing + discovery-lite), **13**
    (secret_env shorthand — commits a349d03, 1e7dc25; 492 tests green, golden
    plans byte-unchanged), **14** (env map form — commits 1035073, 564deca;
    498 tests green, golden plans byte-unchanged).
+- Spec **15** (TOML toolchain: tombi) exists and is IN-FLIGHT (implementation
+  wave in progress).
 - Key commit refs: `421a54a` (docs env claims); `d7c5a83` (`repos/` →
   `config-repos/` rename); `bd99481` (dirty-guard test); `3894fb7`
   (`workestrate home init`); `bef1c37` (discovery tier removed); `418530a`
@@ -89,20 +91,23 @@ re-derive their contents.
 
 ## Remaining specs + recommended execution order
 
-1. **05 cwd-fallback** (small) — the only bug-fix improvement; small, closes a
+1. **15 tombi TOML toolchain** (IN-FLIGHT) — land the implementation wave;
+   cargo gates + scripts/check-toml.sh run in-container via `nix develop`;
+   `nix build .#tombi` is HOST-NIX.
+2. **05 cwd-fallback** (small) — the only bug-fix improvement; small, closes a
    silent config-discovery backdoor; gate `cargo test` runnable in-container
    via `nix develop`.
-2. **01 mounts WP1–WP3** (in-container; WP4 + Phase 0 spike are KVM and fold
+3. **01 mounts WP1–WP3** (in-container; WP4 + Phase 0 spike are KVM and fold
    into the host batch) — highest-value hardening; WP1–3 verifiable
    in-container.
-3. **03 dogfooding B1/B2** — structural isolation for self-development; B1/B2
+4. **03 dogfooding B1/B2** — structural isolation for self-development; B1/B2
    verifiable-here (B3 has a KVM tail).
-4. **07 naming leftover** (trivial) — mechanical residue sweep; banner says
+5. **07 naming leftover** (trivial) — mechanical residue sweep; banner says
    DONE with cargo gates pending (run via `nix develop`).
-5. **09 post-merge cleanup** — upstream-latency-bound; local action resumes
+6. **09 post-merge cleanup** — upstream-latency-bound; local action resumes
    only after the ON-HOLD PR is pushed/merged/released (then delete
    compensation machinery + bump pin).
-6. **04 CLI config authoring** — DEFERRED by design until
+7. **04 CLI config authoring** — DEFERRED by design until
    `02-config-requirements.md` sign-off.
 
 ---

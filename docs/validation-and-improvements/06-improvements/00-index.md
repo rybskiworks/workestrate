@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the fourteen post-validation improvement specifications under
+This index catalogs the fifteen post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -64,6 +64,7 @@ invariant.
 | [12-per-instance-addressing.md](12-per-instance-addressing.md) | Per-instance addressing + discovery-lite (ADR 0026 execution spec) | `IMPLEMENTED (Waves 1+2 landed: 9107b87/de9aa62/f9fd2f0/c5837e7 + 4adad3f/7b65ad1/39c1694); Experiment E1 guest-reachability NEEDS-KVM` | ADR 0026; amends ADR 0021 (removes --port-offset); E1 hook in [../05-host-validation.md](../05-host-validation.md); 12b (discovery-lite) landed in Wave 2 | **M** | cargo gates `HOST-NIX` devshell; E1 `HOST-KVM` |
 | [13-secret-env-shorthand.md](13-secret-env-shorthand.md) | Config ergonomics: string-or-table shorthand for `secret_env` | `EXECUTED (2026-07-31; commits a349d03, 1e7dc25; personal config converted in .tmp separately)` | None — standalone ergonomics; merge/validation/plan-build code paths untouched (operate post-parse on the normalized struct) | **S** | `verifiable-here` (cargo gates via `nix develop`) |
 | [14-env-map-form.md](14-env-map-form.md) | Config ergonomics: map form for `env` entries (formatting collapse) | `EXECUTED (2026-07-31; commits 1035073, 564deca)` | None — standalone ergonomics; serde-only normalize to `Vec<EnvVarConfig>`; merge/validation/plan-build untouched | **S** | `verifiable-here` (cargo gates via `nix develop`) |
+| [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) | TOML toolchain: tombi format/lint/schema-validation for config repos + homes | `IN-FLIGHT (implementation wave in progress)` | ↔ [13](13-secret-env-shorthand.md)/[14](14-env-map-form.md) (notation — tombi keeps the collapsed map form tidy + validated; cannot restructure) | **M** | devshell in-container (cargo gates + scripts/check-toml.sh via `nix develop`) + `HOST-NIX` (`nix build .#tombi` package build) |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -348,6 +349,8 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 
 14-env-map-form [no deps; additive serde-only map form; schema_version stays 1;
                   supersedes 13 §3 "env genuinely needs tables" non-goal]
+
+15-toml-toolchain-tombi [↔ 13/14 notation; additive toolchain; no schema_version change]
 ```
 
 **Key dependency notes:**
@@ -400,6 +403,10 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
    default (shared `127.0.0.1` + `--port-auto` for guest-facing alternates)
    holds until E1 runs and its outcome is recorded in the spec's
    §open-decisions.
+- **15 (tombi TOML toolchain)** ↔ 13/14 (notation): tombi validates whichever
+  notation the author chose (array-of-tables or collapsed map form) — it
+  normalizes layout only and never forces a form, so the 13/14 ergonomics are
+  unaffected by the toolchain adoption.
 
 ### 13 — Config ergonomics: string-or-table shorthand for `secret_env`
 
@@ -448,6 +455,30 @@ regression with exact error `workload 'pi' env references undefined secret
 'GITHUB_TOKEN_TYPO'`); 498 tests green; golden plans byte-unchanged; schema
 `anyOf` [array, object]; `config.reference` example-service converted
 (golden-equivalent).
+
+### 15 — TOML toolchain: tombi format/lint/schema-validation
+
+Adopts tombi v1.2.5 (MIT) as the TOML formatter + linter + schema validator
+for the repo, scaffolded config repos, and homes, packaged via
+`nix/packages/tombi.nix` using the fetchurl-prebuilt pattern (the
+`cargo install tombi-cli` path is a trap — a 0.0.1 placeholder; the nixpkgs
+pin `a799d3e3` only ships 0.11.6, whose config keys differ from 1.x). The
+gating fact is that tombi's formatter normalizes layout only (19 lexical
+rules) and **cannot restructure** array-of-tables to map form — the 13/14
+collapsed notation is already schema-valid, so tombi keeps it tidy + validated
+but never forces a form. Three `tombi.toml` designs (repo root / scaffolded
+config repo / home) with explicit include/exclude sets; the schema is vendored
+into the binary via `include_str!` (compile-time template/schema version
+match, `schema_drift.rs` freshness guard) and emitted into config repos as a
+static copy, with the `#:schema` directive switching from the floating GitHub
+URL to the relative `./schemas/workestrate.schema.json` at the 3 sites.
+Hooks: a config-repo pre-commit hook (new const, installed after the git-init
+block, `TOMBI_REQUIRED=1.2.5` version guard + `format --check` +
+`lint --error-on-warnings`) and a home-hook tombi gate (warn-not-fail when
+tombi absent). Flake wiring: `lib.checks.tombiCheck` (mirroring
+`flake.nix:140-154`), `scripts/check-toml.sh`, and a `tombi-check` just
+recipe wired into `just verify`. **Key decision:** package the pinned v1.2.5
+binary rather than rely on the nixpkgs pin's 0.11.6.
 
 ---
 
