@@ -1,22 +1,43 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -26,8 +26,19 @@ fn build_agentd(workspace_root: &Path, out_dir: &Path) {
+@@ -25,6 +25,40 @@
+     #[cfg(feature = "prebuilt")]
      {
          let dest = out_dir.join(AGENTD_BINARY);
++        let marker = out_dir.join(".agentd-from-msb-agentd-path");
++
++        // MSB_AGENTD_PATH is authoritative: when set it must point to a real
++        // agentd binary and takes precedence over any workspace/CI-local
++        // artifact or download. There is no fallthrough on an invalid path.
++        println!("cargo:rerun-if-env-changed=MSB_AGENTD_PATH");
++        if let Some(staged) = std::env::var_os("MSB_AGENTD_PATH").map(std::path::PathBuf::from) {
++            if !staged.is_file() {
++                panic!(
++                    "MSB_AGENTD_PATH does not point to an agentd file: {}",
++                    staged.display()
++                );
++            }
++            println!("cargo:rerun-if-changed={}", staged.display());
++            // A previous copy may have left dest read-only (mode inherited from
++            // an immutable store source); remove it so this authoritative copy
++            // always succeeds on build-script reruns.
++            let _ = std::fs::remove_file(&dest);
++            std::fs::copy(&staged, &dest)
++                .expect("failed to copy agentd from MSB_AGENTD_PATH");
++            std::fs::write(&marker, staged.display().to_string())
++                .expect("failed to write .agentd-from-msb-agentd-path marker");
++            return;
++        }
++
++        // MSB_AGENTD_PATH is unset: if dest was previously provisioned from
++        // it, that artifact is now stale — remove it (and the marker) so the
++        // normal provisioning below re-creates it. A dest without the marker
++        // was provisioned normally and is left untouched.
++        if marker.exists() {
++            let _ = std::fs::remove_file(&dest);
++            let _ = std::fs::remove_file(&marker);
++        }
++
          if dest.exists() {
              return;
          }
-+
-+        // Offline/hermetic builds can supply agentd via MSB_AGENTD_PATH.
-+        println!("cargo:rerun-if-env-changed=MSB_AGENTD_PATH");
-+        if let Some(staged) = std::env::var_os("MSB_AGENTD_PATH").map(std::path::PathBuf::from) {
-+            println!("cargo:rerun-if-changed={}", staged.display());
-+            if staged.is_file() {
-+                std::fs::copy(&staged, &dest)
-+                    .expect("failed to copy agentd from MSB_AGENTD_PATH");
-+                return;
-+            }
-+        }
-
-         // In CI, prefer the locally-built agentd from workspace build/.
-         // Check both CI (standard) and GITHUB_ACTIONS (set inside maturin Docker containers
