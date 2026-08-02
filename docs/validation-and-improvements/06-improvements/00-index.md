@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the twenty post-validation improvement specifications under
+This index catalogs the twenty-one post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -77,6 +77,7 @@ invariant.
 | [18-cross-home-dependencies.md](18-cross-home-dependencies.md) | Cross-home dependencies (wider up across homes/config sets) | INTENT-TO-EXPLORE (2026-08-01 — questions, no decisions) | ADR 0019/0021(addendum)/0023/0026(addendum); builds on [12](12-per-instance-addressing.md) default-on lifecycle | exploration | verifiable-here (docs-only) |
 | [19-visualization-inspection.md](19-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [18](18-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
 | [20-schema-evolution-and-migrations.md](20-schema-evolution-and-migrations.md) | Schema evolution policy + config migration tooling (post-launch) | `SPEC (design; not yet implemented)` | ↔ [15](15-toml-toolchain-tombi.md) (tombi validation + vendored schema) + [16](16-unified-secret-env-model.md) (schema_version collapse to 1) | M (migrate engine) + S (pull+lock) | verifiable-here (docs-only) |
+| [21-image-build-lifecycle.md](21-image-build-lifecycle.md) | Image build/load lifecycle: ensure-images pre-flight, change detection, selectors, reserved build dir | `DESIGN-APPROVED (awaiting implementation; user signed off 2026-08-02)` | ↔ [17](17-config-repo-directory-mode.md), [11](11-home-provisioning-and-lockfile.md), [12](12-per-instance-addressing.md)/ADR 0026 addendum, [01](01-mount-filtering-shadowing.md), [07](07-naming-consistency.md); additive-only per ADR 0021 §8 | A=S, B=S, C=M, D=M, E=M, F=S–M (phased) | HOST-KVM (phase E); C/D/F HOST-NIX |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -405,6 +406,39 @@ half-applied multi-version chains. **Key decision:** the bump trigger is user
 exposure — pre-release breaking changes are absorbed and the version retracts
 (spec 16 collapse precedent), not bumped.
 
+### 21 — Image build/load lifecycle
+
+Moves the custom nix-layered image lifecycle (`workestrate-pi:latest`,
+`tempest:latest`) out of the manual config-repo justfile ritual (`nix build` +
+`msb load`) and into the tool: a **parent-side ensure-images pre-flight** runs
+before any spawn on `workload up`/`exec`/`batch-up` (never in the detached
+child — an `images_ready` token on `InstanceSpec` plus a hidden
+`--images-ready` flag in `detach_args` mirrors the `--no-deps` precedent);
+**change detection** is eval-only `nix eval --raw <repo>#<name>.drvPath`
+compared against an advisory per-home record at `state/images.json` (per-tag
+flock spans eval→build→load→record; re-load only on outPath change); the CLI
+gains **`workestrate workload build [name] [--repo | --all-repos] [--check]
+[--force] [--json]`** and a `--reload-images` force flag on the lifecycle
+verbs; and **`.workestrate-build/`** is reserved at each config-repo root —
+gitignored, artifact-only by construction, scaffold-provisioned, the new
+default for undeclared `local_build` fallbacks. Five user decisions are
+locked: **D1** record-absent + tag-present TRUSTs the store on plain `up`
+(records advisory, never authoritative); **D2** stable verbatim tags, no
+auto-prefixing, cross-repo collision → `validate-config`/`plan` WARN naming
+both repos; **D3** `--reload-images` forces ALL service workloads in a batch
+and is never forwarded in `detach_args`; **D4** the `.workestrate-build/`
+reservation; **D5** cross-home collisions warn + digest-detect with records
+keyed by (config-repo identity, name:tag). Phased **A–F**: A spec+scaffold and
+B image-state store are S/`verifiable-here`; C change detection + `workload
+build` and D the build/load pipeline are M/`HOST-NIX` (parallelizable behind
+B); E lifecycle wiring is M/`HOST-KVM` e2e; F multi-repo + personal repo
+migration is S–M/`HOST-NIX`. An msb HOST-VERIFY cluster (digest surface,
+bare-tag normalization, `msb load` stdin concurrency, tarball determinism,
+`git+file` dirty-worktree drvPath stability) gates phase D/E. **Key
+decision:** the tool owns freshness via eval-only drvPath change detection
+against an advisory per-home record — the msb store stays ground truth for
+presence, the record stays memory for provenance.
+
 ---
 
 ## Dependency graph
@@ -476,6 +510,8 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 19-visualization-inspection [deps: ADR 0026 addendum / 0027 W3 anchor; ↔ 12/18; exploration]
 
 20-schema-evolution-and-migrations [↔ 15 (tombi/vendored schema), 16 (schema_version collapse); docs-only spec]
+
+21-image-build-lifecycle [↔ 17/11/12(ADR 0026 addendum)/01/07; ADR 0021 §8 additive-only; docs-only; phased A–F]
 ```
 
 **Key dependency notes:**

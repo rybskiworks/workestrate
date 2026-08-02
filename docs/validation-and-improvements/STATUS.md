@@ -560,6 +560,10 @@ current post-flips except the spec-05 row above.
     Standing threads that outlive the cleanup: container-home
     ephemerality/host-side home (§6); `stash@{0}` on `406b5b5` never to be
     touched (§7).
+12. **Spec 21 (image build/load lifecycle) — DESIGN-APPROVED, implementation
+    pending.** Authored 2026-08-02; phases A–F per the spec (A/B
+    verifiable-here; C/D/F HOST-NIX; E HOST-KVM; HOST-VERIFY cluster on msb
+    digest surface).
 
 ---
 

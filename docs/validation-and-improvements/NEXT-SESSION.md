@@ -25,6 +25,26 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+> **2026-08-02 update (6) — spec 21 (image build/load lifecycle) authored**
+> as DESIGN-APPROVED at
+> [06-improvements/21-image-build-lifecycle.md](06-improvements/21-image-build-lifecycle.md)
+> (user signed off on decisions 2026-08-02); implementation phases A–F pending
+> (A/B `verifiable-here`, C/D/F `HOST-NIX`, E `HOST-KVM`; msb HOST-VERIFY
+> cluster on the digest surface). The five locked user decisions:
+> - **D1** — record-absent + tag-present → TRUST the store tag on plain `up`
+>   (rebuild only via `--reload-images`); records are advisory, never
+>   authoritative.
+> - **D2** — stable tags verbatim from config TOML; no auto-prefixing;
+>   cross-config collision → `validate-config`/`plan` WARN naming both repos;
+>   manual TOML prefixing is the operator remedy.
+> - **D3** — `--reload-images` batch scope = force ALL service workloads in
+>   the batch; never forwarded in `detach_args`.
+> - **D4** — `.workestrate-build/` reserved at config-repo root — gitignored,
+>   artifact-only by construction, scaffold-provisioned, new default for
+>   undeclared `local_build` fallbacks.
+> - **D5** — cross-home collisions → warn + digest-detect; state records
+>   keyed by (config-repo identity, name:tag).
+
 > **2026-08-02 update — cleanup PHASE 0 landed** (one commit on top of
 > `09b624f`; HEAD below is stale). Repo-relative mount/seed paths now resolve
 > against the DECLARING config layer's directory, and `project_root()` is a
@@ -523,3 +543,9 @@ checkout-marker containment; flaky port-probe test fix); the phase-3 note's
 "Phase 4 owns devshell genericization" forward reference flipped to past
 tense; open thread 12 added (phases 5–6 remaining genericization items —
 USER DECISIONS).
+
+**2026-08-02 refresh (6):** spec 21 (image build/load lifecycle) authored as
+DESIGN-APPROVED (`06-improvements/21-image-build-lifecycle.md`; user signed
+off 2026-08-02) — update note (6) added to Current state with the five locked
+user decisions D1–D5; index row/summary/dependency-graph entries added;
+STATUS.md §5 item 12 added (implementation phases A–F pending).
