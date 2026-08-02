@@ -158,54 +158,6 @@ vendor-lock:
     rm -rf "$link"
     echo "Removed $link. Run 'nix develop' to recreate the Nix-managed symlink."
 
-# Build pi into agents/pi/build with native npm (hashless local dev loop).
-# workestrate falls back to agents/pi/build when WORKESTRATE_PI_BUILD is unset.
-# Requires the dev shell's npm/node (run inside `nix develop`).
-dev-build-pi:
-    rm -rf agents/pi/build
-    cp -r agents/pi/repo agents/pi/build
-    chmod -R u+w agents/pi/build
-    cd agents/pi/build && NODE_ENV=development npm ci --ignore-scripts && npm run build
-
-# Run pi from the local agents/pi/build (overrides the canonical bun path).
-# Overrides the dev-shell's exported WORKESTRATE_PI_BUILD for this one command,
-# pointing at the local agents/pi/build populated by `just dev-build-pi` — no
-# manual export/unset needed. Callers pass the verb + name (ADR 0027
-# verb-first shape), e.g. `just dev-run-pi exec pi` or
-# `just dev-run-pi up pi --new` (flags after the name).
-dev-run-pi *args:
-    WORKESTRATE_PI_BUILD=agents/pi/build workestrate workload {{args}}
-
-# Build and load ALL nix-built workload images into microsandbox.
-# Driven by the `workload-images` attrset in flake.nix — adding an image
-# there = one entry; this recipe picks it up automatically. No per-image recipes.
-load-images:
-    nix develop -c load-images
-
-# Refresh all fixed-output derivation (FOD) dependency hashes for the agent
-# recipes. Run this whenever the agent source inputs change (flake.lock bumps
-# to tempest) or after editing per-recipe lock files.
-#
-# The agent recipe uses lib.fakeHash as a placeholder until the real hash is
-# computed on a nix-capable host (the sandbox cannot reach the network for hash
-# computation; see HOST-GATE comments in nix/packages/tempest.nix).
-#
-# Workflow:
-#   1. Run this recipe (it issues one nix command and prints results).
-#   2. For each hash output, inline the sha256-... value into the matching file:
-#        tempest:   nix/packages/tempest.nix   (npmDepsHash)
-#   3. Re-run `nix build .#tempest` to confirm.
-update-hashes:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "=== tempest: prefetch-npm-deps (buildNpmPackage internal FOD) ==="
-    nix run nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json
-    echo ""
-    echo "Done. Inline each 'got:' sha256-... value into the matching nix/packages/*.nix"
-    echo "file (see HOST-GATE comments), then run:"
-    echo "  nix build .#tempest"
-
-
 # Collect nix store garbage and optimise (dedupe) the store. Run periodically
 # to reclaim disk from old generations / orphaned paths. Anti-accumulation
 # maintenance recipe — pairs with the CARGO_TARGET_DIR relocation and the
@@ -249,52 +201,6 @@ store-audit:
         exit 0
     fi
     echo "$path_info" | python3 scripts/store-audit.py --fail-if-source-over 50
-
-# Periodic host/CI check: measures /nix/store growth from one pure eval
-# (nix eval .#packages.x86_64-linux.pi-image.drvPath). Asserts <50M new
-# source paths (exit 1 when the byte delta exceeds 50_000_000). Non-blocking
-# style consistent with store-audit: skips with exit 0 when nix is absent.
-# Run periodically on a nix-capable host or in CI to catch source-closure
-# regressions early. NOT wired into `verify` (it requires nix + is slow).
-store-delta-check:
-    #!/usr/bin/env bash
-    # NOTE: deliberately NO `set -e` — non-blocking style: skips with exit 0
-    # when nix is absent; exits 1 only when nix is present AND the measured
-    # store delta exceeds 50 MiB. `set -uo pipefail` catches unset-variable
-    # bugs + surfaces pipe failures via `$?` without aborting.
-    set -uo pipefail
-    if ! command -v nix >/dev/null 2>&1; then
-        echo "store-delta-check: SKIP (nix not on PATH — run on a nix-capable host)"
-        exit 0
-    fi
-    before=$(du -sb /nix/store 2>/dev/null | awk '{print $1}')
-    if [ -z "${before:-}" ]; then
-        echo "store-delta-check: SKIP (could not measure /nix/store before eval)"
-        exit 0
-    fi
-    echo "store-delta-check: /nix/store before = ${before} bytes"
-    # Pure eval of the pi-image drvPath (git-filtered .# ref — must not copy
-    # the raw working tree). Failure to eval is non-blocking here; the byte
-    # delta is the assertion.
-    if ! nix eval .#packages.x86_64-linux.pi-image.drvPath >/dev/null 2>&1; then
-        echo "store-delta-check: SKIP (nix eval of pi-image drvPath failed — run on a nix-capable host)"
-        exit 0
-    fi
-    after=$(du -sb /nix/store 2>/dev/null | awk '{print $1}')
-    if [ -z "${after:-}" ]; then
-        echo "store-delta-check: SKIP (could not measure /nix/store after eval)"
-        exit 0
-    fi
-    echo "store-delta-check: /nix/store after  = ${after} bytes"
-    delta=$((after - before))
-    echo "store-delta-check: delta = ${delta} bytes"
-    threshold=50000000
-    if [ "$delta" -gt "$threshold" ]; then
-        echo "FAIL: store-delta-check: /nix/store grew by ${delta} bytes (> ${threshold}) from one pure eval — unbounded source copy regression" >&2
-        exit 1
-    fi
-    echo "OK: store-delta-check: delta ${delta} bytes within ${threshold}-byte budget"
-
 
 # Lint nix code for purity violations: --impure flags, builtins.getFlake
 # with toString, bare builtins.path (no filter), cleanSourceWith without

@@ -63,6 +63,27 @@ re-derive their contents.
 > Phase-3 follow-ups recorded in STATUS.md §0 (tests/fixtures litellm
 > workload, docs/litellm knowledge-repo decision, tempest package deletion).
 
+> **2026-08-02 update (4) — cleanup PHASE 3 landed** (one commit on top of
+> phase 2). Workflow image builds moved OUT of the tool repo: the personal
+> config repo flake (`workestrate-dev-home/config-repos/personal`, commit
+> `1000e60`) now builds `workestrate-pi:latest` + `tempest:latest` via the
+> tool's lib recipes + `buildImagesFromConfig` (one flake input per
+> `flake://` source; nix-only enrichment — pi binary_name/install_dir/
+> assets, tempest npm_deps_hash HOST-GATE placeholder — attached
+> post-parse). Tool side deleted: the 4 source inputs,
+> `nix/packages/{pi,pi-bun,pi-image,tempest,tempest-image}.nix`, the
+> `workload-images`/`load-images` attrs, the `.#workestrate-sandbox`
+> wrappers (`apps.default` now runs the CLI), the devshell
+> `WORKESTRATE_PI_BUILD` export + `agents/*/repo` population, and the
+> `dev-build-pi`/`dev-run-pi`/`update-hashes`/`store-delta-check`/
+> `load-images` just recipes. `lib.<system>` is fully intact (the config
+> repo depends on it). Both scaffold templates synced byte-identical with
+> the new reality. Tests: 640 passed / 0 failed / 3 ignored; `just verify`
+> fully green (real copier parity); `nix flake show` clean (the phase-2
+> tempest.nix lambda bug is mooted by deletion). Phase 4 owns devshell
+> genericization. Host follow-ups + citation-staleness notes in STATUS.md
+> §0.
+
 - HEAD: `867a96e` (docs: STATUS.md comprehensive state report; latest code
   commit is the spec-05 cwd-fallback fix `7624aaf`; the interim
   microsandbox-filesystem agentd patch slim `19d94e8` landed just before).

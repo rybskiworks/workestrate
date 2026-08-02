@@ -14,7 +14,81 @@ work from §5.
 
 ---
 
-## 0. LATEST LANDING — cleanup PHASE 2 (2026-08-02, uncommitted at time of writing; lands as one commit on top of phase 1)
+## 0. LATEST LANDING — cleanup PHASE 3 (2026-08-02, lands as one commit on top of phase 2)
+
+**Phase 3 of the approved cleanup: workflow image builds moved out of the
+tool repo into the config repo flake.** What changed and why, for
+contextless sessions:
+
+- **Before:** the tool flake owned the personal workflow end to end —
+  flake inputs for the agent forks (`pi`, `odysseus`, `opencode`,
+  `tempest`), package derivations (`nix/packages/{pi,pi-bun,pi-image,
+  tempest,tempest-image}.nix`), the `workload-images` attrset, the
+  `load-images` package + justfile recipe, the `.#workestrate-sandbox`
+  wrappers (`apps.default` pointed at the pi wrapper), the devshell's
+  `WORKESTRATE_PI_BUILD` export + `agents/*/repo` shellHook population,
+  and the just recipes `dev-build-pi` / `dev-run-pi` / `update-hashes` /
+  `store-delta-check` / `load-images`.
+- **After:** the tool flake is tool-only. Packages: `workestrate`,
+  `microsandbox`, `microsandbox-filesystem-patched`, `msb-wrapped`,
+  `decrypt-env`, `write-env`, `setup-secrets`, `tombi` (`default =
+  workestrate`); `apps.default` runs the workestrate CLI directly. The
+  image-build mechanism is generic and lives in
+  `lib.<system>.buildImagesFromConfig` (+ `recipes`, `vocabulary`,
+  `config`, `buildWorkloadImage`, `checks` — the whole `lib` is intact;
+  the config repo depends on it). The devshell keeps core tooling
+  (cargo/rust/node/bun/tombi/msb-wrapped/secrets) and drops the
+  agent-repo population and image-loaded check; **phase 4 owns devshell
+  genericization**.
+- **Moved to the personal config repo**
+  (`workestrate-dev-home/config-repos/personal`, commit `1000e60` — the
+  config-repo flake landed BEFORE this tool-side deletion): the images
+  `workestrate-pi:latest` and `tempest:latest` now build there via the
+  tool's lib recipes + `buildImagesFromConfig`; one flake input per
+  `flake://` source with revs pinned in the config repo's flake.lock;
+  nix-only enrichment (pi `binary_name`/`install_dir`/`assets`, tempest
+  `npm_deps_hash` HOST-GATE placeholder, pi 4-workspace `build_phase`/
+  `install_phase`) attached post-parse; drvPath-eval verified. Its
+  justfile owns `update-hashes` + `load-images` now.
+- **Also in this commit (workstream A):** the `bun-compile` recipe gained
+  `binaryName`/`installDir` params and `buildImagesFromConfig` passes the
+  enrichment fields through; `workestrate source clone` resolves
+  `flake://` guidance against the DECLARING config layer's repo; the
+  5-workload test fixture's litellm workload is sanitized to
+  `example-litellm`.
+- **Templates synced (both, in lockstep):**
+  `templates/workestrate-config/flake.nix.jinja` and
+  `control/agentctl/src/scaffold/template/flake.nix.tpl` are now
+  byte-identical and document the current reality — sources declaration
+  pattern, nix-only enrichment fields, directory-mode assembly pointer,
+  HOST-GATE FOD-hash workflow, image name/tag ↔ msb store parity.
+- **Mooted by deletion:** the pre-existing `tempest.nix` npmDepsHash
+  lambda bug that made `nix flake show` fail at phase-2 HEAD is gone with
+  the file (approved decision).
+- **Known doc-citation staleness (intentional, NOT fixed here):**
+  `.agents/skills/*` still cite the deleted recipes/attrs
+  (`just update-hashes`, `store-delta-check`, `load-images`,
+  `nix/packages/tempest.nix`, `pi-image` eval examples) as historical
+  text; `docs/migration/*`, `docs/nix/*`, and this file's older sections
+  likewise. The README's recipe table still lists `just litellm-check` in
+  the `just verify` composition (pre-existing phase-2 staleness). Rust
+  test references to `${WORKESTRATE_PI_BUILD}` are the LIVE runtime
+  env_override mechanism (`Workload::build_path()`), deliberately kept.
+- **Gates after landing:** 640 passed / 0 failed / 3 ignored; `just
+  verify` fully green (incl. scaffold-check with REAL copier parity, not
+  a skip); `nix flake show` evaluates clean with no pi/tempest/
+  workload-images attrs; `lib.buildImagesFromConfig` +
+  `packages.workestrate.drvPath` eval OK.
+- **Host follow-ups (cannot run in this container — no network/KVM):**
+  `nix build .#workestrate-pi .#tempest` in the config repo; `just
+  update-hashes` there (tempest real npmDepsHash); `just load-images`;
+  exercise `workestrate source clone`/`source build` flows; run the 2+1
+  ignored KVM tests; verify `msb image ls` name parity
+  (workestrate-pi:latest / tempest:latest).
+
+---
+
+## 0.1 PREVIOUS LANDING — cleanup PHASE 2 (2026-08-02, lands as one commit on top of phase 1)
 
 **Phase 2 of the approved cleanup: the tool repo is decoupled from personal
 workflow content.** What changed and why, for contextless sessions:
@@ -56,7 +130,7 @@ workflow content.** What changed and why, for contextless sessions:
 
 ---
 
-## 0.1 PREVIOUS LANDING — cleanup PHASE 1 (2026-08-02, lands on top of phase-0 HEAD `b9a3ed3`)
+## 0.2 PREVIOUS LANDING — cleanup PHASE 1 (2026-08-02, lands on top of phase-0 HEAD `b9a3ed3`)
 
 **Phase 1 of the approved cleanup landed** as one commit on
 `migration/tool-model` (the phase-1 commit; hash assigned at commit time).
@@ -98,7 +172,7 @@ What changed and why, for contextless sessions:
 
 ---
 
-## 0.2 PREVIOUS LANDING — cleanup PHASE 0 (2026-08-02, landed on top of `09b624f`)
+## 0.3 PREVIOUS LANDING — cleanup PHASE 0 (2026-08-02, landed on top of `09b624f`)
 
 **Phase 0 of the approved mount/seed path-resolution cleanup landed** (one
 commit; HEAD moves past `09b624f` — the snapshot below still cites `7624aaf`/

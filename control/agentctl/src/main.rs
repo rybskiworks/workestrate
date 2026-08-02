@@ -945,7 +945,8 @@ mod tests {
         check_agent_subcommands(&cmd, "tempest");
     }
 
-    /// Build an InstanceSpec for `litellm` (no context) with selected flags.
+    /// Build an InstanceSpec for `example-litellm` (no context) with selected
+    /// flags.
     fn spec_for_detach(
         instance: &str,
         replace: bool,
@@ -962,7 +963,7 @@ mod tests {
         use workestrate::microsandbox::runtime::InstanceSpec;
         InstanceSpec {
             instance: instance.to_string(),
-            workload: "litellm".to_string(),
+            workload: "example-litellm".to_string(),
             context: None,
             replace,
             port_auto,
@@ -975,22 +976,25 @@ mod tests {
     fn detach_args_include_foreground() -> Result<()> {
         let _guard = TestConfigGuard::new();
         use workestrate::microsandbox::workload::Workload;
-        let litellm = ConfigWorkload::new("litellm")?;
+        let example_litellm = ConfigWorkload::new("example-litellm")?;
 
         // Singleton, no flags: verb-first `workload up <name> --foreground`
         // (ADR 0027).
-        let args = litellm.detach_args(&spec_for_detach("litellm", false));
-        assert_eq!(args, vec!["workload", "up", "litellm", "--foreground"]);
+        let args = example_litellm.detach_args(&spec_for_detach("example-litellm", false));
+        assert_eq!(
+            args,
+            vec!["workload", "up", "example-litellm", "--foreground"]
+        );
 
         // Parallel instance: forward `--instance <id>` with the BARE id, never
         // `slot@id`. `--new` must NOT appear (already materialized by parent).
-        let args = litellm.detach_args(&spec_for_detach("litellm@canary", false));
+        let args = example_litellm.detach_args(&spec_for_detach("example-litellm@canary", false));
         assert_eq!(
             args,
             vec![
                 "workload",
                 "up",
-                "litellm",
+                "example-litellm",
                 "--foreground",
                 "--instance",
                 "canary"
@@ -1002,20 +1006,26 @@ mod tests {
         );
 
         // `--replace` is forwarded when requested.
-        let args = litellm.detach_args(&spec_for_detach("litellm", true));
-        assert_eq!(
-            args,
-            vec!["workload", "up", "litellm", "--foreground", "--replace"]
-        );
-
-        // `--replace` and `--instance` compose.
-        let args = litellm.detach_args(&spec_for_detach("litellm@ab2z", true));
+        let args = example_litellm.detach_args(&spec_for_detach("example-litellm", true));
         assert_eq!(
             args,
             vec![
                 "workload",
                 "up",
-                "litellm",
+                "example-litellm",
+                "--foreground",
+                "--replace"
+            ]
+        );
+
+        // `--replace` and `--instance` compose.
+        let args = example_litellm.detach_args(&spec_for_detach("example-litellm@ab2z", true));
+        assert_eq!(
+            args,
+            vec![
+                "workload",
+                "up",
+                "example-litellm",
                 "--foreground",
                 "--replace",
                 "--instance",
@@ -1023,7 +1033,7 @@ mod tests {
             ]
         );
 
-        // A workload other than litellm uses its own name as the <name>
+        // A workload other than example-litellm uses its own name as the <name>
         // positional (the argv prefix stays `workload up`).
         let pi = ConfigWorkload::new("pi")?;
         let args = pi.detach_args(&spec_for_detach("pi@xy7", false));
@@ -1036,7 +1046,11 @@ mod tests {
 
         // `--port-auto` (ADR 0026(c)) is forwarded alongside --instance; it
         // must NOT appear when unset.
-        let args = litellm.detach_args(&spec_for_detach_full("litellm@canary", false, true));
+        let args = example_litellm.detach_args(&spec_for_detach_full(
+            "example-litellm@canary",
+            false,
+            true,
+        ));
         assert!(
             args.contains(&"--port-auto".to_string()),
             "--port-auto must be forwarded to the detached child: {args:?}"
@@ -1046,14 +1060,14 @@ mod tests {
             vec![
                 "workload",
                 "up",
-                "litellm",
+                "example-litellm",
                 "--foreground",
                 "--port-auto",
                 "--instance",
                 "canary",
             ]
         );
-        let args = litellm.detach_args(&spec_for_detach("litellm", false));
+        let args = example_litellm.detach_args(&spec_for_detach("example-litellm", false));
         assert!(
             !args.contains(&"--port-auto".to_string()),
             "--port-auto must not appear when unset: {args:?}"
@@ -1126,11 +1140,11 @@ mod tests {
     fn detach_args_forwards_no_deps() -> Result<()> {
         let _guard = TestConfigGuard::new();
         use workestrate::microsandbox::workload::Workload;
-        let litellm = ConfigWorkload::new("litellm")?;
+        let example_litellm = ConfigWorkload::new("example-litellm")?;
 
-        let mut spec = spec_for_detach("litellm", false);
+        let mut spec = spec_for_detach("example-litellm", false);
         spec.no_deps = true;
-        let args = litellm.detach_args(&spec);
+        let args = example_litellm.detach_args(&spec);
         assert!(
             args.contains(&"--no-deps".to_string()),
             "--no-deps must be forwarded to the detached child: {args:?}"
@@ -1145,7 +1159,7 @@ mod tests {
         }
 
         // Unset → no --no-deps token.
-        let args = litellm.detach_args(&spec_for_detach("litellm", false));
+        let args = example_litellm.detach_args(&spec_for_detach("example-litellm", false));
         assert!(
             !args.contains(&"--no-deps".to_string()),
             "--no-deps must not appear when unset: {args:?}"

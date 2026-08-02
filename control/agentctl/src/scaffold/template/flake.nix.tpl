@@ -1,6 +1,69 @@
 # Inverted-dependency flake: takes workestrate core as input.
-# This flake builds nix-layered images from this config repo's workestrate.toml.
-# Phase 2 feature — optional.
+# This flake builds this config repo's nix-layered images from its
+# workestrate.toml using core's exported lib recipes
+# (workestrate.lib.<system>.buildImagesFromConfig).
+#
+# ============================================================================
+# SOURCES — `flake://<name>` declaration pattern
+# ============================================================================
+# If a workload's image.binary.src is `flake://<name>`, declare ONE flake
+# input per source here (flake = false for plain source trees), pin the
+# exact revs in this repo's flake.lock (`nix flake lock`), and map each
+# name in the `sources` attrset below, e.g.:
+#
+#   inputs.pi.url      = "github:example/pi";      inputs.pi.flake      = false;
+#   inputs.tempest.url = "github:example/T3MP3ST"; inputs.tempest.flake = false;
+#   ...
+#   outputs = { self, workestrate, nixpkgs, pi, tempest }:
+#     ...
+#     sources = { pi = pi; tempest = tempest; };
+#
+# A source may also be a derivation produced in this flake (e.g. an
+# npm-build pre-build feeding a bun-compile image binary). An unresolved
+# `flake://<name>` URI is a hard eval error naming the URI.
+#
+# ============================================================================
+# NIX-ONLY ENRICHMENT — fields the TOML schema cannot carry
+# ============================================================================
+# The Rust TOML schema is deny_unknown_fields, so build-enrichment fields
+# can never live in workestrate.toml. Attach them POST-PARSE in this flake
+# (attrset update on the parsed config), e.g.:
+#
+#   enriched = parsed // { image = parsed.image // { binary =
+#     parsed.image.binary // {
+#       binary_name    = "pi";       # bun-compile output layout:
+#       install_dir    = "app/bin";  #   $out/app/bin/pi (default: $out/bin/app)
+#       npm_deps_hash  = "sha256-...";  # npm-build FOD hash
+#       assets         = [ { from = "..."; to = "..."; } ];  # runtime asset mirror
+#       dont_npm_build = true; build_phase = "..."; install_phase = "...";  # overrides
+#     }; }; };
+#
+# ============================================================================
+# HOST-GATE — FOD hashes
+# ============================================================================
+# npm-build's npmDepsHash is a fixed-output-derivation hash. Use
+# `lib.fakeHash` ("sha256-AAAA...AAA=") as a placeholder: drvPath
+# EVALUATION works, a real `nix build` fails with the `got:` hash. Compute
+# real hashes on a nix-capable host via the config repo justfile's
+# `update-hashes` workflow, then inline the value into the enrichment.
+#
+# ============================================================================
+# IMAGE NAME/TAG ↔ MSB STORE PARITY
+# ============================================================================
+# Each workload's image.name + image.tag must match what the deployment's
+# microsandbox store has loaded (e.g. workestrate-pi:latest). Build
+# (`nix build .#<image.name>`) and load (`msb load -t <name>:<tag>`) from
+# THIS repo's justfile; the workestrate CLI consumes whatever image the
+# store holds — it never builds images itself.
+#
+# ============================================================================
+# DIRECTORY-MODE (spec 17) POINTER
+# ============================================================================
+# This template is SINGLE-FILE-MODE: the config is one workestrate.toml
+# parsed below. Directory-mode repos instead assemble the `config` attrset
+# from workestrate/workloads/<name>/workload.toml capsules via
+# builtins.fromTOML + builtins.readFile (each capsule is a BARE workload
+# table; assemble { workloads = { <name> = capsule // enrichment; }; }).
 {
   inputs = {
     workestrate.url = "{{ core_flake_url }}";
@@ -14,9 +77,13 @@
       config = builtins.fromTOML (builtins.readFile ./workestrate.toml);
       workestrate-cli = workestrate.packages.${system}.workestrate;
     in {
-      # Build this repo's nix-layered images using core's exported recipes
+      # Build this repo's nix-layered images using core's exported recipes.
+      # Output packages are keyed by each workload's image.name.
       packages.${system} = workestrate.lib.${system}.buildImagesFromConfig {
         inherit pkgs config;
+        # Map `flake://<name>` binary.src URIs to inputs/built trees here.
+        # Valid empty only when no binary.src uses `flake://`.
+        sources = { };
       };
 
       # Config-repo CI: validate against core's schema

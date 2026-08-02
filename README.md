@@ -73,10 +73,10 @@ live in your personal config repo.
    up legacy per-shell tmpfs dirs from earlier versions, and refreshes the
    `control/agentctl/vendor/microsandbox-filesystem-0.5.6` symlink.
    The dev shell pins `nodejs_24` (was `nodejs_22`; fixes pi's gondolin
-   `EBADENGINE`) and exports `WORKESTRATE_PI_BUILD` pointing at the
-   canonical `.#pi-bun` standalone binary, so dev-shell `workestrate workload
-   exec pi` mounts the bun binary at `/app/bin/pi` (once a personal config repo
-   is registered).
+   `EBADENGINE`). Workload images (pi, tempest, ...) are built by your
+   personal config repo's flake — not this repo — via the lib recipes this
+   flake exports (`lib.buildImagesFromConfig`); load them into the
+   microsandbox store from the config repo.
    ```bash
    git clone <repo-url> workestrate
    cd workestrate
@@ -400,13 +400,15 @@ The `run` subcommand decrypts `.env.enc` via `sops`, loads all keys into the pro
 
 Pi runs in its sandbox as a **bun standalone binary** at `/app/bin/pi` —
 a self-contained executable with the Bun runtime embedded, so no node
-or bun is needed inside the microVM at runtime. The binary is produced
-by the `.#pi-bun` nix derivation and mounted at `/app` via
-`WORKESTRATE_PI_BUILD`. The `.#pi` derivation (npm/node, exec'ing `node
+or bun is needed inside the microVM at runtime. The binary and the
+`workestrate-pi:latest` image are built by the config repo flake (via the
+`bun-compile` lib recipe exported here) and loaded into the microsandbox
+store from the config repo; the `WORKESTRATE_PI_BUILD` env override
+mechanism (`Workload::build_path()`) can still point workestrate at an
+alternate build tree. The npm/node variant (exec'ing `node
 /app/packages/coding-agent/dist/cli.js`) remains the runtime fallback if
 the bun binary misbehaves. The bun-binary path through the microVM is
-compile- and plan-verified but pending KVM runtime validation; `.#pi`
-(node) is the fallback.
+compile- and plan-verified but pending KVM runtime validation.
 
 Note: `agents/pi/repo`, `agents/odysseus/repo`, `agents/opencode/repo`, and
 `agents/tempest/repo` must be cloned into the `agents/` directory before
@@ -474,7 +476,6 @@ Common `just` recipes:
 | `just setup-secrets init` | Run `setup-secrets init` from the dev shell |
 | `just vendor-unlock` | Replace the vendor symlink with a writable copy of the patched Microsandbox crate |
 | `just vendor-lock` | Remove the vendor copy so the dev shell recreates the symlink |
-| `just dev-build-pi` | Build pi into `agents/pi/build` with native npm (hashless local dev loop); workestrate falls back to `agents/pi/build` when `WORKESTRATE_PI_BUILD` is unset. Requires the dev shell's npm/node (run inside `nix develop`). |
 
 > **Nix note:** New files must be `git add`-ed before `nix build` or `nix develop`
 > will see them. Nix flakes only include git-tracked files in the source tree.
@@ -489,64 +490,48 @@ recreates the symlink from the flake input.
 
 ## Nix build integration
 
-Beyond the dev shell, the flake exposes hermetic agent derivations so a
-full `nix build` produces ready-to-run artifacts without `nix develop`:
+Workload image builds live in the **config repo**, not the tool repo
+(cleanup phase 3). This flake exports the generic machinery the config
+repo consumes under `lib.x86_64-linux`:
 
-- `.#pi` — hermetic `buildNpmPackage` of the pi monorepo (npm-workspaces)
-  from the remote fork (`github:georgrybski/pi`). Output tree laid out so
-  `node $out/packages/coding-agent/dist/cli.js` resolves workspace siblings.
-  `dontNpmBuild` + a custom buildPhase skip `generate-models` (offline;
-  uses committed catalogs) and chain the four workspace builds in
-  dependency order. `libcap_ng` is included for gondolin/libkrun.
-- `.#pi-bun` — standalone Bun-compiled `pi` binary (~110 MB, Bun runtime
-  embedded). Reuses the `.#pi` tree and runs `bun build --compile` on the
-  bun entrypoint + image-resize worker, then mirrors upstream
-  `copy-binary-assets` (themes, package.json, export-html templates, photon
-  wasm) next to the binary so pi resolves package assets relative to
-  `process.execPath`. **This is the canonical pi artifact** mounted at
-  `/app` in the sandbox.
-- `.#tempest-built` — hermetic `buildNpmPackage` of T3MP3ST from the
-  remote fork (`github:georgrybski/T3MP3ST`). Single-package TypeScript
-  app; `tsc` emits `dist/`. The tempest sandbox execs
-  `node dist/cli.js` from the image's working directory.
-- `.#tempest-image` — `dockerTools.buildLayeredImage` for the tempest
-  sandbox. Provides nodejs_24 + nmap + bind.dnsutils + the compiled
-  T3MP3ST tree + a baked `defaultProvider:"local"` config so T3MP3ST
-  uses the env-var-driven local LLM provider (no conf-store secrets).
-- `.#workestrate-sandbox` — `runCommand` + `makeWrapper` wrapper around
-  `.#workestrate` that bakes `WORKESTRATE_PI_BUILD=${pi-bun}` into the
-  environment, so `nix build .#workestrate-sandbox && ./result/bin/workestrate workload exec pi`
-  runs the hermetic bun-binary pi sandbox with no `nix develop` and no
-  extra env. `apps.default` points at this wrapped binary.
+- `lib.recipes` — the build/image recipe library (`build.npm-build`,
+  `build.bun-compile`, `build.pip-install`, `build.bun-install`,
+  `image.nix-layered`).
+- `lib.buildImagesFromConfig` — builds one `dockerTools.buildLayeredImage`
+  per nix-layered workload in a config attrset, resolving `flake://<name>`
+  `binary.src` URIs against a caller-supplied `sources` attrset and
+  supporting the nix-only enrichment fields (`binary_name`, `install_dir`,
+  `npm_deps_hash`, `assets`, `dont_npm_build`, `build_phase`,
+  `install_phase`) the config repo attaches post-parse.
+- `lib.checks.validateConfig` / `lib.checks.tombiCheck` — config-repo CI
+  gates.
 
-**Single canonical source.** Both `.#pi` and `.#pi-bun` build from one
-source (the remote fork) with one `npmDepsHash`. The old `-local`/`-remote`
-dual-output was collapsed: local pi hacking is **not** a nix override —
-use `just dev-build-pi` (hashless native npm into `agents/pi/build`),
-which workestrate picks up via the `agents/<name>/build` fallback when
-`WORKESTRATE_PI_BUILD` is unset.
+The tool flake's own packages are just the tool itself plus its support
+binaries (`.#workestrate`, `.#microsandbox`, `.#msb-wrapped`, secrets
+helpers, `.#tombi`); `apps.default` runs the workestrate CLI directly.
+The personal config repo
+(`workestrate-dev-home/config-repos/personal`) uses the lib to build
+`.#workestrate-pi` (bun-compiled pi binary + asset mirror on a nix-glibc
+image) and `.#tempest` (npm-built T3MP3ST tree + nmap/dnsutils), and its
+justfile loads them into the microsandbox store (`workestrate-pi:latest`,
+`tempest:latest`).
 
 **Fork-carries-compat policy.** nix-build compatibility (patches,
 lockfile, committed catalogs) lives on the agent fork itself, not as
-nix-side patches in this repo. The flake consumes the fork verbatim.
+nix-side patches in this repo. The config-repo flake consumes the fork
+verbatim (one flake input per `flake://` source, revs pinned in the
+config repo's flake.lock).
 
 **Per-agent build-path override.** `Workload::build_path()` reads
 `WORKESTRATE_<NAME>_BUILD` (NAME uppercased, `-`→`_`) and falls back to
-`agents/<name>/build`. This is the mechanism the `.#workestrate-sandbox` wrapper
-uses to point workestrate at the nix store path for pi; the same mechanism
-is available for future agent derivations (odysseus, opencode).
-
-**Dev shell.** `nix develop` exports `WORKESTRATE_PI_BUILD` (canonical
-bun pi) so dev-shell `workestrate` mounts the bun binary at `/app/bin/pi`.
-pi is no longer built by the shellHook `_build_agents` auto-build; the
-canonical artifact comes from the `.#pi-bun` derivation. odysseus and
-opencode still auto-build on `nix develop` (via `pip --only-binary=:all:`
-and `HUSKY=0 bun install` respectively) until their own derivations land.
+`agents/<name>/build`. This mechanism is unchanged; the config repo (or
+any wrapper) can point workestrate at a nix store path or local build
+tree without touching the CLI.
 
 **Runtime caveat.** The bun binary in the microVM, `up`/`exec`/`logs`,
 and detached-mode + internal secret loading are compile- and
-plan-verified but pending KVM runtime validation. `.#pi` (node) is the
-fallback if the bun binary misbehaves at runtime.
+plan-verified but pending KVM runtime validation. The npm/node variant
+is the fallback if the bun binary misbehaves at runtime.
 
 ## Derivation purity
 
@@ -606,11 +591,11 @@ Reload your shell (or `source` the completion file) afterwards.
 
 - The Microsandbox SDK is pinned to `microsandbox = "=0.5.6"` with the
   `net` feature.
-- The pi microVM runs a **bun standalone binary** (`/app/bin/pi`, from
-  `.#pi-bun`) with the Bun runtime embedded; no node/bun is needed inside
-  the sandbox. `.#pi` (npm/node) is the fallback. The `.#workestrate-sandbox`
-  wrapper bakes `WORKESTRATE_PI_BUILD` so `nix build .#workestrate-sandbox` runs
-  hermetic.
+- The pi microVM runs a **bun standalone binary** (`/app/bin/pi`, built by
+  the config repo flake via the `bun-compile` lib recipe) with the Bun
+  runtime embedded; no node/bun is needed inside the sandbox. The npm/node
+  variant is the fallback. The config repo can wrap workestrate to bake
+  `WORKESTRATE_PI_BUILD` so the CLI runs against the hermetic store path.
 - Sandbox plans use a default-deny network policy; only the
   destinations listed above have explicit egress.
 - `LITELLM_MASTER_KEY` is guest-bound (real value) only on the LiteLLM

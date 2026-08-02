@@ -32,9 +32,11 @@ annotates per-field provenance with layer names. `up`/`exec` target a slot
 `--instance <id> --port-offset N` or `--new --port-offset N` for parallel
 canaries). `--port-offset N` shifts host ports by `+=N` (guest unchanged).
 
-The `.#workestrate-sandbox` wrapper (`runCommand` + `makeWrapper`) bakes
-`WORKESTRATE_PI_BUILD` (pointing at the `.#pi-bun` standalone binary) into
-the environment; `apps.default` points at this wrapped binary.
+`apps.default` runs the workestrate CLI directly. Workload image builds
+live in the config repo flake (cleanup phase 3), which consumes the tool
+flake's `lib` recipes (`buildImagesFromConfig`, `bun-compile`,
+`npm-build`, `image.nix-layered`); the `WORKESTRATE_<NAME>_BUILD` env
+override (`Workload::build_path()`) can point the CLI at any built tree.
 
 ### Microsandbox
 
@@ -60,13 +62,14 @@ ships only synthetic reference workloads (`example-service`,
 `odysseus`, `opencode`, `tempest`) appear once a personal config repo is
 registered.
 
-- **Pi** — coding agent. Built two ways from one source (the remote fork):
-  `.#pi-bun` (canonical standalone bun binary, ~110 MB, Bun runtime embedded,
-  exec'd at `/app/bin/pi`) and `.#pi` (npm/node fallback). Pi does not honor
+- **Pi** — coding agent. Built two ways from one source (the remote fork)
+  by the config repo flake: a bun-compile standalone binary (canonical,
+  ~110 MB, Bun runtime embedded, exec'd at `/app/bin/pi`) and an npm/node
+  fallback. Pi does not honor
   `OPENAI_BASE_URL`; it requires seeding `~/.pi/agent/models.json` with a
   custom provider pointing at LiteLLM. The bun-binary path is compile- and
-  plan-verified but pending KVM runtime validation; `.#pi` (node) is the
-  fallback.
+  plan-verified but pending KVM runtime validation; the npm/node variant
+  is the fallback.
 - **Odysseus** — coding agent (service). Requires `ODYSSEUS_ADMIN_PASSWORD`
   because `AUTH_ENABLED=true`. Does not honor `OPENAI_BASE_URL`; requires
   seeding `data/settings.json` with a custom provider pointing at LiteLLM.

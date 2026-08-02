@@ -889,12 +889,16 @@ default_deny = true
     // ---- F2: the lazy flake-root gate predicate ----
 
     /// Registry image, no local_build, no build-path mounts → NO
-    /// requirement: build_sandbox must never call project_root for litellm.
+    /// requirement: build_sandbox must never call project_root for
+    /// example-litellm.
     #[test]
     fn flake_root_requirement_none_for_plain_registry_workload() -> Result<()> {
         let _guard = TestConfigGuard::new();
-        let litellm = ConfigWorkload::new("litellm")?;
-        assert_eq!(litellm.flake_root_requirement(&litellm.plan()), None);
+        let example_litellm = ConfigWorkload::new("example-litellm")?;
+        assert_eq!(
+            example_litellm.flake_root_requirement(&example_litellm.plan()),
+            None
+        );
         Ok(())
     }
 

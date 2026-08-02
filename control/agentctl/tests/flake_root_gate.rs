@@ -215,17 +215,17 @@ fn local_build_up_fails_with_feature_naming_gate_error() {
     );
 }
 
-/// End-to-end regression on a KVM host: detached `workload up litellm` from
-/// a flake-less cwd (the operator scenario that motivated the fix — the
+/// End-to-end regression on a KVM host: detached `workload up example-litellm`
+/// from a flake-less cwd (the operator scenario that motivated the fix — the
 /// detached child re-execs and inherits cwd). The child log must NEVER
 /// contain the flake-root error; any failure must be sandbox/KVM-related.
 ///
-/// Uses the committed 5-workload fixture (litellm is a registry image with
-/// mounts that resolve against the fixture's own content dir) and the same
-/// isolation pattern as `lifecycle_detached.rs`.
+/// Uses the committed 5-workload fixture (example-litellm is a plain
+/// registry image with no flake artifacts) and the same isolation pattern
+/// as `lifecycle_detached.rs`.
 #[tokio::test]
-#[ignore = "needs KVM + a loaded litellm image; run manually with --ignored"]
-async fn detached_litellm_up_from_flake_less_cwd_passes_project_root_gate() {
+#[ignore = "needs KVM + a loaded python:3.12-slim image; run manually with --ignored"]
+async fn detached_example_litellm_up_from_flake_less_cwd_passes_project_root_gate() {
     let home = uniq_dir("kvm-home");
     let cwd = uniq_dir("kvm-cwd");
     std::fs::create_dir_all(&home).expect("create isolated HOME");
@@ -240,23 +240,19 @@ async fn detached_litellm_up_from_flake_less_cwd_passes_project_root_gate() {
     // child passes the secrets gate on a provisioned host.
     for (k, v) in [
         ("LITELLM_MASTER_KEY", "sk-test-master-key"),
-        ("OPENROUTER_API_KEY", "sk-or-test"),
-        ("KIMI_CODE_API_KEY", "sk-kimi-test"),
-        ("NEURALWATT_API_KEY", "sk-nw-test"),
-        ("MINIMAX_CODING_API_KEY", "sk-mx-test"),
         ("ODYSSEUS_ADMIN_PASSWORD", "test-admin-password"),
     ] {
         up.env(k, v);
     }
     let up = up
-        .args(["workload", "up", "litellm"])
+        .args(["workload", "up", "example-litellm"])
         .output()
-        .expect("spawn workload up litellm");
+        .expect("spawn workload up example-litellm");
     let up_stderr = String::from_utf8_lossy(&up.stderr).to_string();
 
     // The detached child's per-sandbox log is the source of truth for how
     // far it got (the parent returns after a 500ms grace window).
-    let log_path = home.join(".microsandbox/sandboxes/litellm/workestrate.log");
+    let log_path = home.join(".microsandbox/sandboxes/example-litellm/workestrate.log");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut log = String::new();
     while std::time::Instant::now() < deadline {
@@ -280,13 +276,13 @@ async fn detached_litellm_up_from_flake_less_cwd_passes_project_root_gate() {
     );
     assert!(
         !log.contains("flake.nix") && !log.contains("project root"),
-        "REGRESSION: litellm (registry image) hit the flake-root gate from a \
-         flake-less cwd; log:\n{log}"
+        "REGRESSION: example-litellm (registry image) hit the flake-root gate \
+         from a flake-less cwd; log:\n{log}"
     );
 
     // Best-effort cleanup on KVM hosts where the sandbox may have started.
     let _ = gate_cmd(&home, &fixture, &cwd)
-        .args(["workload", "down", "litellm"])
+        .args(["workload", "down", "example-litellm"])
         .output();
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&cwd);

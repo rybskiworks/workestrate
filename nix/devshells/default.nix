@@ -7,21 +7,14 @@
 , decrypt-env
 , write-env
 , setup-secrets
-, load-images
-, imageNames
-, pi
-, pi-bun-built
-, odysseus
-, opencode
-, tempest
 , tombi
 , referenceConfig
 }:
 
-# Agent source repos. These default to maintainer forks.
-# Override with --override-input to use upstreams or your own forks:
-#   nix develop --override-input pi github:earendil-works/pi
-#   nix develop --override-input opencode github:anomalyco/opencode
+# Cleanup phase 3: the pi build + agents/* repo population moved to the
+# personal config repo flake (which owns the pi/odysseus/opencode/tempest
+# source inputs and image builds). WORKESTRATE_PI_BUILD is no longer
+# exported here; phase 4 owns devshell genericization.
 
 # Build commands derived from config.reference/workestrate.toml.
 # The devshell reads ONLY the reference config (tool-dev). Each workload
@@ -59,7 +52,6 @@ pkgs.mkShell {
     jq
     just
     libcap_ng
-    load-images
     msb-wrapped
     nodejs_24  # Node 24: pi's gondolin needs >=23.6; aligns with the node:24 sandbox images
     bun
@@ -126,10 +118,9 @@ pkgs.mkShell {
     export MSB_PATH="$_msb_home/bin/msb"
     export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
 
-    # Canonical pi build: the standalone Bun binary from `.#pi-bun`.
-    # Dev-workestrate reads WORKESTRATE_PI_BUILD so it mounts the bun binary
-    # at /app/bin/pi instead of needing agents/pi/build from the shellHook.
-    export WORKESTRATE_PI_BUILD="${pi-bun-built}"
+    # Cleanup phase 3: the WORKESTRATE_PI_BUILD export moved to the personal
+    # config repo flake (pi build now lives there); phase 4 owns devshell
+    # genericization.
 
     _setup_vendor_link() {
       local repo_root vendor_dir vendor_link target
@@ -159,47 +150,10 @@ pkgs.mkShell {
     _setup_vendor_link
     unset -f _setup_vendor_link
 
-    _setup_agent_repos() {
-      local repo_root agents_dir
-      repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
-      [ -z "$repo_root" ] && return 0
-      agents_dir="$repo_root/agents"
-
-      _setup_repo() {
-        local name="$1" src="$2" target
-        target="$agents_dir/$name/repo"
-        mkdir -p "$(dirname "$target")"
-
-        if [ -L "$target" ]; then
-          # Existing symlink (from older devShell versions) — replace with writable copy
-          echo "ai-workbench: replacing agents/$name/repo symlink with writable copy" >&2
-          rm "$target"
-          cp -r "$src" "$target"
-          chmod -R u+w "$target"
-        elif [ -d "$target" ] && [ -n "$(ls -A "$target" 2>/dev/null)" ]; then
-          # Real directory with content — user's local clone, leave it alone
-          echo "ai-workbench: agents/$name/repo is a local clone; leaving it alone" >&2
-        elif [ -d "$target" ]; then
-          # Empty directory — populate from flake input
-          echo "ai-workbench: populating agents/$name/repo from flake input" >&2
-          rmdir "$target" 2>/dev/null || true
-          cp -r "$src" "$target"
-          chmod -R u+w "$target"
-        else
-          # Doesn't exist — copy from flake input
-          echo "ai-workbench: setting up agents/$name/repo from flake input" >&2
-          cp -r "$src" "$target"
-          chmod -R u+w "$target"
-        fi
-      }
-
-      _setup_repo "pi" "${pi}"
-      _setup_repo "odysseus" "${odysseus}"
-      _setup_repo "opencode" "${opencode}"
-      _setup_repo "tempest" "${tempest}"
-    }
-    _setup_agent_repos
-    unset -f _setup_agent_repos _setup_repo
+    # Cleanup phase 3: _setup_agent_repos removed — the agents/*/repo
+    # population was fed by the deleted pi/odysseus/opencode/tempest flake
+    # inputs; those now live in the personal config repo flake (phase 4 owns
+    # devshell genericization).
 
     _build_agents() {
       local repo_root agents_dir
@@ -262,17 +216,5 @@ pkgs.mkShell {
     }
     _build_agents
     unset -f _build_agents
-
-    # Check workload images are loaded (lightweight — skip silently if msb
-    # unavailable). Driven by the `workload-images` attrset via `imageNames`
-    # — adding an image to the attrset automatically updates this check.
-    if command -v msb >/dev/null 2>&1; then
-      loaded=$(msb image ls 2>/dev/null || true)
-      for img in ${pkgs.lib.concatMapStringsSep " " (x: x) imageNames}; do
-        if ! echo "$loaded" | grep -q "$img"; then
-          echo "ai-workbench: image '$img' not loaded. Run: just load-images" >&2
-        fi
-      done
-    fi
   '';
 }

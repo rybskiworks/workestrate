@@ -190,6 +190,18 @@ pub fn take_provenance() -> Option<Provenance> {
         .take()
 }
 
+/// Clone the stored provenance without consuming it. Companion to
+/// [`take_provenance`] (which is consumed by `ConfigWorkload::new`):
+/// read-only callers — e.g. `source clone` resolving the declaring config
+/// layer — must not drain the slot. Same accessor shape as
+/// [`get_layer_dirs`] / [`get_secret_provenance`].
+pub fn get_provenance() -> Option<Provenance> {
+    MERGED_PROVENANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
 // ---------------------------------------------------------------------------
 // Layer content-dir process-global storage
 // ---------------------------------------------------------------------------

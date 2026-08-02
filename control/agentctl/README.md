@@ -10,7 +10,7 @@ Control plane CLI for the AI workbench.
 - `workestrate litellm down` — stop and remove the LiteLLM sandbox
 - `workestrate litellm logs` — tail the detached LiteLLM service's log
 - `workestrate pi plan` — print Pi sandbox plan
-- `workestrate pi exec` — attach to the Pi sandbox interactively; execs `/app/bin/pi` (the `.#pi-bun` standalone bun binary; `.#pi`/node is the fallback). M2: requires KVM.
+- `workestrate pi exec` — attach to the Pi sandbox interactively; execs `/app/bin/pi` (the bun-compile standalone binary built by the config repo flake; npm/node is the fallback). M2: requires KVM.
 - `workestrate pi down` — stop and remove the Pi sandbox
 - `workestrate odysseus plan` — print Odysseus sandbox plan
 - `workestrate odysseus up` — start the Odysseus sandbox (detached; M2: requires KVM)
@@ -33,13 +33,14 @@ just build
 Hermetic nix build (no `nix develop` needed to run):
 
 ```bash
-nix build .#workestrate-sandbox
-./result/bin/workestrate pi exec   # bakes WORKESTRATE_PI_BUILD (.#pi-bun)
+nix build .#workestrate
+./result/bin/workestrate check
 ```
 
-`.#pi` (npm/node) and `.#pi-bun` (standalone bun binary) are the two pi
-derivations from the remote fork; `.#pi-bun` is canonical. Local pi
-hacking: `just dev-build-pi` (hashless native npm into `agents/pi/build`).
+Workload images (pi bun-compile binary, tempest npm-build tree) are built
+by the config repo flake via the tool's exported lib recipes
+(`lib.buildImagesFromConfig`), not by this repo; load them into the
+microsandbox store from the config repo.
 
 ## Development
 

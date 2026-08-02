@@ -4,33 +4,13 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    pi = {
-      url = "github:georgrybski/pi";
-      flake = false;
-    };
-
-    odysseus = {
-      url = "github:georgrybski/odysseus";
-      flake = false;
-    };
-
-    opencode = {
-      url = "github:georgrybski/opencode";
-      flake = false;
-    };
-
-    tempest = {
-      url = "github:georgrybski/T3MP3ST";
-      flake = false;
-    };
-
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, pi, odysseus, opencode, tempest, fenix, ... }:
+  outputs = { self, nixpkgs, fenix, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -93,6 +73,13 @@
                     worker = binary.worker;
                     # B4: runtime asset mirroring (list of {from, to}).
                     assets = binary.assets or [];
+                    # binary_name / install_dir are nix-only enrichment
+                    # fields: the Rust TOML schema has deny_unknown_fields,
+                    # so config-repo flakes attach them post-parse (they are
+                    # never present in a parsed workestrate.toml). Defaults
+                    # preserve the historical $out/bin/app layout.
+                    binaryName = binary.binary_name or "app";
+                    installDir = binary.install_dir or "bin";
                   }
                 else if binary.recipe == "npm-build" then
                   recipesForPkgs.build.npm-build {
@@ -189,94 +176,6 @@
         inherit microsandbox microsandbox-filesystem-patched rustToolchain;
       };
 
-      # Hermetic nix build of the pi agent monorepo (runtime tree mounted at /app).
-      # Single canonical source: the remote fork (github:georgrybski/pi). One
-      # npmDepsHash for the fork's package-lock.json. Local pi hacking uses the
-      # hashless `just dev-build-pi` (native npm into agents/pi/build), not a
-      # nix override — avoids the lockfile-hash wall.
-      pi-built = pkgs.callPackage ./nix/packages/pi.nix { pi = pi; npmDepsHash = "sha256-1EGs8lX8XoAnRtS+pw4lBRm24U/vtVB2loVRmZyd4Z8="; };
-
-      # Standalone Bun-compiled pi binary (self-contained executable, Bun
-      # runtime embedded). Reuses the npm-built pi tree + `bun build --compile`.
-      pi-bun-built = pkgs.callPackage ./nix/packages/pi-bun.nix { pi-built = pi-built; };
-
-      # Nix-built Docker image for the pi sandbox (dockerTools.buildLayeredImage).
-      # Provides nix glibc 2.42 matching the pi-bun binary's PT_INTERP; replaces
-      # node:24-bookworm-slim (glibc 2.36) which crashed the bun binary.
-      # Load into microsandbox with `just load-pi-image`.
-      pi-image = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
-
-      # Hermetic nix build of the T3MP3ST offensive-security agent (single
-      # package, no workspaces). npmDepsHash is a placeholder until computed
-      # in a nix-capable environment via:
-      #   nix run nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json
-      tempest-built = pkgs.callPackage ./nix/packages/tempest.nix {
-        tempest = tempest;
-        npmDepsHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-      };
-
-      # Nix-built Docker image for the T3MP3ST sandbox (dockerTools.buildLayeredImage).
-      # Provides nodejs_24 + nmap + dnsutils + the compiled T3MP3ST tree + the
-      # baked defaultProvider:"local" config. Load via `just load-images`.
-      tempest-image = pkgs.callPackage ./nix/packages/tempest-image.nix {
-        inherit tempest-built;
-      };
-
-      # Explicit workload images (not config-driven). config.reference is now
-      # synthetic; real deployments live in the user's personal config repo.
-      workload-images = {
-        workestrate-pi = pkgs.callPackage ./nix/packages/pi-image.nix { inherit pi-bun-built pi-built; };
-        tempest = pkgs.callPackage ./nix/packages/tempest-image.nix { inherit tempest-built; };
-      };
-
-      # General loader: iterates `workload-images` and loads each into
-      # microsandbox. Driven by the attrset — no hardcoded image names.
-      #
-      # Anti-accumulation: uses `--no-link --print-out-paths` so no /tmp GC
-      # root is created. The previous `--out-link /tmp/<name>.tar.gz` form
-      # left a symlink + tarball in /tmp that survived across runs and was
-      # never garbage-collected by nix. The new form pipes the store path
-      # directly into `gunzip | msb load`, leaving no /tmp residue.
-      load-images = pkgs.writeShellApplication {
-        name = "load-images";
-        runtimeInputs = [ msb-wrapped pkgs.gzip ];
-        text = let
-          names = builtins.attrNames workload-images;
-          load-one = name: ''
-            echo "Loading ${name}..."
-            out=$(nix build .#${name} --no-link --print-out-paths)
-            gunzip -c "$out" | msb load -t ${name}:latest
-          '';
-        in pkgs.lib.concatMapStringsSep "\n" load-one names + ''
-          echo ""
-          echo "Loaded images:"
-          msb image ls
-        '';
-      };
-
-      # Reusable wrapper around workestrate that bakes WORKESTRATE_PI_BUILD
-      # (pointing at the given pi build) into the environment, so `nix run .` /
-      # `.#workestrate-sandbox` runs the pi sandbox without extra env. Wraps the
-      # already-wrapped `${workestrate}/bin/workestrate` (which sets MSB_HOME
-      # via its postInstall wrapProgram); makeWrapper preserves that inner
-      # wrapper's env by exec'ing it, so MSB_HOME is retained.
-      workestrate-wrapper = { pi-build }: pkgs.runCommand "workestrate-sandbox" {
-        nativeBuildInputs = [ pkgs.makeWrapper ];
-      } ''
-        mkdir -p $out/bin
-        makeWrapper ${workestrate}/bin/workestrate $out/bin/workestrate \
-          --set WORKESTRATE_PI_BUILD ${pi-build}
-      '';
-
-      # .#workestrate-sandbox: the pi-bun wrapper (canonical pi-bun standalone
-      # binary, Bun runtime embedded). NOTE: the flake's `default` package is
-      # `.#workestrate` (the agentctl binary), NOT this wrapper.
-      workestrate-sandbox = workestrate-wrapper { pi-build = pi-bun-built; };
-
-      # .#workestrate-sandbox-node: npm/node fallback (the .#pi JS tree).
-      # One-command switch — no manual WORKESTRATE_PI_BUILD export needed.
-      workestrate-sandbox-node = workestrate-wrapper { pi-build = pi-built; };
-
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`
       # and other runtime commands look in ~/.microsandbox (where workestrate
       # stores the SDK cache/db), not the per-shell build staging directory
@@ -355,35 +254,20 @@
       };
     in {
       devShells.${system}.default = import ./nix/devshells/default.nix {
-        inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped decrypt-env write-env setup-secrets load-images
-          odysseus opencode pi-bun-built tempest tombi referenceConfig rustToolchain;
-        # devshell populates agents/pi/repo from the canonical remote fork.
-        pi = pi;
-        imageNames = builtins.attrNames workload-images;
+        inherit pkgs microsandbox microsandbox-filesystem-patched workestrate msb-wrapped decrypt-env write-env setup-secrets
+          tombi referenceConfig rustToolchain;
       };
 
       lib.${system} = libForSystem { inherit pkgs; };
 
-      packages.${system} = workload-images // {
-        inherit workload-images;
-        inherit workestrate workestrate-sandbox workestrate-sandbox-node microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets load-images tombi;
-        # .#pi = npm/node JS tree (canonical remote fork).
-        # .#pi-bun = standalone Bun binary (Bun runtime embedded).
-        # Both from one source, one npmDepsHash. Local dev: `just dev-build-pi`.
-        pi = pi-built;
-        pi-bun = pi-bun-built;
-        pi-image = pi-image;
-        # .#tempest = compiled T3MP3ST tree (dist/ + node_modules + package.json).
-        tempest = tempest-built;
-        # .#tempest-built alias (named derivation; same output as .#tempest).
-        tempest-built = tempest-built;
-        tempest-image = tempest-image;
+      packages.${system} = {
+        inherit workestrate microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets tombi;
         default = workestrate;
       };
 
       apps.${system}.default = {
         type = "app";
-        program = "${workestrate-sandbox}/bin/workestrate";
+        program = "${workestrate}/bin/workestrate";
       };
     };
 }

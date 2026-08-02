@@ -43,7 +43,7 @@ fn workloads_lists_fixture_workloads_with_kinds() {
     let stdout = String::from_utf8(out.stdout).expect("utf8 stdout");
 
     for (name, kind) in [
-        ("litellm", "service"),
+        ("example-litellm", "service"),
         ("odysseus", "service"),
         ("opencode", "agent"),
         ("pi", "agent"),
@@ -113,8 +113,8 @@ fn workloads_json_parses_and_is_sorted() {
     }
     assert!(
         rows.iter()
-            .any(|r| r["name"] == "litellm" && r["kind"] == "service"),
-        "litellm must be listed as a service; got: {rows:?}"
+            .any(|r| r["name"] == "example-litellm" && r["kind"] == "service"),
+        "example-litellm must be listed as a service; got: {rows:?}"
     );
     assert!(
         rows.iter()
@@ -155,12 +155,12 @@ fn workloads_reports_running_instances_from_registry() {
         pi_line.contains("running: pi@xy7"),
         "seeded record must surface as running; got line: {pi_line}"
     );
-    let litellm_line = stdout
+    let example_litellm_line = stdout
         .lines()
-        .find(|l| l.split('\t').next() == Some("litellm"))
-        .expect("litellm row must exist");
+        .find(|l| l.split('\t').next() == Some("example-litellm"))
+        .expect("example-litellm row must exist");
     assert!(
-        litellm_line.contains("(none running)"),
-        "litellm has no record; got line: {litellm_line}"
+        example_litellm_line.contains("(none running)"),
+        "example-litellm has no record; got line: {example_litellm_line}"
     );
 }

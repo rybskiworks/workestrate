@@ -37,62 +37,10 @@
         "type": "github"
       }
     },
-    "odysseus": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1781046458,
-        "narHash": "sha256-N8xjCkYBgMXS5F5J9OxcMkBTpJ2siO/fYKuPfxXlKZ0=",
-        "owner": "georgrybski",
-        "repo": "odysseus",
-        "rev": "fc8e6366ddb627935af092ba81ea5faa5d05e1b3",
-        "type": "github"
-      },
-      "original": {
-        "owner": "georgrybski",
-        "repo": "odysseus",
-        "type": "github"
-      }
-    },
-    "opencode": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1782258396,
-        "narHash": "sha256-Tubr+Hqe7ArEKtG0pBYclmYOfMQL/oUSn85JW36+KHI=",
-        "owner": "georgrybski",
-        "repo": "opencode",
-        "rev": "cfddb2407cb6343aaa221a6aa72222b8fdd325d7",
-        "type": "github"
-      },
-      "original": {
-        "owner": "georgrybski",
-        "repo": "opencode",
-        "type": "github"
-      }
-    },
-    "pi": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1782317646,
-        "narHash": "sha256-p1PWFs+j0pjAl+aep3vUqE7cFI+WIbh+GVGPAXbvY78=",
-        "owner": "georgrybski",
-        "repo": "pi",
-        "rev": "371adcf37130629ffb9bbeed9f5548ce08ffa93b",
-        "type": "github"
-      },
-      "original": {
-        "owner": "georgrybski",
-        "repo": "pi",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
         "fenix": "fenix",
-        "nixpkgs": "nixpkgs",
-        "odysseus": "odysseus",
-        "opencode": "opencode",
-        "pi": "pi",
-        "tempest": "tempest"
+        "nixpkgs": "nixpkgs"
       }
     },
     "rust-analyzer-src": {
@@ -109,22 +57,6 @@
         "owner": "rust-lang",
         "ref": "nightly",
         "repo": "rust-analyzer",
-        "type": "github"
-      }
-    },
-    "tempest": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1783601494,
-        "narHash": "sha256-IHIxcol2posEmYeHvql8pZTqqjkdZzprAxUKLEZ7HWg=",
-        "owner": "georgrybski",
-        "repo": "T3MP3ST",
-        "rev": "ae32cf505174a422c55d7ca970f5f23816218f38",
-        "type": "github"
-      },
-      "original": {
-        "owner": "georgrybski",
-        "repo": "T3MP3ST",
         "type": "github"
       }
     }

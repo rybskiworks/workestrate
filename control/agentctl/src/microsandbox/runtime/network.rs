@@ -75,13 +75,13 @@ mod tests {
     use crate::microsandbox::workload::{ConfigWorkload, Workload};
 
     #[test]
-    fn litellm_network_plan_converts_without_error() -> anyhow::Result<()> {
+    fn example_litellm_network_plan_converts_without_error() -> anyhow::Result<()> {
         let _guard = TestConfigGuard::new();
-        let plan = ConfigWorkload::new("litellm")?.plan();
+        let plan = ConfigWorkload::new("example-litellm")?.plan();
         let result = network_plan_to_policy(&plan.network);
         assert!(
             result.is_ok(),
-            "litellm conversion failed: {:?}",
+            "example-litellm conversion failed: {:?}",
             result.err()
         );
         Ok(())
@@ -100,8 +100,9 @@ mod tests {
     fn pi_plan_uses_nix_built_image() -> anyhow::Result<()> {
         let _guard = TestConfigGuard::new();
         // The pi-bun binary's PT_INTERP points at nix glibc 2.42; the sandbox
-        // image must be the nix-built `workestrate-pi:latest` (loaded via
-        // `just load-pi-image`), NOT node:24-bookworm-slim (glibc 2.36 → crash).
+        // image must be the nix-built `workestrate-pi:latest` (built by the
+        // config repo flake and loaded into the msb store there), NOT
+        // node:24-bookworm-slim (glibc 2.36 → crash).
         let plan = ConfigWorkload::new("pi")?.plan();
         assert_eq!(plan.image.as_deref(), Some("workestrate-pi:latest"));
         Ok(())

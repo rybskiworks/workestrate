@@ -4,8 +4,9 @@
 # B3 (WP9): the recipe can now express pi's 4-workspace build order
 # (tui -> ai -> agent -> coding-agent) and skip pi's root build script
 # (which fails offline because generate-models deletes committed catalogs
-# then can't refetch them). This mirrors the proven logic in
-# nix/packages/pi.nix:44-104 via three optional passthroughs:
+# then can't refetch them). The logic originated in the deleted
+# nix/packages/pi.nix call site (now ported to the personal config repo
+# flake's pi pre-build) and is exposed here via three optional passthroughs:
 #   dontNpmBuild  — skip buildNpmPackage's default `npm run build`
 #   buildPhase    — custom build phase (e.g. pi's chained workspace builds)
 #   installPhase   — custom install phase (e.g. pi's monorepo tree layout)

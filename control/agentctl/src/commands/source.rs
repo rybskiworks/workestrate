@@ -1,13 +1,15 @@
 //! Source-override commands (`workestrate source clone|build|list|reset`)
 //! and the build-env-var helpers.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 use crate::cli_actions::SourceAction;
 use crate::config;
 use crate::git::{git_checkout_dot, git_clone};
+use crate::merge::Provenance;
 
 pub async fn cmd_source(action: SourceAction) -> Result<()> {
     match action {
@@ -39,11 +41,50 @@ pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
             .source
             .strip_prefix("flake://")
             .unwrap_or(&local_build.source);
-        println!(
-            "To clone the canonical source, run: nix develop (materializes flake inputs). Or clone manually to: {}",
-            dest.display()
-        );
-        println!("Flake input name: {}", input);
+        // flake:// sources are materialized by the CONFIG REPO's flake (the
+        // repo that declares this workload), not by the tool flake. Resolve
+        // the declaring layer's content dir via the phase-0
+        // provenance/layer-dir machinery, then walk up to its flake root.
+        match config_repo_content_dir(name) {
+            Some(content_dir) => match find_flake_root(&content_dir) {
+                Some(root) => {
+                    println!(
+                        "flake:// sources are materialized by the config repo's flake (the repo that declares workload '{}').",
+                        name
+                    );
+                    println!("Config repo flake root: {}", root.display());
+                    println!(
+                        "To materialize the source, run: nix develop {} (materializes flake inputs), or nix build {}#...",
+                        root.display(),
+                        root.display()
+                    );
+                    println!("Flake input name: {}", input);
+                }
+                None => {
+                    println!(
+                        "The config repo declaring workload '{}' (content dir: {}) has no flake.nix.",
+                        name,
+                        content_dir.display()
+                    );
+                    println!(
+                        "To use this flake:// source, add a flake.nix to that config repo declaring an input named '{}', then materialize it with: nix develop <config-repo-root>",
+                        input
+                    );
+                    println!("Or clone manually to: {}", dest.display());
+                }
+            },
+            None => {
+                println!(
+                    "Could not resolve the config repo that declares workload '{}' (no provenance/layer-dir information available).",
+                    name
+                );
+                println!(
+                    "flake:// sources are materialized by the declaring config repo's flake: run 'nix develop <config-repo-root>' in the repo whose flake.nix declares an input named '{}', or clone manually to: {}",
+                    input,
+                    dest.display()
+                );
+            }
+        }
     } else {
         if dest.exists() {
             anyhow::bail!("source path already exists: {}", dest.display());
@@ -59,6 +100,46 @@ pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
     let env_var = build_env_var_name(name);
     println!("Set {}={} for this session", env_var, dest.display());
     Ok(())
+}
+
+/// Walk `start` and its ancestors for the nearest directory containing a
+/// `flake.nix` — the flake root. Returns `None` when no ancestor is one.
+pub fn find_flake_root(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|dir| dir.join("flake.nix").is_file())
+        .map(Path::to_path_buf)
+}
+
+/// Pure core of [`config_repo_content_dir`]: resolve the content dir of the
+/// layer that DECLARED `workload`'s local_build, from an explicit
+/// provenance + layer-dirs pair.
+///
+/// Provenance keys are dot-paths (`workloads.<name>.local_build`; the merge
+/// engine records local_build wholesale, so the `.source` sub-key is probed
+/// first only for forward compatibility). Values are layer names; for
+/// directory-mode config repos the layer name is `<repo>#<relpath>` and the
+/// layer-dirs map carries its content dir (parent of the layer's source
+/// file, per [`crate::merge::layer_dirs_from`]).
+fn declaring_layer_content_dir_from(
+    provenance: &Provenance,
+    layer_dirs: &HashMap<String, PathBuf>,
+    workload: &str,
+) -> Option<PathBuf> {
+    let layer = provenance
+        .get(&format!("workloads.{workload}.local_build.source"))
+        .or_else(|| provenance.get(&format!("workloads.{workload}.local_build")))?;
+    layer_dirs.get(layer).cloned()
+}
+
+/// Content dir of the config-repo layer that declared `workload`'s
+/// local_build, resolved from the process-global provenance + layer dirs
+/// captured by the most recent `load_config` (phase 0). Returns `None` for
+/// synthetic layers or when no load has recorded the state.
+pub fn config_repo_content_dir(workload: &str) -> Option<PathBuf> {
+    let provenance = crate::merge::get_provenance()?;
+    let layer_dirs = crate::merge::get_layer_dirs()?;
+    declaring_layer_content_dir_from(&provenance, &layer_dirs, workload)
 }
 
 /// Env-var name that overrides a workload's build directory for the current
@@ -263,5 +344,116 @@ mod tests {
         let env_var = build_env_var_name("my-agent");
         assert!(!env_var.contains('-'));
         assert_eq!(env_var, "WORKESTRATE_MY_AGENT_BUILD");
+    }
+
+    // --- flake:// config-repo flake-root resolution -------------------------
+
+    /// Unique temp dir per test invocation (same pattern as the integration
+    /// tests; no tempfile dep).
+    fn uniq_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "workestrate-source-{}-{}-{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ))
+    }
+
+    #[test]
+    fn find_flake_root_walks_up_to_nearest_flake_nix() {
+        let root = uniq_dir("flake-root");
+        let nested = root.join("workestrate").join("workloads").join("pi");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join("flake.nix"), "{}\n").unwrap();
+
+        assert_eq!(find_flake_root(&nested).as_deref(), Some(root.as_path()));
+        assert_eq!(
+            find_flake_root(&root).as_deref(),
+            Some(root.as_path()),
+            "the flake root itself resolves"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn find_flake_root_prefers_nearest_ancestor() {
+        let outer = uniq_dir("flake-outer");
+        let inner = outer.join("config-repo");
+        let nested = inner.join("workestrate");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(outer.join("flake.nix"), "{}\n").unwrap();
+        std::fs::write(inner.join("flake.nix"), "{}\n").unwrap();
+
+        assert_eq!(
+            find_flake_root(&nested).as_deref(),
+            Some(inner.as_path()),
+            "the NEAREST ancestor with flake.nix wins"
+        );
+
+        let _ = std::fs::remove_dir_all(&outer);
+    }
+
+    #[test]
+    fn find_flake_root_returns_none_when_absent() {
+        let root = uniq_dir("flake-less");
+        let nested = root.join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        // Walk starts at `nested`; nothing below / has a flake.nix in this
+        // tree, but ancestors ABOVE `root` (e.g. /tmp) must not leak in — so
+        // assert against the tree itself: no ancestor within `root` matches.
+        assert!(
+            find_flake_root(&nested).is_none_or(|found| !found.starts_with(&root)),
+            "no flake.nix inside the temp tree must not resolve into it"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The pure resolution core: provenance dot-path + layer-dirs map → the
+    /// declaring layer's content dir. Directory-mode layer names are
+    /// `<repo>#<relpath>`; the map lookup is by exact layer name.
+    #[test]
+    fn declaring_layer_content_dir_resolves_via_provenance_and_layer_dirs() {
+        let mut provenance = Provenance::new();
+        provenance.insert(
+            "workloads.pi.local_build".to_string(),
+            "personal#workestrate/workloads/pi.toml".to_string(),
+        );
+        let mut layer_dirs = HashMap::new();
+        layer_dirs.insert(
+            "personal#workestrate/workloads/pi.toml".to_string(),
+            PathBuf::from("/repo/workestrate/workloads"),
+        );
+
+        assert_eq!(
+            declaring_layer_content_dir_from(&provenance, &layer_dirs, "pi"),
+            Some(PathBuf::from("/repo/workestrate/workloads"))
+        );
+        assert_eq!(
+            declaring_layer_content_dir_from(&provenance, &layer_dirs, "odysseus"),
+            None,
+            "a workload with no local_build provenance resolves to None"
+        );
+    }
+
+    /// A provenance entry whose layer has no recorded content dir (synthetic
+    /// layer) resolves to None — the caller falls back to generic guidance.
+    #[test]
+    fn declaring_layer_content_dir_none_for_synthetic_layer() {
+        let mut provenance = Provenance::new();
+        provenance.insert(
+            "workloads.pi.local_build".to_string(),
+            "synthetic".to_string(),
+        );
+        let layer_dirs = HashMap::new();
+
+        assert_eq!(
+            declaring_layer_content_dir_from(&provenance, &layer_dirs, "pi"),
+            None
+        );
     }
 }

@@ -40,7 +40,7 @@ const SLUG_RE: &str = r"^[a-z2-7]{4}$";
 /// a fresh writable `MSB_HOME` (so the SDK's `<MSB_HOME>/db/msb.db` is
 /// openable and empty), and `WORKESTRATE_CONFIG_DIR` pointed at the committed
 /// 5-workload fixture. Dummy non-placeholder values are injected for every
-/// required litellm secret so the create path does not bail on missing
+/// required fixture secret so the create path does not bail on missing
 /// secrets on a provisioned host.
 fn isolated_cmd(home: &std::path::Path) -> Command {
     let mut c = Command::new(BIN);
@@ -60,10 +60,7 @@ fn isolated_cmd(home: &std::path::Path) -> Command {
     // Dummy non-placeholder secrets so the create path proceeds on a host.
     for (k, v) in [
         ("LITELLM_MASTER_KEY", "sk-test-master-key"),
-        ("OPENROUTER_API_KEY", "sk-or-test"),
-        ("KIMI_CODE_API_KEY", "sk-kimi-test"),
-        ("NEURALWATT_API_KEY", "sk-nw-test"),
-        ("MINIMAX_CODING_API_KEY", "sk-mx-test"),
+        ("ODYSSEUS_ADMIN_PASSWORD", "test-admin-password"),
     ] {
         c.env(k, v);
     }
@@ -79,8 +76,8 @@ fn parse_started_instance(stdout: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-/// Poll the litellm registry for a record named `instance`. Returns true once
-/// `workestrate ps --json` lists it.
+/// Poll the instance registry for a record named `instance`. Returns true
+/// once `workestrate ps --json` lists it.
 fn ps_contains(home: &std::path::Path, instance: &str) -> bool {
     let out = isolated_cmd(home)
         .args(["ps", "--json"])
@@ -95,7 +92,7 @@ fn ps_contains(home: &std::path::Path, instance: &str) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "needs KVM + a loaded litellm image; run manually with --ignored"]
+#[ignore = "needs KVM + a loaded python:3.12-slim image; run manually with --ignored"]
 async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
     let home = std::env::temp_dir().join(format!(
         "workestrate-lifecycle-detached-{}-{}",
@@ -111,9 +108,9 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
     //    foreground child; the child creates the sandbox and writes the
     //    registry record.
     let up = isolated_cmd(&home)
-        .args(["litellm", "up", "--new"])
+        .args(["example-litellm", "up", "--new"])
         .output()
-        .expect("spawn litellm up --new");
+        .expect("spawn example-litellm up --new");
     let up_stdout = String::from_utf8_lossy(&up.stdout).to_string();
     let up_stderr = String::from_utf8_lossy(&up.stderr).to_string();
 
@@ -149,7 +146,7 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
         .split_once('@')
         .unwrap_or_else(|| panic!("expected '<slot>@<slug>', got '{instance}'"));
     assert_eq!(
-        slot, "litellm",
+        slot, "example-litellm",
         "slot must be the bare workload name (no context active)"
     );
     assert!(
@@ -157,7 +154,7 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
         "slug '{slug}' must be 4 chars of [a-z2-7] (base32, WP-B); instance was '{instance}'"
     );
     assert_ne!(
-        instance, "litellm",
+        instance, "example-litellm",
         "must NOT register the bare singleton slot"
     );
 
@@ -191,9 +188,9 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
 
     // 5. `down --instance <slug>` stops and removes it.
     let down = isolated_cmd(&home)
-        .args(["litellm", "down", "--instance", slug])
+        .args(["example-litellm", "down", "--instance", slug])
         .output()
-        .expect("spawn litellm down --instance");
+        .expect("spawn example-litellm down --instance");
     let down_stdout = String::from_utf8_lossy(&down.stdout).to_string();
     assert!(
         down.status.success(),

@@ -1,27 +1,13 @@
 schema_version = 1
 
+# 5-workload test fixture. Cleanup phase 3: the historical real litellm
+# workload is replaced by the synthetic `example-litellm` placeholder
+# (mirroring config.reference/workestrate.toml) — generic public image, no
+# real provider egress hosts, no real provider secret IDs. The pi/odysseus/
+# opencode/tempest workloads are test scaffolding kept as-is.
+
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
-required = true
-
-[secrets.OPENROUTER_API_KEY]
-env_var = "OPENROUTER_API_KEY"
-allowed_hosts = ["openrouter.ai"]
-required = true
-
-[secrets.KIMI_CODE_API_KEY]
-env_var = "KIMI_CODE_API_KEY"
-allowed_hosts = ["api.kimi.com"]
-required = true
-
-[secrets.NEURALWATT_API_KEY]
-env_var = "NEURALWATT_API_KEY"
-allowed_hosts = ["api.neuralwatt.com"]
-required = true
-
-[secrets.MINIMAX_CODING_API_KEY]
-env_var = "MINIMAX_CODING_API_KEY"
-allowed_hosts = ["api.minimax.io"]
 required = true
 
 [secrets.GITHUB_TOKEN]
@@ -34,49 +20,29 @@ env_var = "ODYSSEUS_ADMIN_PASSWORD"
 required = true
 placeholder = "change_me_before_first_boot"
 
-[workloads.litellm]
+[workloads.example-litellm]
 kind = "service"
-image = { recipe = "registry", ref = "ghcr.io/berriai/litellm:v1.89.4" }
+image = { recipe = "registry", ref = "python:3.12-slim" }
 workdir = "/app"
 cpus = 2
 memory_mib = 2048
-command = ["/app/.venv/bin/litellm", "--config", "/app/config/config.yaml", "--host", "0.0.0.0"]
+command = ["python", "-m", "http.server", "4000"]
 log_stop_errors = true
 
-[workloads.litellm.env]
+[workloads.example-litellm.env]
 PORT = "4000"
-LITELLM_LOCAL_MODEL_COST_MAP = "True"
-LITELLM_MASTER_KEY = { bound = "guest" }
-OPENROUTER_API_KEY = true
-KIMI_CODE_API_KEY = true
-NEURALWATT_API_KEY = true
-MINIMAX_CODING_API_KEY = true
 
-[[workloads.litellm.ports]]
+[[workloads.example-litellm.ports]]
 host = 4000
 guest = 4000
 
-[[workloads.litellm.mounts]]
-host = "${MSB_HOME}/sandboxes/litellm/logs"
-guest = "/var/log/litellm"
-read_only = false
-
-[[workloads.litellm.mounts]]
-host = "infra/litellm"
-guest = "/app/config"
-read_only = true
-
-[workloads.litellm.network]
+[workloads.example-litellm.network]
 default_deny = true
 
-[[workloads.litellm.network.egress]]
+[[workloads.example-litellm.network.egress]]
 recipe = "dns"
 
-[[workloads.litellm.network.egress]]
-recipe = "https"
-hosts = ["openrouter.ai", "api.kimi.com", "api.neuralwatt.com", "api.minimax.io"]
-
-[[workloads.litellm.network.ingress]]
+[[workloads.example-litellm.network.ingress]]
 protocol = "tcp"
 port = 4000
 scope = "local"
