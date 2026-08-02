@@ -100,3 +100,44 @@ pub fn workloads_json(
         })
         .collect()
 }
+
+/// One row of `workestrate workload build --json` (spec 21 §5.1, phase C):
+/// the per-workload change-detection result. The envelope is a bare ARRAY of
+/// these objects — for BOTH the single-name and the batch scopes (the
+/// single-name shape is the same array of one), matching the bare-array
+/// convention of `ps_entries_json`/`workloads_json` above.
+#[derive(serde::Serialize)]
+pub struct BuildResultJson {
+    name: String,
+    /// repo_key (registered repo name or canonical path).
+    repo: String,
+    attr: String,
+    tag: String,
+    /// "absent" | "fresh" | "stale" | "unknown" (nix-absent degrade).
+    record_state: String,
+    /// "present" | "gone".
+    store_state: String,
+    /// The current drvPath eval; `null` when nix is absent (unverifiable).
+    drv_path: Option<String>,
+    decision: String,
+    action_taken: String,
+}
+
+pub fn build_results_json(
+    reports: &[crate::images::build_cmd::TargetReport],
+) -> Vec<BuildResultJson> {
+    reports
+        .iter()
+        .map(|r| BuildResultJson {
+            name: r.name.clone(),
+            repo: r.repo.clone(),
+            attr: r.attr.clone(),
+            tag: r.tag.clone(),
+            record_state: r.record_state.clone(),
+            store_state: r.store_state.clone(),
+            drv_path: r.drv_path.clone(),
+            decision: r.decision.clone(),
+            action_taken: r.action_taken.clone(),
+        })
+        .collect()
+}

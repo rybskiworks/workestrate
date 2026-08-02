@@ -290,6 +290,9 @@ fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
         WorkloadAction::New { .. } => {
             unreachable!("workload new is dispatched before workload translation")
         }
+        WorkloadAction::Build { .. } => {
+            unreachable!("workload build is dispatched before workload translation")
+        }
     }
 }
 
@@ -328,6 +331,9 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
         }
         WorkloadAction::New { .. } => {
             unreachable!("workload new is dispatched before workload translation")
+        }
+        WorkloadAction::Build { .. } => {
+            unreachable!("workload build is dispatched before workload translation")
         }
     }
 }
@@ -471,6 +477,29 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             if let WorkloadAction::New { name, kind } = &action {
                 return cmd_new(name, kind);
             }
+            // Spec 21 phase C: `workload build` is NOT kind-routed — it is
+            // selector-driven (name / bare / --repo / --all-repos) and
+            // dispatches early like `workload new`, before the name-verb
+            // match below. It is also deliberately NOT in the legacy shim's
+            // VERBS list: build is a new verb, verb-first only.
+            if let WorkloadAction::Build {
+                name,
+                repo,
+                all_repos,
+                check,
+                force,
+            } = &action
+            {
+                return workestrate::images::build_cmd::cmd_workload_build(
+                    name.as_deref(),
+                    repo.as_deref(),
+                    *all_repos,
+                    *check,
+                    *force,
+                    cli.json,
+                )
+                .await;
+            }
             // ADR 0021 addendum 2026-08-01: bare `workload up` (no name) is
             // the batch form — a topo-ordered start of ALL service-kind
             // workloads in the active context. Per-slot/per-dependent flags
@@ -535,6 +564,9 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                     WorkloadAction::Logs { name, .. } => (name.clone(), "logs", Vec::new(), false),
                     WorkloadAction::New { .. } => {
                         unreachable!("workload new is dispatched above")
+                    }
+                    WorkloadAction::Build { .. } => {
+                        unreachable!("workload build is dispatched above")
                     }
                 };
             let overrides = workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
@@ -1098,10 +1130,11 @@ mod tests {
 
     // --- ADR 0027: verb-first `workload` dispatch surface ------------------
 
-    /// The `workload` group exposes exactly the five verbs, each with the
-    /// workload name as the FIRST positional argument.
+    /// The `workload` group exposes the lifecycle verbs plus `new` and
+    /// `build` (spec 21 phase C), each with the workload name as the FIRST
+    /// positional argument (optional for the batch-capable verbs up/build).
     #[test]
-    fn workload_group_exposes_six_verbs_with_name_positional() {
+    fn workload_group_exposes_seven_verbs_with_name_positional() {
         let cmd = Cli::command();
         let workload = cmd
             .find_subcommand("workload")
@@ -1110,10 +1143,10 @@ mod tests {
             .get_subcommands()
             .map(|s| s.get_name().to_string())
             .collect();
-        for v in ["up", "exec", "plan", "down", "logs", "new"] {
+        for v in ["up", "exec", "plan", "down", "logs", "new", "build"] {
             assert!(verbs.contains(v), "workload missing verb: {v}");
         }
-        for v in ["up", "exec", "plan", "down", "logs", "new"] {
+        for v in ["up", "exec", "plan", "down", "logs", "new", "build"] {
             let sub = workload.find_subcommand(v).unwrap();
             let positionals: Vec<String> = sub
                 .get_positionals()
@@ -1125,6 +1158,128 @@ mod tests {
                 "workload {v} must take the workload name as its first positional"
             );
         }
+    }
+
+    // --- spec 21 phase C: `workload build` grammar (§5.1) ------------------
+
+    /// Bare `workload build` parses with name=None (the batch form: all
+    /// nix-layered workloads in the active context) and default flags.
+    #[test]
+    fn workload_build_bare_parses_as_batch_form_with_defaults() {
+        let cli = Cli::try_parse_from(["workestrate", "workload", "build"])
+            .expect("bare workload build must parse");
+        match cli.command {
+            Commands::Workload {
+                action:
+                    WorkloadAction::Build {
+                        name,
+                        repo,
+                        all_repos,
+                        check,
+                        force,
+                    },
+            } => {
+                assert_eq!(name, None, "bare build → batch form");
+                assert_eq!(repo, None);
+                assert!(!all_repos && !check && !force, "defaults are all off");
+            }
+            _ => panic!("expected workload build"),
+        }
+    }
+
+    /// Named build + flags parse; the GLOBAL --json propagates (not
+    /// re-declared on the verb).
+    #[test]
+    fn workload_build_named_with_flags_parses() {
+        let cli = Cli::try_parse_from([
+            "workestrate",
+            "workload",
+            "build",
+            "pi",
+            "--check",
+            "--force",
+            "--json",
+        ])
+        .expect("workload build <name> --check --force --json must parse");
+        assert!(cli.json, "global --json propagates into workload build");
+        match cli.command {
+            Commands::Workload {
+                action:
+                    WorkloadAction::Build {
+                        name,
+                        repo,
+                        all_repos,
+                        check,
+                        force,
+                    },
+            } => {
+                assert_eq!(name.as_deref(), Some("pi"));
+                assert_eq!(repo, None);
+                assert!(!all_repos);
+                assert!(check && force);
+            }
+            _ => panic!("expected workload build"),
+        }
+        let cli = Cli::try_parse_from(["workestrate", "workload", "build", "--repo", "personal"])
+            .expect("--repo form must parse");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Build { name, repo, .. },
+            } => {
+                assert_eq!(name, None);
+                assert_eq!(repo.as_deref(), Some("personal"));
+            }
+            _ => panic!("expected workload build"),
+        }
+        let cli = Cli::try_parse_from(["workestrate", "workload", "build", "--all-repos"])
+            .expect("--all-repos form must parse");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Build { all_repos, .. },
+            } => assert!(all_repos),
+            _ => panic!("expected workload build"),
+        }
+    }
+
+    /// §5.1 selector conflicts are parse errors: name+--repo, name+--all-repos,
+    /// --repo+--all-repos.
+    #[test]
+    fn workload_build_selector_conflicts_are_rejected() {
+        for argv in [
+            vec![
+                "workestrate",
+                "workload",
+                "build",
+                "pi",
+                "--repo",
+                "personal",
+            ],
+            vec!["workestrate", "workload", "build", "pi", "--all-repos"],
+            vec![
+                "workestrate",
+                "workload",
+                "build",
+                "--repo",
+                "a",
+                "--all-repos",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(argv.clone()).is_err(),
+                "conflicting selectors must fail to parse: {argv:?}"
+            );
+        }
+    }
+
+    /// `build` is a NEW verb — verb-first only: it must NOT join the legacy
+    /// name-first shim's VERBS list (`workestrate pi build` stays unparsed).
+    #[test]
+    fn legacy_shim_does_not_rewrite_build() {
+        let args = argv(&["workestrate", "redis", "build"]);
+        let (rewritten, warning) =
+            rewrite_legacy_workload_argv(args.clone(), &known_subcommand_names(), |n| n == "redis");
+        assert_eq!(rewritten, args, "build is not a shimmed legacy verb");
+        assert!(warning.is_none());
     }
 
     /// W6a: `workload new` takes `name` as its first positional and exposes

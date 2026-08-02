@@ -195,6 +195,18 @@ manual ritual (or another home) before this tool ever recorded it — refusing
 to trust it would force a spurious rebuild of every pre-existing tag on first
 run. `--reload-images` is the explicit escape that re-establishes the record.
 
+**Phase-C implementation note (2026-08-02):** in phase C the freshness
+predicate compares **drvPath only** — the outPath re-load gate is phase D,
+and records written by the phase-C D1-trust branch carry `out_path = ""`
+(unknown until the pipeline realizes the drv; the drvPath-only predicate
+never consults it). An unreachable msb store is a named ERROR per §7, not a
+skew-matrix state, so `skew.rs`'s `StoreTag` stays 2-variant. `--check`
+takes NO per-tag lock (it is a read-only report with no critical section).
+Under `--all-repos`, a repo whose standalone load/merge fails (e.g. it
+fails the current policy gates) is skipped with a note naming the repo and
+the rest of the batch proceeds; explicit `--repo <name>` hard-errors on the
+same failure.
+
 ### 3.5 Digest upgrade path
 
 The drvPath/outPath comparison answers "did the BUILD INPUTS change", not "is

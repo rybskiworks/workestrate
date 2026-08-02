@@ -415,7 +415,14 @@ pub fn load_config() -> Result<ConfigFile> {
 ///
 /// If BOTH `workestrate.toml` and `workestrate/` exist → hard error naming
 /// both paths. If neither exists → no layers (historical skip behavior).
-fn load_config_repo_layers(name: &str, repo_dir: &Path) -> Result<Vec<crate::merge::Layer>> {
+///
+/// `pub(crate)` for spec 21 phase C: the `workload build --repo/--all-repos`
+/// selectors load one registered repo's OWN layers through this (the repo's
+/// declarations, not the active-context merge).
+pub(crate) fn load_config_repo_layers(
+    name: &str,
+    repo_dir: &Path,
+) -> Result<Vec<crate::merge::Layer>> {
     let file_path = repo_dir.join("workestrate.toml");
     let dir_path = repo_dir.join("workestrate");
     let has_file = file_path.exists();

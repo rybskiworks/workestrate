@@ -287,6 +287,40 @@ pub enum WorkloadAction {
         #[arg(long, value_parser = ["agent", "service"], default_value = "agent")]
         kind: String,
     },
+    /// Build or check the nix-layered images of workloads (spec 21 phase C:
+    /// drvPath change detection + the §3.4 skew matrix; the build/load
+    /// pipeline itself is phase D). Omit the name for the batch form: all
+    /// nix-layered workloads in the active context (mirrors the bare-up
+    /// grammar of the ADR 0021 addendum). `--repo`/`--all-repos` widen the
+    /// scope to registered config repos. NOT kind-routed — `main.rs`
+    /// dispatches it early like `workload new`.
+    Build {
+        /// Workload name from the merged config. Omit for the batch form
+        /// (all nix-layered workloads in the active context).
+        #[arg(conflicts_with_all = ["repo", "all_repos"])]
+        name: Option<String>,
+
+        /// Build all nix-layered workloads declared by one registered config
+        /// repo.
+        #[arg(long, value_name = "CONFIG", conflicts_with = "all_repos")]
+        repo: Option<String>,
+
+        /// Build all nix-layered workloads across ALL registered config repos
+        /// (`registry.configs`); repos without a flake.nix are skipped with a
+        /// note.
+        #[arg(long)]
+        all_repos: bool,
+
+        /// Print the staleness matrix (spec 21 §3.4) only: build nothing,
+        /// load nothing, write no records.
+        #[arg(long)]
+        check: bool,
+
+        /// Rebuild regardless of the change-detection outcome (the
+        /// build-verb-local force; `--reload-images` on up/exec is phase E).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Actions for managing config repositories and trust.

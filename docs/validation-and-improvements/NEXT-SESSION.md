@@ -25,6 +25,34 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+> **2026-08-02 update (9) — spec 21 phase C (`workload build` + change
+> detection) landed** (one commit on top of phase B `290e91b`): new CLI verb
+> `workestrate workload build [name] [--repo <config> | --all-repos] [--check]
+> [--force]` (spec §5.1; `--json` is the global flag; verb-first only — NOT
+> in the legacy shim). New modules: `images/detect.rs` (the `DrvEvaluator`
+> and `StoreProbe` seams — real backends `NixCliEvaluator` (hermetic `nix
+> eval --raw <flake_root>#<attr>.drvPath`) and `MsbStoreProbe`
+> (`microsandbox::Image::get`; unreachable store = the named §7 "db
+> unreachable" error reusing the ps.rs vocabulary); the drvPath-only
+> freshness predicate; cfg(test) fakes), `images/build_cmd.rs` (selector
+> resolution via declaring-layer provenance; the lock → probe → eval → skew
+> → act flow; `--check` is lock-free and write-free; D1 trust records write
+> `out_path = ""` until phase D), `images/pipeline.rs` (the marked **SPEC 21
+> PHASE D SEAM** — `run_build_pipeline(BuildJob)` refuses with "build
+> pipeline not yet implemented (spec 21 phase D)"). `skew.rs` `StoreTag`
+> stays 2-variant (unreachable = named error, not a decision). Spec 21 §3.4
+> gained a phase-C addendum recording these. Tests: 700 passed / 0 failed /
+> 3 ignored (673 baseline + 27 new); `just verify` green. Smoke: real-repo
+> drvPath eval works IN-CONTAINER (personal flake inputs already in the
+> store); all `--check` selector forms green against the dev home with
+> `state/` untouched; phase-D seam refusal + §7 vocabularies demonstrated
+> live. Discovery: dev-home `personal-v2` fails the CURRENT policy gates
+> standalone (`default_deny=false` without entitlement — pre-existing repo
+> drift); `--all-repos` skips such repos with a note. HOST-NIX deferrals:
+> `nix build`/`msb load` (phase D) and a live D1 trust against a populated
+> store (the in-container msb store is empty). Spec 21 phases D–F remain
+> (D/F `HOST-NIX`; E `HOST-KVM`).
+>
 > **2026-08-02 update (8) — spec 21 phase B (image-state store) landed** (one
 > commit on top of phase A `02bea9a`): new library-only module
 > `control/agentctl/src/images/` — `state.rs` (the `state/images.json` spec §8
@@ -597,3 +625,10 @@ recovery — not flock(2), unsafe-code lint — repo_key, skew matrix;
 library-only, phases C–E wire it later; 673/0/3); STATUS.md §0 added for
 phase B (phase A demoted to §0.01, commit `02bea9a`), §5 item 12 annotated,
 spec 21 §6.1 addendum recorded.
+
+**2026-08-02 refresh (9):** spec 21 phase C (`workload build` + drvPath
+change detection) landed — update note (9) added to Current state (new
+verb + `images/{detect,build_cmd,pipeline}.rs`, the phase-D seam, the §7
+ladders; 700/0/3); STATUS.md §0 rewritten for phase C (B demoted to §0.01,
+A to §0.02), §5 item 12 annotated (incl. the personal-v2 policy-gate
+discovery), spec 21 §3.4 phase-C addendum recorded.

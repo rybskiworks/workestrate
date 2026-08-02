@@ -14,7 +14,90 @@ work from §5.
 
 ---
 
-## 0. LATEST LANDING — spec 21 PHASE B, image-state store (2026-08-02, one commit on top of phase A)
+## 0. LATEST LANDING — spec 21 PHASE C, `workload build` + drvPath change detection (2026-08-02, one commit on top of phase B)
+
+**Phase C of spec 21 (image build/load lifecycle) landed on
+`migration/tool-model`.** What changed, for contextless sessions:
+
+- **New CLI verb `workestrate workload build [name] [--repo <config> |
+  --all-repos] [--check] [--force]`** (spec §5.1; `--json` is the existing
+  GLOBAL flag, not re-declared). Verb-first only — deliberately NOT in the
+  legacy name-first shim's VERBS list. Clap conflicts: `name` × `--repo` ×
+  `--all-repos` are parse errors. Dispatched EARLY in `main.rs` (like
+  `workload new` — selector-driven, NOT kind-routed). Selectors resolve via
+  declaring-layer provenance (`workloads.<name>.image` → layer → layer-dirs
+  → `repo_identity_for`), never name-guessing: `name` = one workload in the
+  active context; bare = all nix-layered workloads in the active context
+  (mirrors bare-up grammar); `--repo` = all nix-layered workloads declared
+  by one registered repo (the repo's OWN layers merged standalone);
+  `--all-repos` = all `registry.configs` sorted. Eligibility is
+  `image.recipe == "nix-layered"` (§2.3 predicate); non-nix-layered
+  workloads are skipped silently; zero-eligible is a no-op with the EXACT
+  stderr note `note: no nix-layered workloads in scope; nothing to build`.
+- **New `images/detect.rs`** — the two change-detection seams:
+  `trait DrvEvaluator` (real: `NixCliEvaluator` running `nix eval --raw
+  <flake_root>#<attr>.drvPath` with explicit `--extra-experimental-features
+  "nix-command flakes"` + pinned `current_dir`, hermetic against ambient
+  nix.conf/cwd; errors: `NixAbsent` / `AttrMissing` / `EvalFailed` with
+  nix's stderr surfaced) and `trait StoreProbe` (real: `MsbStoreProbe` over
+  `microsandbox::Image::get`; Ok → Present, ImageNotFound → Gone, anything
+  else → the named §7 `StoreUnreachable` error reusing the ps.rs
+  unreachable-DB "db unreachable" vocabulary). `record_state_for` is the
+  drvPath-only freshness predicate. cfg(test) fakes for both seams.
+- **New `images/build_cmd.rs`** — selector resolution + the per-workload
+  flow: acquire `ImageTagLock` (build mode ONLY — `--check` takes NO lock,
+  read-only) → INSIDE the lock: probe store, load `ImagesState`, drvPath
+  eval, `decide_skew`, act. Skip → report; TrustAndRecord → D1 baseline
+  record written INSIDE the lock (`drv_path` = current eval, `out_path =
+  ""` until phase D, `digest = None`, `Provenance::capture()` fields);
+  Build/Rebuild/RebuildForced → the phase-D seam. §7 ladders implemented
+  row-for-row where phase-C-applicable: missing flake.nix = hard error
+  naming the repo (single-name) / skip-with-note (batch); nix absent +
+  tag present = degrade with stderr note + NO record; nix absent + tag
+  missing = hard error + remediation; msb store unreachable = one named
+  error, fail-fast in batch. `--check` reports structured "would …"
+  verdicts, never writes, exit 0.
+- **New `images/pipeline.rs` — the SPEC 21 PHASE D SEAM:** `BuildJob`
+  (workload, repo identity, attr, tag, drv_path, force) +
+  `run_build_pipeline()` returning `Err("build pipeline not yet implemented
+  (spec 21 phase D)")`; the module docblock specifies phase D's slot (nix
+  build → outPath re-load gate → msb load → record upsert inside the
+  still-held lock).
+- **Decisions (recorded in code + spec §3.4 addendum):** `StoreTag` stays
+  2-variant (unreachable = named §7 error, not a decision); D1 record
+  `out_path = ""` until phase D; drvPath-only freshness; `--check` lock-free;
+  batch unreachable/repo-failure posture = fail-fast per command /
+  skip-with-note per repo (`--all-repos` skips a repo whose standalone
+  load/merge fails — discovered live: dev-home `personal-v2` fails the
+  CURRENT policy gates standalone, `default_deny=false` without entitlement
+  — pre-existing repo drift, NOT phase-C code); JSON envelope = bare array
+  of per-workload objects (name, repo, attr, tag, record_state, store_state,
+  drv_path, decision, action_taken), single-name = same array of one.
+- **`load_config_repo_layers` made `pub(crate)`** (the `--repo`/`--all-repos`
+  selectors load one registered repo's own layers through it).
+- **Gates after landing:** 700 passed / 0 failed / 3 ignored (673 baseline
+  + 27 new); `just verify` fully green.
+- **Smoke (built binary, dev home `--home`, read-only + TempDir-copy
+  write-mode):** real-repo `nix eval --raw personal#workestrate-pi.drvPath`
+  works IN-CONTAINER (the personal flake's inputs are already in the store);
+  `build --check` (human + `--json`), `build pi --check`, `--repo personal`,
+  `--all-repos` (with the personal-v2 skip-note) all green; dev-home
+  `state/` byte-identical after (empty before and after); zero-eligible note
+  + unreachable-store vocabulary + phase-D seam refusal demonstrated live;
+  tempest drvPath eval succeeds WITH its placeholder FOD hash (the §3.1
+  fakeHash property against the real repo). Write-mode smoke ran against a
+  sibling TempDir COPY (`wk-home-copy`, cleaned up after) — `/tmp/opencode`
+  is root-owned in this container, so the copy could not live there. The D1
+  live record write is NOT reachable in-container (the msb store is empty —
+  no pre-existing tag to trust); it is unit-test-validated (record content
+  assertions). HOST-NIX deferrals: `nix build` / `msb load` (phase D) and a
+  live D1 trust against a populated store.
+- **Phases D–F remain** (build/load pipeline — the seam is marked; lifecycle
+  pre-flight wiring; multi-repo migration; D/F `HOST-NIX`, E `HOST-KVM`).
+
+---
+
+## 0.01 PREVIOUS LANDING — spec 21 PHASE B, image-state store (2026-08-02, one commit on top of phase A)
 
 **Phase B of spec 21 (image build/load lifecycle) landed on
 `migration/tool-model`.** What changed, for contextless sessions:
@@ -61,7 +144,7 @@ work from §5.
 
 ---
 
-## 0.01 PREVIOUS LANDING — spec 21 PHASE A, scaffold part (2026-08-02, commit `02bea9a`)
+## 0.02 PREVIOUS LANDING — spec 21 PHASE A, scaffold part (2026-08-02, commit `02bea9a`)
 
 **Phase A (scaffold part) of spec 21 (image build/load lifecycle) landed as
 commit `02bea9a` on `migration/tool-model`.** What changed, for contextless
@@ -632,16 +715,22 @@ current post-flips except the spec-05 row above.
     Standing threads that outlive the cleanup: container-home
     ephemerality/host-side home (§6); `stash@{0}` on `406b5b5` never to be
     touched (§7).
-12. **Spec 21 (image build/load lifecycle) — DESIGN-APPROVED; phases A + B
-    landed 2026-08-02** (§0/§0.01 above: A = `.workestrate-build/` reserved in
-    both scaffold template locations with parity + undeclared `local_build`
-    fallback default; B = `control/agentctl/src/images/` image-state store —
-    `images.json` schema/IO, per-tag O_EXCL lock, repo_key, skew matrix,
-    library-only). Phases C–F remain per the spec (C/D/F HOST-NIX; E HOST-KVM;
-    HOST-VERIFY cluster on msb digest surface). Phase C/D note: the per-tag
-    lock is O_EXCL + stale-PID recovery, NOT flock(2) (unsafe-code lint); the
-    kernel-release upgrade is an open follow-up decision recorded in
-    `images/lock.rs`.
+12. **Spec 21 (image build/load lifecycle) — DESIGN-APPROVED; phases A + B +
+    C landed 2026-08-02** (§0/§0.01/§0.02 above: A = `.workestrate-build/`
+    reserved in both scaffold template locations with parity + undeclared
+    `local_build` fallback default; B = `control/agentctl/src/images/`
+    image-state store — `images.json` schema/IO, per-tag O_EXCL lock,
+    repo_key, skew matrix; C = `workestrate workload build` verb + drvPath
+    change detection — selectors, `--check`/`--force`/`--json`, the §7
+    failure ladders, D1 trust-record writes, and the marked **phase-D seam**
+    in `images/pipeline.rs`). Phases D–F remain per the spec (D/F HOST-NIX;
+    E HOST-KVM; HOST-VERIFY cluster on the msb digest surface). Phase C/D
+    note: the per-tag lock is O_EXCL + stale-PID recovery, NOT flock(2)
+    (unsafe-code lint); the kernel-release upgrade is an open follow-up
+    decision recorded in `images/lock.rs`. Phase-C discovery: the dev-home
+    `personal-v2` repo fails the CURRENT policy gates standalone
+    (`default_deny=false` without entitlement) — pre-existing repo drift;
+    `--all-repos` skips it with a note (batch posture).
 
 ---
 
