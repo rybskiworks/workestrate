@@ -4,9 +4,9 @@ Beads tracks **WORK** (actionable issues, claims, status). Docs track **STATE** 
 
 ## Setup facts
 - `bd` currently via `nix shell nixpkgs#beads` (ephemeral; currently bd 1.0.3); devshell integration is planned (serialized behind in-flight cleanup phases). Binary source is irrelevant to state: any `bd` (native install, devshell, nix shell) operates on the same `.beads/` workspace.
-- Backend: embedded Dolt at `.beads/embeddeddolt/` (untracked). Tracked: `.beads/{config.yaml,metadata.json,.gitignore}` — nothing else may be committed from `.beads/`.
+- Backend: embedded Dolt at `.beads/embeddeddolt/` (untracked). Tracked: `.beads/{config.yaml,metadata.json,.gitignore}` plus `.beads/issues.jsonl` — auto-export is ON by design: `issues.jsonl` is committed as a human-readable issue snapshot, so expect commit churn on issue writes and stage it deliberately with issue-related commits. All other `.beads/` content (e.g. `embeddeddolt`) stays untracked.
 - Issue prefix: `wrk`. Sync: git ref `refs/dolt/data` on origin via `bd dolt push` / `bd dolt pull` (host checkout is the canonical pusher; origin is the host-local repo path, so all pushes happen host-side with user approval).
-- Version discipline: keep all binaries on the same minor version across checkouts; the DB schema migrates one-way and older binaries refuse newer DBs.
+- Version discipline: keep all binaries on the same minor version across checkouts; the DB schema migrates one-way and older binaries refuse newer DBs. These procedures are verified against bd 1.0.3 — recheck commands on upgrade (flags and subcommand shapes may change).
 
 ## Sync discipline
 - **Session start (any checkout):** `git pull` then `bd dolt pull` (when a remote dolt ref exists).
@@ -20,8 +20,8 @@ Beads tracks **WORK** (actionable issues, claims, status). Docs track **STATE** 
 - Microsandbox microVMs never run `bd` — they are runtime sandboxes, not dev environments.
 
 ## Daily loops by role
-- **Orchestrator / lead:** session start: `bd dolt pull`, `bd ready` → choose work; create/refine issues (`bd create --title ... --type task|epic`); assign and order with `bd dep add <child> <parent>`; end: push proposal + update STATUS.md/NEXT-SESSION.md pointers to issue IDs.
-- **Worker (incl. parallel implementation agents):** claim, don't create: `bd ready --claim <id>` (atomic/idempotent). Work the claimed issue; `bd update <id> --status in_progress`; close with `bd close <id> --reason "<validation tags + evidence>"`. Blocked mid-task → file ONE new issue for the blocker and `bd dep add`; don't batch-create.
+- **Orchestrator / lead:** session start: `bd dolt pull`, `bd ready` → choose work; create/refine issues (`bd create --title ... --type task|epic`); assign and order with `bd dep add <blocker> <blocked>` (task→task blocks only — epics cannot be blocked; epic hierarchy is set via `bd update <child> --parent <epic>`); end: push proposal + update STATUS.md/NEXT-SESSION.md pointers to issue IDs.
+- **Worker (incl. parallel implementation agents):** claim, don't create: `bd update <id> --claim` (atomic/idempotent). Work the claimed issue; `bd update <id> --status in_progress`; close with `bd close <id> --reason "<validation tags + evidence>"`. Blocked mid-task → file ONE new issue for the blocker and `bd dep add`; don't batch-create.
 - **Tester:** open issues for confirmed defects with repro in the body; verify `bd close --reason` carries validation evidence before accepting a close.
 - **Parallel-work rule (current Phase 0–4 situation):** the orchestrator owns issue creation for phase/epic structure; the implementation agent claims existing issues only. Duplicates are closed `bd close <id> --reason "duplicate of wrk-NNN"`.
 
@@ -29,7 +29,7 @@ Beads tracks **WORK** (actionable issues, claims, status). Docs track **STATE** 
 - Commits: conventional commits referencing issue IDs, e.g. `fix(agentctl): handle stale msb lock (wrk-42)`.
 - Validation: `--reason` on close carries the validation tag, e.g. `validated: just verify green @ <sha>` (or partially_validated/not_validated with the env tag no-KVM/HOST-KVM/HOST-NIX).
 - STATUS.md/NEXT-SESSION.md: keep their current format; their task lists become links to `wrk-*` IDs; narrative state stays in docs.
-- **Icebox / deferred:** `bd update <id> --defer` (or label `icebox`); deferred items stay OUT of `bd ready` and are revisited at phase boundaries via `bd list --deferred`. STATUS.md records WHY deferred.
+- **Icebox / deferred:** `bd update <id> --defer +1d` (`--defer` requires a duration, e.g. `+1d`; `--defer ""` clears) (or label `icebox`); deferred items stay OUT of `bd ready` and are revisited at phase boundaries via `bd list --deferred`. STATUS.md records WHY deferred.
 
 ## Upgrades
 - bd upgrades = binary change only; nothing in $HOME. Before switching binary versions on any clone: `bd dolt push` everywhere with the OLD binary.
