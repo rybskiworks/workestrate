@@ -19,6 +19,15 @@ work from §5.
 - **HEAD:** `7624aaf` — `fix(config): gate cwd-derived reference config behind
   explicit opt-in (spec 05)`. Branch `migration/tool-model`; working tree clean;
   **2 stashes exist — leave them untouched** (foreign WIP, not ours).
+- **In-flight fix (uncommitted at time of writing; lands as a new commit on
+  `migration/tool-model`):** `workestrate home clone <src> <dest>` from a
+  git-initialized but COMMITLESS source home produced an empty tree (git-clone
+  path; `config.toml` uncommitted), breaking provisioning. The git-clone path
+  now requires a resolvable HEAD (`git_has_head`,
+  `control/agentctl/src/git.rs`); commitless sources fall back to the
+  file-copy path. Regression test
+  `from_commitless_git_src_falls_back_to_file_copy`
+  (`control/agentctl/tests/cmd_home_provision.rs`).
 - **Gates:** green — ~613 cargo tests; `just lint-nix` passes; `just
   tombi-check` is wired into `just verify`. All cargo-linked gates run
   in-container via `nix develop` (nix lives at

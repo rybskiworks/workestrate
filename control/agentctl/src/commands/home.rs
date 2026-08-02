@@ -353,7 +353,10 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
     // dirs are (re-)ensured afterwards: state/ is NEVER copied from src,
     // sources/ is excluded (created empty), secrets/ is created EMPTY
     // (machine-local by design, ADR 0018).
-    let src_is_git_repo = src.join(".git").exists();
+    // A commitless source (git init'd but no commits) must fall back to the
+    // file-copy path: cloning it yields an empty tree because config.toml is
+    // uncommitted/untracked.
+    let src_is_git_repo = src.join(".git").exists() && crate::git::git_has_head(&src);
     if src_is_git_repo {
         let url = src.to_string_lossy().to_string();
         // An existing dest passed the non-empty guard, so it is EMPTY here;

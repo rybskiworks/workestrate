@@ -25,8 +25,10 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
-- HEAD: `19d94e8` (interim microsandbox-filesystem agentd patch slimmed to
-  match the fork). **Phase B landed (2026-08-01):** final unified secret/env
+- HEAD: `867a96e` (docs: STATUS.md comprehensive state report; latest code
+  commit is the spec-05 cwd-fallback fix `7624aaf`; the interim
+  microsandbox-filesystem agentd patch slim `19d94e8` landed just before).
+  **Phase B landed (2026-08-01):** final unified secret/env
   model `19b2cf0` (spec 16 — per-binding `bound`, `true` sugar,
   `allowed_hosts`, `schema_version` back to 1), directory-mode config repos
   `e3194d9` (spec 17 — `workestrate/{default,secrets}.toml` + `workloads/`
@@ -147,6 +149,15 @@ re-derive their contents.
   cwd-fallback fix, spec 01 mounts WP1–WP3 (+ Phase 0 KVM spike), spec 03
   dogfooding B1/B2, spec 20 (schema-evolution) to be written, and
   Experiment E1.
+- **2026-08-02 (in-flight on `migration/tool-model`; fix landing as a new
+  commit on top of `867a96e`):** `workestrate home clone <src> <dest>` from a
+  git-initialized but COMMITLESS source home took the git-clone path, yielding
+  an empty tree (`config.toml` uncommitted) and breaking provisioning. Root
+  cause: the git-clone path never checked for a resolvable HEAD. Fix: it now
+  requires one (new `git_has_head` helper in `control/agentctl/src/git.rs`);
+  commitless sources fall back to the existing file-copy path. Regression
+  test: `from_commitless_git_src_falls_back_to_file_copy` in
+  `control/agentctl/tests/cmd_home_provision.rs`.
 
 ---
 
@@ -370,3 +381,8 @@ directory-mode + final-model; `schema_version = 1` everywhere; spec 02
 flipped OBSOLETE (mooted by spec 08); pending list refreshed (host
 batch/KVM items, upstream PR push, spec 05 cwd-fallback, spec 01 mounts,
 spec 03 dogfooding, spec 20 schema-evolution spec to be written, E1).
+
+**2026-08-02 refresh:** HEAD ref refreshed `19d94e8` → `867a96e`; the
+commitless-home clone bug + fix recorded in Current state (in-flight, landing
+on top of `867a96e`; `git_has_head` HEAD gate on the git-clone path;
+regression test `from_commitless_git_src_falls_back_to_file_copy`).

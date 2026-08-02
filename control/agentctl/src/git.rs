@@ -113,6 +113,13 @@ pub fn git_rev_parse(repo: &std::path::Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// True when `repo` has a resolvable HEAD (at least one commit). A
+/// git-init'd repo with no commits is still a repo on disk, but cloning it
+/// yields an empty tree — callers use this to gate git-clone paths.
+pub fn git_has_head(repo: &std::path::Path) -> bool {
+    git_rev_parse(repo).is_ok()
+}
+
 pub fn git_is_dirty(repo: &std::path::Path) -> Result<bool> {
     // `git status --porcelain` reports tracked modifications AND untracked
     // files; `git diff --quiet HEAD` misses untracked files entirely (a repo

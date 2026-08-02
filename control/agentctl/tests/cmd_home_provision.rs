@@ -716,6 +716,73 @@ fn legacy_src_without_lock_honors_registry_rev_and_no_pin_warns() {
 }
 
 // ---------------------------------------------------------------------------
+// commitless git src (git init'd, no commits) → file-copy fallback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn from_commitless_git_src_falls_back_to_file_copy() {
+    let home = IsolatedHome::new("cmd-home-prov");
+    let tmp = TempDir::new("cmd-home-prov-src");
+    let src_home = tmp.path().join("src-home");
+    // Same layout as build_source_home but WITHOUT the commit step: the src
+    // is a git repo on disk with no resolvable HEAD, so config.toml is
+    // untracked and a git clone of it would yield an empty tree.
+    git_init_repo(&src_home);
+    std::fs::write(
+        src_home.join("config.toml"),
+        "layers = [\"work\"]\n\n[settings]\nhome_version = 2\n",
+    )
+    .expect("write src registry");
+    std::fs::write(
+        src_home.join(".gitignore"),
+        "/config-repos/\n/sources/\n/state/\n/cache/\n",
+    )
+    .expect("write src .gitignore");
+    for dir in ["config-repos", "sources", "state", "secrets"] {
+        std::fs::create_dir_all(src_home.join(dir)).expect("create src layout dir");
+    }
+
+    let scratch = TempDir::new("cmd-home-prov");
+    let dest = scratch.path().join("dest-home");
+    let out = home
+        .cmd()
+        .args(["home", "clone"])
+        .arg(&src_home)
+        .arg(&dest)
+        .output()
+        .expect("invoke home clone");
+    assert!(
+        out.status.success(),
+        "commitless-src provisioning failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The file-copy path materialized dest: the registry carries the src's
+    // (uncommitted) content, stamped at the current home_version.
+    let registry = std::fs::read_to_string(dest.join("config.toml")).expect("read dest registry");
+    assert!(
+        registry.contains("layers = [\"work\"]"),
+        "dest registry must carry the src layers:\n{registry}"
+    );
+    assert!(
+        registry.contains("home_version = 2"),
+        "dest registry must stamp home_version = 2:\n{registry}"
+    );
+    assert!(dest.join(".git").is_dir(), "dest home must be a git repo");
+    assert!(
+        dest.join(".git").join("hooks").join("pre-commit").exists(),
+        "dest must carry the pre-commit hook"
+    );
+    assert!(
+        dest.join(".gitignore").exists(),
+        "dest must carry .gitignore"
+    );
+    for dir in ["config-repos", "sources", "state", "secrets"] {
+        assert!(dest.join(dir).is_dir(), "expected dir {dir} at dest");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // local-only copy + lock: the locked rev is checked out in the copied repo
 // ---------------------------------------------------------------------------
 
