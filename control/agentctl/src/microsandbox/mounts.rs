@@ -451,6 +451,7 @@ mod tests {
             host: "nested/state".into(),
             guest: "/data".into(),
             read_only: false,
+            policy: None,
         }]);
 
         ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan)?;
@@ -476,6 +477,7 @@ mod tests {
             host: "missing/config.json".into(),
             guest: "/app/config.json".into(),
             read_only: true,
+            policy: None,
         }]);
 
         let result =

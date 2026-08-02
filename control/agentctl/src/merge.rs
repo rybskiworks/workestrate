@@ -86,6 +86,10 @@ impl Layer {
             source_path,
         })
     }
+
+    pub(crate) fn raw(&self) -> &toml::Value {
+        &self.raw
+    }
 }
 
 /// Build the layer-name → content-root map for a merged layer set.

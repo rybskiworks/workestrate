@@ -16,7 +16,7 @@
 
 use crate::mount_policy::pattern::Pattern;
 use serde::de::{self, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -24,7 +24,7 @@ use std::marker::PhantomData;
 /// defaults to `true` in both the compact and expanded forms and must be
 /// explicit in expanded form to be `false`. A non-overridable value becomes
 /// a terminal rule at compile time (spec 22 §4).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct PolicyValue<T> {
     /// The scalar payload (a raw pattern string, or a compiled [`Pattern`]).
     pub value: T,

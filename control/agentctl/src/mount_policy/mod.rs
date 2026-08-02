@@ -48,5 +48,15 @@ pub use program::{
     CaseSensitivity, Decision, Explained, MaskedWrites, MountPolicyProgram, RuleMatch,
 };
 pub use rule::{PathPolicyRule, RuleEffect, RuleOrigin};
-pub use scope::{MountsFragment, PolicyScope, ScopeKind};
+pub use scope::{CollectedPolicy, MountsFragment, PolicyScope, ScopeKind};
 pub use value::{PolicyScalar, PolicyValue};
+
+static COLLECTED: std::sync::Mutex<Option<CollectedPolicy>> = std::sync::Mutex::new(None);
+
+pub fn set_collected_policy(policy: Option<CollectedPolicy>) {
+    *COLLECTED.lock().unwrap_or_else(|e| e.into_inner()) = policy;
+}
+
+pub fn get_collected_policy() -> Option<CollectedPolicy> {
+    COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}

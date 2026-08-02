@@ -156,6 +156,11 @@ re-derive their contents.
 > phases B–F remain (B `verifiable-here`; C/D/F `HOST-NIX`; E `HOST-KVM`;
 > msb HOST-VERIFY cluster).
 
+> **2026-08-02 update (8) — config-surface slice:** registry/config/workload/
+> mount policy fields now collect ordered provenance-bearing fragments without
+> merge.rs policy merging; runtime transmission and CLI diagnostics remain
+> future slices.
+
 > **2026-08-02 update (6) — spec 21 (image build/load lifecycle) authored**
 > as DESIGN-APPROVED at
 > [06-improvements/21-image-build-lifecycle.md](06-improvements/21-image-build-lifecycle.md)

@@ -46,6 +46,10 @@ pub struct ConfigWorkload {
     /// path). `plan()` appends the injected env AFTER the declared env and
     /// the derived egress AFTER the expanded declared egress rules.
     pub(super) depends_resolved: Vec<crate::microsandbox::discovery::ResolvedDependency>,
+    /// Compiled only when policy is declared for this workload. It is kept
+    /// off `SandboxPlan` until the runtime transmission slice lands.
+    #[allow(dead_code)]
+    pub(super) mount_policy: Option<crate::mount_policy::MountPolicyProgram>,
 }
 
 impl ConfigWorkload {
@@ -73,6 +77,22 @@ impl ConfigWorkload {
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("workload '{}' not found in config", name))?
             .clone();
+
+        let mount_policy = crate::mount_policy::get_collected_policy()
+            .and_then(|collected| {
+                let mut scopes = collected.global;
+                scopes.extend(collected.workloads.get(name).cloned().unwrap_or_default());
+                if scopes.is_empty() {
+                    None
+                } else {
+                    Some(scopes)
+                }
+            })
+            .map(crate::mount_policy::compile)
+            .transpose()
+            .map_err(|e| {
+                anyhow::anyhow!("mount policy for workload '{name}' failed to compile: {e}")
+            })?;
 
         // Content roots (spec 17): repo-relative mount hosts and seed-file
         // paths resolve against the DECLARING layer's directory, not the
@@ -106,6 +126,7 @@ impl ConfigWorkload {
             mount_content_root,
             seed_content_root,
             depends_resolved,
+            mount_policy,
         })
     }
 
@@ -955,6 +976,7 @@ default_deny = true
             mount_content_root: None,
             seed_content_root: None,
             depends_resolved: Vec::new(),
+            mount_policy: None,
         }
     }
 
