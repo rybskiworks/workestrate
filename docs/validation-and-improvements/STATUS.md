@@ -14,7 +14,49 @@ work from §5.
 
 ---
 
-## 0. LATEST LANDING — cleanup PHASE 0 (2026-08-02, lands on top of `09b624f`)
+## 0. LATEST LANDING — cleanup PHASE 1 (2026-08-02, lands on top of phase-0 HEAD `b9a3ed3`)
+
+**Phase 1 of the approved cleanup landed** as one commit on
+`migration/tool-model` (the phase-1 commit; hash assigned at commit time).
+What changed and why, for contextless sessions:
+
+- **Deleted (verified safe pre-execution):**
+  - `config.reference/agents/{pi,odysseus,opencode}` — duplicated agent
+    configs (byte-identical copies live in the dev-home personal config
+    repo); `config.reference/agents/example-*` golden-test fixtures KEPT.
+  - `nix/packages/{odysseus,opencode}.nix` — consumerless; the
+    `odysseus-built`/`opencode-built` flake attrs + package re-exports and
+    the corresponding `just update-hashes` steps removed with them
+    (tempest/pi attrs untouched; confirm step is now `nix build .#tempest`).
+  - Repo-root `var/` + `workspaces/` — the `.gitignore` exception lines,
+    the two `optional(...)` checks in `control/agentctl/src/config/loading.rs`
+    (optional-count test 10 → 8), and the two entries in the README
+    top-level layout sentence removed with them. The mounts.rs/config.rs
+    `workspaces//var/` XDG-state prefix-mapping logic is UNTOUCHED.
+  - `.assets/opencode-agent/` — legacy personal docker fleet, superseded;
+    recoverable from git history.
+- **Moved:** `docs/odysseus-full-capability.md` → the user's personal config
+  repo (personal-workload content, not generic tooling; the move itself is
+  done by a parallel worker). In-repo citations at `docs/gaps.md:14` and
+  `docs/integration-plan.md:141` replaced with plain-text pointers.
+- **Spec-17 text reconciled with the phase-0 implementation**
+  (`17-config-repo-directory-mode.md`): the :73-75 bullet and the migration
+  mapping-table row now say mount/seed/local_build paths resolve against the
+  DECLARING CONFIG LAYER's directory (capsule-relative names for colocated
+  artifacts, e.g. `host = "config.yaml"` next to `workload.toml`), zero
+  schema change; a note marks the text as reconciled post-implementation
+  (phase 0, `b9a3ed3`). **Correction to the phase-0 drift flag:** spec 20
+  contains NO mount/seed path-semantics text (grep-verified) — the "spec
+  17/20" flag was spec-17-only; spec 20 needed no amendment.
+- **Known doc-citation staleness (follow-ups, NOT fixed here):**
+  `12-per-instance-addressing.md:171` cites the deleted pi `models.json`;
+  `10-config-repos-as-working-copies.md:297` cites the deleted `.assets`
+  fleet; `docs/nix/*.md` + `docs/migration/*` still describe
+  `odysseus-built`/`opencode-built`.
+
+---
+
+## 0.1 PREVIOUS LANDING — cleanup PHASE 0 (2026-08-02, landed on top of `09b624f`)
 
 **Phase 0 of the approved mount/seed path-resolution cleanup landed** (one
 commit; HEAD moves past `09b624f` — the snapshot below still cites `7624aaf`/

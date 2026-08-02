@@ -644,8 +644,7 @@ The top-level layout (already documented in
 [`agents/README.md`](agents/README.md) and
 [`profiles/litellm.md`](profiles/litellm.md)) is: `control/agentctl/`
 (Rust CLI), `infra/litellm/` (LiteLLM config), `infra/microsandbox/`
-(SDK notes), `agents/` (optional agent checkouts), `workspaces/`
-(per-agent scratch), and `var/` (runtime logs and pidfiles).
+(SDK notes), and `agents/` (optional agent checkouts).
 
 ## Troubleshooting
 

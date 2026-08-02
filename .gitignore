@@ -8,12 +8,6 @@
 age.txt
 .secrets/
 
-var/*
-!var/.gitkeep
-
-workspaces/*
-!workspaces/.gitkeep
-
 # Upstream agent repos and build outputs (gitignored — flake/local + build cache)
 agents/*/repo
 agents/*/build

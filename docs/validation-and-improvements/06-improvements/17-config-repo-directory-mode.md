@@ -70,11 +70,16 @@ current form, unchanged) **or** directory mode. Directory mode layout:
   definition and whose sibling files carry that workload's artifacts under
   their **app-native names** (`config.yaml`, `models.yaml`, `opencode.jsonc`,
   `settings.json`, `models.json`, seed files, `flake.nix`).
-- **Mount/seed/local_build paths stay repo-relative strings.** They simply
-  point into the capsule dir (e.g.
-  `mounts = [{ host = "workestrate/workloads/litellm/config.yaml", … }]`).
+- **Mount/seed/local_build paths resolve against the declaring config layer's
+  directory.** For a capsule, that is the capsule dir itself, so colocated
+  app-native artifacts are addressed by capsule-relative names (e.g.
+  `mounts = [{ host = "config.yaml", … }]` next to `workload.toml`).
   **Zero schema change** to the workload schema — directory mode is purely a
   loader + layout concern.
+
+> *This text was reconciled with the implementation post-implementation
+> (phase 0, commit b9a3ed3, which resolves these paths against the declaring
+> layer dir).*
 
 ---
 
@@ -193,7 +198,7 @@ Mapping:
 | Per-workload tables (`[workloads.litellm]` …) | `workestrate/workloads/<name>/workload.toml` (capsule form) |
 | `agents/<wl>/config/*` artifacts | `workestrate/workloads/<wl>/` under app-native names (`settings.json`, `opencode.jsonc`, `models.json`) |
 | `infra/litellm/{config.yaml,models.yaml}` | `workestrate/workloads/litellm/{config.yaml,models.yaml}` |
-| Mount/seed paths referencing `agents/…` / `infra/…` | Re-pointed into the capsule — repo-relative strings, **no schema change** |
+| Mount/seed paths referencing `agents/…` / `infra/…` | Re-pointed into the capsule — capsule-relative strings resolved against the declaring layer dir, **no schema change** |
 
 The `agents/` and `infra/` trees collapse into capsules; the restructured repo
 must load to a **byte-identical merged config** (acceptance §6).

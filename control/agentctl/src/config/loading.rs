@@ -81,8 +81,6 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
             "profiles/agents/tempest.md",
             root.join("profiles/agents/tempest.md"),
         ),
-        optional("workspaces/", root.join("workspaces")),
-        optional("var/", root.join("var")),
         // Optional: agent repos are typically supplied via flake
         // inputs. A fresh clone may legitimately omit local
         // `agents/<name>/repo` checkouts.
@@ -870,11 +868,11 @@ pub(crate) mod tests {
         let tmp = std::env::temp_dir();
         let entries = check_required_files(&tmp).unwrap();
         let optional_entries: Vec<_> = entries.iter().filter(|e| e.optional).collect();
-        // Optional local overrides: 4 agent repos + 4 agent builds + workspaces/ + var/ = 10.
+        // Optional local overrides: 4 agent repos + 4 agent builds = 8.
         assert_eq!(
             optional_entries.len(),
-            10,
-            "expected 10 optional checks, got {}",
+            8,
+            "expected 8 optional checks, got {}",
             optional_entries.len()
         );
     }

@@ -38,6 +38,17 @@ re-derive their contents.
 > (flagged): spec 17/20 say "repo-relative"; implementation is
 > declaring-FILE-dir-relative — see STATUS.md §0.
 
+> **2026-08-02 update (2) — cleanup PHASE 1 landed** (the phase-1 commit, on
+> top of phase-0 HEAD `b9a3ed3`). Deleted duplicated
+> `config.reference/agents/{pi,odysseus,opencode}` configs, consumerless
+> `nix/packages/{odysseus,opencode}.nix` (+ flake attrs + `update-hashes`
+> lines), repo-root `var/`/`workspaces/`, and `.assets/opencode-agent`
+> (recoverable from git history); `docs/odysseus-full-capability.md` moved to
+> the user's personal config repo. Spec-17 mount/seed path text reconciled
+> with the phase-0 semantics (declaring-layer-dir); correction: spec 20 had
+> no such text (grep-verified) — the phase-0 "spec 17/20" flag was
+> spec-17-only. Remaining citation staleness is recorded in STATUS.md §0.
+
 - HEAD: `867a96e` (docs: STATUS.md comprehensive state report; latest code
   commit is the spec-05 cwd-fallback fix `7624aaf`; the interim
   microsandbox-filesystem agentd patch slim `19d94e8` landed just before).
@@ -399,3 +410,11 @@ spec 03 dogfooding, spec 20 schema-evolution spec to be written, E1).
 commitless-home clone bug + fix recorded in Current state (in-flight, landing
 on top of `867a96e`; `git_has_head` HEAD gate on the git-clone path;
 regression test `from_commitless_git_src_falls_back_to_file_copy`).
+
+**2026-08-02 refresh (2):** cleanup PHASE 1 landed (phase-1 commit on top of
+phase-0 `b9a3ed3`) — duplicated `config.reference` agent configs,
+consumerless nix packages + flake attrs, repo-root `var/`/`workspaces/`, and
+the legacy `.assets/opencode-agent` fleet deleted;
+`docs/odysseus-full-capability.md` moved to the personal config repo;
+spec-17 path-semantics text reconciled with the phase-0 implementation
+(spec 20 confirmed to need no amendment).
