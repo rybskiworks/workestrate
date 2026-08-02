@@ -3,7 +3,27 @@ use anyhow::Result;
 use microsandbox::sandbox::SandboxBuilder;
 use std::path::{Component, Path, PathBuf};
 
-fn resolve_mount_host(root: &Path, host: &str) -> Result<PathBuf> {
+/// Roots for resolving mount hosts (F1/F2 — spec 17 path resolution).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MountRoots<'a> {
+    /// Content root: plain repo-relative hosts resolve here — the directory
+    /// of the config layer that DECLARED the workload's mounts (the parent
+    /// dir of the layer file; e.g. the capsule dir in a directory-mode
+    /// config repo). The caller (`build_sandbox`) falls back to the flake
+    /// project root / cwd only when no declaring layer dir is knowable.
+    pub content_root: &'a Path,
+    /// Flake project root — present only when the workload actually requires
+    /// it (F2 lazy gate). Relative BUILD-path hosts (artifacts of the flake
+    /// checkout, e.g. `agents/<name>/build`) resolve here, keeping the
+    /// pre-F1 behavior for `${WORKESTRATE_<NAME>_BUILD}`-template mounts.
+    pub project_root: Option<&'a Path>,
+    /// The workload's `build_path()` value, used to detect build-derived
+    /// relative hosts AFTER template substitution (a `${WORKESTRATE_<NAME>_BUILD}`
+    /// host expands to exactly this string).
+    pub build_path: &'a str,
+}
+
+fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathBuf> {
     if let Some(rest) = host.strip_prefix("${MSB_HOME}/") {
         let home = std::env::var("HOME")
             .map(PathBuf::from)
@@ -14,7 +34,27 @@ fn resolve_mount_host(root: &Path, host: &str) -> Result<PathBuf> {
         let state_dir = crate::config::resolve_state_dir();
         Ok(state_dir.join(host))
     } else {
-        Ok(root.join(host))
+        let path = Path::new(host);
+        if path.is_absolute() {
+            // `${CWD}`-template hosts and absolute build paths: substitution
+            // already happened in `plan()`; absolute paths pass through
+            // unchanged (Path::join would do the same — explicit for clarity).
+            return Ok(path.to_path_buf());
+        }
+        // A relative host equal to the workload's build_path() came from a
+        // `${WORKESTRATE_<NAME>_BUILD}`-template expansion (or a literal
+        // `agents/<name>/build`): a build artifact of the flake checkout, so
+        // it keeps resolving against the flake project root when one is
+        // available. Without a project root it degrades to the content root
+        // (the F2 gate normally hard-errors first in that situation).
+        if host == roots.build_path {
+            if let Some(project_root) = roots.project_root {
+                return Ok(project_root.join(host));
+            }
+        }
+        // Plain repo-relative host: resolve against the DECLARING config
+        // layer's content dir (F1), not the flake project root.
+        Ok(roots.content_root.join(host))
     }
 }
 
@@ -25,7 +65,7 @@ fn resolve_mount_host(root: &Path, host: &str) -> Result<PathBuf> {
 /// 1. Reject empty strings.
 /// 2. Reject absolute paths (leading `/`). Config authors must use a
 ///    template prefix (`${CWD}/...`, `${MSB_HOME}/...`) or a relative path
-///    that resolves under the project root.
+///    that resolves under the declaring config layer's content directory.
 /// 3. Reject any `..` path component anywhere in the string. Template
 ///    prefixes are not traversal escapes — `${CWD}/../../etc` is still
 ///    rejected because the suffix contains `..`.
@@ -33,7 +73,8 @@ fn resolve_mount_host(root: &Path, host: &str) -> Result<PathBuf> {
 /// The permitted raw-value forms are:
 /// - `${MSB_HOME}/...`, `${CWD}/...`, `${CWD}` (exact), `${WORKESTRATE_<NAME>_BUILD}` (exact)
 /// - `workspaces/...`, `var/...` (resolved to XDG state dir)
-/// - any other relative path with no `..` component (resolved to `root.join(host)`)
+/// - any other relative path with no `..` component (resolved against the
+///   declaring config layer's content directory — see [`MountRoots`])
 pub fn validate_mount_host(host: &str) -> Result<()> {
     if host.is_empty() {
         anyhow::bail!("mount host cannot be empty");
@@ -107,12 +148,12 @@ pub fn validate_mount_guest(guest: &str, read_only: bool) -> Result<()> {
 
 pub(crate) fn apply_plan_mounts(
     builder: SandboxBuilder,
-    root: &Path,
+    roots: &MountRoots,
     plan: &SandboxPlan,
 ) -> Result<SandboxBuilder> {
     let mut b = builder;
     for m in &plan.mounts {
-        let host = resolve_mount_host(root, &m.host)?;
+        let host = resolve_mount_host(roots, &m.host)?;
         b = b.volume(&m.guest, |v| {
             let v = v.bind(host);
             if m.read_only {
@@ -125,9 +166,9 @@ pub(crate) fn apply_plan_mounts(
     Ok(b)
 }
 
-pub(crate) fn ensure_mount_sources(root: &Path, plan: &SandboxPlan) -> Result<()> {
+pub(crate) fn ensure_mount_sources(roots: &MountRoots, plan: &SandboxPlan) -> Result<()> {
     for m in &plan.mounts {
-        let path = resolve_mount_host(root, &m.host)?;
+        let path = resolve_mount_host(roots, &m.host)?;
         if !path.exists() {
             if m.read_only {
                 anyhow::bail!("mount source does not exist: {}", path.display());
@@ -147,7 +188,8 @@ pub(crate) fn ensure_mount_sources(root: &Path, plan: &SandboxPlan) -> Result<()
     clippy::unwrap_in_result
 )]
 mod tests {
-    use super::{ensure_mount_sources, validate_mount_guest, validate_mount_host};
+    use super::{ensure_mount_sources, resolve_mount_host, MountRoots};
+    use super::{validate_mount_guest, validate_mount_host};
     use crate::microsandbox::plan::{MountPlan, NetworkPlan, SandboxPlan};
 
     fn unique_root(label: &str) -> std::path::PathBuf {
@@ -161,6 +203,18 @@ mod tests {
             std::process::id(),
             nanos,
         ))
+    }
+
+    fn roots_for<'a>(
+        content_root: &'a std::path::Path,
+        project_root: Option<&'a std::path::Path>,
+        build_path: &'a str,
+    ) -> MountRoots<'a> {
+        MountRoots {
+            content_root,
+            project_root,
+            build_path,
+        }
     }
 
     fn minimal_plan(mounts: Vec<MountPlan>) -> SandboxPlan {
@@ -193,7 +247,7 @@ mod tests {
             read_only: false,
         }]);
 
-        ensure_mount_sources(&root, &plan)?;
+        ensure_mount_sources(&roots_for(&root, None, "agents/test/build"), &plan)?;
 
         let created = root.join("nested").join("state");
         assert!(
@@ -203,7 +257,7 @@ mod tests {
         );
 
         // Idempotent: re-running over an existing directory must not error.
-        ensure_mount_sources(&root, &plan)?;
+        ensure_mount_sources(&roots_for(&root, None, "agents/test/build"), &plan)?;
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -218,7 +272,7 @@ mod tests {
             read_only: true,
         }]);
 
-        let result = ensure_mount_sources(&root, &plan);
+        let result = ensure_mount_sources(&roots_for(&root, None, "agents/test/build"), &plan);
         assert!(
             result.is_err(),
             "readonly mount source should bail when missing, got {:?}",
@@ -226,6 +280,63 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    // ---- F1: repo-relative hosts resolve against the content root ----
+
+    #[test]
+    fn relative_host_resolves_against_content_root_not_project_root() -> anyhow::Result<()> {
+        let content = unique_root("content");
+        let project = unique_root("project");
+        let roots = roots_for(&content, Some(&project), "agents/test/build");
+        // Capsule-style declaration: `config.yaml` lives next to the
+        // declaring layer file (content root), NOT under the flake root.
+        let resolved = resolve_mount_host(&roots, "config.yaml")?;
+        assert_eq!(resolved, content.join("config.yaml"));
+        // Even a nested repo-relative path ignores the project root.
+        let resolved = resolve_mount_host(&roots, "nested/dir/file.json")?;
+        assert_eq!(resolved, content.join("nested/dir/file.json"));
+        Ok(())
+    }
+
+    #[test]
+    fn relative_build_path_host_prefers_project_root_when_available() -> anyhow::Result<()> {
+        let content = unique_root("content");
+        let project = unique_root("project");
+        // `${WORKESTRATE_TEST_BUILD}` expanded to the relative fallback
+        // `agents/test/build`: a flake-checkout artifact → project root.
+        let roots = roots_for(&content, Some(&project), "agents/test/build");
+        let resolved = resolve_mount_host(&roots, "agents/test/build")?;
+        assert_eq!(resolved, project.join("agents/test/build"));
+        Ok(())
+    }
+
+    #[test]
+    fn relative_build_path_host_degrades_to_content_root_without_project_root() -> anyhow::Result<()>
+    {
+        let content = unique_root("content");
+        let roots = roots_for(&content, None, "agents/test/build");
+        let resolved = resolve_mount_host(&roots, "agents/test/build")?;
+        assert_eq!(resolved, content.join("agents/test/build"));
+        Ok(())
+    }
+
+    #[test]
+    fn absolute_and_template_hosts_pass_through_unchanged() -> anyhow::Result<()> {
+        let content = unique_root("content");
+        let project = unique_root("project");
+        let roots = roots_for(&content, Some(&project), "agents/test/build");
+        // `${CWD}`-substituted hosts and absolute build paths are absolute —
+        // they must NOT be re-rooted under either root.
+        let resolved = resolve_mount_host(&roots, "/abs/path/from-cwd-template")?;
+        assert_eq!(
+            resolved,
+            std::path::PathBuf::from("/abs/path/from-cwd-template")
+        );
+        let roots = roots_for(&content, Some(&project), "/nix/store/abc-build");
+        let resolved = resolve_mount_host(&roots, "/nix/store/abc-build")?;
+        assert_eq!(resolved, std::path::PathBuf::from("/nix/store/abc-build"));
         Ok(())
     }
 

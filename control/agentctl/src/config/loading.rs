@@ -157,9 +157,10 @@ pub fn load_overrides(
     if let Some(global) = raw.get("global").and_then(|v| v.as_table()) {
         let processed = process_override_section(global, "global", existing_workloads)?;
         if !processed.is_empty() {
-            layers.push(crate::merge::Layer::from_string(
+            layers.push(crate::merge::Layer::from_string_with_path(
                 "global-override",
                 &processed,
+                Some(overrides_path.to_path_buf()),
             )?);
         }
     }
@@ -181,9 +182,10 @@ pub fn load_overrides(
             let section_path = format!("configs.{}", name);
             let processed = process_override_section(table, &section_path, existing_workloads)?;
             if !processed.is_empty() {
-                layers.push(crate::merge::Layer::from_string(
+                layers.push(crate::merge::Layer::from_string_with_path(
                     &format!("configs.{}-override", name),
                     &processed,
+                    Some(overrides_path.to_path_buf()),
                 )?);
             }
         }
@@ -289,8 +291,10 @@ pub fn load_config() -> Result<ConfigFile> {
         if path.exists() {
             set_active_context(None);
             let layer = crate::merge::Layer::load("local", &path)?;
+            let layer_dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&layer));
             let (merged, provenance) = crate::merge::merge_layers(&[layer])?;
             crate::merge::set_provenance(Some(provenance));
+            crate::merge::set_layer_dirs(Some(layer_dirs));
             validate_config(&merged)?;
             return Ok(merged);
         }
@@ -382,8 +386,10 @@ pub fn load_config() -> Result<ConfigFile> {
         anyhow::bail!("no config found; run 'workestrate init' or set WORKESTRATE_CONFIG_DIR");
     }
 
+    let layer_dirs = crate::merge::layer_dirs_from(&layers);
     let (merged, provenance) = crate::merge::merge_layers(&layers)?;
     crate::merge::set_provenance(Some(provenance));
+    crate::merge::set_layer_dirs(Some(layer_dirs));
     validate_config(&merged)?;
     Ok(merged)
 }
@@ -458,9 +464,10 @@ fn load_config_repo_layers(name: &str, repo_dir: &Path) -> Result<Vec<crate::mer
         );
     }
     record_workload_names(&mut defined, &default_raw, &default_prov)?;
-    layers.push(crate::merge::Layer::from_string(
+    layers.push(crate::merge::Layer::from_string_with_path(
         &default_prov,
         &default_content,
+        Some(default_path.clone()),
     )?);
 
     // 2. secrets.toml — optional; must NOT repeat schema_version.
@@ -469,9 +476,10 @@ fn load_config_repo_layers(name: &str, repo_dir: &Path) -> Result<Vec<crate::mer
         let secrets_prov = format!("{name}#workestrate/secrets.toml");
         let (secrets_content, secrets_raw) = read_toml_file(&secrets_path)?;
         reject_schema_version(&secrets_raw, &secrets_prov)?;
-        layers.push(crate::merge::Layer::from_string(
+        layers.push(crate::merge::Layer::from_string_with_path(
             &secrets_prov,
             &secrets_content,
+            Some(secrets_path.clone()),
         )?);
     }
 
@@ -595,7 +603,7 @@ fn load_workload_entry(
     if raw.get("workloads").is_some() {
         // Full form: [workloads.<name>] table(s) loaded as-is.
         record_workload_names(defined, &raw, &provenance)?;
-        crate::merge::Layer::from_string(&provenance, &content)
+        crate::merge::Layer::from_string_with_path(&provenance, &content, Some(entry_file))
     } else {
         // Bare form: synthesize the [workloads.<implied>] wrapper.
         let wrapper = bare_wrapper_value(&implied_name, &raw);
@@ -607,7 +615,7 @@ fn load_workload_entry(
                 e
             )
         })?;
-        crate::merge::Layer::from_string(&provenance, &wrapped)
+        crate::merge::Layer::from_string_with_path(&provenance, &wrapped, Some(entry_file))
     }
 }
 

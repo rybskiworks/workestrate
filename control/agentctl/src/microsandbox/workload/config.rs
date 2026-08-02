@@ -4,6 +4,25 @@ use super::{SandboxCommand, Workload};
 use crate::config::WorkloadConfig;
 use crate::microsandbox::plan::{EgressRule, EnvVar, HostBoundSecret, NetworkPlan, SandboxPlan};
 use anyhow::Result;
+use std::path::PathBuf;
+
+/// Resolve the content root for one workload field (`mounts`,
+/// `seed_files`): the content dir of the layer that DECLARED the field, per
+/// the merge provenance (`workloads.<name>.<field>` → layer name) and the
+/// layer-dirs map (layer name → parent dir of the layer file).
+///
+/// Returns `None` when provenance or the layer's dir is unavailable
+/// (synthetic `from_string` layers without a source path); the caller then
+/// applies the documented fallback explicitly.
+fn field_content_root(
+    provenance: Option<&crate::merge::Provenance>,
+    layer_dirs: &std::collections::HashMap<String, PathBuf>,
+    workload: &str,
+    field: &str,
+) -> Option<PathBuf> {
+    let layer = provenance?.get(&format!("workloads.{workload}.{field}"))?;
+    layer_dirs.get(layer).cloned()
+}
 
 /// Workload implementation driven by `workestrate.toml`. This replaces the
 /// per-agent `workloads/*.rs` modules with a single generic implementation.
@@ -14,6 +33,14 @@ pub struct ConfigWorkload {
     pub(super) env: Vec<EnvVar>,
     pub(super) secret_env: Vec<HostBoundSecret>,
     pub(super) provenance: Option<crate::merge::Provenance>,
+    /// Content root for repo-relative mount hosts: the directory of the
+    /// config layer that declared `workloads.<name>.mounts`. Resolved at
+    /// construction from provenance + the load-time layer-dirs map.
+    pub(super) mount_content_root: Option<PathBuf>,
+    /// Content root for seed-file sources and non-state targets: the
+    /// directory of the config layer that declared
+    /// `workloads.<name>.seed_files`.
+    pub(super) seed_content_root: Option<PathBuf>,
     /// ADR 0026(d) discovery-lite: depends_on resolutions computed at
     /// construction (declaration triggers resolution on every up/exec/plan
     /// path). `plan()` appends the injected env AFTER the declared env and
@@ -39,12 +66,22 @@ impl ConfigWorkload {
     pub fn new_with_use_overrides(name: &str, use_overrides: &[(String, String)]) -> Result<Self> {
         let config = crate::config::load_config()?;
         let provenance = crate::merge::take_provenance();
+        let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
         crate::config::validate_config(&config)?;
         let workload = config
             .workloads
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("workload '{}' not found in config", name))?
             .clone();
+
+        // Content roots (spec 17): repo-relative mount hosts and seed-file
+        // paths resolve against the DECLARING layer's directory, not the
+        // flake project root. Mounts and seed_files merge wholesale-replace,
+        // so each field has exactly one declaring layer.
+        let mount_content_root =
+            field_content_root(provenance.as_ref(), &layer_dirs, name, "mounts");
+        let seed_content_root =
+            field_content_root(provenance.as_ref(), &layer_dirs, name, "seed_files");
 
         // ADR 0026(d): a declared depends_on map resolves EVERY declared dep
         // at plan time — no flag. A required-but-not-running dep refuses
@@ -66,6 +103,8 @@ impl ConfigWorkload {
             env,
             secret_env,
             provenance,
+            mount_content_root,
+            seed_content_root,
             depends_resolved,
         })
     }
@@ -174,8 +213,30 @@ impl Workload for ConfigWorkload {
     }
 
     fn prepare(&self) -> Result<()> {
-        let root = crate::config::project_root()
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+        if self.workload.seed_files.is_empty() {
+            return Ok(());
+        }
+        // Content root for seed sources and non-state targets: the directory
+        // of the config layer that declared this workload's seed_files
+        // (spec 17). EXPLICIT FALLBACK: when no declaring layer dir is
+        // knowable (synthetic layers), fall back to the flake project root
+        // when one resolves. There is NO silent cwd fallback (F3 — removed
+        // the old `unwrap_or_else(current_dir)`): if neither is available,
+        // hard-error and name the workload.
+        let root = match self
+            .seed_content_root
+            .clone()
+            .or_else(crate::config::project_root_optional)
+        {
+            Some(root) => root,
+            None => anyhow::bail!(
+                "workload '{}' declares seed_files but no content root can be resolved: \
+                 the declaring config layer has no source directory and no flake project \
+                 root was found. Set AGENTCTL_ROOT, run from the workbench root, or \
+                 declare seed_files from a file-backed config layer.",
+                self.name
+            ),
+        };
         let state_dir = crate::config::resolve_state_dir();
         for seed in &self.workload.seed_files {
             let source = root.join(&seed.source);
@@ -227,6 +288,40 @@ impl Workload for ConfigWorkload {
 
     fn log_stop_errors(&self) -> bool {
         self.workload.log_stop_errors.unwrap_or(true)
+    }
+
+    fn mount_content_root(&self) -> Option<PathBuf> {
+        self.mount_content_root.clone()
+    }
+
+    /// F2 lazy gate: `build_sandbox` calls `project_root()` ONLY when the
+    /// workload genuinely needs the flake checkout. The triggers:
+    ///
+    /// (a) a `nix-layered` image recipe (image build artifacts live in the
+    ///     tool flake);
+    /// (b) a `local_build` config (recipes — including `flake://` sources —
+    ///     execute against the flake checkout);
+    /// (c) a mount whose host, after `${WORKESTRATE_<NAME>_BUILD}` template
+    ///     substitution in `plan()`, IS the workload's relative build path
+    ///     (e.g. `agents/<name>/build`) — a flake-checkout artifact that
+    ///     still resolves against the project root.
+    ///
+    /// Registry-image workloads with none of these return `None`, so
+    /// `build_sandbox` never touches the flake-root gate for them.
+    fn flake_root_requirement(&self, plan: &SandboxPlan) -> Option<String> {
+        if self.workload.image.recipe == "nix-layered" {
+            return Some("nix-layered image".to_string());
+        }
+        if self.workload.local_build.is_some() {
+            return Some("local_build config".to_string());
+        }
+        let build_path = self.build_path();
+        if !std::path::Path::new(&build_path).is_absolute()
+            && plan.mounts.iter().any(|m| m.host == build_path)
+        {
+            return Some(format!("relative build-path mount '{build_path}'"));
+        }
+        None
     }
 }
 
@@ -345,6 +440,10 @@ default_deny = true
 
         fn state_dir(&self) -> &std::path::Path {
             &self.state_dir
+        }
+
+        fn config_dir(&self) -> &std::path::Path {
+            &self.config_dir
         }
     }
 
@@ -560,6 +659,303 @@ default_deny = true
         .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("litellm") && msg.contains("ghost"));
+        Ok(())
+    }
+
+    // ---- F1: content roots resolve against the DECLARING layer's dir ----
+
+    /// Pure resolution: provenance key → layer name → layer dir.
+    #[test]
+    fn field_content_root_follows_provenance_to_layer_dir() {
+        let mut provenance = crate::merge::Provenance::new();
+        provenance.insert(
+            "workloads.litellm.mounts".to_string(),
+            "personal#workestrate/workloads/litellm.toml".to_string(),
+        );
+        let mut dirs = std::collections::HashMap::new();
+        dirs.insert(
+            "personal#workestrate/workloads/litellm.toml".to_string(),
+            PathBuf::from("/store/config-repos/personal/workestrate/workloads"),
+        );
+        assert_eq!(
+            field_content_root(Some(&provenance), &dirs, "litellm", "mounts"),
+            Some(PathBuf::from(
+                "/store/config-repos/personal/workestrate/workloads"
+            ))
+        );
+        // No provenance → None (caller applies the documented fallback).
+        assert_eq!(field_content_root(None, &dirs, "litellm", "mounts"), None);
+        // Provenance names a synthetic layer with no dir → None.
+        let mut provenance = crate::merge::Provenance::new();
+        provenance.insert(
+            "workloads.litellm.mounts".to_string(),
+            "synthetic".to_string(),
+        );
+        assert_eq!(
+            field_content_root(Some(&provenance), &dirs, "litellm", "mounts"),
+            None
+        );
+    }
+
+    /// Multi-layer pipeline: a directory-mode-style layer re-declaring
+    /// `mounts` moves the mount content root to ITS dir; `seed_files`
+    /// declared only by the base layer keep the BASE dir. Mirrors the
+    /// `load_config` merge + `layer_dirs_from` wiring end to end.
+    #[test]
+    fn content_roots_track_the_declaring_layer_across_a_merge() -> Result<()> {
+        let base_dir = std::path::Path::new("/tmp/f1-base-repo/workestrate/workloads");
+        let capsule_dir = std::path::Path::new("/tmp/f1-personal-repo/workestrate/workloads/svc");
+        let base = crate::merge::Layer::from_string_with_path(
+            "base#workestrate/workloads/svc.toml",
+            "schema_version = 1\n\n[workloads.svc]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"python:3.12-slim\" }\ncommand = []\n\n[[workloads.svc.mounts]]\nhost = \"base-config.yaml\"\nguest = \"/app/cfg\"\nread_only = true\n\n[[workloads.svc.seed_files]]\nsource = \"seed/s.json\"\ntarget = \"workspaces/svc-state/s.json\"\n\n[workloads.svc.network]\ndefault_deny = true",
+            Some(base_dir.join("svc.toml")),
+        )?;
+        let capsule = crate::merge::Layer::from_string_with_path(
+            "personal#workestrate/workloads/svc/workload.toml",
+            "schema_version = 1\n\n[workloads.svc]\n\n[[workloads.svc.mounts]]\nhost = \"config.yaml\"\nguest = \"/app/cfg\"\nread_only = true",
+            Some(capsule_dir.join("workload.toml")),
+        )?;
+
+        let dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&base));
+        let mut dirs = dirs;
+        dirs.extend(crate::merge::layer_dirs_from(std::slice::from_ref(
+            &capsule,
+        )));
+        let (_merged, provenance) = crate::merge::merge_layers(&[base, capsule])?;
+
+        // Mounts: wholesale-replaced by the capsule layer → capsule dir.
+        assert_eq!(
+            field_content_root(Some(&provenance), &dirs, "svc", "mounts"),
+            Some(capsule_dir.to_path_buf())
+        );
+        // Seed files: declared only by the base layer → base dir.
+        assert_eq!(
+            field_content_root(Some(&provenance), &dirs, "svc", "seed_files"),
+            Some(base_dir.to_path_buf())
+        );
+        Ok(())
+    }
+
+    /// End-to-end through `ConfigWorkload::new` (WORKESTRATE_CONFIG_DIR
+    /// single layer named "local"): the content root is the config dir
+    /// holding the declaring `workestrate.toml`, and `prepare()` seeds from
+    /// it — never from project_root or cwd.
+    const SEED_CONFIG_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "config.yaml"
+guest = "/app/config.yaml"
+read_only = true
+
+[[workloads.svc.seed_files]]
+source = "seed/settings.json"
+target = "workspaces/svc-state/settings.json"
+only_if_missing = true
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
+    #[test]
+    fn new_resolves_content_roots_to_the_declaring_config_dir() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-content-root", SEED_CONFIG_TOML);
+        let svc = ConfigWorkload::new("svc")?;
+        assert_eq!(
+            svc.mount_content_root.as_deref(),
+            Some(guard.config_dir()),
+            "mount content root is the declaring layer's dir"
+        );
+        assert_eq!(
+            svc.seed_content_root.as_deref(),
+            Some(guard.config_dir()),
+            "seed content root is the declaring layer's dir"
+        );
+        // And via the trait surface used by build_sandbox.
+        assert_eq!(
+            Workload::mount_content_root(&svc).as_deref(),
+            Some(guard.config_dir())
+        );
+        Ok(())
+    }
+
+    /// F3: prepare() copies seed files from the DECLARING layer's dir
+    /// (colocated seed payload), never silently from cwd.
+    #[test]
+    fn prepare_seeds_from_the_declaring_layer_dir() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-prepare-seed", SEED_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("settings.json"),
+            "{\"seeded\":true}",
+        )?;
+
+        let svc = ConfigWorkload::new("svc")?;
+        svc.prepare()?;
+
+        let target = guard.state_dir().join("workspaces/svc-state/settings.json");
+        assert_eq!(
+            std::fs::read_to_string(&target)?,
+            "{\"seeded\":true}",
+            "seed payload must come from the declaring layer's dir"
+        );
+        Ok(())
+    }
+
+    /// F3: seed files present but NO content root resolvable (synthetic
+    /// workload, no declaring layer dir, no flake project root reachable)
+    /// → explicit hard error naming the workload, NEVER a silent cwd
+    /// fallback.
+    #[test]
+    fn prepare_hard_errors_when_seed_content_root_unresolvable() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+        let old_root = std::env::var("AGENTCTL_ROOT").ok();
+        let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
+
+        // Scrub every project_root tier: no AGENTCTL_ROOT, no
+        // CARGO_MANIFEST_DIR, cwd = a flake-less temp dir.
+        let cwd = crate::config::test_support::uniq_dir("cw-prepare-noroot");
+        std::fs::create_dir_all(&cwd)?;
+        std::env::remove_var("AGENTCTL_ROOT");
+        std::env::remove_var("CARGO_MANIFEST_DIR");
+        std::env::set_current_dir(&cwd)?;
+
+        let result = synthetic_workload(SEED_CONFIG_TOML, "svc").prepare();
+
+        match old_root {
+            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
+            None => std::env::remove_var("AGENTCTL_ROOT"),
+        }
+        match old_manifest {
+            Some(v) => std::env::set_var("CARGO_MANIFEST_DIR", v),
+            None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&cwd);
+
+        let err = result.expect_err("seed files without a content root must hard-error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("workload 'svc'") && msg.contains("no content root"),
+            "error must name the workload and the missing content root: {msg}"
+        );
+        Ok(())
+    }
+
+    /// F3: no seed files → prepare() is a no-op even with no content root.
+    #[test]
+    fn prepare_without_seed_files_is_a_noop() -> Result<()> {
+        let svc = synthetic_workload(MINIMAL_SEEDLESS_TOML, "svc");
+        svc.prepare()
+    }
+
+    const MINIMAL_SEEDLESS_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["true"]
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
+    /// Build a ConfigWorkload directly (no config load): provenance and
+    /// content roots are None, simulating a synthetic layer stack.
+    fn synthetic_workload(toml: &str, name: &str) -> ConfigWorkload {
+        let cf: crate::config::ConfigFile =
+            toml::from_str(toml).expect("synthetic config must parse");
+        let workload = cf.workloads.get(name).expect("workload present").clone();
+        ConfigWorkload {
+            name: name.to_string(),
+            workload,
+            env: Vec::new(),
+            secret_env: Vec::new(),
+            provenance: None,
+            mount_content_root: None,
+            seed_content_root: None,
+            depends_resolved: Vec::new(),
+        }
+    }
+
+    // ---- F2: the lazy flake-root gate predicate ----
+
+    /// Registry image, no local_build, no build-path mounts → NO
+    /// requirement: build_sandbox must never call project_root for litellm.
+    #[test]
+    fn flake_root_requirement_none_for_plain_registry_workload() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        let litellm = ConfigWorkload::new("litellm")?;
+        assert_eq!(litellm.flake_root_requirement(&litellm.plan()), None);
+        Ok(())
+    }
+
+    /// nix-layered image recipe → requirement naming the feature.
+    #[test]
+    fn flake_root_requirement_names_nix_layered_image() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        let pi = ConfigWorkload::new("pi")?;
+        let req = pi
+            .flake_root_requirement(&pi.plan())
+            .expect("nix-layered pi must require the flake root");
+        assert!(req.contains("nix-layered"), "got: {req}");
+        Ok(())
+    }
+
+    /// Registry image WITH local_build → requirement naming local_build.
+    #[test]
+    fn flake_root_requirement_names_local_build() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        let odysseus = ConfigWorkload::new("odysseus")?;
+        let req = odysseus
+            .flake_root_requirement(&odysseus.plan())
+            .expect("local_build odysseus must require the flake root");
+        assert!(req.contains("local_build"), "got: {req}");
+        Ok(())
+    }
+
+    /// Case (c): a `${WORKESTRATE_<NAME>_BUILD}` mount whose build path is
+    /// the RELATIVE fallback (`agents/<name>/build`) requires the flake root
+    /// even without a nix-layered image or local_build.
+    #[test]
+    fn flake_root_requirement_names_relative_build_path_mount() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("WORKESTRATE_SVC_BUILD");
+        let toml = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "${WORKESTRATE_SVC_BUILD}"
+guest = "/app"
+read_only = true
+
+[workloads.svc.network]
+default_deny = true
+"#;
+        let svc = synthetic_workload(toml, "svc");
+        let req = svc
+            .flake_root_requirement(&svc.plan())
+            .expect("a relative build-path mount must require the flake root");
+        assert!(req.contains("agents/svc/build"), "got: {req}");
+
+        // An ABSOLUTE build path (env override to a store path) needs no root.
+        std::env::set_var("WORKESTRATE_SVC_BUILD", "/nix/store/abc-build");
+        let svc = synthetic_workload(toml, "svc");
+        assert_eq!(svc.flake_root_requirement(&svc.plan()), None);
+        std::env::remove_var("WORKESTRATE_SVC_BUILD");
         Ok(())
     }
 }

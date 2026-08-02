@@ -62,7 +62,8 @@ pub fn validate_env_override(name: &str) -> Result<()> {
 ///
 /// Rules:
 /// 1. Reject empty.
-/// 2. Reject absolute paths (leading `/`). Seed sources are project-root-relative.
+/// 2. Reject absolute paths (leading `/`). Seed sources resolve relative to
+///    the declaring config layer's content directory (spec 17).
 /// 3. Reject any `..` component.
 ///
 /// Note: seed sources do not participate in mount-template substitution, so
@@ -76,7 +77,7 @@ pub fn validate_seed_source(src: &str) -> Result<()> {
     }
     if src.starts_with('/') {
         anyhow::bail!(
-            "seed_files.source cannot be an absolute path (got '{src}');              seed sources must be project-root-relative"
+            "seed_files.source cannot be an absolute path (got '{src}');              seed sources must be relative to the declaring config layer's directory"
         );
     }
     for component in Path::new(src).components() {
@@ -90,7 +91,7 @@ pub fn validate_seed_source(src: &str) -> Result<()> {
     // and would silently create a literal directory named ${CWD}.
     if src.starts_with("${") {
         anyhow::bail!(
-            "seed_files.source='{src}' looks like a template token, but seed sources              are not template-substituted; use a project-root-relative path"
+            "seed_files.source='{src}' looks like a template token, but seed sources              are not template-substituted; use a path relative to the declaring config layer"
         );
     }
     Ok(())

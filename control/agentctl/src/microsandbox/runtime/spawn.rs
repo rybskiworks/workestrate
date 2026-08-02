@@ -18,6 +18,21 @@ pub fn spawn_detached_service(name: &str, args: &[String]) -> Result<std::proces
         .create(true)
         .append(true)
         .open(&log_path)?;
+    // Per-run delimiter (F4): the log is append-mode across runs AND binary
+    // versions, so without a marker an operator can misattribute a stale
+    // error from an older binary to the current run. One cheap write before
+    // the child's stdout/stderr is redirected here. Failure is non-fatal —
+    // log hygiene must never block a service start.
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            &log_file,
+            "===== workestrate {} spawn {} pid {} =====",
+            env!("CARGO_PKG_VERSION"),
+            super::time::current_rfc3339_utc(),
+            std::process::id()
+        );
+    }
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(args)
         .stdin(std::process::Stdio::null())
@@ -135,6 +150,16 @@ mod tests {
         assert!(
             !log.is_empty(),
             "the child's stderr must land in the log file"
+        );
+        // F4: a per-run delimiter precedes the child's output so stale
+        // entries from older runs/binaries are distinguishable.
+        assert!(
+            log.contains("===== workestrate "),
+            "log must open with the per-run delimiter: {log}"
+        );
+        assert!(
+            log.contains(" pid "),
+            "delimiter carries version, timestamp and pid: {log}"
         );
 
         let _ = std::fs::remove_dir_all(&home);

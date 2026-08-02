@@ -25,6 +25,19 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+> **2026-08-02 update — cleanup PHASE 0 landed** (one commit on top of
+> `09b624f`; HEAD below is stale). Repo-relative mount/seed paths now resolve
+> against the DECLARING config layer's directory, and `project_root()` is a
+> LAZY gate in `build_sandbox` (nix-layered / local_build / relative
+> build-path mounts only, error names the feature). Root-cause note for
+> contextless sessions: the `workload up litellm` failure from a flake-less
+> cwd was the unconditional flake-root gate (`run.rs`), NOT the stale log
+> lines that append-mode logging made look current; `spawn.rs` now writes a
+> per-run log delimiter. Tests: 634 passed / 0 failed / 3 ignored; KVM-gated
+> regression in `control/agentctl/tests/flake_root_gate.rs`. Known spec drift
+> (flagged): spec 17/20 say "repo-relative"; implementation is
+> declaring-FILE-dir-relative — see STATUS.md §0.
+
 - HEAD: `867a96e` (docs: STATUS.md comprehensive state report; latest code
   commit is the spec-05 cwd-fallback fix `7624aaf`; the interim
   microsandbox-filesystem agentd patch slim `19d94e8` landed just before).

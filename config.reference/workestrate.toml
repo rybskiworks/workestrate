@@ -32,7 +32,7 @@ host = 4000
 guest = 4000
 
 [[workloads.litellm.mounts]]
-host = "config.reference/infra/litellm"
+host = "infra/litellm"
 guest = "/app/config"
 read_only = true
 
@@ -70,12 +70,12 @@ guest = "/data"
 read_only = false
 
 [[workloads.example-service.mounts]]
-host = "config.reference/infra/litellm"
+host = "infra/litellm"
 guest = "/app/config"
 read_only = true
 
 [[workloads.example-service.seed_files]]
-source = "config.reference/agents/example-service/config/settings.json"
+source = "agents/example-service/config/settings.json"
 target = "workspaces/example-service-state/settings.json"
 only_if_missing = true
 

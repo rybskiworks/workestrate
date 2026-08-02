@@ -1,5 +1,5 @@
 use super::super::env::{resolve_templated_value_with, resolve_templated_value_with_env_fallback};
-use super::super::mounts::{apply_plan_mounts, ensure_mount_sources};
+use super::super::mounts::{apply_plan_mounts, ensure_mount_sources, MountRoots};
 use super::super::plan::{PortMapping, SandboxPlan};
 use super::super::workload::{EntrypointSpec, SandboxCommand, Workload};
 use super::{check_occupied_or_replace, ForegroundConfig, InstanceSpec};
@@ -8,7 +8,7 @@ use microsandbox::sandbox::{exec::ExecEvent, SandboxBuilder};
 use microsandbox::Sandbox;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Resolve the host bind IP for the slot `instance` runs in (ADR 0026(a)).
 ///
@@ -301,8 +301,44 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // never reach here.
     let secrets = crate::microsandbox::secrets_loader::load_secrets()?;
 
-    let root = crate::config::project_root()?;
     let mut plan = workload.plan();
+
+    // F2 LAZY GATE: `project_root()` hard-errors when the resolved root
+    // lacks flake.nix (e.g. a detached service child re-exec'd from the
+    // operator's cwd), so it is called ONLY when the workload genuinely
+    // needs the flake checkout — nix-layered image recipe, local_build
+    // config (incl. flake:// sources), or a relative build-path mount
+    // (`agents/<name>/build`). The error names the triggering feature.
+    // Registry-image workloads with none of these never touch the gate.
+    let project_root: Option<PathBuf> = match workload.flake_root_requirement(&plan) {
+        Some(feature) => Some(crate::config::project_root().map_err(|e| {
+            anyhow::anyhow!(
+                "workload '{}' uses {}, which requires a flake project root: {}",
+                workload.name(),
+                feature,
+                e
+            )
+        })?),
+        None => crate::config::project_root_optional(),
+    };
+
+    // F1: repo-relative mount hosts resolve against the DECLARING config
+    // layer's content dir (spec 17 — config content lives in config repos,
+    // not the tool checkout). EXPLICIT FALLBACK: when no declaring layer dir
+    // is knowable (synthetic layers, hand-built workloads), fall back to the
+    // flake project root when one resolved, else the process cwd — the only
+    // remaining cwd fallback; prepare() hard-errors instead of falling back.
+    let content_root: PathBuf = workload
+        .mount_content_root()
+        .or_else(|| project_root.clone())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let build_path = workload.build_path();
+    let mount_roots = MountRoots {
+        content_root: &content_root,
+        project_root: project_root.as_deref(),
+        build_path: &build_path,
+    };
 
     // Override the plan name with the spec instance name so display matches
     // the actual sandbox identity (slot for singleton, slot@id for parallel).
@@ -340,7 +376,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
 
     check_occupied_or_replace(spec, &state_dir).await?;
 
-    ensure_mount_sources(&root, &plan)?;
+    ensure_mount_sources(&mount_roots, &plan)?;
 
     let policy = super::network_plan_to_policy(&plan.network)?;
 
@@ -373,7 +409,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
     }
 
     builder = apply_plan_envs(builder, &plan, &secrets)?;
-    builder = apply_plan_mounts(builder, &root, &plan)?;
+    builder = apply_plan_mounts(builder, &mount_roots, &plan)?;
     builder = apply_plan_secrets(builder, &plan, &secrets)?;
 
     let builder = if spec.replace {

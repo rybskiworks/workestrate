@@ -1,0 +1,7 @@
+# Minimal LiteLLM config for the committed 5-workload fixture. The litellm
+# workload mounts this directory read-only at /app/config; under spec 17
+# path resolution the relative mount host `infra/litellm` resolves against
+# the declaring layer's content dir (this fixture dir), so the payload must
+# live here. Content validity only matters on KVM hosts that actually boot
+# the image.
+model_list: []

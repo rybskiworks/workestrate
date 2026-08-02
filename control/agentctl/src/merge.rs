@@ -3,7 +3,7 @@ use crate::policy;
 use crate::recipes::EgressRecipeRef;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Provenance: which layer set each field.
 ///
@@ -16,6 +16,12 @@ pub struct Layer {
     pub name: String,
     pub config: ConfigFile,
     raw: toml::Value,
+    /// The file this layer was loaded from, when known. `None` for synthetic
+    /// layers built from in-memory strings with no on-disk source. Carried
+    /// so repo-relative mount/seed paths can resolve against the DECLARING
+    /// layer's content directory (the parent dir of this file) rather than
+    /// the flake project root — see [`layer_dirs_from`].
+    pub source_path: Option<PathBuf>,
 }
 
 impl Layer {
@@ -23,7 +29,7 @@ impl Layer {
     pub fn load(name: &str, path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read layer config {}", path.display()))?;
-        Self::from_string(name, &content)
+        Self::from_string_with_path(name, &content, Some(path.to_path_buf()))
     }
 
     /// Load a layer from a TOML string.
@@ -55,6 +61,19 @@ impl Layer {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn from_string(name: &str, content: &str) -> Result<Self> {
+        Self::from_string_with_path(name, content, None)
+    }
+
+    /// Load a layer from a TOML string, recording the on-disk file the
+    /// content came from (when there is one). Directory-mode config repos
+    /// (spec 17) load each pseudo-layer from a real file under
+    /// `<repo>/workestrate/`, so they pass that path here; purely synthetic
+    /// layers pass `None`.
+    pub fn from_string_with_path(
+        name: &str,
+        content: &str,
+        source_path: Option<PathBuf>,
+    ) -> Result<Self> {
         let raw: toml::Value = toml::from_str(content)
             .with_context(|| format!("failed to parse raw TOML for layer '{}'", name))?;
         let config: ConfigFile = toml::from_str(content)
@@ -63,8 +82,34 @@ impl Layer {
             name: name.to_string(),
             config,
             raw,
+            source_path,
         })
     }
+}
+
+/// Build the layer-name → content-dir map for a merged layer set.
+///
+/// A layer's content dir is the parent directory of the file it was loaded
+/// from (e.g. the capsule dir for `personal#workestrate/workloads/litellm/
+/// workload.toml`). Layers without a source path (synthetic `from_string`
+/// layers) are absent — callers then apply the documented fallback
+/// (flake project root, else cwd) explicitly.
+///
+/// DESIGN NOTE (phases 1-4): later approved phases move image builds into
+/// config-repo flakes, making the config repo the flake root. This map is
+/// the plumbing those phases should reuse to locate each layer's content
+/// root — do not duplicate the layer-name → dir derivation.
+pub fn layer_dirs_from(layers: &[Layer]) -> HashMap<String, PathBuf> {
+    layers
+        .iter()
+        .filter_map(|layer| {
+            layer
+                .source_path
+                .as_ref()
+                .and_then(|p| p.parent())
+                .map(|dir| (layer.name.clone(), dir.to_path_buf()))
+        })
+        .collect()
 }
 
 /// Merge an ordered list of layers (earlier = lower precedence).
@@ -143,6 +188,33 @@ pub fn take_provenance() -> Option<Provenance> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take()
+}
+
+// ---------------------------------------------------------------------------
+// Layer content-dir process-global storage
+// ---------------------------------------------------------------------------
+//
+// Companion to [`MERGED_PROVENANCE`]: provenance records WHICH layer set a
+// field; this map records WHERE that layer's content lives on disk (the
+// parent dir of the layer file). Together they let repo-relative mount and
+// seed_file paths resolve against the DECLARING layer's directory instead of
+// the flake project root (spec 17 directory mode: config content lives in
+// config repos, not in the tool checkout). Same `Mutex` rationale as the
+// provenance stores above (tokio multi-thread task migration).
+
+/// Layer-name → content dir for the most recent config load.
+static LAYER_DIRS: std::sync::Mutex<Option<HashMap<String, PathBuf>>> = std::sync::Mutex::new(None);
+
+/// Store the layer content dirs for the most recent config load.
+pub fn set_layer_dirs(dirs: Option<HashMap<String, PathBuf>>) {
+    *LAYER_DIRS.lock().unwrap_or_else(|e| e.into_inner()) = dirs;
+}
+
+/// Clone the stored layer content dirs without consuming them. (Unlike
+/// provenance — which is TAKEN by `ConfigWorkload::new` — the dirs are read
+/// by every workload constructed after a load, so the accessor is a clone.)
+pub fn get_layer_dirs() -> Option<HashMap<String, PathBuf>> {
+    LAYER_DIRS.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,6 +1104,66 @@ mod tests {
         let _: fn(Option<Provenance>) = set_secret_provenance;
         let _: fn() -> Option<Provenance> = get_secret_provenance;
         let _: fn() -> Option<Provenance> = take_secret_provenance;
+    }
+
+    // ---- Layer content dirs (spec 17 path resolution plumbing) ----
+
+    /// `Layer::load` captures the source file; `from_string` leaves it None.
+    #[test]
+    fn layer_source_path_captured_by_load_not_from_string() -> Result<()> {
+        let loaded = load_fixture("base", "base");
+        assert_eq!(
+            loaded.source_path.as_deref(),
+            Some(fixture("base").as_path()),
+            "Layer::load must record the file it was loaded from"
+        );
+        let synthetic = Layer::from_string("synthetic", "schema_version = 1\n")?;
+        assert!(
+            synthetic.source_path.is_none(),
+            "from_string layers have no on-disk source"
+        );
+        Ok(())
+    }
+
+    /// The layer-dirs map records each sourced layer's PARENT dir (its
+    /// content root); synthetic layers are absent.
+    #[test]
+    fn layer_dirs_from_maps_layer_names_to_parent_dirs() -> Result<()> {
+        let loaded = load_fixture("base", "base");
+        let synthetic = Layer::from_string("synthetic", "schema_version = 1\n")?;
+        let dirs = layer_dirs_from(&[loaded, synthetic]);
+        assert_eq!(
+            dirs.get("base").map(|p| p.as_path()),
+            fixture("base").parent(),
+            "content dir is the layer file's parent directory"
+        );
+        assert!(
+            !dirs.contains_key("synthetic"),
+            "synthetic layers contribute no content dir"
+        );
+        Ok(())
+    }
+
+    /// The process-global store round-trips and survives cross-thread sets
+    /// (same tokio multi-thread migration hazard as provenance, WP10/A9).
+    #[test]
+    fn layer_dirs_set_from_another_thread_is_visible() {
+        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        set_layer_dirs(None);
+        let mut sample = HashMap::new();
+        sample.insert(
+            "personal#workestrate/workloads/litellm.toml".to_string(),
+            PathBuf::from("/tmp/example/workestrate/workloads"),
+        );
+        std::thread::spawn(move || set_layer_dirs(Some(sample)))
+            .join()
+            .expect("setter thread panicked");
+        let got = get_layer_dirs().expect("layer dirs set on another thread must be visible");
+        assert_eq!(
+            got.get("personal#workestrate/workloads/litellm.toml"),
+            Some(&PathBuf::from("/tmp/example/workestrate/workloads"))
+        );
+        set_layer_dirs(None); // clean up for other tests
     }
     // ---- Spec 16: final unified secret/env model — merge rules ----
 

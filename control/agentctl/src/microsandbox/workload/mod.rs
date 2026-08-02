@@ -152,4 +152,25 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
             format!("agents/{}/build", self.name())
         }
     }
+
+    /// Content root for repo-relative mount hosts: the directory of the
+    /// config layer that DECLARED this workload's mounts (spec 17 directory
+    /// mode — config content lives in config repos, not in the tool
+    /// checkout). `None` when no declaring layer dir is knowable (synthetic
+    /// layers, hand-built workloads); the caller then applies the documented
+    /// fallback (flake project root, else cwd) explicitly.
+    fn mount_content_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    /// The feature requiring a flake project root at sandbox-build time, if
+    /// any — a human-readable label used in the gate's error message
+    /// ("workload '<name>' uses <feature>, which requires a flake project
+    /// root: ..."). `None` means `build_sandbox` must NOT call
+    /// `project_root()` eagerly: registry-image workloads with no local
+    /// build and no relative build-path mounts run from any cwd.
+    fn flake_root_requirement(&self, plan: &SandboxPlan) -> Option<String> {
+        let _ = plan;
+        None
+    }
 }

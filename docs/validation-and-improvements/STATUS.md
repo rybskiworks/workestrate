@@ -14,6 +14,43 @@ work from §5.
 
 ---
 
+## 0. LATEST LANDING — cleanup PHASE 0 (2026-08-02, lands on top of `09b624f`)
+
+**Phase 0 of the approved mount/seed path-resolution cleanup landed** (one
+commit; HEAD moves past `09b624f` — the snapshot below still cites `7624aaf`/
+`09b624f` ancestry). What changed and why, for contextless sessions:
+
+- **Root cause (confirmed):** `build_sandbox` called
+  `crate::config::project_root()` UNCONDITIONALLY (`runtime/run.rs`), and
+  `project_root()` hard-errors when the resolved root lacks `flake.nix`.
+  Detached service children re-exec and inherit the operator's cwd
+  (`runtime/spawn.rs`), so `workestrate workload up litellm` from a flake-less
+  directory died at that gate even though litellm is a registry image with
+  zero flake artifacts. **Misattribution hazard:** the per-sandbox log was
+  append-mode with no run delimiter, so stale errors from older binaries
+  looked current — the log line was NOT the live failure; the flake-root gate
+  was. (F4 now writes a `===== workestrate <version> spawn <ts> pid <n> =====`
+  delimiter per run.)
+- **The fix set:** (F1) repo-relative mount hosts + seed-file sources now
+  resolve against the DECLARING CONFIG LAYER's directory (layer-name →
+  content-dir plumbing in `merge.rs`: `Layer::source_path`,
+  `layer_dirs_from`, `set_layer_dirs`/`get_layer_dirs`); (F2) `project_root()`
+  is LAZY in `build_sandbox` — called only for nix-layered image recipes,
+  `local_build` configs, or relative build-path mounts, with the error naming
+  the triggering feature; (F3) `prepare()`'s silent cwd fallback is removed
+  (hard error when seed files exist and no content root resolves); (F4) the
+  log delimiter above; (F5) tests incl. `tests/flake_root_gate.rs` (3 non-KVM
+  + 1 KVM-gated).
+- **Known spec drift (flagged, intentional per approval):** spec 17/20 say
+  mount/seed paths "stay repo-relative" (config-REPO root); phase 0 resolves
+  them against the declaring FILE's directory (capsule-relative, e.g.
+  `config.yaml` next to `workload.toml`). `config.reference` was updated
+  accordingly (`infra/litellm`, `agents/example-service/...`; goldens
+  regenerated). Spec text itself not yet amended.
+- **Gates after landing:** 634 passed / 0 failed / 3 ignored (was 614/0/2).
+
+---
+
 ## 1. SNAPSHOT (as of 2026-08-01, HEAD `7624aaf`)
 
 - **HEAD:** `7624aaf` — `fix(config): gate cwd-derived reference config behind
