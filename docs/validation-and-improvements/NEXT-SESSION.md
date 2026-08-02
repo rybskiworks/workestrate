@@ -25,6 +25,14 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+> **2026-08-02 update (7-spec22) — spec 22 + ADR 0028 authored on the
+> `experimental` branch:** spec 22 (dynamic mount masking policy) is
+> DESIGN-APPROVED at
+> [06-improvements/22-dynamic-mount-masking-policy.md](06-improvements/22-dynamic-mount-masking-policy.md);
+> ADR 0028 records collect-and-compile (never merge). Spec 01 is
+> dispositioned to SECONDARY/FALLBACK (WP1–WP4 frozen; deleted if spec 22
+> lands).
+
 > **2026-08-03 update (11) — spec 21 phase E (lifecycle wiring) is IMPLEMENTED
 > in the working tree but UNCOMMITTED and UNVALIDATED.** HEAD is `3efd377`
 > (post-Phase-D beads commits `30bfdb1` + `3efd377`; last CODE commit is Phase D

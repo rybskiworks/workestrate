@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the twenty-one post-validation improvement specifications under
+This index catalogs the twenty-two post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -57,7 +57,7 @@ invariant.
 
 | Spec | Title | Status (verbatim banner) | Dependencies (file-level) | Effort | Env gate (worst) |
 |---|---|---|---|---|---|
-| [01-mount-filtering-shadowing.md](01-mount-filtering-shadowing.md) | Mount Filtering / Shadowing (Track A) | `SPEC (not yet implemented); Phase 0 spike is NEEDS-KVM` | Phase 0 KVM spike gates WP4; WP5 (staging-copy fallback) is conditional on spike failure only | Phase 0 = **S**; WP1–WP4 = **M** each; WP5 = **L** (conditional) | `HOST-KVM` |
+| [01-mount-filtering-shadowing.md](01-mount-filtering-shadowing.md) | Mount Filtering / Shadowing (Track A) | `SECONDARY / FALLBACK (2026-08-02)` — spec [22](22-dynamic-mount-masking-policy.md) (dynamic PassthroughFs masking) is PRIMARY; WP1–WP4 FROZEN; deleted if 22 lands; kept as the degraded-mode/static fallback (WP5 staging-copy essence survives) | Phase 0 KVM spike gates WP4; WP5 (staging-copy fallback) is conditional on spike failure only | Phase 0 = **S**; WP1–WP4 = **M** each; WP5 = **L** (conditional) | `HOST-KVM` |
 | [02-main-standardization.md](02-main-standardization.md) | Standardize on `main` (rename the personal clone) | `OBSOLETE (2026-08-01)` — rename applied in Step 0(a); mismatch mooted by spec 08 execution (repo-local bundle retired; personal config now at `~/.workestrate/config-repos/personal` on `main`) | None — standalone one-shot rename | **S** (one-shot branch rename; branch-detection option deferred) | `verifiable-here` |
 | [03-dogfooding.md](03-dogfooding.md) | Dogfooding: workestrate developing workestrate (Track C) | `SPEC (Phase 0 env pinning READY-TO-EXECUTE; B1/B2/B3 not implemented)` | Phase 0 is standalone; B1/B2/B3 are independent of each other; references [05](05-config-reference-cwd-fallback.md) for the underlying quirk | Phase 0 = **S** (env pinning); B1/B2/B3 = **M** each (not implemented) | `HOST-KVM` (B3 live-sandbox verification) |
 | [04-cli-config-authoring.md](04-cli-config-authoring.md) | CLI Config Authoring (DEFERRED vision + requirements traceability) | `DEFERRED` — pending sign-off of [02-config-requirements.md](../02-config-requirements.md) | Gated on `02-config-requirements.md` sign-off; must be additive-tolerant of 01's mount exclude/shadow schema (§2 of the spec) | **M** (explicitly stated) | `verifiable-here` |
@@ -78,6 +78,7 @@ invariant.
 | [19-visualization-inspection.md](19-visualization-inspection.md) | Visualization + inspection surfaces (beyond the W3 workloads verb) | INTENT-TO-EXPLORE (2026-08-01 — candidates + data sources, no decisions) | ADR 0026(addendum)/0027 (W3 anchor); ↔ [12](12-per-instance-addressing.md), [18](18-cross-home-dependencies.md) | exploration | verifiable-here (docs-only) |
 | [20-schema-evolution-and-migrations.md](20-schema-evolution-and-migrations.md) | Schema evolution policy + config migration tooling (post-launch) | `SPEC (design; not yet implemented)` | ↔ [15](15-toml-toolchain-tombi.md) (tombi validation + vendored schema) + [16](16-unified-secret-env-model.md) (schema_version collapse to 1) | M (migrate engine) + S (pull+lock) | verifiable-here (docs-only) |
 | [21-image-build-lifecycle.md](21-image-build-lifecycle.md) | Image build/load lifecycle: ensure-images pre-flight, change detection, selectors, reserved build dir | `DESIGN-APPROVED (awaiting implementation; user signed off 2026-08-02)` | ↔ [17](17-config-repo-directory-mode.md), [11](11-home-provisioning-and-lockfile.md), [12](12-per-instance-addressing.md)/ADR 0026 addendum, [01](01-mount-filtering-shadowing.md), [07](07-naming-consistency.md); additive-only per ADR 0021 §8 | A=S, B=S, C=M, D=M, E=M, F=S–M (phased) | HOST-KVM (phase E); C/D/F HOST-NIX |
+| [22-dynamic-mount-masking-policy.md](22-dynamic-mount-masking-policy.md) | Dynamic mount masking policy: hierarchical `[policy.mounts]` scopes, collect-and-compile, runtime program | `DESIGN-APPROVED (awaiting implementation; user decisions locked 2026-08-02)` | ↔ [01](01-mount-filtering-shadowing.md) (dispositioned to fallback; WP1–WP4 frozen), ADR 0028 (decision record), ADR 0020 Ruling 1 (unamended), ADR 0005/0004/0011 (adjacency) | M (parser + compiler + diagnostics; enforcement is a later spec/phase) | `verifiable-here` (docs + pure Rust); microsandbox runtime enforcement `HOST-KVM` |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the

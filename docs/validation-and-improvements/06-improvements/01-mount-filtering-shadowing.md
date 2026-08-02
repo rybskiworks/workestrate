@@ -1,7 +1,12 @@
 # 06.01 — Mount Filtering / Shadowing (Track A)
 
-> **STATUS: SPEC (not yet implemented); Phase 0 spike is NEEDS-KVM**
+> **STATUS: SECONDARY / FALLBACK (2026-08-02) — spec 22 (dynamic PassthroughFs
+> masking, [22-dynamic-mount-masking-policy.md](22-dynamic-mount-masking-policy.md))
+> is the PRIMARY plan; if spec 22 lands successfully THIS SPEC WILL BE DELETED.**
+> **WP1–WP4 are FROZEN — do not start.** This spec is kept for now as the
+> degraded-mode / static fallback (the WP5 staging-copy essence survives).
 > Prerequisites / see-also: [../README.md](../README.md) ·
+> [22-dynamic-mount-masking-policy.md](22-dynamic-mount-masking-policy.md) ·
 > [../02-config-requirements.md](../02-config-requirements.md) ·
 > [00-index.md](00-index.md) ·
 > [../01-current-state-and-prereqs.md](../01-current-state-and-prereqs.md) ·

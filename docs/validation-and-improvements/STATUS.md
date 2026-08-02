@@ -14,6 +14,13 @@ work from §5.
 
 ---
 
+## 0.0 DESIGN DOCS — spec 22 + ADR 0028 (2026-08-02, `experimental` branch)
+
+- **Spec 22** (dynamic mount masking policy, [06-improvements/22-dynamic-mount-masking-policy.md](06-improvements/22-dynamic-mount-masking-policy.md)) and **ADR 0028** (policy scopes: collect-and-compile) authored as DESIGN-APPROVED/Accepted on the `experimental` branch.
+- **Spec 01 dispositioned to SECONDARY/FALLBACK:** WP1–WP4 frozen; kept as the degraded-mode/static fallback (WP5 staging-copy essence survives); deleted if spec 22 lands.
+
+---
+
 ## 0. LATEST LANDING — spec 21 PHASE D, build/load pipeline (2026-08-02, one commit on top of phase C)
 
 **Phase D of spec 21 (image build/load lifecycle) landed on
