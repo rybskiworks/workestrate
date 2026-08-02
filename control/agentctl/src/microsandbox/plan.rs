@@ -318,6 +318,10 @@ impl EgressRule {
             },
         ]
     }
+    /// TCP 4000 to the host bridge: the OSS litellm proxy's default port
+    /// (generic tool vocabulary — no personal models/hosts encoded).
+    /// `agent_base` embeds this rule, so workloads using `agent_base`
+    /// assume a host-reachable litellm proxy on port 4000.
     pub fn litellm_proxy() -> Self {
         Self {
             protocol: Protocol::Tcp,
@@ -334,6 +338,9 @@ impl EgressRule {
             derived_from: None,
         }
     }
+    /// dns + litellm_proxy + github: the baseline agent egress set. Note the
+    /// embedded litellm_proxy rule means every `agent_base` workload may
+    /// reach a litellm proxy on the host bridge at its default port 4000.
     pub fn agent_base() -> Vec<Self> {
         let mut rules = Self::dns();
         rules.push(Self::litellm_proxy());

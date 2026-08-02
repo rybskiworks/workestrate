@@ -1,5 +1,5 @@
 # pip-install recipe: installs Python deps into .deps/
-# Wraps the devshell build command for odysseus.
+# Wraps the devshell build command for a Python service workload.
 { pkgs, python312, stdenv }:
 
 { source, requirementsFile, target ? ".deps", ... }:

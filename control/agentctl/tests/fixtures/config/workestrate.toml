@@ -209,6 +209,8 @@ fallback = "agents/opencode/build"
 
 [workloads.tempest]
 kind = "agent"
+# default_deny = false (below) requires this config-declared entitlement.
+entitlements = ["default_deny_false"]
 image = { recipe = "nix-layered", name = "tempest", tag = "latest", contents = ["cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils"], binary = { recipe = "npm-build", src = "flake://tempest", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }, baked_files = [{ path = "root/.config/t3mp3st/config.json", content = '{"defaultProvider":"local"}' }], features = ["create_tmp"] }
 workdir = "/work"
 cpus = 2

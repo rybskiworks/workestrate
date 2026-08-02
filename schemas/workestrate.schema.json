@@ -133,6 +133,7 @@
           }
         },
         {
+          "description": "TCP 4000 to the host bridge — the OSS litellm proxy's default port (https://github.com/BerriAI/litellm). This is legitimate generic tool vocabulary (like a `postgres` recipe would be): it encodes no personal models, hosts, or credentials, only the upstream project's well-known default. `agent_base` embeds it, so any workload using `agent_base` assumes a host-reachable litellm proxy on port 4000.",
           "type": "object",
           "required": [
             "recipe"
@@ -599,6 +600,14 @@
           "type": "object",
           "additionalProperties": {
             "$ref": "#/definitions/DependsOnSpec"
+          }
+        },
+        "entitlements": {
+          "description": "Config-declared entitlements (`workloads.<name>.entitlements`). The closed vocabulary core understands lives in `config::validation` (currently only `\"default_deny_false\"`, which permits `network.default_deny = false` — fail-closed: setting `default_deny = false` WITHOUT the declared entitlement is a hard error at merge and validate time). Layers merge union-style with dedup (an entitlement, once granted by any layer, cannot be revoked by a later layer).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         },
         "env": {

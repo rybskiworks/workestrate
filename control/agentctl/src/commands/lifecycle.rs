@@ -85,8 +85,8 @@ pub enum WorkloadRoute {
 /// Kind-check a verb-first workload action at dispatch (ADR 0027). Pure:
 /// given the workload's configured `kind`, the verb, and the workload name,
 /// decide the dispatch route or produce a clear wrong-kind error. Wrong-kind
-/// usage names the correct invocation (e.g. "pi is an agent; use
-/// `workestrate workload exec pi`").
+/// usage names the correct invocation (e.g. "my-agent is an agent; use
+/// `workestrate workload exec my-agent`").
 pub fn workload_route(kind: &str, verb: &str, name: &str) -> Result<WorkloadRoute> {
     match (kind, verb) {
         ("service", "up" | "down" | "logs" | "plan") => Ok(WorkloadRoute::Service),

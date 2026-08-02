@@ -538,6 +538,16 @@ pub struct WorkloadConfig {
     pub local_build: Option<LocalBuildConfig>,
     #[serde(default)]
     pub network: NetworkConfig,
+    /// Config-declared entitlements (`workloads.<name>.entitlements`). The
+    /// closed vocabulary core understands lives in `config::validation`
+    /// (currently only `"default_deny_false"`, which permits
+    /// `network.default_deny = false` — fail-closed: setting
+    /// `default_deny = false` WITHOUT the declared entitlement is a hard
+    /// error at merge and validate time). Layers merge union-style with
+    /// dedup (an entitlement, once granted by any layer, cannot be revoked
+    /// by a later layer).
+    #[serde(default)]
+    pub entitlements: Vec<String>,
     /// Dependency declarations (`workloads.<name>.depends_on.<dep>`; ADR
     /// 0026(d)): each entry names another workload whose address is resolved
     /// from the port registry and injected as the declared env var at plan

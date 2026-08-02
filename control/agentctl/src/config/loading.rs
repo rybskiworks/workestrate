@@ -70,15 +70,26 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
         // until a later migration step moves them out.
         // Optional: agent repos are typically supplied via flake
         // inputs. A fresh clone may legitimately omit local
-        // `agents/<name>/repo` checkouts.
-        optional("agents/pi/repo", root.join("agents/pi/repo")),
-        optional("agents/odysseus/repo", root.join("agents/odysseus/repo")),
-        optional("agents/opencode/repo", root.join("agents/opencode/repo")),
-        optional("agents/pi/build", root.join("agents/pi/build")),
-        optional("agents/odysseus/build", root.join("agents/odysseus/build")),
-        optional("agents/opencode/build", root.join("agents/opencode/build")),
-        optional("agents/tempest/repo", root.join("agents/tempest/repo")),
-        optional("agents/tempest/build", root.join("agents/tempest/build")),
+        // `agents/<name>/repo` checkouts. Cleanup phase 4: the tool repo's
+        // own devshell builds the synthetic example-* workloads from
+        // config.reference; real agent sources live in personal config repo
+        // flakes and are not this command's business.
+        optional(
+            "agents/example-agent/repo",
+            root.join("agents/example-agent/repo"),
+        ),
+        optional(
+            "agents/example-offensive/repo",
+            root.join("agents/example-offensive/repo"),
+        ),
+        optional(
+            "agents/example-agent/build",
+            root.join("agents/example-agent/build"),
+        ),
+        optional(
+            "agents/example-offensive/build",
+            root.join("agents/example-offensive/build"),
+        ),
     ];
 
     Ok(specs
@@ -861,11 +872,11 @@ pub(crate) mod tests {
         let tmp = std::env::temp_dir();
         let entries = check_required_files(&tmp).unwrap();
         let optional_entries: Vec<_> = entries.iter().filter(|e| e.optional).collect();
-        // Optional local overrides: 4 agent repos + 4 agent builds = 8.
+        // Optional local overrides: 2 example-* agent repos + 2 builds = 4.
         assert_eq!(
             optional_entries.len(),
-            8,
-            "expected 8 optional checks, got {}",
+            4,
+            "expected 4 optional checks, got {}",
             optional_entries.len()
         );
     }

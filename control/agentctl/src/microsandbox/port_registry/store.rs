@@ -1148,21 +1148,54 @@ mod tests {
 
     /// Assert every probed port is bindable on `bind` RIGHT NOW (the probe
     /// dropped its listeners) and distinct.
-    fn assert_probed_ports_bindable(bind: IpAddr, probed: &[u16], expected: usize) {
-        assert_eq!(probed.len(), expected, "probe must return {expected} ports");
-        let distinct: std::collections::HashSet<u16> = probed.iter().copied().collect();
-        assert_eq!(
-            distinct.len(),
-            probed.len(),
-            "probed ports must be distinct: {probed:?}"
-        );
-        for p in probed {
-            let listener = std::net::TcpListener::bind((bind, *p));
-            assert!(
-                listener.is_ok(),
-                "probed port {p} on {bind} must be bindable after the probe: {:?}",
-                listener.err()
+    ///
+    /// FLAKE-GUARD (TOCTOU): `probe_free_ports` is deliberately NOT a
+    /// reservation — the probed ports are released the moment the probe
+    /// returns. Under `cargo test`'s parallel harness, another test thread
+    /// (or an unrelated process) can claim a probed port between the probe
+    /// and this assertion's bind. Retrying the whole probe+assert cycle a
+    /// few times distinguishes that benign race from a real regression (a
+    /// genuinely broken probe fails EVERY cycle, not intermittently).
+    fn assert_probed_ports_bindable(state_dir: &Path, bind: IpAddr, expected: usize) {
+        const MAX_CYCLES: usize = 8;
+        for cycle in 1..=MAX_CYCLES {
+            let probed =
+                probe_free_ports(state_dir, bind, expected).expect("probe_free_ports must succeed");
+            assert_eq!(probed.len(), expected, "probe must return {expected} ports");
+            let distinct: std::collections::HashSet<u16> = probed.iter().copied().collect();
+            assert_eq!(
+                distinct.len(),
+                probed.len(),
+                "probed ports must be distinct: {probed:?}"
             );
+            // Hold every successfully bound listener while attempting the
+            // rest: the assertion is "all probed ports are SIMULTANEOUSLY
+            // bindable right now".
+            let mut held = Vec::with_capacity(probed.len());
+            let mut conflict = None;
+            for p in &probed {
+                match std::net::TcpListener::bind((bind, *p)) {
+                    Ok(listener) => held.push(listener),
+                    Err(e) => {
+                        conflict = Some((*p, e));
+                        break;
+                    }
+                }
+            }
+            drop(held);
+            if let Some((port, err)) = conflict {
+                assert!(
+                    cycle < MAX_CYCLES,
+                    "probed port {port} on {bind} must be bindable after the probe \
+                     (failed all {MAX_CYCLES} probe/assert cycles): {err:?}"
+                );
+                eprintln!(
+                    "probe cycle {cycle}/{MAX_CYCLES}: probed port {port} on {bind} was \
+                     claimed before the assertion bind ({err}); re-probing"
+                );
+            } else {
+                return;
+            }
         }
     }
 
@@ -1170,8 +1203,7 @@ mod tests {
     fn probe_free_ports_returns_distinct_bindable_ports_on_singleton_bind() -> Result<()> {
         let state_dir = unique_state_dir("probe-singleton");
         let bind = singleton_bind();
-        let probed = probe_free_ports(&state_dir, bind, 3)?;
-        assert_probed_ports_bindable(bind, &probed, 3);
+        assert_probed_ports_bindable(&state_dir, bind, 3);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -1181,8 +1213,7 @@ mod tests {
         let state_dir = unique_state_dir("probe-parallel");
         // Linux 127/8 is bindable per-address: probing on 127.0.0.2 works.
         let bind = loopback(2);
-        let probed = probe_free_ports(&state_dir, bind, 3)?;
-        assert_probed_ports_bindable(bind, &probed, 3);
+        assert_probed_ports_bindable(&state_dir, bind, 3);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -1217,8 +1248,7 @@ mod tests {
         // flaky since P is ephemeral-free on 127.0.0.1 too.)
         let p = probe_free_ports(&state_dir, loopback(2), 1)?[0];
         register_instance_on(&state_dir, "personal-litellm@a", "litellm", loopback(2), p)?;
-        let probed = probe_free_ports(&state_dir, singleton_bind(), 2)?;
-        assert_probed_ports_bindable(singleton_bind(), &probed, 2);
+        assert_probed_ports_bindable(&state_dir, singleton_bind(), 2);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

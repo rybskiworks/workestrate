@@ -277,14 +277,20 @@ pub fn print_ps_text_to<W: std::io::Write>(
         )?;
         for e in &stale {
             // Parallel instance (slot@id) → `down --instance <id>`;
-            // singleton → bare `down`. Uses the id, not the full instance name.
+            // singleton → bare `down`. Uses the id, not the full instance
+            // name. Canonical verb-first form (ADR 0027; cleanup phase 4
+            // removed the typed `<name>` subcommands).
             if let Some((_, id)) = e.instance.split_once('@') {
-                writeln!(out, "  workestrate {} down --instance {}", e.workload, id)?;
+                writeln!(
+                    out,
+                    "  workestrate workload down {} --instance {}",
+                    e.workload, id
+                )?;
             } else {
-                writeln!(out, "  workestrate {} down", e.workload)?;
+                writeln!(out, "  workestrate workload down {}", e.workload)?;
             }
         }
-        writeln!(out, "Remove every instance with: workestrate down --all")?;
+        writeln!(out, "Remove every instance with: workestrate down-all")?;
     }
     Ok(())
 }
@@ -542,7 +548,7 @@ pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> 
     keys.sort();
 
     let mut buf = String::new();
-    buf.push_str("# ai-workbench environment schema.\n");
+    buf.push_str("# workestrate environment schema.\n");
     buf.push_str("# This file is committed and safe to share.\n");
     buf.push_str(
         "# Real secrets live in .env.enc (encrypted) and are loaded by workestrate at runtime.\n",
@@ -555,7 +561,7 @@ pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> 
     buf.push_str("#     is substituted by the egress rewrite only for hosts in `allowed_hosts`.\n");
     buf.push_str("#   - the real value in-sandbox is an explicit `bound = \"guest\"` opt-in,\n");
     buf.push_str(
-        "#     reserved for workloads that verify the credential (e.g. litellm itself).\n",
+        "#     reserved for workloads that verify the credential (e.g. a proxy service verifying its callers).\n",
     );
     buf.push_str(
         "#   - `secret` appears at a binding only when RENAMING (env name != secret ID);\n",
@@ -564,9 +570,6 @@ pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> 
     for key in &keys {
         buf.push_str(&format!("{}=\n", key));
     }
-    buf.push_str("\n# Optional local paths\n");
-    buf.push_str("AI_WORKBENCH_WORKSPACES_DIR=workspaces\n");
-    buf.push_str("AI_WORKBENCH_VAR_DIR=var\n");
 
     match output {
         Some(path) => {
@@ -752,19 +755,19 @@ mod tests {
         );
         // Parallel stale entry → `down --instance <id>` (id, not full instance).
         assert!(
-            out.contains("  workestrate litellm down --instance canary"),
+            out.contains("  workestrate workload down litellm --instance canary"),
             "parallel stale remediation line missing; got:
 {out}"
         );
         // Catch-all.
         assert!(
-            out.contains("Remove every instance with: workestrate down --all"),
+            out.contains("Remove every instance with: workestrate down-all"),
             "catch-all remediation line missing; got:
 {out}"
         );
         // The live singleton must NOT appear in any teardown line.
         assert!(
-            !out.contains("workestrate pi down"),
+            !out.contains("down pi"),
             "live singleton leaked into the footer; got:
 {out}"
         );

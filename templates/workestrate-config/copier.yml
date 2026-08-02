@@ -33,8 +33,10 @@ core_flake_url:
 _exclude:
   - "!include_flake"
 
-# Post-copy task: regenerate .env.example from the live secrets schema if
-# workestrate is on PATH. Falls back to the committed static .env.example
-# if workestrate is not available (keeps the template self-contained).
-_tasks:
-  - "if command -v workestrate >/dev/null 2>&1; then workestrate generate-env-example --output .env.example; fi"
+# NOTE (cleanup phase 4): no post-copy `_tasks`. The historical task
+# regenerated `.env.example` via `workestrate generate-env-example`, which
+# renders the ACTIVE (ambient) config's secrets — leaking whatever personal
+# config the operator has registered into the freshly scaffolded repo. The
+# committed static `.env.example` matches the scaffolded workestrate.toml
+# exactly; regenerate against YOUR config once the repo is registered:
+#   workestrate generate-env-example --output .env.example

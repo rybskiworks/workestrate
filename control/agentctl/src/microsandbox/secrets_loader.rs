@@ -461,10 +461,10 @@ mod tests {
         // std::env::var afterwards. Under the old implementation the
         // set_var loop populated process env from the merged map.
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        // An allowlisted secret (policy::SECRET_HOST_BINDINGS) that is NOT
-        // set in this process — required=false so load_secrets succeeds and
-        // returns the map without the key.
-        let probe = "ODYSSEUS_ADMIN_PASSWORD";
+        // A config-declared secret with an env_var that is NOT set in this
+        // process — required=false so load_secrets succeeds and returns the
+        // map without the key.
+        let probe = "WORKESTRATE_FN9_PROBE_SECRET";
         std::env::remove_var(probe);
 
         let tmp = std::env::temp_dir().join(format!(
@@ -478,8 +478,8 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let config_content = concat!(
             "schema_version = 1\n\n",
-            "[secrets.ODYSSEUS_ADMIN_PASSWORD]\n",
-            "env_var = \"ODYSSEUS_ADMIN_PASSWORD\"\n",
+            "[secrets.WORKESTRATE_FN9_PROBE_SECRET]\n",
+            "env_var = \"WORKESTRATE_FN9_PROBE_SECRET\"\n",
             "required = false\n"
         );
         std::fs::write(tmp.join("workestrate.toml"), config_content).unwrap();

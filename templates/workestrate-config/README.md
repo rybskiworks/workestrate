@@ -9,8 +9,8 @@ This is a workestrate configuration repo, generated from the
 workestrate.toml     # workload definitions + secrets schema
 .env.enc             # SOPS-encrypted secrets (NOT committed until encrypted)
 .sops.yaml           # SOPS config (age recipients + creation rules)
-.env.example         # auto-generated schema (run `workestrate generate-env-example`)
-infra/litellm/       # LiteLLM config values (config.yaml, models.yaml)
+.env.example         # schema example (regenerate: `workestrate generate-env-example`)
+infra/<service>/     # service config values (e.g. config.yaml, models.yaml)
 agents/*/config/     # agent config files (models.json, settings.json, etc.)
 ```
 
@@ -19,7 +19,7 @@ agents/*/config/     # agent config files (models.json, settings.json, etc.)
 Env bindings default to the **placeholder** — workloads never see a real
 credential unless you opt in. The real value in-sandbox is an explicit
 `bound = "guest"` on the binding, reserved for workloads that **verify** the
-credential (e.g. litellm itself). `secret` appears at a binding only when
+credential (e.g. a proxy service verifying its callers). `secret` appears at a binding only when
 **renaming** (env name ≠ secret ID); same-name bindings are just `KEY = true`.
 
 ## Setup
@@ -45,7 +45,7 @@ credential (e.g. litellm itself). `secret` appears at a binding only when
 5. Verify:
    ```bash
    workestrate validate-config
-   workestrate pi plan
+   workestrate workload plan <name>
    ```
 
 ## Updating from the template
@@ -57,10 +57,12 @@ copier update
 
 ## `.env.example` regeneration
 
-If `workestrate` is on your PATH when you run `copier copy` or `copier update`,
-the `.env.example` file is automatically regenerated from the live secrets
-schema via `workestrate generate-env-example`. If `workestrate` is not on PATH,
-the committed static `.env.example` is used as a fallback.
+The committed `.env.example` matches this repo's scaffolded
+`workestrate.toml`. Once the repo is registered and your real secrets are
+declared, regenerate it from your active config:
+```bash
+workestrate generate-env-example --output .env.example
+```
 
 ## Multi-recipient SOPS (team secrets)
 

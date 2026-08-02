@@ -93,6 +93,12 @@ const ALLOWED_BUILD_RECIPES: &[&str] = &["npm-build", "bun-compile", "pip-instal
 /// owned file set).
 const ALLOWED_FEATURES: &[&str] = &["create_tmp"];
 
+/// Allowed `workloads.{wl}.entitlements` entries. Entitlements are
+/// config-declared (no core hardcoded workload names); this is the closed
+/// vocabulary core understands. `"default_deny_false"` permits
+/// `network.default_deny = false`.
+const ALLOWED_ENTITLEMENTS: &[&str] = &["default_deny_false"];
+
 /// Whether `name` is a syntactically valid environment-variable name:
 /// `^[A-Za-z_][A-Za-z0-9_]*$` (WP10/A11).
 ///
@@ -220,32 +226,21 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
-    // Secret bindings must match SECRET_HOST_BINDINGS.
+    // Secret-declared egress hosts must come from the core egress allowlist
+    // (fail-closed, generic: there is no core per-secret table — any
+    // config-declared secret may bind hosts, but only allowlisted ones).
+    // Secrets WITHOUT `env_var` are skipped: they are never read from the
+    // host environment, so their `allowed_hosts` cannot route a host-env
+    // value anywhere (the declaration may still be used by other binding
+    // modes; gating preserved from the retired core binding table).
     for (secret_name, secret) in &config.secrets {
-        if let Some(ref env_var) = secret.env_var {
-            let allowed_hosts = policy::SECRET_HOST_BINDINGS
-                .iter()
-                .find(|(key, _)| key == env_var)
-                .map(|(_, hosts)| *hosts);
-
-            match allowed_hosts {
-                Some(allowed_hosts) => {
-                    for host in secret.allowed_hosts.as_deref().unwrap_or(&[]) {
-                        if !allowed_hosts.contains(&host.as_str()) {
-                            anyhow::bail!(
-                                "secret '{}' host '{}' is not in the core binding allowlist for '{}'",
-                                secret_name,
-                                host,
-                                env_var
-                            );
-                        }
-                    }
-                }
-                None => {
+        if secret.env_var.is_some() {
+            for host in secret.allowed_hosts.as_deref().unwrap_or(&[]) {
+                if !policy::ALLOWED_EGRESS_HOSTS.contains(&host.as_str()) {
                     anyhow::bail!(
-                        "secret '{}' env_var '{}' has no core secret binding allowlist entry",
+                        "secret '{}' allowed_hosts entry '{}' is not in the core egress allowlist",
                         secret_name,
-                        env_var
+                        host
                     );
                 }
             }
@@ -282,13 +277,28 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
-    // Only entitled workloads may use default_deny = false.
+    // Entitlements vocabulary + the default_deny gate (fail-closed):
+    // `default_deny = false` requires the workload to DECLARE the
+    // `default_deny_false` entitlement itself — no core-hardcoded names.
     for (workload_name, workload) in &config.workloads {
+        for entitlement in &workload.entitlements {
+            if !ALLOWED_ENTITLEMENTS.contains(&entitlement.as_str()) {
+                anyhow::bail!(
+                    "workload '{}' entitlement '{}' is not a known entitlement (expected one of: {})",
+                    workload_name,
+                    entitlement,
+                    ALLOWED_ENTITLEMENTS.join(", ")
+                );
+            }
+        }
         if workload.network.default_deny == Some(false)
-            && !policy::DEFAULT_DENY_FALSE_ENTITLEMENT.contains(&workload_name.as_str())
+            && !workload
+                .entitlements
+                .iter()
+                .any(|e| e == "default_deny_false")
         {
             anyhow::bail!(
-                "workload '{}' is not entitled to default_deny=false",
+                "workload '{}' sets default_deny=false without declaring entitlements = [\"default_deny_false\"]",
                 workload_name
             );
         }
@@ -656,9 +666,9 @@ default_deny = true
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         let err = validate_config(&config).unwrap_err();
         let msg = err.to_string();
-        // The secret-bindings check runs before the env_var-name check, and
-        // BAD-NAME has no allowlist entry — both orderings name the secret
-        // and the offending value, so assert on the stable shared content.
+        // The secret allowed-hosts check runs before the env_var-name check;
+        // BAD-NAME declares no allowed_hosts, so the env_var-name check is
+        // the one that fires — it names both the secret and the value.
         assert!(
             msg.contains("env_var 'BAD-NAME'"),
             "error should name the secret env_var value; got: {msg}"
@@ -705,6 +715,139 @@ default_deny = true
         for bad in ["", "1FOO", "FOO-BAR", "FOO BAR", "FOO.BAR", "-A"] {
             assert!(!is_valid_env_var_name(bad), "'{bad}' should be invalid");
         }
+    }
+
+    // ---- Generic secret allowed-hosts + declared entitlements (phase 4) ----
+
+    #[test]
+    fn validate_rejects_secret_allowed_host_outside_core_egress_allowlist() {
+        let toml = r#"
+schema_version = 1
+
+[secrets.MY_KEY]
+env_var = "MY_KEY"
+allowed_hosts = ["evil.example.com"]
+
+[workloads.example-agent]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.example-agent.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "secret 'MY_KEY' allowed_hosts entry 'evil.example.com' is not in the core egress allowlist"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_secret_allowed_host_inside_core_egress_allowlist() {
+        let toml = r#"
+schema_version = 1
+
+[secrets.MY_KEY]
+env_var = "MY_KEY"
+allowed_hosts = ["github.com", "api.github.com"]
+
+[workloads.example-agent]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.example-agent.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        validate_config(&config).expect("allowlisted hosts must validate");
+    }
+
+    /// Secrets WITHOUT `env_var` are never read from the host environment,
+    /// so their allowed_hosts are not gated against the egress allowlist
+    /// (gating preserved from the retired core per-secret binding table).
+    #[test]
+    fn validate_skips_allowed_hosts_check_for_secret_without_env_var() {
+        let toml = r#"
+schema_version = 1
+
+[secrets.EXTERNAL_ONLY]
+allowed_hosts = ["not-in-the-core-allowlist.example.com"]
+required = false
+
+[workloads.example-agent]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.example-agent.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        validate_config(&config).expect("secrets without env_var skip the allowed-hosts gate");
+    }
+
+    #[test]
+    fn validate_rejects_default_deny_false_without_declared_entitlement() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.example-offensive]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.example-offensive.network]
+default_deny = false
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'example-offensive' sets default_deny=false without declaring entitlements = [\"default_deny_false\"]"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_default_deny_false_with_declared_entitlement() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.example-offensive]
+kind = "agent"
+entitlements = ["default_deny_false"]
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.example-offensive.network]
+default_deny = false
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        validate_config(&config).expect("declared entitlement must validate");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_entitlement() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.example-agent]
+kind = "agent"
+entitlements = ["root_access"]
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.example-agent.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'example-agent' entitlement 'root_access' is not a known entitlement (expected one of: default_deny_false)"
+        );
     }
 
     // ---- ADR 0026(d): depends_on validation ----

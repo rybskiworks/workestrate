@@ -61,12 +61,13 @@ pub struct PsEntry {
 /// Note: the message references the occupying *instance name* (which is the
 /// slot for the singleton case, or `slot@id` for a parallel instance). The
 /// caller passes the workload's bare name so the suggested `down` command
-/// reads naturally (`workestrate litellm down`).
+/// reads naturally (`workestrate workload down <name>` — verb-first,
+/// ADR 0027; cleanup phase 4 removed the typed `<name>` subcommands).
 pub fn format_refuse_message(workload: &str, occupying_instance: &str) -> String {
     format!(
         "instance '{instance}' is already running. \
          Use --replace to replace it, --instance <id> for a parallel instance, \
-         or '{wl} down' to stop it first.",
+         or 'workload down {wl}' to stop it first.",
         instance = occupying_instance,
         wl = workload,
     )
@@ -246,10 +247,12 @@ mod tests {
     fn refuse_message_is_byte_identical_to_pinned_text() {
         // The text below is pinned by ADR 0021 §2 and asserted by external
         // tooling; do not rephrase without coordinating with the docs track.
+        // (Cleanup phase 4: the `down` hint moved to the canonical verb-first
+        // form — the typed `<name> down` subcommands were removed.)
         let msg = format_refuse_message("litellm", "personal-litellm");
         let expected = "instance 'personal-litellm' is already running. \
          Use --replace to replace it, --instance <id> for a parallel instance, \
-         or 'litellm down' to stop it first.";
+         or 'workload down litellm' to stop it first.";
         assert_eq!(msg, expected, "refuse message drifted from pinned text");
     }
 

@@ -156,31 +156,6 @@ enum Commands {
         #[command(subcommand)]
         action: SourceAction,
     },
-    /// Typed subcommand for the LiteLLM proxy service
-    Litellm {
-        #[command(subcommand)]
-        action: ServiceAction,
-    },
-    /// Typed subcommand for the Pi coding agent
-    Pi {
-        #[command(subcommand)]
-        action: AgentAction,
-    },
-    /// Typed subcommand for the Odysseus service
-    Odysseus {
-        #[command(subcommand)]
-        action: ServiceAction,
-    },
-    /// Typed subcommand for the OpenCode agent
-    Opencode {
-        #[command(subcommand)]
-        action: AgentAction,
-    },
-    /// Typed subcommand for the T3MP3ST agent
-    Tempest {
-        #[command(subcommand)]
-        action: AgentAction,
-    },
     /// Migrate legacy XDG (or bundled .workestrate/{config,data,state}/workestrate/)
     /// layout into a single WORKESTRATE_HOME (ADR 0023).
     MigrateHome {
@@ -207,46 +182,6 @@ enum Commands {
     },
     /// List configured workloads (name, kind, image, running status).
     Workloads,
-}
-
-/// Extract the typed `--use <dep>@<instance>` overrides from a clap-parsed
-/// ServiceAction (ADR 0026(d)). The hardcoded subcommands parse the action
-/// via clap BEFORE constructing the workload, so the overrides reach
-/// `ConfigWorkload::new_with_use_overrides` and resolution selects the same
-/// records the dispatch will forward to a detached child.
-fn service_action_use_overrides(action: &ServiceAction) -> Result<Vec<(String, String)>> {
-    let raw: &[String] = match action {
-        ServiceAction::Up { use_, .. } | ServiceAction::Plan { use_, .. } => use_,
-        _ => &[],
-    };
-    workestrate::microsandbox::discovery::parse_use_overrides(raw)
-}
-
-/// The AgentAction counterpart of [`service_action_use_overrides`].
-fn agent_action_use_overrides(action: &AgentAction) -> Result<Vec<(String, String)>> {
-    let raw: &[String] = match action {
-        AgentAction::Exec { use_, .. } | AgentAction::Plan { use_, .. } => use_,
-        _ => &[],
-    };
-    workestrate::microsandbox::discovery::parse_use_overrides(raw)
-}
-
-/// The start verb + `--no-deps` flag of a clap-parsed [`ServiceAction`]
-/// (ADR 0026 addendum). Non-start actions yield no verb; the caller skips
-/// dependency auto-start for them.
-fn service_action_verb_no_deps(action: &ServiceAction) -> (Option<&'static str>, bool) {
-    match action {
-        ServiceAction::Up { no_deps, .. } => (Some("up"), *no_deps),
-        _ => (None, false),
-    }
-}
-
-/// The [`AgentAction`] counterpart of [`service_action_verb_no_deps`].
-fn agent_action_verb_no_deps(action: &AgentAction) -> (Option<&'static str>, bool) {
-    match action {
-        AgentAction::Exec { no_deps, .. } => (Some("exec"), *no_deps),
-        _ => (None, false),
-    }
 }
 
 /// Pre-scan argv for a global `--json` flag so ANY error (including clap
@@ -524,51 +459,6 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
         Commands::Doctor => cmd_doctor(cli.json),
         Commands::Source { action } => cmd_source(action).await,
-        Commands::Litellm { action } => {
-            let overrides = service_action_use_overrides(&action)?;
-            let (verb, no_deps) = service_action_verb_no_deps(&action);
-            if let Some(verb) = verb {
-                auto_start_dependencies("litellm", verb, no_deps, &overrides).await?;
-            }
-            let workload = ConfigWorkload::new_with_use_overrides("litellm", &overrides)?;
-            dispatch_service(&workload, action, cli.show_source, cli.json).await
-        }
-        Commands::Pi { action } => {
-            let overrides = agent_action_use_overrides(&action)?;
-            let (verb, no_deps) = agent_action_verb_no_deps(&action);
-            if let Some(verb) = verb {
-                auto_start_dependencies("pi", verb, no_deps, &overrides).await?;
-            }
-            let workload = ConfigWorkload::new_with_use_overrides("pi", &overrides)?;
-            dispatch_agent(&workload, action, cli.show_source, cli.json).await
-        }
-        Commands::Odysseus { action } => {
-            let overrides = service_action_use_overrides(&action)?;
-            let (verb, no_deps) = service_action_verb_no_deps(&action);
-            if let Some(verb) = verb {
-                auto_start_dependencies("odysseus", verb, no_deps, &overrides).await?;
-            }
-            let workload = ConfigWorkload::new_with_use_overrides("odysseus", &overrides)?;
-            dispatch_service(&workload, action, cli.show_source, cli.json).await
-        }
-        Commands::Opencode { action } => {
-            let overrides = agent_action_use_overrides(&action)?;
-            let (verb, no_deps) = agent_action_verb_no_deps(&action);
-            if let Some(verb) = verb {
-                auto_start_dependencies("opencode", verb, no_deps, &overrides).await?;
-            }
-            let workload = ConfigWorkload::new_with_use_overrides("opencode", &overrides)?;
-            dispatch_agent(&workload, action, cli.show_source, cli.json).await
-        }
-        Commands::Tempest { action } => {
-            let overrides = agent_action_use_overrides(&action)?;
-            let (verb, no_deps) = agent_action_verb_no_deps(&action);
-            if let Some(verb) = verb {
-                auto_start_dependencies("tempest", verb, no_deps, &overrides).await?;
-            }
-            let workload = ConfigWorkload::new_with_use_overrides("tempest", &overrides)?;
-            dispatch_agent(&workload, action, cli.show_source, cli.json).await
-        }
         Commands::MigrateHome {
             from,
             dry_run,
@@ -713,16 +603,20 @@ mod tests {
             "clean",
             "context",
             "source",
-            "litellm",
-            "pi",
-            "odysseus",
-            "opencode",
-            "tempest",
             "migrate-home",
             "workload",
             "workloads",
         ] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
+        }
+        // Cleanup phase 4: NO config-specific workload names are baked into
+        // the CLI as typed subcommands — the generic `workload <verb> <name>`
+        // group is the only lifecycle path.
+        for removed in ["litellm", "pi", "odysseus", "opencode", "tempest"] {
+            assert!(
+                !names.contains(&removed),
+                "typed subcommand must not exist: {removed}"
+            );
         }
     }
 
@@ -882,67 +776,6 @@ mod tests {
                 "config new must keep the --{flag} flag; got: {long_names:?}"
             );
         }
-    }
-
-    fn check_service_subcommands(cmd: &clap::Command, name: &str) {
-        let sub = cmd.find_subcommand(name);
-        assert!(sub.is_some(), "missing subcommand: {name}");
-        let sub = sub.unwrap();
-        let action_names: HashSet<_> = sub
-            .get_subcommands()
-            .map(|s| s.get_name().to_string())
-            .collect();
-        for expected in ["up", "down", "logs", "plan"] {
-            assert!(
-                action_names.contains(expected),
-                "{} missing action: {}",
-                name,
-                expected
-            );
-        }
-        assert!(
-            !action_names.contains("exec"),
-            "{} should not have action: exec",
-            name
-        );
-    }
-
-    fn check_agent_subcommands(cmd: &clap::Command, name: &str) {
-        let sub = cmd.find_subcommand(name);
-        assert!(sub.is_some(), "missing subcommand: {name}");
-        let sub = sub.unwrap();
-        let action_names: HashSet<_> = sub
-            .get_subcommands()
-            .map(|s| s.get_name().to_string())
-            .collect();
-        for expected in ["exec", "down", "plan"] {
-            assert!(
-                action_names.contains(expected),
-                "{} missing action: {}",
-                name,
-                expected
-            );
-        }
-        assert!(
-            !action_names.contains("up"),
-            "{} should not have action: up",
-            name
-        );
-        assert!(
-            !action_names.contains("logs"),
-            "{} should not have action: logs",
-            name
-        );
-    }
-
-    #[test]
-    fn cli_workload_subcommands_match_registry_kinds() {
-        let cmd = Cli::command();
-        check_service_subcommands(&cmd, "litellm");
-        check_service_subcommands(&cmd, "odysseus");
-        check_agent_subcommands(&cmd, "pi");
-        check_agent_subcommands(&cmd, "opencode");
-        check_agent_subcommands(&cmd, "tempest");
     }
 
     /// Build an InstanceSpec for `example-litellm` (no context) with selected
@@ -1215,47 +1048,6 @@ mod tests {
         let names: Vec<_> = cmd.get_subcommands().map(|s| s.get_name()).collect();
         for expected in ["ps", "down-all", "generate-schema"] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
-        }
-    }
-
-    #[test]
-    fn service_up_exposes_lifecycle_flags() {
-        let cmd = Cli::command();
-        let up = cmd
-            .find_subcommand("litellm")
-            .and_then(|s| s.find_subcommand("up"))
-            .expect("litellm up must exist");
-        // get_long() returns the user-facing long flag name (clap hyphenates
-        // underscores: all_instances → all-instances). get_id() preserves the
-        // raw field identifier; the CLI surface is what we care about here.
-        let flag_names: Vec<_> = up
-            .get_arguments()
-            .filter_map(|a| a.get_long().map(|s| s.to_string()))
-            .collect();
-        for f in ["replace", "instance", "new", "foreground", "port-auto"] {
-            assert!(
-                flag_names.contains(&f.to_string()),
-                "litellm up missing flag: {f}"
-            );
-        }
-    }
-
-    #[test]
-    fn service_down_exposes_lifecycle_flags() {
-        let cmd = Cli::command();
-        let down = cmd
-            .find_subcommand("litellm")
-            .and_then(|s| s.find_subcommand("down"))
-            .expect("litellm down must exist");
-        let flag_names: Vec<_> = down
-            .get_arguments()
-            .filter_map(|a| a.get_long().map(|s| s.to_string()))
-            .collect();
-        for f in ["instance", "all-instances"] {
-            assert!(
-                flag_names.contains(&f.to_string()),
-                "litellm down missing flag: {f}"
-            );
         }
     }
 
@@ -1567,8 +1359,9 @@ mod tests {
     #[test]
     fn shim_rewrites_legacy_name_first_shape() {
         // `redis` is a config-defined workload with NO built-in subcommand —
-        // the exact case the shim exists for. (`pi`/`litellm` are built-in
-        // typed subcommands, so built-ins win and the shim never fires.)
+        // the exact case the shim exists for. (Cleanup phase 4: there are NO
+        // typed workload subcommands left at all — every config-defined
+        // workload name takes this path.)
         let args = argv(&["workestrate", "redis", "exec", "--instance", "x"]);
         let (rewritten, warning) =
             rewrite_legacy_workload_argv(args, &known_subcommand_names(), |n| n == "redis");

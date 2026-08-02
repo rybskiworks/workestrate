@@ -9,10 +9,18 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "recipe", rename_all = "snake_case")]
 pub enum EgressRecipeRef {
     Dns,
+    /// TCP 4000 to the host bridge — the OSS litellm proxy's default port
+    /// (https://github.com/BerriAI/litellm). This is legitimate generic
+    /// tool vocabulary (like a `postgres` recipe would be): it encodes no
+    /// personal models, hosts, or credentials, only the upstream project's
+    /// well-known default. `agent_base` embeds it, so any workload using
+    /// `agent_base` assumes a host-reachable litellm proxy on port 4000.
     LitellmProxy,
     Github,
     AgentBase,
-    Https { hosts: Vec<String> },
+    Https {
+        hosts: Vec<String>,
+    },
 }
 
 impl EgressRecipeRef {

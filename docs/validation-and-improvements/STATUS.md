@@ -14,7 +14,73 @@ work from §5.
 
 ---
 
-## 0. LATEST LANDING — cleanup PHASE 3 (2026-08-02, lands as one commit on top of phase 2)
+## 0. LATEST LANDING — cleanup PHASE 4 (2026-08-02, lands as one commit on top of phase 3)
+
+**Phase 4 of the approved cleanup: the CLI surface, policy layer, scaffold,
+and devshell are generic — the last hardcoded personal names leave the tool's
+non-test code paths.** Uncommitted in the working tree at time of writing;
+the lead commits it as `refactor(cli): generic CLI surface, policy, and
+scaffold (cleanup phase 4)`. What changed and why, for contextless sessions:
+
+- **Typed CLI subcommands removed:** the 5 personal subcommands
+  (`litellm`/`pi`/`odysseus`/`opencode`/`tempest`) are deleted from
+  `control/agentctl/src/main.rs` along with their dead helper fns — the
+  generic `workestrate workload <verb> <name>` path (ADR 0027) is now the
+  ONLY lifecycle path. Stale user-facing strings fixed in the same pass: the
+  `ps` stale-instance footer and the ADR-0021-pinned refuse message now emit
+  `workestrate workload down <name>` (the pinned test updated to match); the
+  stale `workestrate down --all` footer now reads `workestrate down-all`.
+- **policy.rs de-personalized:** `SECRET_HOST_BINDINGS` (the hardcoded
+  personal 7-secret inventory) and `DEFAULT_DENY_FALSE_ENTITLEMENT` (the
+  hardcoded `tempest` name) are deleted. Generic replacements: (1) secrets
+  with `env_var` may bind only hosts in `ALLOWED_EGRESS_HOSTS` — fail-closed;
+  secrets without `env_var` are skipped (preserves the prior gating
+  semantics); (2) new config-schema field `workloads.{name}.entitlements`
+  with the closed vocabulary `ALLOWED_ENTITLEMENTS = ["default_deny_false"]`
+  — `default_deny = false` now requires declaring
+  `entitlements = ["default_deny_false"]` in config (config-declared, no core
+  names); merge unions entitlements grant-only with provenance, applied
+  before the network gate.
+- **Scaffold/templates genericized:** `templates/workestrate-config/*` and
+  `control/agentctl/src/scaffold/template/*` now emit generic
+  `EXAMPLE_API_KEY` + `GITHUB_TOKEN` secrets only. The copier.yml post-copy
+  `generate-env-example` task is REMOVED (it re-personalized output from the
+  operator's ambient config); `generate-env-example` itself no longer emits
+  the stale `AI_WORKBENCH_WORKSPACES_DIR`/`AI_WORKBENCH_VAR_DIR` lines.
+- **`litellm_proxy` egress recipe KEPT as generic OSS vocabulary** (verdict
+  with evidence: TCP 4000 is litellm's upstream default; the recipe contains
+  no personal models/hosts; the personal config repo never references it
+  directly, only `agent_base`). The decision is documented in code comments.
+- **Devshell containment fix** (`nix/devshells/default.nix`): the shellHook
+  now mutates the repo ONLY when the caller's toplevel is the workestrate
+  tool checkout (marker probe: `flake.nix` + `control/agentctl/Cargo.toml` +
+  `config.reference/workestrate.toml`); running `nix develop` from another
+  repo no longer litters vendor symlinks / agents build dirs there. This
+  discharges the "phase 4 owns devshell genericization" forward reference
+  from phase 3. Banner/echo strings `ai-workbench`→`workestrate` adjacent to
+  the edits.
+- **Flaky test fix:** the `probe_free_ports_*` assertions now re-probe on
+  TOCTOU bind conflict (up to 8 cycles, holding bound listeners during the
+  simultaneous-bindability check).
+- **`check_required_files` optional entries genericized** to
+  `example-{agent,offensive}`.
+- **Coordinated personal-repo change** (separate repo
+  `workestrate-dev-home/config-repos/personal`, committed by the lead):
+  `tempest/workload.toml` declares `entitlements = ["default_deny_false"]`
+  (required by the new policy gate above).
+- **Validation:** 3 consecutive full `cargo test` runs = 640 passed / 0
+  failed / 3 ignored each (matches the phase-3 baseline); `just verify` exit
+  0; smoke green — `--help` free of personal subcommands, TempDir `config
+  new` emits only generic secrets, `check` green, devshell scratch-cwd
+  write-free. All validation ran in-container; no new HOST gates.
+- **Closing sweep done — remaining hits classified:** test-fixture vocabulary
+  (~600 hits in `#[cfg(test)]` modules + doctests) deferred as a future
+  dedicated sweep; `config.reference` example-* vocabulary is by design;
+  litellm OSS mentions are acceptable.
+
+---
+
+## 0.1 PREVIOUS LANDING — cleanup PHASE 3 (2026-08-02, lands as one commit on top of phase 2)
 
 **Phase 3 of the approved cleanup: workflow image builds moved out of the
 tool repo into the config repo flake.** What changed and why, for
@@ -38,8 +104,8 @@ contextless sessions:
   `config`, `buildWorkloadImage`, `checks` — the whole `lib` is intact;
   the config repo depends on it). The devshell keeps core tooling
   (cargo/rust/node/bun/tombi/msb-wrapped/secrets) and drops the
-  agent-repo population and image-loaded check; **phase 4 owns devshell
-  genericization**.
+   agent-repo population and image-loaded check; **devshell genericization
+   landed in phase 4** (§0 above).
 - **Moved to the personal config repo**
   (`workestrate-dev-home/config-repos/personal`, commit `1000e60` — the
   config-repo flake landed BEFORE this tool-side deletion): the images
@@ -88,7 +154,7 @@ contextless sessions:
 
 ---
 
-## 0.1 PREVIOUS LANDING — cleanup PHASE 2 (2026-08-02, lands as one commit on top of phase 1)
+## 0.2 PREVIOUS LANDING — cleanup PHASE 2 (2026-08-02, lands as one commit on top of phase 1)
 
 **Phase 2 of the approved cleanup: the tool repo is decoupled from personal
 workflow content.** What changed and why, for contextless sessions:
@@ -130,7 +196,7 @@ workflow content.** What changed and why, for contextless sessions:
 
 ---
 
-## 0.2 PREVIOUS LANDING — cleanup PHASE 1 (2026-08-02, lands on top of phase-0 HEAD `b9a3ed3`)
+## 0.3 PREVIOUS LANDING — cleanup PHASE 1 (2026-08-02, lands on top of phase-0 HEAD `b9a3ed3`)
 
 **Phase 1 of the approved cleanup landed** as one commit on
 `migration/tool-model` (the phase-1 commit; hash assigned at commit time).
@@ -172,7 +238,7 @@ What changed and why, for contextless sessions:
 
 ---
 
-## 0.3 PREVIOUS LANDING — cleanup PHASE 0 (2026-08-02, landed on top of `09b624f`)
+## 0.4 PREVIOUS LANDING — cleanup PHASE 0 (2026-08-02, landed on top of `09b624f`)
 
 **Phase 0 of the approved mount/seed path-resolution cleanup landed** (one
 commit; HEAD moves past `09b624f` — the snapshot below still cites `7624aaf`/
@@ -476,6 +542,24 @@ current post-flips except the spec-05 row above.
     (Aug 1 20:59) is STALE — pre-dates HEAD. The live binary is built into the
     devshell target dir `~/.cache/ai-workbench/agentctl-target/debug/`
     (justfile:5 relocates `CARGO_TARGET_DIR`). Never run the in-tree one.
+11. **Cleanup phases 5–6 (remaining genericization) — USER DECISIONS.**
+    Phases 0–4 landed (§0–§0.4 above). The remaining genericization items
+    await user decision and are NOT in flight:
+    - age-key path rename (`ai-workbench-secrets.txt`);
+    - cache path renames (`~/.cache/ai-workbench-msb`, `CARGO_TARGET_DIR`
+      ai-workbench);
+    - README/SPEC reframing (headline personal examples);
+    - canonical config-flake input URL (`git+file://` vs
+      `github:georgrybski/...`);
+    - broad `ai-workbench` user-facing string sweep;
+    - `ALLOWED_EGRESS_HOSTS` still contains personal provider hosts
+      (api.kimi.com / api.neuralwatt.com / api.minimax.io) — the same
+      violation class as the phase-4-retired `SECRET_HOST_BINDINGS` table;
+    - test-fixture personal-name sweep (~600 `#[cfg(test)]`/doctest hits,
+      classified and deferred by the phase-4 closing sweep).
+    Standing threads that outlive the cleanup: container-home
+    ephemerality/host-side home (§6); `stash@{0}` on `406b5b5` never to be
+    touched (§7).
 
 ---
 

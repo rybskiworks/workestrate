@@ -112,7 +112,7 @@ pub fn validate_mount_host(host: &str) -> Result<()> {
 /// **Deviation from `80-remediation-plan.md` WP1:** the plan also named
 /// `/etc`, `/root`, `/home` as sensitive. Those are *sandbox-internal* rootfs
 /// directories (not host pivots) and are legitimate mount targets —
-/// e.g. opencode mounts `/home/node/.local/share/opencode` rw for app state.
+/// e.g. an agent workload mounts its app-state dir under `/home` rw.
 /// Only `/proc`, `/sys`, `/dev` actually pivot to host kernel resources in
 /// microsandbox. This matches the plan's actual intent ("paths that
 /// microsandbox may pivot to real host resources") and is documented here as

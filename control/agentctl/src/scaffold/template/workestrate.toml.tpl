@@ -8,8 +8,10 @@ schema_version = 1
 
 # ─── Secret definitions ────────────────────────────────────────────────────
 # These define the schema for your encrypted secrets (.env.enc) — a pure
-# catalog of each credential's intrinsic properties. The env_var names must
-# match the core policy.rs SECRET_HOST_BINDINGS.
+# catalog of each credential's intrinsic properties. `allowed_hosts` entries
+# must come from the core egress allowlist (policy.rs ALLOWED_EGRESS_HOSTS);
+# there is no core per-secret table — any secret you declare may bind
+# allowlisted hosts.
 #
 # A definition says NOTHING about how any workload sees the value. Exposure
 # is declared per workload, at the env binding site:
@@ -18,41 +20,17 @@ schema_version = 1
 #     only for hosts in `allowed_hosts` (omitted = deny-all).
 #   - the real value in-sandbox is an explicit `bound = "guest"` opt-in on
 #     the binding, reserved for workloads that VERIFY the credential (e.g.
-#     litellm verifying its callers, odysseus verifying admin requests).
+#     a proxy service verifying its callers).
 
-[secrets.LITELLM_MASTER_KEY]
-env_var = "LITELLM_MASTER_KEY"
-required = true
-
-[secrets.OPENROUTER_API_KEY]
-env_var = "OPENROUTER_API_KEY"
-allowed_hosts = ["openrouter.ai"]
-required = true
-
-[secrets.KIMI_CODE_API_KEY]
-env_var = "KIMI_CODE_API_KEY"
-allowed_hosts = ["api.kimi.com"]
-required = true
-
-[secrets.NEURALWATT_API_KEY]
-env_var = "NEURALWATT_API_KEY"
-allowed_hosts = ["api.neuralwatt.com"]
-required = true
-
-[secrets.MINIMAX_CODING_API_KEY]
-env_var = "MINIMAX_CODING_API_KEY"
-allowed_hosts = ["api.minimax.io"]
-required = true
+# Generic example secrets — replace with your own credentials.
+[secrets.EXAMPLE_API_KEY]
+env_var = "EXAMPLE_API_KEY"
+required = false
 
 [secrets.GITHUB_TOKEN]
 env_var = "GITHUB_TOKEN"
 allowed_hosts = ["github.com", "api.github.com"]
 required = false
-
-[secrets.ODYSSEUS_ADMIN_PASSWORD]
-env_var = "ODYSSEUS_ADMIN_PASSWORD"
-required = true
-placeholder = "change_me_before_first_boot"
 
 # ─── Workload definitions ──────────────────────────────────────────────────
 # Add [workloads.<name>] tables here. See:

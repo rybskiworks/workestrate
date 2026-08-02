@@ -11,12 +11,11 @@
 # exact revs in this repo's flake.lock (`nix flake lock`), and map each
 # name in the `sources` attrset below, e.g.:
 #
-#   inputs.pi.url      = "github:example/pi";      inputs.pi.flake      = false;
-#   inputs.tempest.url = "github:example/T3MP3ST"; inputs.tempest.flake = false;
+#   inputs.myagent.url  = "github:example/myagent";  inputs.myagent.flake  = false;
 #   ...
-#   outputs = { self, workestrate, nixpkgs, pi, tempest }:
+#   outputs = { self, workestrate, nixpkgs, myagent }:
 #     ...
-#     sources = { pi = pi; tempest = tempest; };
+#     sources = { myagent = myagent; };
 #
 # A source may also be a derivation produced in this flake (e.g. an
 # npm-build pre-build feeding a bun-compile image binary). An unresolved
@@ -31,8 +30,8 @@
 #
 #   enriched = parsed // { image = parsed.image // { binary =
 #     parsed.image.binary // {
-#       binary_name    = "pi";       # bun-compile output layout:
-#       install_dir    = "app/bin";  #   $out/app/bin/pi (default: $out/bin/app)
+#       binary_name    = "myagent";  # bun-compile output layout:
+#       install_dir    = "app/bin";  #   $out/app/bin/myagent (default: $out/bin/app)
 #       npm_deps_hash  = "sha256-...";  # npm-build FOD hash
 #       assets         = [ { from = "..."; to = "..."; } ];  # runtime asset mirror
 #       dont_npm_build = true; build_phase = "..."; install_phase = "...";  # overrides
@@ -51,7 +50,7 @@
 # IMAGE NAME/TAG ↔ MSB STORE PARITY
 # ============================================================================
 # Each workload's image.name + image.tag must match what the deployment's
-# microsandbox store has loaded (e.g. workestrate-pi:latest). Build
+# microsandbox store has loaded (e.g. myagent:latest). Build
 # (`nix build .#<image.name>`) and load (`msb load -t <name>:<tag>`) from
 # THIS repo's justfile; the workestrate CLI consumes whatever image the
 # store holds — it never builds images itself.

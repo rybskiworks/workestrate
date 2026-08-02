@@ -239,7 +239,7 @@ pub(crate) async fn run_service_foreground(
 /// (ctrl-]). Then stop the sandbox.
 ///
 /// This is the interactive counterpart to `run_service_foreground`, used by
-/// TUI workloads (Pi, OpenCode). The SDK's `attach_with` handles raw mode,
+/// interactive TUI agent workloads. The SDK's `attach_with` handles raw mode,
 /// stdin, resize, and TUI output coalescing internally.
 pub(crate) async fn run_service_interactive(
     sandbox: &Sandbox,

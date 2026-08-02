@@ -53,7 +53,7 @@ pkgs.mkShell {
     just
     libcap_ng
     msb-wrapped
-    nodejs_24  # Node 24: pi's gondolin needs >=23.6; aligns with the node:24 sandbox images
+    nodejs_24  # Node 24: aligns with the node:24 sandbox images (agent workloads need >=23.6)
     bun
     openssl
     pkg-config
@@ -69,7 +69,7 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
-    echo "ai-workbench dev shell"
+    echo "workestrate dev shell"
     echo "msb version: $(msb --version 2>/dev/null || echo 'not available')"
     echo "secrets workflow: docs/secrets.md"
 
@@ -122,9 +122,27 @@ pkgs.mkShell {
     # config repo flake (pi build now lives there); phase 4 owns devshell
     # genericization.
 
+    # Cleanup phase 4: the hook must ONLY touch the workestrate tool
+    # checkout. `git rev-parse --show-toplevel` resolves from the CALLER's
+    # cwd, so running `nix develop <tool-flake>` from another repo used to
+    # litter vendor symlinks and agents/*/build dirs into THAT repo. The
+    # marker probe (flake.nix + control/agentctl/Cargo.toml +
+    # config.reference/workestrate.toml) identifies the tool checkout; any
+    # other toplevel (or none) skips the repo-mutating steps.
+    _tool_repo_root() {
+      local root
+      root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+      if [ -n "$root" ] \
+        && [ -f "$root/flake.nix" ] \
+        && [ -f "$root/control/agentctl/Cargo.toml" ] \
+        && [ -f "$root/config.reference/workestrate.toml" ]; then
+        printf '%s' "$root"
+      fi
+    }
+
     _setup_vendor_link() {
       local repo_root vendor_dir vendor_link target
-      repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+      repo_root=$(_tool_repo_root)
       if [ -z "$repo_root" ]; then
         return 0
       fi
@@ -138,11 +156,11 @@ pkgs.mkShell {
         local current
         current=$(readlink -f "$vendor_link" 2>/dev/null || true)
         if [ -z "$current" ] || [ ! -d "$current" ]; then
-          echo "ai-workbench: refreshing stale vendor symlink" >&2
+          echo "workestrate: refreshing stale vendor symlink" >&2
           ln -sfn "$target" "$vendor_link"
         fi
       elif [ -e "$vendor_link" ]; then
-        echo "ai-workbench: vendor/microsandbox-filesystem-0.5.6 is a real directory (unlocked); leaving it alone" >&2
+        echo "workestrate: vendor/microsandbox-filesystem-0.5.6 is a real directory (unlocked); leaving it alone" >&2
       else
         ln -sfn "$target" "$vendor_link"
       fi
@@ -157,7 +175,7 @@ pkgs.mkShell {
 
     _build_agents() {
       local repo_root agents_dir
-      repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+      repo_root=$(_tool_repo_root)
       [ -z "$repo_root" ] && return 0
       agents_dir="$repo_root/agents"
 
@@ -187,7 +205,7 @@ pkgs.mkShell {
           [ -f "$stamp" ] && return 0
         fi
 
-        echo "ai-workbench: building $name into agents/$name/build..." >&2
+        echo "workestrate: building $name into agents/$name/build..." >&2
 
         # Copy clean source to build dir (keeps repo/ pristine)
         rm -rf "$build_dir"
@@ -201,11 +219,11 @@ pkgs.mkShell {
           if [ -n "$gating_file" ] && [ -n "$current_hash" ]; then
             echo "$current_hash" > "$hash_file"
           fi
-          echo "ai-workbench: $name built successfully" >&2
+          echo "workestrate: $name built successfully" >&2
         else
           rm -rf "$build_dir"
-          echo "ai-workbench: WARNING: $name build failed; the agent may not work" >&2
-          echo "ai-workbench: You can retry: rm -rf agents/$name/build && nix develop" >&2
+          echo "workestrate: WARNING: $name build failed; the agent may not work" >&2
+          echo "workestrate: You can retry: rm -rf agents/$name/build && nix develop" >&2
         fi
       }
 
@@ -216,5 +234,6 @@ pkgs.mkShell {
     }
     _build_agents
     unset -f _build_agents
+    unset -f _tool_repo_root
   '';
 }

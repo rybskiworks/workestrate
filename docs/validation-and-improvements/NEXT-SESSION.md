@@ -80,9 +80,43 @@ re-derive their contents.
 > repo depends on it). Both scaffold templates synced byte-identical with
 > the new reality. Tests: 640 passed / 0 failed / 3 ignored; `just verify`
 > fully green (real copier parity); `nix flake show` clean (the phase-2
-> tempest.nix lambda bug is mooted by deletion). Phase 4 owns devshell
-> genericization. Host follow-ups + citation-staleness notes in STATUS.md
-> §0.
+> tempest.nix lambda bug is mooted by deletion). Devshell genericization
+> landed in phase 4 (update (5) below). Host follow-ups + citation-staleness
+> notes in STATUS.md §0.
+
+> **2026-08-02 update (5) — cleanup PHASE 4 landed** (uncommitted at time of
+> writing; lands as one commit on top of phase 3 as
+> `refactor(cli): generic CLI surface, policy, and scaffold (cleanup phase
+> 4)`; HEAD below is stale). The 5 typed CLI subcommands
+> (litellm/pi/odysseus/opencode/tempest) are REMOVED from
+> `control/agentctl/src/main.rs` — the generic `workestrate workload <verb>
+> <name>` path (ADR 0027) is now the only lifecycle path; stale strings fixed
+> (`ps` footer + the ADR-0021-pinned refuse message now emit `workestrate
+> workload down <name>`; `down --all` footer → `down-all`). policy.rs: the
+> hardcoded personal 7-secret `SECRET_HOST_BINDINGS` table and the hardcoded
+> `tempest` `DEFAULT_DENY_FALSE_ENTITLEMENT` are deleted — secrets with
+> `env_var` now bind only hosts in `ALLOWED_EGRESS_HOSTS` (fail-closed;
+> env_var-less secrets skipped), and `default_deny = false` requires the new
+> config-declared `workloads.{name}.entitlements = ["default_deny_false"]`
+> (closed vocabulary `ALLOWED_ENTITLEMENTS`; grant-only union with provenance
+> before the network gate). Scaffold/templates emit generic
+> `EXAMPLE_API_KEY` + `GITHUB_TOKEN` only; the copier `generate-env-example`
+> post-copy task is removed. The `litellm_proxy` egress recipe is KEPT as
+> generic OSS vocabulary (verdict + evidence recorded in code comments). The
+> devshell shellHook now only mutates the repo when the caller's toplevel is
+> the workestrate tool checkout (marker probe) — `nix develop` from another
+> repo no longer litters vendor symlinks/agents build dirs there; banner
+> strings ai-workbench→workestrate. Flaky `probe_free_ports_*` tests now
+> re-probe on TOCTOU bind conflict (up to 8 cycles). `check_required_files`
+> optional entries genericized to `example-{agent,offensive}`. Coordinated
+> personal-repo change (committed by lead): `tempest/workload.toml` declares
+> the entitlement. Validation: 3 consecutive full cargo test runs 640 passed
+> / 0 failed / 3 ignored each (matches baseline); `just verify` exit 0; smoke
+> green (`--help` personal-subcommand-free, TempDir `config new` generic-only
+> secrets, `check` green, devshell scratch-cwd write-free). Closing sweep:
+> ~600 test-fixture/doctest personal-name hits deferred as a future dedicated
+> sweep. Remaining phases 5–6 items are USER DECISIONS — open thread 12 and
+> STATUS.md §0/§5 item 11.
 
 - HEAD: `867a96e` (docs: STATUS.md comprehensive state report; latest code
   commit is the spec-05 cwd-fallback fix `7624aaf`; the interim
@@ -281,6 +315,20 @@ re-derive their contents.
     placeholder value → rejected;
     (8) v1 shim: legacy forms load with stderr deprecation warnings and fold
     correctly.
+12. **Cleanup phases 5–6 (remaining genericization) — USER DECISIONS.**
+    Phase 4 landed the CLI/policy/scaffold/devshell genericization (update
+    (5) above; STATUS.md §0). Phases 5–6 await user decision and are NOT in
+    flight: age-key path rename (`ai-workbench-secrets.txt`); cache path
+    renames (`~/.cache/ai-workbench-msb`, `CARGO_TARGET_DIR` ai-workbench);
+    README/SPEC reframing (headline personal examples); canonical
+    config-flake input URL (`git+file://` vs `github:georgrybski/...`);
+    broad `ai-workbench` user-facing string sweep; `ALLOWED_EGRESS_HOSTS`
+    still contains personal provider hosts (api.kimi.com /
+    api.neuralwatt.com / api.minimax.io) — the same violation class as the
+    phase-4-retired secret table; test-fixture personal-name sweep (~600
+    `#[cfg(test)]`/doctest hits, deferred by the phase-4 closing sweep).
+    Standing: container-home ephemerality/host-side home (threads 7/8);
+    `stash@{0}` on `406b5b5` never to be touched.
 
 ---
 
@@ -462,3 +510,16 @@ opt-in `config.reference` base layer, synthetic example-* fixture,
 `profiles/` + litellm schemas/config-check skill + `litellm-check` recipe
 moved to the personal config repo; open thread 4 (litellm-check PyYAML)
 re-scoped to the personal repo.
+
+**2026-08-02 refresh (4):** cleanup PHASE 3 landed — update note (4) added to
+Current state (workflow image builds moved to the personal config repo flake;
+tool flake now tool-only; `lib` intact; templates synced; 640/0/3).
+
+**2026-08-02 refresh (5):** cleanup PHASE 4 landed — update note (5) added to
+Current state (typed CLI subcommands removed; policy.rs de-personalized with
+config-declared `entitlements`; scaffold/templates genericized;
+`litellm_proxy` recipe kept as OSS vocabulary; devshell shellHook
+checkout-marker containment; flaky port-probe test fix); the phase-3 note's
+"Phase 4 owns devshell genericization" forward reference flipped to past
+tense; open thread 12 added (phases 5–6 remaining genericization items —
+USER DECISIONS).

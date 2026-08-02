@@ -1,5 +1,5 @@
 {
-  description = "ai-workbench — local AI workbench for Pi/Odysseus/OpenCode through Microsandbox + LiteLLM";
+  description = "workestrate — control plane for sandboxed agent/service workloads on Microsandbox microVMs";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

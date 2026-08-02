@@ -47,9 +47,9 @@ pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
 /// Start `exec_program` with `exec_args` inside `sandbox`, stream its logs to
 /// stderr, and block until Ctrl-C — then stop the sandbox.
 ///
-/// This is the shared foreground path used by `up_litellm`, `up_pi`, and
-/// `up_odysseus`. The service label is used in user-facing messages
-/// (e.g. "litellm", "pi", "odysseus").
+/// This is the shared foreground path used by every service-kind `up`. The
+/// service label is used in user-facing messages (e.g. the workload's bare
+/// name, "example-litellm").
 pub struct ForegroundConfig {
     pub sandbox_name: String,
     pub service_label: String,
@@ -64,7 +64,7 @@ pub struct ForegroundConfig {
 pub struct InstanceSpec {
     /// The sandbox name to create: `slot` (singleton) or `slot@<id>` (parallel).
     pub instance: String,
-    /// Bare workload name (e.g. `litellm`). Used in user-facing messages.
+    /// Bare workload name (e.g. `example-litellm`). Used in user-facing messages.
     pub workload: String,
     /// Active context name, if any.
     pub context: Option<String>,

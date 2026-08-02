@@ -146,6 +146,9 @@ required = false
 
 [workloads.example-offensive]
 kind = "agent"
+# default_deny = false (below) requires this config-declared entitlement
+# (fail-closed: without it, merge/validate refuse default_deny = false).
+entitlements = ["default_deny_false"]
 image = { recipe = "nix-layered", name = "example-offensive", tag = "latest", contents = [
   "cacert",
   "busybox",
