@@ -11,6 +11,7 @@ pub mod cli_error;
 pub mod commands;
 pub mod config;
 pub mod git;
+pub mod images;
 pub mod json_out;
 pub mod merge;
 pub mod microsandbox;

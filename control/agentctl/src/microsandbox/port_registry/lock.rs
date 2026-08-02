@@ -108,7 +108,10 @@ impl Drop for PortRegistryLock {
 ///
 /// Conservative: any parse failure, missing PID, or live PID counts as NOT
 /// stale (never remove a lock we cannot prove is dead).
-fn lock_file_is_stale(path: &Path) -> bool {
+///
+/// `pub(crate)` so `images::lock` (spec 21 §3.3) shares the ONE stale-lock
+/// recovery probe — the pid+timestamp body format is identical.
+pub(crate) fn lock_file_is_stale(path: &Path) -> bool {
     lock_file_is_stale_with(path, pid_is_alive)
 }
 

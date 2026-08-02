@@ -25,6 +25,25 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+> **2026-08-02 update (8) — spec 21 phase B (image-state store) landed** (one
+> commit on top of phase A `02bea9a`): new library-only module
+> `control/agentctl/src/images/` — `state.rs` (the `state/images.json` spec §8
+> schema keyed by `<repo>#<tag>` with a `#` separator, atomic tmp+fsync+rename
+> saves, corrupt/absent tolerance per the advisory-record posture), `lock.rs`
+> (per-tag `state/image-locks/<sanitized-key>.lock`, O_EXCL + blocking-until-
+> acquired + stale dead-PID recovery REUSED from the port-registry lock — NOT
+> flock(2), because `unsafe_code = "forbid"` makes the unsafe `libc::flock`
+> FFI uncallable; the pre-approved `libc` dep was NOT added and the
+> kernel-release upgrade is a recorded follow-up), `repo_key.rs` (spec §4.3/§8
+> registered-name-vs-canonical-path resolution, pure core + registry
+> wrappers), `skew.rs` (the pure §3.4 skew matrix incl. the D1 TRUST branch
+> and the `--reload-images` Skip/Trust → RebuildForced flip, exhaustive table
+> test). No clap wiring, no production callers — phases C–E wire it later.
+> Spec 21 §6.1 gained a phase-A addendum (the `.workestrate-build/` contract
+> ships in the config-repo README, not inside the gitignored dir). Tests:
+> 673 passed / 0 failed / 3 ignored (642 baseline + 31 new); `just verify`
+> green. Spec 21 phases C–F remain (C/D/F `HOST-NIX`; E `HOST-KVM`).
+
 > **2026-08-02 update (7) — spec 21 phase A (scaffold part) landed** (in the
 > working tree on `migration/tool-model`): `.workestrate-build/` reserved in
 > the scaffold template per USER DECISION D4 — a `.gitignore` entry + README
@@ -570,3 +589,11 @@ section; undeclared `local_build` fallback default →
 `.workestrate-build/<name>` declaring-layer-relative; phases B–F remain);
 STATUS.md gained a new §0 latest-landing section and its §5 item 12 was
 annotated.
+
+**2026-08-02 refresh (8):** spec 21 phase B (image-state store) landed —
+update note (8) added to Current state (`control/agentctl/src/images/`:
+`images.json` schema + atomic IO, per-tag O_EXCL lock with stale-PID
+recovery — not flock(2), unsafe-code lint — repo_key, skew matrix;
+library-only, phases C–E wire it later; 673/0/3); STATUS.md §0 added for
+phase B (phase A demoted to §0.01, commit `02bea9a`), §5 item 12 annotated,
+spec 21 §6.1 addendum recorded.

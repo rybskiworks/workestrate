@@ -319,6 +319,10 @@ the workload-agnostic artifact location:
   `.tpl` copy — template + static copy + parity in ONE commit, with
   `scaffold-check` enforcing parity (the same mechanism that guards the
   tombi/flake templates).
+  **Phase-A implementation note (2026-08-02):** the contract README ships as a
+  section in the config-repo README (`README.md` / `README.md.tpl`), not as a
+  README *inside* `.workestrate-build/` — a gitignored directory cannot carry
+  committed content, so an in-directory README was impossible by construction.
 - **New default for UNDECLARED `local_build` fallbacks:** a workload with a
   `local_build` recipe but no declared output dir falls back to
   `.workestrate-build/<workload-name>/`, resolved declaring-layer-relative

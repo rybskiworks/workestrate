@@ -8,7 +8,9 @@ use crate::microsandbox::plan::PortMapping;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
-mod lock;
+// `lock` is crate-visible so `images::lock` (spec 21 §3.3) can reuse the
+// stale dead-PID lock recovery probe instead of duplicating it.
+pub(crate) mod lock;
 mod slug;
 mod store;
 

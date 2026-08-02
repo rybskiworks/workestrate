@@ -13,7 +13,9 @@ mod network;
 mod ps;
 mod run;
 mod spawn;
-mod time;
+// `time` is crate-visible so `images::state` (spec 21 §8) reuses the ONE
+// no-chrono RFC3339 formatter (`current_rfc3339_utc`).
+pub(crate) mod time;
 mod wait;
 
 pub use network::network_plan_to_policy;

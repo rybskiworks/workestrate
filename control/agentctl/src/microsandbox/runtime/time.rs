@@ -1,6 +1,9 @@
 /// Current time as an RFC3339 UTC string. Best-effort: falls back to the
 /// Unix timestamp when SystemTime fails (should not happen in practice).
-pub(super) fn current_rfc3339_utc() -> String {
+///
+/// `pub(crate)`: reused by `images::state` (spec 21 §8 `built_at`/`loaded_at`)
+/// so the crate keeps ONE no-chrono RFC3339 formatter.
+pub(crate) fn current_rfc3339_utc() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

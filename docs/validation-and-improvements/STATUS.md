@@ -14,10 +14,57 @@ work from §5.
 
 ---
 
-## 0. LATEST LANDING — spec 21 PHASE A, scaffold part (2026-08-02, uncommitted in the working tree)
+## 0. LATEST LANDING — spec 21 PHASE B, image-state store (2026-08-02, one commit on top of phase A)
 
-**Phase A (scaffold part) of spec 21 (image build/load lifecycle) landed in
-the working tree on `migration/tool-model`.** What changed, for contextless
+**Phase B of spec 21 (image build/load lifecycle) landed on
+`migration/tool-model`.** What changed, for contextless sessions:
+
+- **New library-only module `control/agentctl/src/images/`** (no clap wiring,
+  no commands, no production callers — phases C–E wire it later; everything is
+  reachable only from in-module tests):
+  - `state.rs` — the `state/images.json` serde schema per spec §8
+    (`version: 1`, `images` map keyed by the `<repo>#<tag>` composite with a
+    **`#` separator**, e.g. `personal#workestrate-pi:latest`), atomic
+    tmp+fsync+rename saves (FN-5 discipline parity with `save_registry`, with
+    per-writer-unique tmp names because different tags save under different
+    per-tag locks), and corrupt/absent-file tolerance per the advisory-record
+    posture (spec §3.2: warn on stderr, yield an empty record set, never
+    hard-error). Provenance capture (`loader` = `workestrate <pkg version>`,
+    `host` = /etc/hostname → HOSTNAME, `user` = USER → LOGNAME).
+  - `lock.rs` — the per-tag lock `state/image-locks/<sanitized-key>.lock`
+    (spec §3.3): O_EXCL create + blocking-until-acquired (NO 2s timeout —
+    phases C/D hold it across minutes-long builds), pid+epoch body with the
+    port-registry's stale dead-PID recovery REUSED (made `pub(crate)`), Drop
+    removes the file. **Not `flock(2)`:** the crate's
+    `[lints.rust] unsafe_code = "forbid"` makes the unsafe `libc::flock` FFI
+    uncallable, so the pre-approved `libc` direct dependency was NOT added
+    (zero new deps); kernel-release flock is a recorded follow-up decision.
+  - `repo_key.rs` — pure `repo_key_for(declaring_dir, registered)` per spec
+    §4.3/§8 (registered checkout containment → repo NAME, longest match wins;
+    else canonical path) plus impure registry wrappers (local-path entries
+    contribute their `url`; managed clones `config_repo_dir(name)`) and
+    `repo_identity_for` reusing `commands::source::find_flake_root`.
+  - `skew.rs` — the pure §3.4 skew matrix (`decide_skew(record, store,
+    force)`) incl. the D1 TRUST branch and the `--reload-images` flip of
+    Skip/Trust → RebuildForced, with an exhaustive 12-row table test.
+- **Visibility tweaks (no behavior change):** `runtime::time` made
+  `pub(crate)` so `images::state` reuses the ONE no-chrono RFC3339 formatter;
+  `port_registry::lock` made `pub(crate)` for the stale-lock probe reuse.
+- **Spec 21 §6.1 addendum:** the phase-A deviation recorded — the scaffold
+  ships the `.workestrate-build/` contract in the config-repo README, not a
+  README inside the (gitignored) directory.
+- **Gates after landing:** 673 passed / 0 failed / 3 ignored (baseline 642 +
+  31 new); `just verify` fully green.
+- **Phases C–F remain** (change detection + `workload build`, build/load
+  pipeline, lifecycle wiring, multi-repo migration; C/D/F `HOST-NIX`, E
+  `HOST-KVM`).
+
+---
+
+## 0.01 PREVIOUS LANDING — spec 21 PHASE A, scaffold part (2026-08-02, commit `02bea9a`)
+
+**Phase A (scaffold part) of spec 21 (image build/load lifecycle) landed as
+commit `02bea9a` on `migration/tool-model`.** What changed, for contextless
 sessions:
 
 - **`.workestrate-build/` reserved in the scaffold template (USER DECISION
@@ -585,12 +632,16 @@ current post-flips except the spec-05 row above.
     Standing threads that outlive the cleanup: container-home
     ephemerality/host-side home (§6); `stash@{0}` on `406b5b5` never to be
     touched (§7).
-12. **Spec 21 (image build/load lifecycle) — DESIGN-APPROVED; phase A
-    (scaffold part) landed 2026-08-02** (§0 above: `.workestrate-build/`
-    reserved in both scaffold template locations with parity; undeclared
-    `local_build` fallback default → `.workestrate-build/<name>`). Phases
-    B–F remain per the spec (A/B verifiable-here; C/D/F HOST-NIX; E HOST-KVM;
-    HOST-VERIFY cluster on msb digest surface).
+12. **Spec 21 (image build/load lifecycle) — DESIGN-APPROVED; phases A + B
+    landed 2026-08-02** (§0/§0.01 above: A = `.workestrate-build/` reserved in
+    both scaffold template locations with parity + undeclared `local_build`
+    fallback default; B = `control/agentctl/src/images/` image-state store —
+    `images.json` schema/IO, per-tag O_EXCL lock, repo_key, skew matrix,
+    library-only). Phases C–F remain per the spec (C/D/F HOST-NIX; E HOST-KVM;
+    HOST-VERIFY cluster on msb digest surface). Phase C/D note: the per-tag
+    lock is O_EXCL + stale-PID recovery, NOT flock(2) (unsafe-code lint); the
+    kernel-release upgrade is an open follow-up decision recorded in
+    `images/lock.rs`.
 
 ---
 
