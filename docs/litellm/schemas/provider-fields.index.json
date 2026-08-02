@@ -1,0 +1,560 @@
+{
+  "schema_version": "1.0",
+  "upstream_sources": [
+    "https://docs.litellm.ai/docs/providers/openai_compatible",
+    "https://docs.litellm.ai/docs/providers/anthropic",
+    "https://docs.litellm.ai/docs/providers/openrouter",
+    "https://docs.litellm.ai/docs/providers/moonshot",
+    "https://docs.litellm.ai/docs/providers/minimax",
+    "https://docs.litellm.ai/docs/providers/zai",
+    "https://docs.litellm.ai/docs/providers/vllm",
+    "https://docs.litellm.ai/docs/providers/ollama",
+    "https://docs.litellm.ai/docs/providers/litellm_proxy",
+    "https://docs.litellm.ai/docs/providers/inception",
+    "https://docs.litellm.ai/docs/providers/openai"
+  ],
+  "providers": [
+    {
+      "provider_name": "OpenAI-Compatible Endpoints",
+      "source_url": "https://docs.litellm.ai/docs/providers/openai_compatible",
+      "litellm_prefix": "openai/",
+      "api_protocol": "OpenAI-compatible",
+      "example_model_strings": [
+        "openai/mistral",
+        "openai/GPT-J",
+        "openai/<your-model-name>",
+        "openai/google/gemma"
+      ],
+      "required_env_vars": ["OPENAI_API_KEY"],
+      "optional_env_vars": [],
+      "api_base_behavior": "Configured as `api_base` in both Python SDK (`litellm.completion(model=..., api_base=...)`) and Proxy `litellm_params`. Example values: `http://0.0.0.0:4000`, `http://my-custom-base`. CRITICAL: \"If you see `Not Found Error` when testing make sure your `api_base` has the `/v1` postfix. Example: `http://vllm-endpoint.xyz/v1`\". CRITICAL: \"Do NOT add anything additional to the base url e.g. `/v1/embedding`. LiteLLM uses the openai-client to make these calls, and that automatically adds the relevant endpoints.\"",
+      "api_key_behavior": "Configured as `api_key` parameter or `OPENAI_API_KEY` env var. \"This library requires an API key for all requests, either through the `api_key` parameter or the `OPENAI_API_KEY` environment variable.\" \"If you don't want to provide a fake API key in each request, consider using a provider that directly matches your OpenAI-compatible endpoint, such as `hosted_vllm` or `llamafile`.\"",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page (provider selection is implicit via the `openai/` prefix in the model string)",
+      "proxy_yaml_example": "model_list:\n  - model_name: my-model\n    litellm_params:\n      model: openai/<your-model-name>  # add openai/ prefix to route as OpenAI provider\n      api_base: <model-api-base>       # add api base for OpenAI compatible provider\n      api_key: api-key                 # api key to send your model",
+      "supported_endpoints": [
+        "/chat/completions",
+        "/embeddings",
+        "/completions"
+      ],
+      "special_params": [
+        "`supports_system_message: False` — under `litellm_params`, maps system messages to 'user' messages (for VLLM models like gemma that don't support system messages)."
+      ],
+      "pricing_context_window_behavior": "not documented on this page",
+      "caveats": [
+        "The openai-client library requires an API key for all requests (even for endpoints that don't need one — use `hosted_vllm` or `llamafile` as alternatives).",
+        "`api_base` must include `/v1` postfix or you'll get \"Not Found Error\".",
+        "Do NOT append endpoint paths like `/v1/embedding` to `api_base` — the openai-client adds them automatically."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] This is the CANONICAL pattern for Neuralwatt (api.neuralwatt.com/v1) and any self-hosted vLLM/Ollama OpenAI-compatible endpoint. Pattern: `model: openai/<name>` + `api_base: https://<host>/v1` + `api_key: <key>` in litellm_params. The repo's `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` follows this exact documented pattern. For endpoints that don't require an API key, a fake key must still be passed (or use `hosted_vllm/` prefix instead)."
+    },
+    {
+      "provider_name": "Anthropic",
+      "source_url": "https://docs.litellm.ai/docs/providers/anthropic",
+      "litellm_prefix": "anthropic/",
+      "api_protocol": "both",
+      "example_model_strings": [
+        "anthropic/claude-3-5-sonnet-20240620",
+        "anthropic/claude-3-haiku-20240307",
+        "anthropic/claude-3-opus-20240229",
+        "anthropic/claude-sonnet-4-20250514",
+        "anthropic/claude-sonnet-4-5-20250929",
+        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-opus-4-7",
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-3-5-haiku-20241022"
+      ],
+      "required_env_vars": ["ANTHROPIC_API_KEY"],
+      "optional_env_vars": [
+        "ANTHROPIC_API_BASE",
+        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"
+      ],
+      "api_base_behavior": "CRITICAL — Custom API Base IS DOCUMENTED. \"When using a custom API base for Anthropic (e.g., a proxy or custom endpoint), LiteLLM automatically appends the appropriate suffix (`/v1/messages` or `/v1/complete`) to your base URL.\" `api_base` can be passed as a parameter to `completion()` or via env var `ANTHROPIC_API_BASE`. URL suffix behavior: Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`: Base URL `https://my-proxy.com` → `https://my-proxy.com/v1/messages`; Base URL `https://my-proxy.com/api` → `https://my-proxy.com/api/v1/messages`. With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`: Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged).",
+      "api_key_behavior": "Configured via `ANTHROPIC_API_KEY` env var or `api_key` parameter. `os.environ[\"ANTHROPIC_API_KEY\"] = \"your-api-key\"`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page (provider selection is implicit via the `anthropic/` prefix)",
+      "proxy_yaml_example": "model_list:\n  - model_name: claude-4 ### RECEIVED MODEL NAME ###\n    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input\n      model: claude-opus-4-20250514 ### MODEL NAME sent to `litellm.completion()` ###\n      api_key: \"os.environ/ANTHROPIC_API_KEY\" # does os.getenv(\"ANTHROPIC_API_KEY\")",
+      "supported_endpoints": [
+        "/chat/completions",
+        "/v1/messages"
+      ],
+      "special_params": [
+        "Anthropic API fails requests when `max_tokens` are not passed. LiteLLM passes `max_tokens=4096` when no `max_tokens` is passed.",
+        "`response_format` fully supported for Claude Sonnet 4.5 and Opus 4.1 models (Structured Outputs).",
+        "`reasoning_effort` mapped to `output_config={\"effort\": ...}` for Claude 4.6 and Opus 4.5 models.",
+        "Prompt caching via `cache_control: {\"type\": \"ephemeral\"}` in message content.",
+        "Thinking/reasoning: `reasoning_effort` (\"low\"|\"medium\"|\"high\") or native `thinking={\"type\": \"enabled\", \"budget_tokens\": 1024}` or `thinking={\"type\": \"adaptive\"}`.",
+        "Azure Foundry: use `azure/` prefix or `anthropic/` with `api_base`."
+      ],
+      "pricing_context_window_behavior": "not documented on this page (see model_prices_and_context_window.json)",
+      "caveats": [
+        "`max_tokens` is required by Anthropic API; LiteLLM defaults to 4096 if not passed.",
+        "`reasoning_effort` other than \"none\" automatically turns thinking on for Claude 4.6/4.7 models.",
+        "`budget_tokens` deprecated on 4.6 models, rejected on Opus 4.7 (only adaptive supported)."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] The `anthropic/` prefix + custom `api_base` IS a documented pattern. The repo uses `anthropic/kimi-for-coding` (api_base: https://api.kimi.com/coding) and `anthropic/MiniMax-M3` (api_base: https://api.minimax.io/anthropic) — pointing the `anthropic/` prefix at non-Anthropic endpoints that speak the Anthropic Messages API. [WORKESTRATE DEVIATION] kimi-for-coding uses `anthropic/` prefix instead of the documented `moonshot/` prefix because Kimi's coding endpoint (api.kimi.com/coding) speaks Anthropic Messages API, not OpenAI-compatible. LiteLLM auto-appends `/v1/messages` to the api_base, so final URL for Kimi is `api.kimi.com/coding/v1/messages`; for MiniMax it is `api.minimax.io/anthropic/v1/messages`. If the endpoint already includes the full path, set `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true` to prevent auto-append. This is a project choice, not upstream-documented-as-correct."
+    },
+    {
+      "provider_name": "OpenRouter",
+      "source_url": "https://docs.litellm.ai/docs/providers/openrouter",
+      "litellm_prefix": "openrouter/",
+      "api_protocol": "OpenAI-compatible",
+      "example_model_strings": [
+        "openrouter/openai/gpt-3.5-turbo",
+        "openrouter/openai/gpt-3.5-turbo-16k",
+        "openrouter/openai/gpt-4",
+        "openrouter/openai/gpt-4-32k",
+        "openrouter/anthropic/claude-2",
+        "openrouter/anthropic/claude-instant-v1",
+        "openrouter/google/palm-2-chat-bison",
+        "openrouter/google/palm-2-codechat-bison",
+        "openrouter/meta-llama/llama-2-13b-chat",
+        "openrouter/meta-llama/llama-2-70b-chat",
+        "openrouter/openai/text-embedding-3-small",
+        "openrouter/google/gemini-2.5-flash-image"
+      ],
+      "required_env_vars": ["OPENROUTER_API_KEY"],
+      "optional_env_vars": [
+        "OPENROUTER_API_BASE",
+        "OR_SITE_URL",
+        "OR_APP_NAME"
+      ],
+      "api_base_behavior": "Env var: `OPENROUTER_API_BASE` — defaults to `https://openrouter.ai/api/v1`. Can also be passed as `base_url=` kwarg to `completion()`. `os.environ[\"OPENROUTER_API_BASE\"] = \"\" # [OPTIONAL] defaults to https://openrouter.ai/api/v1`",
+      "api_key_behavior": "Env var: `OPENROUTER_API_KEY`. `os.environ[\"OPENROUTER_API_KEY\"] = \"\"`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page",
+      "proxy_yaml_example": "(inferred) YAML would follow standard pattern:\nmodel_list:\n  - model_name: <alias>\n    litellm_params:\n      model: openrouter/<provider>/<model>\n      api_key: os.environ/OPENROUTER_API_KEY",
+      "supported_endpoints": [
+        "litellm.completion() (chat/text)",
+        "litellm.embedding() (embeddings)",
+        "litellm.image_generation() (image generation)",
+        "litellm.image_edit() (image editing)"
+      ],
+      "special_params": [
+        "OpenRouter-specific params: `transforms`, `models`, `route` — passed as arguments to `litellm.completion()`",
+        "Image generation: `size` maps to `aspect_ratio` (1024x1024 → 1:1, etc.), `quality` maps to `image_size` (low/standard → 1K, medium → 2K, high/hd → 4K).",
+        "`image_config` dict for native OpenRouter params: `aspect_ratio`, `image_size`.",
+        "Cost tracking: `response._hidden_params['additional_headers']['llm_provider-x-litellm-response-cost']`"
+      ],
+      "pricing_context_window_behavior": "not documented on this page (OpenRouter provides cost info in response, LiteLLM tracks automatically)",
+      "caveats": [
+        "The model table on the page is small/legacy and does not enumerate current OpenRouter offerings.",
+        "LiteLLM claims to support \"ALL OpenRouter models\" via the `openrouter/<any-model>` generic pattern.",
+        "No proxy YAML config is shown on this page."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] The repo uses `openrouter/z-ai/glm-5.1`, `openrouter/qwen/...`, and `openrouter/nex/...` style model strings. The nested format `openrouter/<provider>/<model>` is the correct documented pattern. `openrouter/z-ai/glm-5.1` is structurally valid (`z-ai` is OpenRouter's namespace for Z.AI/Zhipu). Note: OpenRouter uses `z-ai/` (hyphenated) while LiteLLM's native Z.AI provider uses `zai/` (no hyphen) — distinct paths. `openrouter/qwen/...` and `openrouter/nex/...` are structurally consistent with the documented nested pattern, though not explicitly shown on the page. GLM-5.1 is NOT documented on the native Z.AI provider page (only GLM-4.x). OpenRouter is the correct path for GLM-5.1."
+    },
+    {
+      "provider_name": "Moonshot AI",
+      "source_url": "https://docs.litellm.ai/docs/providers/moonshot",
+      "litellm_prefix": "moonshot/",
+      "api_protocol": "OpenAI-compatible",
+      "example_model_strings": [
+        "moonshot/moonshot-v1-8k",
+        "moonshot/moonshot-v1-32k",
+        "moonshot/moonshot-v1-128k",
+        "moonshot/kimi-k2.5",
+        "moonshot/kimi-latest"
+      ],
+      "required_env_vars": ["MOONSHOT_API_KEY"],
+      "optional_env_vars": ["MOONSHOT_API_BASE"],
+      "api_base_behavior": "Default Global API Base URL: `https://api.moonshot.ai/v1` (verbatim: \"This is the one currently implemented\"). China API Base URL: `https://api.moonshot.cn/v1`. Override via: `MOONSHOT_API_BASE` env var. \"Moonshot AI offers two distinct API endpoints: a global one and a China-specific one.\"",
+      "api_key_behavior": "Env var: `MOONSHOT_API_KEY`. In proxy YAML: `api_key: os.environ/MOONSHOT_API_KEY`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page",
+      "proxy_yaml_example": "model_list:\n  - model_name: moonshot-v1-8k\n    litellm_params:\n      model: moonshot/moonshot-v1-8k\n      api_key: os.environ/MOONSHOT_API_KEY\n  - model_name: moonshot-v1-32k\n    litellm_params:\n      model: moonshot/moonshot-v1-32k\n      api_key: os.environ/MOONSHOT_API_KEY\n  - model_name: moonshot-v1-128k\n    litellm_params:\n      model: moonshot/moonshot-v1-128k\n      api_key: os.environ/MOONSHOT_API_KEY",
+      "supported_endpoints": [
+        "/chat/completions"
+      ],
+      "special_params": [
+        "Temperature range limitation: Moonshot only supports [0, 1] (vs OpenAI's [0, 2]). LiteLLM auto-clamps temperature > 1 to 1.",
+        "Temperature + multiple outputs: if temperature < 0.3 and n > 1, Moonshot raises exception. LiteLLM auto-sets temperature to 0.3.",
+        "Tool choice \"required\" not supported. LiteLLM converts by adding message \"Please select a tool to handle the current issue.\" and removing tool_choice param.",
+        "Vision models: `kimi-k2.5`, `kimi-latest`, `moonshot-v1-*-vision-preview` accept OpenAI content array with `image_url` blocks."
+      ],
+      "pricing_context_window_behavior": "not documented on this page",
+      "caveats": [
+        "Moonshot AI = the company; Kimi = their model line (e.g. kimi-k2.5, kimi-latest).",
+        "The page does NOT document using Moonshot via the `anthropic/` prefix with a custom api_base.",
+        "The page does NOT mention `api.kimi.com/coding` or any Kimi-specific coding endpoint.",
+        "Global endpoint (`api.moonshot.ai/v1`) is \"the one currently implemented\" — China endpoint requires manual override."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Moonshot AI = the company; Kimi = their model line. The `moonshot/` prefix uses the OpenAI-compatible Moonshot API at `https://api.moonshot.ai/`. The repo's `anthropic/kimi-for-coding` with `api_base: https://api.kimi.com/coding` is a DIFFERENT integration — it uses the `anthropic/` prefix (Anthropic Messages API protocol) pointed at Kimi's coding endpoint. This pattern is NOT documented on the moonshot page; it's documented on the Anthropic provider page (Custom API Base section). Kimi's coding endpoint (api.kimi.com/coding) speaks the Anthropic Messages API, NOT the OpenAI-compatible API. That's why the repo uses `anthropic/` prefix + custom api_base instead of `moonshot/` prefix. If using the standard Moonshot OpenAI-compatible API, use `moonshot/kimi-k2.5` or `moonshot/moonshot-v1-128k` with `MOONSHOT_API_KEY`."
+    },
+    {
+      "provider_name": "MiniMax",
+      "source_url": "https://docs.litellm.ai/docs/providers/minimax",
+      "litellm_prefix": "minimax/",
+      "api_protocol": "both",
+      "example_model_strings": [
+        "minimax/MiniMax-M2.1",
+        "minimax/MiniMax-M2.1-lightning",
+        "minimax/MiniMax-M2",
+        "minimax/speech-2.6-hd",
+        "minimax/speech-2.6-turbo"
+      ],
+      "required_env_vars": ["MINIMAX_API_KEY"],
+      "optional_env_vars": ["MINIMAX_API_BASE"],
+      "api_base_behavior": "Anthropic Messages endpoint: `api_base=\"https://api.minimax.io/anthropic/v1/messages\"` (verbatim). OpenAI-compatible endpoint: `api_base=\"https://api.minimax.io/v1\"` (verbatim). Env var: `MINIMAX_API_BASE` — set to `https://api.minimax.io/anthropic/v1/messages` or `https://api.minimax.io/v1`. In proxy YAML: `api_base: https://api.minimax.io/anthropic/v1/messages` or `api_base: https://api.minimax.io/v1`.",
+      "api_key_behavior": "Direct param: `api_key=\"your-minimax-api-key\"`. Env var: `MINIMAX_API_KEY`. In proxy YAML: `api_key: os.environ/MINIMAX_API_KEY`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page",
+      "proxy_yaml_example": "model_list:\n  - model_name: minimax/MiniMax-M2.1\n    litellm_params:\n      model: minimax/MiniMax-M2.1\n      api_key: os.environ/MINIMAX_API_KEY\n      api_base: https://api.minimax.io/anthropic/v1/messages",
+      "supported_endpoints": [
+        "Anthropic Messages (`/v1/messages`) — via `litellm.anthropic.messages.acreate()`",
+        "OpenAI Chat Completions (`/v1/chat/completions`) — via `litellm.completion()`",
+        "Audio/Speech (`/v1/audio/speech`) — via `litellm.speech()` / `litellm.aspeech()`"
+      ],
+      "special_params": [
+        "`reasoning_split: True` (via `extra_body`) — separates thinking content on OpenAI-compatible endpoint.",
+        "`thinking={\"type\": \"enabled\", \"budget_tokens\": 1000}` — on Anthropic Messages endpoint (M2.1 feature).",
+        "TTS voice mappings: alloy→male-qn-qingse, echo→male-qn-jingying, fable→female-shaonv, onyx→male-qn-badao, nova→female-yujie, shimmer→female-tianmei.",
+        "TTS extra_body params: `vol` (0.1-10), `pitch` (-12 to 12), `sample_rate` (16000/24000/32000), `bitrate` (64000/128000/192000/256000), `channel` (1/2), `output_format` (\"hex\"/\"url\").",
+        "Cost calculation works automatically using model_prices_and_context_window.json."
+      ],
+      "pricing_context_window_behavior": "Model pricing table: MiniMax-M2.1: $0.3/M input, $1.2/M output, $0.03/M cached read, $0.375/M cached write. MiniMax-M2.1-lightning: $0.3/M input, $2.4/M output. MiniMax-M2: $0.3/M input, $1.2/M output.",
+      "caveats": [
+        "MiniMax exposes BOTH an Anthropic Messages-compatible endpoint AND an OpenAI Chat Completions-compatible endpoint.",
+        "The Anthropic-compatible endpoint is documented first and is the primary path for M2-series models (thinking, tool-use).",
+        "The OpenAI-compatible endpoint uses `reasoning_split` instead of native Anthropic thinking blocks.",
+        "`minimax/MiniMax-M3` is NOT documented — only M2-series models (M2, M2.1, M2.1-lightning)."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] [WORKESTRATE DEVIATION] workestrate config uses `anthropic/MiniMax-M3` (api_base: https://api.minimax.io/anthropic) which DEVIATES from the documented `minimax/` prefix pattern (`minimax/MiniMax-M2.1` with api_base: https://api.minimax.io/anthropic/v1/messages). Both may work; documented approach is `minimax/`. This is a project choice, not upstream-documented-as-correct. The documented approach uses the `minimax/` prefix (NOT `anthropic/`) even when calling the Anthropic Messages endpoint, via `litellm.anthropic.messages.acreate(model=\"minimax/MiniMax-M2.1\", api_base=\"https://api.minimax.io/anthropic/v1/messages\")`. `MiniMax-M3` is NOT in the docs — only M2-series. The repo may be using a newer model not yet documented, or the model name may need verification. The api_base `api.minimax.io/anthropic` in the repo matches the documented `https://api.minimax.io/anthropic/v1/messages` (the repo omits the `/v1/messages` suffix, which LiteLLM would auto-append via the `anthropic/` prefix)."
+    },
+    {
+      "provider_name": "Z.AI (Zhipu AI)",
+      "source_url": "https://docs.litellm.ai/docs/providers/zai",
+      "litellm_prefix": "zai/",
+      "api_protocol": "OpenAI-compatible",
+      "example_model_strings": [
+        "zai/glm-4.7",
+        "zai/glm-4.6",
+        "zai/glm-4.5",
+        "zai/glm-4.5v",
+        "zai/glm-4.5-x",
+        "zai/glm-4.5-air",
+        "zai/glm-4.5-airx",
+        "zai/glm-4-32b-0414-128k",
+        "zai/glm-4.5-flash"
+      ],
+      "required_env_vars": ["ZAI_API_KEY"],
+      "optional_env_vars": [],
+      "api_base_behavior": "NOT documented on this page. No `api_base` is shown in any example. The URL `https://z.ai/` appears as the provider homepage link only.",
+      "api_key_behavior": "Env var: `ZAI_API_KEY`. `os.environ['ZAI_API_KEY'] = \"\"`. In proxy YAML: `api_key: os.environ/ZAI_API_KEY`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page",
+      "proxy_yaml_example": "model_list:\n  - model_name: glm-4.7\n    litellm_params:\n        model: zai/glm-4.7\n        api_key: os.environ/ZAI_API_KEY\n\n  - model_name: glm-4.5-flash  # Free tier\n    litellm_params:\n        model: zai/glm-4.5-flash\n        api_key: os.environ/ZAI_API_KEY",
+      "supported_endpoints": [
+        "/v1/chat/completions"
+      ],
+      "special_params": [
+        "Model pricing table: glm-4.7: $0.60/M input, $2.20/M output, $0.11/M cached, 200K context; glm-4.6: $0.60/M input, $2.20/M output, 200K context; glm-4.5: $0.60/M input, $2.20/M output, 128K context; glm-4.5v: $0.60/M input, $1.80/M output, 128K context; glm-4.5-x: $2.20/M input, $8.90/M output, 128K context; glm-4.5-air: $0.20/M input, $1.10/M output, 128K context; glm-4.5-airx: $1.10/M input, $4.50/M output, 128K context; glm-4-32b-0414-128k: $0.10/M input, $0.10/M output, 128K context; glm-4.5-flash: FREE, 128K context."
+      ],
+      "pricing_context_window_behavior": "Documented in model pricing table. Context windows: 200K (glm-4.7, glm-4.6), 128K (all others).",
+      "caveats": [
+        "The prefix is `zai/` (no hyphen) — NOT `z-ai/` (hyphenated). OpenRouter uses `z-ai/` for the same provider.",
+        "GLM-5.1 is NOT documented on this page — only GLM-4.x models.",
+        "`api_base` is NOT documented — the exact Z.AI API base URL is not stated on this page.",
+        "Provider name variations: \"Z.AI\" (primary), \"Zhipu AI\" (parenthesized alias)."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] The repo uses `openrouter/z-ai/glm-5.1` (via OpenRouter). This is the CORRECT path for GLM-5.1 since it's not documented on the native Z.AI provider page. CRITICAL SPELLING DIFFERENCE: LiteLLM native prefix is `zai/` (no hyphen); OpenRouter namespace is `z-ai/` (hyphenated). These are distinct routing paths. Do NOT change `openrouter/z-ai/glm-5.1` to `zai/glm-5.1` — GLM-5.1 is not in the native Z.AI docs and would likely fail routing. If direct Z.AI access is desired, use `zai/glm-4.7` (latest flagship) or `zai/glm-4.5-flash` (free tier). The repo's GLM-5.1 access via OpenRouter is the correct approach since GLM-5.1 is not yet in LiteLLM's native Z.AI docs."
+    },
+    {
+      "provider_name": "vLLM",
+      "source_url": "https://docs.litellm.ai/docs/providers/vllm",
+      "litellm_prefix": "hosted_vllm/",
+      "api_protocol": "OpenAI-compatible",
+      "example_model_strings": [
+        "hosted_vllm/facebook/opt-125m",
+        "hosted_vllm/gpt-oss-120b",
+        "hosted_vllm/qwen",
+        "hosted_vllm/your-rerank-model",
+        "vllm/facebook/opt-125m",
+        "vllm/meta-llama/Llama-2-7b",
+        "vllm/tiiuae/falcon-7b-instruct",
+        "vllm/mosaicml/mpt-7b-chat",
+        "vllm/codellama/CodeLlama-34b-Instruct-hf",
+        "vllm/WizardLM/WizardCoder-Python-34B-V1.0",
+        "vllm/Phind/Phind-CodeLlama-34B-v2",
+        "vllm/togethercomputer/LLaMA-2-7B-32K"
+      ],
+      "required_env_vars": [],
+      "optional_env_vars": [
+        "HOSTED_VLLM_API_BASE",
+        "HOSTED_VLLM_API_KEY",
+        "LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT"
+      ],
+      "api_base_behavior": "Config field: `api_base` in litellm_params or `api_base=` kwarg. Env var: `HOSTED_VLLM_API_BASE`. Example values: `https://hosted-vllm-api.co`, `http://localhost:8000`. \"In order to use litellm to call a hosted vllm server add the following to your completion call: `model='hosted_vllm/<your-vllm-model-name>'`, `api_base = 'your-hosted-vllm-server'`\"",
+      "api_key_behavior": "Optional. Env var: `HOSTED_VLLM_API_KEY`. `os.environ['HOSTED_VLLM_API_KEY'] = '' # [optional], if your VLLM server requires an API key`. In proxy YAML: `# api_key: your-api-key # [optional] if your VLLM server requires authentication`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "Documented in deprecated section: `custom_llm_provider=provider` (where provider=\"vllm\") for batch_completion. `custom_llm_provider=provider, # can easily switch to huggingface, replicate, together ai, sagemaker, etc.`",
+      "proxy_yaml_example": "model_list:\n  - model_name: my-model\n    litellm_params:\n      model: hosted_vllm/facebook/opt-125m  # add hosted_vllm/ prefix to route as OpenAI provider\n      api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider",
+      "supported_endpoints": [
+        "/chat/completions",
+        "/embeddings",
+        "/completions",
+        "/rerank",
+        "/audio/transcriptions"
+      ],
+      "special_params": [
+        "`reasoning_effort` supported (e.g. `reasoning_effort=\"high\"`)",
+        "Video URL support: `{\"type\": \"file\", \"file\": {\"file_id\": video_url}}` or `{\"type\": \"video_url\", \"video_url\": {\"url\": video_url}}`",
+        "`litellm.register_prompt_template()` for custom prompt templates (deprecated vllm/ path)",
+        "Embeddings: when clients omit `encoding_format`, LiteLLM defaults it (request → model litellm_params → `LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT` → `float`)"
+      ],
+      "pricing_context_window_behavior": "not documented on this page",
+      "caveats": [
+        "`vllm/` prefix is DEPRECATED — use `hosted_vllm/` for OpenAI-compatible vLLM servers.",
+        "The `vllm/` prefix is for in-process vLLM SDK usage (packaged installs via `uv add litellm vllm`), not HTTP server calls.",
+        "`hosted_vllm/` is the recommended alternative to `openai/` prefix when you don't want to pass a fake API key (referenced by openai_compatible page)."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml. `hosted_vllm/` is the recommended prefix for self-hosted OpenAI-compatible vLLM servers. This is the alternative to `openai/` prefix when the endpoint doesn't require an API key (no need for fake key). Pattern: `model: hosted_vllm/<model-name>` + `api_base: https://<vllm-host>` + optional `api_key`. Supports more endpoints than openai_compatible: `/rerank`, `/audio/transcriptions` in addition to chat/completions and embeddings. For Neuralwatt (which requires an API key), `openai/` prefix is more appropriate. For keyless local vLLM, `hosted_vllm/` is better."
+    },
+    {
+      "provider_name": "Ollama",
+      "source_url": "https://docs.litellm.ai/docs/providers/ollama",
+      "litellm_prefix": [
+        "ollama/",
+        "ollama_chat/"
+      ],
+      "api_protocol": "native",
+      "example_model_strings": [
+        "ollama/llama2",
+        "ollama/llama2:13b",
+        "ollama/llama2:70b",
+        "ollama/llama2-uncensored",
+        "ollama/mistral",
+        "ollama/mistral-7B-Instruct-v0.1",
+        "ollama/mistral-7B-Instruct-v0.2",
+        "ollama/mistral-8x7B-Instruct-v0.1",
+        "ollama/mixtral-8x22B-Instruct-v0.1",
+        "ollama/codellama",
+        "ollama/llama3",
+        "ollama/llama3:70b",
+        "ollama/orca-mini",
+        "ollama/vicuna",
+        "ollama/nous-hermes",
+        "ollama/nous-hermes:13b",
+        "ollama/wizard-vicuna",
+        "ollama/llava",
+        "ollama_chat/llama3.1",
+        "ollama_chat/deepseek-r1",
+        "ollama/llama3.1"
+      ],
+      "required_env_vars": [],
+      "optional_env_vars": [],
+      "api_base_behavior": "Config field: `api_base` in litellm_params or `api_base=` kwarg. Default: `http://localhost:11434`. Example: `api_base=\"http://localhost:11434\"`. In proxy YAML: `api_base: \"http://localhost:11434\"`",
+      "api_key_behavior": "NOT required. `api_key=\"anything\" # PROXY KEY (can be anything, if master_key not set)`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page",
+      "proxy_yaml_example": "model_list:\n  - model_name: \"llama3.1\"                 \n    litellm_params:\n      model: \"ollama_chat/llama3.1\"\n      keep_alive: \"8m\" # Optional: Overrides default keep_alive, use -1 for Forever\n    model_info:\n      supports_function_calling: true",
+      "supported_endpoints": [
+        "/api/chat",
+        "/api/generate",
+        "/v1/completions",
+        "Vision",
+        "JSON mode",
+        "Tool calling",
+        "JSON Schema / structured outputs"
+      ],
+      "special_params": [
+        "`format=\"json\"` — Ollama JSON Mode",
+        "`keep_alive: \"8m\"` — optional, overrides default keep_alive (use -1 for Forever)",
+        "`model_info: supports_function_calling: true` — register model for function calling support",
+        "`litellm.register_model()` — optional, for models that support function calling",
+        "`ollama_chat/` prefix routes to `/api/chat` (recommended for better responses)",
+        "`ollama/` prefix routes to `/api/generate`",
+        "Vision: `ollama/llava` accepts OpenAI content array with `image_url` blocks"
+      ],
+      "pricing_context_window_behavior": "not documented on this page",
+      "caveats": [
+        "Not all ollama models support function calling — LiteLLM defaults to json mode tool calls if native tool calling not supported.",
+        "`ollama_chat/` is recommended over `ollama/` for better responses.",
+        "Ollama uses native API (not OpenAI-compatible) — uses `/api/chat` and `/api/generate` endpoints.",
+        "`api_base` defaults to `http://localhost:11434`."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml. Ollama is a local model serving pattern. Uses native Ollama API (not OpenAI-compatible). `ollama_chat/` is the recommended prefix for chat; `ollama/` for generate/FIM. No API key required — suitable for local development. `api_base` defaults to `http://localhost:11434`. For OpenAI-compatible local serving, vLLM (`hosted_vllm/`) may be a better choice since it exposes an OpenAI-compatible API."
+    },
+    {
+      "provider_name": "LiteLLM Proxy (LLM Gateway)",
+      "source_url": "https://docs.litellm.ai/docs/providers/litellm_proxy",
+      "litellm_prefix": "litellm_proxy/",
+      "api_protocol": "OpenAI-compatible",
+      "example_model_strings": [
+        "litellm_proxy/your-model-name",
+        "litellm_proxy/your-embedding-model",
+        "litellm_proxy/dall-e-3",
+        "litellm_proxy/gpt-image-1",
+        "litellm_proxy/whisper-1",
+        "litellm_proxy/tts-1",
+        "litellm_proxy/rerank-english-v2.0"
+      ],
+      "required_env_vars": [
+        "LITELLM_PROXY_API_KEY",
+        "LITELLM_PROXY_API_BASE"
+      ],
+      "optional_env_vars": ["USE_LITELLM_PROXY"],
+      "api_base_behavior": "Env var: `LITELLM_PROXY_API_BASE` (e.g. \"http://localhost:4000\"). Global attribute: `litellm.api_base = \"your-openai-proxy-url\"`. Per-request: `api_base = \"your-litellm-proxy-url\"` kwarg. \"If you need to set api_base dynamically, just pass it in completions instead - completions(...,api_base='your-proxy-api-base')\"",
+      "api_key_behavior": "Env var: `LITELLM_PROXY_API_KEY`. Per-request: `api_key = \"your-litellm-proxy-api-key\"` kwarg",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page",
+      "proxy_yaml_example": "(inferred) YAML would follow standard pattern:\nmodel_list:\n  - model_name: <alias>\n    litellm_params:\n      model: litellm_proxy/<model-name>\n      api_key: os.environ/LITELLM_PROXY_API_KEY\n      api_base: <proxy-url>",
+      "supported_endpoints": [
+        "/chat/completions",
+        "/completions",
+        "/embeddings",
+        "/audio/speech",
+        "/audio/transcriptions",
+        "/images",
+        "/images/edits",
+        "/rerank"
+      ],
+      "special_params": [
+        "`use_litellm_proxy=True` — per-request flag to route through proxy (v1.72.1+)",
+        "`litellm.use_litellm_proxy = True` — global flag",
+        "`USE_LITELLM_PROXY` env var — controls SDK-wide proxy routing",
+        "`extra_body={\"tags\": [...]}` — send tags for categorization/tracking",
+        "OAuth2/JWT authentication: `litellm.proxy_auth = ProxyAuthHandler(credential=AzureADCredential(), scope=\"...\")`",
+        "When `USE_LITELLM_PROXY=True`, requests use `LITELLM_PROXY_API_BASE` with `LITELLM_PROXY_API_KEY` as auth, regardless of model specified."
+      ],
+      "pricing_context_window_behavior": "not documented on this page",
+      "caveats": [
+        "No YAML config example on this page — only Python SDK usage documented.",
+        "The `USE_LITELLM_PROXY` flag requires v1.72.1 or higher.",
+        "OAuth2/JWT auto-refresh is available via `ProxyAuthHandler`."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml. This is the chained-proxy pattern for one LiteLLM proxy calling another LiteLLM proxy. Pattern: `model: litellm_proxy/<model-name>` + `api_base: <upstream-proxy-url>` + `api_key: <upstream-proxy-key>`. The `USE_LITELLM_PROXY` flag (v1.72.1+) routes ALL SDK requests through the proxy regardless of model — useful for centralized proxy management. Tags (`extra_body={\"tags\": [...]}`) enable request categorization for monitoring/analytics."
+    },
+    {
+      "provider_name": "Inception",
+      "source_url": "https://docs.litellm.ai/docs/providers/inception",
+      "litellm_prefix": "inception/",
+      "api_protocol": "OpenAI-compatible",
+      "example_model_strings": [
+        "inception/mercury-2",
+        "text-completion-inception/mercury-edit-2"
+      ],
+      "required_env_vars": ["INCEPTION_API_KEY"],
+      "optional_env_vars": [],
+      "api_base_behavior": "NOT explicitly configurable in examples — fixed base URL is `https://api.inceptionlabs.ai/v1`. Base URL: `https://api.inceptionlabs.ai/v1`",
+      "api_key_behavior": "Env var: `INCEPTION_API_KEY`. `os.environ[\"INCEPTION_API_KEY\"] = \"\"  # your Inception API key`. In proxy YAML: `api_key: os.environ/INCEPTION_API_KEY`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page",
+      "proxy_yaml_example": "model_list:\n  - model_name: mercury-2\n    litellm_params:\n      model: inception/mercury-2\n      api_key: os.environ/INCEPTION_API_KEY\n  - model_name: mercury-edit-2\n    litellm_params:\n      model: text-completion-inception/mercury-edit-2\n      api_key: os.environ/INCEPTION_API_KEY",
+      "supported_endpoints": [
+        "/chat/completions",
+        "/fim/completions"
+      ],
+      "special_params": [
+        "Inception-specific parameters (passed through to chat API): `reasoning_effort` (`instant` | `low` | `medium` | `high`) — `instant` is Inception-specific for near real-time; `reasoning_summary` (bool); `reasoning_summary_wait` (bool); `diffusing` (bool); `realtime` (bool).",
+        "Supported OpenAI parameters: `max_tokens`, `max_completion_tokens`, `temperature`, `stop`, `tools`, `tool_choice`, `stream`, `stream_options`, `response_format`.",
+        "Inception serves the Mercury family of diffusion LLMs (dLLMs)."
+      ],
+      "pricing_context_window_behavior": "Context windows: mercury-2 = 128,000 tokens; mercury-edit-2 = 32,000 tokens. Pricing: not documented on this page.",
+      "caveats": [
+        "Inception serves diffusion LLMs (dLLMs) — the Mercury family.",
+        "`api_base` is NOT configurable — fixed at `https://api.inceptionlabs.ai/v1`.",
+        "`reasoning_effort` has an Inception-specific `instant` value not found in other providers."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml. Inception is a provider of diffusion LLMs (Mercury family). OpenAI-compatible API. Pattern: `model: inception/mercury-2` + `api_key: os.environ/INCEPTION_API_KEY`. `api_base` is fixed at `https://api.inceptionlabs.ai/v1` — not configurable. Supports FIM (fill-in-the-middle) via `text-completion-inception/mercury-edit-2` prefix. Inception-specific `reasoning_effort=\"instant\"` for near real-time responses."
+    },
+    {
+      "provider_name": "OpenAI",
+      "source_url": "https://docs.litellm.ai/docs/providers/openai",
+      "litellm_prefix": "openai/",
+      "api_protocol": "OpenAI native",
+      "example_model_strings": [
+        "gpt-4o",
+        "gpt-3.5-turbo",
+        "openai/gpt-3.5-turbo",
+        "openai/gpt-3.5-turbo-instruct",
+        "openai/*",
+        "openai/gpt-5-search-api",
+        "openai/gpt-5",
+        "openai/responses/gpt-5-mini",
+        "openai/responses/gpt-4o",
+        "openai/your-model-name"
+      ],
+      "required_env_vars": ["OPENAI_API_KEY"],
+      "optional_env_vars": [
+        "OPENAI_BASE_URL",
+        "OPENAI_ORGANIZATION",
+        "LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES"
+      ],
+      "api_base_behavior": "Env var: `OPENAI_BASE_URL` — \"These also support the `OPENAI_BASE_URL` environment variable, which can be used to specify a custom API endpoint.\" Global attribute: `litellm.api_base = \"https://your_host/v1\"`. Per-request: `api_base=\"your-proxy-api-base\"` kwarg. \"If you need to set api_base dynamically, just pass it in completions instead - `completions(...,api_base='your-proxy-api-base')`\". NOTE: `api_base` as a YAML `litellm_params` key is NOT shown on this page (see openai_compatible page for that form).",
+      "api_key_behavior": "Env var: `OPENAI_API_KEY`. In proxy YAML: `api_key: os.environ/OPENAI_API_KEY`",
+      "api_version_behavior": "not documented on this page",
+      "custom_llm_provider_behavior": "not documented on this page (provider selection is implicit via the `openai/` prefix)",
+      "proxy_yaml_example": "model_list:\n  - model_name: gpt-3.5-turbo\n    litellm_params:\n      model: openai/gpt-3.5-turbo                          # The `openai/` prefix will call openai.chat.completions.create\n      api_key: os.environ/OPENAI_API_KEY\n  - model_name: gpt-3.5-turbo-instruct\n    litellm_params:\n      model: text-completion-openai/gpt-3.5-turbo-instruct # The `text-completion-openai/` prefix will call openai.completions.create\n      api_key: os.environ/OPENAI_API_KEY",
+      "supported_endpoints": [
+        "/chat/completions",
+        "/completions",
+        "/v1/responses",
+        "Embeddings",
+        "Audio Transcription",
+        "Vision",
+        "PDF File Parsing",
+        "Image Generation",
+        "Web Search",
+        "Function/Tool calling",
+        "Streaming"
+      ],
+      "special_params": [
+        "`openai/responses/` prefix — routes through Responses API (for built-in tools like `web_search_preview`, `code_interpreter`)",
+        "`route_all_chat_openai_to_responses: true` — global flag to route all OpenAI chat through Responses API",
+        "`reasoning_effort` — supports \"none\", \"minimal\", \"low\", \"medium\", \"high\", \"xhigh\" (xhigh only on gpt-5.1-codex-max and gpt-5.2)",
+        "`reasoning_effort` as dict: `{\"effort\": \"high\", \"summary\": \"auto\"}` — requires org verification",
+        "`verbosity` — \"low\", \"medium\", \"high\" (for GPT-5 family; NOT for GPT-5-Codex)",
+        "`reasoning_items` — for multi-turn conversations with encrypted_content",
+        "`include=[\"reasoning.encrypted_content\"]` — to get reasoning token for next turn",
+        "`forward_openai_org_id: true` — in general_settings, forwards OpenAI Org ID from client",
+        "`litellm.return_response_headers = True` — get raw response headers",
+        "`litellm.client_session = httpx.Client(verify=False)` — disable SSL verification",
+        "Model `mode` property: `mode: responses` (auto Responses API) vs `mode: chat` (Chat Completions, needs prefix for built-in tools)",
+        "GPT-5 Pro: Responses API only, no streaming, 400K input / 272K output tokens"
+      ],
+      "pricing_context_window_behavior": "GPT-5 Pro: $15.00 input / $120.00 output per 1M tokens (Standard), $7.50/$60.00 (Batch). GPT-5 Pro context: 400,000 input, 272,000 output tokens. Other models: see model_prices_and_context_window.json",
+      "caveats": [
+        "`openai/` prefix is used in proxy YAML to disambiguate the OpenAI route. In SDK calls, bare model names work when calling api.openai.com directly.",
+        "`OPENAI_BASE_URL` env var is documented for custom endpoints — this is the mechanism for pointing at OpenAI-compatible endpoints.",
+        "`api_base` as a YAML `litellm_params` key is NOT shown on this page (see openai_compatible page for that form).",
+        "GPT-5.4+ drops `reasoning_effort` from requests that include tools (only supported in Responses API).",
+        "`reasoning_effort` summary field requires OpenAI org verification."
+      ],
+      "requires_db": false,
+      "requires_redis": false,
+      "enterprise_only": false,
+      "workestrate_alias_recommendation": "[WORKESTRATE RECOMMENDATION] Not currently used in infra/litellm/config.yaml for direct OpenAI API calls. The repo uses `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` — this follows the documented pattern. `openai/` prefix + `OPENAI_BASE_URL` (or `api_base` in litellm_params) is the canonical way to point LiteLLM at a custom OpenAI-compatible endpoint. The `openai/` prefix is shared between the OpenAI provider page and the openai_compatible page — both use the same prefix for OpenAI-protocol chat-completions endpoints. For Neuralwatt: `model: openai/neuralwatt` + `api_base: https://api.neuralwatt.com/v1` + `api_key: <key>` is correct. The `openai/responses/` sub-prefix is for OpenAI's Responses API (not relevant for Neuralwatt)."
+    }
+  ]
+}

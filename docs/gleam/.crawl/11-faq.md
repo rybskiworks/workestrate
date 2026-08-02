@@ -1,0 +1,185 @@
+# Crawl: documentation/frequently-asked-questions/
+- seed_url: https://gleam.run/documentation/frequently-asked-questions/
+- canonical_url: https://gleam.run/frequently-asked-questions/
+- family: Gleam official docs
+- fetch: 200 (note: seed URL returned 404; canonical is the real page at /frequently-asked-questions/)
+- gleam_version: not present on page
+- feeds_docs: overview.md, conventions-patterns-antipatterns.md
+
+## Purpose
+The Gleam FAQ is the official statement of language design rationale, scope boundaries, and
+positioning relative to peer BEAM/typed-functional languages. It encodes:
+- which features are deliberately excluded and why (language maturity / cohesion stance);
+- the type-system stance (no type classes, nominal typing, Hindley-Milner roots);
+- the concurrency/interop stance (typed message passing via libraries, not core);
+- the runtime/target stance (Erlang + JavaScript, BEAM semantics preserved);
+- production-readiness claim and the compiler-implementation rationale (Rust).
+
+This is primary-source evidence for the overview (what Gleam is, targets, maturity) and for
+conventions/antipatterns (what is intentionally absent: no exceptions, no overloading, no
+implicit null, no macros, no mutation).
+
+## Q&A (verbatim, grouped by theme)
+
+### Language design & naming
+**Why is it called Gleam?**
+Gleam rhymes with and is a synonym of “beam”, which is the name of the Erlang virtual machine. It’s also a short and cute word that’s hopefully easy to spell and pronounce for most people.
+
+**What are Gleam programmers called?**
+Gleamlins, according to the Gleam Discord server.
+
+**Is it good?**
+Yes, I think so. :)
+
+### Type system
+**Will Gleam have type classes?**
+Type classes are fun and enable creation of very nice, concise APIs, but they can make it easy to make challenging to understand code, tend to have confusing error messages, make consuming the code from other languages much harder, have a high compile time cost, and have a runtime cost unless the compiler performs full-program compilation and expensive monomorphisation. This is unfortunately not a good fit for Gleam and they are not planned.
+
+### Metaprogramming & feature scope
+**Will Gleam have metaprogramming?**
+We are open interested in some form of metaprogramming in Gleam so long as it is not detrimental to Gleam’s readability and fast compilation. If you wish to propose a design for metaprogramming then the process is outlined in this article: How to add metaprogramming to Gleam.
+
+**What features are not planned for Gleam?**
+Gleam will always be a small and cohesive language with a minimal feature set, so there are many features popular in other languages which will not be added to Gleam. This includes, but is not limited to:
+- Exception based error handling
+- Extensible variants
+- Function and operator overloading
+- Implicit arguments
+- Implicitly nullable values
+- Linear or affine or relevant types
+- Lisp style macros
+- Manual memory management
+- Mutation
+- Object orientation
+- Optional arguments
+- Type classes or traits
+- Untagged unions
+
+### Mutation, state & effects
+**Does Gleam have mutable state?**
+All data structures in Gleam are immutable and are implemented using structural sharing, making them very efficient to update. Typically these are used with functional immutable algorithms to get excellent performance without mutation. Sometimes mutation is still useful for storing data, caching etc. In these instances databases might be used, or language specific mutable storage such as Erlang's ETS system.
+
+**Does Gleam have side effects?**
+Yes, Gleam is an impure functional language like OCaml or Erlang. Impure actions like writing to files and printing to the console are possible without special handling. The compiler performs a limited amount of effects tracking internally. This could be extended in future if we have some problem that would benefit from that.
+
+### Concurrency, message passing & hot code reloading
+**How is message passing typed?**
+Type safe message passing is implemented in Gleam in libraries, rather than being part of the core language itself. This enables us to run on and interop with both Erlang and JavaScript, two environments that have incompatible concurrency systems. If you’d like to see more consider checking out the gleam_erlang and gleam_otp packages.
+
+**Can Gleam use Erlang’s hot code reloading?**
+All the usual Erlang code reloading features work, but it is not possible to type check the upgrades themselves as we have no way knowing the types of the already running code. This means you would have the usual Erlang amount of safety rather than what you might have with Gleam otherwise. Generally the OTP libraries for Gleam are optimised for type safety rather than upgrades, and use records rather than atom modules so the state upgrade callbacks may be more complex to write.
+
+### Numeric semantics
+**Why does division by zero return zero?**
+There are three common approaches to handling division by zero in programming languages:
+1. Throw an exception and crash the program.
+2. Return a special infinity value.
+3. Return 0.
+
+Gleam does not implicitly throw exceptions, so throwing an exception is not an option. The BEAM VM does not have an infinity value, so that is not an option. Therefore the only option open to Gleam is to return 0 when dividing by zero. The standard library provides functions which return a result type for division by zero which you can use if that is more suitable for your program. For more information on division by zero from a mathematical perspective, see this article by Hillel Wayne: 1/0 = 0.
+
+### Targets & compilation
+**What does Gleam compile to?**
+Gleam compiles to Erlang or JavaScript.
+
+### Compiler implementation
+**Why is the compiler written in Rust?**
+Prototype versions of the Gleam compiler were written in Erlang, but a switch was made to Rust as the lack of static types was making refactoring a slow and error prone process. A full Rust rewrite of the prototype resulted in the removal of a lot of tech debt and bugs, and the performance boost is nice too! The community may one day implement a Gleam compiler written in Gleam, but the core team are focused on developing other areas of the ecosystem such as libraries, tooling, and documentation, as this will provide more value overall.
+
+### Production readiness
+**Should I put Gleam in production?**
+Yes! Gleam is a production-ready programming language and the Erlang and JavaScript runtimes it runs on are extremely mature and battle-tested. Gleam is ready for mission critical workloads.
+
+### Elixir interop
+**Can I use Elixir code with Gleam?**
+Yes! The Gleam build tool has support for Elixir and can compile both Elixir dependencies and Elixir source files in your Gleam project. Elixir has to be installed on your computer for this to work. Elixir macros cannot be called from outside of Elixir, so some Elixir APIs cannot be used directly from Gleam. To use one of these you can write an Elixir module that uses the macros, and then use that module in your Gleam code.
+
+### Comparison to other languages
+**How does Gleam compare to Alpaca?**
+Alpaca is similar to Gleam in that it is a statically typed language for the Erlang VM that is inspired by the ML family of languages. It’s a wonderful project and it was an early inspiration for Gleam! Here’s a non-exhaustive list of differences:
+- Alpaca’s functions are auto-curried, Gleam’s are not.
+- Alpaca’s unions can be untagged, with Gleam all variants in a custom type need a name.
+- Alpaca’s compiler is written in Erlang, Gleam’s is written in Rust.
+- Alpaca’s syntax is closer to ML family languages, Gleam’s is closer to C family languages.
+- Alpaca compiles to Core Erlang, Gleam compiles to regular Erlang and optionally JavaScript.
+- Alpaca uses the Erlang build tool, Gleam has its own build tool.
+- Gleam is more actively developed than Alpaca (at time of writing).
+
+**How does Gleam compare to Caramel?**
+Caramel is similar to Gleam in that it is a statically typed language for the Erlang VM. It is very cool, especially because of its OCaml heritage! Here’s a non-exhaustive list of differences:
+- Caramel is based off of OCaml and forks the OCaml compiler, Gleam is an entirely new language, syntax, and compiler.
+- Caramel’s functions are auto-curried, Gleam’s are not.
+- Caramel’s compiler is written in OCaml, Gleam’s is written in Rust.
+- Caramel uses OCaml syntax, Gleam has its own syntax that is closer to C family languages.
+- Gleam is more actively developed than Caramel (at time of writing).
+
+**How does Gleam compare to Elixir?**
+Elixir is another language that runs on the Erlang virtual machine. It is very popular and a great language! Here’s a non-exhaustive list of differences:
+
+Elixir and Gleam both have compile time type checking, but their respective type systems are very different, so they offer a different development experience.
+- Elixir's type system is gradual, so portions of the codebase can be dynamically typed. Gleam is always fully statically typed.
+- Elixir's type system is structural, while Gleam's type system is nominal. This means Elixir's types can be more precise in some respects, but it cannot distinguish between types that are semantically distinct but structurally the same.
+- Elixir does not support type annotations, so the programmer cannot restrict the type beyond what Elixir infers them to be. Gleam supports type annotations, but they are not required.
+- Elixir does not support generics, while Gleam does. This makes Gleam's type system more precise in some respects.
+- Elixir's type system does not support recursive types, while Gleam's type system does. This makes some data structures impossible to represent in Elixir's type system.
+- Elixir's type checker is more likely to have false-negatives, while Gleam is more likely to have false-positives. This means Gleam may reject a program that is actually safe, but Elixir may accept a program that crashes at runtime due to a type error.
+- Elixir's type system does not integrate with any other system. Gleam's type system generates BEAM typespecs, TypeScript definitions, and API type information can be exported to be used by other external tools.
+- Elixir's type system is the product of novel research specifically for Elixir. Gleam's type system is based on the same Hindley-Milner type system that underpins OCaml, Haskell, F#, etc.
+- Elixir's system is set-theoretic. Gleam's system is type-theoretic.
+
+Elixir has a powerful macro system, Gleam has no metaprogramming features. Elixir’s compiler is written in Erlang and Elixir, Gleam’s is written in Rust. Gleam has a more traditional C family style syntax. Elixir has a namespace for module functions and another for variables, Gleam has one unified namespace (so there’s no special fun.() syntax, and Gleam variables can be used to shadow functions). Gleam standard library is distributed as Hex packages, which makes interoperability with other BEAM languages easier. Elixir is a larger language, featuring numerous language features not present in Gleam. Elixir has an official test framework with excellent support for concurrency, partitioning, parameterized tests, integrated error reports, and more. Gleam has no official test framework, but there are multiple community-maintained frameworks. Both languages compile to Erlang but Elixir compiles to Erlang abstract format, while Gleam compiles to Erlang source. Gleam can also compile to JavaScript. Elixir has superior BEAM runtime integration, featuring accurate stack traces and full support for tools such as code coverage, profiling, and more. Gleam’s support is much weaker due to going via Erlang source, resulting in less accurate line numbers with these tools. Elixir has an interactive shell, while Gleam does not. Gleam programmers can use Erlang, Elixir, or JavaScript shells to work with Gleam code. Elixir and Gleam both use Erlang's OTP framework. Both languages can use Erlang/OTP modules directly, though it is more ergonomic and requires less boilerplate in Elixir. Both languages offer their own additional abstractions, with Elixir providing new functionality and Gleam providing type-safety. Elixir currently has superior deployment tooling, including support for OTP releases and OTP umbrella applications. Gleam’s editor tooling is superior due to having a more mature official language server, but Elixir has recently announced an official language server project which is in active development. Elixir is more mature than Gleam and has a much larger ecosystem. Gleam and Elixir compile at similar speeds due to using the Erlang compiler as their compiler backend. Elixir's macros are evaluated at compile time, so a program that uses macros will take longer to compile the larger the amount of work performed in macros. Gleam has no language features that result in slower compilation. Most importantly both are BEAM languages! I advise using whichever has the programming style you personally find most enjoyable and productive.
+
+**How does Gleam compare to Purerl?**
+Purerl is a backend for the PureScript compiler that outputs Erlang. Both PureScript and Purerl are fantastic! Here’s a non-exhaustive list of differences:
+- Purerl is a backend for the PureScript compiler, Gleam is its own language and compiler.
+- PureScript has a more sophisticated type system than Gleam, featuring rows, HKTs, type classes, and more.
+- Purerl’s compiler is written in Haskell, Gleam’s is written in Rust.
+- PureScript has an ML family style syntax, Gleam has a C family style syntax.
+- Purerl code can be difficult to use from other BEAM languages, Gleam code is designed to be usable from all BEAM languages.
+- PureScript is more mature than Gleam and has a much larger ecosystem, though not all of it can be used with the Purerl compiler backend.
+
+**How does Gleam compare to Rust?**
+Rust is a language that compiles to native code and gives you full control of memory use in your program, much like C or C++. Gleam’s compiler is written in Rust! We’re big fans of the language. Despite having some syntactic similarities, Gleam and Rust are extremely different languages.
+- Rust is a low level programming language, Gleam is a very high level language.
+- Rust is a hybrid functional and imperative language that makes heavy use of mutable state. Gleam is a functional language where everything is immutable.
+- Rust compiles to native code. Gleam runs on the Erlang VM and JavaScript runtimes.
+- Rust is a very large language which can be challenging to learn. Gleam is a small language and is designed to be easy to learn.
+- Rust uses futures with async/await, Gleam uses the actor model on Erlang.
+- Rust features traits and multiple macro systems, Gleam does not.
+
+## Verbatim quotes
+> "Gleam will always be a small and cohesive language with a minimal feature set."
+
+> "Type classes ... are unfortunately not a good fit for Gleam and they are not planned."
+
+> "All data structures in Gleam are immutable and are implemented using structural sharing."
+
+> "Gleam is an impure functional language like OCaml or Erlang. Impure actions like writing to files and printing to the console are possible without special handling."
+
+> "Type safe message passing is implemented in Gleam in libraries, rather than being part of the core language itself."
+
+> "Gleam does not implicitly throw exceptions ... The BEAM VM does not have an infinity value ... Therefore the only option open to Gleam is to return 0 when dividing by zero."
+
+> "Gleam is a production-ready programming language and the Erlang and JavaScript runtimes it runs on are extremely mature and battle-tested. Gleam is ready for mission critical workloads."
+
+> "Gleam's type system is based on the same Hindley-Milner type system that underpins OCaml, Haskell, F#, etc."
+
+> "Gleam's type system is nominal. ... it cannot distinguish between types that are semantically distinct but structurally the same." (paraphrased context: Elixir is structural, Gleam is nominal)
+
+> "Gleam code is designed to be usable from all BEAM languages."
+
+## Version notes
+- No Gleam version is stated on the FAQ page.
+- The page is versionless marketing/reference documentation hosted on gleam.run (GitHub Pages).
+- Comparative statements ("at time of writing", "recently announced") are point-in-time and may drift; re-verify peer-language claims (Elixir official language server, Elixir type system capabilities) before citing as current.
+
+## Discovered links
+
+### Relevant (crawl later)
+- https://hex.pm/packages/gleam_erlang — Erlang interop primitives; informs conventions/interop docs.
+- https://hex.pm/packages/gleam_otp — OTP bindings; informs concurrency/actor-model docs.
+- https://lpil.uk/blog/how-to-add-metaprogramming-to-gleam/ — design rationale for a possible future metaprogramming feature; informs language-design/overview docs.
+- https://www.hillelwayne.com/post/divide-by-zero/ — external; mathematical rationale for Gleam's divide-by-zero semantics. (External, not a Gleam doc; cite only.)
+
+### Skipped
+- All in-page anchor links (`#Why-is-it-called-Gleam`, `#Alpaca`, `#Elixir`, etc.) — same-page table-of-contents navigation, no new content.

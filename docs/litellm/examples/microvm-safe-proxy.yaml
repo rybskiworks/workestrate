@@ -1,0 +1,172 @@
+# =============================================================================
+# microvm-safe-proxy.yaml
+# The in-memory, microsandbox-safe shape ACTUALLY used by workestrate.
+# =============================================================================
+#
+# This mirrors the merged infra/litellm/config.yaml + models.yaml (the real
+# deployment, split via `include:`). No Postgres, no Redis. All secrets via
+# os.environ/. Default-deny egress is enforced by the microsandbox runtime,
+# not by this config. This example is the merged shape (single file).
+#
+# ANTI-HALLUCINATION GROUNDING:
+#   - All config keys verified verbatim from
+#     docs/litellm/schemas/config-yaml.option-index.json:
+#       model_list, model_list[].model_name, .litellm_params{model, api_base,
+#         api_key}; general_settings{master_key, completion_model,
+#         disable_spend_logs}; router_settings{fallbacks, num_retries, timeout,
+#         stream_timeout, allowed_fails, cooldown_time, retry_policy};
+#       litellm_settings{drop_params, request_timeout, force_ipv4}.
+#   - disable_spend_logs: option-index marks requires_db=true. The
+#     workestrate_recommendation note states it is "Set to true in real config;
+#     compensates for no DB (prevents spend-log write attempts)." [WORKESTRATE
+#     NOTE] setting it true without a DB suppresses spend-log write attempts.
+#   - force_ipv4: option-index common_misconfiguration note: "Used in real config
+#     (workaround httpx ConnectionError with ipv6 + Anthropic)."
+#   - request_timeout: option-index litellm_settings.request_timeout (default=6000).
+#   - Provider prefixes verified from
+#     docs/litellm/schemas/provider-fields.index.json:
+#       anthropic/ (litellm_prefix: anthropic/, required_env_vars:
+#         [ANTHROPIC_API_KEY]; custom api_base IS documented; LiteLLM auto-
+#         appends /v1/messages unless LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true).
+#       openrouter/ (litellm_prefix: openrouter/, required_env_vars:
+#         [OPENROUTER_API_KEY]; nested form openrouter/<provider>/<model>).
+#       openai/ (litellm_prefix: openai/, required_env_vars: [OPENAI_API_KEY];
+#         api_base MUST include /v1 postfix).
+#
+# WORKESTRATE-SPECIFIC DEVIATIONS (clearly marked):
+#   [WORKESTRATE DEVIATION] Kimi coding endpoint uses `anthropic/` prefix
+#     (model: anthropic/kimi-for-coding, api_base: https://api.kimi.com/coding)
+#     instead of the documented `moonshot/` prefix. Rationale (from
+#     provider-fields.index.json anthropic/ + moonshot/ entries): Kimi's coding
+#     endpoint speaks the Anthropic Messages API, not OpenAI-compatible, so the
+#     `anthropic/` prefix + custom api_base is the documented Anthropic-custom-
+#     base pattern. LiteLLM auto-appends /v1/messages -> final URL
+#     api.kimi.com/coding/v1/messages. This is a project choice, not upstream-
+#     documented-as-correct.
+#   [WORKESTRATE DEVIATION] MiniMax uses `anthropic/MiniMax-M3` (api_base:
+#     https://api.minimax.io/anthropic) instead of the documented `minimax/`
+#     prefix. provider-fields.index.json minimax/ entry documents the
+#     `minimax/` prefix with api_base https://api.minimax.io/anthropic/v1/messages
+#     as the primary path. The repo's `anthropic/` form omits the /v1/messages
+#     suffix (LiteLLM auto-appends it). `MiniMax-M3` is NOT in the docs (only
+#     M2-series). This is a project choice, not upstream-documented-as-correct.
+#   [WORKESTRATE NOTE] default-deny egress is enforced by the microsandbox
+#     runtime (msb), NOT by this config. The api_base hosts below must be on the
+#     runtime's egress allowlist.
+#
+# SECRETS: ALL keys use os.environ/ indirection. NEVER commit real values.
+# Required env vars: LITELLM_MASTER_KEY, KIMI_CODE_API_KEY,
+# MINIMAX_CODING_API_KEY, OPENROUTER_API_KEY, NEURALWATT_API_KEY.
+
+model_list:
+  # --- coding (default: Kimi K2.7 specialist) -> MiniMax M3 ---
+  # [WORKESTRATE DEVIATION] anthropic/ prefix for Kimi coding endpoint.
+  - model_name: coding
+    litellm_params:
+      model: anthropic/kimi-for-coding
+      api_base: https://api.kimi.com/coding
+      api_key: os.environ/KIMI_CODE_API_KEY
+
+  - model_name: coding-fallback
+    litellm_params:
+      # [WORKESTRATE DEVIATION] anthropic/ prefix for MiniMax (docs use minimax/).
+      model: anthropic/MiniMax-M3
+      api_base: https://api.minimax.io/anthropic
+      api_key: os.environ/MINIMAX_CODING_API_KEY
+
+  # --- coding.fast (cheap: MiniMax M3) -> Qwen 3.7 Plus ---
+  - model_name: coding.fast
+    litellm_params:
+      model: anthropic/MiniMax-M3
+      api_base: https://api.minimax.io/anthropic
+      api_key: os.environ/MINIMAX_CODING_API_KEY
+
+  - model_name: coding.fast-fallback
+    litellm_params:
+      # openrouter/ nested form openrouter/<provider>/<model> — documented pattern.
+      model: openrouter/qwen/qwen3.7-plus
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # --- coding.pro (strong: GLM-5.1) -> Kimi K2.7 ---
+  - model_name: coding.pro
+    litellm_params:
+      # openrouter/z-ai/glm-5.1: z-ai is OpenRouter's namespace for Z.AI.
+      # provider-fields.index.json notes GLM-5.1 is NOT on the native zai/ page,
+      # so OpenRouter is the correct path. (zai/ native prefix is no-hyphen;
+      # OpenRouter uses z-ai/ hyphenated — distinct paths.)
+      model: openrouter/z-ai/glm-5.1
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: coding.pro-fallback
+    litellm_params:
+      model: anthropic/kimi-for-coding
+      api_base: https://api.kimi.com/coding
+      api_key: os.environ/KIMI_CODE_API_KEY
+
+  # --- coding.free (no cost) -> Nex N2 Pro (free) ---
+  - model_name: coding.free
+    litellm_params:
+      model: openrouter/qwen/qwen3-coder:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: coding.free-fallback
+    litellm_params:
+      model: openrouter/nex-agi/nex-n2-pro:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # --- neural (Neuralwatt endpoint) ---
+  # openai/ prefix is the CANONICAL pattern for Neuralwatt
+  # (provider-fields.index.json openai/ workestrate_alias_recommendation).
+  # api_base includes /v1 postfix per the openai/ caveat.
+  - model_name: neural
+    litellm_params:
+      model: openai/neuralwatt
+      api_base: https://api.neuralwatt.com/v1
+      api_key: os.environ/NEURALWATT_API_KEY
+
+general_settings:
+  # master_key: REQUIRED. os.environ/ works in-memory (no DB). Verified:
+  # option-index general_settings.master_key.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # completion_model: default model group. Verified:
+  # option-index general_settings.completion_model.
+  completion_model: coding
+  # disable_spend_logs: [WORKESTRATE NOTE] set true to suppress spend-log write
+  # attempts against the nonexistent DB. Verified:
+  # option-index general_settings.disable_spend_logs (requires_db=true).
+  disable_spend_logs: true
+
+router_settings:
+  # fallbacks: Verified router_settings.fallbacks. [WORKESTRATE] coding-tier
+  # failover chains: <tier> -> [<tier>-fallback].
+  fallbacks:
+    - coding: [coding-fallback]
+    - coding.fast: [coding.fast-fallback]
+    - coding.pro: [coding.pro-fallback]
+    - coding.free: [coding.free-fallback]
+  # num_retries: Verified router_settings.num_retries (default=3).
+  num_retries: 2
+  # timeout: Verified router_settings.timeout (default=10 minutes).
+  timeout: 300
+  # stream_timeout: Verified router_settings.stream_timeout.
+  stream_timeout: 300
+  # allowed_fails: Verified router_settings.allowed_fails.
+  allowed_fails: 3
+  # cooldown_time: Verified router_settings.cooldown_time (default=30).
+  cooldown_time: 60
+  # retry_policy: Verified router_settings.retry_policy (ex:
+  # {TimeoutErrorRetries: 3}).
+  retry_policy:
+    TimeoutErrorRetries: 2
+    RateLimitErrorRetries: 3
+    InternalServerErrorRetries: 2
+
+litellm_settings:
+  # drop_params: Verified litellm_settings.drop_params (drops unsupported params).
+  drop_params: true
+  # request_timeout: Verified litellm_settings.request_timeout (default=6000).
+  request_timeout: 300
+  # force_ipv4: [WORKESTRATE NOTE] workaround for httpx ConnectionError with
+  # ipv6 + Anthropic. Verified: litellm_settings.force_ipv4 (option-index
+  # common_misconfiguration note confirms real-config usage).
+  force_ipv4: true

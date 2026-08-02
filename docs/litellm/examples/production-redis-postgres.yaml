@@ -1,0 +1,152 @@
+# =============================================================================
+# production-redis-postgres.yaml
+# REFERENCE template for a production LiteLLM deployment WITH Postgres + Redis.
+# =============================================================================
+#
+# *** THIS IS NOT THE CURRENT WORKESTRATE DEPLOYMENT. ***
+# workestrate runs in-memory (no DB, no Redis). See microvm-safe-proxy.yaml for
+# the actual shape. This file exists only to document the production reference
+# shape and to clearly mark which keys REQUIRE a database and/or Redis.
+#
+# ANTI-HALLUCINATION GROUNDING:
+#   - All keys verified verbatim from
+#     docs/litellm/schemas/config-yaml.option-index.json. The `requires_db` /
+#     `requires_redis` flags below are taken directly from that index.
+#   - database_url, store_model_in_db, supported_db_objects, disable_spend_logs,
+#     max_budget, budget_duration, ui_access_mode, default_key_generate_params,
+#     proxy_batch_write_at, custom_key_generate, fail_closed_budget_enforcement
+#     => requires_db=true (option-index).
+#   - cache_params{type,host,port,password}, redis_host/redis_password/redis_port/
+#     redis_db/redis_url (router_settings), enable_redis_auth_cache,
+#     fail_closed_budget_enforcement => requires_redis=true (option-index).
+#   - alerting, alerting_threshold, alert_types, alert_to_webhook_url =>
+#     general_settings (option-index); no DB/Redis flag set on these.
+#
+# DB/REDIS REQUIREMENTS (commented inline at each key):
+#   [REQUIRES DB]    — key only functions with a Postgres database_url.
+#   [REQUIRES REDIS] — key only functions with a Redis backend.
+#   [REQUIRES DB+REDIS] — both.
+#
+# SECRETS: database_url, redis_password, master_key, all api_key values use
+# os.environ/ indirection. NEVER commit real secret values.
+# Required env vars: LITELLM_MASTER_KEY, DATABASE_URL, REDIS_PASSWORD,
+# OPENROUTER_API_KEY (and any provider keys you enable).
+#
+# WORKESTRATE-SPECIFIC: this whole file is a reference template, NOT used by the
+# in-memory microsandbox deployment. Sections marked [WORKESTRATE NOTE] are
+# project commentary, not upstream-documented defaults.
+
+model_list:
+  - model_name: primary
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+
+general_settings:
+  # [WORKS IN-MEMORY] master_key: proxy auth. Verified: general_settings.master_key.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  completion_model: primary
+
+  # [REQUIRES DB] database_url: Postgres connection string for virtual keys,
+  # spend tracking, budgets, Admin UI, model DB storage.
+  # Verified: general_settings.database_url (requires_db=true).
+  database_url: os.environ/DATABASE_URL
+
+  # [REQUIRES DB] store_model_in_db: allow models to be added via API/UI at
+  # runtime (persisted). Verified: general_settings.store_model_in_db
+  # (requires_db=true). workestrate leaves this unset (false) — models are
+  # static in config.yaml.
+  store_model_in_db: true
+
+  # [REQUIRES DB] supported_db_objects: restrict which object types are stored.
+  # Verified: general_settings.supported_db_objects (requires_db=true).
+  supported_db_objects:
+    - budgets
+    - keys
+    - users
+    - teams
+
+  # [REQUIRES DB] disable_spend_logs: in production WITH a DB you typically leave
+  # this false so spend is recorded. Verified: general_settings.disable_spend_logs
+  # (requires_db=true). [WORKESTRATE NOTE] the in-memory config sets this true
+  # to suppress spend-log write attempts against a nonexistent DB.
+  disable_spend_logs: false
+
+  # [REQUIRES DB] custom_key_generate: virtual-key generation hook.
+  # Verified: general_settings.custom_key_generate (requires_db=true).
+  custom_key_generate: custom_auth.custom_generate_key_fn
+
+  # [REQUIRES DB] proxy_batch_write_at: batched spend writes interval (seconds).
+  # Verified: general_settings.proxy_batch_write_at (requires_db=true).
+  proxy_batch_write_at: 10
+
+  # [REQUIRES DB] ui_access_mode: Admin UI access. Verified:
+  # general_settings.ui_access_mode (requires_db=true). Moot without DB.
+  ui_access_mode: all
+
+  # alerting: webhook targets for alerts. Verified: general_settings.alerting
+  # (type=list; ex: `alerting: ["slack"]`). No DB/Redis flag.
+  alerting: ["slack"]
+  # alerting_threshold: seconds between alert checks. Verified:
+  # general_settings.alerting_threshold (default=0).
+  alerting_threshold: 300
+  # alert_types: which alert categories to emit. Verified:
+  # general_settings.alert_types (type=list).
+  alert_types:
+    - budget_alerts
+    - db_exceptions
+    - llm_too_frequent
+  # alert_to_webhook_url: map alert type -> webhook URL. Verified:
+  # general_settings.alert_to_webhook_url (type=dict).
+  alert_to_webhook_url:
+    budget_alerts: os.environ/SLACK_BUDGET_WEBHOOK_URL
+
+litellm_settings:
+  # [REQUIRES REDIS] cache + cache_params{type: redis}: response caching backed
+  # by Redis. Verified: litellm_settings.cache (requires_redis=true),
+  # litellm_settings.cache_params (requires_redis=true), cache_params.type
+  # (requires_redis=true; ex: `type: redis`).
+  cache: true
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: 6379
+    password: os.environ/REDIS_PASSWORD
+    # supported_call_types: which call types to cache. Verified:
+    # cache_params.supported_call_types (ex: `["acompletion"]`).
+    supported_call_types:
+      - acompletion
+      - aembedding
+
+  # [REQUIRES REDIS] enable_redis_auth_cache: cache virtual-key auth lookups in
+  # Redis. Verified: litellm_settings.enable_redis_auth_cache
+  # (requires_redis=true; default=false).
+  enable_redis_auth_cache: true
+
+  # [REQUIRES DB] max_budget / budget_duration: global proxy budget.
+  # Verified: litellm_settings.max_budget (requires_db=true),
+  # litellm_settings.budget_duration (requires_db=true; ex: `30d`).
+  max_budget: 100.0
+  budget_duration: 30d
+
+router_settings:
+  # [REQUIRES REDIS] redis_host/redis_password/redis_port/redis_db: router-level
+  # Redis for multi-instance coordination. Verified: router_settings.redis_host,
+  # redis_password, redis_port, redis_db (all requires_redis=true).
+  # [WORKESTRATE NOTE] p0-configs.md states: "When using multiple LiteLLM
+  # Servers / Kubernetes set redis settings router_settings:redis_host etc".
+  redis_host: os.environ/REDIS_HOST
+  redis_password: os.environ/REDIS_PASSWORD
+  redis_port: "6379"
+  redis_db: 0
+
+  # [REQUIRES DB+REDIS] fail_closed_budget_enforcement: reject requests when
+  # budget store is unreachable. Verified: general_settings.fail_closed_budget_enforcement
+  # (requires_db=true, requires_redis=true; default=false).
+  fail_closed_budget_enforcement: true
+
+  routing_strategy: simple-shuffle  # Verified: router_settings.routing_strategy (default=simple-shuffle).
+  num_retries: 3                     # Verified: router_settings.num_retries (default=3).
+  timeout: 30                        # Verified: router_settings.timeout (default=10 minutes).
+  allowed_fails: 3                   # Verified: router_settings.allowed_fails.
+  cooldown_time: 30                 # Verified: router_settings.cooldown_time (default=30).
