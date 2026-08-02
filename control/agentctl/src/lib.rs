@@ -15,6 +15,7 @@ pub mod images;
 pub mod json_out;
 pub mod merge;
 pub mod microsandbox;
+pub mod mount_policy;
 pub mod policy;
 pub mod recipes;
 pub mod scaffold;
