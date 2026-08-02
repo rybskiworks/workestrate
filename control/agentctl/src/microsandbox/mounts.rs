@@ -13,14 +13,20 @@ pub(crate) struct MountRoots<'a> {
     /// project root / cwd only when no declaring layer dir is knowable.
     pub content_root: &'a Path,
     /// Flake project root — present only when the workload actually requires
-    /// it (F2 lazy gate). Relative BUILD-path hosts (artifacts of the flake
-    /// checkout, e.g. `agents/<name>/build`) resolve here, keeping the
-    /// pre-F1 behavior for `${WORKESTRATE_<NAME>_BUILD}`-template mounts.
+    /// it (F2 lazy gate). Relative BUILD-path hosts that are flake-checkout
+    /// artifacts (declared `local_build.fallback` or relative env-override
+    /// values, e.g. `agents/<name>/build`) resolve here, keeping the pre-F1
+    /// behavior for `${WORKESTRATE_<NAME>_BUILD}`-template mounts.
     pub project_root: Option<&'a Path>,
-    /// The workload's `build_path()` value, used to detect build-derived
-    /// relative hosts AFTER template substitution (a `${WORKESTRATE_<NAME>_BUILD}`
-    /// host expands to exactly this string).
-    pub build_path: &'a str,
+    /// The workload's `build_path()` value when it is a flake-checkout
+    /// artifact (declared fallback or env override), used to detect
+    /// build-derived relative hosts AFTER template substitution (a
+    /// `${WORKESTRATE_<NAME>_BUILD}` host expands to exactly this string).
+    /// `None` when `build_path()` is the UNDECLARED reserved default
+    /// (`.workestrate-build/<name>`, spec 21 §6.1): that default is a
+    /// config-repo artifact dir resolving declaring-layer-relative (content
+    /// root), so it must NOT capture the flake project-root preference.
+    pub flake_build_path: Option<&'a str>,
 }
 
 fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathBuf> {
@@ -41,15 +47,21 @@ fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathBuf> {
             // unchanged (Path::join would do the same — explicit for clarity).
             return Ok(path.to_path_buf());
         }
-        // A relative host equal to the workload's build_path() came from a
-        // `${WORKESTRATE_<NAME>_BUILD}`-template expansion (or a literal
-        // `agents/<name>/build`): a build artifact of the flake checkout, so
-        // it keeps resolving against the flake project root when one is
-        // available. Without a project root it degrades to the content root
-        // (the F2 gate normally hard-errors first in that situation).
-        if host == roots.build_path {
-            if let Some(project_root) = roots.project_root {
-                return Ok(project_root.join(host));
+        // A relative host equal to the workload's flake-checkout build path
+        // came from a `${WORKESTRATE_<NAME>_BUILD}`-template expansion (or a
+        // literal declared fallback like `agents/<name>/build`): a build
+        // artifact of the flake checkout, so it keeps resolving against the
+        // flake project root when one is available. Without a project root
+        // it degrades to the content root (the F2 gate normally hard-errors
+        // first in that situation). The UNDECLARED reserved default
+        // (`.workestrate-build/<name>`, spec 21 §6.1) is excluded —
+        // `flake_build_path` is None then — so it falls through to the
+        // declaring-layer-relative content root below.
+        if let Some(flake_build) = roots.flake_build_path {
+            if host == flake_build {
+                if let Some(project_root) = roots.project_root {
+                    return Ok(project_root.join(host));
+                }
             }
         }
         // Plain repo-relative host: resolve against the DECLARING config
@@ -208,12 +220,12 @@ mod tests {
     fn roots_for<'a>(
         content_root: &'a std::path::Path,
         project_root: Option<&'a std::path::Path>,
-        build_path: &'a str,
+        flake_build_path: Option<&'a str>,
     ) -> MountRoots<'a> {
         MountRoots {
             content_root,
             project_root,
-            build_path,
+            flake_build_path,
         }
     }
 
@@ -247,7 +259,7 @@ mod tests {
             read_only: false,
         }]);
 
-        ensure_mount_sources(&roots_for(&root, None, "agents/test/build"), &plan)?;
+        ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan)?;
 
         let created = root.join("nested").join("state");
         assert!(
@@ -257,7 +269,7 @@ mod tests {
         );
 
         // Idempotent: re-running over an existing directory must not error.
-        ensure_mount_sources(&roots_for(&root, None, "agents/test/build"), &plan)?;
+        ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan)?;
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -272,7 +284,8 @@ mod tests {
             read_only: true,
         }]);
 
-        let result = ensure_mount_sources(&roots_for(&root, None, "agents/test/build"), &plan);
+        let result =
+            ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan);
         assert!(
             result.is_err(),
             "readonly mount source should bail when missing, got {:?}",
@@ -289,7 +302,7 @@ mod tests {
     fn relative_host_resolves_against_content_root_not_project_root() -> anyhow::Result<()> {
         let content = unique_root("content");
         let project = unique_root("project");
-        let roots = roots_for(&content, Some(&project), "agents/test/build");
+        let roots = roots_for(&content, Some(&project), Some("agents/test/build"));
         // Capsule-style declaration: `config.yaml` lives next to the
         // declaring layer file (content root), NOT under the flake root.
         let resolved = resolve_mount_host(&roots, "config.yaml")?;
@@ -304,9 +317,11 @@ mod tests {
     fn relative_build_path_host_prefers_project_root_when_available() -> anyhow::Result<()> {
         let content = unique_root("content");
         let project = unique_root("project");
-        // `${WORKESTRATE_TEST_BUILD}` expanded to the relative fallback
-        // `agents/test/build`: a flake-checkout artifact → project root.
-        let roots = roots_for(&content, Some(&project), "agents/test/build");
+        // DECLARED fallback: `${WORKESTRATE_TEST_BUILD}` expanded to the
+        // declared relative fallback `agents/test/build` — a flake-checkout
+        // artifact → project root. Declared fallbacks keep the
+        // pre-reservation behavior unchanged (spec 21 §6.1).
+        let roots = roots_for(&content, Some(&project), Some("agents/test/build"));
         let resolved = resolve_mount_host(&roots, "agents/test/build")?;
         assert_eq!(resolved, project.join("agents/test/build"));
         Ok(())
@@ -316,9 +331,24 @@ mod tests {
     fn relative_build_path_host_degrades_to_content_root_without_project_root() -> anyhow::Result<()>
     {
         let content = unique_root("content");
-        let roots = roots_for(&content, None, "agents/test/build");
+        let roots = roots_for(&content, None, Some("agents/test/build"));
         let resolved = resolve_mount_host(&roots, "agents/test/build")?;
         assert_eq!(resolved, content.join("agents/test/build"));
+        Ok(())
+    }
+
+    /// Spec 21 §6.1: the UNDECLARED reserved default `.workestrate-build/<name>`
+    /// is NOT a flake-checkout artifact (`flake_build_path` is None), so even
+    /// with a flake project root available it resolves declaring-layer-relative
+    /// against the content root.
+    #[test]
+    fn undeclared_reserved_default_resolves_against_content_root_not_project_root(
+    ) -> anyhow::Result<()> {
+        let content = unique_root("content");
+        let project = unique_root("project");
+        let roots = roots_for(&content, Some(&project), None);
+        let resolved = resolve_mount_host(&roots, ".workestrate-build/test")?;
+        assert_eq!(resolved, content.join(".workestrate-build/test"));
         Ok(())
     }
 
@@ -326,7 +356,7 @@ mod tests {
     fn absolute_and_template_hosts_pass_through_unchanged() -> anyhow::Result<()> {
         let content = unique_root("content");
         let project = unique_root("project");
-        let roots = roots_for(&content, Some(&project), "agents/test/build");
+        let roots = roots_for(&content, Some(&project), Some("agents/test/build"));
         // `${CWD}`-substituted hosts and absolute build paths are absolute —
         // they must NOT be re-rooted under either root.
         let resolved = resolve_mount_host(&roots, "/abs/path/from-cwd-template")?;
@@ -334,7 +364,7 @@ mod tests {
             resolved,
             std::path::PathBuf::from("/abs/path/from-cwd-template")
         );
-        let roots = roots_for(&content, Some(&project), "/nix/store/abc-build");
+        let roots = roots_for(&content, Some(&project), Some("/nix/store/abc-build"));
         let resolved = resolve_mount_host(&roots, "/nix/store/abc-build")?;
         assert_eq!(resolved, std::path::PathBuf::from("/nix/store/abc-build"));
         Ok(())

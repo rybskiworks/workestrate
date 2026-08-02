@@ -125,6 +125,35 @@ impl ConfigWorkload {
             _ => None,
         }
     }
+
+    /// Resolve the build path, reporting whether the result is the
+    /// UNDECLARED reserved default (`.workestrate-build/<name>`, spec 21
+    /// §6.1): no configured `env_override` in effect, no declared `fallback`,
+    /// and no conventional `WORKESTRATE_<NAME>_BUILD` env var set. The
+    /// reserved default resolves declaring-layer-relative and must not
+    /// trigger the flake project-root machinery; declared fallbacks and env
+    /// overrides keep the pre-reservation behavior unchanged.
+    fn resolve_build_path(&self) -> (String, bool) {
+        if let Some(ref build) = self.workload.local_build {
+            if let Some(ref env_override) = build.env_override {
+                if let Ok(p) = std::env::var(env_override) {
+                    return (p, false);
+                }
+            }
+            if let Some(ref fallback) = build.fallback {
+                return (fallback.clone(), false);
+            }
+        }
+        // Fallback to the workload-trait default env-var convention.
+        let key = format!(
+            "WORKESTRATE_{}_BUILD",
+            self.name.to_ascii_uppercase().replace('-', "_")
+        );
+        if let Ok(p) = std::env::var(key) {
+            return (p, false);
+        }
+        (format!(".workestrate-build/{}", self.name), true)
+    }
 }
 
 impl Workload for ConfigWorkload {
@@ -265,25 +294,11 @@ impl Workload for ConfigWorkload {
     }
 
     fn build_path(&self) -> String {
-        if let Some(ref build) = self.workload.local_build {
-            if let Some(ref env_override) = build.env_override {
-                if let Ok(p) = std::env::var(env_override) {
-                    return p;
-                }
-            }
-            if let Some(ref fallback) = build.fallback {
-                return fallback.clone();
-            }
-        }
-        // Fallback to the workload-trait default env-var convention.
-        let key = format!(
-            "WORKESTRATE_{}_BUILD",
-            self.name.to_ascii_uppercase().replace('-', "_")
-        );
-        if let Ok(p) = std::env::var(key) {
-            return p;
-        }
-        format!("agents/{}/build", self.name)
+        self.resolve_build_path().0
+    }
+
+    fn build_path_is_reserved_default(&self) -> bool {
+        self.resolve_build_path().1
     }
 
     fn log_stop_errors(&self) -> bool {
@@ -303,8 +318,11 @@ impl Workload for ConfigWorkload {
     ///     execute against the flake checkout);
     /// (c) a mount whose host, after `${WORKESTRATE_<NAME>_BUILD}` template
     ///     substitution in `plan()`, IS the workload's relative build path
-    ///     (e.g. `agents/<name>/build`) — a flake-checkout artifact that
-    ///     still resolves against the project root.
+    ///     AND that path is a flake-checkout artifact (a declared fallback
+    ///     or a relative env override, e.g. `agents/<name>/build`). The
+    ///     UNDECLARED reserved default (`.workestrate-build/<name>`, spec 21
+    ///     §6.1) resolves declaring-layer-relative and is excluded — it
+    ///     needs no flake root.
     ///
     /// Registry-image workloads with none of these return `None`, so
     /// `build_sandbox` never touches the flake-root gate for them.
@@ -315,8 +333,9 @@ impl Workload for ConfigWorkload {
         if self.workload.local_build.is_some() {
             return Some("local_build config".to_string());
         }
-        let build_path = self.build_path();
-        if !std::path::Path::new(&build_path).is_absolute()
+        let (build_path, reserved_default) = self.resolve_build_path();
+        if !reserved_default
+            && !std::path::Path::new(&build_path).is_absolute()
             && plan.mounts.iter().any(|m| m.host == build_path)
         {
             return Some(format!("relative build-path mount '{build_path}'"));
@@ -341,12 +360,33 @@ mod tests {
     fn build_path_reads_per_agent_env_override() -> Result<()> {
         let _guard = TestConfigGuard::new();
         let pi = ConfigWorkload::new("pi")?;
-        // Override set → returns the env value.
+        // Override set → returns the env value (and is NOT the reserved default).
         std::env::set_var("WORKESTRATE_PI_BUILD", "/tmp/test-pi-build");
         assert_eq!(pi.build_path(), "/tmp/test-pi-build");
-        // Override removed → falls back to agents/<name>/build.
+        assert!(!pi.build_path_is_reserved_default());
+        // Override removed → falls back to the reserved default
+        // `.workestrate-build/<name>` (spec 21 §6.1).
         std::env::remove_var("WORKESTRATE_PI_BUILD");
-        assert_eq!(pi.build_path(), "agents/pi/build");
+        assert_eq!(pi.build_path(), ".workestrate-build/pi");
+        assert!(pi.build_path_is_reserved_default());
+        Ok(())
+    }
+
+    /// Spec 21 §6.1: the reservation changes the DEFAULT, never a
+    /// declaration — a declared `local_build.fallback` resolves exactly as
+    /// before, and the env override still beats it.
+    #[test]
+    fn build_path_declared_fallback_unchanged_and_env_beats_it() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        // Fixture odysseus declares `fallback = "agents/odysseus/build"`.
+        std::env::remove_var("WORKESTRATE_ODYSSEUS_BUILD");
+        let odysseus = ConfigWorkload::new("odysseus")?;
+        assert_eq!(odysseus.build_path(), "agents/odysseus/build");
+        assert!(!odysseus.build_path_is_reserved_default());
+        // Env override precedence unchanged: it beats the declared fallback.
+        std::env::set_var("WORKESTRATE_ODYSSEUS_BUILD", "/tmp/test-ody-build");
+        assert_eq!(odysseus.build_path(), "/tmp/test-ody-build");
+        std::env::remove_var("WORKESTRATE_ODYSSEUS_BUILD");
         Ok(())
     }
 
@@ -926,13 +966,14 @@ default_deny = true
         Ok(())
     }
 
-    /// Case (c): a `${WORKESTRATE_<NAME>_BUILD}` mount whose build path is
-    /// the RELATIVE fallback (`agents/<name>/build`) requires the flake root
-    /// even without a nix-layered image or local_build.
+    /// Case (c): a `${WORKESTRATE_<NAME>_BUILD}` mount requires the flake
+    /// root only when the build path is a RELATIVE flake-checkout artifact
+    /// (an env override to a relative path). The UNDECLARED reserved default
+    /// (`.workestrate-build/<name>`, spec 21 §6.1) resolves
+    /// declaring-layer-relative and needs NO flake root.
     #[test]
     fn flake_root_requirement_names_relative_build_path_mount() -> Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("WORKESTRATE_SVC_BUILD");
         let toml = r#"
 schema_version = 1
 
@@ -949,10 +990,23 @@ read_only = true
 [workloads.svc.network]
 default_deny = true
 "#;
+        // UNDECLARED reserved default: declaring-layer-relative → no gate.
+        std::env::remove_var("WORKESTRATE_SVC_BUILD");
+        let svc = synthetic_workload(toml, "svc");
+        assert_eq!(svc.build_path(), ".workestrate-build/svc");
+        assert_eq!(
+            svc.flake_root_requirement(&svc.plan()),
+            None,
+            "the reserved default resolves declaring-layer-relative; no flake root needed"
+        );
+
+        // Env override to a RELATIVE path (flake-checkout artifact, e.g.
+        // `agents/svc/build`) → the gate still fires.
+        std::env::set_var("WORKESTRATE_SVC_BUILD", "agents/svc/build");
         let svc = synthetic_workload(toml, "svc");
         let req = svc
             .flake_root_requirement(&svc.plan())
-            .expect("a relative build-path mount must require the flake root");
+            .expect("a relative flake-checkout build-path mount must require the flake root");
         assert!(req.contains("agents/svc/build"), "got: {req}");
 
         // An ABSOLUTE build path (env override to a store path) needs no root.

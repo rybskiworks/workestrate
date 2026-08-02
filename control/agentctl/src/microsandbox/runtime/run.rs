@@ -307,9 +307,13 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // lacks flake.nix (e.g. a detached service child re-exec'd from the
     // operator's cwd), so it is called ONLY when the workload genuinely
     // needs the flake checkout — nix-layered image recipe, local_build
-    // config (incl. flake:// sources), or a relative build-path mount
-    // (`agents/<name>/build`). The error names the triggering feature.
-    // Registry-image workloads with none of these never touch the gate.
+    // config (incl. flake:// sources), or a relative build-path mount naming
+    // a flake-checkout artifact (a declared fallback or relative env
+    // override, e.g. `agents/<name>/build`). The UNDECLARED reserved build
+    // default (`.workestrate-build/<name>`, spec 21 §6.1) resolves
+    // declaring-layer-relative and does NOT trigger the gate. The error
+    // names the triggering feature. Registry-image workloads with none of
+    // these never touch the gate.
     let project_root: Option<PathBuf> = match workload.flake_root_requirement(&plan) {
         Some(feature) => Some(crate::config::project_root().map_err(|e| {
             anyhow::anyhow!(
@@ -334,10 +338,20 @@ pub(crate) async fn build_sandbox<W: Workload>(
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     let build_path = workload.build_path();
+    // Spec 21 §6.1: the UNDECLARED reserved default
+    // (`.workestrate-build/<name>`) is a config-repo artifact dir that
+    // resolves declaring-layer-relative (content root) — it must NOT capture
+    // the flake project-root mount preference. Declared fallbacks and env
+    // overrides keep the pre-reservation flake-checkout preference.
+    let flake_build_path = if workload.build_path_is_reserved_default() {
+        None
+    } else {
+        Some(build_path.as_str())
+    };
     let mount_roots = MountRoots {
         content_root: &content_root,
         project_root: project_root.as_deref(),
-        build_path: &build_path,
+        flake_build_path,
     };
 
     // Override the plan name with the spec instance name so display matches

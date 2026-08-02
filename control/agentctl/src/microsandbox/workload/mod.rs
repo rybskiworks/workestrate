@@ -138,9 +138,11 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         EntrypointSpec::Shell
     }
 
-    /// Where to find the built agent code. Defaults to agents/<name>/build;
-    /// override per-agent with WORKESTRATE_<NAME>_BUILD (NAME uppercased,
-    /// '-' → '_') — used by the nix wrapper to point at a store path.
+    /// Where to find the built workload artifacts. Default: the reserved
+    /// `.workestrate-build/<name>` dir (spec 21 §6.1), resolved
+    /// declaring-layer-relative at mount time; override per workload with
+    /// WORKESTRATE_<NAME>_BUILD (NAME uppercased, '-' → '_') — used by the
+    /// nix wrapper to point at a store path.
     fn build_path(&self) -> String {
         let key = format!(
             "WORKESTRATE_{}_BUILD",
@@ -149,8 +151,25 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         if let Ok(p) = std::env::var(key) {
             p
         } else {
-            format!("agents/{}/build", self.name())
+            format!(".workestrate-build/{}", self.name())
         }
+    }
+
+    /// Whether `build_path()` is the UNDECLARED reserved default
+    /// (`.workestrate-build/<name>`, spec 21 §6.1) rather than a declared
+    /// `local_build.fallback` or an env override. The reserved default is a
+    /// config-repo artifact dir that resolves DECLARING-LAYER-relative — it
+    /// must NOT trigger the flake project-root mount preference or the
+    /// flake-root gate. Default impl matches the default `build_path()`
+    /// above: true when the conventional env var is unset. Implementors that
+    /// override `build_path()` with declared-fallback handling MUST override
+    /// this too.
+    fn build_path_is_reserved_default(&self) -> bool {
+        let key = format!(
+            "WORKESTRATE_{}_BUILD",
+            self.name().to_ascii_uppercase().replace('-', "_")
+        );
+        std::env::var(key).is_err()
     }
 
     /// Content root for repo-relative mount hosts: the directory of the

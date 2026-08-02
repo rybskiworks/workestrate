@@ -14,7 +14,32 @@ work from §5.
 
 ---
 
-## 0. LATEST LANDING — cleanup PHASE 4 (2026-08-02, lands as one commit on top of phase 3)
+## 0. LATEST LANDING — spec 21 PHASE A, scaffold part (2026-08-02, uncommitted in the working tree)
+
+**Phase A (scaffold part) of spec 21 (image build/load lifecycle) landed in
+the working tree on `migration/tool-model`.** What changed, for contextless
+sessions:
+
+- **`.workestrate-build/` reserved in the scaffold template (USER DECISION
+  D4, spec §6):** a `.gitignore` entry plus a README section documenting the
+  contract, added to BOTH template locations
+  (`templates/workestrate-config/` and
+  `control/agentctl/src/scaffold/template/`) — the `.gitignore` addition is
+  byte-identical in both (the `scaffold-check` byte-parity overlap covers
+  `.gitignore`; the README is outside the parity set, so its section matches
+  semantically and verbatim in the added text).
+- **Undeclared `local_build` fallback default changed** to
+  `.workestrate-build/<name>`, resolved declaring-layer-relative (spec-17
+  declaring-layer-dir semantics); explicitly declared fallbacks are never
+  overridden. (The Rust-side resolution change lands with the parallel
+  phase-A source edit.)
+- **Spec 21 phases B–F remain** (image-state store, change detection +
+  `workload build`, build/load pipeline, lifecycle wiring, multi-repo
+  migration; B `verifiable-here`, C/D/F `HOST-NIX`, E `HOST-KVM`).
+
+---
+
+## 0.05 PREVIOUS LANDING — cleanup PHASE 4 (2026-08-02, lands as one commit on top of phase 3)
 
 **Phase 4 of the approved cleanup: the CLI surface, policy layer, scaffold,
 and devshell are generic — the last hardcoded personal names leave the tool's
@@ -560,10 +585,12 @@ current post-flips except the spec-05 row above.
     Standing threads that outlive the cleanup: container-home
     ephemerality/host-side home (§6); `stash@{0}` on `406b5b5` never to be
     touched (§7).
-12. **Spec 21 (image build/load lifecycle) — DESIGN-APPROVED, implementation
-    pending.** Authored 2026-08-02; phases A–F per the spec (A/B
-    verifiable-here; C/D/F HOST-NIX; E HOST-KVM; HOST-VERIFY cluster on msb
-    digest surface).
+12. **Spec 21 (image build/load lifecycle) — DESIGN-APPROVED; phase A
+    (scaffold part) landed 2026-08-02** (§0 above: `.workestrate-build/`
+    reserved in both scaffold template locations with parity; undeclared
+    `local_build` fallback default → `.workestrate-build/<name>`). Phases
+    B–F remain per the spec (A/B verifiable-here; C/D/F HOST-NIX; E HOST-KVM;
+    HOST-VERIFY cluster on msb digest surface).
 
 ---
 

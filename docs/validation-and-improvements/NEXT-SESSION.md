@@ -25,6 +25,19 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+> **2026-08-02 update (7) — spec 21 phase A (scaffold part) landed** (in the
+> working tree on `migration/tool-model`): `.workestrate-build/` reserved in
+> the scaffold template per USER DECISION D4 — a `.gitignore` entry + README
+> contract section in BOTH template locations
+> (`templates/workestrate-config/` and
+> `control/agentctl/src/scaffold/template/`); the `.gitignore` addition is
+> byte-identical in both (the `scaffold-check` parity overlap covers
+> `.gitignore`; the README is outside the parity set). The undeclared
+> `local_build` fallback default changed to `.workestrate-build/<name>`
+> (declaring-layer-relative; declared fallbacks never overridden). Spec 21
+> phases B–F remain (B `verifiable-here`; C/D/F `HOST-NIX`; E `HOST-KVM`;
+> msb HOST-VERIFY cluster).
+
 > **2026-08-02 update (6) — spec 21 (image build/load lifecycle) authored**
 > as DESIGN-APPROVED at
 > [06-improvements/21-image-build-lifecycle.md](06-improvements/21-image-build-lifecycle.md)
@@ -549,3 +562,11 @@ DESIGN-APPROVED (`06-improvements/21-image-build-lifecycle.md`; user signed
 off 2026-08-02) — update note (6) added to Current state with the five locked
 user decisions D1–D5; index row/summary/dependency-graph entries added;
 STATUS.md §5 item 12 added (implementation phases A–F pending).
+
+**2026-08-02 refresh (7):** spec 21 phase A (scaffold part) landed — update
+note (7) added to Current state (`.workestrate-build/` reserved in both
+scaffold template locations, `.gitignore` byte-parity + README contract
+section; undeclared `local_build` fallback default →
+`.workestrate-build/<name>` declaring-layer-relative; phases B–F remain);
+STATUS.md gained a new §0 latest-landing section and its §5 item 12 was
+annotated.

@@ -7,3 +7,6 @@
 
 # Editor clutter
 *.swp
+
+# Reserved workload-agnostic build-artifact dir (spec 21 §6) — never committed.
+.workestrate-build/
