@@ -16,6 +16,10 @@ an OpenAI-compatible endpoint at `http://host.microsandbox.internal:4000`.
 Agent microVMs start with a default-deny network policy and only receive
 the secrets needed to reach the proxy.
 
+## Issue tracking
+
+Work items (issues, claims, status) are tracked with beads (`bd`); see [BEADS.md](BEADS.md) for procedures. Issue prefix: `wrk`. Narrative state stays in the docs — beads tracks work, docs track state.
+
 ## Trust model
 
 workestrate has a small number of deliberate escape hatches. Naming them
