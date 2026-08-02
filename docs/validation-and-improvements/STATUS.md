@@ -14,7 +14,95 @@ work from §5.
 
 ---
 
-## 0. LATEST LANDING — spec 21 PHASE C, `workload build` + drvPath change detection (2026-08-02, one commit on top of phase B)
+## 0. LATEST LANDING — spec 21 PHASE D, build/load pipeline (2026-08-02, one commit on top of phase C)
+
+**Phase D of spec 21 (image build/load lifecycle) landed on
+`migration/tool-model`.** The phase-C seam (`run_build_pipeline` → "build
+pipeline not yet implemented") is now the REAL pipeline. What changed, for
+contextless sessions:
+
+- **`images/pipeline.rs` — the real 4-stage pipeline**, async + trait-seamed
+  like `detect.rs` (mock-free fakes under `cfg(test)`), running inside the
+  build verb's still-held `ImageTagLock` (spec §3.3):
+  1. **nix build** (`trait ImageBuilder`; real `NixCliBuilder`): `nix build
+     <flake_root>#<attr> --no-link --print-out-paths
+     --extra-experimental-features "nix-command flakes"`,
+     `current_dir(flake_root)` (NixCliEvaluator conventions). stderr is TEED:
+     copied live to the operator TTY AND retained for §7 classification.
+     outPath = the LAST `/nix/store/…` stdout line. Spawn NotFound →
+     `BuildError::NixAbsent`, mapped to the SAME §7 wording as the phase-C
+     eval ladder ("install nix / config-repo 'load-images' ritual").
+  2. **outPath re-load gate** (spec §3.1): pure `reload_decision(record_out,
+     fresh_out, store)` — skip `msb load` iff record out_path non-empty AND
+     equals the realized outPath AND the tag is still in the store; load
+     anyway on out-of-band deletion (tag gone), and always when
+     `out_path = ""` (phase-C trust records upgrade on next build). The
+     state is re-loaded FRESH inside the lock.
+  3. **msb load** (`trait ImageLoader`; real `MsbCliLoader`): `gunzip -c
+     <outPath>` piped into `msb load -t <tag>` — two Commands, no shell, no
+     staged tarball. msb via `commands::doctor::msb_binary()` (MSB_PATH
+     convention). Post-load store re-probe: load success + tag still gone →
+     named error.
+  4. **record upsert + save inside the lock** (§3.3): drv_path = job eval,
+     out_path = realized, `built_at` captured post-build / `loaded_at`
+     post-load (gate-skip: post-verification), `digest = None` — the §3.5
+     probe point (§11 item 1 verified the surface EXISTS; capture deferred
+     to the §3.5 comparison design).
+- **§7 phase-D rows implemented** (`classify_build_stderr`, pure):
+  fakeHash fixed-output hash mismatch → named error pointing at the
+  declaring repo's `update-hashes` recipe (NOT a raw error wall, extracted
+  got:/specified: lines only); fetch/substituter failure → offline-context
+  error; generic → `nix build failed for '<flake>#<attr>'` + stderr tail
+  (20 lines); `msb load failed for tag '<tag>'` + msb stderr.
+- **`build_cmd.rs`**: `process_target` now takes the 4 seams bundled as
+  `TargetSeams { probe, eval, builder, loader }` (clippy arg-count);
+  Build/Rebuild/RebuildForced await the pipeline and report
+  `built+loaded+recorded` or the exact gate-skip note `image unchanged in
+  store; tag already current`. The two phase-C seam-refusal tests were
+  reworked to drive the real pipeline through fakes.
+- **New read-only doctor check `image_records`** (`commands/doctor.rs`,
+  chosen over `diagnostics.rs`'s `cmd_check` because the doctor surface is
+  the established read-only health-check home): `images.json` records vs
+  `msb image ls` presence — missing recorded tag → WARN with remediation
+  (`workload build --repo <name>` / 'load-images' recipe); unreadable store
+  → WARN (never FAIL); no records → OK note; nix not consulted.
+- **E2E ran FULLY in-container** (the container turned out to reach
+  cache.nixos.org; the fixture build fetched only ~600 KiB): fixture flake
+  `control/agentctl/tests/fixtures/image-flake/` (~20 KiB
+  dockerTools.buildLayeredImage, nixpkgs pinned to this repo's flake.lock
+  rev, zero network FODs). `tests/image_pipeline_e2e.rs` drives the REAL
+  `run_build_pipeline` (real builder/loader/probe): load → record →
+  gate-skip second run → out-of-band `msb image rm` → reload. ALSO smoked
+  through the real CLI against a temp home + fixture config repo: `build
+  --repo fixture` → `built+loaded+recorded`; second run → `skip`; `--force`
+  → `image unchanged in store; tag already current`; out-of-band delete →
+  reload; doctor `image_records` OK→WARN flip demonstrated. **Caveat:** the
+  devshell wraps `msb` with a forced `MSB_HOME=$HOME/.microsandbox` — the
+  e2e gates on an explicit `MSB_PATH` to an UNWRAPPED msb (without it, and
+  without nix, it skips with a note; the probe runs against the wrapper
+  once wrote fixture images to the dev-home store, cleaned up same-day).
+- **§11 HOST-VERIFY cluster: 4 of 5 items VERIFIED in-container** (see the
+  spec's new verification block): (1) digest surface EXISTS (`msb image ls`
+  DIGEST column, `msb image inspect` full digest, SDK
+  `ImageHandle::manifest_digest()`); (2) load/query normalization identical
+  (verbatim — bare `-t othername` registers `othername`, NOT
+  `othername:latest`); (3) concurrent same-tag `msb load` is NOT safe
+  (loser errors with a manifest-cache race — the §3.3 outer flock is
+  load-bearing, no deadlock); (5) git+file dirty worktree drvPath is stable
+  across repeat evals AND tracks dirty content. (4) partially verified
+  (fixture digest stable across reloads/homes; bun-compile FOD determinism
+  for the real images stays HOST-NIX).
+- **Gates after landing:** 721 passed / 0 failed / 3 ignored (700 baseline
+  + 21 new); `just verify` fully green. `verify-full` (nix build of the
+  tool itself) NOT run in-container — host gate.
+- **Phases E–F remain** (lifecycle pre-flight wiring — E `HOST-KVM`;
+  multi-repo migration — F `HOST-NIX`). Phase D's only HOST-NIX remainder:
+  running the pipeline against the REAL workestrate-pi/tempest images
+  (network FODs) and the §3.5 digest capture flip.
+
+---
+
+## 0.01 PREVIOUS LANDING — spec 21 PHASE C, `workload build` + drvPath change detection (2026-08-02, one commit on top of phase B)
 
 **Phase C of spec 21 (image build/load lifecycle) landed on
 `migration/tool-model`.** What changed, for contextless sessions:
@@ -97,7 +185,7 @@ work from §5.
 
 ---
 
-## 0.01 PREVIOUS LANDING — spec 21 PHASE B, image-state store (2026-08-02, one commit on top of phase A)
+## 0.02 PREVIOUS LANDING — spec 21 PHASE B, image-state store (2026-08-02, one commit on top of phase A)
 
 **Phase B of spec 21 (image build/load lifecycle) landed on
 `migration/tool-model`.** What changed, for contextless sessions:
@@ -144,7 +232,7 @@ work from §5.
 
 ---
 
-## 0.02 PREVIOUS LANDING — spec 21 PHASE A, scaffold part (2026-08-02, commit `02bea9a`)
+## 0.03 PREVIOUS LANDING — spec 21 PHASE A, scaffold part (2026-08-02, commit `02bea9a`)
 
 **Phase A (scaffold part) of spec 21 (image build/load lifecycle) landed as
 commit `02bea9a` on `migration/tool-model`.** What changed, for contextless

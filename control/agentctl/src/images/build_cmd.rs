@@ -1,10 +1,12 @@
-//! `workestrate workload build` (spec 21 §5.1, phase C): selector resolution,
-//! the per-workload lock → probe → eval → skew → act flow, `--check`, and the
-//! human/JSON renderers.
+//! `workestrate workload build` (spec 21 §5.1, phases C+D): selector
+//! resolution, the per-workload lock → probe → eval → skew → act flow,
+//! `--check`, and the human/JSON renderers.
 //!
-//! Phase-C scope boundary: change detection + the skew matrix + the D1 trust
-//! record are REAL here; the build/load pipeline itself is the
-//! [`crate::images::pipeline`] seam (phase D). Recorded phase-C decisions:
+//! Phase C landed change detection + the skew matrix + the D1 trust record;
+//! phase D landed the build/load pipeline behind the Build/Rebuild/
+//! RebuildForced decisions ([`crate::images::pipeline`] — nix build →
+//! outPath re-load gate → `msb load` → record upsert, all inside the
+//! still-held per-tag lock). Recorded phase-C decisions (all still live):
 //!
 //! - **`skew.rs`'s `StoreTag` stays 2-variant.** The unreachable-store case
 //!   is the named §7 error ([`detect::StoreUnreachable`]), not a skew
@@ -35,7 +37,10 @@ use crate::images::detect::{
     record_state_for, DrvEvalError, DrvEvaluator, MsbStoreProbe, NixCliEvaluator, StoreProbe,
 };
 use crate::images::lock::ImageTagLock;
-use crate::images::pipeline::{run_build_pipeline, BuildJob};
+use crate::images::pipeline::{
+    run_build_pipeline, BuildJob, ImageBuilder, ImageLoader, LoadAction, MsbCliLoader,
+    NixCliBuilder, PipelineOutcome,
+};
 use crate::images::repo_key::{registered_repo_checkouts, repo_identity_for, repo_key_for};
 use crate::images::skew::{decide_skew, RecordState, SkewDecision, StoreTag};
 use crate::images::state::{image_key, ImageRecord, ImagesState, Provenance, RepoIdentity};
@@ -300,7 +305,18 @@ fn store_state_label(state: StoreTag) -> &'static str {
     }
 }
 
-/// The per-workload flow (spec §3.3/§3.4/§7), generic over the two seams so
+/// The four seam implementations the flow drives, bundled so
+/// [`process_target`] stays readable (and within the argument-count lint):
+/// the two phase-C change-detection seams (`detect.rs`) plus the two
+/// phase-D process seams (`pipeline.rs`).
+pub struct TargetSeams<'a, P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: ImageLoader> {
+    pub probe: &'a mut P,
+    pub eval: &'a mut E,
+    pub builder: &'a mut B,
+    pub loader: &'a mut L,
+}
+
+/// The per-workload flow (spec §3.3/§3.4/§7), generic over the four seams so
 /// tests drive fakes with a temp state dir:
 ///
 /// 1. acquire the per-tag lock (build mode only — `--check` takes NO lock);
@@ -309,16 +325,28 @@ fn store_state_label(state: StoreTag) -> &'static str {
 ///    `decide_skew` (re-checked inside the lock per the §7 concurrent row);
 /// 3. act: Skip → report; TrustAndRecord → write the D1 baseline record
 ///    (upsert + save INSIDE the lock); Build/Rebuild/RebuildForced → the
-///    phase-D seam; `--check` → structured "would …" report, never the seam,
-///    never a write.
-pub async fn process_target<P: StoreProbe, E: DrvEvaluator>(
+///    phase-D pipeline (nix build → outPath gate → `msb load` → record),
+///    still inside the lock; `--check` → structured "would …" report, never
+///    the pipeline, never a write.
+pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: ImageLoader>(
     target: &BuildTarget,
     state_dir: &Path,
     check: bool,
     force: bool,
-    probe: &mut P,
-    eval: &mut E,
+    seams: &mut TargetSeams<'_, P, E, B, L>,
 ) -> Result<TargetReport> {
+    let TargetSeams {
+        probe,
+        eval,
+        builder,
+        loader,
+    } = seams;
+    // Reborrow the &mut fields so the generic seam bounds (P: StoreProbe
+    // etc.) are satisfied by &mut P directly, not &mut &mut P.
+    let probe = &mut **probe;
+    let eval = &mut **eval;
+    let builder = &mut **builder;
+    let loader = &mut **loader;
     let key = image_key(&target.repo.name, &target.tag);
     // §3.3: the per-tag lock spans the eval → build → load → record critical
     // section. `--check` has no critical section (read-only) → no lock.
@@ -455,23 +483,36 @@ pub async fn process_target<P: StoreProbe, E: DrvEvaluator>(
                 other => unreachable!("matched only the three build decisions; got {other:?}"),
             };
             if check {
-                // --check never touches the phase-D seam and never writes.
+                // --check never touches the pipeline and never writes.
                 report.decision = format!("would {verb}");
                 report.action_taken = "none (--check)".to_string();
             } else {
                 report.decision = verb.to_string();
-                // Phase D fills this in (fail-fast in phase C). The lock is
-                // still held here — phase D's nix build → outPath gate → msb
-                // load → record upsert runs inside it (spec §3.3).
-                run_build_pipeline(&BuildJob {
-                    workload: target.name.clone(),
-                    repo: target.repo.clone(),
-                    attr: target.attr.clone(),
-                    tag: target.tag.clone(),
-                    drv_path: drv,
-                    force,
-                })?;
-                report.action_taken = "built+loaded+recorded".to_string();
+                // The phase-D pipeline: nix build → outPath re-load gate →
+                // `msb load` → record upsert. The lock is still held here —
+                // the whole critical section runs inside it (spec §3.3).
+                let PipelineOutcome { action, .. } = run_build_pipeline(
+                    &BuildJob {
+                        workload: target.name.clone(),
+                        repo: target.repo.clone(),
+                        attr: target.attr.clone(),
+                        tag: target.tag.clone(),
+                        drv_path: drv,
+                        force,
+                    },
+                    state_dir,
+                    builder,
+                    loader,
+                    probe,
+                )
+                .await?;
+                report.action_taken = match action {
+                    LoadAction::Loaded => "built+loaded+recorded".to_string(),
+                    // The §3.1 re-load gate skip: exact operator-facing note.
+                    LoadAction::AlreadyCurrent => {
+                        "image unchanged in store; tag already current".to_string()
+                    }
+                };
             }
         }
     }
@@ -574,13 +615,20 @@ pub async fn cmd_workload_build(
     let state_dir = crate::config::resolve_state_dir();
     let mut probe = MsbStoreProbe;
     let mut eval = NixCliEvaluator::new();
+    let mut builder = NixCliBuilder::new();
+    let mut loader = MsbCliLoader::new();
     let mut reports = Vec::with_capacity(targets.len());
     for target in &targets {
         // Fail-fast: the first hard error (unreachable store, nix-absent with
-        // a missing tag, eval failure, or the phase-D seam refusal) aborts
+        // a missing tag, eval failure, or a pipeline stage failure) aborts
         // the command — one named error, not per-workload spam.
-        reports
-            .push(process_target(target, &state_dir, check, force, &mut probe, &mut eval).await?);
+        let mut seams = TargetSeams {
+            probe: &mut probe,
+            eval: &mut eval,
+            builder: &mut builder,
+            loader: &mut loader,
+        };
+        reports.push(process_target(target, &state_dir, check, force, &mut seams).await?);
     }
 
     if json {
@@ -606,6 +654,7 @@ pub async fn cmd_workload_build(
 )]
 mod tests {
     use super::super::detect::test_fakes::{FakeEvaluator, FakeStoreProbe};
+    use super::super::pipeline::test_fakes::{FakeBuilder, FakeLoader};
     use super::*;
     use crate::config::test_support::unique_state_dir;
     use crate::images::detect::StoreUnreachable;
@@ -890,6 +939,29 @@ mod tests {
         e
     }
 
+    /// Builder/loader fakes for tests whose flow never reaches the pipeline
+    /// (skip / trust / --check / ladder rows): empty queues assert the
+    /// pipeline seams are never touched.
+    fn no_pipeline() -> (FakeBuilder, FakeLoader) {
+        (FakeBuilder::new(), FakeLoader::new())
+    }
+
+    /// Bundle the four fakes into the [`TargetSeams`] shape
+    /// [`process_target`] takes.
+    fn seams<'a>(
+        probe: &'a mut FakeStoreProbe,
+        eval: &'a mut FakeEvaluator,
+        builder: &'a mut FakeBuilder,
+        loader: &'a mut FakeLoader,
+    ) -> TargetSeams<'a, FakeStoreProbe, FakeEvaluator, FakeBuilder, FakeLoader> {
+        TargetSeams {
+            probe,
+            eval,
+            builder,
+            loader,
+        }
+    }
+
     /// D1 trust record: record absent + tag present → TrustAndRecord writes
     /// the baseline INSIDE the lock, with the phase-C record shape (drv_path
     /// = current eval, out_path = "", digest = None, provenance fields).
@@ -899,14 +971,19 @@ mod tests {
         let state_dir = unique_state_dir("flow-d1-state");
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Present);
+        let (mut builder, mut loader) = no_pipeline();
 
         let report = process_target(
             &target,
             &state_dir,
             false,
             false,
-            &mut probe,
-            &mut fake_eval_with("drv-A"),
+            &mut seams(
+                &mut probe,
+                &mut fake_eval_with("drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
         )
         .await?;
 
@@ -956,21 +1033,30 @@ mod tests {
     }
 
     /// Fresh record + tag present → Skip; a drvPath change flips the SAME
-    /// setup to Rebuild, which routes to the phase-D seam (fail-fast with the
-    /// named refusal in phase C).
+    /// setup to Rebuild, which runs the real pipeline over fakes: nix build
+    /// (fake) → gate (record out_path="" → load) → msb load (fake) → record
+    /// upsert with the realized outPath.
     #[tokio::test]
-    async fn skip_then_drv_drift_routes_to_phase_d_seam() -> Result<()> {
+    async fn skip_then_drv_drift_rebuilds_through_the_pipeline() -> Result<()> {
         let (tmp, target) = target_fixture("flow-skip", "pi");
         let state_dir = unique_state_dir("flow-skip-state");
+        let (mut builder, mut loader) = no_pipeline();
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Present);
-        probe.push(StoreTag::Present);
-        let mut eval = FakeEvaluator::new();
-        eval.push_ok("drv-A");
-        eval.push_ok("drv-B");
 
-        let first =
-            process_target(&target, &state_dir, false, false, &mut probe, &mut eval).await?;
+        let first = process_target(
+            &target,
+            &state_dir,
+            false,
+            false,
+            &mut seams(
+                &mut probe,
+                &mut fake_eval_with("drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
+        )
+        .await?;
         assert_eq!(first.decision, "trust+record");
 
         // Same drv → fresh → skip.
@@ -981,82 +1067,232 @@ mod tests {
             &state_dir,
             false,
             false,
-            &mut probe2,
-            &mut fake_eval_with("drv-A"),
+            &mut seams(
+                &mut probe2,
+                &mut fake_eval_with("drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
         )
         .await?;
         assert_eq!(skip.record_state, "fresh");
         assert_eq!(skip.decision, "skip");
         assert_eq!(skip.action_taken, "none (up to date)");
 
-        // drvPath drift → stale + present → Rebuild → the phase-D seam.
-        let err = process_target(&target, &state_dir, false, false, &mut probe, &mut eval)
-            .await
-            .expect_err("Rebuild routes to the phase-D seam");
-        assert!(
-            err.to_string()
-                .contains("build pipeline not yet implemented (spec 21 phase D)"),
-            "the seam refusal surfaces: {err}"
+        // drvPath drift → stale + present → Rebuild → the pipeline runs:
+        // skew probe (present), pre-gate probe (present — record out_path=""
+        // so the gate loads anyway), post-load verification (present).
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Present);
+        probe.push(StoreTag::Present);
+        probe.push(StoreTag::Present);
+        let mut builder = FakeBuilder::new();
+        builder.push_ok("/nix/store/out-B-img.tar.gz");
+        let mut loader = FakeLoader::new();
+        loader.push_ok();
+        let report = process_target(
+            &target,
+            &state_dir,
+            false,
+            false,
+            &mut seams(
+                &mut probe,
+                &mut fake_eval_with("drv-B"),
+                &mut builder,
+                &mut loader,
+            ),
+        )
+        .await?;
+        assert_eq!(report.decision, "rebuild");
+        assert_eq!(report.action_taken, "built+loaded+recorded");
+        assert_eq!(
+            loader.calls,
+            vec![(
+                PathBuf::from("/nix/store/out-B-img.tar.gz"),
+                "img-pi:latest".to_string()
+            )]
         );
+
+        // The record now carries the phase-D shape: realized out_path.
+        let key = image_key("personal", "img-pi:latest");
+        let record = ImagesState::load(&state_dir)
+            .lookup(&key)
+            .expect("pipeline upserted the record")
+            .clone();
+        assert_eq!(record.drv_path, "drv-B");
+        assert_eq!(record.out_path, "/nix/store/out-B-img.tar.gz");
+        assert_eq!(record.digest, None);
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
 
-    /// Record present + tag gone → Rebuild (§3.4 row 3) → phase-D seam.
-    /// Record absent + tag gone → Build (row 5) → same seam.
+    /// Record present + tag gone → Rebuild (§3.4 row 3): the pipeline's
+    /// pre-gate probe sees the tag gone and loads anyway even when the
+    /// realized outPath MATCHES the recorded one (out-of-band deletion).
+    /// Record absent + tag gone → Build (row 5) → same load path.
     #[tokio::test]
-    async fn rebuild_and_build_rows_route_to_phase_d_seam() -> Result<()> {
+    async fn tag_gone_rows_load_anyway_and_build_row_records() -> Result<()> {
         let (tmp, target) = target_fixture("flow-rows", "pi");
         let state_dir = unique_state_dir("flow-rows-state");
 
-        // Seed a record so row 3 applies.
-        let mut probe = FakeStoreProbe::new();
-        probe.push(StoreTag::Present);
-        process_target(
-            &target,
-            &state_dir,
-            false,
-            false,
-            &mut probe,
-            &mut fake_eval_with("drv-A"),
-        )
-        .await?;
+        // Seed a record so row 3 applies, with a phase-D out_path.
+        let key = image_key("personal", "img-pi:latest");
+        let mut state = ImagesState::default();
+        let prov = Provenance::capture();
+        state.upsert(
+            key.clone(),
+            ImageRecord {
+                repo: target.repo.clone(),
+                attr: target.attr.clone(),
+                tag: target.tag.clone(),
+                drv_path: "drv-A".to_string(),
+                out_path: "/nix/store/out-A-img.tar.gz".to_string(),
+                digest: None,
+                built_at: prov.now.clone(),
+                loaded_at: prov.now.clone(),
+                loader: prov.loader,
+                host: prov.host,
+                user: prov.user,
+            },
+        );
+        state.save(&state_dir)?;
 
+        // Row 3: skew probe (gone) → Rebuild; builder realizes the SAME
+        // outPath; pre-gate probe (gone) → the gate loads anyway; post-load
+        // probe (present).
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Gone);
-        let err = process_target(
+        probe.push(StoreTag::Gone);
+        probe.push(StoreTag::Present);
+        let mut builder = FakeBuilder::new();
+        builder.push_ok("/nix/store/out-A-img.tar.gz");
+        let mut loader = FakeLoader::new();
+        loader.push_ok();
+        let report = process_target(
             &target,
             &state_dir,
             false,
             false,
-            &mut probe,
-            &mut fake_eval_with("drv-A"),
+            &mut seams(
+                &mut probe,
+                &mut fake_eval_with("drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
         )
-        .await
-        .expect_err("record present + tag gone → Rebuild → seam");
-        assert!(err.to_string().contains("spec 21 phase D"), "{err}");
+        .await?;
+        assert_eq!(report.decision, "rebuild");
+        assert_eq!(report.action_taken, "built+loaded+recorded");
+        assert_eq!(loader.calls.len(), 1, "tag gone → load anyway (§3.1 gate)");
 
-        // Row 5: absent + absent → Build.
+        // Row 5: absent + absent → Build → pipeline loads and records.
         let state_dir2 = unique_state_dir("flow-rows-state2");
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Gone);
-        let err = process_target(
+        probe.push(StoreTag::Gone);
+        probe.push(StoreTag::Present);
+        let mut builder = FakeBuilder::new();
+        builder.push_ok("/nix/store/out-A-img.tar.gz");
+        let mut loader = FakeLoader::new();
+        loader.push_ok();
+        let report = process_target(
             &target,
             &state_dir2,
             false,
             false,
-            &mut probe,
-            &mut fake_eval_with("drv-A"),
+            &mut seams(
+                &mut probe,
+                &mut fake_eval_with("drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
         )
-        .await
-        .expect_err("absent + gone → Build → seam");
-        assert!(err.to_string().contains("spec 21 phase D"), "{err}");
+        .await?;
+        assert_eq!(report.decision, "build");
+        assert_eq!(report.action_taken, "built+loaded+recorded");
+        let record = ImagesState::load(&state_dir2)
+            .lookup(&key)
+            .expect("Build row writes the record")
+            .clone();
+        assert_eq!(record.out_path, "/nix/store/out-A-img.tar.gz");
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
         let _ = std::fs::remove_dir_all(&state_dir2);
+        Ok(())
+    }
+
+    /// The §3.1 re-load gate end-to-end through process_target: drvPath
+    /// drift forces a Rebuild, but the realized outPath MATCHES the recorded
+    /// one and the tag is present → `msb load` is SKIPPED and the action is
+    /// the exact operator note "image unchanged in store; tag already
+    /// current"; the record's drv_path still refreshes.
+    #[tokio::test]
+    async fn outpath_gate_skip_reports_tag_already_current() -> Result<()> {
+        let (tmp, target) = target_fixture("flow-gate", "pi");
+        let state_dir = unique_state_dir("flow-gate-state");
+
+        // Seed a phase-D record (drv-A, realized out_path).
+        let key = image_key("personal", "img-pi:latest");
+        let mut state = ImagesState::default();
+        let prov = Provenance::capture();
+        state.upsert(
+            key.clone(),
+            ImageRecord {
+                repo: target.repo.clone(),
+                attr: target.attr.clone(),
+                tag: target.tag.clone(),
+                drv_path: "drv-A".to_string(),
+                out_path: "/nix/store/out-A-img.tar.gz".to_string(),
+                digest: None,
+                built_at: prov.now.clone(),
+                loaded_at: prov.now.clone(),
+                loader: prov.loader,
+                host: prov.host,
+                user: prov.user,
+            },
+        );
+        state.save(&state_dir)?;
+
+        // drv drift (drv-B) → stale + present → Rebuild; the builder
+        // realizes the SAME outPath (eval churn, nix-store dedup); the
+        // pre-gate probe sees the tag present → SkipLoad, no loader call.
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Present);
+        probe.push(StoreTag::Present);
+        let mut builder = FakeBuilder::new();
+        builder.push_ok("/nix/store/out-A-img.tar.gz");
+        let mut loader = FakeLoader::new(); // empty queue: must NOT be called
+        let report = process_target(
+            &target,
+            &state_dir,
+            false,
+            false,
+            &mut seams(
+                &mut probe,
+                &mut fake_eval_with("drv-B"),
+                &mut builder,
+                &mut loader,
+            ),
+        )
+        .await?;
+        assert_eq!(report.decision, "rebuild");
+        assert_eq!(
+            report.action_taken, "image unchanged in store; tag already current",
+            "the exact §3.1 gate-skip note"
+        );
+        assert!(loader.calls.is_empty(), "the gate skipped msb load");
+        let record = ImagesState::load(&state_dir)
+            .lookup(&key)
+            .expect("record upserted on the gate-skip path")
+            .clone();
+        assert_eq!(record.drv_path, "drv-B", "drv_path refreshes");
+        assert_eq!(record.out_path, "/nix/store/out-A-img.tar.gz");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
 
@@ -1072,8 +1308,15 @@ mod tests {
         probe.push(StoreTag::Present);
         let mut eval = FakeEvaluator::new();
         eval.push_err(DrvEvalError::NixAbsent);
-        let report =
-            process_target(&target, &state_dir, false, false, &mut probe, &mut eval).await?;
+        let (mut builder, mut loader) = no_pipeline();
+        let report = process_target(
+            &target,
+            &state_dir,
+            false,
+            false,
+            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+        )
+        .await?;
         assert_eq!(report.record_state, "unknown");
         assert_eq!(report.drv_path, None);
         assert_eq!(report.decision, "trust (unverified)");
@@ -1087,9 +1330,15 @@ mod tests {
         probe.push(StoreTag::Gone);
         let mut eval = FakeEvaluator::new();
         eval.push_err(DrvEvalError::NixAbsent);
-        let err = process_target(&target, &state_dir, false, false, &mut probe, &mut eval)
-            .await
-            .expect_err("nix absent + tag missing is a hard error (§7)");
+        let err = process_target(
+            &target,
+            &state_dir,
+            false,
+            false,
+            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+        )
+        .await
+        .expect_err("nix absent + tag missing is a hard error (§7)");
         let msg = err.to_string();
         assert!(msg.contains("install nix"), "remediation: {msg}");
         assert!(
@@ -1113,10 +1362,17 @@ mod tests {
         probe.push_unreachable("img-pi:latest", "io error: not a directory");
         let mut eval = FakeEvaluator::new();
         eval.push_ok("drv-A");
+        let (mut builder, mut loader) = no_pipeline();
 
-        let err = process_target(&target, &state_dir, false, false, &mut probe, &mut eval)
-            .await
-            .expect_err("unreachable store fails the flow");
+        let err = process_target(
+            &target,
+            &state_dir,
+            false,
+            false,
+            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+        )
+        .await
+        .expect_err("unreachable store fails the flow");
         let msg = err.to_string();
         assert!(msg.contains("msb image store unreachable"), "{msg}");
         assert!(msg.contains("db unreachable"), "ps.rs vocabulary: {msg}");
@@ -1143,19 +1399,30 @@ mod tests {
         // Seed a record with a DIFFERENT drv via a prior build-mode run.
         let mut probe0 = FakeStoreProbe::new();
         probe0.push(StoreTag::Present);
+        let (mut builder, mut loader) = no_pipeline();
         process_target(
             &target,
             &state_dir,
             false,
             false,
-            &mut probe0,
-            &mut fake_eval_with("drv-A"),
+            &mut seams(
+                &mut probe0,
+                &mut fake_eval_with("drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
         )
         .await?;
         let state_before = std::fs::read_to_string(images_state_path(&state_dir)).unwrap();
 
-        let report =
-            process_target(&target, &state_dir, true, false, &mut probe, &mut eval).await?;
+        let report = process_target(
+            &target,
+            &state_dir,
+            true,
+            false,
+            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+        )
+        .await?;
         assert_eq!(report.record_state, "stale");
         assert_eq!(report.decision, "would rebuild");
         assert_eq!(report.action_taken, "none (--check)");
@@ -1175,8 +1442,12 @@ mod tests {
             &state_dir2,
             true,
             false,
-            &mut probe,
-            &mut fake_eval_with("drv-A"),
+            &mut seams(
+                &mut probe,
+                &mut fake_eval_with("drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
         )
         .await?;
         assert_eq!(report.decision, "would trust+record");
@@ -1192,8 +1463,12 @@ mod tests {
             &state_dir,
             true,
             true,
-            &mut probe,
-            &mut fake_eval_with("drv-A"),
+            &mut seams(
+                &mut probe,
+                &mut fake_eval_with("drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
         )
         .await?;
         assert_eq!(

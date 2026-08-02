@@ -25,6 +25,39 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+> **2026-08-02 update (10) — spec 21 phase D (build/load pipeline) landed**
+> (one commit on top of phase C `0729bb4`): the phase-C seam is now the REAL
+> pipeline in `images/pipeline.rs` — async + trait-seamed (`ImageBuilder` /
+> `ImageLoader`, cfg(test) fakes, the detect.rs pattern), running inside the
+> build verb's still-held per-tag lock: `nix build <flake_root>#<attr>
+> --no-link --print-out-paths` (stderr TEED live to the TTY AND retained for
+> the §7 classification: fakeHash mismatch → `update-hashes` pointer;
+> fetch/substituter → offline-context error; generic → stderr tail) → the
+> §3.1 outPath re-load gate (pure `reload_decision`; skip `msb load` iff
+> record out_path matches AND the tag is still in the store; out-of-band
+> deletion loads anyway; phase-C `out_path=""` trust records upgrade on next
+> build) → `gunzip -c <outPath>` | `msb load -t <tag>` (no shell, no staged
+> tarball; msb via the doctor `MSB_PATH` convention) → post-load store
+> re-probe (load success + tag gone = named error) → record upsert + save
+> INSIDE the lock (`digest = None` — the §3.5 probe point). `process_target`
+> now takes the 4 seams as `TargetSeams`; gate-skip reports the exact note
+> `image unchanged in store; tag already current`. New read-only doctor
+> check `image_records` (records vs `msb image ls`; missing tag or
+> unreachable store = WARN, never FAIL). **E2E ran FULLY in-container** with
+> a ~20 KiB fixture image (`tests/fixtures/image-flake/`, nixpkgs pinned to
+> the repo's flake.lock rev, no FODs): `tests/image_pipeline_e2e.rs` (gates
+> on nix + an explicit `MSB_PATH` to an UNWRAPPED msb — the devshell's
+> wrapped `msb` FORCES `MSB_HOME=$HOME/.microsandbox`, so never run it
+> through the wrapper) plus a real-CLI smoke (build → skip → `--force`
+> gate-skip → out-of-band-delete reload; doctor OK→WARN). **§11 HOST-VERIFY:
+> 4 of 5 items VERIFIED in-container** (digest surface exists; load/query
+> normalization identical-verbatim; concurrent same-tag `msb load` unsafe —
+> the outer flock is load-bearing; git+file dirty-worktree drvPath stable).
+> Tests: 721 passed / 0 failed / 3 ignored (700 baseline + 21 new); `just
+> verify` green (`verify-full` left as the host gate). Spec 21 phases E–F
+> remain (E `HOST-KVM`; F `HOST-NIX`; phase-D remainder: real
+> workestrate-pi/tempest builds + the §3.5 digest capture flip).
+>
 > **2026-08-02 update (9) — spec 21 phase C (`workload build` + change
 > detection) landed** (one commit on top of phase B `290e91b`): new CLI verb
 > `workestrate workload build [name] [--repo <config> | --all-repos] [--check]

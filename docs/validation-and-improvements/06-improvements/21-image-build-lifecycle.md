@@ -207,6 +207,29 @@ fails the current policy gates) is skipped with a note naming the repo and
 the rest of the batch proceeds; explicit `--repo <name>` hard-errors on the
 same failure.
 
+**Phase-D implementation note (2026-08-02):** the outPath re-load gate is
+now REAL (`images/pipeline.rs::reload_decision`, pure): after `nix build`
+the pipeline re-loads `images.json` fresh INSIDE the still-held per-tag
+lock and skips `msb load` only when the recorded `out_path` is non-empty
+AND equals the realized outPath AND the store probe still finds the tag —
+an out-of-band tag deletion loads anyway even with a matching outPath, and
+phase-C trust records with `out_path = ""` never match the gate, so they
+are **upgraded to full phase-D records (real `out_path`) on the next
+build/rebuild** with no migration step. `nix build` stderr is TEED live to
+the operator TTY (parent-side, user-facing, minutes-long) AND retained for
+the §7 classification: fixed-output hash mismatch → the `update-hashes`
+recipe pointer (not a raw nix error wall); fetch/substituter failure → the
+offline-context error; anything else → a named error with the stderr tail.
+The load stage is `gunzip -c <outPath>` piped into `msb load -t <tag>` (no
+shell, no staged tarball — the anti-accumulation posture), with a post-load
+store re-probe: `msb load` reporting success while the tag stays gone is a
+named error. `digest` stays `null` at the phase-D write site: §11 item 1
+verified the msb digest surface EXISTS (see below), but capture is deferred
+until the §3.5 digest-COMPARISON design lands — the write site is the
+documented probe point. A read-only `image_records` doctor check compares
+`images.json` against `msb image ls` (missing recorded tag or unreadable
+store → WARN, never FAIL).
+
 ### 3.5 Digest upgrade path
 
 The drvPath/outPath comparison answers "did the BUILD INPUTS change", not "is
@@ -439,7 +462,7 @@ flake-input update (operator action in the config repo), not a reload.
 | **A** | This spec + scaffold reservation: `.workestrate-build/` `.gitignore` + README + `.tpl` parity, `local_build` undeclared-fallback default | `scaffold/template/` (gitignore/README/.tpl), `copier` static copy, `local_build` fallback resolution in `types.rs` / `plan.rs` | scaffold parity test (existing `scaffold-check` harness); fallback-default unit test | `just scaffold-check`, `cargo test` | S, `verifiable-here` |
 | **B** | Image-state store: `state/images.json` schema + atomic tmp+rename IO + `state/image-locks/` flock helper | new `control/agentctl/src/images/state.rs`; reuse the port-registry atomic-write pattern | round-trip serde test; tmp+rename crash-safety test; flock contention test | `cargo test` | S, `verifiable-here` |
 | **C** | Change detection + `workload build` verb: drvPath eval, skew matrix, selectors, `--check`, `--force`, `--json`, zero-eligible note | new `images/detect.rs`, `images/build_cmd.rs`; verb wiring in `main.rs`; `registry.configs` iteration | drvPath-eval unit tests against fixtures; skew-matrix table tests; selector-scope tests; stderr-note assertion | `cargo test`; live `nix eval` smoke | M, `HOST-NIX` |
-| **D** | Build/load pipeline: `nix build` + `msb load` orchestration, outPath re-load gate, digest capture (pending msb surface) | new `images/pipeline.rs`; msb invocation wrapper alongside the existing `microsandbox` SDK call sites | pipeline staging tests with a stub loader; re-load-on-outPath-change test | `cargo test`; `nix build` + `msb load` smoke; msb digest-surface verification | M, `HOST-NIX` + msb HOST-VERIFY cluster |
+| **D** | Build/load pipeline: `nix build` + `msb load` orchestration, outPath re-load gate, digest capture (pending msb surface) | new `images/pipeline.rs`; msb invocation wrapper alongside the existing `microsandbox` SDK call sites | pipeline staging tests with a stub loader; re-load-on-outPath-change test | `cargo test`; `nix build` + `msb load` smoke; msb digest-surface verification | M, **DONE 2026-08-02 — validated in-container through the FULL e2e** (fixture image: nix build → gated `msb load` → record → gate-skip → out-of-band-delete reload, via the real CLI AND `tests/image_pipeline_e2e.rs`); `HOST-NIX` only for the real workestrate-pi/tempest images (network FODs) — see the §11 verification block |
 | **E** | Lifecycle wiring: ensure-images pre-flight in `cmd_workload_up`/`exec`/`batch-up`, `images_ready` on `InstanceSpec`, `--images-ready` in `detach_args`, `--reload-images` threading into `cmd_workload_up_all` | `spawn.rs`, `run.rs`, `main.rs`, `InstanceSpec`, `detach_args`, bare-up flag-reject loop | parent-ensures/child-skips integration tests; batch force-scope test; KVM e2e: up after TOML edit rebuilds before spawn | `cargo test`; guest boot + stale-tag e2e | M, `HOST-KVM` e2e |
 | **F** | Multi-repo + personal repo migration: `--repo`/`--all-repos` breadth, personal config repo cutover from the manual justfile ritual, record seeding | `images/build_cmd.rs` (repo iteration), personal repo justfile (`update-hashes` / `load-images` recipes retired) | multi-repo selector tests; first-run record-seeding smoke | `cargo test`; personal-repo `up` smoke | S–M, `HOST-NIX` |
 
@@ -474,6 +497,58 @@ verified in this container. Each is a phase-D/E gate item:
    input, an uncommitted (dirty) worktree must produce a stable drvPath across
    evals — otherwise every eval looks stale and change detection (§3.1) is
    useless on dirty trees.
+
+**Phase-D in-container verification (2026-08-02, nix 2.35.1 / msb 0.5.6):**
+most of the cluster turned out to be verifiable in-container after all —
+`msb load` is a pure STORE IMPORT and needs no KVM (KVM gates only RUNNING
+sandboxes), and a ~20 KiB `dockerTools.buildLayeredImage` fixture image
+(`control/agentctl/tests/fixtures/image-flake/`, no network FODs, nixpkgs
+pinned to this repo's `flake.lock` rev) exercised every item:
+
+1. **VERIFIED in-container.** `msb image ls` prints a `DIGEST` column
+   (truncated); `msb image inspect <ref>` prints the FULL manifest digest
+   (`sha256:3a48c1e72d5a0e6f…` for the fixture); the Rust SDK exposes
+   `ImageHandle::manifest_digest() -> Option<&str>` (microsandbox 0.5.6,
+   `lib/image/mod.rs`). The §3.5 surface EXISTS. Phase D still records
+   `digest: null` — capture is deferred to the §3.5 comparison design (the
+   one-way signal in the D1 trust branch), with the pipeline's record-write
+   site as the documented probe point. Host remainder: none for the surface
+   itself.
+2. **VERIFIED at the load/query level in-container.** `msb load -t
+   othername` (bare) registers the reference VERBATIM as `othername` — NOT
+   normalized to `othername:latest` — and `msb image inspect
+   othername:latest` then fails "image not found" while `inspect othername`
+   succeeds: load-time and query-time normalization are the SAME (verbatim)
+   in 0.5.6. D2's always-`name:tag` tags keep the tool on the safe side by
+   construction. Host remainder: the `create()`-time docker.io pull
+   fallback for a missing tag is exercised with the phase-E KVM e2e.
+3. **VERIFIED in-container.** Two parallel `gunzip -c … | msb load -t
+   <same tag>` runs raced: one loaded, the other FAILED with `cache error
+   at …/cache/manifests/<hash>.json: No such file or directory (os error
+   2)`. msb's internal locking does NOT make concurrent same-tag loads
+   safe — the outer per-tag flock (§3.3) is load-bearing — and the loser
+   ERRORS rather than deadlocking, so the locks compose as spec'd.
+4. **PARTIALLY verified in-container.** The same fixture tarball reloaded
+   across separate `MSB_HOME`s and separate loads yields the IDENTICAL
+   manifest digest; for the fixture, same-rev reproducibility reduces to
+   nix content-addressing (same outPath → same bytes). Host remainder:
+   bun-compile FOD determinism for the real workestrate-pi/tempest images
+   (HOST-NIX).
+5. **VERIFIED in-container.** A git flake with a dirty (uncommitted)
+   worktree produces a drvPath that is STABLE across repeat evals AND
+   tracks the dirty content: editing the derivation (`name = "img"` →
+   `"img-dirty"`) without committing changed the drvPath
+   (`…-img-dirty.drv`), and repeat dirty evals returned the identical
+   drvPath. Change detection is sound on dirty trees.
+
+One container caveat discovered during verification: the workestrate
+**devshell wraps `msb` with a forced `MSB_HOME=$HOME/.microsandbox`**,
+overriding the caller's `MSB_HOME`. The phase-D e2e
+(`control/agentctl/tests/image_pipeline_e2e.rs`) therefore gates on an
+explicit `MSB_PATH` pointing at an UNWRAPPED msb binary — running it
+through the wrapper would write fixture images into the real home store.
+On a host without the wrapper, plain `msb` honors `MSB_HOME` naturally.
+
 
 ---
 

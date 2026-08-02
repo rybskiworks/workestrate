@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::config;
+use crate::images::state::{ImageRecord, ImagesState};
 use crate::scaffold;
 
 /// One doctor check result. `status` is "OK", "WARN", or "FAIL"; a FAIL
 /// anywhere flips the overall verdict and the process exit code to 1.
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct DoctorCheck {
     name: &'static str,
     status: &'static str,
@@ -149,6 +150,140 @@ pub fn doctor_check_msb() -> DoctorCheck {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Image records vs store presence (spec 21 §3.2 — read-only)
+// ---------------------------------------------------------------------------
+
+/// What the read-only `msb image ls` probe returned. Separated from the
+/// check builder so the verdict logic is unit-testable without spawning msb.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreListing {
+    /// Reference strings from the listing's first column.
+    Tags(Vec<String>),
+    /// The listing could not be read (msb missing/unreachable/failed) —
+    /// always WARN, never FAIL: this hook is read-only and the records are
+    /// advisory (spec §3.2).
+    Unreachable(String),
+}
+
+/// Parse the reference column of `msb image ls` output (pure): the first
+/// whitespace-separated token of each non-header, non-empty row. The
+/// "No images found." empty-store line yields an empty vec.
+pub fn parse_image_ls_references(output: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() || line == "No images found." {
+            continue;
+        }
+        let Some(first) = line.split_whitespace().next() else {
+            continue;
+        };
+        if first == "REFERENCE" {
+            continue; // the header row
+        }
+        refs.push(first.to_string());
+    }
+    refs
+}
+
+/// The pure verdict core of [`doctor_check_image_records`]: recorded tags vs
+/// store presence. No records → OK note; unreachable store → WARN (never
+/// FAIL a read-only hook); a recorded tag missing from the store → WARN with
+/// remediation; all present → OK.
+pub fn image_records_check(state: &ImagesState, listing: &StoreListing) -> DoctorCheck {
+    if state.images.is_empty() {
+        return DoctorCheck::new(
+            "image_records",
+            "OK",
+            "no image records (no nix-layered image has been built/loaded via 'workload \
+             build' yet)"
+                .to_string(),
+        );
+    }
+    let count = state.images.len();
+    let listing = match listing {
+        StoreListing::Tags(tags) => tags,
+        StoreListing::Unreachable(detail) => {
+            return DoctorCheck::new(
+                "image_records",
+                "WARN",
+                format!(
+                    "{count} image record(s) but the msb store listing could not be read: \
+                     {detail}"
+                ),
+            )
+            .with_remediation(
+                "Check that msb is installed and MSB_HOME/MSB_PATH are set correctly; the \
+                 records are advisory — the store is ground truth (spec 21 §3.2)",
+            );
+        }
+    };
+    let mut missing: Vec<&ImageRecord> = state
+        .images
+        .values()
+        .filter(|r| !listing.iter().any(|t| t == &r.tag))
+        .collect();
+    missing.sort_by(|a, b| a.tag.cmp(&b.tag));
+    if missing.is_empty() {
+        DoctorCheck::new(
+            "image_records",
+            "OK",
+            format!("{count} image record(s); all recorded tags present in the msb store"),
+        )
+    } else {
+        let names = missing
+            .iter()
+            .map(|r| format!("{}#{}", r.repo.name, r.tag))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let first_repo = missing[0].repo.name.clone();
+        DoctorCheck::new(
+            "image_records",
+            "WARN",
+            format!("recorded tag(s) missing from the msb store: {names}"),
+        )
+        .with_remediation(&format!(
+            "re-run 'workestrate workload build --repo {first_repo}' (or load the image \
+             manually via the declaring repo's 'load-images' recipe) to re-populate the \
+             store; records are advisory — the store is ground truth (spec 21 §3.2)"
+        ))
+    }
+}
+
+/// `image_records` check (spec 21 §3.2, read-only): the per-home
+/// `state/images.json` records against the live msb store listing (`msb
+/// image ls` via [`msb_binary`]). Never FAILs: a missing recorded tag or an
+/// unreadable store is WARN (the records are advisory; the store is ground
+/// truth). nix is not consulted at all — the separate `nix` doctor check
+/// owns that verdict.
+pub fn doctor_check_image_records() -> DoctorCheck {
+    let state = ImagesState::load(&config::resolve_state_dir());
+    if state.images.is_empty() {
+        // No records → OK note without touching the store at all.
+        return image_records_check(&state, &StoreListing::Tags(Vec::new()));
+    }
+    let bin = msb_binary();
+    let listing = match std::process::Command::new(&bin)
+        .args(["image", "ls"])
+        .output()
+    {
+        Ok(out) if out.status.success() => StoreListing::Tags(parse_image_ls_references(
+            &String::from_utf8_lossy(&out.stdout),
+        )),
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            StoreListing::Unreachable(if stderr.is_empty() {
+                format!("'{bin} image ls' exited with {}", out.status)
+            } else {
+                stderr
+            })
+        }
+        Err(e) => StoreListing::Unreachable(format!("failed to spawn '{bin}': {e}")),
+    };
+    image_records_check(&state, &listing)
+}
+
 pub fn doctor_check_home() -> DoctorCheck {
     let (home, kind) = config::resolve_home_with_kind();
     let message = format!("{} ({:?})", home.display(), kind);
@@ -239,6 +374,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
         doctor_check_msb(),
         doctor_check_home(),
         doctor_check_config_repos()?,
+        doctor_check_image_records(),
     ];
     let overall = if checks.iter().any(|c| c.status == "FAIL") {
         "FAIL"
@@ -282,4 +418,117 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+    use crate::images::state::{image_key, RepoIdentity};
+
+    fn record(repo: &str, tag: &str) -> ImageRecord {
+        ImageRecord {
+            repo: RepoIdentity {
+                name: repo.to_string(),
+                path: PathBuf::from("/tmp/repo"),
+                flake_root: PathBuf::from("/tmp/repo"),
+            },
+            attr: "img".to_string(),
+            tag: tag.to_string(),
+            drv_path: "/nix/store/drv.drv".to_string(),
+            out_path: "/nix/store/out.tar.gz".to_string(),
+            digest: None,
+            built_at: "2026-08-02T10:15:00Z".to_string(),
+            loaded_at: "2026-08-02T10:16:12Z".to_string(),
+            loader: "workestrate 0.1.0".to_string(),
+            host: "devbox".to_string(),
+            user: "node".to_string(),
+        }
+    }
+
+    fn state_with(records: &[(&str, &str)]) -> ImagesState {
+        let mut state = ImagesState::default();
+        for (repo, tag) in records {
+            state.upsert(image_key(repo, tag), record(repo, tag));
+        }
+        state
+    }
+
+    // ---- parse_image_ls_references (pure) ----
+
+    #[test]
+    fn parse_image_ls_reads_the_reference_column() {
+        let output = "REFERENCE                  DIGEST                 SIZE        CREATED\n\
+                      wk-fixture-image:latest    sha256:3a48c1e72d5a    20.0 KiB    2026-08-02 20:59:28\n\
+                      tempest:latest             sha256:9f8e7d6c5b4a    1.2 GiB     2026-08-01 09:00:00\n";
+        assert_eq!(
+            parse_image_ls_references(output),
+            vec!["wk-fixture-image:latest", "tempest:latest"]
+        );
+        assert!(parse_image_ls_references("No images found.").is_empty());
+        assert!(parse_image_ls_references("").is_empty());
+    }
+
+    // ---- image_records_check (pure verdict core) ----
+
+    /// No records → OK note (the store is never consulted).
+    #[test]
+    fn no_records_is_an_ok_note() {
+        let check = image_records_check(&ImagesState::default(), &StoreListing::Tags(vec![]));
+        assert_eq!(check.name, "image_records");
+        assert_eq!(check.status, "OK");
+        assert!(check.message.contains("no image records"), "{check:?}");
+    }
+
+    /// All recorded tags present in the store → OK.
+    #[test]
+    fn all_recorded_tags_present_is_ok() {
+        let state = state_with(&[("personal", "workestrate-pi:latest")]);
+        let check = image_records_check(
+            &state,
+            &StoreListing::Tags(vec!["workestrate-pi:latest".to_string()]),
+        );
+        assert_eq!(check.status, "OK");
+        assert!(check.message.contains("1 image record(s)"), "{check:?}");
+    }
+
+    /// A recorded tag missing from the store → WARN (never FAIL) with the
+    /// remediation naming the repo and the build verb.
+    #[test]
+    fn missing_recorded_tag_is_warn_with_remediation() {
+        let state = state_with(&[
+            ("personal", "workestrate-pi:latest"),
+            ("work", "tempest:latest"),
+        ]);
+        let check = image_records_check(
+            &state,
+            &StoreListing::Tags(vec!["workestrate-pi:latest".to_string()]),
+        );
+        assert_eq!(check.status, "WARN", "read-only hook never FAILs");
+        assert!(check.message.contains("work#tempest:latest"), "{check:?}");
+        let remediation = check.remediation.expect("WARN carries remediation");
+        assert!(
+            remediation.contains("workestrate workload build --repo work"),
+            "{remediation}"
+        );
+        assert!(remediation.contains("load-images"), "{remediation}");
+    }
+
+    /// An unreadable store with records present → WARN, never FAIL.
+    #[test]
+    fn unreachable_store_is_warn_never_fail() {
+        let state = state_with(&[("personal", "workestrate-pi:latest")]);
+        let check = image_records_check(
+            &state,
+            &StoreListing::Unreachable("failed to spawn 'msb': No such file".to_string()),
+        );
+        assert_eq!(check.status, "WARN");
+        assert!(check.message.contains("could not be read"), "{check:?}");
+        assert!(check.remediation.is_some());
+    }
 }
