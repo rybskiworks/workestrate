@@ -63,24 +63,11 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
             "config.reference/workestrate.toml",
             root.join("config.reference").join("workestrate.toml"),
         ),
-        required(
-            "infra/microsandbox/sdk-notes.md",
-            root.join("infra/microsandbox/sdk-notes.md"),
-        ),
-        required("profiles/litellm.md", root.join("profiles/litellm.md")),
-        required("profiles/agents/pi.md", root.join("profiles/agents/pi.md")),
-        required(
-            "profiles/agents/odysseus.md",
-            root.join("profiles/agents/odysseus.md"),
-        ),
-        required(
-            "profiles/agents/opencode.md",
-            root.join("profiles/agents/opencode.md"),
-        ),
-        required(
-            "profiles/agents/tempest.md",
-            root.join("profiles/agents/tempest.md"),
-        ),
+        // NOTE (cleanup phase 2): personal workflow content (profiles/*.md,
+        // profiles/agents/*.md, infra/microsandbox/sdk-notes.md) is no longer
+        // a hard runtime gate — the tool repo must not couple `agentctl
+        // check` to personal files. The files themselves remain in the repo
+        // until a later migration step moves them out.
         // Optional: agent repos are typically supplied via flake
         // inputs. A fresh clone may legitimately omit local
         // `agents/<name>/repo` checkouts.
@@ -272,7 +259,10 @@ fn process_override_section(
 /// Load the active `workestrate.toml`.
 ///
 /// Resolution order (lowest to highest precedence):
-/// 1. Reference config (`config.reference/workestrate.toml`).
+/// 1. Reference config (`config.reference/workestrate.toml`) — OPT-IN since
+///    cleanup phase 2: only included when `WORKESTRATE_REFERENCE_CONFIG=1`
+///    (see `reference_config_path()`; the spec-05 cwd gate stays layered on
+///    top for cwd-derived roots).
 /// 2. Registry layers (`registry.layers` ordered list, each a config repo).
 /// 3. User-global overrides (`$XDG_CONFIG_HOME/workestrate/overrides.toml`):
 ///    `[global]` is applied to every context, then `[configs.<name>]` for each
@@ -300,7 +290,8 @@ pub fn load_config() -> Result<ConfigFile> {
 
     let mut layers: Vec<crate::merge::Layer> = Vec::new();
 
-    // 2. Reference config as the base layer.
+    // 2. Reference config as the base layer (opt-in: reference_config_path()
+    //    returns None unless WORKESTRATE_REFERENCE_CONFIG=1).
     if let Some(path) = reference_config_path() {
         if path.exists() {
             layers.push(crate::merge::Layer::load("reference", &path)?);
@@ -680,7 +671,9 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
     }
 
     // 2. Reference config dir (shipped with the tool — no .env.enc expected,
-    //    but included so the layer list mirrors load_config()).
+    //    but included so the layer list mirrors load_config()). Opt-in since
+    //    cleanup phase 2: reference_config_path() returns None unless
+    //    WORKESTRATE_REFERENCE_CONFIG=1.
     if let Some(path) = reference_config_path() {
         if let Some(parent) = path.parent() {
             layers.push(SecretsLayer {
@@ -1172,12 +1165,17 @@ pub(crate) mod tests {
         let old_xdg_data = std::env::var("XDG_DATA_HOME").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
+        let old_ref = std::env::var("WORKESTRATE_REFERENCE_CONFIG").ok();
 
         std::env::set_var("HOME", &tmp_home);
         std::env::set_var("XDG_CONFIG_HOME", tmp_home.join(".config"));
         std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share"));
         std::env::remove_var("WORKESTRATE_CONFIG_DIR");
         std::env::remove_var("WORKESTRATE_CONTEXT");
+        // Opt into the reference base layer (cleanup phase 2): under cargo
+        // test CARGO_MANIFEST_DIR pins the repo root, so the reference layer
+        // resolves deterministically.
+        std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1");
 
         let layers = resolve_secrets_layers()?;
 
@@ -1202,11 +1200,22 @@ pub(crate) mod tests {
             Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
             None => std::env::remove_var("WORKESTRATE_CONTEXT"),
         }
+        match old_ref {
+            Some(v) => std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", v),
+            None => std::env::remove_var("WORKESTRATE_REFERENCE_CONFIG"),
+        }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
-        // Expected layers: reference, personal (context layer), user-global
-        // (trusted project is not present because cwd has no workestrate.toml)
+        // Expected layers: reference (opted in above), personal (context
+        // layer), user-global (trusted project is not present because cwd
+        // has no workestrate.toml)
         let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(
+            names.first(),
+            Some(&"reference"),
+            "opted-in reference layer should lead the layer list: {:?}",
+            names
+        );
         assert!(
             names.contains(&"personal"),
             "context layer 'personal' should be present: {:?}",

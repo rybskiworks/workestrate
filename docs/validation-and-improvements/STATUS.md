@@ -14,7 +14,49 @@ work from §5.
 
 ---
 
-## 0. LATEST LANDING — cleanup PHASE 1 (2026-08-02, lands on top of phase-0 HEAD `b9a3ed3`)
+## 0. LATEST LANDING — cleanup PHASE 2 (2026-08-02, uncommitted at time of writing; lands as one commit on top of phase 1)
+
+**Phase 2 of the approved cleanup: the tool repo is decoupled from personal
+workflow content.** What changed and why, for contextless sessions:
+
+- **Check gates decoupled:** `profiles/*` and
+  `infra/microsandbox/sdk-notes.md` removed from the check gates.
+- **`config.reference` base layer is now opt-in** via
+  `WORKESTRATE_REFERENCE_CONFIG=1` (the spec-05 cwd gate stays unchanged on
+  top).
+- **Fixture is synthetic example-\*-only:** the real litellm workload in
+  `config.reference/workestrate.toml` was replaced with `example-litellm`;
+  goldens regenerated.
+- **Moved to the personal config repo**
+  (`workestrate-dev-home/config-repos/personal`):
+  - `profiles/` (litellm.md + agents/{pi,odysseus,opencode,tempest}.md) →
+    `docs/profiles/`;
+  - `docs/litellm/schemas/` → `docs/litellm/schemas/`;
+  - `.agents/skills/validation-litellm-config-check/` → same path in the
+    personal repo; the `litellm-check` justfile recipe moved with it
+    (personal-repo justfile, args re-pointed at
+    `workestrate/workloads/litellm/config.yaml`).
+- **Deleted as redundant:** `config.reference/infra/litellm/{config,models}.yaml`
+  — `models.yaml` byte-identical to the personal-repo canonical copy;
+  `config.yaml` differed by one comment word (the personal copy's
+  "workestrator" typo fixed to "workestrate" on merge).
+- **Live gate-list citations updated:** `nix-ci-cd` and
+  `workflow-nix-hardening-05-verify` skills no longer list `litellm-check` in
+  the `just verify` composition.
+- **Known staleness (intentional, deferred):** the remaining litellm skill
+  corpus under `.agents/skills/` still cites `docs/litellm/schemas/*` and
+  `validation-litellm-config-check` — those resolve in the personal repo now
+  and move with the deferred docs/litellm knowledge-repo decision (phase 3).
+  Historical docs under `docs/` keep their stale citations as record.
+- **Gates after landing:** 635 passed / 0 failed / 3 ignored.
+- **Phase-3 follow-ups:** `tests/fixtures` 5-workload fixture still contains a
+  real litellm workload (ignored KVM tests only); the docs/litellm corpus
+  knowledge-repo decision is deferred; tempest package deletion is planned
+  (the pre-existing tempest.nix npmDepsHash lambda bug becomes moot).
+
+---
+
+## 0.1 PREVIOUS LANDING — cleanup PHASE 1 (2026-08-02, lands on top of phase-0 HEAD `b9a3ed3`)
 
 **Phase 1 of the approved cleanup landed** as one commit on
 `migration/tool-model` (the phase-1 commit; hash assigned at commit time).
@@ -56,7 +98,7 @@ What changed and why, for contextless sessions:
 
 ---
 
-## 0.1 PREVIOUS LANDING — cleanup PHASE 0 (2026-08-02, landed on top of `09b624f`)
+## 0.2 PREVIOUS LANDING — cleanup PHASE 0 (2026-08-02, landed on top of `09b624f`)
 
 **Phase 0 of the approved mount/seed path-resolution cleanup landed** (one
 commit; HEAD moves past `09b624f` — the snapshot below still cites `7624aaf`/

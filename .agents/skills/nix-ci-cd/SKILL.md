@@ -96,7 +96,7 @@ caches). Set as GitHub repository or organization secrets — NEVER in-repo.
 
 - `just verify` — runs in-container (all non-nix gates): `toolchain-check`,
   `check` (fmt + clippy + cargo check), `test`, `spec-examples`,
-  `litellm-check`, `golden-check`, `schema-check`, `scaffold-check`,
+  `golden-check`, `schema-check`, `scaffold-check`,
   `lint-nix`, `store-audit`, plus `git diff --exit-code HEAD -- control/agentctl/Cargo.lock`.
 - `just verify-full` — `verify` + `nix build .#workestrate` (HOST-NIX).
 
@@ -104,7 +104,7 @@ caches). Set as GitHub repository or organization secrets — NEVER in-repo.
 
 **Runs in-container** (no nix needed): `cargo` commands (via relocated
 `CARGO_TARGET_DIR`), `just check`, `just test`, `just lint-nix` (bash static
-guard), `just litellm-check`, `just golden-check`, `just schema-check`,
+guard), `just golden-check`, `just schema-check`,
 `just scaffold-check`, `just store-audit` (skips when nix absent). Essentially
 all of `just verify` EXCEPT the nix build step.
 

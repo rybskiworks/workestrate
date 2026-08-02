@@ -6,11 +6,11 @@ cpus: 2
 memory: 2048 MiB
 env: T3MP3ST_HOST=127.0.0.1
 env: OPENAI_API_KEY=(redacted)
-env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'litellm')
+env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'example-litellm')
 mount: workspaces/example-offensive-state:/data
 network: default_deny=false
   egress: tcp:53 -> host
   egress: udp:53 -> host
   egress: tcp:443 -> openrouter.ai, api.kimi.com, api.neuralwatt.com, api.minimax.io, github.com, api.github.com
-  egress: tcp:4000 -> host (derived: depends_on 'litellm')
+  egress: tcp:4000 -> host (derived: depends_on 'example-litellm')
 

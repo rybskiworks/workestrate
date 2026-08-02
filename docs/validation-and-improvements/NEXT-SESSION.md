@@ -49,6 +49,20 @@ re-derive their contents.
 > no such text (grep-verified) — the phase-0 "spec 17/20" flag was
 > spec-17-only. Remaining citation staleness is recorded in STATUS.md §0.
 
+> **2026-08-02 update (3) — cleanup PHASE 2 landed** (uncommitted at time of
+> writing; lands as one commit on top of phase 1). Tool repo decoupled from
+> personal workflow content: check gates no longer cover `profiles/*` /
+> sdk-notes; the `config.reference` base layer is opt-in via
+> `WORKESTRATE_REFERENCE_CONFIG=1` (spec-05 cwd gate unchanged on top); the
+> fixture is synthetic example-*-only (litellm → example-litellm, goldens
+> regenerated). `profiles/`, `docs/litellm/schemas/`, and the
+> `validation-litellm-config-check` skill + `litellm-check` recipe moved to
+> the personal config repo (`workestrate-dev-home/config-repos/personal`);
+> `config.reference/infra/litellm/*.yaml` deleted as redundant with the
+> canonical personal-repo copies. Tests: 635 passed / 0 failed / 3 ignored.
+> Phase-3 follow-ups recorded in STATUS.md §0 (tests/fixtures litellm
+> workload, docs/litellm knowledge-repo decision, tempest package deletion).
+
 - HEAD: `867a96e` (docs: STATUS.md comprehensive state report; latest code
   commit is the spec-05 cwd-fallback fix `7624aaf`; the interim
   microsandbox-filesystem agentd patch slim `19d94e8` landed just before).
@@ -204,8 +218,10 @@ re-derive their contents.
 3. **One flaky lib test seen once** (374/375 passed in one run; NOT reproduced
    in ~10 subsequent runs — likely timing-sensitive). Watch it; no action
    unless it recurs.
-4. **`just verify`'s litellm-check needs PyYAML** — run inside `nix develop`
-   (store-path prefix; bare shell lacks it).
+4. **~~`just verify`'s litellm-check needs PyYAML~~ — MOVED (2026-08-02,
+   cleanup phase 2).** `litellm-check` left the tool repo for the personal
+   config repo's justfile; the PyYAML note applies there (run inside a
+   devshell with PyYAML).
 5. **Experiment E1 NEEDS-KVM** (guest-reachability of non-`127.0.0.1`
    loopbacks; in `05-host-validation.md` B10; the deferred binding decision
    stays NEEDS-KVM per ADR 0026).
@@ -418,3 +434,10 @@ the legacy `.assets/opencode-agent` fleet deleted;
 `docs/odysseus-full-capability.md` moved to the personal config repo;
 spec-17 path-semantics text reconciled with the phase-0 implementation
 (spec 20 confirmed to need no amendment).
+
+**2026-08-02 refresh (3):** cleanup PHASE 2 landed (uncommitted at time of
+writing) — personal workflow content decoupled from the tool repo:
+opt-in `config.reference` base layer, synthetic example-* fixture,
+`profiles/` + litellm schemas/config-check skill + `litellm-check` recipe
+moved to the personal config repo; open thread 4 (litellm-check PyYAML)
+re-scoped to the personal repo.

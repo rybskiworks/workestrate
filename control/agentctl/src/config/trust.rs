@@ -144,6 +144,12 @@ pub(crate) mod tests {
     /// A1 regression: with a registry present but cwd NOT trusted, a
     /// workestrate.local.toml in cwd must NOT be loaded. After trusting
     /// the project dir, the local layer MUST be loaded.
+    ///
+    /// The test opts into the reference base layer
+    /// (`WORKESTRATE_REFERENCE_CONFIG=1`, cleanup phase 2): case 1 gates out
+    /// EVERY non-reference layer, and without the base layer `load_config`
+    /// would bail with "no config found" before the assertion could observe
+    /// the gated marker's absence.
     #[test]
     fn local_toml_requires_trust_gate() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
@@ -169,6 +175,7 @@ pub(crate) mod tests {
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
+        let old_ref = std::env::var("WORKESTRATE_REFERENCE_CONFIG").ok();
         let old_cwd = std::env::current_dir().ok();
 
         std::env::set_var("HOME", root.join("home"));
@@ -179,6 +186,10 @@ pub(crate) mod tests {
         std::env::remove_var("WORKESTRATE_CONTEXT");
         std::env::remove_var("WORKESTRATE_CONFIG_DIR");
         std::env::remove_var("WORKESTRATE_NO_PROJECT_CONFIG");
+        // Cleanup phase 2: opt into the reference base layer so case 1 (all
+        // cwd layers gated out) still resolves a config instead of bailing
+        // with "no config found".
+        std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1");
         std::env::set_current_dir(root.join("cwd"))?;
 
         // Case 1: registry exists, cwd NOT trusted -> local layer gated out.
@@ -210,6 +221,7 @@ pub(crate) mod tests {
             ("WORKESTRATE_CONTEXT", old_ctx),
             ("WORKESTRATE_CONFIG_DIR", old_config_dir),
             ("WORKESTRATE_NO_PROJECT_CONFIG", old_no_project),
+            ("WORKESTRATE_REFERENCE_CONFIG", old_ref),
         ] {
             match v {
                 Some(val) => std::env::set_var(k, val),

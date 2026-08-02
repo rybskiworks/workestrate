@@ -20,9 +20,11 @@
 //! and writes fixture TOML inline (registry, per-layer
 //! `<home>/config-repos/<layer>/workestrate.toml`, project `workestrate.toml`).
 //!
-//! The repo's `config.reference/workestrate.toml` is auto-prepended as the
-//! "reference" base layer on every invocation (compile-time-anchored
-//! discovery, CARGO_MANIFEST_DIR fallback). It defines `example-service`
+//! The repo's `config.reference/workestrate.toml` is prepended as the
+//! "reference" base layer on every invocation — explicitly opted in via
+//! `WORKESTRATE_REFERENCE_CONFIG=1` since cleanup phase 2 made the base
+//! layer opt-in (discovery stays compile-time-anchored via the forwarded
+//! CARGO_MANIFEST_DIR). It defines `example-service`
 //! (kind=service), `example-agent`, `example-offensive` with
 //! schema_version=1. Fixtures either override `example-service` fields or
 //! add fresh workloads alongside it.
@@ -126,7 +128,8 @@ impl ProdHome {
 
     /// Build a `workestrate` Command with the full production-path env:
     /// WORKESTRATE_HOME set, bypass vars REMOVED, XDG pointed into the
-    /// sandbox (defensive hermeticity), CARGO_MANIFEST_DIR forwarded so the
+    /// sandbox (defensive hermeticity), CARGO_MANIFEST_DIR forwarded plus
+    /// WORKESTRATE_REFERENCE_CONFIG=1 (cleanup-phase-2 opt-in) so the
     /// reference layer resolves deterministically no matter how the test
     /// harness itself was launched.
     fn cmd(&self) -> Command {
@@ -142,8 +145,10 @@ impl ProdHome {
             "XDG_STATE_HOME",
             self.operator_home.join(".local").join("state"),
         );
-        // Reference-config discovery fallback (compile-time anchored).
+        // Reference-config discovery fallback (compile-time anchored), plus
+        // the cleanup-phase-2 opt-in so the reference base layer is included.
         c.env("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"));
+        c.env("WORKESTRATE_REFERENCE_CONFIG", "1");
         // CRITICAL: never leak the bypass/discovery vars into the child.
         c.env_remove("WORKESTRATE_CONFIG_DIR");
         c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");

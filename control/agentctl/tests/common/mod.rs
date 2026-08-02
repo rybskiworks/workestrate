@@ -71,12 +71,21 @@ impl IsolatedHome {
     /// Build a Command with HOME / XDG pointed at this isolated root and all
     /// workestrate/sops env overrides removed. Stdin is /dev/null
     /// (non-interactive) unless the caller overrides it.
+    ///
+    /// `WORKESTRATE_REFERENCE_CONFIG=1` is set explicitly: these suites were
+    /// written against the reference base layer being auto-included (the
+    /// spawned child inherits `CARGO_MANIFEST_DIR`, so the repo's
+    /// `config.reference/workestrate.toml` resolves via the manifest tier).
+    /// Since cleanup phase 2 the base layer is opt-in; suites that exercise
+    /// the DEFAULT (opted-out) behavior build their own Command instead
+    /// (see `cwd_reference_warning.rs`).
     pub fn cmd(&self) -> Command {
         let mut c = Command::new(BIN);
         c.env("HOME", &self.dir);
         c.env("XDG_CONFIG_HOME", self.dir.join(".config"));
         c.env("XDG_DATA_HOME", self.dir.join(".local").join("share"));
         c.env("XDG_STATE_HOME", self.dir.join(".local").join("state"));
+        c.env("WORKESTRATE_REFERENCE_CONFIG", "1");
         c.env_remove("WORKESTRATE_CONFIG_DIR");
         c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
         c.env_remove("WORKESTRATE_HOME");

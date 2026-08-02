@@ -29,7 +29,7 @@ This is the terminal phase; it does not introduce new behavior.
      regressions across the full build surface. Must use `--no-link` (or the
      existing `result` symlink must be cleaned) to avoid store leaks.
    - `just verify-full` — the full pre-merge gate: toolchain-check, check,
-     test, spec-examples, litellm-check, golden-check, schema-check,
+     test, spec-examples, golden-check, schema-check,
      scaffold-check, lint-nix, store-audit, + `nix build .#workestrate`.
      Confirms the entire workspace is green.
    - Confirm no `result*` symlink leaks after the build. The build must use
@@ -75,7 +75,7 @@ Run these verification gates in order. Each maps to a runtime check.
 - `nix build .#workestrate` — the canonical package build; confirms no
   regressions.
 - `just verify-full` — the full pre-merge gate (toolchain-check, check, test,
-  spec-examples, litellm-check, golden-check, schema-check, scaffold-check,
+  spec-examples, golden-check, schema-check, scaffold-check,
   lint-nix, store-audit, + nix build).
 - `result*` symlink-leak check — confirm no `result*` symlinks after build
   (build must use `--no-link`).

@@ -6,14 +6,13 @@ cpus: 2
 memory: 1024 MiB
 env: APP_PORT=8080
 env: OPENAI_API_KEY=(redacted)
-env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'litellm')
+env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'example-litellm')
 port: 8080:8080
 mount: workspaces/example-service-state:/data
-mount: infra/litellm:/app/config (ro)
 network: default_deny=true
   ingress: tcp:8080 local
   egress: tcp:53 -> host
   egress: udp:53 -> host
   egress: tcp:443 -> github.com, api.github.com
-  egress: tcp:4000 -> host (derived: depends_on 'litellm')
+  egress: tcp:4000 -> host (derived: depends_on 'example-litellm')
 

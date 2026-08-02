@@ -5,7 +5,7 @@ command: node dist/cli.js
 cpus: 1
 memory: 512 MiB
 env: API_KEY=(redacted)
-env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'litellm')
+env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'example-litellm')
 secret_env: GITHUB_TOKEN (value redacted, allowed: github.com, api.github.com, optional)
 mount: workspaces/example-agent-state:/data
 network: default_deny=true
