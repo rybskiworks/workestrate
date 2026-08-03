@@ -66,9 +66,14 @@ buildNpmPackage ({
 
   # tsgo/esbuild ship prebuilt ELF binaries; autoPatchelfHook patches their
   # interpreter / RPATH. stdenv.cc provides libstdc++. libcap_ng is needed by
-  # gondolin's libkrun runner at runtime.
+  # gondolin's libkrun runner at runtime. pkgs.musl provides
+  # libc.musl-x86_64.so.1 + ld-musl-x86_64.so.1 for the musl-linked native
+  # node deps some workloads pull (lightningcss-linux-x64-musl,
+  # @rolldown/binding-linux-x64-musl, @biomejs/cli-linux-x64-musl, esbuild);
+  # without it auto-patchelf fails with "could not satisfy dependency
+  # libc.musl-x86_64.so.1".
   nativeBuildInputs = [ autoPatchelfHook ];
-  buildInputs = [ stdenv.cc.cc.lib libcap_ng ];
+  buildInputs = [ stdenv.cc.cc.lib libcap_ng pkgs.musl ];
 
   installPhase = if installPhase != null then installPhase else defaultInstallPhase;
 
