@@ -53,6 +53,33 @@ guest = "/work"
 read_only = false
 "#;
 
+const TWO_MOUNT_POLICY_TOML: &str = r#"
+schema_version = 1
+
+[policy.mounts]
+mask = ["shared-secret"]
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "alpine:latest" }
+command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "."
+guest = "/workspace"
+read_only = false
+policy = { mask = ["node_modules/"] }
+
+[[workloads.svc.mounts]]
+host = "."
+guest = "/data"
+read_only = false
+policy = { mask = ["secrets/"] }
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
 fn fixture_with(config: &str) -> (TempDir, PathBuf) {
     let tmp = TempDir::new("cmd-policy-fixture");
     let dir = tmp.path().to_path_buf();
@@ -77,7 +104,28 @@ fn fixture() -> (TempDir, PathBuf) {
     fixture_with(WORKESTRATE_TOML)
 }
 
+fn two_mount_fixture() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new("cmd-policy-two-mount-fixture");
+    let dir = tmp.path().to_path_buf();
+    std::fs::write(dir.join("workestrate.toml"), TWO_MOUNT_POLICY_TOML).unwrap();
+    std::fs::write(dir.join("shared-secret"), "shared").unwrap();
+    std::fs::create_dir_all(dir.join("node_modules/deps")).unwrap();
+    std::fs::write(dir.join("node_modules/deps/lib.js"), "deps").unwrap();
+    std::fs::create_dir_all(dir.join("secrets")).unwrap();
+    std::fs::write(dir.join("secrets/api.key"), "api").unwrap();
+    (tmp, dir)
+}
+
 fn explain(config_dir: &PathBuf, path: &str, json: bool) -> std::process::Output {
+    explain_mount(config_dir, "/work", path, json)
+}
+
+fn explain_mount(
+    config_dir: &PathBuf,
+    mount: &str,
+    path: &str,
+    json: bool,
+) -> std::process::Output {
     let home = IsolatedHome::new("cmd-policy");
     let mut cmd = home.cmd();
     cmd.env("WORKESTRATE_CONFIG_DIR", config_dir).args([
@@ -87,7 +135,7 @@ fn explain(config_dir: &PathBuf, path: &str, json: bool) -> std::process::Output
         "--workload",
         "svc",
         "--mount",
-        "/work",
+        mount,
         "--path",
         path,
     ]);
@@ -98,6 +146,10 @@ fn explain(config_dir: &PathBuf, path: &str, json: bool) -> std::process::Output
 }
 
 fn preview(config_dir: &PathBuf, json: bool) -> std::process::Output {
+    preview_mount(config_dir, "/work", json)
+}
+
+fn preview_mount(config_dir: &PathBuf, mount: &str, json: bool) -> std::process::Output {
     let home = IsolatedHome::new("cmd-policy");
     let mut cmd = home.cmd();
     cmd.env("WORKESTRATE_CONFIG_DIR", config_dir)
@@ -108,7 +160,7 @@ fn preview(config_dir: &PathBuf, json: bool) -> std::process::Output {
             "--workload",
             "svc",
             "--mount",
-            "/work",
+            mount,
             "--root",
         ])
         .arg(config_dir);
@@ -277,4 +329,74 @@ fn policy_mounts_errors_return_one() {
         .expect("invoke no-policy error case");
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains("has no compiled mount policy"));
+}
+
+#[test]
+fn explain_per_mount_picks_the_right_program() {
+    let (_tmp, dir) = two_mount_fixture();
+    for (mount, path, decision) in [
+        ("/workspace", "node_modules/deps/lib.js", "Masked"),
+        ("/workspace", "secrets/api.key", "Visible"),
+        ("/data", "node_modules/deps/lib.js", "Visible"),
+        ("/data", "secrets/api.key", "Masked"),
+        ("/workspace", "shared-secret", "Masked"),
+        ("/data", "shared-secret", "Masked"),
+    ] {
+        let out = explain_mount(&dir, mount, path, false);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(
+            stdout(&out).contains(&format!("decision: {decision}")),
+            "{}",
+            stdout(&out)
+        );
+    }
+}
+
+#[test]
+fn explain_per_mount_no_cross_mount_rules_in_matches() {
+    let (_tmp, dir) = two_mount_fixture();
+    let out = explain_mount(&dir, "/workspace", "secrets/api.key", true);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["decision"], "visible");
+    let matches = doc["matches"].as_array().unwrap();
+    assert!(!matches.iter().any(|m| m["pattern"] == "secrets/"));
+
+    let out = explain_mount(&dir, "/workspace", "shared-secret", true);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["decision"], "masked");
+    assert!(doc["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["pattern"] == "shared-secret"));
+
+    let out = explain_mount(&dir, "/data", "node_modules/deps/lib.js", true);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["decision"], "visible");
+    assert!(!doc["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["pattern"] == "node_modules/"));
+}
+
+#[test]
+fn preview_per_mount_evaluates_the_right_program() {
+    let (_tmp, dir) = two_mount_fixture();
+    let out = preview_mount(&dir, "/workspace", false);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("node_modules [masked]"));
+    assert!(!text.contains("secrets [masked]"));
+    assert!(text.contains("shared-secret [masked]"));
+
+    let out = preview_mount(&dir, "/data", false);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("secrets [masked]"));
+    assert!(!text.contains("node_modules [masked]"));
+    assert!(text.contains("shared-secret [masked]"));
 }

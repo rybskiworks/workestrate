@@ -115,8 +115,11 @@ fn parent_paths(path: &LexicalPath) -> Vec<LexicalPath> {
         .filter_map(|n| LexicalPath::new(&components[..n].join("/")).ok())
         .collect()
 }
-fn policy_for(wl: &ConfigWorkload) -> Result<&MountPolicyProgram> {
-    wl.mount_policy().ok_or_else(|| anyhow::anyhow!("workload '{}' has no compiled mount policy; declare [policy.mounts] to use this command", wl.name()))
+fn policy_for_mount<'a>(wl: &'a ConfigWorkload, mount: &str) -> Result<&'a MountPolicyProgram> {
+    wl.mount_policy_for(mount).ok_or_else(|| anyhow::anyhow!(
+        "workload '{}' has no compiled mount policy for mount '{}'; declare [policy.mounts] or a mount-entry policy to use this command",
+        wl.name(), mount
+    ))
 }
 
 pub async fn cmd_policy(action: PolicyAction, json: bool) -> Result<()> {
@@ -142,7 +145,6 @@ pub async fn cmd_policy(action: PolicyAction, json: bool) -> Result<()> {
 
 fn cmd_explain(workload: &str, mount: &str, path: &str, json: bool) -> Result<()> {
     let wl = ConfigWorkload::new_with_use_overrides(workload, &[])?;
-    let program = policy_for(&wl)?;
     let plan = wl.plan();
     let m = plan
         .mounts
@@ -151,6 +153,7 @@ fn cmd_explain(workload: &str, mount: &str, path: &str, json: bool) -> Result<()
         .ok_or_else(|| {
             anyhow::anyhow!("workload '{workload}' has no mount with guest path '{mount}'")
         })?;
+    let program = policy_for_mount(&wl, &m.guest)?;
     let lexical = LexicalPath::new(path)?;
     let read = program.decide(&lexical);
     let write = program.decide_write(&lexical);
@@ -264,7 +267,6 @@ fn resolve_root(
 
 fn cmd_preview(workload: &str, mount: &str, root_override: Option<&str>, json: bool) -> Result<()> {
     let wl = ConfigWorkload::new_with_use_overrides(workload, &[])?;
-    let program = policy_for(&wl)?;
     let plan = wl.plan();
     let m = plan
         .mounts
@@ -273,6 +275,7 @@ fn cmd_preview(workload: &str, mount: &str, root_override: Option<&str>, json: b
         .ok_or_else(|| {
             anyhow::anyhow!("workload '{workload}' has no mount with guest path '{mount}'")
         })?;
+    let program = policy_for_mount(&wl, &m.guest)?;
     let root = resolve_root(&wl, m, root_override)?;
     if !root.exists() {
         anyhow::bail!("mount host root '{}' does not exist", root.display());
