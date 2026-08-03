@@ -1,7 +1,7 @@
 pub mod depgraph;
 pub mod discovery;
 mod env;
-mod mounts;
+pub(crate) mod mounts;
 pub mod plan;
 pub mod port_registry;
 pub mod runtime;

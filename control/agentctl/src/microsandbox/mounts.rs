@@ -29,7 +29,7 @@ pub(crate) struct MountRoots<'a> {
     pub flake_build_path: Option<&'a str>,
 }
 
-fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathBuf> {
+pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathBuf> {
     if let Some(rest) = host.strip_prefix("${MSB_HOME}/") {
         let home = std::env::var("HOME")
             .map(PathBuf::from)
@@ -192,6 +192,200 @@ pub(crate) fn ensure_mount_sources(roots: &MountRoots, plan: &SandboxPlan) -> Re
     Ok(())
 }
 
+/// Owned companion to [`MountRoots`] (which borrows). Resolved once, then
+/// [`MountRoots`] borrows from it for the lifetime of a build/plan/preflight.
+/// Extracted from `build_sandbox` so the plan-time existence preflight reuses
+/// the SAME root-resolution logic as the runtime build path (F1/F2).
+pub(crate) struct MountRootsOwned {
+    pub content_root: PathBuf,
+    pub project_root: Option<PathBuf>,
+    pub flake_build_path: Option<String>,
+}
+
+impl MountRootsOwned {
+    /// Borrow as a [`MountRoots`] for `resolve_mount_host` /
+    /// `ensure_mount_sources` / [`preflight_existence`].
+    pub fn as_roots(&self) -> MountRoots<'_> {
+        MountRoots {
+            content_root: &self.content_root,
+            project_root: self.project_root.as_deref(),
+            flake_build_path: self.flake_build_path.as_deref(),
+        }
+    }
+}
+
+/// Resolve the mount roots for a workload, mirroring `build_sandbox`'s logic
+/// exactly (F2 lazy flake-root gate + F1 content-root fallback). Shared by the
+/// runtime build path and the plan-time existence preflight so they agree on
+/// where a mount host resolves.
+pub(crate) fn resolve_mount_roots_owned<W: crate::microsandbox::workload::Workload + ?Sized>(
+    workload: &W,
+    plan: &SandboxPlan,
+) -> Result<MountRootsOwned> {
+    // F2 LAZY GATE: `project_root()` hard-errors when the resolved root lacks
+    // flake.nix, so it is called ONLY when the workload genuinely needs the
+    // flake checkout. Registry-image workloads with no local_build and no
+    // relative build-path mounts never touch the gate.
+    let project_root: Option<PathBuf> = match workload.flake_root_requirement(plan) {
+        Some(feature) => Some(crate::config::project_root().map_err(|e| {
+            anyhow::anyhow!(
+                "workload '{}' uses {}, which requires a flake project root: {}",
+                workload.name(),
+                feature,
+                e
+            )
+        })?),
+        None => crate::config::project_root_optional(),
+    };
+
+    // F1: repo-relative mount hosts resolve against the DECLARING config
+    // layer's content root (spec 17). EXPLICIT FALLBACK: when no declaring
+    // layer dir is knowable (synthetic layers), fall back to the flake project
+    // root when one resolved, else the process cwd.
+    let content_root: PathBuf = workload
+        .mount_content_root()
+        .or_else(|| project_root.clone())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let build_path = workload.build_path();
+    // Spec 21 §6.1: the UNDECLARED reserved default (`.workestrate-build/<name>`)
+    // resolves declaring-layer-relative and must NOT capture the flake
+    // project-root preference. Declared fallbacks and env overrides keep the
+    // pre-reservation flake-checkout preference.
+    let flake_build_path = if workload.build_path_is_reserved_default() {
+        None
+    } else {
+        Some(build_path)
+    };
+
+    Ok(MountRootsOwned {
+        content_root,
+        project_root,
+        flake_build_path,
+    })
+}
+
+/// Plan-time existence preflight (security-model enforcement point; fulfills
+/// docs/migration/30-security-model.md:137-141's plan-time promise).
+///
+/// `hard = true` (the `plan` command): a missing read-only mount source or a
+/// missing seed source BAILS with a clear error — this is the exact failure-1
+/// signal (a doubled or wrong-root path that points nowhere), surfaced BEFORE
+/// any KVM/runtime work. `hard = false` (`validate-config`): everything is
+/// collected as a warning, because synthetic/reference configs may legitimately
+/// lack the referenced files.
+///
+/// Read-write mounts are ALWAYS warnings (auto-created at runtime by
+/// [`ensure_mount_sources`]); a `local_build.fallback` is ALWAYS a warning (a
+/// build output that may not exist yet at plan time).
+///
+/// Returns the list of warning strings (empty when everything resolves).
+pub(crate) fn preflight_existence(
+    roots: &MountRoots,
+    plan: &SandboxPlan,
+    seed_files: &[crate::config::SeedFileConfig],
+    seed_content_root: Option<&Path>,
+    local_build_fallback: Option<&str>,
+    workload_name: &str,
+    hard: bool,
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+
+    // Mounts: resolve each host the same way `apply_plan_mounts` does, then
+    // check existence. RO missing → hard error (plan) / warning (validate);
+    // RW missing → always a warning (auto-created at runtime).
+    for m in &plan.mounts {
+        let path = resolve_mount_host(roots, &m.host)?;
+        if !path.exists() {
+            if m.read_only {
+                let msg = format!(
+                    "workload '{}': read-only mount source does not exist: {} (host = {:?})",
+                    workload_name,
+                    path.display(),
+                    m.host
+                );
+                if hard {
+                    anyhow::bail!("{msg}");
+                } else {
+                    warnings.push(msg);
+                }
+            } else {
+                warnings.push(format!(
+                    "workload '{}': read-write mount source does not exist (will be created at runtime): {}",
+                    workload_name,
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    // Seed sources: resolve against the seed content root (the declaring
+    // layer's content root), falling back to the mount content root / project
+    // root — mirroring `ConfigWorkload::prepare`'s fallback chain. A missing
+    // seed source is a hard error at plan time (prepare() would fail to copy
+    // it at runtime); warn-only under validate-config.
+    let seed_root = seed_content_root
+        .or(Some(roots.content_root))
+        .or(roots.project_root);
+    for seed in seed_files {
+        match &seed_root {
+            Some(root) => {
+                let src = root.join(&seed.source);
+                if !src.exists() {
+                    let msg = format!(
+                        "workload '{}': seed source does not exist: {} (source = {:?})",
+                        workload_name,
+                        src.display(),
+                        seed.source
+                    );
+                    if hard {
+                        anyhow::bail!("{msg}");
+                    } else {
+                        warnings.push(msg);
+                    }
+                }
+            }
+            None => {
+                let msg = format!(
+                    "workload '{}': seed source {:?} cannot be resolved (no content root)",
+                    workload_name, seed.source
+                );
+                if hard {
+                    anyhow::bail!("{msg}");
+                } else {
+                    warnings.push(msg);
+                }
+            }
+        }
+    }
+
+    // local_build fallback: a build output dir. Warn if missing (it may be
+    // built later). Resolve a relative fallback against the project root when
+    // present (flake-checkout artifact), else the content root; absolute
+    // fallbacks are checked verbatim.
+    if let Some(fallback) = local_build_fallback {
+        let resolved = if std::path::Path::new(fallback).is_absolute() {
+            Some(PathBuf::from(fallback))
+        } else {
+            roots
+                .project_root
+                .or(Some(roots.content_root))
+                .map(|root| root.join(fallback))
+        };
+        if let Some(p) = resolved {
+            if !p.exists() {
+                warnings.push(format!(
+                    "workload '{}': local_build fallback does not exist (will be built): {}",
+                    workload_name,
+                    p.display()
+                ));
+            }
+        }
+    }
+
+    Ok(warnings)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -200,7 +394,7 @@ pub(crate) fn ensure_mount_sources(roots: &MountRoots, plan: &SandboxPlan) -> Re
     clippy::unwrap_in_result
 )]
 mod tests {
-    use super::{ensure_mount_sources, resolve_mount_host, MountRoots};
+    use super::{ensure_mount_sources, preflight_existence, resolve_mount_host, MountRoots};
     use super::{validate_mount_guest, validate_mount_host};
     use crate::microsandbox::plan::{MountPlan, NetworkPlan, SandboxPlan};
 
@@ -473,5 +667,311 @@ mod tests {
         validate_mount_guest("/data", false).unwrap();
         validate_mount_guest("/work", false).unwrap();
         validate_mount_guest("/app/config.json", false).unwrap();
+    }
+
+    // ---- FIX 1 regression: directory-mode content root is the workestrate/
+    // root, NOT the capsule/workloads dir — mount hosts written relative to
+    // the workestrate root must NOT double. ----
+
+    /// Unique tempdir for directory-mode fixtures (short name keeps it off the
+    /// 108-byte unix-socket budget if a KVM test ever reuses this helper).
+    fn dirmode_root(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "wk-dirmode-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos,
+        ))
+    }
+
+    /// End-to-end through the real directory-mode loader: a capsule workload
+    /// declaring `host = "workloads/litellm"` (a path relative to the
+    /// workestrate root) must resolve to `<tmp>/workestrate/workloads/litellm`
+    /// — NOT doubled to `<tmp>/workestrate/workloads/litellm/workloads/litellm`
+    /// (host-boot failure 1). The content root derived by `layer_dirs_from`
+    /// must be the directory-mode root `<tmp>/workestrate/`.
+    #[test]
+    fn directory_mode_content_root_is_workestrate_root_not_capsule() -> anyhow::Result<()> {
+        let tmp = dirmode_root("capsule");
+        let wks = tmp.join("workestrate");
+        let capsule = wks.join("workloads").join("litellm");
+        std::fs::create_dir_all(&capsule)?;
+        std::fs::write(wks.join("default.toml"), "schema_version = 1\n")?;
+        std::fs::write(
+            capsule.join("workload.toml"),
+            "kind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[[mounts]]\nhost = \"workloads/litellm\"\nguest = \"/app/config\"\nread_only = true\n",
+        )?;
+        // The real artifact the mount points at — must exist for any future
+        // existence preflight, and proves the resolved path is real.
+        std::fs::write(capsule.join("config.yaml"), "litellm: {}\n")?;
+
+        let layers = crate::config::loading::load_config_repo_layers("testrepo", &tmp)?;
+        let dirs = crate::merge::layer_dirs_from(&layers);
+        let (_merged, provenance) = crate::merge::merge_layers(&layers)?;
+
+        let layer_name = provenance
+            .get("workloads.litellm.mounts")
+            .expect("mounts provenance recorded");
+        let content_root = dirs
+            .get(layer_name)
+            .expect("content root recorded for the mounts-declaring layer");
+        // Directory-mode root, NOT the capsule dir.
+        assert_eq!(
+            content_root, &wks,
+            "content root must be the directory-mode root <tmp>/workestrate/, not the capsule dir"
+        );
+
+        let roots = roots_for(content_root, None, None);
+        let resolved = resolve_mount_host(&roots, "workloads/litellm")?;
+        assert_eq!(
+            resolved,
+            wks.join("workloads").join("litellm"),
+            "a workestrate-root-relative mount host must NOT double"
+        );
+        // And the resolved path actually exists (the real config.yaml lives
+        // there — the doubling bug pointed at a non-existent path).
+        assert!(
+            resolved.join("config.yaml").is_file(),
+            "resolved mount source must point at the real capsule dir"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// Flat-file directory-mode entry: `workloads/<name>.toml`. The content
+    /// root must be `<repo>/workestrate/` (NOT `workloads/`), so a
+    /// `host = "workloads/svc"` mount resolves without doubling. Uses pure
+    /// structural layer construction (no FS) — the loader would otherwise
+    /// treat a `workloads/svc/` artifact dir as a capsule entry.
+    #[test]
+    fn directory_mode_flat_file_content_root_is_workestrate_root() -> anyhow::Result<()> {
+        let wks = std::path::Path::new("/tmp/wk-flat-test/workestrate");
+        let flat_file = wks.join("workloads").join("svc.toml");
+        let layer = crate::merge::Layer::from_string_with_path(
+            "testrepo#workestrate/workloads/svc.toml",
+            "schema_version = 1\n\n[workloads.svc]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[[workloads.svc.mounts]]\nhost = \"workloads/svc\"\nguest = \"/app\"\nread_only = true\n",
+            Some(flat_file),
+        )?;
+        let dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&layer));
+        let (_merged, provenance) = crate::merge::merge_layers(std::slice::from_ref(&layer))?;
+
+        let layer_name = provenance
+            .get("workloads.svc.mounts")
+            .expect("mounts provenance recorded");
+        let content_root = dirs
+            .get(layer_name)
+            .expect("content root recorded for the flat workload layer");
+        assert_eq!(
+            content_root,
+            wks,
+            "flat-file content root must be the directory-mode root <repo>/workestrate/, not workloads/"
+        );
+
+        let roots = roots_for(content_root, None, None);
+        let resolved = resolve_mount_host(&roots, "workloads/svc")?;
+        assert_eq!(
+            resolved,
+            wks.join("workloads").join("svc"),
+            "flat-file workestrate-root-relative mount must NOT double"
+        );
+        Ok(())
+    }
+
+    /// A `local_build.fallback` string (e.g. `agents/svc/build`) resolves
+    /// against the directory-mode content root when no flake project root is
+    /// available (the UNDECLARED reserved default path; a declared fallback
+    /// with a project root would prefer it). Proves the content root — not
+    /// the capsule dir — is the base for relative build-path hosts.
+    #[test]
+    fn directory_mode_local_build_fallback_resolves_against_content_root() -> anyhow::Result<()> {
+        let tmp = dirmode_root("build");
+        let wks = tmp.join("workestrate");
+        let capsule = wks.join("workloads").join("svc");
+        std::fs::create_dir_all(&capsule)?;
+        std::fs::write(wks.join("default.toml"), "schema_version = 1\n")?;
+        std::fs::write(
+            capsule.join("workload.toml"),
+            "kind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[local_build]\nrecipe = \"pip-install\"\nsource = \"flake://svc\"\nfallback = \"agents/svc/build\"\n",
+        )?;
+
+        let layers = crate::config::loading::load_config_repo_layers("testrepo", &tmp)?;
+        let dirs = crate::merge::layer_dirs_from(&layers);
+        let (_merged, provenance) = crate::merge::merge_layers(&layers)?;
+
+        let layer_name = provenance
+            .get("workloads.svc.local_build")
+            .expect("local_build provenance recorded");
+        let content_root = dirs
+            .get(layer_name)
+            .expect("content root recorded for the local_build-declaring layer");
+        assert_eq!(
+            content_root, &wks,
+            "local_build content root must be the directory-mode root"
+        );
+
+        // flake_build_path = None (no project root, reserved-default posture):
+        // a relative fallback resolves against the content root, NOT the
+        // capsule dir.
+        let roots = roots_for(content_root, None, None);
+        let resolved = resolve_mount_host(&roots, "agents/svc/build")?;
+        assert_eq!(
+            resolved,
+            wks.join("agents").join("svc").join("build"),
+            "relative local_build fallback resolves against the directory-mode root, not the capsule dir"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    // ---- FIX 3: plan-time existence preflight ----
+
+    /// A missing read-only mount source BAILS in hard mode (the failure-1
+    /// signal: a doubled/wrong-root path that points nowhere).
+    #[test]
+    fn preflight_missing_readonly_mount_fails_hard() -> anyhow::Result<()> {
+        let root = unique_root("pf-ro");
+        let plan = minimal_plan(vec![MountPlan {
+            host: "missing/config.json".into(),
+            guest: "/app/config.json".into(),
+            read_only: true,
+        }]);
+        let roots = roots_for(&root, None, None);
+        let err = preflight_existence(&roots, &plan, &[], None, None, "svc", true).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("read-only mount source does not exist"),
+            "hard preflight must bail on missing RO mount: {msg}"
+        );
+        assert!(msg.contains("svc"), "error must name the workload: {msg}");
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// A missing read-write mount source WARNS (not fails) even in hard mode —
+    /// it is auto-created at runtime by `ensure_mount_sources`.
+    #[test]
+    fn preflight_missing_readwrite_mount_warns_not_fails() -> anyhow::Result<()> {
+        let root = unique_root("pf-rw");
+        let plan = minimal_plan(vec![MountPlan {
+            host: "nested/state".into(),
+            guest: "/data".into(),
+            read_only: false,
+        }]);
+        let roots = roots_for(&root, None, None);
+        let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", true)?;
+        assert_eq!(warnings.len(), 1, "exactly one RW warning: {warnings:?}");
+        assert!(
+            warnings[0].contains("will be created at runtime"),
+            "RW warning must say it will be created: {}",
+            warnings[0]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// A missing seed source BAILS in hard mode (prepare() would fail to copy
+    /// it at runtime).
+    #[test]
+    fn preflight_missing_seed_source_fails_hard() -> anyhow::Result<()> {
+        let root = unique_root("pf-seed");
+        let plan = minimal_plan(vec![]);
+        let seeds = vec![crate::config::SeedFileConfig {
+            source: "seed/missing.json".into(),
+            target: "workspaces/svc-state/missing.json".into(),
+            only_if_missing: None,
+        }];
+        let roots = roots_for(&root, None, None);
+        let err =
+            preflight_existence(&roots, &plan, &seeds, Some(&root), None, "svc", true).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("seed source does not exist"),
+            "hard preflight must bail on missing seed source: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// A missing `local_build.fallback` WARNS (not fails) — it is a build
+    /// output that may not exist yet at plan time.
+    #[test]
+    fn preflight_missing_local_build_fallback_warns() -> anyhow::Result<()> {
+        let root = unique_root("pf-build");
+        let plan = minimal_plan(vec![]);
+        let roots = roots_for(&root, None, None);
+        let warnings = preflight_existence(
+            &roots,
+            &plan,
+            &[],
+            None,
+            Some("agents/svc/build"),
+            "svc",
+            true,
+        )?;
+        assert_eq!(
+            warnings.len(),
+            1,
+            "exactly one fallback warning: {warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("local_build fallback does not exist"),
+            "fallback warning text: {}",
+            warnings[0]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// In warn mode (validate-config), a missing RO mount is collected as a
+    /// warning, NOT a bail.
+    #[test]
+    fn preflight_warn_mode_collects_missing_ro_mount() -> anyhow::Result<()> {
+        let root = unique_root("pf-warn");
+        let plan = minimal_plan(vec![MountPlan {
+            host: "missing/cfg.yaml".into(),
+            guest: "/app/cfg.yaml".into(),
+            read_only: true,
+        }]);
+        let roots = roots_for(&root, None, None);
+        let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", false)?;
+        assert_eq!(warnings.len(), 1, "warn mode collects the missing RO mount");
+        assert!(
+            warnings[0].contains("read-only mount source does not exist"),
+            "warn-mode warning text: {}",
+            warnings[0]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// An existing RO mount + existing seed source → no warnings, no bail.
+    #[test]
+    fn preflight_existing_sources_yield_no_warnings() -> anyhow::Result<()> {
+        let root = unique_root("pf-ok");
+        std::fs::create_dir_all(root.join("cfg"))?;
+        std::fs::write(root.join("cfg").join("app.yaml"), "ok")?;
+        std::fs::create_dir_all(root.join("seed"))?;
+        std::fs::write(root.join("seed").join("s.json"), "{}")?;
+        let plan = minimal_plan(vec![MountPlan {
+            host: "cfg/app.yaml".into(),
+            guest: "/app/app.yaml".into(),
+            read_only: true,
+        }]);
+        let seeds = vec![crate::config::SeedFileConfig {
+            source: "seed/s.json".into(),
+            target: "workspaces/svc-state/s.json".into(),
+            only_if_missing: None,
+        }];
+        let roots = roots_for(&root, None, None);
+        let warnings = preflight_existence(&roots, &plan, &seeds, Some(&root), None, "svc", true)?;
+        assert!(warnings.is_empty(), "no warnings expected: {warnings:?}");
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
     }
 }

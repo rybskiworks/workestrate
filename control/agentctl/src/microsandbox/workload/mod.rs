@@ -204,4 +204,34 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         let _ = plan;
         None
     }
+
+    /// Plan-time existence preflight (security-model enforcement point; see
+    /// docs/migration/30-security-model.md §enforcement-points). Checks that
+    /// mount sources / seed sources referenced by the plan actually resolve
+    /// to existing paths BEFORE any KVM/runtime work — surfacing the
+    /// failure-1 doubling signal at `plan` time rather than at sandbox start.
+    ///
+    /// `hard = true` (the `plan` command): a missing read-only mount source
+    /// or missing seed source BAILS. `hard = false` (`validate-config`):
+    /// everything is collected as a warning (synthetic/reference configs may
+    /// legitimately lack the referenced files). Read-write mounts and
+    /// `local_build` fallbacks are ALWAYS warnings (RW is auto-created at
+    /// runtime; the fallback is a build output that may not exist yet).
+    ///
+    /// The default impl checks mounts only (the pieces available on the
+    /// trait); `ConfigWorkload` overrides to add seed sources and the
+    /// `local_build` fallback. Returns the list of warning strings.
+    fn preflight_existence(&self, plan: &SandboxPlan, hard: bool) -> Result<Vec<String>> {
+        let owned = crate::microsandbox::mounts::resolve_mount_roots_owned(self, plan)?;
+        let roots = owned.as_roots();
+        crate::microsandbox::mounts::preflight_existence(
+            &roots,
+            plan,
+            &[],
+            None,
+            None,
+            self.name(),
+            hard,
+        )
+    }
 }

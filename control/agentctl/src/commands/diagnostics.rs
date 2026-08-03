@@ -59,6 +59,15 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
         }
     }
 
+    // Plan-time existence preflight (security-model enforcement point; see
+    // docs/migration/30-security-model.md §enforcement-points): fail fast on
+    // a missing read-only mount source or missing seed source BEFORE rendering
+    // — the exact failure-1 signal (a doubled/wrong-root path that points
+    // nowhere). Read-write mounts and local_build fallbacks warn only.
+    for w in effective.preflight_existence(&plan, true)? {
+        eprintln!("warning: {w}");
+    }
+
     if json {
         println!("{}", serde_json::to_string_pretty(&plan)?);
     } else if show_source {
@@ -516,7 +525,119 @@ pub fn cmd_validate_config() -> Result<()> {
     let config = config::load_config()?;
     config::validate_config(&config)?;
     println!("workestrate.toml is valid.");
+    // Warn-only existence preflight across all workloads (security-model
+    // enforcement point). Synthetic/reference configs may legitimately lack
+    // the referenced files, so this NEVER bails — it surfaces missing mount
+    // sources / seed sources / local_build fallbacks as warnings. Derives
+    // content roots from the process-global provenance + layer_dirs captured
+    // by load_config() (no ConfigWorkload construction, so depends_on
+    // resolution does not refuse synthetic configs).
+    for w in preflight_config_warnings(&config) {
+        eprintln!("warning: {w}");
+    }
     Ok(())
+}
+
+/// Warn-only plan-time existence preflight for `validate-config`. Derives
+/// each workload's mount/seed/local_build content root from the process-global
+/// provenance + layer_dirs (set by `load_config`), resolves the referenced
+/// paths via [`crate::microsandbox::mounts::resolve_mount_host`], and collects
+/// missing ones as warnings. Never bails (synthetic/reference configs may
+/// legitimately lack the files).
+fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> {
+    use crate::microsandbox::mounts::{resolve_mount_host, MountRootsOwned};
+    let provenance = crate::merge::get_provenance();
+    let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
+    let project_root = crate::config::project_root_optional();
+    let mut warnings = Vec::new();
+    for (name, wl) in &config.workloads {
+        let mount_root = provenance
+            .as_ref()
+            .and_then(|p| p.get(&format!("workloads.{name}.mounts")))
+            .and_then(|l| layer_dirs.get(l));
+        let seed_root = provenance
+            .as_ref()
+            .and_then(|p| p.get(&format!("workloads.{name}.seed_files")))
+            .and_then(|l| layer_dirs.get(l));
+        let build_root = provenance
+            .as_ref()
+            .and_then(|p| p.get(&format!("workloads.{name}.local_build")))
+            .and_then(|l| layer_dirs.get(l));
+        let content_root = mount_root
+            .or(build_root)
+            .cloned()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let owned = MountRootsOwned {
+            content_root,
+            project_root: project_root.clone(),
+            flake_build_path: None,
+        };
+        let roots = owned.as_roots();
+        // Mounts: resolve each host and check existence (warn-only).
+        for m in &wl.mounts {
+            if let Ok(path) = resolve_mount_host(&roots, &m.host) {
+                if !path.exists() {
+                    if m.read_only {
+                        warnings.push(format!(
+                            "workload '{name}': read-only mount source does not exist: {} (host = {:?})",
+                            path.display(),
+                            m.host
+                        ));
+                    } else {
+                        warnings.push(format!(
+                            "workload '{name}': read-write mount source does not exist (will be created at runtime): {}",
+                            path.display()
+                        ));
+                    }
+                }
+            }
+        }
+        // Seeds: resolve against the seed content root (or content_root /
+        // project_root fallback, mirroring ConfigWorkload::prepare).
+        let seed_base = seed_root
+            .or(mount_root)
+            .or(build_root)
+            .or(project_root.as_ref());
+        for seed in &wl.seed_files {
+            if let Some(root) = seed_base {
+                let src = root.join(&seed.source);
+                if !src.exists() {
+                    warnings.push(format!(
+                        "workload '{name}': seed source does not exist: {} (source = {:?})",
+                        src.display(),
+                        seed.source
+                    ));
+                }
+            } else {
+                warnings.push(format!(
+                    "workload '{name}': seed source {:?} cannot be resolved (no content root)",
+                    seed.source
+                ));
+            }
+        }
+        // local_build fallback: warn if missing (a build output).
+        if let Some(lb) = &wl.local_build {
+            if let Some(fallback) = &lb.fallback {
+                let resolved = if std::path::Path::new(fallback).is_absolute() {
+                    Some(std::path::PathBuf::from(fallback))
+                } else {
+                    project_root
+                        .as_deref()
+                        .or(Some(owned.content_root.as_path()))
+                        .map(|root| root.join(fallback))
+                };
+                if let Some(p) = resolved {
+                    if !p.exists() {
+                        warnings.push(format!(
+                            "workload '{name}': local_build fallback does not exist (will be built): {}",
+                            p.display()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    warnings
 }
 
 pub fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {

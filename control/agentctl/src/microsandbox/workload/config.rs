@@ -342,6 +342,29 @@ impl Workload for ConfigWorkload {
         }
         None
     }
+
+    /// ConfigWorkload override: check mounts (via the shared core) PLUS seed
+    /// sources (resolved against the declaring layer's seed content root) and
+    /// the `local_build.fallback` build output. See the trait method doc for
+    /// the hard/warn semantics.
+    fn preflight_existence(&self, plan: &SandboxPlan, hard: bool) -> Result<Vec<String>> {
+        let owned = crate::microsandbox::mounts::resolve_mount_roots_owned(self, plan)?;
+        let roots = owned.as_roots();
+        let fallback = self
+            .workload
+            .local_build
+            .as_ref()
+            .and_then(|b| b.fallback.as_deref());
+        crate::microsandbox::mounts::preflight_existence(
+            &roots,
+            plan,
+            &self.workload.seed_files,
+            self.seed_content_root.as_deref(),
+            fallback,
+            &self.name,
+            hard,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -738,13 +761,19 @@ default_deny = true
     }
 
     /// Multi-layer pipeline: a directory-mode-style layer re-declaring
-    /// `mounts` moves the mount content root to ITS dir; `seed_files`
-    /// declared only by the base layer keep the BASE dir. Mirrors the
-    /// `load_config` merge + `layer_dirs_from` wiring end to end.
+    /// `mounts` moves the mount content root to ITS directory-mode root;
+    /// `seed_files` declared only by the base layer keep the BASE layer's
+    /// directory-mode root. The content root is the `<repo>/workestrate/`
+    /// dir (the parent of `workloads/`), NOT the capsule dir or the
+    /// `workloads/` dir — so a `host = "workloads/svc"` mount resolves
+    /// without doubling. Mirrors the `load_config` merge + `layer_dirs_from`
+    /// wiring end to end.
     #[test]
     fn content_roots_track_the_declaring_layer_across_a_merge() -> Result<()> {
-        let base_dir = std::path::Path::new("/tmp/f1-base-repo/workestrate/workloads");
-        let capsule_dir = std::path::Path::new("/tmp/f1-personal-repo/workestrate/workloads/svc");
+        let base_root = std::path::Path::new("/tmp/f1-base-repo/workestrate");
+        let capsule_root = std::path::Path::new("/tmp/f1-personal-repo/workestrate");
+        let base_dir = base_root.join("workloads");
+        let capsule_dir = capsule_root.join("workloads").join("svc");
         let base = crate::merge::Layer::from_string_with_path(
             "base#workestrate/workloads/svc.toml",
             "schema_version = 1\n\n[workloads.svc]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"python:3.12-slim\" }\ncommand = []\n\n[[workloads.svc.mounts]]\nhost = \"base-config.yaml\"\nguest = \"/app/cfg\"\nread_only = true\n\n[[workloads.svc.seed_files]]\nsource = \"seed/s.json\"\ntarget = \"workspaces/svc-state/s.json\"\n\n[workloads.svc.network]\ndefault_deny = true",
@@ -763,15 +792,18 @@ default_deny = true
         )));
         let (_merged, provenance) = crate::merge::merge_layers(&[base, capsule])?;
 
-        // Mounts: wholesale-replaced by the capsule layer → capsule dir.
+        // Mounts: wholesale-replaced by the capsule layer → the capsule
+        // layer's directory-mode root (`<repo>/workestrate/`), NOT the
+        // capsule dir.
         assert_eq!(
             field_content_root(Some(&provenance), &dirs, "svc", "mounts"),
-            Some(capsule_dir.to_path_buf())
+            Some(capsule_root.to_path_buf())
         );
-        // Seed files: declared only by the base layer → base dir.
+        // Seed files: declared only by the base layer → the base layer's
+        // directory-mode root, NOT the `workloads/` dir.
         assert_eq!(
             field_content_root(Some(&provenance), &dirs, "svc", "seed_files"),
-            Some(base_dir.to_path_buf())
+            Some(base_root.to_path_buf())
         );
         Ok(())
     }
