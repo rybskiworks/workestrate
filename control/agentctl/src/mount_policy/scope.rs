@@ -66,8 +66,10 @@ impl ScopeKind {
 /// Mask/unmask entries hold RAW pattern strings: the compiler validates and
 /// compiles them against the declaring origin (spec 22 §6 pattern rejections
 /// name the origin), so fragments must not pre-compile patterns.
-/// `masked_writes` / `case_sensitivity` are likewise raw so the compiler can
-/// name the offending value and origin in a `CompileError` (spec 22 §10, §6).
+/// `case_sensitivity` is likewise raw so the compiler can name the offending
+/// value and origin in a `CompileError` (spec 22 §6). The former scalar
+/// `masked_writes` field is intentionally gone: this pre-release surface now
+/// rejects it as an unknown field rather than silently accepting old policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MountsFragment {
@@ -81,14 +83,30 @@ pub struct MountsFragment {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
     pub unmask: Vec<PolicyValue<String>>,
-    /// Raw `masked_writes` setting; the compiler accepts exactly `"deny"`
-    /// (spec 22 §10).
+    /// Protected paths are hidden and untouchable, independently of
+    /// overridability.
     #[serde(default)]
-    pub masked_writes: Option<String>,
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
+    pub protect: Vec<PolicyValue<String>>,
+    /// Pattern-keyed write policy.
+    #[serde(default)]
+    pub writes: Option<WritesFragment>,
     /// Raw `case_sensitivity` setting; v1 accepts exactly `"sensitive"`
     /// (spec 22 §6).
     #[serde(default)]
     pub case_sensitivity: Option<String>,
+}
+
+/// Pattern-keyed write policy for one scope.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WritesFragment {
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
+    pub allow: Vec<PolicyValue<String>>,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
+    pub deny: Vec<PolicyValue<String>>,
 }
 
 /// The public schema for a raw string policy value. Runtime deserialization
@@ -230,7 +248,11 @@ mod tests {
             r#"
             mask = [".env", { pattern = ".workestrate/", overridable = false }]
             unmask = [".env.example"]
-            masked_writes = "deny"
+            protect = [{ pattern = ".secret", overridable = false }]
+
+            [writes]
+            allow = [".tmp/**"]
+            deny = [{ pattern = ".secret/**", overridable = false }]
             "#,
         )
         .unwrap();
@@ -239,7 +261,10 @@ mod tests {
         assert!(!fragment.mask[1].overridable);
         assert_eq!(fragment.mask[1].value, ".workestrate/");
         assert_eq!(fragment.unmask.len(), 1);
-        assert_eq!(fragment.masked_writes.as_deref(), Some("deny"));
+        assert_eq!(fragment.protect[0].value, ".secret");
+        let writes = fragment.writes.unwrap();
+        assert_eq!(writes.allow[0].value, ".tmp/**");
+        assert!(!writes.deny[0].overridable);
         assert_eq!(fragment.case_sensitivity, None);
     }
 
@@ -250,5 +275,11 @@ mod tests {
             err.to_string().contains("unknown field"),
             "unknown-field error must surface: {err}"
         );
+    }
+
+    #[test]
+    fn former_masked_writes_scalar_is_rejected_intentionally() {
+        let err = toml::from_str::<MountsFragment>(r#"masked_writes = "deny""#).unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
     }
 }

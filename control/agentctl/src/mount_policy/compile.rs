@@ -12,11 +12,10 @@
 //!   pattern is an error naming BOTH origins (spec 22 §4);
 //! - a non-operator scope declaring a terminal (non-overridable) unmask is
 //!   rejected (spec 22 §5);
-//! - `masked_writes` accepts exactly `"deny"` (spec 22 §10);
 //! - `case_sensitivity` v1 accepts exactly `"sensitive"` (spec 22 §6).
 
 use crate::mount_policy::pattern::{Pattern, PatternError};
-use crate::mount_policy::program::{CaseSensitivity, MaskedWrites, MountPolicyProgram};
+use crate::mount_policy::program::{CaseSensitivity, CompiledRuleSet, MountPolicyProgram};
 use crate::mount_policy::rule::{PathPolicyRule, RuleEffect, RuleOrigin};
 use crate::mount_policy::scope::PolicyScope;
 use crate::mount_policy::value::PolicyValue;
@@ -46,13 +45,8 @@ pub enum CompileError {
         /// The offending raw pattern string.
         pattern: String,
     },
-    /// `masked_writes` other than `"deny"` (spec 22 §10).
-    UnsupportedMaskedWrites {
-        /// Where the value was declared.
-        origin: RuleOrigin,
-        /// The offending value.
-        value: String,
-    },
+    /// A terminal protect from an untrusted scope (spec 22 §5).
+    TerminalProtectFromNonOperator { origin: RuleOrigin, pattern: String },
     /// `case_sensitivity` other than `"sensitive"` (spec 22 §6): v1 compiles
     /// case-sensitive programs only, with the flag recorded explicitly.
     UnsupportedCaseSensitivity {
@@ -94,10 +88,10 @@ impl fmt::Display for CompileError {
                 "terminal unmask '{pattern}' declared at {origin} is not allowed: non-operator \
                  scopes may not declare non-overridable unmasks (spec 22 \u{a7}5)"
             ),
-            CompileError::UnsupportedMaskedWrites { origin, value } => write!(
+            CompileError::TerminalProtectFromNonOperator { origin, pattern } => write!(
                 f,
-                "masked_writes value '{value}' declared at {origin} is not supported: v1 \
-                 accepts exactly \"deny\" (spec 22 \u{a7}10)"
+                "terminal protect '{pattern}' declared at {origin} is not allowed: non-operator \
+                 scopes may not declare non-overridable protection (spec 22 \u{a7}5)"
             ),
             CompileError::UnsupportedCaseSensitivity { origin, value } => write!(
                 f,
@@ -128,14 +122,22 @@ pub fn compile(mut scopes: Vec<PolicyScope>) -> Result<MountPolicyProgram, Compi
     scopes.sort_by_key(|scope| scope.scope_kind.authority());
 
     let mut rules = Vec::new();
+    let mut protect = Vec::new();
+    let mut writes = CompiledRuleSet::default();
     for scope in &scopes {
         validate_program_flags(scope)?;
-        rules.extend(compile_scope(scope)?);
+        let (read, protected, write) = compile_scope(scope)?;
+        rules.extend(read);
+        protect.extend(protected);
+        writes.allow.extend(write.allow);
+        writes.deny.extend(write.deny);
     }
 
     Ok(MountPolicyProgram {
         rules,
-        masked_writes: MaskedWrites::Deny,
+        version: 1,
+        protect,
+        writes,
         // v1's explicit default, recorded so the runtime's behavior is
         // pinned by the program (spec 22 §6).
         case_sensitivity: CaseSensitivity::Sensitive,
@@ -144,14 +146,6 @@ pub fn compile(mut scopes: Vec<PolicyScope>) -> Result<MountPolicyProgram, Compi
 
 /// Validate the program-level flags one scope may set (spec 22 §6, §10).
 fn validate_program_flags(scope: &PolicyScope) -> Result<(), CompileError> {
-    if let Some(value) = &scope.fragment.masked_writes {
-        if value != "deny" {
-            return Err(CompileError::UnsupportedMaskedWrites {
-                origin: scope.origin(),
-                value: value.clone(),
-            });
-        }
-    }
     if let Some(value) = &scope.fragment.case_sensitivity {
         if value != "sensitive" {
             return Err(CompileError::UnsupportedCaseSensitivity {
@@ -166,7 +160,9 @@ fn validate_program_flags(scope: &PolicyScope) -> Result<(), CompileError> {
 /// Compile one scope's fragment into rules (mask-then-unmask), applying
 /// trust validation (spec 22 §5) and the exact-duplicate conflict check
 /// (spec 22 §4).
-fn compile_scope(scope: &PolicyScope) -> Result<Vec<PathPolicyRule>, CompileError> {
+fn compile_scope(
+    scope: &PolicyScope,
+) -> Result<(Vec<PathPolicyRule>, Vec<PathPolicyRule>, CompiledRuleSet), CompileError> {
     let origin = scope.origin();
     let mut rules = Vec::new();
     for entry in &scope.fragment.mask {
@@ -174,6 +170,33 @@ fn compile_scope(scope: &PolicyScope) -> Result<Vec<PathPolicyRule>, CompileErro
     }
     for entry in &scope.fragment.unmask {
         rules.push(compile_rule(RuleEffect::Unmask, entry, &origin)?);
+    }
+    let protect: Vec<_> = scope
+        .fragment
+        .protect
+        .iter()
+        .map(|entry| compile_rule(RuleEffect::Mask, entry, &origin))
+        .collect::<Result<_, _>>()?;
+    for rule in &protect {
+        if rule.is_terminal() && !scope.scope_kind.is_operator() {
+            return Err(CompileError::TerminalProtectFromNonOperator {
+                origin: rule.origin.clone(),
+                pattern: rule.pattern.raw().to_string(),
+            });
+        }
+    }
+    let mut writes = CompiledRuleSet::default();
+    if let Some(fragment) = &scope.fragment.writes {
+        writes.allow = fragment
+            .allow
+            .iter()
+            .map(|entry| compile_rule(RuleEffect::Unmask, entry, &origin))
+            .collect::<Result<_, _>>()?;
+        writes.deny = fragment
+            .deny
+            .iter()
+            .map(|entry| compile_rule(RuleEffect::Mask, entry, &origin))
+            .collect::<Result<_, _>>()?;
     }
 
     // Trust validation (spec 22 §5): a terminal unmask from a non-operator
@@ -218,7 +241,7 @@ fn compile_scope(scope: &PolicyScope) -> Result<Vec<PathPolicyRule>, CompileErro
         }
     }
 
-    Ok(rules)
+    Ok((rules, protect, writes))
 }
 
 /// Compile one mask/unmask entry into a rule; pattern rejections name the
@@ -244,7 +267,7 @@ mod tests {
     use super::*;
     use crate::mount_policy::lexical::LexicalPath;
     use crate::mount_policy::program::Decision;
-    use crate::mount_policy::scope::{MountsFragment, ScopeKind};
+    use crate::mount_policy::scope::{MountsFragment, ScopeKind, WritesFragment};
     use std::path::PathBuf;
 
     fn scope_with(
@@ -252,7 +275,6 @@ mod tests {
         layer: &str,
         mask: Vec<PolicyValue<String>>,
         unmask: Vec<PolicyValue<String>>,
-        masked_writes: Option<&str>,
         case_sensitivity: Option<&str>,
     ) -> PolicyScope {
         PolicyScope::new(
@@ -262,7 +284,8 @@ mod tests {
             MountsFragment {
                 mask,
                 unmask,
-                masked_writes: masked_writes.map(str::to_string),
+                protect: vec![],
+                writes: None,
                 case_sensitivity: case_sensitivity.map(str::to_string),
             },
         )
@@ -274,7 +297,7 @@ mod tests {
         mask: Vec<PolicyValue<String>>,
         unmask: Vec<PolicyValue<String>>,
     ) -> PolicyScope {
-        scope_with(kind, layer, mask, unmask, None, None)
+        scope_with(kind, layer, mask, unmask, None)
     }
 
     fn mask_entry(pattern: &str) -> PolicyValue<String> {
@@ -283,6 +306,24 @@ mod tests {
 
     fn mask_terminal(pattern: &str) -> PolicyValue<String> {
         PolicyValue::terminal(pattern.to_string())
+    }
+
+    fn write_scope(
+        kind: ScopeKind,
+        layer: &str,
+        protect: Vec<PolicyValue<String>>,
+        writes: WritesFragment,
+    ) -> PolicyScope {
+        PolicyScope::new(
+            kind,
+            layer,
+            format!("{layer}.toml"),
+            MountsFragment {
+                protect,
+                writes: Some(writes),
+                ..Default::default()
+            },
+        )
     }
 
     fn decide(program: &MountPolicyProgram, path: &str) -> Decision {
@@ -486,35 +527,6 @@ mod tests {
     }
 
     #[test]
-    fn masked_writes_rejects_values_other_than_deny() {
-        let err = compile(vec![scope_with(
-            ScopeKind::HomeRegistry,
-            "registry",
-            vec![],
-            vec![],
-            Some("passthrough"),
-            None,
-        )])
-        .unwrap_err();
-        let text = err.to_string();
-        assert!(
-            text.contains("passthrough") && text.contains("registry"),
-            "error must name the offending value and origin: {text}"
-        );
-        // "deny" compiles and is recorded in the program.
-        let program = compile(vec![scope_with(
-            ScopeKind::HomeRegistry,
-            "registry",
-            vec![],
-            vec![],
-            Some("deny"),
-            None,
-        )])
-        .unwrap();
-        assert_eq!(program.masked_writes, MaskedWrites::Deny);
-    }
-
-    #[test]
     fn case_sensitivity_defaults_to_sensitive_and_rejects_other_values() {
         let program = compile(vec![]).unwrap();
         assert_eq!(program.case_sensitivity, CaseSensitivity::Sensitive);
@@ -523,7 +535,6 @@ mod tests {
             "registry",
             vec![],
             vec![],
-            None,
             Some("sensitive"),
         )])
         .unwrap();
@@ -533,7 +544,6 @@ mod tests {
             "registry",
             vec![],
             vec![],
-            None,
             Some("insensitive"),
         )])
         .unwrap_err();
@@ -559,5 +569,69 @@ mod tests {
                 "error must name the origin for pattern {raw:?}: {text}"
             );
         }
+    }
+
+    #[test]
+    fn writes_default_allow_deny_wins_and_protect_wins() {
+        let program = compile(vec![write_scope(
+            ScopeKind::ConfigRepoLayer,
+            "repo",
+            vec![mask_entry("protected")],
+            WritesFragment {
+                allow: vec![mask_entry("**")],
+                deny: vec![mask_entry("denied")],
+            },
+        )])
+        .unwrap();
+        assert_eq!(
+            program
+                .decide_write(&LexicalPath::new("visible").unwrap())
+                .decision,
+            crate::mount_policy::WriteDecision::Allow
+        );
+        assert_eq!(
+            program
+                .decide_write(&LexicalPath::new("denied").unwrap())
+                .decision,
+            crate::mount_policy::WriteDecision::Deny
+        );
+        assert_eq!(
+            program
+                .decide_write(&LexicalPath::new("protected").unwrap())
+                .decision,
+            crate::mount_policy::WriteDecision::Deny
+        );
+        assert_eq!(
+            program
+                .decide(&LexicalPath::new("protected").unwrap())
+                .decision,
+            Decision::Masked
+        );
+        let empty = compile(vec![]).unwrap();
+        assert_eq!(
+            empty
+                .decide_write(&LexicalPath::new("new").unwrap())
+                .decision,
+            crate::mount_policy::WriteDecision::Allow
+        );
+    }
+
+    #[test]
+    fn terminal_protect_is_operator_only() {
+        let err = compile(vec![write_scope(
+            ScopeKind::Workload,
+            "workload",
+            vec![mask_terminal("secret")],
+            WritesFragment::default(),
+        )])
+        .unwrap_err();
+        assert!(err.to_string().contains("workload") && err.to_string().contains("secret"));
+        assert!(compile(vec![write_scope(
+            ScopeKind::HomeRegistry,
+            "operator",
+            vec![mask_terminal("secret")],
+            WritesFragment::default()
+        )])
+        .is_ok());
     }
 }

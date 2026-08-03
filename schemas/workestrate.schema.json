@@ -454,7 +454,7 @@
       }
     },
     "MountsFragment": {
-      "description": "The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).\n\nMask/unmask entries hold RAW pattern strings: the compiler validates and compiles them against the declaring origin (spec 22 §6 pattern rejections name the origin), so fragments must not pre-compile patterns. `masked_writes` / `case_sensitivity` are likewise raw so the compiler can name the offending value and origin in a `CompileError` (spec 22 §10, §6).",
+      "description": "The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).\n\nMask/unmask entries hold RAW pattern strings: the compiler validates and compiles them against the declaring origin (spec 22 §6 pattern rejections name the origin), so fragments must not pre-compile patterns. `case_sensitivity` is likewise raw so the compiler can name the offending value and origin in a `CompileError` (spec 22 §6). The former scalar `masked_writes` field is intentionally gone: this pre-release surface now rejects it as an unknown field rather than silently accepting old policy.",
       "type": "object",
       "properties": {
         "case_sensitivity": {
@@ -473,13 +473,13 @@
             "$ref": "#/definitions/PolicyValue_for_String"
           }
         },
-        "masked_writes": {
-          "description": "Raw `masked_writes` setting; the compiler accepts exactly `\"deny\"` (spec 22 §10).",
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+        "protect": {
+          "description": "Protected paths are hidden and untouchable, independently of overridability.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
         },
         "unmask": {
           "description": "Unmask entries: carve-outs to this scope's (or a lower-authority scope's provisional) masks.",
@@ -488,6 +488,18 @@
           "items": {
             "$ref": "#/definitions/PolicyValue_for_String"
           }
+        },
+        "writes": {
+          "description": "Pattern-keyed write policy.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WritesFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -817,6 +829,27 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WritesFragment": {
+      "description": "Pattern-keyed write policy for one scope.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "deny": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
         }
       },
       "additionalProperties": false

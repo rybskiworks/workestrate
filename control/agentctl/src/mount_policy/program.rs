@@ -26,43 +26,31 @@ pub enum Decision {
     TraversalOnly,
 }
 
-/// Write behavior at masked paths (spec 22 §10): v1 accepts exactly
-/// `"deny"` — writes to masked paths fail (EACCES at the enforcement layer).
-/// Any other value is rejected explicitly at deserialization and at compile
-/// time, naming the offending value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MaskedWrites {
-    /// Writes to masked paths are denied.
+/// Write decision. Tagging successful writes is performed by the msb
+/// enforcement layer; this pure library only decides allow/deny.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteDecision {
+    Allow,
     Deny,
 }
 
-impl Serialize for MaskedWrites {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str("deny")
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteRuleEffect {
+    Allow,
+    Deny,
+    Protect,
 }
 
-impl<'de> Deserialize<'de> for MaskedWrites {
-    /// Explicit rejection (spec 22 §10): any value other than `"deny"` is an
-    /// error naming the offending value; no passthrough syntax is reserved.
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        if value == "deny" {
-            Ok(MaskedWrites::Deny)
-        } else {
-            Err(de::Error::custom(format!(
-                "masked_writes value '{value}' is not supported: v1 accepts exactly \"deny\" \
-                 (spec 22 \u{a7}10)"
-            )))
-        }
-    }
+/// Compiled pattern buckets. Cascade/rename/hardlink handling remains in msb.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CompiledRuleSet {
+    pub allow: Vec<PathPolicyRule>,
+    pub deny: Vec<PathPolicyRule>,
 }
+
+pub type WritePolicy = CompiledRuleSet;
 
 /// Case sensitivity of pattern matching, recorded in the compiled program so
 /// the runtime's behavior is pinned by the program, not by runtime defaults
@@ -95,14 +83,23 @@ pub struct RuleMatch {
     pub frozen_out: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WriteRuleMatch {
+    pub rule_index: usize,
+    pub effect: WriteRuleEffect,
+    pub terminal: bool,
+    pub origin: RuleOrigin,
+    pub frozen_out: bool,
+}
+
 /// A decision plus its full provenance trace (spec 22 §13): every matching
 /// rule in compile order, and which rule froze the decision, if any.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Explained<T> {
+pub struct Explained<T, M = RuleMatch> {
     /// The final visibility decision.
     pub decision: T,
     /// Every matching rule, in compile order (spec 22 §13).
-    pub matches: Vec<RuleMatch>,
+    pub matches: Vec<M>,
     /// The terminal rule that froze the decision, if any (`frozen_by`,
     /// spec 22 §4, §13).
     pub frozen_by: Option<RuleOrigin>,
@@ -114,15 +111,67 @@ pub struct Explained<T> {
 /// The compiled mount policy program: the compiler's output, transmitted to
 /// the guest filesystem as JSON (spec 22 §12) and enforced for the mount's
 /// lifetime.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MountPolicyProgram {
+    pub version: u32,
     /// The compiled rules, in compile order (= authority order, spec 22 §2).
     pub rules: Vec<PathPolicyRule>,
     /// Write behavior at masked paths (spec 22 §10).
-    pub masked_writes: MaskedWrites,
+    pub protect: Vec<PathPolicyRule>,
+    pub writes: WritePolicy,
     /// Recorded case sensitivity, pinning the runtime's behavior (spec 22
     /// §6). v1: always `Sensitive`.
     pub case_sensitivity: CaseSensitivity,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MountPolicyProgramWire {
+    version: Option<u32>,
+    rules: Vec<PathPolicyRule>,
+    protect: Vec<PathPolicyRule>,
+    writes: WritePolicy,
+    case_sensitivity: CaseSensitivity,
+}
+
+impl Serialize for MountPolicyProgram {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        MountPolicyProgramWire {
+            version: Some(1),
+            rules: self.rules.clone(),
+            protect: self.protect.clone(),
+            writes: self.writes.clone(),
+            case_sensitivity: self.case_sensitivity,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MountPolicyProgram {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = MountPolicyProgramWire::deserialize(deserializer)?;
+        match wire.version {
+            Some(1) => Ok(Self {
+                version: 1,
+                rules: wire.rules,
+                protect: wire.protect,
+                writes: wire.writes,
+                case_sensitivity: wire.case_sensitivity,
+            }),
+            Some(version) => Err(de::Error::custom(format!(
+                "unsupported mount policy program version {version}; supported version is 1"
+            ))),
+            None => Err(de::Error::custom(
+                "mount policy program version is required (expected version 1)",
+            )),
+        }
+    }
 }
 
 impl MountPolicyProgram {
@@ -151,6 +200,35 @@ impl MountPolicyProgram {
                 fail_closed_non_utf8: true,
             };
         };
+        // Protection is a higher read boundary than ordinary mask/unmask
+        // rules: a protected path is always hidden and cannot be reopened.
+        let protected: Vec<_> = self
+            .protect
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| rule.pattern.matches_unknown(text))
+            .collect();
+        if !protected.is_empty() {
+            let frozen_by = protected
+                .iter()
+                .find(|(_, rule)| rule.is_terminal())
+                .map(|(_, rule)| rule.origin.clone());
+            return Explained {
+                decision: Decision::Masked,
+                matches: protected
+                    .into_iter()
+                    .map(|(rule_index, rule)| RuleMatch {
+                        rule_index,
+                        effect: RuleEffect::Mask,
+                        terminal: rule.is_terminal(),
+                        origin: rule.origin.clone(),
+                        frozen_out: false,
+                    })
+                    .collect(),
+                frozen_by,
+                fail_closed_non_utf8: false,
+            };
+        }
         let mut matches = Vec::new();
         let mut current: Option<Decision> = None;
         let mut frozen_by: Option<RuleOrigin> = None;
@@ -187,6 +265,113 @@ impl MountPolicyProgram {
             frozen_by,
             fail_closed_non_utf8: false,
         }
+    }
+
+    /// Decide a write. Successful writes are tagged by the msb enforcement
+    /// layer; cascade, rename, hardlink, and symlink contracts are outside
+    /// this pure policy library.
+    pub fn decide_write(&self, path: &LexicalPath) -> Explained<WriteDecision, WriteRuleMatch> {
+        let Some(text) = path.as_str() else {
+            return Explained {
+                decision: WriteDecision::Deny,
+                matches: Vec::new(),
+                frozen_by: None,
+                fail_closed_non_utf8: true,
+            };
+        };
+        let mut matches = Vec::new();
+        let mut protected = false;
+        let mut frozen_by = None;
+        for (index, rule) in self.protect.iter().enumerate() {
+            if !rule.pattern.matches_unknown(text) {
+                continue;
+            }
+            let frozen_out = frozen_by.is_some();
+            matches.push(WriteRuleMatch {
+                rule_index: index,
+                effect: WriteRuleEffect::Protect,
+                terminal: rule.is_terminal(),
+                origin: rule.origin.clone(),
+                frozen_out,
+            });
+            if !frozen_out {
+                protected = true;
+                if rule.is_terminal() {
+                    frozen_by = Some(rule.origin.clone());
+                }
+            }
+        }
+        let mut decision = if protected {
+            WriteDecision::Deny
+        } else {
+            WriteDecision::Allow
+        };
+        // Reconstitute authority order after the public allow/deny split.
+        // Deny is evaluated after allow within a scope, while a terminal deny
+        // freezes all lower-authority rules (including later allows).
+        let mut ordered = Vec::new();
+        for (bucket, rules) in [
+            (WriteRuleEffect::Allow, &self.writes.allow),
+            (WriteRuleEffect::Deny, &self.writes.deny),
+        ] {
+            for (index, rule) in rules.iter().enumerate() {
+                ordered.push((rule.origin.scope_kind.authority(), bucket, index, rule));
+            }
+        }
+        ordered.sort_by_key(|(authority, bucket, index, _)| {
+            (
+                *authority,
+                if *bucket == WriteRuleEffect::Allow {
+                    0
+                } else {
+                    1
+                },
+                *index,
+            )
+        });
+        for (_, bucket, index, rule) in ordered {
+            if !rule.pattern.matches_unknown(text) {
+                continue;
+            }
+            let frozen_out = frozen_by.is_some();
+            let rule_index = self.protect.len()
+                + if bucket == WriteRuleEffect::Deny {
+                    self.writes.allow.len() + index
+                } else {
+                    index
+                };
+            matches.push(WriteRuleMatch {
+                rule_index,
+                effect: bucket,
+                terminal: rule.is_terminal(),
+                origin: rule.origin.clone(),
+                frozen_out,
+            });
+            if frozen_out || protected {
+                continue;
+            }
+            if bucket == WriteRuleEffect::Deny {
+                decision = WriteDecision::Deny;
+                if rule.is_terminal() {
+                    frozen_by = Some(rule.origin.clone());
+                }
+            } else if decision != WriteDecision::Deny {
+                decision = WriteDecision::Allow;
+            }
+        }
+        Explained {
+            decision,
+            matches,
+            frozen_by,
+            fail_closed_non_utf8: false,
+        }
+    }
+
+    pub fn is_protected(&self, path: &LexicalPath) -> bool {
+        self.protect.iter().any(|rule| {
+            path.as_str()
+                .is_some_and(|text| rule.pattern.matches_unknown(text))
+        })
     }
 
     /// Decide the visibility of `dir/name` (the readdir/lookup surface, spec
@@ -266,7 +451,8 @@ mod tests {
             MountsFragment {
                 mask,
                 unmask,
-                masked_writes: None,
+                protect: vec![],
+                writes: None,
                 case_sensitivity: None,
             },
         )
@@ -398,29 +584,12 @@ mod tests {
     }
 
     #[test]
-    fn masked_writes_serializes_as_deny_and_rejects_other_values() {
-        assert_eq!(
-            serde_json::to_string(&MaskedWrites::Deny).unwrap(),
-            "\"deny\""
-        );
-        assert_eq!(
-            serde_json::from_str::<MaskedWrites>("\"deny\"").unwrap(),
-            MaskedWrites::Deny
-        );
-        let err = serde_json::from_str::<MaskedWrites>("\"passthrough\"").unwrap_err();
-        assert!(
-            err.to_string().contains("passthrough") && err.to_string().contains("deny"),
-            "rejection must name the offending value: {err}"
-        );
-    }
-
-    #[test]
     fn program_round_trips_through_json() {
         let program = carve_out_program();
         let json = serde_json::to_string_pretty(&program).unwrap();
         let back: MountPolicyProgram = serde_json::from_str(&json).unwrap();
         assert_eq!(back, program);
-        assert_eq!(back.masked_writes, MaskedWrites::Deny);
+        assert_eq!(back.version, 1);
         assert_eq!(back.case_sensitivity, CaseSensitivity::Sensitive);
         // Decisions are identical before and after the round trip.
         for path in ["private", "private/other", "private/public/x"] {
@@ -430,5 +599,26 @@ mod tests {
                 program.decide(&lexical).decision
             );
         }
+    }
+
+    #[test]
+    fn program_version_is_required_supported_and_unknown_fields_rejected() {
+        let program = carve_out_program();
+        let json = serde_json::to_value(&program).unwrap();
+        assert_eq!(json["version"], 1);
+        let mut missing = json.clone();
+        missing.as_object_mut().unwrap().remove("version");
+        let err = serde_json::from_value::<MountPolicyProgram>(missing).unwrap_err();
+        assert!(err.to_string().contains("version"));
+        let mut unsupported = json.clone();
+        unsupported["version"] = serde_json::json!(2);
+        let err = serde_json::from_value::<MountPolicyProgram>(unsupported).unwrap_err();
+        assert!(err.to_string().contains("2"));
+        let mut old = json;
+        old.as_object_mut()
+            .unwrap()
+            .insert("masked_writes".into(), serde_json::json!("deny"));
+        let err = serde_json::from_value::<MountPolicyProgram>(old).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 }

@@ -25,9 +25,9 @@
 //!   filesystem access; non-UTF-8 paths fail closed (masked).
 //! - [`rule`]: [`PathPolicyRule`] + [`RuleOrigin`] provenance (spec 22 §11).
 //! - [`compile`]: the compiler — precedence, freeze semantics, trust
-//!   validation (terminal unmask rejected from non-operator scopes, spec 22
-//!   §5), exact-duplicate conflict detection (spec 22 §4), `masked_writes =
-//!   "deny"` only (spec 22 §10).
+//!   validation (terminal unmask/protect rejected from non-operator scopes),
+//!   exact-duplicate conflict detection, write-rule precedence, and explicit
+//!   versioned fail-closed transmission.
 //! - [`program`]: the compiled program and pure evaluator — the three
 //!   decision states Visible / Masked / TraversalOnly (spec 22 §7),
 //!   `may_unmask_descendant` literal-prefix analysis, and full explain
@@ -45,10 +45,11 @@ pub use compile::{compile, CompileError, DuplicateConflict};
 pub use lexical::{LexicalPath, LexicalPathError};
 pub use pattern::{Pattern, PatternError, PatternErrorKind};
 pub use program::{
-    CaseSensitivity, Decision, Explained, MaskedWrites, MountPolicyProgram, RuleMatch,
+    CaseSensitivity, CompiledRuleSet, Decision, Explained, MountPolicyProgram, RuleMatch,
+    WriteDecision, WritePolicy, WriteRuleEffect, WriteRuleMatch,
 };
 pub use rule::{PathPolicyRule, RuleEffect, RuleOrigin};
-pub use scope::{CollectedPolicy, MountsFragment, PolicyScope, ScopeKind};
+pub use scope::{CollectedPolicy, MountsFragment, PolicyScope, ScopeKind, WritesFragment};
 pub use value::{PolicyScalar, PolicyValue};
 
 static COLLECTED: std::sync::Mutex<Option<CollectedPolicy>> = std::sync::Mutex::new(None);
