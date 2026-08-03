@@ -88,3 +88,36 @@ precedence.
 - The **transmission channel is a shim** (state-dir read-only mount + env
   var) until the v2 `VolumeMount::Bind` field lands via the upstream-PR
   track (ADR 0011 adjacency).
+
+---
+
+## Addendum (2026-08-03): write-rule families, protect tier, transmission correction
+
+Spec 22 is amended as the primary semantic reference. The write surface is
+now pattern-keyed: `[policy.mounts.writes]` has `allow` and `deny` lists, each
+using the existing `PolicyValue<Pattern>` compact/expanded, overridable, and
+provenance machinery. No matching write rule means allow+tag; deny beats allow
+on overlap and terminal deny freezes. The scalar `masked_writes` model is
+removed. This is pre-release churn, so it creates no migration debt.
+
+`protect = [...]` is an independent policy axis, not an interpretation of
+`overridable`. Protected entries are fully untouchable and beat mask, unmask,
+and write rules. Terminal protection follows the terminal-unmask trust rule:
+only OPERATOR scopes may declare it; other scopes produce a compile error.
+Both axes must remain explicit in the compiler and diagnostics.
+
+The earlier guest-file plus environment-variable transmission channel is
+**INVALIDATED**. `PassthroughFs` is constructed host-side before the guest
+exists, and `LaunchConfig.env` is guest-only; it cannot be the host loading
+channel. The corrected path is: atomically write compiled policy JSON with
+restrictive permissions to the host state dir → carry an optional policy path
+in the SDK mount model → encode a host mount-spec keyed token → msb parses →
+`PassthroughFs` loads and validates before VM startup → retain an immutable
+in-memory program for the mount lifetime. The path is confined to the approved
+state dir, with no symlinks/traversal and parse-once loading. JSON has explicit
+`"version": 1`; malformed, missing-version, or unsupported-version input
+fails closed and refuses startup.
+
+Reference spec 22 (as amended) is the primary source for the consolidated read
+boundary, write admission, tag lifecycle, cascade, rename, hardlink, and
+symlink semantics.

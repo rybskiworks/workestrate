@@ -22,6 +22,8 @@ work from §5.
 
 - **Spec 22** (dynamic mount masking policy, [06-improvements/22-dynamic-mount-masking-policy.md](06-improvements/22-dynamic-mount-masking-policy.md)) and **ADR 0028** (policy scopes: collect-and-compile) authored as DESIGN-APPROVED/Accepted on the `experimental` branch.
 - **Spec 01 dispositioned to SECONDARY/FALLBACK:** WP1–WP4 frozen; kept as the degraded-mode/static fallback (WP5 staging-copy essence survives); deleted if spec 22 lands.
+- **2026-08-03 consolidated amendment:** spec 22 now locks write-rules/protect/tagging/cascade/symlink semantics and the corrected host-side transmission channel; ADR 0028 carries the addendum.
+- The pure policy library design was revised; msb enforcement remains pending.
 
 ---
 

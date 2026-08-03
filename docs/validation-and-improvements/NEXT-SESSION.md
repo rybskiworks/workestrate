@@ -161,6 +161,11 @@ re-derive their contents.
 > merge.rs policy merging; runtime transmission and CLI diagnostics remain
 > future slices.
 
+> **2026-08-03 amendment:** consolidated write-rules, protect, tagging,
+> cascade, symlink, and host-side transmission semantics landed; see spec 22
+> §10/§12 and the ADR 0028 addendum. The pure library was revised; msb work is
+> still pending.
+
 > **2026-08-02 update (6) — spec 21 (image build/load lifecycle) authored**
 > as DESIGN-APPROVED at
 > [06-improvements/21-image-build-lifecycle.md](06-improvements/21-image-build-lifecycle.md)
