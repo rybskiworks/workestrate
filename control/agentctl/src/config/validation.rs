@@ -377,6 +377,13 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     for (workload_name, workload) in &config.workloads {
         let mut seen_guests = std::collections::HashSet::new();
         for m in &workload.mounts {
+            if m.policy_file.is_some() {
+                anyhow::bail!(
+                    "workload '{workload_name}' mount '{}' sets policy_file; \
+                     policy_file is a runtime-resolved field; it cannot be set in configuration",
+                    m.guest
+                );
+            }
             validate_mount_host(&m.host).map_err(|e| {
                 anyhow::anyhow!("workload '{workload_name}' mount host validation failed: {e}")
             })?;
@@ -666,6 +673,29 @@ pub(crate) mod tests {
         let err = validate_config(&config).unwrap_err().to_string();
         assert!(err.contains("duplicate mount guest path"), "error: {err}");
         assert!(err.contains("/data"), "error: {err}");
+    }
+
+    #[test]
+    fn validate_config_rejects_user_supplied_policy_file() {
+        let mut config = base_config_for_validation();
+        let workload = config.workloads.get_mut("pi").unwrap();
+        workload.mounts = vec![crate::microsandbox::plan::MountPlan {
+            host: "state".to_string(),
+            guest: "/data".to_string(),
+            read_only: false,
+            policy: None,
+            policy_file: Some(std::path::PathBuf::from("/some/path")),
+        }];
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("policy_file is a runtime-resolved field"),
+            "error must explain policy_file is runtime-resolved: {err}"
+        );
+        assert!(err.contains("pi"), "error must name the workload: {err}");
+        assert!(
+            err.contains("/data"),
+            "error must name the mount guest: {err}"
+        );
     }
 
     #[test]
