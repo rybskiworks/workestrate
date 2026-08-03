@@ -8,6 +8,8 @@ SDK integration seam when the pinned microsandbox dependency gains the policy fi
 > [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md) ·
 > [07-execution-order.md](07-execution-order.md)
 
+> **2026-08-03 update — spec 23 (microsandbox fork nix flake packaging) authored** as DESIGN/DEFERRED at [06-improvements/23-microsandbox-fork-nix-flake-packaging.md](06-improvements/23-microsandbox-fork-nix-flake-packaging.md). Captures the deferred idea of packaging the fork as a nix flake output (encapsulated source-build; lockstep binary+SDK from one rev; reversibility via input-ref change). Implementation explicitly deferred until workestrate+passthrough usage stabilizes on host; no flake code written now; no ADR (deferred design). Supersedes spec 09 option 3 for the masking use case; unblocks spec 22 §14 runtime enforcement when implemented.
+
 This file is the self-contained handoff for the next contextless session working
 the `migration/tool-model` branch. It assumes no prior conversation. Everything
 below is drawn from the four cited docs, which are the source of truth — do not

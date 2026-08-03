@@ -26,6 +26,10 @@ work from §5.
 - **Spec 01 dispositioned to SECONDARY/FALLBACK:** WP1–WP4 frozen; kept as the degraded-mode/static fallback (WP5 staging-copy essence survives); deleted if spec 22 lands.
 - **2026-08-03 consolidated amendment:** spec 22 now locks write-rules/protect/tagging/cascade/symlink semantics and the corrected host-side transmission channel; ADR 0028 carries the addendum.
 - The pure policy library design was revised; msb enforcement remains pending.
+- **Spec 23** ([06-improvements/23-microsandbox-fork-nix-flake-packaging.md](06-improvements/23-microsandbox-fork-nix-flake-packaging.md))
+  was authored DESIGN/DEFERRED on the `experimental` branch: it captures the
+  fork-as-flake packaging idea, with implementation deferred until host
+  stabilization. No ADR was created because this is a deferred design.
 
 ---
 
@@ -764,6 +768,7 @@ still say SPEC (bookkeeping pending, §5 item 9).
 | 18 | Cross-home dependencies | INTENT-TO-EXPLORE | exploration only (questions enumerated in spec) |
 | 19 | Visualization + inspection | INTENT-TO-EXPLORE | exploration only (candidates + data sources in spec) |
 | 20 | Schema evolution + migrations | SPEC (design written, `0b401d9`) | implement: schema pull+lock (vendored schema refresh, lockfile provenance, fail-closed) + `config migrate` framework |
+| 23 | microsandbox fork nix flake packaging | DESIGN / DEFERRED (2026-08-03) | implementation deferred until workestrate+passthrough usage stabilizes on host |
 
 The index file itself (`06-improvements/00-index.md`) is STATUS: INDEX and
 current post-flips except the spec-05 row above.

@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the twenty-two post-validation improvement specifications under
+This index catalogs the twenty-three post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -79,6 +79,7 @@ invariant.
 | [20-schema-evolution-and-migrations.md](20-schema-evolution-and-migrations.md) | Schema evolution policy + config migration tooling (post-launch) | `SPEC (design; not yet implemented)` | ↔ [15](15-toml-toolchain-tombi.md) (tombi validation + vendored schema) + [16](16-unified-secret-env-model.md) (schema_version collapse to 1) | M (migrate engine) + S (pull+lock) | verifiable-here (docs-only) |
 | [21-image-build-lifecycle.md](21-image-build-lifecycle.md) | Image build/load lifecycle: ensure-images pre-flight, change detection, selectors, reserved build dir | `DESIGN-APPROVED (awaiting implementation; user signed off 2026-08-02)` | ↔ [17](17-config-repo-directory-mode.md), [11](11-home-provisioning-and-lockfile.md), [12](12-per-instance-addressing.md)/ADR 0026 addendum, [01](01-mount-filtering-shadowing.md), [07](07-naming-consistency.md); additive-only per ADR 0021 §8 | A=S, B=S, C=M, D=M, E=M, F=S–M (phased) | HOST-KVM (phase E); C/D/F HOST-NIX |
 | [22-dynamic-mount-masking-policy.md](22-dynamic-mount-masking-policy.md) | Dynamic mount masking policy: hierarchical `[policy.mounts]` scopes, collect-and-compile, runtime program | `DESIGN-APPROVED (awaiting implementation; user decisions locked 2026-08-02)` | ↔ [01](01-mount-filtering-shadowing.md) (dispositioned to fallback; WP1–WP4 frozen), ADR 0028 (decision record), ADR 0020 Ruling 1 (unamended), ADR 0005/0004/0011 (adjacency) | M (parser + compiler + diagnostics; enforcement is a later spec/phase) | `verifiable-here` (docs + pure Rust); microsandbox runtime enforcement `HOST-KVM` |
+| [23-microsandbox-fork-nix-flake-packaging.md](23-microsandbox-fork-nix-flake-packaging.md) | microsandbox fork nix flake packaging (encapsulated source-build consumption) | `DESIGN / DEFERRED (2026-08-03; implementation deferred until workestrate+passthrough usage stabilizes on host)` | ↔ [22](22-dynamic-mount-masking-policy.md) (the consumer; unblocks runtime enforcement), [09](09-microsandbox-agentd-offline-build.md) (supersedes option 3 for the masking use case), ADR 0011 (adjacent — flake packaging ≠ reversed cargo-dep carrier), ADR 0028 (transmission adjacency) | M (flake authoring; deferred) | `verifiable-here` (docs-only); flake build `HOST-NIX`; runtime `HOST-KVM` |
 
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
@@ -440,6 +441,19 @@ decision:** the tool owns freshness via eval-only drvPath change detection
 against an advisory per-home record — the msb store stays ground truth for
 presence, the record stays memory for provenance.
 
+### 23 — microsandbox fork nix flake packaging
+
+Spec 23 captures a deferred design for packaging the microsandbox passthrough
+fork as a source-built nix flake output. One pinned flake revision would keep the
+`msb` binary and Cargo SDK source in lockstep, while the fork encapsulates agentd
+and the libkrunfw wrinkle. The recommended location is the fork's own flake,
+consumed by workestrate as an input; workestrate-side `nix/packages/` remains an
+assessed but leaky alternative. Implementation waits for host stabilization and
+no ADR is created for the deferred idea.
+
+**Key decision:** defer implementation; recommend fork-as-flake packaging for
+reversible, one-revision binary-plus-SDK consumption.
+
 ---
 
 ## Dependency graph
@@ -513,6 +527,7 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 20-schema-evolution-and-migrations [↔ 15 (tombi/vendored schema), 16 (schema_version collapse); docs-only spec]
 
 21-image-build-lifecycle [↔ 17/11/12(ADR 0026 addendum)/01/07; ADR 0021 §8 additive-only; docs-only; phased A–F]
+23-microsandbox-fork-nix-flake-packaging [↔ 22 (consumer; unblocks runtime enforcement), 09 (supersedes option 3 for masking), ADR 0011 (adjacent), ADR 0028 (adjacent); DESIGN/DEFERRED — no flake code now]
 ```
 
 **Key dependency notes:**
@@ -575,6 +590,8 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
   `workestrate up` across homes/config sets), 19 enumerates inspection
   surfaces beyond the W3 `workestrate workloads` verb (anchored by ADR 0027,
   verb-first workload dispatch). Neither gates code.
+- **23 (DESIGN/DEFERRED)** gates nothing now; when implemented, its recommended
+  fork-as-flake consumption unblocks spec 22's §14 runtime enforcement.
 
 ### 13 — Config ergonomics: string-or-table shorthand for `secret_env`
 
