@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Grace period after spawn during which an immediate child exit is treated
@@ -53,13 +54,94 @@ pub fn spawn_detached_service(name: &str, args: &[String]) -> Result<std::proces
     // healthy-looking Child.
     std::thread::sleep(SPAWN_GRACE);
     if let Some(status) = child.try_wait()? {
-        anyhow::bail!(
-            "detached service '{}' exited immediately ({status}); see log: {}",
-            name,
-            log_path.display()
-        );
+        let hint = extract_last_run_error(&log_path);
+        match hint {
+            Some(h) => anyhow::bail!(
+                "detached service '{}' exited immediately ({status}); see log: {}; last error: {}",
+                name,
+                log_path.display(),
+                h
+            ),
+            None => anyhow::bail!(
+                "detached service '{}' exited immediately ({status}); see log: {}",
+                name,
+                log_path.display()
+            ),
+        }
     }
     Ok(child)
+}
+
+/// Best-effort extraction of the child's first error line for the FS-8
+/// early-exit path. The append-mode log carries a per-run delimiter
+/// (`===== workestrate <ver> spawn <ts> pid <pid> =====`); find the LAST
+/// delimiter and scan lines after it for the first error/panic/usage line,
+/// else the first non-empty line. Bounded: last 8 KiB, `<=32` lines,
+/// `<=300` chars (truncated with a trailing `…`). `None` if the log is
+/// missing/empty, has no delimiter, or no candidate line follows it.
+fn extract_last_run_error(log_path: &Path) -> Option<String> {
+    // bounded tail read: last 8 KiB
+    const TAIL: u64 = 8 * 1024;
+    let mut file = std::fs::File::open(log_path).ok()?;
+    let len = std::fs::metadata(log_path).ok()?.len();
+    if len == 0 {
+        return None;
+    }
+    let start = len.saturating_sub(TAIL);
+    use std::io::{Read, Seek, SeekFrom};
+    if start > 0 {
+        file.seek(SeekFrom::Start(start)).ok()?;
+    }
+    let mut buf = Vec::with_capacity(TAIL as usize);
+    file.read_to_end(&mut buf).ok()?;
+    let tail = String::from_utf8_lossy(&buf);
+
+    // Split into lines; if we sliced mid-line (start>0), drop the first
+    // partial line so we only consider whole lines.
+    let mut lines: Vec<&str> = tail.lines().collect();
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+
+    // Find the LAST delimiter line (a line that starts with the marker).
+    const MARK: &str = "===== workestrate ";
+    let last_delim = lines.iter().rposition(|l| l.starts_with(MARK))?;
+    let after: Vec<&str> = lines[last_delim + 1..]
+        .iter()
+        .rev()
+        .take(32)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    // First candidate: a line containing error/panic/usage (case-insensitive).
+    let candidate = after
+        .iter()
+        .find(|l| {
+            let low = l.to_ascii_lowercase();
+            low.contains("error") || low.contains("panic") || low.contains("usage")
+        })
+        .or_else(|| after.iter().find(|l| !l.is_empty()))?;
+    let s = candidate.trim();
+    if s.is_empty() {
+        return None;
+    }
+    const MAX: usize = 300;
+    if s.chars().count() <= MAX {
+        Some(s.to_string())
+    } else {
+        // truncate at a char boundary <= MAX chars, append ellipsis
+        let mut end = 0usize;
+        for (i, (bidx, _)) in s.char_indices().enumerate() {
+            if i == MAX {
+                end = bidx;
+                break;
+            }
+        }
+        Some(format!("{}…", &s[..end]))
+    }
 }
 
 /// Tail the detached service's log file.
@@ -141,6 +223,12 @@ mod tests {
             err.contains("workestrate.log"),
             "error should point at the log file: {err}"
         );
+        assert!(
+            err.contains("unexpected argument")
+                || err.contains("Usage:")
+                || err.contains("Unrecognized option"),
+            "the early-exit message should surface the child's clap error via the last-error hint: {err}"
+        );
         // The log file captured the child's clap usage error.
         let log = std::fs::read_to_string(
             home.join(".microsandbox/sandboxes")
@@ -163,6 +251,86 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn extract_last_run_error_finds_first_error_after_last_delimiter() -> anyhow::Result<()> {
+        let dir = crate::config::test_support::uniq_dir("extract-first-error");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("workestrate.log");
+        std::fs::write(
+            &path,
+            "===== workestrate 0.0.0 spawn 2026-01-01T00:00:00Z pid 1 =====\nerror: stale run failure\n===== workestrate 0.0.0 spawn 2026-01-01T00:00:00Z pid 2 =====\nerror: current run failure\nUsage: workestrate ...\n",
+        )?;
+        assert_eq!(
+            extract_last_run_error(&path),
+            Some("error: current run failure".to_string())
+        );
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn extract_last_run_error_falls_back_to_first_nonempty_when_no_error_marker(
+    ) -> anyhow::Result<()> {
+        let dir = crate::config::test_support::uniq_dir("extract-fallback");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("workestrate.log");
+        std::fs::write(
+            &path,
+            "===== workestrate 0.0.0 spawn 2026-01-01T00:00:00Z pid 1 =====\nbooting workestrate\nstarted ok\n",
+        )?;
+        assert_eq!(
+            extract_last_run_error(&path),
+            Some("booting workestrate".to_string())
+        );
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn extract_last_run_error_none_for_missing_empty_delimiter_only() -> anyhow::Result<()> {
+        let dir = crate::config::test_support::uniq_dir("extract-none");
+        std::fs::create_dir_all(&dir)?;
+        let missing = dir.join("missing.log");
+        assert_eq!(extract_last_run_error(&missing), None);
+        let empty = dir.join("empty.log");
+        std::fs::write(&empty, "")?;
+        assert_eq!(extract_last_run_error(&empty), None);
+        let delimiter = dir.join("delimiter.log");
+        std::fs::write(
+            &delimiter,
+            "===== workestrate 0.0.0 spawn 2026-01-01T00:00:00Z pid 1 =====\n",
+        )?;
+        assert_eq!(extract_last_run_error(&delimiter), None);
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn extract_last_run_error_is_bounded_and_truncates() -> anyhow::Result<()> {
+        let dir = crate::config::test_support::uniq_dir("extract-bounded");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("long.log");
+        let log = format!(
+            "===== workestrate 0.0.0 spawn 2026-01-01T00:00:00Z pid 1 =====\nerror: {}\n",
+            "x".repeat(1000)
+        );
+        std::fs::write(&path, log)?;
+        let result = extract_last_run_error(&path).expect("long error line should be extracted");
+        assert!(result.chars().count() <= 301);
+        assert!(result.ends_with('…'));
+
+        let many = dir.join("many.log");
+        let mut log =
+            String::from("===== workestrate 0.0.0 spawn 2026-01-01T00:00:00Z pid 1 =====\n");
+        for _ in 0..999 {
+            log.push_str("x\n");
+        }
+        std::fs::write(&many, log)?;
+        assert!(extract_last_run_error(&many).is_some());
+        std::fs::remove_dir_all(&dir)?;
         Ok(())
     }
 

@@ -28,6 +28,8 @@
     clippy::unwrap_in_result
 )]
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -42,7 +44,7 @@ const SLUG_RE: &str = r"^[a-z2-7]{4}$";
 /// 5-workload fixture. Dummy non-placeholder values are injected for every
 /// required fixture secret so the create path does not bail on missing
 /// secrets on a provisioned host.
-fn isolated_cmd(home: &std::path::Path) -> Command {
+fn isolated_cmd(home: &std::path::Path, msb_home: &std::path::Path) -> Command {
     let mut c = Command::new(BIN);
     c.env("HOME", home);
     c.env("XDG_CONFIG_HOME", home.join(".config"));
@@ -56,7 +58,7 @@ fn isolated_cmd(home: &std::path::Path) -> Command {
         .join("config");
     c.env("WORKESTRATE_CONFIG_DIR", &fixture);
     // Isolated, writable msb home (WP-E pattern): empty db → openable.
-    c.env("MSB_HOME", home.join("msb-home"));
+    c.env("MSB_HOME", msb_home);
     // Dummy non-placeholder secrets so the create path proceeds on a host.
     for (k, v) in [
         ("LITELLM_MASTER_KEY", "sk-test-master-key"),
@@ -78,8 +80,8 @@ fn parse_started_instance(stdout: &str) -> Option<String> {
 
 /// Poll the instance registry for a record named `instance`. Returns true
 /// once `workestrate ps --json` lists it.
-fn ps_contains(home: &std::path::Path, instance: &str) -> bool {
-    let out = isolated_cmd(home)
+fn ps_contains(home: &std::path::Path, msb_home: &std::path::Path, instance: &str) -> bool {
+    let out = isolated_cmd(home, msb_home)
         .args(["ps", "--json"])
         .output()
         .expect("ps --json");
@@ -103,11 +105,13 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
             .unwrap_or(0),
     ));
     std::fs::create_dir_all(&home).expect("create isolated HOME");
+    let msb_home = common::short_msb_home();
+    std::fs::create_dir_all(&msb_home).expect("create short MSB_HOME");
 
     // 1. Detached `up --new`. The parent returns at once after spawning the
     //    foreground child; the child creates the sandbox and writes the
     //    registry record.
-    let up = isolated_cmd(&home)
+    let up = isolated_cmd(&home, &msb_home)
         .args(["example-litellm", "up", "--new"])
         .output()
         .expect("spawn example-litellm up --new");
@@ -127,6 +131,7 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
             up_stderr.trim()
         );
         let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&msb_home);
         return;
     }
     assert!(
@@ -164,7 +169,7 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut seen = false;
     while Instant::now() < deadline {
-        if ps_contains(&home, &instance) {
+        if ps_contains(&home, &msb_home, &instance) {
             seen = true;
             break;
         }
@@ -187,7 +192,7 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
     );
 
     // 5. `down --instance <slug>` stops and removes it.
-    let down = isolated_cmd(&home)
+    let down = isolated_cmd(&home, &msb_home)
         .args(["example-litellm", "down", "--instance", slug])
         .output()
         .expect("spawn example-litellm down --instance");
@@ -203,6 +208,7 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
     );
 
     let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&msb_home);
 }
 
 /// Tiny anchored-prefix matcher for `[a-z2-7]{4}` without pulling a regex dep.

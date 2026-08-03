@@ -180,3 +180,30 @@ fn run_git(dir: &Path, args: &[&str]) {
         dir.display()
     );
 }
+
+/// Short unique MSB_HOME for KVM tests that BOOT a sandbox. microsandbox
+/// derives its agent-relay socket as `$MSB_HOME/run/agent/<32hex>.sock` =
+/// len+48 bytes, capped at the 108-byte Linux `sockaddr_un` limit, so
+/// `len(MSB_HOME)` must be `<= 59`. The usual
+/// `workestrate-<label>-<pid>-<nanos>` temp dir under a deep `$TMPDIR` blows
+/// that budget. These tests are Linux-only KVM-gated, so a fixed short
+/// `/tmp` base is honest and decouples the length from `$TMPDIR`. `pid+nanos`
+/// matches the codebase uniq idiom and is collision-free across parallel
+/// tests in one binary. The caller owns cleanup (RAII `Drop` ->
+/// `remove_dir_all`).
+pub fn short_msb_home() -> PathBuf {
+    let p = PathBuf::from(format!(
+        "/tmp/wk-msb-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    debug_assert!(
+        p.to_string_lossy().len() + 48 < 108,
+        "MSB_HOME too long for the 108-byte unix-socket budget: {} bytes",
+        p.to_string_lossy().len()
+    );
+    p
+}
