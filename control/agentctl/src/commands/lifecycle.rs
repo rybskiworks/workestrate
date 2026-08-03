@@ -68,6 +68,10 @@ pub fn build_instance_spec(
         port_auto,
         use_overrides: use_overrides.to_vec(),
         no_deps,
+        // Spec 21 §2.2: the ensure-images token defaults OFF here — callers
+        // set it (a detached up's spec describes the ensured child-to-be;
+        // the detached child reconstitutes it from its clap parse).
+        images_ready: false,
     })
 }
 
@@ -125,6 +129,10 @@ pub async fn dispatch_service<W: Workload>(
             port_auto,
             use_,
             no_deps,
+            // --reload-images is consumed by the ensure-images pre-flight
+            // in main.rs (before dispatch); it never reaches the spec.
+            reload_images: _,
+            images_ready,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -138,7 +146,7 @@ pub async fn dispatch_service<W: Workload>(
             } else {
                 None
             };
-            let spec = build_instance_spec(
+            let mut spec = build_instance_spec(
                 workload.name(),
                 replace,
                 instance.as_deref(),
@@ -147,6 +155,11 @@ pub async fn dispatch_service<W: Workload>(
                 &crate::microsandbox::discovery::parse_use_overrides(&use_)?,
                 no_deps,
             )?;
+            // Spec 21 §2.2: the spec of a DETACHED up describes the ensured
+            // child-to-be (the parent ensures before spawning it), and the
+            // detached child itself re-parsed --images-ready — both carry
+            // the token. A plain foreground up is the parent (no token).
+            spec.images_ready = images_ready || !foreground;
             crate::microsandbox::runtime::up_service_with_spec(workload, &spec, foreground).await
         }
         ServiceAction::Down {
@@ -192,6 +205,8 @@ pub async fn dispatch_agent<W: Workload>(
             port_auto,
             use_,
             no_deps,
+            // Consumed by the ensure-images pre-flight in main.rs.
+            reload_images: _,
         } => {
             let new_id: Option<String> = if new {
                 let state_dir = crate::config::resolve_state_dir();
@@ -234,6 +249,8 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
             let new = args.iter().any(|a| a == "--new");
             let port_auto = args.iter().any(|a| a == "--port-auto");
             let no_deps = args.iter().any(|a| a == "--no-deps");
+            let reload_images = args.iter().any(|a| a == "--reload-images");
+            let images_ready = args.iter().any(|a| a == "--images-ready");
             let instance = parse_flag_value(args, "--instance");
             let use_ = parse_flag_values(args, "--use");
             Ok(ServiceAction::Up {
@@ -244,6 +261,8 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
                 port_auto,
                 use_,
                 no_deps,
+                reload_images,
+                images_ready,
             })
         }
         "down" => {
@@ -274,6 +293,7 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
             let new = args.iter().any(|a| a == "--new");
             let port_auto = args.iter().any(|a| a == "--port-auto");
             let no_deps = args.iter().any(|a| a == "--no-deps");
+            let reload_images = args.iter().any(|a| a == "--reload-images");
             let instance = parse_flag_value(args, "--instance");
             let use_ = parse_flag_values(args, "--use");
             Ok(AgentAction::Exec {
@@ -283,6 +303,7 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
                 port_auto,
                 use_,
                 no_deps,
+                reload_images,
             })
         }
         "down" => {

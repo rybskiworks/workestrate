@@ -169,10 +169,16 @@ fn registry_up_from_flake_less_cwd_never_hits_flake_root_gate() {
     );
 }
 
-/// A nix-layered workload in the same flake-less environment MUST fail at
-/// the gate, with an error naming the triggering feature.
+/// A nix-layered workload declared by a FLAKE-LESS repo now fails EARLIER
+/// than the project-root gate: the spec-21 phase-E ensure-images pre-flight
+/// runs before dispatch (§2.4 fail-fast ordering), and the §7 "No flake.nix
+/// in the declaring repo" row is a HARD ERROR naming the repo. The F2 gate
+/// itself is unchanged — it still fires for nix-layered/local_build
+/// workloads whose ensure passed (see the local_build test below and the
+/// KVM-gated e2e in `ensure_images_e2e.rs`, which drives ensure past the
+/// build and into the spawn path).
 #[test]
-fn nix_layered_up_fails_with_feature_naming_gate_error() {
+fn nix_layered_up_without_declaring_flake_fails_at_ensure() {
     let fx = GateFixture::new("nix-layered");
     let out = fx
         .cmd()
@@ -183,14 +189,16 @@ fn nix_layered_up_fails_with_feature_naming_gate_error() {
 
     assert!(!out.status.success());
     assert!(
-        stderr.contains(
-            "workload 'builder' uses nix-layered image, which requires a flake project root"
-        ),
-        "gate error must name the workload and the feature; stderr:\n{stderr}"
+        stderr.contains("workload 'builder' declares a nix-layered image"),
+        "the ensure pre-flight names the workload; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("flake.nix"),
-        "the original project_root error is preserved as context; stderr:\n{stderr}"
+        stderr.contains("has no flake.nix ancestor"),
+        "the §7 missing-flake hard error; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("add a flake.nix to the config repo"),
+        "remediation wording; stderr:\n{stderr}"
     );
 }
 

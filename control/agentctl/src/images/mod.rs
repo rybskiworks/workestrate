@@ -14,7 +14,12 @@
 //! post-load store verification → record upsert, all inside the caller's
 //! still-held per-tag lock (spec §3.3), with the `ImageBuilder`/`ImageLoader`
 //! trait seams and cfg(test) fakes matching the detect.rs pattern. Phase E
-//! wires the ensure-images pre-flight into the lifecycle verbs.
+//! landed the ensure-images pre-flight (`ensure.rs`): the parent-side wiring
+//! of `workload up` / `exec` / bare-up to the phase-C/D flow, the
+//! `images_ready` detach token (`InstanceSpec::images_ready` + the hidden
+//! `--images-ready` flag `detach_args` appends unconditionally), and the
+//! `--reload-images` force on the lifecycle verbs (USER DECISION D3:
+//! batch-scoped, never forwarded to the detached child).
 //!
 //! Phase-C usage (spec §3/§5, implemented in `build_cmd::process_target`):
 //!
@@ -42,6 +47,7 @@
 
 pub mod build_cmd;
 pub mod detect;
+pub mod ensure;
 pub mod lock;
 pub mod pipeline;
 pub mod repo_key;

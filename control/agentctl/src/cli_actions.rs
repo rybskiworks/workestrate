@@ -50,6 +50,20 @@ pub enum ServiceAction {
         /// time, optional deps fall back per convention + warn.
         #[arg(long)]
         no_deps: bool,
+
+        /// Force the ensure-images pre-flight to rebuild+load+record
+        /// nix-layered images even when the skew matrix would skip or trust
+        /// (spec 21 §5.2). Parent-side only — NEVER forwarded to the
+        /// detached child (USER DECISION D3).
+        #[arg(long)]
+        reload_images: bool,
+
+        /// Hidden detach token (spec 21 §2.2): the parent already ran the
+        /// ensure-images pre-flight, so this process (the detached child)
+        /// skips it. Appended unconditionally by `detach_args` — same shape
+        /// as `--foreground`.
+        #[arg(long, hide = true)]
+        images_ready: bool,
     },
     /// Stop and remove the sandbox
     Down {
@@ -119,6 +133,12 @@ pub enum AgentAction {
         /// time, optional deps fall back per convention + warn.
         #[arg(long)]
         no_deps: bool,
+
+        /// Force the ensure-images pre-flight to rebuild+load+record
+        /// nix-layered images even when the skew matrix would skip or trust
+        /// (spec 21 §5.2). Parent-side only (agents are always foreground).
+        #[arg(long)]
+        reload_images: bool,
     },
     /// Stop and remove the sandbox
     Down {
@@ -197,6 +217,22 @@ pub enum WorkloadAction {
         /// time, optional deps fall back per convention + warn.
         #[arg(long)]
         no_deps: bool,
+
+        /// Force the ensure-images pre-flight to rebuild+load+record
+        /// nix-layered images even when the skew matrix would skip or trust
+        /// (spec 21 §5.2). Batch scope (USER DECISION D3): on bare `up` the
+        /// force applies to ALL service workloads in the batch. Parent-side
+        /// only — NEVER forwarded to the detached child.
+        #[arg(long)]
+        reload_images: bool,
+
+        /// Hidden detach token (spec 21 §2.2): the parent already ran the
+        /// ensure-images pre-flight, so this process (the detached child)
+        /// skips it. Appended unconditionally by `detach_args` — same shape
+        /// as `--foreground`. Rejected on bare `up` (the batch form spawns
+        /// per-workload children that carry their own token).
+        #[arg(long, hide = true)]
+        images_ready: bool,
     },
     /// Attach to an agent workload interactively (TUI)
     Exec {
@@ -238,6 +274,12 @@ pub enum WorkloadAction {
         /// time, optional deps fall back per convention + warn.
         #[arg(long)]
         no_deps: bool,
+
+        /// Force the ensure-images pre-flight to rebuild+load+record
+        /// nix-layered images even when the skew matrix would skip or trust
+        /// (spec 21 §5.2). Parent-side only (agents are always foreground).
+        #[arg(long)]
+        reload_images: bool,
     },
     /// Print the planned sandbox workload
     Plan {

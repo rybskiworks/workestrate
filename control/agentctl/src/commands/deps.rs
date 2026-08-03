@@ -225,7 +225,11 @@ pub async fn auto_start_dependencies(
     )?;
     for action in actions {
         if let DepStartAction::StartService { dep, slot, ports } = action {
-            start_service_detached(&dep).await?;
+            // Spec 21 §2.1: dep auto-start inherits the ensure-images
+            // pre-flight per dependency. force=false — `--reload-images` is
+            // named-workload/batch scoped (USER DECISION D3); deps get the
+            // plain skew matrix.
+            start_service_detached(&dep, EnsurePreflight::Run { force: false }).await?;
             println!("started dependency '{dep}' (slot '{slot}')");
             wait_until_ready(
                 &state_dir,
@@ -246,7 +250,13 @@ pub async fn auto_start_dependencies(
 /// Output: text by default. With `json`, a single summary object
 /// (`{"started": [...], "already_running": [...], "skipped_agents": [...]}`)
 /// is printed INSTEAD of the per-workload text lines.
-pub async fn cmd_workload_up_all(json: bool) -> Result<()> {
+///
+/// Spec 21 phase E: `reload_images` is the batch-scoped `--reload-images`
+/// force (USER DECISION D3). The ensure-images pre-flight runs for EVERY
+/// start BEFORE ANY spawn — a nix-layered workload whose declaring repo
+/// lacks a flake.nix is skipped with a note (spec §7 batch row) and a hard
+/// ensure failure aborts the batch before anything starts.
+pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> {
     let config = crate::config::load_config()?;
     let context = crate::config::active_context_name();
     let state_dir = crate::config::resolve_state_dir();
@@ -266,9 +276,15 @@ pub async fn cmd_workload_up_all(json: bool) -> Result<()> {
         }
     }
 
+    // Spec 21 §2.1/§5.2: the batch ensure pass, ALL starts BEFORE ANY
+    // spawn, with the same force flag for every eligible service workload
+    // in the batch (USER DECISION D3).
+    let start_names: Vec<String> = starts.iter().map(|s| s.name.clone()).collect();
+    crate::images::ensure::ensure_images_for_workloads(&start_names, reload_images).await?;
+
     let mut started: Vec<String> = Vec::with_capacity(starts.len());
     for s in &starts {
-        start_service_detached(&s.name).await?;
+        start_service_detached(&s.name, EnsurePreflight::AlreadyDone).await?;
         if !json {
             println!("started '{}' (slot '{}')", s.name, s.slot);
         }
@@ -306,13 +322,32 @@ pub async fn cmd_workload_up_all(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Whether [`start_service_detached`] runs the ensure-images pre-flight
+/// (spec 21 §2.1, phase E).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnsurePreflight {
+    /// Run ensure-images for the workload before spawning it, with this
+    /// force flag. Dep auto-start uses `force: false` (the pre-flight
+    /// inheritance — `--reload-images` is named-workload/batch scoped per
+    /// USER DECISION D3, so deps get the plain skew matrix).
+    Run { force: bool },
+    /// The caller already ran the batch ensure pass
+    /// (`cmd_workload_up_all`); do not re-run per spawn.
+    AlreadyDone,
+}
+
 /// Start one service-kind workload DETACHED on its singleton slot with no
 /// `--use` overrides and no per-slot flags (its own deps are already
-/// started/satisfied by topo order).
-async fn start_service_detached(name: &str) -> Result<()> {
+/// started/satisfied by topo order). The spawned child is the ensured party
+/// (spec 21 §2.2): its spec carries `images_ready = true`, and `detach_args`
+/// appends `--images-ready` so the child skips the pre-flight.
+async fn start_service_detached(name: &str, preflight: EnsurePreflight) -> Result<()> {
+    if let EnsurePreflight::Run { force } = preflight {
+        crate::images::ensure::ensure_images_for_workload(name, force).await?;
+    }
     let workload =
         crate::microsandbox::workload::ConfigWorkload::new_with_use_overrides(name, &[])?;
-    let spec = crate::commands::lifecycle::build_instance_spec(
+    let mut spec = crate::commands::lifecycle::build_instance_spec(
         name,
         false,
         None,
@@ -321,6 +356,7 @@ async fn start_service_detached(name: &str) -> Result<()> {
         &[],
         false,
     )?;
+    spec.images_ready = true;
     crate::microsandbox::runtime::up_service_with_spec(&workload, &spec, false).await
 }
 

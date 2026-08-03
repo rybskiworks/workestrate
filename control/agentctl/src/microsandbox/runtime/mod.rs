@@ -86,6 +86,15 @@ pub struct InstanceSpec {
     /// child must NOT re-run dependency auto-start (the parent was told to
     /// skip it); forwarded by `detach_args` as the `--no-deps` flag.
     pub no_deps: bool,
+    /// `--images-ready` (spec 21 §2.2, phase E). The ensure-images token:
+    /// when true, this spec describes a process whose nix-layered images the
+    /// PARENT already ensured (the detached child), so the ensure pre-flight
+    /// must be SKIPPED entirely — no nix eval, no store probe (keeps the
+    /// FS-8 500ms grace meaningful). `detach_args` appends the hidden
+    /// `--images-ready` flag unconditionally; the child reconstitutes this
+    /// field from its clap parse. A foreground `up` without the token IS the
+    /// parent (false here) and ensures.
+    pub images_ready: bool,
 }
 
 /// Outcome of stopping one instance. Used by `down --instance`, `down

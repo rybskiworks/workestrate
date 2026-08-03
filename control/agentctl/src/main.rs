@@ -264,6 +264,8 @@ fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
             port_auto,
             use_,
             no_deps,
+            reload_images,
+            images_ready,
             ..
         } => ServiceAction::Up {
             foreground,
@@ -273,6 +275,8 @@ fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
             port_auto,
             use_,
             no_deps,
+            reload_images,
+            images_ready,
         },
         WorkloadAction::Plan { instance, use_, .. } => ServiceAction::Plan { instance, use_ },
         WorkloadAction::Down {
@@ -308,6 +312,7 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
             port_auto,
             use_,
             no_deps,
+            reload_images,
             ..
         } => AgentAction::Exec {
             replace,
@@ -316,6 +321,7 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
             port_auto,
             use_,
             no_deps,
+            reload_images,
         },
         WorkloadAction::Plan { instance, use_, .. } => AgentAction::Plan { instance, use_ },
         WorkloadAction::Down {
@@ -336,6 +342,39 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
             unreachable!("workload build is dispatched before workload translation")
         }
     }
+}
+
+/// The bare-up flag-reject table (ADR 0021 addendum 2026-08-01 + spec 21
+/// phase E): name-scoped flags are meaningless for the batch form and are
+/// hard errors naming the offending flag. `--reload-images` is deliberately
+/// NOT in the table (spec 21 §5.2: batch-scoped force, threaded into
+/// [`cmd_workload_up_all`]); `--images-ready` IS rejected (the detach token
+/// is per-child — batch children carry their own).
+fn bare_up_reject_table(action: &WorkloadAction) -> Vec<(bool, &'static str)> {
+    let WorkloadAction::Up {
+        foreground,
+        replace,
+        instance,
+        new,
+        port_auto,
+        use_,
+        no_deps,
+        images_ready,
+        ..
+    } = action
+    else {
+        return Vec::new();
+    };
+    vec![
+        (*foreground, "--foreground"),
+        (*replace, "--replace"),
+        (instance.is_some(), "--instance"),
+        (*new, "--new"),
+        (*port_auto, "--port-auto"),
+        (!use_.is_empty(), "--use"),
+        (*no_deps, "--no-deps"),
+        (*images_ready, "--images-ready"),
+    ]
 }
 
 fn main() {
@@ -504,76 +543,100 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // the batch form — a topo-ordered start of ALL service-kind
             // workloads in the active context. Per-slot/per-dependent flags
             // are not meaningful for batch up and are hard errors naming
-            // the offending flag.
+            // the offending flag. `--reload-images` is the exception (spec
+            // 21 §5.2, USER DECISION D3): batch-scoped, threaded into
+            // cmd_workload_up_all.
             if let WorkloadAction::Up { name: None, .. } = &action {
-                let WorkloadAction::Up {
-                    foreground,
-                    replace,
-                    instance,
-                    new,
-                    port_auto,
-                    use_,
-                    no_deps,
-                    ..
-                } = &action
-                else {
+                let WorkloadAction::Up { reload_images, .. } = &action else {
                     unreachable!("matched WorkloadAction::Up above");
                 };
-                for (present, flag) in [
-                    (*foreground, "--foreground"),
-                    (*replace, "--replace"),
-                    (instance.is_some(), "--instance"),
-                    (*new, "--new"),
-                    (*port_auto, "--port-auto"),
-                    (!use_.is_empty(), "--use"),
-                    (*no_deps, "--no-deps"),
-                ] {
+                for (present, flag) in bare_up_reject_table(&action) {
                     if present {
                         anyhow::bail!(
                             "{flag} is not meaningful for bare `workestrate workload up` (batch mode); pass a workload name to use it"
                         );
                     }
                 }
-                return cmd_workload_up_all(cli.json).await;
+                return cmd_workload_up_all(cli.json, *reload_images).await;
             }
             // ADR 0027 verb-first dispatch: the workload name is a clap
             // positional, so `--json` and every flag is parsed by clap
             // directly (no raw-args extraction). The `--use` values reach
             // the workload constructor BEFORE resolution runs (ADR 0026(d)).
-            let (name, verb, use_values, no_deps): (String, &'static str, Vec<String>, bool) =
-                match &action {
-                    WorkloadAction::Up {
-                        name: Some(n),
-                        use_,
-                        no_deps,
-                        ..
-                    } => (n.clone(), "up", use_.clone(), *no_deps),
-                    WorkloadAction::Up { name: None, .. } => {
-                        unreachable!("bare up is handled above")
-                    }
-                    WorkloadAction::Exec {
-                        name,
-                        use_,
-                        no_deps,
-                        ..
-                    } => (name.clone(), "exec", use_.clone(), *no_deps),
-                    WorkloadAction::Plan { name, use_, .. } => {
-                        (name.clone(), "plan", use_.clone(), false)
-                    }
-                    WorkloadAction::Down { name, .. } => (name.clone(), "down", Vec::new(), false),
-                    WorkloadAction::Logs { name, .. } => (name.clone(), "logs", Vec::new(), false),
-                    WorkloadAction::New { .. } => {
-                        unreachable!("workload new is dispatched above")
-                    }
-                    WorkloadAction::Build { .. } => {
-                        unreachable!("workload build is dispatched above")
-                    }
-                };
+            let (name, verb, use_values, no_deps, reload_images, images_ready): (
+                String,
+                &'static str,
+                Vec<String>,
+                bool,
+                bool,
+                bool,
+            ) = match &action {
+                WorkloadAction::Up {
+                    name: Some(n),
+                    use_,
+                    no_deps,
+                    reload_images,
+                    images_ready,
+                    ..
+                } => (
+                    n.clone(),
+                    "up",
+                    use_.clone(),
+                    *no_deps,
+                    *reload_images,
+                    *images_ready,
+                ),
+                WorkloadAction::Up { name: None, .. } => {
+                    unreachable!("bare up is handled above")
+                }
+                WorkloadAction::Exec {
+                    name,
+                    use_,
+                    no_deps,
+                    reload_images,
+                    ..
+                } => (
+                    name.clone(),
+                    "exec",
+                    use_.clone(),
+                    *no_deps,
+                    *reload_images,
+                    false,
+                ),
+                WorkloadAction::Plan { name, use_, .. } => {
+                    (name.clone(), "plan", use_.clone(), false, false, false)
+                }
+                WorkloadAction::Down { name, .. } => {
+                    (name.clone(), "down", Vec::new(), false, false, false)
+                }
+                WorkloadAction::Logs { name, .. } => {
+                    (name.clone(), "logs", Vec::new(), false, false, false)
+                }
+                WorkloadAction::New { .. } => {
+                    unreachable!("workload new is dispatched above")
+                }
+                WorkloadAction::Build { .. } => {
+                    unreachable!("workload build is dispatched above")
+                }
+            };
             let overrides = workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
+            // Spec 21 §2/§2.4 (phase E): the ensure-images pre-flight runs
+            // on the NAMED workload BEFORE dependency auto-start — fail fast
+            // on the workload the operator actually asked for before
+            // spending minutes starting its dep closure. The detached child
+            // carries the --images-ready token and skips this entirely
+            // (§2.2); a token-free foreground up/exec IS the parent and
+            // ensures. `--reload-images` maps to force (§5.2).
+            if workestrate::images::ensure::ensure_should_run(verb, images_ready) {
+                workestrate::images::ensure::ensure_images_for_workload(&name, reload_images)
+                    .await?;
+            }
             // Construction-order rule (ADR 0026 addendum): declared deps
             // start BEFORE the dependent's ConfigWorkload is constructed —
             // construction runs resolve_depends_on, which refuses a
-            // required-not-running dep, so the dep must already be up.
+            // required-not-running dep, so the dep must already be up. Dep
+            // auto-start inherits the ensure pre-flight per dependency (spec
+            // 21 §2.1) inside auto_start_dependencies.
             auto_start_dependencies(&name, verb, no_deps, &overrides).await?;
             let workload = ConfigWorkload::new_with_use_overrides(&name, &overrides)?;
             // Kind-check at dispatch (ADR 0027): wrong-kind usage names the
@@ -834,6 +897,7 @@ mod tests {
             port_auto,
             use_overrides: Vec::new(),
             no_deps: false,
+            images_ready: false,
         }
     }
 
@@ -844,11 +908,18 @@ mod tests {
         let example_litellm = ConfigWorkload::new("example-litellm")?;
 
         // Singleton, no flags: verb-first `workload up <name> --foreground`
-        // (ADR 0027).
+        // (ADR 0027) + the unconditional `--images-ready` token (spec 21
+        // §2.2 — the parent ensured before spawning the child).
         let args = example_litellm.detach_args(&spec_for_detach("example-litellm", false));
         assert_eq!(
             args,
-            vec!["workload", "up", "example-litellm", "--foreground"]
+            vec![
+                "workload",
+                "up",
+                "example-litellm",
+                "--foreground",
+                "--images-ready"
+            ]
         );
 
         // Parallel instance: forward `--instance <id>` with the BARE id, never
@@ -861,6 +932,7 @@ mod tests {
                 "up",
                 "example-litellm",
                 "--foreground",
+                "--images-ready",
                 "--instance",
                 "canary"
             ]
@@ -879,6 +951,7 @@ mod tests {
                 "up",
                 "example-litellm",
                 "--foreground",
+                "--images-ready",
                 "--replace"
             ]
         );
@@ -892,6 +965,7 @@ mod tests {
                 "up",
                 "example-litellm",
                 "--foreground",
+                "--images-ready",
                 "--replace",
                 "--instance",
                 "ab2z",
@@ -927,6 +1001,7 @@ mod tests {
                 "up",
                 "example-litellm",
                 "--foreground",
+                "--images-ready",
                 "--port-auto",
                 "--instance",
                 "canary",
@@ -963,6 +1038,7 @@ mod tests {
                 "up",
                 "pi",
                 "--foreground",
+                "--images-ready",
                 "--use",
                 "litellm@canary",
                 "--use",
@@ -1030,6 +1106,202 @@ mod tests {
             "--no-deps must not appear when unset: {args:?}"
         );
         Ok(())
+    }
+
+    // --- spec 21 phase E: the images_ready token + --reload-images -------
+
+    /// §2.2 make-or-break token contract: `--images-ready` is ALWAYS in the
+    /// detached-child argv (exactly once, right after `--foreground`) for
+    /// every flag shape, and `--reload-images` is NEVER in it (USER
+    /// DECISION D3) — including when the PARENT was invoked with
+    /// `--reload-images` (the flag is parent-side force only; the child
+    /// skips ensure anyway via the token).
+    #[test]
+    fn detach_args_always_carries_images_ready_and_never_reload_images() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        use workestrate::microsandbox::workload::Workload;
+        let pi = ConfigWorkload::new("pi")?;
+
+        // Every spec shape: singleton, parallel, replace, port-auto,
+        // no-deps, use-overrides.
+        let mut full = spec_for_detach_full("pi@canary", true, true);
+        full.no_deps = true;
+        full.use_overrides = vec![("redis".to_string(), "blue".to_string())];
+        for spec in [
+            spec_for_detach("pi", false),
+            spec_for_detach("pi@x1", false),
+            spec_for_detach("pi", true),
+            spec_for_detach_full("pi", false, true),
+            full,
+        ] {
+            let args = pi.detach_args(&spec);
+            let count = args.iter().filter(|a| *a == "--images-ready").count();
+            assert_eq!(count, 1, "--images-ready exactly once: {args:?}");
+            let fg = args.iter().position(|a| a == "--foreground").unwrap();
+            assert_eq!(
+                args.get(fg + 1).map(|s| s.as_str()),
+                Some("--images-ready"),
+                "the token rides right after --foreground: {args:?}"
+            );
+            assert!(
+                !args.contains(&"--reload-images".to_string()),
+                "--reload-images must NEVER be forwarded (D3): {args:?}"
+            );
+        }
+
+        // The parent was invoked with --reload-images: the flag lands on the
+        // clap action but there is NO reload state on InstanceSpec to
+        // forward — the child's re-parse sees reload_images=false and
+        // images_ready=true.
+        let cli = Cli::try_parse_from(["workestrate", "workload", "up", "pi", "--reload-images"])
+            .expect("parent argv with --reload-images must parse");
+        match cli.command {
+            Commands::Workload {
+                action:
+                    WorkloadAction::Up {
+                        reload_images,
+                        images_ready,
+                        ..
+                    },
+            } => {
+                assert!(reload_images);
+                assert!(!images_ready, "the parent carries no token");
+            }
+            _ => panic!("expected workload up"),
+        }
+        let args = pi.detach_args(&spec_for_detach("pi", false));
+        let round_trip = workestrate::commands::lifecycle::parse_service_action("up", &args[3..])?;
+        match round_trip {
+            ServiceAction::Up {
+                reload_images,
+                images_ready,
+                ..
+            } => {
+                assert!(!reload_images, "child never re-forces (D3)");
+                assert!(images_ready, "child carries the token (§2.2)");
+            }
+            _ => panic!("expected Up variant"),
+        }
+        Ok(())
+    }
+
+    /// `--images-ready` is a hidden flag on `workload up` (the detach token
+    /// is not user surface) and does NOT exist on `workload exec` (agents
+    /// are never detached — no token to carry); `--reload-images` is
+    /// user-facing on both.
+    #[test]
+    fn images_ready_is_hidden_on_up_and_absent_on_exec() {
+        let cmd = Cli::command();
+        let workload = cmd.find_subcommand("workload").unwrap();
+        let up = workload.find_subcommand("up").unwrap();
+        let images_ready = up
+            .get_arguments()
+            .find(|a| a.get_long() == Some("images-ready"))
+            .expect("workload up must have --images-ready");
+        assert!(
+            images_ready.is_hide_set(),
+            "--images-ready must be hidden (detach token, not user surface)"
+        );
+        let reload = up
+            .get_arguments()
+            .find(|a| a.get_long() == Some("reload-images"))
+            .expect("workload up must have --reload-images");
+        assert!(
+            !reload.is_hide_set(),
+            "--reload-images is user-facing (spec §5.2)"
+        );
+
+        let exec = workload.find_subcommand("exec").unwrap();
+        assert!(
+            exec.get_arguments()
+                .all(|a| a.get_long() != Some("images-ready")),
+            "workload exec must NOT have --images-ready (agents are never detached)"
+        );
+        assert!(
+            exec.get_arguments()
+                .any(|a| a.get_long() == Some("reload-images")),
+            "workload exec must have --reload-images"
+        );
+    }
+
+    /// Bare-up flag-reject table (§5.2): `--reload-images` is ACCEPTED on
+    /// bare `workload up` (batch-scoped force, threaded into
+    /// cmd_workload_up_all) while the genuinely name-scoped flags AND the
+    /// detach token stay rejected.
+    #[test]
+    fn bare_up_reject_table_accepts_reload_images_rejects_name_scoped_flags() {
+        // Bare up with --reload-images: nothing rejected.
+        let cli = Cli::try_parse_from(["workestrate", "workload", "up", "--reload-images"])
+            .expect("bare up --reload-images must parse");
+        let Commands::Workload { action } = &cli.command else {
+            panic!("expected workload action");
+        };
+        let table = bare_up_reject_table(action);
+        assert!(
+            table.iter().all(|(present, _)| !present),
+            "--reload-images must NOT be in the reject table (D3): {table:?}"
+        );
+        let flags: Vec<&str> = table.iter().map(|(_, f)| *f).collect();
+        assert!(
+            !flags.contains(&"--reload-images"),
+            "the force flag is batch-scoped, not rejected: {flags:?}"
+        );
+
+        // Genuinely-unsupported flags AND the detach token are rejected.
+        for (argv, expected) in [
+            (
+                vec!["workestrate", "workload", "up", "--foreground"],
+                "--foreground",
+            ),
+            (
+                vec!["workestrate", "workload", "up", "--replace"],
+                "--replace",
+            ),
+            (vec!["workestrate", "workload", "up", "--new"], "--new"),
+            (
+                vec!["workestrate", "workload", "up", "--port-auto"],
+                "--port-auto",
+            ),
+            (
+                vec!["workestrate", "workload", "up", "--no-deps"],
+                "--no-deps",
+            ),
+            (
+                vec!["workestrate", "workload", "up", "--images-ready"],
+                "--images-ready",
+            ),
+        ] {
+            let cli = Cli::try_parse_from(argv.clone()).expect("argv parses");
+            let Commands::Workload { action } = &cli.command else {
+                panic!("expected workload action");
+            };
+            let table = bare_up_reject_table(action);
+            assert!(
+                table.iter().any(|(present, f)| *present && *f == expected),
+                "{expected} must be rejected on bare up ({argv:?}): {table:?}"
+            );
+        }
+        // --instance <id> and --use <dep>@<id> shapes.
+        for (argv, expected) in [
+            (
+                vec!["workestrate", "workload", "up", "--instance", "x1"],
+                "--instance",
+            ),
+            (
+                vec!["workestrate", "workload", "up", "--use", "redis@blue"],
+                "--use",
+            ),
+        ] {
+            let cli = Cli::try_parse_from(argv.clone()).expect("argv parses");
+            let Commands::Workload { action } = &cli.command else {
+                panic!("expected workload action");
+            };
+            let table = bare_up_reject_table(action);
+            assert!(
+                table.iter().any(|(present, f)| *present && *f == expected),
+                "{expected} must be rejected on bare up ({argv:?}): {table:?}"
+            );
+        }
     }
 
     /// Round-trip (ADR 0021 WP-B): `--new` allocates a base32 slug, build_instance_spec
@@ -1380,6 +1652,7 @@ mod tests {
                 "port-auto",
                 "use",
                 "no-deps",
+                "reload-images",
             ] {
                 assert!(
                     flags.contains(&f.to_string()),
@@ -1457,9 +1730,10 @@ mod tests {
         );
     }
 
-    /// The detached-child argv shape (`workload up <name> --foreground ...`,
-    /// ADR 0027) parses through clap into the same action the legacy raw-args
-    /// parser produced.
+    /// The detached-child argv shape (`workload up <name> --foreground
+    /// --images-ready ...`, ADR 0027 + spec 21 §2.2) parses through clap
+    /// into the same action the legacy raw-args parser produced, with the
+    /// ensure-images token landing on the Up action.
     #[test]
     fn detach_child_argv_parses_through_clap() {
         let cli = Cli::try_parse_from([
@@ -1468,6 +1742,7 @@ mod tests {
             "up",
             "litellm",
             "--foreground",
+            "--images-ready",
             "--replace",
             "--port-auto",
             "--use",
@@ -1486,14 +1761,31 @@ mod tests {
                         instance,
                         port_auto,
                         use_,
+                        images_ready,
+                        reload_images,
                         ..
                     },
             } => {
                 assert_eq!(name.as_deref(), Some("litellm"));
                 assert!(foreground && replace && port_auto);
+                assert!(images_ready, "the token rides the re-exec (spec 21 §2.2)");
+                assert!(
+                    !reload_images,
+                    "--reload-images is never forwarded to the child (D3)"
+                );
                 assert_eq!(instance.as_deref(), Some("canary"));
                 assert_eq!(use_, vec!["redis@blue"]);
             }
+            _ => panic!("expected workload up"),
+        }
+        // A plain foreground up carries NO token: the foreground process IS
+        // the parent and ensures.
+        let cli = Cli::try_parse_from(["workestrate", "workload", "up", "litellm", "--foreground"])
+            .expect("plain foreground up must parse");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Up { images_ready, .. },
+            } => assert!(!images_ready),
             _ => panic!("expected workload up"),
         }
     }

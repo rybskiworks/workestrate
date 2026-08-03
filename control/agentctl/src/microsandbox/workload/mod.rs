@@ -91,12 +91,24 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// parses these args via clap's `workload up` subcommand; the raw-args
     /// `parse_service_action` parser still round-trips the same flags for
     /// the detach tests.
+    ///
+    /// `--images-ready` (spec 21 §2.2) is forwarded UNCONDITIONALLY — the
+    /// same shape as `--foreground`: by the time a detached child exists,
+    /// the parent has already run the ensure-images pre-flight, so the
+    /// child must skip it entirely (a child-side `nix build` would be an
+    /// invisible-timeout guarantee: redirected output + the FS-8 500ms
+    /// grace). `--reload-images` is NEVER forwarded (USER DECISION D3 —
+    /// parent-side force only; `InstanceSpec` deliberately carries no
+    /// reload field, so there is nothing here to forward).
     fn detach_args(&self, spec: &crate::microsandbox::runtime::InstanceSpec) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "workload".to_string(),
             "up".to_string(),
             self.name().to_string(),
             "--foreground".to_string(),
+            // Spec 21 §2.2: the ensure-images token rides the re-exec so the
+            // child skips the pre-flight the parent already ran.
+            "--images-ready".to_string(),
         ];
         if spec.replace {
             args.push("--replace".to_string());

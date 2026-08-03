@@ -84,6 +84,45 @@ pub enum SelectSkip {
     },
 }
 
+impl SelectSkip {
+    /// The §7 single-target escalation (hard error naming the repo +
+    /// remediation). Shared by `cmd_workload_build` (single-name scope) and
+    /// the phase-E ensure pre-flight (`images::ensure`) so the wording
+    /// stays byte-identical across both callers.
+    pub fn hard_error_message(&self) -> String {
+        match self {
+            SelectSkip::NoFlakeRoot {
+                workload,
+                repo_key,
+                declaring_dir,
+            } => format!(
+                "workload '{workload}' declares a nix-layered image, but its declaring \
+                 repo '{repo_key}' ({}) has no flake.nix ancestor — a nix-layered image \
+                 build requires a flake root (spec 21 §7); add a flake.nix to the \
+                 config repo, or load the image manually via the config-repo ritual",
+                declaring_dir.display()
+            ),
+        }
+    }
+
+    /// The §7 batch note (skip-with-note naming the missing flake; the rest
+    /// of the batch proceeds). Shared by `cmd_workload_build` (batch scopes)
+    /// and the phase-E batch ensure pass (`cmd_workload_up_all`).
+    pub fn note_message(&self) -> String {
+        match self {
+            SelectSkip::NoFlakeRoot {
+                workload,
+                repo_key,
+                declaring_dir,
+            } => format!(
+                "note: skipping workload '{workload}': declaring repo '{repo_key}' ({}) \
+                 has no flake.nix ancestor (spec 21 §7)",
+                declaring_dir.display()
+            ),
+        }
+    }
+}
+
 /// The selector shape (clap conflicts guarantee exactly one per invocation).
 pub enum BuildScope<'a> {
     /// `build <name>` — one workload in the active context.
@@ -576,31 +615,13 @@ pub async fn cmd_workload_build(
 
     let (targets, skips) = resolve_targets(scope)?;
     for skip in &skips {
-        match skip {
-            SelectSkip::NoFlakeRoot {
-                workload,
-                repo_key,
-                declaring_dir,
-            } => {
-                // §7 "No flake.nix in the declaring repo": single-name mode
-                // HARD ERRORS naming the repo; batch modes skip-with-note and
-                // the rest of the batch proceeds.
-                if single_name {
-                    anyhow::bail!(
-                        "workload '{workload}' declares a nix-layered image, but its declaring \
-                         repo '{repo_key}' ({}) has no flake.nix ancestor — a nix-layered image \
-                         build requires a flake root (spec 21 §7); add a flake.nix to the \
-                         config repo, or load the image manually via the config-repo ritual",
-                        declaring_dir.display()
-                    );
-                }
-                eprintln!(
-                    "note: skipping workload '{workload}': declaring repo '{repo_key}' ({}) \
-                     has no flake.nix ancestor (spec 21 §7)",
-                    declaring_dir.display()
-                );
-            }
+        // §7 "No flake.nix in the declaring repo": single-name mode HARD
+        // ERRORS naming the repo; batch modes skip-with-note and the rest
+        // of the batch proceeds.
+        if single_name {
+            anyhow::bail!("{}", skip.hard_error_message());
         }
+        eprintln!("{}", skip.note_message());
     }
 
     if targets.is_empty() {
