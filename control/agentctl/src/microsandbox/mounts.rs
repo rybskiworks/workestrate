@@ -70,6 +70,20 @@ pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathB
     }
 }
 
+/// Spec 22 §12 SDK integration seam. SDK `microsandbox =0.5.6` has no policy
+/// field, so this intentionally does nothing until the fork dependency lands.
+/// TODO(spec 22 §12, SDK switch): once the Cargo dep moves to the fork, replace
+/// this with the exact SDK call (per policy-bearing mount):
+/// `builder = builder.volume(&m.guest, |v| { v.bind(host).policy_file(policy_file) });`
+/// or the fork's final equivalent if its API settles on a per-sandbox method.
+pub(crate) fn apply_mount_policy(
+    builder: SandboxBuilder,
+    plan: &SandboxPlan,
+) -> Result<SandboxBuilder> {
+    let _ = plan.policy_file.as_ref();
+    Ok(builder)
+}
+
 /// Validate a mount host string as it appears in the raw config TOML
 /// (before `${CWD}` / `${WORKESTRATE_<NAME>_BUILD}` template substitution).
 ///
@@ -435,6 +449,7 @@ mod tests {
             secret_env: vec![],
             ports: vec![],
             mounts,
+            policy_file: None,
             network: NetworkPlan {
                 default_deny: true,
                 egress_rules: vec![],

@@ -46,9 +46,8 @@ pub struct ConfigWorkload {
     /// path). `plan()` appends the injected env AFTER the declared env and
     /// the derived egress AFTER the expanded declared egress rules.
     pub(super) depends_resolved: Vec<crate::microsandbox::discovery::ResolvedDependency>,
-    /// Compiled only when policy is declared for this workload. It is kept
-    /// off `SandboxPlan` until the runtime transmission slice lands.
-    #[allow(dead_code)]
+    /// Compiled only when policy is declared for this workload; the runtime
+    /// serializes it to the per-instance host policy file.
     pub(super) mount_policy: Option<crate::mount_policy::MountPolicyProgram>,
 }
 
@@ -239,6 +238,12 @@ impl Workload for ConfigWorkload {
             secret_env: self.secret_env.clone(),
             ports: self.workload.ports.clone(),
             mounts,
+            policy_file: self.mount_policy.as_ref().map(|_| {
+                crate::microsandbox::policy_file::policy_file_path(
+                    &crate::config::resolve_state_dir(),
+                    &self.sandbox_instance_name(),
+                )
+            }),
             network: NetworkPlan {
                 default_deny: self.workload.network.default_deny.unwrap_or(true),
                 egress_rules,
@@ -250,6 +255,10 @@ impl Workload for ConfigWorkload {
 
     fn show_source(&self) -> String {
         self.show_source_render()
+    }
+
+    fn mount_policy(&self) -> Option<&crate::mount_policy::MountPolicyProgram> {
+        self.mount_policy.as_ref()
     }
 
     fn exec(&self) -> SandboxCommand {

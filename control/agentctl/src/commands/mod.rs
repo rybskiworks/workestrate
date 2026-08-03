@@ -3,6 +3,7 @@
 pub mod config_cmd;
 pub mod deps;
 pub mod diagnostics;
+pub mod policy;
 pub mod doctor;
 pub mod home;
 pub mod init;

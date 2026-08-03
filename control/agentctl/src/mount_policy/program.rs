@@ -81,6 +81,8 @@ pub struct RuleMatch {
     /// True when an earlier terminal rule had already frozen the decision
     /// for this path: the match is recorded but had no effect (spec 22 §4).
     pub frozen_out: bool,
+    /// Original pattern text, retained for self-contained diagnostics.
+    pub pattern: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -90,6 +92,7 @@ pub struct WriteRuleMatch {
     pub terminal: bool,
     pub origin: RuleOrigin,
     pub frozen_out: bool,
+    pub pattern: String,
 }
 
 /// A decision plus its full provenance trace (spec 22 §13): every matching
@@ -223,6 +226,7 @@ impl MountPolicyProgram {
                         terminal: rule.is_terminal(),
                         origin: rule.origin.clone(),
                         frozen_out: false,
+                        pattern: rule.pattern.raw().to_string(),
                     })
                     .collect(),
                 frozen_by,
@@ -243,6 +247,7 @@ impl MountPolicyProgram {
                 terminal: rule.is_terminal(),
                 origin: rule.origin.clone(),
                 frozen_out,
+                pattern: rule.pattern.raw().to_string(),
             });
             if frozen_out {
                 continue;
@@ -293,6 +298,7 @@ impl MountPolicyProgram {
                 terminal: rule.is_terminal(),
                 origin: rule.origin.clone(),
                 frozen_out,
+                pattern: rule.pattern.raw().to_string(),
             });
             if !frozen_out {
                 protected = true;
@@ -346,6 +352,7 @@ impl MountPolicyProgram {
                 terminal: rule.is_terminal(),
                 origin: rule.origin.clone(),
                 frozen_out,
+                pattern: rule.pattern.raw().to_string(),
             });
             if frozen_out || protected {
                 continue;

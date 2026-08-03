@@ -515,3 +515,35 @@ pub enum SourceAction {
     /// Reset agent source to canonical (discard local edits)
     Reset { name: String },
 }
+
+/// Mount-policy diagnostics (spec 22 §13).
+#[derive(Subcommand)]
+pub enum PolicyAction {
+    /// Mount-masking diagnostics.
+    Mounts {
+        #[command(subcommand)]
+        action: MountsDiagnosticsAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MountsDiagnosticsAction {
+    /// Explain one mount-root-relative path.
+    Explain {
+        #[arg(long)]
+        workload: String,
+        #[arg(long)]
+        mount: String,
+        #[arg(long)]
+        path: String,
+    },
+    /// Preview the annotated mount tree.
+    Preview {
+        #[arg(long)]
+        workload: String,
+        #[arg(long)]
+        mount: String,
+        #[arg(long)]
+        root: Option<String>,
+    },
+}

@@ -1,5 +1,8 @@
 # NEXT-SESSION — handoff prompt
 
+Spec 22 host policy-file preparation and diagnostics CLI landed. Continue at the documented
+SDK integration seam when the pinned microsandbox dependency gains the policy field.
+
 > **STATUS: HANDOFF**
 > Prerequisites / see-also: [README.md](README.md) · [00-overview.md](00-overview.md) ·
 > [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md) ·

@@ -60,6 +60,11 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// Build the declarative sandbox plan.
     fn plan(&self) -> SandboxPlan;
 
+    /// Compiled mount policy retained for host-side spec 22 transmission prep.
+    fn mount_policy(&self) -> Option<&crate::mount_policy::MountPolicyProgram> {
+        None
+    }
+
     /// Format the plan with a `[source]` annotation for each field.
     fn show_source(&self) -> String {
         self.plan().to_string()

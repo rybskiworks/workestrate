@@ -83,6 +83,8 @@ pub struct SandboxPlan {
     pub secret_env: Vec<HostBoundSecret>,
     pub ports: Vec<PortMapping>,
     pub mounts: Vec<MountPlan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_file: Option<std::path::PathBuf>,
     pub network: NetworkPlan,
 }
 
@@ -247,6 +249,9 @@ impl fmt::Display for SandboxPlan {
         for m in &self.mounts {
             let ro = if m.read_only { " (ro)" } else { "" };
             writeln!(f, "mount: {}:{}{}", m.host, m.guest, ro)?;
+        }
+        if let Some(pf) = &self.policy_file {
+            writeln!(f, "policy_file: {}", pf.display())?;
         }
         writeln!(f, "network: default_deny={}", self.network.default_deny)?;
         for rule in &self.network.ingress_rules {
@@ -417,6 +422,7 @@ mod tests {
                     policy: None,
                 },
             ],
+            policy_file: None,
             network: NetworkPlan {
                 default_deny: true,
                 egress_rules: vec![
@@ -471,6 +477,7 @@ network: default_deny=true
             secret_env: vec![],
             ports,
             mounts: vec![],
+            policy_file: None,
             network: NetworkPlan {
                 default_deny: false,
                 egress_rules: vec![],
@@ -517,6 +524,7 @@ network: default_deny=true
             secret_env: vec![],
             ports: vec![],
             mounts: vec![],
+            policy_file: None,
             network: NetworkPlan {
                 default_deny: false,
                 egress_rules: vec![],
@@ -595,6 +603,7 @@ network: default_deny=true
             secret_env: vec![],
             ports: vec![],
             mounts: vec![],
+            policy_file: None,
             network: NetworkPlan {
                 default_deny: true,
                 egress_rules: rules,

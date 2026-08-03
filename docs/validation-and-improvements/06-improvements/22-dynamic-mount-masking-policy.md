@@ -241,6 +241,8 @@ Both CLI surfaces use the runtime compiler. `workestrate policy mounts explain
 <path>` shows every matching rule, effect, overridability, origin, frozen-by
 decision, and final state. `preview <dir>` annotates Visible/Masked/
 TraversalOnly and warns on hardlink aliases using `(dev, ino)` detection.
+The current workestrate CLI uses explicit flags (`--workload`, `--mount`, and
+`--path` for explain; `--root` for preview) rather than positional path operands.
 
 ## 14. Microsandbox enforcement contract (summary)
 
