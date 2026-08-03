@@ -73,14 +73,16 @@ pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathB
 /// Spec 22 §12 SDK integration seam. SDK `microsandbox =0.5.6` has no policy
 /// field, so this intentionally does nothing until the fork dependency lands.
 /// TODO(spec 22 §12, SDK switch): once the Cargo dep moves to the fork, replace
-/// this with the exact SDK call (per policy-bearing mount):
-/// `builder = builder.volume(&m.guest, |v| { v.bind(host).policy_file(policy_file) });`
+/// this with the exact per-mount SDK call (using each MountPlan.policy_file):
+/// `builder = builder.volume(&m.guest, |v| { v.bind(host).policy_file(m.policy_file.as_ref()) });`
 /// or the fork's final equivalent if its API settles on a per-sandbox method.
 pub(crate) fn apply_mount_policy(
     builder: SandboxBuilder,
     plan: &SandboxPlan,
 ) -> Result<SandboxBuilder> {
-    let _ = plan.policy_file.as_ref();
+    for m in &plan.mounts {
+        let _ = m.policy_file.as_ref();
+    }
     Ok(builder)
 }
 
@@ -449,7 +451,6 @@ mod tests {
             secret_env: vec![],
             ports: vec![],
             mounts,
-            policy_file: None,
             network: NetworkPlan {
                 default_deny: true,
                 egress_rules: vec![],
@@ -467,6 +468,7 @@ mod tests {
             guest: "/data".into(),
             read_only: false,
             policy: None,
+            policy_file: None,
         }]);
 
         ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan)?;
@@ -493,6 +495,7 @@ mod tests {
             guest: "/app/config.json".into(),
             read_only: true,
             policy: None,
+            policy_file: None,
         }]);
 
         let result =

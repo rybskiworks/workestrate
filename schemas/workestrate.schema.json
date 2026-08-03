@@ -448,6 +448,12 @@
             }
           ]
         },
+        "policy_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "read_only": {
           "type": "boolean"
         }

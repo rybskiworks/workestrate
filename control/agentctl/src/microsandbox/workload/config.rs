@@ -258,12 +258,6 @@ impl Workload for ConfigWorkload {
             secret_env: self.secret_env.clone(),
             ports: self.workload.ports.clone(),
             mounts,
-            policy_file: (!self.mount_policies.is_empty()).then(|| {
-                crate::microsandbox::policy_file::policy_file_path(
-                    &crate::config::resolve_state_dir(),
-                    &self.sandbox_instance_name(),
-                )
-            }),
             network: NetworkPlan {
                 default_deny: self.workload.network.default_deny.unwrap_or(true),
                 egress_rules,

@@ -320,12 +320,17 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.
     let state_dir = crate::config::resolve_state_dir();
-    if let Some(program) = workload.mount_policy() {
-        plan.policy_file = Some(crate::microsandbox::policy_file::write_policy_file(
-            &state_dir,
-            &spec.instance,
-            program,
-        )?);
+    for m in &mut plan.mounts {
+        if let Some(program) = workload.mount_policy_for(&m.guest) {
+            let slug = crate::microsandbox::policy_file::mount_slug(&m.guest);
+            let path = crate::microsandbox::policy_file::write_policy_file(
+                &state_dir,
+                &spec.instance,
+                &slug,
+                program,
+            )?;
+            m.policy_file = Some(path);
+        }
     }
 
     // ADR 0026(a)/C2: resolve the slot's bind IP BEFORE the builder port
@@ -496,7 +501,6 @@ mod tests {
             secret_env: Vec::new(),
             ports: Vec::new(),
             mounts: Vec::new(),
-            policy_file: None,
             network: NetworkPlan {
                 default_deny: false,
                 egress_rules: Vec::new(),

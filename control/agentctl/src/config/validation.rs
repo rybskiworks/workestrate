@@ -375,6 +375,7 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         validate_env_override, validate_mount_guest, validate_mount_host, validate_seed_source,
     };
     for (workload_name, workload) in &config.workloads {
+        let mut seen_guests = std::collections::HashSet::new();
         for m in &workload.mounts {
             validate_mount_host(&m.host).map_err(|e| {
                 anyhow::anyhow!("workload '{workload_name}' mount host validation failed: {e}")
@@ -382,6 +383,12 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
             validate_mount_guest(&m.guest, m.read_only).map_err(|e| {
                 anyhow::anyhow!("workload '{workload_name}' mount guest validation failed: {e}")
             })?;
+            if !seen_guests.insert(m.guest.clone()) {
+                anyhow::bail!(
+                    "workload '{workload_name}' has duplicate mount guest path '{}'; mount guest paths must be unique within a workload (per-mount policy files are keyed by guest slug)",
+                    m.guest
+                );
+            }
         }
         for seed in &workload.seed_files {
             validate_seed_source(&seed.source).map_err(|e| {
@@ -634,6 +641,31 @@ pub(crate) mod tests {
             msg,
             "workload 'pi' env name '1FOO' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)"
         );
+    }
+
+    #[test]
+    fn validate_config_rejects_duplicate_mount_guest_path() {
+        let mut config = base_config_for_validation();
+        let workload = config.workloads.get_mut("pi").unwrap();
+        workload.mounts = vec![
+            crate::microsandbox::plan::MountPlan {
+                host: "first".to_string(),
+                guest: "/data".to_string(),
+                read_only: false,
+                policy: None,
+                policy_file: None,
+            },
+            crate::microsandbox::plan::MountPlan {
+                host: "second".to_string(),
+                guest: "/data".to_string(),
+                read_only: false,
+                policy: None,
+                policy_file: None,
+            },
+        ];
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(err.contains("duplicate mount guest path"), "error: {err}");
+        assert!(err.contains("/data"), "error: {err}");
     }
 
     #[test]
