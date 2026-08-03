@@ -25,6 +25,36 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+> **2026-08-03 update (11) — spec 21 phase E (lifecycle wiring) is IMPLEMENTED
+> in the working tree but UNCOMMITTED and UNVALIDATED.** HEAD is `3efd377`
+> (post-Phase-D beads commits `30bfdb1` + `3efd377`; last CODE commit is Phase D
+> `932b476`). 12 dirty files (10 modified + 2 intent-to-add):
+> `control/agentctl/src/{cli_actions.rs, commands/deps.rs,
+> commands/lifecycle.rs, images/build_cmd.rs, images/ensure.rs (new),
+> images/mod.rs, main.rs, microsandbox/runtime/mod.rs,
+> microsandbox/workload/mod.rs}` + `tests/{ensure_images_e2e.rs (new),
+> flake_root_gate.rs}`. Key symbols: `images::ensure`
+> (`ensure_should_run` / `ensure_images_for_workload(s)` / `ensure_resolved`
+> reusing `build_cmd::process_target`); `InstanceSpec.images_ready`;
+> `detach_args` appends `--images-ready` unconditionally (never
+> `--reload-images`, D3); `--reload-images` on up/exec/batch-up;
+> `cmd_workload_up_all(json, reload_images)` batch-ensures all starts before
+> any spawn; `EnsurePreflight` dep-auto-start inheritance (`force=false`);
+> `bare_up_reject_table` excludes `--reload-images`. **DO NOT DISCARD the
+> working tree.** Next session MUST: (1) run targeted tests for the new code
+> (cargo test for ensure.rs in-module tests + main.rs detach-args/bare-up tests
+> + flake_root_gate renamed test) —
+> `cargo test -p workestrate-agentctl ensure should_run missing_flake
+> batch_force unforced nix_absent non_nix detach_args images_ready bare_up
+> nix_layered_up_without_declaring_flake` via `nix develop`; (2) run `just
+> verify` for full green (expect 721 baseline + new Phase E tests); (3) commit
+> Phase E as e.g. `feat(images): ensure-images pre-flight lifecycle wiring
+> (spec 21 phase E)` — stage ONLY the 12 code files; (4) then HOST-KVM gates
+> (the #[ignore]'d ensure_images_e2e KVM variant + stale-tag rebuild e2e).
+> Docs (STATUS/NEXT-SESSION/spec-21) were reconciled to this reality on
+> 2026-08-03 in a docs-only commit. Phase F (multi-repo migration) remains
+> pending after E lands.
+
 > **2026-08-02 update (10) — spec 21 phase D (build/load pipeline) landed**
 > (one commit on top of phase C `0729bb4`): the phase-C seam is now the REAL
 > pipeline in `images/pipeline.rs` — async + trait-seamed (`ImageBuilder` /
@@ -231,9 +261,9 @@ re-derive their contents.
 > sweep. Remaining phases 5–6 items are USER DECISIONS — open thread 12 and
 > STATUS.md §0/§5 item 11.
 
-- HEAD: `867a96e` (docs: STATUS.md comprehensive state report; latest code
-  commit is the spec-05 cwd-fallback fix `7624aaf`; the interim
-  microsandbox-filesystem agentd patch slim `19d94e8` landed just before).
+- HEAD: `3efd377` (post-Phase-D beads commits; latest code commit is Phase D
+  `932b476`; Phase E implemented-uncommitted-unvalidated in the working tree —
+  see the 2026-08-03 update note above).
   **Phase B landed (2026-08-01):** final unified secret/env
   model `19b2cf0` (spec 16 — per-binding `bound`, `true` sugar,
   `allowed_hosts`, `schema_version` back to 1), directory-mode config repos
@@ -665,3 +695,8 @@ verb + `images/{detect,build_cmd,pipeline}.rs`, the phase-D seam, the §7
 ladders; 700/0/3); STATUS.md §0 rewritten for phase C (B demoted to §0.01,
 A to §0.02), §5 item 12 annotated (incl. the personal-v2 policy-gate
 discovery), spec 21 §3.4 phase-C addendum recorded.
+
+**2026-08-03 refresh:** docs reconciled to post-D + uncommitted-E reality;
+STATUS.md header + §0/§1/§5-item-12 + spec-21 header/§10/§13 updated; origin
+rewiring to GitHub BLOCKED (private repo, `ls-remote` auth failure — see
+STATUS/origin notes).

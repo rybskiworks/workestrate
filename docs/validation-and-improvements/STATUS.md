@@ -1,6 +1,6 @@
 # STATUS — comprehensive state report for the next session
 
-> **STATUS: CURRENT (2026-08-01, HEAD `7624aaf`)**
+> **STATUS: CURRENT (2026-08-03, HEAD `3efd377`; Phase E implemented-uncommitted-unvalidated in the working tree)**
 > Prerequisites / see-also: [README.md](README.md) · [NEXT-SESSION.md](NEXT-SESSION.md) ·
 > [07-execution-order.md](07-execution-order.md) · [06-improvements/00-index.md](06-improvements/00-index.md) ·
 > [02-config-requirements.md](02-config-requirements.md)
@@ -95,10 +95,24 @@ contextless sessions:
 - **Gates after landing:** 721 passed / 0 failed / 3 ignored (700 baseline
   + 21 new); `just verify` fully green. `verify-full` (nix build of the
   tool itself) NOT run in-container — host gate.
-- **Phases E–F remain** (lifecycle pre-flight wiring — E `HOST-KVM`;
-  multi-repo migration — F `HOST-NIX`). Phase D's only HOST-NIX remainder:
-  running the pipeline against the REAL workestrate-pi/tempest images
-  (network FODs) and the §3.5 digest capture flip.
+- **Phase E (lifecycle pre-flight wiring) is IMPLEMENTED in the working tree
+  but UNCOMMITTED and UNVALIDATED.** The 12 dirty paths are:
+  `control/agentctl/src/cli_actions.rs`, `control/agentctl/src/commands/deps.rs`,
+  `control/agentctl/src/commands/lifecycle.rs`,
+  `control/agentctl/src/images/build_cmd.rs`,
+  `control/agentctl/src/images/ensure.rs` (new),
+  `control/agentctl/src/images/mod.rs`, `control/agentctl/src/main.rs`,
+  `control/agentctl/src/microsandbox/runtime/mod.rs`,
+  `control/agentctl/src/microsandbox/workload/mod.rs`,
+  `control/agentctl/tests/ensure_images_e2e.rs` (new),
+  `control/agentctl/tests/flake_root_gate.rs`.
+  Key symbols are `images/ensure.rs`, `InstanceSpec.images_ready`,
+  unconditional `--images-ready` in `detach_args`, `--reload-images` on
+  up/exec/batch-up, `cmd_workload_up_all` batch ensure,
+  `EnsurePreflight` dependency inheritance, and `bare_up_reject_table`.
+  **Phase F (multi-repo migration) remains pending.** Phase D's only HOST-NIX
+  remainder is unchanged: real workestrate-pi/tempest builds (network FODs)
+  and the §3.5 digest capture flip.
 
 ---
 
@@ -518,11 +532,19 @@ commit; HEAD moves past `09b624f` — the snapshot below still cites `7624aaf`/
 
 ---
 
-## 1. SNAPSHOT (as of 2026-08-01, HEAD `7624aaf`)
+## 1. SNAPSHOT (as of 2026-08-03, HEAD `3efd377`)
 
-- **HEAD:** `7624aaf` — `fix(config): gate cwd-derived reference config behind
-  explicit opt-in (spec 05)`. Branch `migration/tool-model`; working tree clean;
-  **2 stashes exist — leave them untouched** (foreign WIP, not ours).
+- **HEAD:** `3efd377` (post-Phase-D: `30bfdb1` beads seed, `3efd377` beads
+  export repair; last CODE commit is Phase D `932b476`). Branch
+  `migration/tool-model`; **WORKING TREE DIRTY** — Phase E (spec 21 lifecycle
+  wiring) is implemented but UNCOMMITTED and UNVALIDATED: 12 files (10
+  modified + 2 intent-to-add). Nothing staged. ONE stash exists
+  (`stash@{0}` on `406b5b5`) — leave untouched, never run stash commands.
+  Dirty paths: `control/agentctl/src/cli_actions.rs`,
+  `commands/deps.rs`, `commands/lifecycle.rs`, `images/build_cmd.rs`,
+  `images/ensure.rs` (new), `images/mod.rs`, `main.rs`,
+  `microsandbox/runtime/mod.rs`, `microsandbox/workload/mod.rs`,
+  `tests/ensure_images_e2e.rs` (new), `tests/flake_root_gate.rs`.
 - **In-flight fix (uncommitted at time of writing; lands as a new commit on
   `migration/tool-model`):** `workestrate home clone <src> <dest>` from a
   git-initialized but COMMITLESS source home produced an empty tree (git-clone
@@ -702,7 +724,7 @@ build-script tests), **pending user force-push + PR open**.
 
 Condensed from [06-improvements/00-index.md](06-improvements/00-index.md)
 (post-2026-08-01 flips — the A2 audit). One delta since the index: **spec 05**
-landed at HEAD (`7624aaf`) after the index flip pass; its banner/index row
+landed before the current HEAD after the index flip pass; its banner/index row
 still say SPEC (bookkeeping pending, §5 item 9).
 
 | Spec | Title | ACTUAL status | What remains |
@@ -711,7 +733,7 @@ still say SPEC (bookkeeping pending, §5 item 9).
 | 02 | main standardization | OBSOLETE (2026-08-01) — mooted by spec 08 | none (branch-detection stays a deferred option) |
 | 03 | Dogfooding | PARTIAL — Phase 0 env pinning READY-TO-EXECUTE; B1/B2/B3 not implemented | Phase 0 wrapper; B1/B2 (verifiable-here); B3 (HOST-KVM tail) |
 | 04 | CLI config authoring | DEFERRED — gated on `02-config-requirements.md` sign-off | nothing until sign-off; must be additive-tolerant / schema-driven |
-| 05 | cwd-fallback fix | EXECUTED (2026-08-01, `7624aaf`) — Δ: banner flip pending | bookkeeping only (banner + index row) |
+| 05 | cwd-fallback fix | EXECUTED (2026-08-01) — Δ: banner flip pending | bookkeeping only (banner + index row) |
 | 06 | `--home` flag | EXECUTED (2026-07-30, `d991252`) | none |
 | 07 | Naming consistency | DONE (3 commits; cargo gates pending) | mechanical residue sweep + cargo gates via `nix develop` |
 | 08 | No repo-local home | EXECUTED (2026-07-30) | none |
@@ -779,8 +801,8 @@ current post-flips except the spec-05 row above.
      workload-rooted schema);
    - tombi toolchain doc include-set touch-up (spec 15 doc vs the landed
      `workestrate/**/*.toml` globs).
-9. **Bookkeeping tail:** spec-05 banner/index flip (code landed `7624aaf`);
-   NEXT-SESSION.md refresh (HEAD `7624aaf`, ~613 tests); spec-07 cargo gates.
+9. **Bookkeeping tail:** spec-05 banner/index flip; NEXT-SESSION.md refresh;
+   spec-07 cargo gates.
 10. **Stale in-tree binary note:** `control/agentctl/target/debug/workestrate`
     (Aug 1 20:59) is STALE — pre-dates HEAD. The live binary is built into the
     devshell target dir `~/.cache/ai-workbench/agentctl-target/debug/`
@@ -803,16 +825,22 @@ current post-flips except the spec-05 row above.
     Standing threads that outlive the cleanup: container-home
     ephemerality/host-side home (§6); `stash@{0}` on `406b5b5` never to be
     touched (§7).
-12. **Spec 21 (image build/load lifecycle) — DESIGN-APPROVED; phases A + B +
-    C landed 2026-08-02** (§0/§0.01/§0.02 above: A = `.workestrate-build/`
+12. **Spec 21 (image build/load lifecycle) — phases A–D LANDED; phase E
+    implemented-uncommitted-unvalidated; phase F pending** (§0/§0.01/§0.02
+    above: A = `.workestrate-build/`
     reserved in both scaffold template locations with parity + undeclared
     `local_build` fallback default; B = `control/agentctl/src/images/`
     image-state store — `images.json` schema/IO, per-tag O_EXCL lock,
     repo_key, skew matrix; C = `workestrate workload build` verb + drvPath
     change detection — selectors, `--check`/`--force`/`--json`, the §7
-    failure ladders, D1 trust-record writes, and the marked **phase-D seam**
-    in `images/pipeline.rs`). Phases D–F remain per the spec (D/F HOST-NIX;
-    E HOST-KVM; HOST-VERIFY cluster on the msb digest surface). Phase C/D
+    failure ladders, D1 trust-record writes, and the phase-D pipeline). Commits:
+    A `02bea9a`, B `290e91b`, C `0729bb4`, D `932b476`. Phase E (lifecycle
+    wiring: `ensure.rs` pre-flight, `images_ready`/`--images-ready` detach
+    token, `--reload-images` on up/exec/batch-up with D3 batch scope, and
+    dependency auto-start inheritance) is IMPLEMENTED in the working tree but
+    UNCOMMITTED and UNVALIDATED; it needs targeted tests + `just verify` +
+    commit, then HOST-KVM e2e. Phase F (multi-repo migration) remains pending.
+    Phase C/D
     note: the per-tag lock is O_EXCL + stale-PID recovery, NOT flock(2)
     (unsafe-code lint); the kernel-release upgrade is an open follow-up
     decision recorded in `images/lock.rs`. Phase-C discovery: the dev-home
@@ -880,7 +908,7 @@ the repo.
 End every session with three things:
 
 - **What was confirmed** — with evidence (command + output, or file:line
-  citation). *This session (2026-08-01):* HEAD `7624aaf` verified via
+  citation). *This session (2026-08-03):* HEAD `3efd377` verified via
   `git log --oneline -15`; fork @ `27d84216` verified via
   `git -C .tmp/microsandbox log --oneline -3`; home `config-repos/personal-v2`
   @ `0e0cb08` directory-mode verified via `ls` + `git log`; stale in-tree

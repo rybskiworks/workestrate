@@ -1,6 +1,6 @@
 # 21 — Image build/load lifecycle: ensure-images pre-flight, change detection, selectors, reserved build dir
 
-> **STATUS: DESIGN-APPROVED (awaiting implementation; user signed off on decisions 2026-08-02)**
+> **STATUS: IMPLEMENTING — phases A–D LANDED (commits 02bea9a / 290e91b / 0729bb4 / 932b476); phase E IMPLEMENTED in the working tree but UNCOMMITTED + UNVALIDATED (2026-08-03); phase F (multi-repo migration) PENDING. User signed off on decisions D1–D5 2026-08-02.**
 > Prerequisites / see-also: [00-index.md](00-index.md) ·
 > [17-config-repo-directory-mode.md](17-config-repo-directory-mode.md) ·
 > [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) ·
@@ -463,7 +463,7 @@ flake-input update (operator action in the config repo), not a reload.
 | **B** | Image-state store: `state/images.json` schema + atomic tmp+rename IO + `state/image-locks/` flock helper | new `control/agentctl/src/images/state.rs`; reuse the port-registry atomic-write pattern | round-trip serde test; tmp+rename crash-safety test; flock contention test | `cargo test` | S, `verifiable-here` |
 | **C** | Change detection + `workload build` verb: drvPath eval, skew matrix, selectors, `--check`, `--force`, `--json`, zero-eligible note | new `images/detect.rs`, `images/build_cmd.rs`; verb wiring in `main.rs`; `registry.configs` iteration | drvPath-eval unit tests against fixtures; skew-matrix table tests; selector-scope tests; stderr-note assertion | `cargo test`; live `nix eval` smoke | M, `HOST-NIX` |
 | **D** | Build/load pipeline: `nix build` + `msb load` orchestration, outPath re-load gate, digest capture (pending msb surface) | new `images/pipeline.rs`; msb invocation wrapper alongside the existing `microsandbox` SDK call sites | pipeline staging tests with a stub loader; re-load-on-outPath-change test | `cargo test`; `nix build` + `msb load` smoke; msb digest-surface verification | M, **DONE 2026-08-02 — validated in-container through the FULL e2e** (fixture image: nix build → gated `msb load` → record → gate-skip → out-of-band-delete reload, via the real CLI AND `tests/image_pipeline_e2e.rs`); `HOST-NIX` only for the real workestrate-pi/tempest images (network FODs) — see the §11 verification block |
-| **E** | Lifecycle wiring: ensure-images pre-flight in `cmd_workload_up`/`exec`/`batch-up`, `images_ready` on `InstanceSpec`, `--images-ready` in `detach_args`, `--reload-images` threading into `cmd_workload_up_all` | `spawn.rs`, `run.rs`, `main.rs`, `InstanceSpec`, `detach_args`, bare-up flag-reject loop | parent-ensures/child-skips integration tests; batch force-scope test; KVM e2e: up after TOML edit rebuilds before spawn | `cargo test`; guest boot + stale-tag e2e | M, `HOST-KVM` e2e |
+| **E** | Lifecycle wiring: ensure-images pre-flight in `cmd_workload_up`/`exec`/`batch-up`, `images_ready` on `InstanceSpec`, `--images-ready` in `detach_args`, `--reload-images` threading into `cmd_workload_up_all` | `spawn.rs`, `run.rs`, `main.rs`, `InstanceSpec`, `detach_args`, bare-up flag-reject loop | parent-ensures/child-skips integration tests; batch force-scope test; KVM e2e: up after TOML edit rebuilds before spawn | `cargo test`; guest boot + stale-tag e2e | IMPLEMENTED-UNCOMMITTED-UNVALIDATED (2026-08-03): ensure.rs + `InstanceSpec.images_ready` + `detach_args --images-ready` + `--reload-images` on up/exec/batch-up + `cmd_workload_up_all` batch ensure + `EnsurePreflight` dep inheritance. Needs: targeted cargo tests + `just verify` + commit, then the HOST-KVM e2e (stale-tag rebuild before spawn; #[ignore]'d ensure_images_e2e KVM variant). |
 | **F** | Multi-repo + personal repo migration: `--repo`/`--all-repos` breadth, personal config repo cutover from the manual justfile ritual, record seeding | `images/build_cmd.rs` (repo iteration), personal repo justfile (`update-hashes` / `load-images` recipes retired) | multi-repo selector tests; first-run record-seeding smoke | `cargo test`; personal-repo `up` smoke | S–M, `HOST-NIX` |
 
 **Ordering:** A and B are independent; C and D may parallelize behind B; E
@@ -601,36 +601,38 @@ deliberate act, not an afterthought.
 
 ## 13. Acceptance criteria
 
-- [ ] ensure-images is parent-side only; the detached child skips it via
+- [~] ensure-images is parent-side only; the detached child skips it via
       `images_ready` on `InstanceSpec` + hidden `--images-ready` in
-      `detach_args`; `--foreground` ensures (§2).
-- [ ] Eligibility gated on `image.recipe == "nix-layered"` mirroring
+      `detach_args`; `--foreground` ensures (§2) (implemented-uncommitted-unvalidated, phase E working tree: ensure.rs + InstanceSpec.images_ready + detach_args --images-ready; pending targeted tests + commit + HOST-KVM e2e).
+- [~] Eligibility gated on `image.recipe == "nix-layered"` mirroring
       `flake_root_requirement`; ensure runs BEFORE
-      `auto_start_dependencies` (§2.3–2.4).
-- [ ] Change detection is eval-only `nix eval --raw <repo>#<name>.drvPath`;
+      `auto_start_dependencies` (§2.3–2.4) (implemented-uncommitted-unvalidated, phase E working tree; pending targeted tests + commit + HOST-KVM e2e).
+- [x] Change detection is eval-only `nix eval --raw <repo>#<name>.drvPath`;
       re-load only on outPath change; per-tag flock spans
-      eval→build→load→record (§3).
-- [ ] Skew matrix implemented exactly as §3.4, including the D1 TRUST branch
+      eval→build→load→record (§3) (landed phases B+C+D: 290e91b lock/state/skew, 0729bb4 detect, 932b476 pipeline reload_decision).
+- [x] Skew matrix implemented exactly as §3.4, including the D1 TRUST branch
       and the `--reload-images` flip; digest one-way signal when the msb
-      surface lands (§3.5).
-- [ ] Stable verbatim tags, no auto-prefixing; `validate-config`/`plan` WARN
+      surface lands (§3.5) (landed phase B 290e91b); digest one-way signal DEFERRED pending §3.5 design (§11 item 1 verified the msb digest surface exists, 932b476).
+- [~] Stable verbatim tags, no auto-prefixing; `validate-config`/`plan` WARN
       on cross-repo name:tag collision naming both repos (D2); cross-home
       warn + digest-detect with records keyed by (repo identity, name:tag)
-      (D5) (§4).
-- [ ] `workestrate workload build [name] [--repo | --all-repos] [--check]
+      (D5) (§4) — PARTIAL: stable verbatim tags landed (0729bb4); cross-repo collision WARN + cross-home digest-detect NOT yet implemented (D5 digest-detect deferred to §3.5).
+- [~] `workestrate workload build [name] [--repo | --all-repos] [--check]
       [--force] [--json]` with the selector table of §5.1; zero-eligible
       no-op + stderr note; `--reload-images` on up/exec/batch-up with D3
       batch scope, excluded from the bare-up flag-reject loop, threaded into
-      `cmd_workload_up_all` (§5).
-- [ ] `.workestrate-build/` reserved, gitignored, artifact-only by
+      `cmd_workload_up_all` (§5) — PARTIAL: build verb landed (0729bb4); `--reload-images` on up/exec/batch-up + D3 batch scope + bare-up reject-loop exclusion + `cmd_workload_up_all` threading implemented-uncommitted (phase E working tree).
+- [x] `.workestrate-build/` reserved, gitignored, artifact-only by
       construction, scaffold-provisioned with `scaffold-check` parity; new
-      default for undeclared `local_build` fallbacks only (D4) (§6).
-- [ ] Failure-mode table (§7) implemented row-for-row, including the
-      `update-hashes` pointer and the `ps.rs` unreachable-DB vocabulary.
-- [ ] `images.json` per §8, atomic tmp+rename; `version` field present.
-- [ ] HOST-VERIFY cluster (§11) items each recorded verified-or-deferred in
-      the phase-D/E gate notes.
-- [ ] No config-schema change; `schema_version` stays `1` (§12.1).
+      default for undeclared `local_build` fallbacks only (D4) (§6) (landed phase A 02bea9a).
+- [x] Failure-mode table (§7) implemented row-for-row, including the
+      `update-hashes` pointer and the `ps.rs` unreachable-DB vocabulary
+      (landed phases C+D 0729bb4/932b476; §7 missing-flake row reused by ensure — implemented-uncommitted phase E).
+- [x] `images.json` per §8, atomic tmp+rename; `version` field present
+      (landed phase B 290e91b).
+- [x] HOST-VERIFY cluster (§11) items each recorded verified-or-deferred in
+      the phase-D/E gate notes (recorded phase D 932b476 — §11 verification block: 4 of 5 verified in-container, item 4 partially; host remainders noted).
+- [x] No config-schema change; `schema_version` stays `1` (§12.1) (true throughout).
 
 **Key decision:** the tool owns freshness via eval-only drvPath change
 detection against an advisory per-home record — the msb store stays ground
