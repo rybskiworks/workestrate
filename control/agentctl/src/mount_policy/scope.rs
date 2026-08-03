@@ -152,6 +152,8 @@ pub struct PolicyScope {
     pub source_path: PathBuf,
     /// The raw `[policy.mounts]` fragment this scope declares.
     pub fragment: MountsFragment,
+    /// Guest path of the mount declaring this entry policy, when applicable.
+    pub mount_guest: Option<String>,
 }
 
 /// Collected policy fragments retained separately from the ordinary merged
@@ -183,7 +185,14 @@ impl PolicyScope {
             layer_name: layer_name.into(),
             source_path: source_path.into(),
             fragment,
+            mount_guest: None,
         }
+    }
+
+    /// Tag this scope with the guest path of its declaring mount.
+    pub fn for_mount(mut self, guest: impl Into<String>) -> Self {
+        self.mount_guest = Some(guest.into());
+        self
     }
 
     /// The origin rules compiled from this scope will carry (spec 22 §11).

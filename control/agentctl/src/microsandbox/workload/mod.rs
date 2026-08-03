@@ -65,6 +65,12 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         None
     }
 
+    /// Compiled mount policy for one guest mount.
+    fn mount_policy_for(&self, guest: &str) -> Option<&crate::mount_policy::MountPolicyProgram> {
+        let _ = guest;
+        None
+    }
+
     /// Format the plan with a `[source]` annotation for each field.
     fn show_source(&self) -> String {
         self.plan().to_string()

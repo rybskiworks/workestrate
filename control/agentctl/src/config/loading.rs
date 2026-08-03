@@ -468,12 +468,15 @@ fn collect_policy_scopes(
                 entries.retain(|scope| scope.scope_kind != ScopeKind::MountEntry);
                 for mount in &workload.mounts {
                     if let Some(fragment) = mount.policy.clone() {
-                        entries.push(PolicyScope::new(
-                            ScopeKind::MountEntry,
-                            layer.name.clone(),
-                            source.clone(),
-                            fragment,
-                        ));
+                        entries.push(
+                            PolicyScope::new(
+                                ScopeKind::MountEntry,
+                                layer.name.clone(),
+                                source.clone(),
+                                fragment,
+                            )
+                            .for_mount(mount.guest.clone()),
+                        );
                     }
                 }
             }
