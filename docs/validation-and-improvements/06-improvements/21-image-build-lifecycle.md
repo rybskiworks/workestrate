@@ -638,3 +638,34 @@ deliberate act, not an afterthought.
 detection against an advisory per-home record — the msb store stays ground
 truth for presence, the record stays memory for provenance, and the five user
 decisions (D1–D5) pin every place the two could disagree.
+
+---
+
+## 14. Open follow-up — KVM-test MSB_HOME convention
+
+> **STATUS: open follow-up (recorded 2026-08-03).** Pragmatic workaround in
+> place; a more idiomatic long-term approach should be brainstormed later.
+
+The two HOST-KVM integration tests (`tests/lifecycle_detached.rs`,
+`tests/ensure_images_e2e.rs`) boot a real sandbox, so microsandbox derives
+its agent-relay unix socket as `$MSB_HOME/run/agent/<32hex>.sock` =
+`len(MSB_HOME) + 48` bytes, capped at the 108-byte Linux `sockaddr_un`
+limit → `len(MSB_HOME)` must be `<= 59`. The codebase's usual
+`workestrate-<label>-<pid>-<nanos>` temp dir under a deep `$TMPDIR` blows
+that budget, so the tests were decoupled via a `common::short_msb_home()`
+helper that uses a fixed short `/tmp/wk-msb-<pid>-<nanos>` base (the `/tmp`
+literal diverges from the `temp_dir()` idiom deliberately — documented on
+the helper).
+
+This is a pragmatic workaround, not the idiomatic long-term answer.
+Follow-up to brainstorm later (tracked as a beads issue, spec-21 epic):
+
+- msb supporting a **configurable run/socket dir** via `paths.sandboxes`
+  (or equivalent), so the socket path is independent of `MSB_HOME` depth;
+  OR
+- a **canonical short-`MSB_HOME` test convention** surfaced as a first-class
+  test-support helper with a documented contract, rather than a `/tmp`
+  literal in two KVM tests.
+
+Either path lets the KVM tests return to the `temp_dir()` idiom and removes
+the `/tmp` divergence. Refactor when the socket-path pressure is revisited.
