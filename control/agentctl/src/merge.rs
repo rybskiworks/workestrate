@@ -19,8 +19,9 @@ pub struct Layer {
     /// The file this layer was loaded from, when known. `None` for synthetic
     /// layers built from in-memory strings with no on-disk source. Carried
     /// so repo-relative mount/seed paths can resolve against the DECLARING
-    /// layer's content directory (the parent dir of this file) rather than
-    /// the flake project root — see [`layer_dirs_from`].
+    /// layer's content root — the directory-mode root (`<repo>/workestrate/`)
+    /// for directory-mode layers, or the file's parent dir for single-file
+    /// mode — rather than the flake project root; see [`layer_dirs_from`].
     pub source_path: Option<PathBuf>,
 }
 
@@ -87,13 +88,32 @@ impl Layer {
     }
 }
 
-/// Build the layer-name → content-dir map for a merged layer set.
+/// Build the layer-name → content-root map for a merged layer set.
 ///
-/// A layer's content dir is the parent directory of the file it was loaded
-/// from (e.g. the capsule dir for `personal#workestrate/workloads/litellm/
-/// workload.toml`). Layers without a source path (synthetic `from_string`
-/// layers) are absent — callers then apply the documented fallback
-/// (flake project root, else cwd) explicitly.
+/// A layer's content root is the directory repo-relative mount/seed paths
+/// resolve against (spec 17). It is derived STRUCTURALLY from the layer's
+/// `source_path` (no filesystem access, so non-existent test paths work):
+///
+/// - **Single-file mode** (`<repo>/workestrate.toml`): the content root is
+///   the file's parent dir (`<repo>/`). The single-file marker
+///   `workestrate.toml` is detected by file name and short-circuits the
+///   walk-up.
+/// - **Directory mode** (`<repo>/workestrate/...`): the content root is the
+///   **directory-mode root** `<repo>/workestrate/` — the dir containing
+///   `default.toml` / the parent of `workloads/` — NOT the immediate parent
+///   of the layer file. For `default.toml`/`secrets.toml` the parent IS the
+///   root; for `workloads/<name>.toml` (flat) and
+///   `workloads/<name>/workload.toml` (capsule) the root is found by walking
+///   up to the nearest ancestor named `workloads` and taking its parent.
+///
+/// This corrects the phase-0/phase-1 capsule-relative choice (which resolved
+/// a `host = "workloads/litellm"` mount against the capsule dir, doubling it
+/// to `workestrate/workloads/litellm/workloads/litellm` — host-boot failure
+/// 1). The directory-mode root is what config authors write paths against.
+///
+/// Layers without a source path (synthetic `from_string` layers) are absent
+/// — callers then apply the documented fallback (flake project root, else
+/// cwd) explicitly.
 ///
 /// DESIGN NOTE (phases 1-4): later approved phases move image builds into
 /// config-repo flakes, making the config repo the flake root. This map is
@@ -106,10 +126,34 @@ pub fn layer_dirs_from(layers: &[Layer]) -> HashMap<String, PathBuf> {
             layer
                 .source_path
                 .as_ref()
-                .and_then(|p| p.parent())
-                .map(|dir| (layer.name.clone(), dir.to_path_buf()))
+                .and_then(|p| content_root_for_layer_file(p).map(|dir| (layer.name.clone(), dir)))
         })
         .collect()
+}
+
+/// Derive the content root for one layer file, structurally (no FS access).
+///
+/// See [`layer_dirs_from`] for the rules. Single-file mode (`workestrate.toml`)
+/// → the file's parent. Directory mode → the nearest `workloads` ancestor's
+/// parent, falling back to the file's parent when no `workloads` ancestor
+/// exists (e.g. `default.toml`/`secrets.toml` sitting directly in the
+/// workestrate root).
+fn content_root_for_layer_file(source_path: &Path) -> Option<PathBuf> {
+    let parent = source_path.parent()?;
+    // Single-file mode marker: `workestrate.toml` at a repo root.
+    if source_path.file_name() == Some(std::ffi::OsStr::new("workestrate.toml")) {
+        return Some(parent.to_path_buf());
+    }
+    // Directory mode: walk up to the nearest ancestor named `workloads`; its
+    // parent is the directory-mode root (`<repo>/workestrate/`). If none is
+    // found (default.toml/secrets.toml at the root — parent IS the root),
+    // fall back to the file's parent.
+    for ancestor in parent.ancestors() {
+        if ancestor.file_name() == Some(std::ffi::OsStr::new("workloads")) {
+            return ancestor.parent().map(|p| p.to_path_buf());
+        }
+    }
+    Some(parent.to_path_buf())
 }
 
 /// Merge an ordered list of layers (earlier = lower precedence).
@@ -208,11 +252,12 @@ pub fn get_provenance() -> Option<Provenance> {
 //
 // Companion to [`MERGED_PROVENANCE`]: provenance records WHICH layer set a
 // field; this map records WHERE that layer's content lives on disk (the
-// parent dir of the layer file). Together they let repo-relative mount and
-// seed_file paths resolve against the DECLARING layer's directory instead of
-// the flake project root (spec 17 directory mode: config content lives in
-// config repos, not in the tool checkout). Same `Mutex` rationale as the
-// provenance stores above (tokio multi-thread task migration).
+// directory-mode root for directory-mode layers, or the file's parent for
+// single-file mode — see [`layer_dirs_from`]). Together they let repo-relative
+// mount and seed_file paths resolve against the DECLARING layer's content
+// root instead of the flake project root (spec 17 directory mode: config
+// content lives in config repos, not in the tool checkout). Same `Mutex`
+// rationale as the provenance stores above (tokio multi-thread task migration).
 
 /// Layer-name → content dir for the most recent config load.
 static LAYER_DIRS: std::sync::Mutex<Option<HashMap<String, PathBuf>>> = std::sync::Mutex::new(None);
