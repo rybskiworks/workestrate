@@ -115,7 +115,7 @@ fn parent_paths(path: &LexicalPath) -> Vec<LexicalPath> {
         .filter_map(|n| LexicalPath::new(&components[..n].join("/")).ok())
         .collect()
 }
-fn policy_for<'a>(wl: &'a ConfigWorkload) -> Result<&'a MountPolicyProgram> {
+fn policy_for(wl: &ConfigWorkload) -> Result<&MountPolicyProgram> {
     wl.mount_policy().ok_or_else(|| anyhow::anyhow!("workload '{}' has no compiled mount policy; declare [policy.mounts] to use this command", wl.name()))
 }
 
@@ -402,7 +402,7 @@ fn walk_tree(
 
 fn masked_inodes(root: &Path, rows: &[(String, TreeJson)]) -> Result<Vec<(String, (u64, u64))>> {
     let mut out = Vec::new();
-    for (path, row) in rows.iter().filter(|(_, r)| r.decision == "masked") {
+    for (path, _) in rows.iter().filter(|(_, r)| r.decision == "masked") {
         let meta = std::fs::symlink_metadata(root.join(path))?;
         #[cfg(unix)]
         if let Some(i) = inode(&meta) {
