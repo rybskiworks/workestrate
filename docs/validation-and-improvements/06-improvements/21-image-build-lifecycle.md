@@ -669,3 +669,30 @@ Follow-up to brainstorm later (tracked as a beads issue, spec-21 epic):
 
 Either path lets the KVM tests return to the `temp_dir()` idiom and removes
 the `/tmp` divergence. Refactor when the socket-path pressure is revisited.
+
+
+## 15. Open follow-ups
+
+> **STATUS: open follow-ups (recorded 2026-08-03).** Tracked as beads issues
+> (spec-21 epic); noted here so the spec carries the decision pointers.
+
+- **wrk-ayz — Canonical config-flake input URL (Phase-5 decision).** The
+  personal config repo's `workestrate` flake input is currently a host-absolute
+  `git+file:///home/rybski/...` path (a workaround committed during the
+  host-boot fix pass; the prior `git+file:///home/node/...` was container-only
+  and unusable on the host). The canonical fix is a pinned
+  `github:georgrybski/workestrate` input, deferred to Phase 5 because it
+  requires the tool repo's `origin/migration/tool-model` branch to be pushed
+  to the remote first (verify push state on the host with `git fetch`). See
+  §10 (phased plan) and §12.3 (migration notes — the config-flake input is
+  what makes the nix-layered image builds reproducible across machines).
+
+- **wrk-23b — ensure-images: keep eval-error fail-closed vs nix-absent trust
+  posture (decision).** Decision (recorded 2026-08-03): nix eval errors
+  FAIL-CLOSED (an eval error almost always conceals a real config bug — a
+  missing attr, a broken overlay, a stale lock — so trusting past it would
+  silently run a stale/foreign image); nix-absent degrades to a TRUST posture
+  (the documented standalone-install path, §3.4 / §8); tag-absent ALWAYS
+  forces a build/load. The two postures are deliberately distinct (config
+  signal vs environment signal) and must not be collapsed by a future
+  refactor. This is a documentation/decision bead — no code change.

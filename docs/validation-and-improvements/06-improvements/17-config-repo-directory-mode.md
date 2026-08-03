@@ -71,15 +71,27 @@ current form, unchanged) **or** directory mode. Directory mode layout:
   their **app-native names** (`config.yaml`, `models.yaml`, `opencode.jsonc`,
   `settings.json`, `models.json`, seed files, `flake.nix`).
 - **Mount/seed/local_build paths resolve against the declaring config layer's
-  directory.** For a capsule, that is the capsule dir itself, so colocated
-  app-native artifacts are addressed by capsule-relative names (e.g.
-  `mounts = [{ host = "config.yaml", … }]` next to `workload.toml`).
-  **Zero schema change** to the workload schema — directory mode is purely a
-  loader + layout concern.
+  content root.** For directory mode the content root is the **directory-mode
+  root** `<repo>/workestrate/` — the dir containing `default.toml` / the parent
+  of `workloads/` — NOT the capsule dir or the `workloads/` dir. Repo-relative
+  hosts are written against the workestrate root (e.g.
+  `mounts = [{ host = "workloads/litellm", … }]` resolves to
+  `<repo>/workestrate/workloads/litellm`). For single-file mode
+  (`<repo>/workestrate.toml`) the content root is the file's parent dir
+  (unchanged). The `flake_build_path`/`${WORKESTRATE_<NAME>_BUILD}` exception
+  (a declared `local_build.fallback` or relative env override resolving
+  against the flake project root) is unchanged. **Zero schema change** to the
+  workload schema — directory mode is purely a loader + layout concern.
 
-> *This text was reconciled with the implementation post-implementation
-> (phase 0, commit b9a3ed3, which resolves these paths against the declaring
-> layer dir).*
+> *Superseded-with-correction (2026-08-03): the phase-1 amendment in commit
+> `08a75d2` codified the WRONG root — "for a capsule, that is the capsule dir
+> itself" — which resolved a `host = "workloads/litellm"` mount against the
+> capsule dir, doubling it to
+> `workestrate/workloads/litellm/workloads/litellm` (host-boot failure 1,
+> discovered on the first real host boot). The correction (commit `b675db2`)
+> resolves the content root at the directory-mode root `<repo>/workestrate/`
+> for all directory-mode layers; the capsule dir does NOT change the root.
+> Single-file mode and the flake-build exception are unchanged.*
 
 ---
 
@@ -198,7 +210,7 @@ Mapping:
 | Per-workload tables (`[workloads.litellm]` …) | `workestrate/workloads/<name>/workload.toml` (capsule form) |
 | `agents/<wl>/config/*` artifacts | `workestrate/workloads/<wl>/` under app-native names (`settings.json`, `opencode.jsonc`, `models.json`) |
 | `infra/litellm/{config.yaml,models.yaml}` | `workestrate/workloads/litellm/{config.yaml,models.yaml}` |
-| Mount/seed paths referencing `agents/…` / `infra/…` | Re-pointed into the capsule — capsule-relative strings resolved against the declaring layer dir, **no schema change** |
+| Mount/seed paths referencing `agents/…` / `infra/…` | Re-pointed against the directory-mode root `<repo>/workestrate/` (workestrate-root-relative strings), **no schema change** |
 
 The `agents/` and `infra/` trees collapse into capsules; the restructured repo
 must load to a **byte-identical merged config** (acceptance §6).

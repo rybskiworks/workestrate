@@ -5,6 +5,46 @@
 > the host without rebuild. Host-side steps (msb load + boot sequence) are
 > in NEXT-SESSION.md / the host runbook.
 
+## Host-boot fix pass (2026-08-03) — fixes landed; host steps remain
+
+Two host-boot failures fixed in-container; the host relock + load-images + boot
+sequence remains.
+
+- **Failure 1 (mount doubling) — FIXED** (commit `b675db2`): directory-mode
+  content root now resolves at the `<repo>/workestrate/` root (not the capsule
+  dir), so a `host = "workloads/litellm"` mount no longer doubles to
+  `workestrate/workloads/litellm/workloads/litellm`. The phase-1 spec-17
+  amendment (`08a75d2`) that codified the wrong capsule-relative root is
+  superseded-with-correction in spec 17.
+
+- **Failure 2 (personal flake URL) — FIXED** (personal config repo commit):
+  `workestrate.url` repointed from the container-only
+  `git+file:///home/node/...` to the host path `git+file:///home/rybski/...`.
+  In-container relock is intentionally NOT done (the URL does not resolve
+  here); the user relocks on the host. Canonical fix (pinned `github:` input)
+  is a Phase-5 decision (beads `wrk-ayz`).
+
+- **Plan-time existence preflight — ADDED** (commit `c6a6b47`): `plan` now
+  fails fast on a missing read-only mount source / seed source (the failure-1
+  signal) before any KVM work; `validate-config` runs the same check warn-only.
+  Fulfills the security-model §enforcement-points plan-time promise. New tests:
+  597 lib tests pass (clippy + fmt clean).
+
+- **Beads filed:** `wrk-ayz` (canonical config-flake input URL, Phase-5
+  decision); `wrk-23b` (ensure-images eval-error fail-closed vs nix-absent
+  trust posture — decision). Both noted in spec 21 §15.
+
+### What remains host-side (ordered)
+1. `nix flake lock --update-input workestrate` (in the personal config repo) —
+   relock against the repointed host-path URL.
+2. `just load-images` (personal repo) — load the built `workestrate-pi` +
+   `tempest` tarballs into the msb store.
+3. Boot sequence: `workestrate workload up litellm` → health →
+   `workestrate workload plan pi` / `plan tempest` (the new preflight should
+   now pass — mount sources resolve) → `exec` the agents → `batch up` → `ps`
+   → `down-all` → the 3 ignored KVM tests → E1.
+
+
 ## Commits made this pass
 
 | Repo | Commit | Message |

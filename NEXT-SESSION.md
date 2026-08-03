@@ -3,6 +3,31 @@
 > Narrative resumption notes. Task lists link to `wrk-*` beads IDs; this doc
 > carries context, not work items (see BEADS.md for the boundary).
 
+## Host-boot fix pass landed (2026-08-03) — host relock + boot remains
+
+The two host-boot failures are fixed in-container; the host steps remain.
+
+- Failure 1 (mount doubling) fixed — `b675db2`: directory-mode content root =
+  `<repo>/workestrate/` (not the capsule dir). Spec 17 amendment `08a75d2`
+  superseded-with-correction.
+- Failure 2 (personal flake URL) fixed — personal config repo: `workestrate.url`
+  repointed to `git+file:///home/rybski/...` (host path). Relock on host required.
+- Plan-time existence preflight added — `c6a6b47`: `plan` fails fast on missing
+  RO mount / seed source; `validate-config` warns. 597 lib tests pass.
+- Beads: `wrk-ayz` (canonical config-flake input URL, Phase-5), `wrk-23b`
+  (ensure-images fail-closed decision). Noted in spec 21 §15.
+
+Host next steps (ordered):
+1. `nix flake lock --update-input workestrate` (personal config repo).
+2. `just load-images` (personal repo).
+3. `workestrate workload up litellm` → health → `plan`/`exec` pi, opencode,
+   tempest → batch up → ps → down-all → the 3 ignored KVM tests → E1.
+
+Push-state check (host) for the Phase-5 `github:` input decision (wrk-ayz):
+`git -C <workestrate> fetch && git log --oneline origin/migration/tool-model..HEAD`.
+
+---
+
 ## Open follow-ups
 
 - **wrk-bvu (spec 21 epic) — revisit the KVM-test `MSB_HOME` convention for
