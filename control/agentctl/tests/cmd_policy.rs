@@ -400,3 +400,35 @@ fn preview_per_mount_evaluates_the_right_program() {
     assert!(!text.contains("node_modules [masked]"));
     assert!(text.contains("shared-secret [masked]"));
 }
+
+#[test]
+fn reference_config_ships_sensitive_mount_defaults() {
+    let config_reference_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("config.reference");
+    let home = IsolatedHome::new("cmd-policy-reference-defaults");
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_CONFIG_DIR", &config_reference_dir)
+        .args([
+            "policy",
+            "mounts",
+            "explain",
+            "--workload",
+            "example-service",
+            "--mount",
+            "/data",
+            "--path",
+            ".env",
+            "--json",
+        ])
+        .output()
+        .expect("invoke reference policy mounts explain");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["decision"], "masked");
+    let matches = doc["matches"].as_array().unwrap();
+    assert!(!matches.is_empty());
+    assert!(matches.iter().any(|m| m["pattern"] == "**/.env"));
+}

@@ -4,6 +4,16 @@
   "description": "Top-level schema root of a `workestrate.toml` layer: `schema_version` (must equal `EXPECTED_SCHEMA_VERSION`; absent warns and is treated as legacy), plus the `secrets` and `workloads` maps. Layers are merged by `merge::merge_layers` into one effective `ConfigFile`.",
   "type": "object",
   "properties": {
+    "policy": {
+      "default": {
+        "mounts": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/PolicyConfig"
+        }
+      ]
+    },
     "schema_version": {
       "default": 0,
       "type": "integer",
@@ -427,10 +437,78 @@
         "host": {
           "type": "string"
         },
+        "policy": {
+          "description": "Mount-entry policy is collected from the same declaring layer as this row; it is intentionally not part of mount-row merging.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MountsFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "read_only": {
           "type": "boolean"
         }
       }
+    },
+    "MountsFragment": {
+      "description": "The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).\n\nMask/unmask entries hold RAW pattern strings: the compiler validates and compiles them against the declaring origin (spec 22 §6 pattern rejections name the origin), so fragments must not pre-compile patterns. `case_sensitivity` is likewise raw so the compiler can name the offending value and origin in a `CompileError` (spec 22 §6). The former scalar `masked_writes` field is intentionally gone: this pre-release surface now rejects it as an unknown field rather than silently accepting old policy.",
+      "type": "object",
+      "properties": {
+        "case_sensitivity": {
+          "description": "Raw `case_sensitivity` setting; v1 accepts exactly `\"sensitive\"` (spec 22 §6).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mask": {
+          "description": "Mask entries, applied before this scope's `unmask` entries (spec 22 §4: per-scope mask-then-unmask).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "protect": {
+          "description": "Protected paths are hidden and untouchable, independently of overridability.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "unmask": {
+          "description": "Unmask entries: carve-outs to this scope's (or a lower-authority scope's provisional) masks.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "writes": {
+          "description": "Pattern-keyed write policy.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WritesFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "NetworkConfig": {
       "description": "Per-workload network policy (`workloads.<name>.network`). `default_deny` is the egress fail-closed switch (monotonic-true across layers for non-entitled workloads); `egress` lists allowed egress recipes, `deny` explicit domain-suffix denials, and `ingress` inbound exposure rules.",
@@ -465,6 +543,51 @@
         }
       },
       "additionalProperties": false
+    },
+    "PolicyConfig": {
+      "description": "A policy namespace. Keeping the `mounts` table nested makes the config surface match `[policy.mounts]` while leaving policy fragments outside the ordinary merge algebra.",
+      "type": "object",
+      "properties": {
+        "mounts": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MountsFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyValueStringExpandedSchema": {
+      "type": "object",
+      "required": [
+        "pattern"
+      ],
+      "properties": {
+        "overridable": {
+          "default": true,
+          "type": "boolean"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyValue_for_String": {
+      "description": "The public schema for a raw string policy value. Runtime deserialization also supports the historical `value` alias, but the config surface is the compact string or the documented `{ pattern, overridable }` table.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/PolicyValueStringExpandedSchema"
+        }
+      ]
     },
     "PortMapping": {
       "type": "object",
@@ -683,6 +806,16 @@
             }
           ]
         },
+        "policy": {
+          "default": {
+            "mounts": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/PolicyConfig"
+            }
+          ]
+        },
         "ports": {
           "default": [],
           "type": "array",
@@ -702,6 +835,27 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WritesFragment": {
+      "description": "Pattern-keyed write policy for one scope.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "deny": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
         }
       },
       "additionalProperties": false
