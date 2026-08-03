@@ -39,3 +39,8 @@ control/agentctl/vendor/
 
 # Zed editor settings (IDE-specific, not project config)
 .zed/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
