@@ -271,11 +271,6 @@ impl Workload for ConfigWorkload {
         self.show_source_render()
     }
 
-    fn mount_policy(&self) -> Option<&crate::mount_policy::MountPolicyProgram> {
-        // Commit 2 wires diagnostics to mount_policy_for for true per-mount selection.
-        self.mount_policies.first().map(|(_, policy)| policy)
-    }
-
     fn mount_policy_for(&self, guest: &str) -> Option<&crate::mount_policy::MountPolicyProgram> {
         self.mount_policies
             .iter()
