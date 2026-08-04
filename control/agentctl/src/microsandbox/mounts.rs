@@ -860,6 +860,8 @@ mod tests {
             host: "missing/config.json".into(),
             guest: "/app/config.json".into(),
             read_only: true,
+            policy: None,
+            policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
         let err = preflight_existence(&roots, &plan, &[], None, None, "svc", true).unwrap_err();
@@ -882,6 +884,8 @@ mod tests {
             host: "nested/state".into(),
             guest: "/data".into(),
             read_only: false,
+            policy: None,
+            policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", true)?;
@@ -957,6 +961,8 @@ mod tests {
             host: "missing/cfg.yaml".into(),
             guest: "/app/cfg.yaml".into(),
             read_only: true,
+            policy: None,
+            policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", false)?;
@@ -982,6 +988,8 @@ mod tests {
             host: "cfg/app.yaml".into(),
             guest: "/app/app.yaml".into(),
             read_only: true,
+            policy: None,
+            policy_file: None,
         }]);
         let seeds = vec![crate::config::SeedFileConfig {
             source: "seed/s.json".into(),
