@@ -7,6 +7,7 @@
 //! runtime, `explain`, and `preview` — spec 22 §13).
 
 use crate::mount_policy::lexical::LexicalPath;
+use crate::mount_policy::pattern::PatternError;
 use crate::mount_policy::rule::{PathPolicyRule, RuleEffect, RuleOrigin};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -160,13 +161,17 @@ impl<'de> Deserialize<'de> for MountPolicyProgram {
     {
         let wire = MountPolicyProgramWire::deserialize(deserializer)?;
         match wire.version {
-            Some(1) => Ok(Self {
-                version: 1,
-                rules: wire.rules,
-                protect: wire.protect,
-                writes: wire.writes,
-                case_sensitivity: wire.case_sensitivity,
-            }),
+            Some(1) => {
+                let mut program = Self {
+                    version: 1,
+                    rules: wire.rules,
+                    protect: wire.protect,
+                    writes: wire.writes,
+                    case_sensitivity: wire.case_sensitivity,
+                };
+                program.recompile_patterns().map_err(de::Error::custom)?;
+                Ok(program)
+            }
             Some(version) => Err(de::Error::custom(format!(
                 "unsupported mount policy program version {version}; supported version is 1"
             ))),
@@ -178,6 +183,26 @@ impl<'de> Deserialize<'de> for MountPolicyProgram {
 }
 
 impl MountPolicyProgram {
+    /// Recompile every pattern's glob matchers with the program's recorded
+    /// `case_sensitivity` (msb parity). The compiler always emits `Sensitive`
+    /// patterns (v1 rejects `Insensitive` at compile time, spec 22 §6), but a
+    /// deserialized program may carry `Insensitive`; this recompiles the globs
+    /// so the evaluator honors the program's setting rather than the default
+    /// case-sensitive compilation.
+    fn recompile_patterns(&mut self) -> Result<(), PatternError> {
+        let case_insensitive = self.case_sensitivity == CaseSensitivity::Insensitive;
+        for rule in self
+            .rules
+            .iter_mut()
+            .chain(self.protect.iter_mut())
+            .chain(self.writes.allow.iter_mut())
+            .chain(self.writes.deny.iter_mut())
+        {
+            rule.pattern.set_case_insensitive(case_insensitive)?;
+        }
+        Ok(())
+    }
+
     /// Decide the visibility of a mount-root-relative path (spec 22 §4, §7).
     ///
     /// Rules evaluate in compile order; overridable matches are provisional
@@ -627,5 +652,32 @@ mod tests {
             .insert("masked_writes".into(), serde_json::json!("deny"));
         let err = serde_json::from_value::<MountPolicyProgram>(old).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn case_insensitive_pattern_matches_different_case() {
+        // A deserialized program carrying `case_sensitivity = "insensitive"`
+        // must recompile its globs case-insensitively (msb parity). v1's
+        // compiler never emits Insensitive (compile.rs rejects it), so this
+        // exercises the deserialize + recompile_patterns path directly.
+        let json = r#"{
+            "version": 1,
+            "rules": [{"effect":"mask","pattern":"**/.ENV","overridable":true,"origin":{"layer":"test","file":"test.json","scope_kind":"workload"}}],
+            "protect": [],
+            "writes": {"allow": [], "deny": []},
+            "case_sensitivity": "insensitive"
+        }"#;
+        let policy: MountPolicyProgram = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.case_sensitivity, CaseSensitivity::Insensitive);
+        assert_eq!(decide(&policy, ".env"), Decision::Masked);
+        assert_eq!(decide(&policy, "subdir/.env"), Decision::Masked);
+        // A case-sensitive program would NOT match these (sanity: the
+        // recompile is what makes them match).
+        let sensitive_json = json.replace(
+            r#""case_sensitivity": "insensitive""#,
+            r#""case_sensitivity": "sensitive""#,
+        );
+        let sensitive: MountPolicyProgram = serde_json::from_str(&sensitive_json).unwrap();
+        assert_eq!(decide(&sensitive, ".env"), Decision::Visible);
     }
 }
