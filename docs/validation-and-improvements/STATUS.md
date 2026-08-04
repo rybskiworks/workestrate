@@ -1,6 +1,6 @@
 # STATUS — comprehensive state report for the next session
 
-> **STATUS: CURRENT (2026-08-03, HEAD `3efd377`; Phase E implemented-uncommitted-unvalidated in the working tree)**
+> **STATUS: CURRENT (2026-08-04, HEAD `0f7ca20` on `experimental`; mount-masking library+config+CLI landed, rebased onto sibling/migration/tool-model c45494b; SDK seam dormant)**
 > Prerequisites / see-also: [README.md](README.md) · [NEXT-SESSION.md](NEXT-SESSION.md) ·
 > [07-execution-order.md](07-execution-order.md) · [06-improvements/00-index.md](06-improvements/00-index.md) ·
 > [02-config-requirements.md](02-config-requirements.md)
@@ -14,18 +14,30 @@ work from §5.
 
 ---
 
-## 0.0 DESIGN DOCS — spec 22 + ADR 0028 (2026-08-02, `experimental` branch)
+## 0.0 DESIGN DOCS — spec 22 + ADR 0028 + spec 23 (2026-08-04, `experimental` branch, rebased onto `sibling/migration/tool-model` c45494b)
 
-- Config-surface wiring and ordered collect-only scope plumbing are implemented;
-  compile-time workload policy validation is wired without changing merge
-  semantics or ordinary plan output.
+**Mount-masking feature state (spec 22):** the compiler library, hierarchical
+scope collection, config wiring, per-mount `policy_file` lifecycle, sensitive
+defaults (§9), validation (§12), and the diagnostics CLI (`workestrate policy
+mounts explain|preview`, §13) are **LANDED**. The `case_sensitivity` parity
+from the msb side is ported (deserialize-path recompile, commit `587e3af`).
+The dead `mount_policy()` shim is removed (commit `d42001a`). The branch is
+rebased onto `sibling/migration/tool-model` @ `c45494b`, bringing spec 21
+(image build/load lifecycle, plan-time preflight, directory-mode fixes) into
+the experimental lineage without conflict.
 
-- Spec 22 runtime transmission preparation and `workestrate policy mounts explain|preview` are now implemented; the SDK mount-spec call remains a no-op seam pending the fork dep switch.
+**SDK seam status:** `apply_mount_policy` (runtime/run.rs) is a **no-op**
+pending the microsandbox fork dependency switch (spec 23, DESIGN/DEFERRED).
+Config compilation, validation, and the diagnostics CLI work today; end-to-end
+runtime enforcement is NOT exercised (no KVM in container).
 
 - **Spec 22** (dynamic mount masking policy, [06-improvements/22-dynamic-mount-masking-policy.md](06-improvements/22-dynamic-mount-masking-policy.md)) and **ADR 0028** (policy scopes: collect-and-compile) authored as DESIGN-APPROVED/Accepted on the `experimental` branch.
+- **Spec 23** (microsandbox fork as nix flake output) is DESIGN/DEFERRED at [06-improvements/23-microsandbox-fork-nix-flake-packaging.md](06-improvements/23-microsandbox-fork-nix-flake-packaging.md).
 - **Spec 01 dispositioned to SECONDARY/FALLBACK:** WP1–WP4 frozen; kept as the degraded-mode/static fallback (WP5 staging-copy essence survives); deleted if spec 22 lands.
 - **2026-08-03 consolidated amendment:** spec 22 now locks write-rules/protect/tagging/cascade/symlink semantics and the corrected host-side transmission channel; ADR 0028 carries the addendum.
-- The pure policy library design was revised; msb enforcement remains pending.
+- **Operator guide:** [mount-masking-operator-guide.md](mount-masking-operator-guide.md). **Example configs:** [examples/mount-masking-multi-mount.toml](examples/mount-masking-multi-mount.toml), [examples/mount-masking-protect-writes.toml](examples/mount-masking-protect-writes.toml).
+
+**Remaining steps:** (1) rebase DONE; (2) msb side (`feat/passthrough-mount-path-policy`) needs rebase onto the fork `4a3133e5` lineage; (3) dep switch — implement spec 23 (microsandbox fork as nix flake output) and flip `apply_mount_policy` to a real per-mount SDK call; (4) HOST-KVM runtime smoke for spec 22 §14 enforcement. The 11 beads handover issues (`.beads/issues.jsonl`, `wrk-bnm`/`wrk-cbz`/`wrk-0kj`/`wrk-wtx`/`wrk-2px`/`wrk-mgk`/`wrk-e1e`/`wrk-rtk`/`wrk-24m`/`wrk-rnt`/`wrk-v53`) track the remaining work.
 - **Spec 23** ([06-improvements/23-microsandbox-fork-nix-flake-packaging.md](06-improvements/23-microsandbox-fork-nix-flake-packaging.md))
   was authored DESIGN/DEFERRED on the `experimental` branch: it captures the
   fork-as-flake packaging idea, with implementation deferred until host

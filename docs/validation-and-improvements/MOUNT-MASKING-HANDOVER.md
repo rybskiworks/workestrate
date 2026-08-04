@@ -1,6 +1,6 @@
 # MOUNT-MASKING HANDOVER — dynamic mount masking policy (spec 22)
 
-> **STATUS: HANDOVER (2026-08-03, post-spec-23 docs; pre-SDK-switch; pre-host-KVM smoke)**
+> **STATUS: HANDOVER (2026-08-04, post-rebase + polish; pre-SDK-switch; pre-host-KVM smoke)**
 > Cross-references: STATUS.md, NEXT-SESSION.md, BEADS.md, spec 22 (06-improvements/22-dynamic-mount-masking-policy.md), spec 23 (06-improvements/23-microsandbox-fork-nix-flake-packaging.md), ADR 0028 (50-decisions/0028-policy-scopes-collect-and-compile.md).
 > Prerequisites: see-also — README.md, 06-improvements/00-index.md.
 
@@ -12,7 +12,7 @@
 | `HOST-KVM` | Requires KVM on the user's host. |
 
 ## TL;DR (≤6 lines)
-The dynamic mount-masking feature is implemented on two branches not yet wired together. msb side: feat/passthrough-mount-path-policy @ ccceb48a (32 commits since d9b4d12e) — full PassthroughFs enforcement: policy core, mutation policy + tag store, cascade, write-deny as global write ACL, SDK/runtime threading, docs, tests. workestrate side: experimental @ 56e2684 (16 commits since 43cfcbc: 14 policy commits + e32a97b handover doc + 56e2684 beads issues) — compiler library, hierarchical scope collection, config wiring, per-mount policy_file lifecycle, sensitive defaults, validation, diagnostics CLI. The SDK seam (apply_mount_policy) is a no-op pending the fork dep switch (spec 23, deferred). Cross-repo wire contract byte-aligned (MountPolicyProgramWire identical). End-to-end runtime enforcement unexercised (no KVM in container).
+The dynamic mount-masking feature is implemented on two branches not yet wired together. msb side: feat/passthrough-mount-path-policy @ ccceb48a (32 commits since d9b4d12e) — full PassthroughFs enforcement: policy core, mutation policy + tag store, cascade, write-deny as global write ACL, SDK/runtime threading, docs, tests. workestrate side: experimental @ 0f7ca20 (rebased onto sibling/migration/tool-model @ c45494b; 17+ policy/doc commits since the base) — compiler library, hierarchical scope collection, config wiring, per-mount policy_file lifecycle, sensitive defaults, validation, diagnostics CLI, case_sensitivity parity (msb 6e51840b ported), dead-code shim removed, operator guide + example configs added. The SDK seam (apply_mount_policy) is a no-op pending the fork dep switch (spec 23, deferred). Cross-repo wire contract byte-aligned (MountPolicyProgramWire identical). End-to-end runtime enforcement unexercised (no KVM in container).
 
 ## 1. Repo state
 
@@ -66,7 +66,7 @@ The dynamic mount-masking feature is implemented on two branches not yet wired t
 ### 1.2 Workestrate experimental clone
 - Path: /home/node/Development/agent-workbench/workestrate-clones/experimental
 - Branch: experimental
-- HEAD: 56e2684 (was 0c18bc2 at original handover; +2 commits: e32a97b this handover doc, 56e2684 beads issues)
+- HEAD: 0f7ca20 (rebased onto sibling/migration/tool-model @ c45494b; was 56e2684 at the prior handover, then bfe56ae after the architecture-enrichment commit, then rebased + polished: 8029348 MountRoots rebase fix, ba7c3b1 MountPlan test helpers, 587e3af case_sensitivity parity, d42001a dead-code shim removal, 5b98d3c operator guide, 0f7ca20 example configs)
 - Base: 43cfcbc (docs(specs): 21 image build/load lifecycle)
 - Author: Georg Rybski
 - Signed: ALL 14 COMMITS UNSIGNED

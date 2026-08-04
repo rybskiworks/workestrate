@@ -30,6 +30,22 @@ re-derive their contents.
 
 ## Current state (as of 2026-08-01)
 
+
+> **2026-08-04 update (12) — mount-masking polish + rebase complete on
+> `experimental`:** the branch is rebased onto
+> `sibling/migration/tool-model` @ `c45494b` (spec 21 image build/load
+> lifecycle + plan-time preflight + directory-mode fixes now in the
+> experimental lineage). The `case_sensitivity` parity is ported from the msb
+> side (deserialize-path recompile, commit `587e3af`). The dead
+> `mount_policy()` shim is removed (`d42001a`). An operator guide
+> ([mount-masking-operator-guide.md](mount-masking-operator-guide.md)) and
+> example configs ([examples/](examples/)) are added. HEAD is `0f7ca20`.
+> The SDK seam (`apply_mount_policy`) remains a no-op pending the fork dep
+> switch (spec 23, DESIGN/DEFERRED). Remaining: msb-side rebase onto fork
+> `4a3133e5` lineage, dep switch (spec 23), HOST-KVM runtime smoke for spec 22
+> §14. The 11 beads handover issues (`.beads/issues.jsonl`) track the rest.
+
+
 > **2026-08-02 update (7-spec22) — spec 22 + ADR 0028 authored on the
 > `experimental` branch:** spec 22 (dynamic mount masking policy) is
 > DESIGN-APPROVED at
