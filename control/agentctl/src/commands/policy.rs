@@ -255,11 +255,18 @@ fn resolve_root(
         .or_else(crate::config::project_root_optional)
         .unwrap_or(cwd);
     let build = wl.build_path();
+    // Spec 21 §6.1: the UNDECLARED reserved default resolves declaring-layer-
+    // relative and must NOT capture the flake project-root preference.
+    let flake_build_path = if wl.build_path_is_reserved_default() {
+        None
+    } else {
+        Some(build.as_str())
+    };
     resolve_mount_host(
         &MountRoots {
             content_root: &content,
             project_root: None,
-            build_path: &build,
+            flake_build_path,
         },
         &mount.host,
     )

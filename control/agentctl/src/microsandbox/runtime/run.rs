@@ -1,7 +1,5 @@
 use super::super::env::{resolve_templated_value_with, resolve_templated_value_with_env_fallback};
-use super::super::mounts::{
-    apply_mount_policy, apply_plan_mounts, ensure_mount_sources, MountRoots,
-};
+use super::super::mounts::{apply_mount_policy, apply_plan_mounts, ensure_mount_sources};
 use super::super::plan::{PortMapping, SandboxPlan};
 use super::super::workload::{EntrypointSpec, SandboxCommand, Workload};
 use super::{check_occupied_or_replace, ForegroundConfig, InstanceSpec};
