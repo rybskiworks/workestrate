@@ -3,9 +3,20 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "cc"
 
-# The patched microsandbox-filesystem crate is symlinked into vendor/ by the
-# nix develop shellHook (from nix/devshells/default.nix). It provides the
-# offline-aware build.rs that reads $MSB_HOME/bin/agentd instead of downloading
-# agentd-x86_64 from GitHub.
+# ALL microsandbox-* crates are patched to the fork source (the entire fork
+# workspace is vendored by the nix develop shellHook so *.workspace = true
+# inheritance resolves). The fork's filesystem crate carries the
+# MSB_AGENTD_PATH fix natively.
 [patch.crates-io]
-microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.6.8" }
+microsandbox = { path = "vendor/microsandbox-fork/sdk/rust" }
+microsandbox-agent-client = { path = "vendor/microsandbox-fork/packages/agent-client/rust" }
+microsandbox-db = { path = "vendor/microsandbox-fork/crates/db" }
+microsandbox-filesystem = { path = "vendor/microsandbox-fork/crates/filesystem" }
+microsandbox-image = { path = "vendor/microsandbox-fork/crates/image" }
+microsandbox-metrics = { path = "vendor/microsandbox-fork/crates/metrics" }
+microsandbox-migration = { path = "vendor/microsandbox-fork/crates/migration" }
+microsandbox-network = { path = "vendor/microsandbox-fork/crates/network" }
+microsandbox-protocol = { path = "vendor/microsandbox-fork/crates/protocol" }
+microsandbox-runtime = { path = "vendor/microsandbox-fork/crates/runtime" }
+microsandbox-types = { path = "vendor/microsandbox-fork/packages/microsandbox-types/rust" }
+microsandbox-utils = { path = "vendor/microsandbox-fork/crates/utils" }

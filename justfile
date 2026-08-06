@@ -137,7 +137,7 @@ validate-secrets:
 vendor-unlock:
     #!/usr/bin/env bash
     set -euo pipefail
-    link="control/agentctl/vendor/microsandbox-filesystem-0.6.8"
+    link="control/agentctl/vendor/microsandbox-fork"
     if [ ! -L "$link" ]; then
         echo "error: $link is not a symlink (already unlocked or blocked)" >&2
         exit 1
@@ -152,7 +152,7 @@ vendor-unlock:
 vendor-lock:
     #!/usr/bin/env bash
     set -euo pipefail
-    link="control/agentctl/vendor/microsandbox-filesystem-0.6.8"
+    link="control/agentctl/vendor/microsandbox-fork"
     if [ -L "$link" ]; then
         echo "$link is already a symlink" >&2
         exit 0

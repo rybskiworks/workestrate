@@ -77,21 +77,32 @@ in
 
   preBuild = ''
     mkdir -p vendor
-    ln -sfn "${microsandbox-filesystem-patched}" vendor/microsandbox-filesystem-0.6.8
+    ln -sfn "${microsandbox-filesystem-patched}" vendor/microsandbox-fork
     cat > .cargo/config.toml <<'CARGO_CONFIG'
     [patch.crates-io]
-    microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.6.8" }
+    microsandbox = { path = "vendor/microsandbox-fork/sdk/rust" }
+    microsandbox-agent-client = { path = "vendor/microsandbox-fork/packages/agent-client/rust" }
+    microsandbox-db = { path = "vendor/microsandbox-fork/crates/db" }
+    microsandbox-filesystem = { path = "vendor/microsandbox-fork/crates/filesystem" }
+    microsandbox-image = { path = "vendor/microsandbox-fork/crates/image" }
+    microsandbox-metrics = { path = "vendor/microsandbox-fork/crates/metrics" }
+    microsandbox-migration = { path = "vendor/microsandbox-fork/crates/migration" }
+    microsandbox-network = { path = "vendor/microsandbox-fork/crates/network" }
+    microsandbox-protocol = { path = "vendor/microsandbox-fork/crates/protocol" }
+    microsandbox-runtime = { path = "vendor/microsandbox-fork/crates/runtime" }
+    microsandbox-types = { path = "vendor/microsandbox-fork/packages/microsandbox-types/rust" }
+    microsandbox-utils = { path = "vendor/microsandbox-fork/crates/utils" }
     CARGO_CONFIG
 
-    # Stage the Nix-managed Microsandbox runtime so the vendored crate's
-    # build.rs finds msb + agentd locally. The fork's build.rs uses the
+    # Stage the Nix-managed Microsandbox runtime so the fork's build.rs
+    # finds msb + agentd locally. The fork's filesystem build.rs uses the
     # MSB_AGENTD_PATH override (prebuilt feature); the staged MSB_HOME + the
     # explicit MSB_AGENTD_PATH below satisfy it without network downloads.
     export MSB_HOME=$TMPDIR/.microsandbox
     mkdir -p $MSB_HOME/bin $MSB_HOME/lib
     cp ${microsandbox}/bin/msb $MSB_HOME/bin/msb
 
-    # Provide the agentd guest-init binary to the patched
+    # Provide the agentd guest-init binary to the fork's
     # microsandbox-filesystem build.rs via the explicit MSB_AGENTD_PATH var.
     export MSB_AGENTD_PATH=${microsandbox}/libexec/agentd
 
