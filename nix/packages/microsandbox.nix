@@ -80,6 +80,16 @@ rustPlatform.buildRustPackage rec {
     stdenv.cc.cc.lib
   ];
 
+  preBuild = ''
+    # The fork's filesystem crate build.rs (without the 'prebuilt' feature)
+    # looks for a pre-built agentd at <workspace>/build/agentd. Stage it here
+    # from the agentd derivation. touch ensures the mtime is newer than the
+    # source tree (the build.rs staleness check compares against crates/agentd
+    # and crates/protocol mtimes — nix source files have fixed mtimes).
+    mkdir -p build
+    cp ${agentd}/libexec/agentd build/agentd
+    touch build/agentd
+  '';
   doCheck = false;
 
   # Assemble the runtime layout the tool expects:
