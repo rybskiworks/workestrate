@@ -102,7 +102,16 @@ rustPlatform.buildRustPackage rec {
     mkdir -p $out/bin $out/lib $out/libexec
 
     # msb CLI binary (regular glibc build — runs on the host).
-    install -Dm755 target/release/msb $out/bin/msb
+    # msb CLI binary. buildRustPackage may place it at target/release/msb
+    # OR target/<host-triple>/release/msb depending on whether --target is set.
+    # Find it robustly and fail loudly if missing (same pattern as agentd.nix).
+    msb_bin=$(find target -type f -name msb -path '*/release/*' ! -name '*.d' | head -n1)
+    if [ -z "$msb_bin" ]; then
+      echo "error: msb binary not found under target/*/release/" >&2
+      find target -type f -name msb >&2 || true
+      exit 1
+    fi
+    install -Dm755 "$msb_bin" $out/bin/msb
 
     # agentd (static musl — runs in the guest microVM).
     install -Dm755 ${agentd}/libexec/agentd $out/libexec/agentd
