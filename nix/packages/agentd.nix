@@ -15,7 +15,7 @@
 # After the fork branch is pushed, swap builtins.fetchGit -> fetchFromGitHub.
 { pkgs }:
 
-pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+pkgs.pkgsStatic.rustPlatform.buildRustPackage rec {
   pname = "microsandbox-agentd";
   version = "0.6.8";
 

@@ -265,7 +265,7 @@
       lib.${system} = libForSystem { inherit pkgs; };
 
       packages.${system} = {
-        inherit workestrate microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets tombi;
+        inherit agentd workestrate microsandbox microsandbox-filesystem-patched msb-wrapped decrypt-env write-env setup-secrets tombi;
         default = workestrate;
       };
 
