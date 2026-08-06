@@ -41,7 +41,7 @@ let
   # -> libkrunfw.so.5 -> libkrunfw.so.
   libkrunfwTar = pkgs.fetchurl {
     url = "https://github.com/superradcompany/microsandbox/releases/download/v0.6.8/microsandbox-linux-x86_64.tar.gz";
-    sha256 = pkgs.lib.fakeHash;
+    sha256 = "sha256-mSvmbOimGWWzrHczvOWNapioKSoXLoXIdRB0oq0W9p0=";
   };
 in
 rustPlatform.buildRustPackage rec {
