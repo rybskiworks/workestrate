@@ -2,6 +2,7 @@
 , microsandbox
 , microsandbox-filesystem-patched
 , rustToolchain
+, rev ? "dirty"
 }:
 
 let
@@ -48,6 +49,8 @@ in
 
   inherit src;
 
+  env = { WORKESTRATE_REV = rev; };
+
   # The composite src root contains control/agentctl + schemas/ (see above);
   # the crate builds from the agentctl subtree.
   sourceRoot = "source/control/agentctl";
@@ -56,11 +59,12 @@ in
     lockFile = ../../control/agentctl/Cargo.lock;
   };
 
-  # Allow microsandbox-filesystem's build.rs to find agentd via the
-  # explicit MSB_AGENTD_PATH env var so the Nix build avoids network
-  # downloads. The patch is applied directly to the vendored crate
-  # directory in preBuild (see below) because buildRustPackage with
-  # cargoLock does not forward `cargoPatches` to the vendored source.
+  # The vendored `microsandbox-filesystem` crate is
+  # `microsandbox-filesystem-patched`, sourced from the user's fork branch
+  # `fix/filesystem-agentd-path-override` (the MSB_AGENTD_PATH fix is carried
+  # natively — no patch step). preBuild (below) symlinks it into vendor/ and
+  # stages MSB_HOME + MSB_AGENTD_PATH so its build.rs finds the prebuilt msb
+  # and agentd without network downloads.
 
   nativeBuildInputs = with pkgs; [
     makeWrapper
@@ -73,16 +77,16 @@ in
 
   preBuild = ''
     mkdir -p vendor
-    ln -sfn "${microsandbox-filesystem-patched}" vendor/microsandbox-filesystem-0.5.6
+    ln -sfn "${microsandbox-filesystem-patched}" vendor/microsandbox-filesystem-0.6.8
     cat > .cargo/config.toml <<'CARGO_CONFIG'
     [patch.crates-io]
-    microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.5.6" }
+    microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.6.8" }
     CARGO_CONFIG
 
-    # Stage the Nix-managed Microsandbox runtime where the crate's build.rs
-    # expects it. build.rs resolves its install root via MSB_HOME (verbatim,
-    # no .microsandbox suffix) and skips downloading when bin/msb and
-    # lib/libkrunfw.so.5.2.1 exist and msb --version matches 0.5.6.
+    # Stage the Nix-managed Microsandbox runtime so the vendored crate's
+    # build.rs finds msb + agentd locally. The fork's build.rs uses the
+    # MSB_AGENTD_PATH override (prebuilt feature); the staged MSB_HOME + the
+    # explicit MSB_AGENTD_PATH below satisfy it without network downloads.
     export MSB_HOME=$TMPDIR/.microsandbox
     mkdir -p $MSB_HOME/bin $MSB_HOME/lib
     cp ${microsandbox}/bin/msb $MSB_HOME/bin/msb

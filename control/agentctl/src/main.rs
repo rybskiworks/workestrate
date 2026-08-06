@@ -30,7 +30,7 @@ use workestrate::microsandbox::workload::ConfigWorkload;
 #[derive(Parser)]
 #[command(name = "workestrate")]
 #[command(about = "Control plane CLI for the AI workbench")]
-#[command(version)]
+#[command(version = env!("WORKESTRATE_VERSION"))]
 struct Cli {
     #[arg(long, help = "Disable project-layer config loading")]
     no_project_config: bool,

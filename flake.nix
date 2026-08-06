@@ -169,11 +169,15 @@
             '';
         };
 
-      microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {};
+      agentd = pkgs.callPackage ./nix/packages/agentd.nix {};
+      microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {
+        inherit rustToolchain agentd;
+      };
       tombi = pkgs.callPackage ./nix/packages/tombi.nix {};
       microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix {};
       workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
         inherit microsandbox microsandbox-filesystem-patched rustToolchain;
+        rev = self.shortRev or (if self ? rev then builtins.substring 0 8 self.rev else "dirty");
       };
 
       # Wrap the raw `msb` binary with a stable MSB_HOME so that `msb list`

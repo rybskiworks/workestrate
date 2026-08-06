@@ -1,23 +1,78 @@
-{ pkgs }:
+# microsandbox — msb CLI + runtime libraries, built from the user's fork.
+#
+# Source provenance: fork branch fix/filesystem-agentd-path-override (local
+# head rev 74919059, NOT yet pushed to GitHub). The fork is a 0.6.8 workspace
+# (edition 2024, resolver 3). msb is built from source via buildRustPackage
+# with the fenix-pinned toolchain (same as agentctl.nix) for host-toolchain
+# consistency. agentd is built separately (nix/packages/agentd.nix, musl
+# static) and assembled here. libkrunfw comes from the upstream release
+# tarball (Branch A, interim) — see CONTINGENCY below.
+#
+# After the fork branch is pushed, swap builtins.fetchGit -> fetchFromGitHub.
+{ pkgs, rustToolchain, agentd }:
 
-pkgs.stdenv.mkDerivation rec {
+let
+  # Mirror agentctl.nix's rustPlatform pattern: fenix-pinned toolchain so the
+  # nix build and the dev shell agree on the exact rustc (1.97.1, edition 2024).
+  rustPlatform = pkgs.makeRustPlatform {
+    rustc = rustToolchain.rustc;
+    cargo = rustToolchain.cargo;
+  };
+
+  # -----------------------------------------------------------------------
+  # libkrunfw — CONTINGENCY
+  # -----------------------------------------------------------------------
+  # Branch A (default): fetch the upstream v0.6.8 release tarball and extract
+  # ONLY libkrunfw.so* from it. The tar sha256 is lib.fakeHash — fill from the
+  # host `nix build .#microsandbox` error output. If the tar 404s (release
+  # doesn't exist), Branch B becomes mandatory.
+  #
+  # Branch B (spike, NOT implemented): build libkrunfw from the fork's
+  # vendor/libkrunfw submodule (gitlink commit c5503d82, repo
+  # https://github.com/superradcompany/libkrunfw.git branch krunfw). The
+  # submodule is NOT populated locally. Building it requires kernel build
+  # deps (gcc, make, flex, bison, libelf) and produces libkrunfw.so.5.6.1.
+  # TODO: if Branch A fails, implement a libkrunfw.nix that fetchGit's the
+  # submodule repo at c5503d82 and builds via `make` (see fork justfile
+  # build-libkrunfw recipe).
+  #
+  # The fork's LIBKRUNFW_VERSION is "5.6.1" (ABI "5") — NOT 5.2.1 as in the
+  # old 0.5.6 release tarball. The symlink layout must match: libkrunfw.so.5.6.1
+  # -> libkrunfw.so.5 -> libkrunfw.so.
+  libkrunfwTar = pkgs.fetchurl {
+    url = "https://github.com/superradcompany/microsandbox/releases/download/v0.6.8/microsandbox-linux-x86_64.tar.gz";
+    sha256 = pkgs.lib.fakeHash;
+  };
+in
+rustPlatform.buildRustPackage rec {
   pname = "microsandbox";
-  version = "0.5.6";
+  version = "0.6.8";
 
-  src = pkgs.fetchurl {
-    url = "https://github.com/superradcompany/microsandbox/releases/download/v${version}/microsandbox-linux-x86_64.tar.gz";
-    sha256 = "b550b1f5f0785d8fb6f9e1322c216afa6fe4e83020ea7f364e12308050d84e55";
+  src = builtins.fetchGit {
+    url = "file:///home/rybski/Development/agent-workbench/forks/microsandbox/repo";
+    rev = "74919059656f59612975d823cca570b774df277b";
   };
 
-  agentd = pkgs.fetchurl {
-    url = "https://github.com/superradcompany/microsandbox/releases/download/v${version}/agentd-x86_64";
-    sha256 = "ecb46b8c13234283e4c88b4cf8c32b7150985826b1804f2cd0a55b7d370443ea";
+  # fetchGit unpacks to source/; the whole workspace is needed for cargo to
+  # resolve the cli crate's workspace siblings.
+  sourceRoot = "source";
+
+  cargoLock = {
+    lockFile = src + "/Cargo.lock";
   };
 
-  sourceRoot = ".";
+  # Build only the cli crate. Features: net + ssh (matching the fork justfile's
+  # build-msb recipe exactly). keyring is excluded (matches justfile; avoids
+  # optional native deps). prebuilt is a filesystem/SDK-crate feature, not a
+  # CLI feature — cargo would reject it on -p microsandbox-cli.
+  cargoBuildFlags = [
+    "-p" "microsandbox-cli"
+    "--no-default-features"
+    "--features" "net,ssh"
+  ];
 
   nativeBuildInputs = with pkgs; [
-    autoPatchelfHook
+    pkg-config
   ];
 
   buildInputs = with pkgs; [
@@ -25,56 +80,58 @@ pkgs.stdenv.mkDerivation rec {
     stdenv.cc.cc.lib
   ];
 
+  doCheck = false;
+
+  # Assemble the runtime layout the tool expects:
+  #   $out/bin/msb           — from cargo target/release/msb
+  #   $out/libexec/agentd    — from the agentd derivation (musl static)
+  #   $out/lib/libkrunfw.so* — from the upstream release tarball (Branch A)
   installPhase = ''
     runHook preInstall
 
     mkdir -p $out/bin $out/lib $out/libexec
 
-    # msb daemon
-    if [ -f msb ]; then
-      install -Dm755 msb $out/bin/msb
-    elif [ -f bin/msb ]; then
-      install -Dm755 bin/msb $out/bin/msb
-    else
-      echo "error: msb not found in tarball" >&2
-      exit 1
-    fi
+    # msb CLI binary (regular glibc build — runs on the host).
+    install -Dm755 target/release/msb $out/bin/msb
 
-    # libkrunfw and any other shared libraries
-    if [ -d lib ]; then
-      for f in lib/*; do
-        if [ -f "$f" ] || [ -L "$f" ]; then
-          cp -P "$f" $out/lib/
-        fi
+    # agentd (static musl — runs in the guest microVM).
+    install -Dm755 ${agentd}/libexec/agentd $out/libexec/agentd
+
+    # libkrunfw: extract from the upstream release tarball (Branch A).
+    # The tar contains lib/libkrunfw.so.5.6.1 (+ possibly other libs).
+    tar xzf ${libkrunfwTar} -C $TMPDIR
+    if [ -d "$TMPDIR/lib" ]; then
+      for f in "$TMPDIR"/lib/libkrunfw.so*; do
+        [ -e "$f" ] && cp -P "$f" $out/lib/
       done
     fi
-
-    # Also handle the flat layout from some releases
-    for f in libkrunfw.so.5.2.1 libkrunfw-linux-x86_64.so libmicrosandbox_go_ffi-linux-amd64.so; do
-      if [ -f "$f" ]; then
-        install -Dm755 "$f" $out/lib/"$f"
-      elif [ -L "$f" ]; then
-        cp -P "$f" $out/lib/
-      fi
+    # Also check the flat layout (some releases put libs at the root).
+    for f in "$TMPDIR"/libkrunfw.so*; do
+      [ -e "$f" ] && cp -P "$f" $out/lib/
     done
 
-    # Ensure the libkrunfw soname symlinks exist
-    if [ -f "$out/lib/libkrunfw.so.5.2.1" ]; then
-      ln -sfn libkrunfw.so.5.2.1 $out/lib/libkrunfw.so.5
+    # Ensure the libkrunfw soname symlinks exist (ABI 5, version 5.6.1).
+    if [ -f "$out/lib/libkrunfw.so.5.6.1" ]; then
+      ln -sfn libkrunfw.so.5.6.1 $out/lib/libkrunfw.so.5
       ln -sfn libkrunfw.so.5 $out/lib/libkrunfw.so
-    elif [ -f "$out/lib/libkrunfw-linux-x86_64.so" ]; then
-      ln -sfn libkrunfw-linux-x86_64.so $out/lib/libkrunfw.so.5
+    elif [ -f "$out/lib/libkrunfw.so.5" ]; then
       ln -sfn libkrunfw.so.5 $out/lib/libkrunfw.so
     fi
 
-    # Guest init binary embedded by microsandbox-filesystem's build.rs
-    install -Dm755 ${agentd} $out/libexec/agentd
+    # Fail-closed: libkrunfw is mandatory for the microVM runtime. If the
+    # release tarball didn't contain it (wrong version, missing lib/, or the
+    # tar 404'd and Branch B is needed), abort loudly rather than shipping a
+    # broken msb with no KVM firmware.
+    if ! ls $out/lib/libkrunfw.so* >/dev/null 2>&1; then
+      echo "error: libkrunfw.so* not found in release tar — fill the hash or implement Branch B (submodule build)" >&2
+      exit 1
+    fi
 
     runHook postInstall
   '';
 
   meta = with pkgs.lib; {
-    description = "Microsandbox CLI and runtime libraries";
+    description = "Microsandbox CLI and runtime libraries (built from fork)";
     homepage = "https://github.com/superradcompany/microsandbox";
     license = licenses.asl20;
     platforms = [ "x86_64-linux" ];

@@ -119,6 +119,12 @@ plan:
 host-check:
     ./scripts/host-check.sh
 
+# Provision/sync the host's nix-installed workestrate binary to the current
+# tree, then run host-check + `workestrate doctor` and print a readiness
+# verdict. Idempotent; only mutation is a nix profile install when stale.
+host-provision:
+    ./scripts/host-provision.sh
+
 # Bootstrap or update encrypted secrets
 setup-secrets *args:
     nix develop -c setup-secrets {{args}}
@@ -131,7 +137,7 @@ validate-secrets:
 vendor-unlock:
     #!/usr/bin/env bash
     set -euo pipefail
-    link="control/agentctl/vendor/microsandbox-filesystem-0.5.6"
+    link="control/agentctl/vendor/microsandbox-filesystem-0.6.8"
     if [ ! -L "$link" ]; then
         echo "error: $link is not a symlink (already unlocked or blocked)" >&2
         exit 1
@@ -146,7 +152,7 @@ vendor-unlock:
 vendor-lock:
     #!/usr/bin/env bash
     set -euo pipefail
-    link="control/agentctl/vendor/microsandbox-filesystem-0.5.6"
+    link="control/agentctl/vendor/microsandbox-filesystem-0.6.8"
     if [ -L "$link" ]; then
         echo "$link is already a symlink" >&2
         exit 0

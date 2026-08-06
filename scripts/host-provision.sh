@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# host-provision.sh — in-flake host provisioner for the workestrate tool.
+#
+# One idempotent command that:
+#   A. runs scripts/host-check.sh,
+#   B. syncs the nix-profile-installed `workestrate` binary to the current
+#      tree (the ONLY mutation: `nix profile install .#workestrate` when
+#      stale, and only when not --check-only),
+#   C. runs `workestrate doctor`,
+#   D. prints a readiness table + verdict (exit 0 = READY, 1 = NOT READY).
+#
+# Idempotent and non-destructive: it never boots workloads, never writes
+# outside the user's nix profile, and never mutates the repo tree.
+#
+# Intended for direct host use:
+#   ./scripts/host-provision.sh                 # auto-fix (install when stale)
+#   ./scripts/host-provision.sh --check-only    # report only, never install
+#   ./scripts/host-provision.sh --force         # reinstall even when fresh
+#   just host-provision
+#
+# This script does NOT boot workloads.
+
+set -euo pipefail
+
+ERRORS=0
+
+log()  { echo "[host-provision] $*"; }
+warn() { echo "[host-provision] WARNING: $*" >&2; }
+fail() { echo "[host-provision] FAIL: $*" >&2; ERRORS=$((ERRORS+1)); }
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+if [[ ! -f "$REPO/flake.nix" ]]; then
+  echo "[host-provision] FAIL: flake.nix not found at $REPO — not a workestrate checkout" >&2
+  exit 1
+fi
+cd "$REPO"
+
+CHECK_ONLY=0
+FORCE=0
+for arg in "$@"; do
+  case "$arg" in
+    --check-only) CHECK_ONLY=1 ;;
+    --force)      FORCE=1 ;;
+    -h|--help)
+      cat <<EOF
+Usage: $0 [--check-only] [--force]
+  --check-only  Report only; never install. Prints reinstall commands when stale.
+  --force       Reinstall the binary even when fresh.
+Default: auto-fix (install when stale).
+EOF
+      exit 0 ;;
+    *)
+      echo "[host-provision] unknown argument: $arg" >&2
+      echo "Usage: $0 [--check-only] [--force]" >&2
+      exit 2 ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Step A — host-check.sh (capture exit, do not abort)
+# ---------------------------------------------------------------------------
+log "Step A: host-check"
+set +e
+host_out=$(./scripts/host-check.sh 2>&1)
+host_check_exit=$?
+set -e
+echo "$host_out"
+if [[ "$host_check_exit" -ne 0 ]]; then
+  warn "host-check.sh exited non-zero ($host_check_exit)"
+fi
+
+# ---------------------------------------------------------------------------
+# Step B — binary sync
+# ---------------------------------------------------------------------------
+log "Step B: binary sync"
+binary_status="UNKNOWN"
+want=""
+got=""
+installed_rev="UNKNOWN"
+
+set +e
+want=$(nix build .#workestrate --no-link --print-out-paths 2>&1)
+nix_build_exit=$?
+set -e
+if [[ "$nix_build_exit" -ne 0 ]]; then
+  fail "nix build .#workestrate failed (exit $nix_build_exit): $want"
+  want=""
+else
+  log "fresh store path: $want"
+fi
+
+set +e
+got=$(readlink -f "$(command -v workestrate 2>/dev/null)" 2>/dev/null)
+got_exit=$?
+set -e
+if [[ "$got_exit" -ne 0 ]] || [[ -z "$got" ]]; then
+  got=""
+fi
+
+fresh=0
+if [[ -n "$want" ]] && [[ -n "$got" ]] && [[ "$got" = "$want/bin/workestrate" ]]; then
+  fresh=1
+fi
+
+if [[ -n "$got" ]]; then
+  log "installed binary resolves to: $got"
+else
+  log "no workestrate binary found on PATH"
+fi
+
+do_install() {
+  # Remove + install the nix profile entry. Returns 0 on success.
+  set +e
+  nix profile remove workestrate >/dev/null 2>&1
+  install_out=$(nix profile install .#workestrate 2>&1)
+  install_exit=$?
+  set -e
+  if [[ "$install_exit" -ne 0 ]]; then
+    fail "nix profile install .#workestrate failed (exit $install_exit): $install_out"
+    return 1
+  fi
+  log "nix profile install .#workestrate OK"
+  return 0
+}
+
+if [[ -z "$want" ]]; then
+  binary_status="FAIL"
+elif [[ "$fresh" -eq 1 ]] && [[ "$FORCE" -eq 0 ]]; then
+  binary_status="OK"
+  log "binary is fresh (matches $want)"
+elif [[ "$CHECK_ONLY" -eq 1 ]]; then
+  binary_status="STALE"
+  warn "installed binary is stale (want=$want, got=${got:-<none>})"
+  echo "[host-provision] reinstall on the host with:"
+  echo "[host-provision]   nix profile remove workestrate 2>/dev/null || true"
+  echo "[host-provision]   nix profile install .#workestrate"
+else
+  # auto-fix or --force: reinstall
+  log "reinstalling (fresh=$fresh, force=$FORCE, check-only=$CHECK_ONLY)"
+  if do_install; then
+    set +e
+    got=$(readlink -f "$(command -v workestrate 2>/dev/null)" 2>/dev/null)
+    got_exit=$?
+    set -e
+    if [[ "$got_exit" -ne 0 ]] || [[ -z "$got" ]]; then got=""; fi
+    if [[ -n "$got" ]] && [[ "$got" = "$want/bin/workestrate" ]]; then
+      binary_status="OK"
+      log "binary now fresh (matches $want)"
+    else
+      binary_status="FAIL"
+      fail "binary still mismatched after install: want=$want got=${got:-<none>}"
+    fi
+  else
+    binary_status="FAIL"
+  fi
+fi
+
+# Best-effort rev from `workestrate --version` (after the main.rs change it
+# prints `0.1.0-<rev>`; older binaries print `0.1.0`).
+if [[ -n "$got" ]] && [[ -x "$got" ]]; then
+  set +e
+  ver_out=$("$got" --version 2>/dev/null | head -n1)
+  set -e
+  if [[ -n "$ver_out" ]] && [[ "$ver_out" == *-* ]]; then
+    installed_rev="${ver_out##*-}"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Step C — workestrate doctor (echo verbatim)
+# ---------------------------------------------------------------------------
+log "Step C: workestrate doctor"
+doctor_out=""
+doctor_exit=0
+if [[ -n "$got" ]] && [[ -x "$got" ]]; then
+  set +e
+  doctor_out=$("$got" doctor 2>&1)
+  doctor_exit=$?
+  set -e
+  echo "$doctor_out"
+  if [[ "$doctor_exit" -ne 0 ]]; then
+    warn "workestrate doctor exited non-zero ($doctor_exit)"
+  fi
+else
+  warn "workestrate binary unavailable — skipping doctor"
+  doctor_exit=1
+fi
+
+# ---------------------------------------------------------------------------
+# Step D — readiness table
+# ---------------------------------------------------------------------------
+log "Step D: readiness table"
+
+# Derive a status word for a named doctor check from its captured output.
+# doctor text format: "<name>: <STATUS> (<message>)"
+doctor_status() {
+  local name="$1"
+  if [[ -z "$doctor_out" ]]; then echo "UNKNOWN"; return; fi
+  local line
+  line=$(echo "$doctor_out" | grep -E "^${name}: " | head -n1 || true)
+  if [[ -z "$line" ]]; then echo "UNKNOWN"; return; fi
+  local rest="${line#*: }"
+  echo "${rest%% *}"
+}
+
+row_kvm=$(doctor_status "dev_kvm")
+row_nix=$(doctor_status "nix")
+row_msb=$(doctor_status "msb")
+row_age=$(doctor_status "age_key_file")
+row_home=$(doctor_status "home")
+row_config_repos=$(doctor_status "config_repos")
+
+# disk: derive from host-check output (line "Free disk in working directory: N GB")
+row_disk="UNKNOWN"
+if [[ -n "$host_out" ]]; then
+  disk_gb=$(echo "$host_out" | grep -oE 'Free disk in working directory: [0-9]+ GB' | grep -oE '[0-9]+' || true)
+  if [[ -n "$disk_gb" ]]; then
+    if [[ "$disk_gb" -lt 20 ]]; then
+      row_disk="WARN"
+    else
+      row_disk="OK"
+    fi
+  fi
+fi
+
+# sops: bundled in the wrapper PATH for a nix-installed binary (agentctl.nix
+# postInstall --prefix PATH : ${pkgs.sops}/bin). OK when the binary is OK;
+# UNKNOWN when we can't trust the wrapper.
+if [[ "$binary_status" = "OK" ]]; then
+  row_sops="OK"
+else
+  row_sops="UNKNOWN"
+fi
+
+# Count FAIL / WARN across the table.
+tbl_fail=0
+tbl_warn=0
+count() {
+  local s="$1"
+  case "$s" in
+    FAIL)  tbl_fail=$((tbl_fail+1)) ;;
+    STALE) tbl_fail=$((tbl_fail+1)) ;;
+    WARN)  tbl_warn=$((tbl_warn+1)) ;;
+  esac
+}
+
+echo
+echo "=== readiness ==="
+printf "  %-14s %-8s %s\n" "ROW" "STATUS" "DETAIL"
+binary_detail="rev=$installed_rev want=${want:-<none>}"
+if [[ "$binary_status" != "OK" ]] && [[ -n "$got" ]]; then
+  binary_detail="$binary_detail got=$got"
+fi
+printf "  %-14s %-8s %s\n" "binary" "$binary_status" "$binary_detail"
+count "$binary_status"
+printf "  %-14s %-8s %s\n" "kvm" "$row_kvm" ""
+count "$row_kvm"
+printf "  %-14s %-8s %s\n" "nix" "$row_nix" ""
+count "$row_nix"
+printf "  %-14s %-8s %s\n" "disk" "$row_disk" ""
+count "$row_disk"
+printf "  %-14s %-8s %s\n" "msb" "$row_msb" ""
+count "$row_msb"
+printf "  %-14s %-8s %s\n" "sops" "$row_sops" "(bundled for nix-installed binary)"
+count "$row_sops"
+printf "  %-14s %-8s %s\n" "age-key" "$row_age" ""
+count "$row_age"
+printf "  %-14s %-8s %s\n" "home" "$row_home" ""
+count "$row_home"
+printf "  %-14s %-8s %s\n" "config_repos" "$row_config_repos" ""
+count "$row_config_repos"
+
+echo
+if [[ "$tbl_fail" -eq 0 ]]; then
+  echo "verdict: READY"
+  exit 0
+else
+  echo "verdict: NOT READY ($tbl_fail FAIL, $tbl_warn WARN)"
+  exit 1
+fi

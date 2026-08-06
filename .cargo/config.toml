@@ -3,4 +3,4 @@
 # cwd-upward; the crate-level .cargo/config.toml is only found when running
 # from control/agentctl/). Paths here are relative to this file's parent dir.
 [patch.crates-io]
-microsandbox-filesystem = { path = "control/agentctl/vendor/microsandbox-filesystem-0.5.6" }
+microsandbox-filesystem = { path = "control/agentctl/vendor/microsandbox-filesystem-0.6.8" }

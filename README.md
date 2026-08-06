@@ -75,7 +75,7 @@ live in your personal config repo.
    `msb` and `agentd` from the Nix store, uses a persistent cache at
    `$HOME/.cache/ai-workbench-msb` for `cargo check`/`build.rs`, cleans
    up legacy per-shell tmpfs dirs from earlier versions, and refreshes the
-   `control/agentctl/vendor/microsandbox-filesystem-0.5.6` symlink.
+   `control/agentctl/vendor/microsandbox-filesystem-0.6.8` symlink.
    The dev shell pins `nodejs_24` (was `nodejs_22`; fixes pi's gondolin
    `EBADENGINE`). Workload images (pi, tempest, ...) are built by your
    personal config repo's flake — not this repo — via the lib recipes this
@@ -484,7 +484,7 @@ Common `just` recipes:
 > **Nix note:** New files must be `git add`-ed before `nix build` or `nix develop`
 > will see them. Nix flakes only include git-tracked files in the source tree.
 
-`control/agentctl/vendor/microsandbox-filesystem-0.5.6` is a Nix-managed
+`control/agentctl/vendor/microsandbox-filesystem-0.6.8` is a Nix-managed
 symlink to `${microsandbox-filesystem-patched}` from the flake. The dev
 shell hook refreshes it on every entry. To inspect or temporarily
 modify the patched source, run `just vendor-unlock` (this expands the
@@ -593,8 +593,9 @@ Reload your shell (or `source` the completion file) afterwards.
                      Upstream LLM providers (OpenRouter, Kimi, Neuralwatt, MiniMax)
 ```
 
-- The Microsandbox SDK is pinned to `microsandbox = "=0.5.6"` with the
-  `net` feature.
+- The Microsandbox SDK is pinned to `microsandbox = "=0.6.8"` with the
+  `net` feature. The `microsandbox-filesystem` crate comes from the user's
+  fork branch `fix/filesystem-agentd-path-override` (local, not yet pushed).
 - The pi microVM runs a **bun standalone binary** (`/app/bin/pi`, built by
   the config repo flake via the `bun-compile` lib recipe) with the Bun
   runtime embedded; no node/bun is needed inside the sandbox. The npm/node
@@ -651,7 +652,7 @@ The top-level layout (already documented in
   LiteLLM port. Stop it, or change the proxy port in the sandbox plan
   and update any agent configuration that points at `:4000`.
 - **Dangling vendor symlink.** If
-  `control/agentctl/vendor/microsandbox-filesystem-0.5.6` points
+  `control/agentctl/vendor/microsandbox-filesystem-0.6.8` points
   nowhere (for example after a `nix store` GC), re-enter the dev
   shell (`exit` then `nix develop`) or run `just vendor-unlock` to
   materialise a real copy, then `just vendor-lock` to put the symlink

@@ -147,7 +147,7 @@ pkgs.mkShell {
         return 0
       fi
       vendor_dir="$repo_root/control/agentctl/vendor"
-      vendor_link="$vendor_dir/microsandbox-filesystem-0.5.6"
+      vendor_link="$vendor_dir/microsandbox-filesystem-0.6.8"
       target="${microsandbox-filesystem-patched}"
 
       mkdir -p "$vendor_dir"
@@ -160,7 +160,7 @@ pkgs.mkShell {
           ln -sfn "$target" "$vendor_link"
         fi
       elif [ -e "$vendor_link" ]; then
-        echo "workestrate: vendor/microsandbox-filesystem-0.5.6 is a real directory (unlocked); leaving it alone" >&2
+        echo "workestrate: vendor/microsandbox-filesystem-0.6.8 is a real directory (unlocked); leaving it alone" >&2
       else
         ln -sfn "$target" "$vendor_link"
       fi

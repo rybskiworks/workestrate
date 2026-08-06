@@ -8,4 +8,4 @@ linker = "cc"
 # offline-aware build.rs that reads $MSB_HOME/bin/agentd instead of downloading
 # agentd-x86_64 from GitHub.
 [patch.crates-io]
-microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.5.6" }
+microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.6.8" }
