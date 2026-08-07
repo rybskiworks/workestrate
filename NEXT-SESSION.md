@@ -1,30 +1,90 @@
 # NEXT-SESSION — workestrate resumption context
 
 > Narrative resumption notes. Task lists link to `wrk-*` beads IDs; this doc
-> carries context, not work items (see BEADS.md for the boundary).
+> carries context, not work items (see BEADS.md for the boundary). Read the
+> 2026-08-07 handover FIRST — it carries the full copy-paste host runbook.
 
-## Host-boot fix pass landed (2026-08-03) — host relock + boot remains
+## Microsandbox 0.6.8 fork migration LANDED (commits 84a901d…2ec1c6e + c413b8a)
 
-The two host-boot failures are fixed in-container; the host steps remain.
+The 0.5.6 pinned-trio implementation is gone. The stack is now source-built
+from the user's microsandbox fork, pinned via a flake input at the validated
+rev. User decision: adopt the idiomatic-Nix baseline and make the migration
+work — pin `74919059` via flake input (flake=false), commit `c413b8a`.
 
-- Failure 1 (mount doubling) fixed — `b675db2`: directory-mode content root =
-  `<repo>/workestrate/` (not the capsule dir). Spec 17 amendment `08a75d2`
-  superseded-with-correction.
-- Failure 2 (personal flake URL) fixed — personal config repo: `workestrate.url`
-  repointed to `git+file:///home/rybski/...` (host path). Relock on host required.
-- Plan-time existence preflight added — `c6a6b47`: `plan` fails fast on missing
-  RO mount / seed source; `validate-config` warns. 597 lib tests pass.
-- Beads: `wrk-ayz` (canonical config-flake input URL, Phase-5), `wrk-23b`
-  (ensure-images fail-closed decision). Noted in spec 21 §15.
+Commits on `migration/tool-model` (2 ahead of origin: migration `c413b8a` + doc commit `5dcf3cf`):
 
-Host next steps (ordered):
-1. `nix flake lock --update-input workestrate` (personal config repo).
-2. `just load-images` (personal repo).
-3. `workestrate workload up litellm` → health → `plan`/`exec` pi, opencode,
-   tempest → batch up → ps → down-all → the 3 ignored KVM tests → E1.
+| Commit | Change |
+|--------|--------|
+| `84a901d` | WIP 1 — microsandbox 0.6.8 source-build migration + in-flake `host-provision` |
+| `4a8c0dd` | WIP 2 — pre-fill libkrunfw tar sha256 from GitHub v0.6.8 release checksum (verified real) |
+| `d37db2e` | WIP 3 — fix `agentd.nix` rec keyword + expose agentd as flake package |
+| `9cacda8` | WIP 4 — stage build/agentd in `microsandbox.nix` preBuild for the filesystem crate |
+| `b48c8d3` | WIP 5 — `find` to locate msb binary in installPhase (host-triple target dir) |
+| `2ec1c6e` | WIP 6 — vendor the entire fork workspace; patch ALL microsandbox-* crates |
+| `c413b8a` | Pin microsandbox fork via flake input at validated rev 74919059 (flake=false; deletes `microsandbox-filesystem-agentd.patch`) |
 
-Push-state check (host) for the Phase-5 `github:` input decision (wrk-ayz):
-`git -C <workestrate> fetch && git log --oneline origin/migration/tool-model..HEAD`.
+What changed vs the 0.5.6 trio:
+
+- msb + agentd are source-built from the fork workspace — `nix/packages/microsandbox.nix`
+  rewritten (`rustPlatform.buildRustPackage`, fenix-pinned toolchain, `-p microsandbox-cli`
+  with `--no-default-features --features net,ssh`); `nix/packages/agentd.nix` NEW
+  (`pkgsStatic.rustPlatform` musl guest-init binary).
+- `microsandbox-fork` flake input (github pin 74919059, flake=false) replaces
+  `builtins.fetchGit` and the agentd patch file.
+- Full fork workspace vendored under `control/agentctl/vendor/microsandbox-fork`
+  (symlink recreated by the devshell shellHook); all 12 `microsandbox-*` crates
+  patched via both `.cargo/config.toml` files.
+- libkrunfw comes from the upstream v0.6.8 release tar (sha256 verified real;
+  the fakeHash is gone).
+- `control/agentctl/build.rs` version wiring (`WORKESTRATE_REV`) and
+  `scripts/host-provision.sh` added.
+
+## What remains — HOST ONLY (B1–B9 + C test gates)
+
+Nothing of the 0.6.8 stack is built yet: `flake.lock` lacks the
+`microsandbox-fork` input, `control/agentctl/Cargo.lock` still pins registry
+0.5.6, the vendor symlink does not exist until `nix develop`, and the old
+`workestrate-pi`/`tempest` image tarballs were GC'd. In-container there is no
+nix/cargo/ssh/KVM, and the container `~/.microsandbox` msb needs GLIBC 2.38+
+so it cannot run here either. All execution is on the host
+(`/home/rybski/Development/agent-workbench`, dblab42).
+
+Ordered host steps (copy-paste runbook: `handovers/2026-08-07-…md` §HOST RUNBOOK):
+
+1. **B1 baseline** — `df -h /` + `./scripts/host-check.sh` (+ deliberate `just gc` only if disk tight).
+2. **B2 lock** — `nix flake lock` in workestrate + commit (adds the `microsandbox-fork` input).
+3. **B3 builds** — `nix build .#agentd` → `nix build .#microsandbox` → `nix build .#workestrate` (evidence: static agentd, `msb 0.6.8`, rev-embedded `--version`).
+4. **B4 devshell + Cargo.lock** — `nix develop -c bash` (recreates vendor/microsandbox-fork) → `cargo check` → commit the Cargo.lock refresh (0.6.8 fork-sourced).
+5. **B5 personal relock** — `nix flake lock --update-input workestrate` in the personal config repo + commit (currently pins pre-migration `c45494b`); refresh dev-home `workestrate.lock` (pins `b1c87416`).
+6. **B6 push (USER DECISION)** — `git push origin migration/tool-model` (origin is SSH; also unblocks wrk-ayz github: input adoption).
+7. **B7 load-images** — `just load-images` in the personal repo (full rebuild; old tarballs GC'd) — expect `workestrate-pi:latest` + `tempest:latest` in the msb store.
+8. **B8 host-provision** — `just host-provision` (needs the real age key for full doctor OK).
+9. **B9 sources** — populate `workestrate-dev-home/sources/<odysseus|opencode|tempest>/repo` (optional for core tests).
+10. **C tests** — dependency order → KVM tests LAST → E1 → bead close-out.
+
+## Corrected pending list (beads / user items)
+
+- **wrk-23b refile PENDING** — the ensure-images fail-closed decision was
+  cited in spec 21 §15 / STATUS but never filed: ABSENT from
+  `.beads/issues.jsonl` (30 issues). `bd` is not installed in-container;
+  refile on the host (`nix shell nixpkgs#beads`, procedure in BEADS.md).
+  Exact commands in the handover. Do not hand-edit `issues.jsonl`.
+- **wrk-vic (fork verify/push/PR)** — expected head `27d84216` is stale;
+  actual local head AND `origin/fix/filesystem-agentd-path-override` =
+  `74919059` (pushed). `origin/main` is `b43d7522` (#1) — a DIFFERENT line
+  (diverged from the local branch; only a cosmetic `crates/filesystem/build.rs`
+  rerun-if-env-changed reorder differs). Re-verify remote state with a LIVE
+  `git ls-remote` before any fork work (a prior live ls-remote showed
+  `caee6378`; not present in local refs). PR state unknown — user question.
+- **wrk-ayz (canonical `github:` config-flake input)** — partially executed:
+  the github-input pattern is now used for `microsandbox-fork`, but the
+  personal flake's `workestrate` input is still the host-path
+  `file:///home/rybski/...`; adopt `github:` only after B6 push.
+- **wrk-wv0 (0.6.8 pin strategy)** — executed by the migration (libkrunfw
+  0.6.8 pin landed); annotate/close on the host.
+- **wrk-8yg (first host beads sync / bd dolt push)** — never done; HOST +
+  user approval (beads sync discipline in BEADS.md; dolt push NEVER autonomous).
+- **Age key** — host-only (`~/.config/sops/age`); `.env.enc` unverifiable in-container.
 
 ---
 
@@ -37,70 +97,9 @@ Push-state check (host) for the Phase-5 `github:` input decision (wrk-ayz):
   socket limit; brainstorm a configurable msb run/socket dir or a canonical
   short-`MSB_HOME` test convention and refactor. See spec 21 §14.
 
-## Pre-KVM build pass (2026-08-03) — host runbook pending
+## Historical note (superseded)
 
-The in-container pre-KVM build pass completed the nix-layered image builds
-for `workestrate-pi` and `tempest` (real tarballs in the shared nix store),
-inlined tempest's real `npmDepsHash`, and applied a one-line tool-recipe fix
-(`nix/lib/recipes/npm-build.nix`: add `pkgs.musl` to `buildInputs` so
-auto-patchelf can satisfy musl-linked native node deps). Source builds
-(odysseus/opencode/tempest local_build) are deferred to the host (disk
-ceiling + odysseus/tempest source repos lack a flake.nix). Full state,
-outPaths, and the host runbook are in `STATUS.md`. Host next steps: load the
-two built images into the msb store (`just load-images`), then run the boot
-sequence (up litellm → health → plan/exec pi/opencode/tempest → batch up →
-ps → down-all → the 3 ignored KVM tests → E1).
-
-
-## host-provision (in-flake provisioner)
-
-One idempotent command (`./scripts/host-provision.sh` or `just host-provision`)
-that runs `scripts/host-check.sh`, syncs the nix-profile-installed `workestrate`
-binary to the current tree (only mutation: `nix profile install .#workestrate`
-when stale), runs `workestrate doctor`, and prints a readiness table + verdict
-(exit 0 = ready, 1 = not). Flags: `--check-only` (report only), `--force`
-(reinstall even when fresh). Uncommitted, pending review.
-
-## microsandbox 0.6.8 fork migration (uncommitted)
-
-Migrated the microsandbox stack from 0.5.6 to 0.6.8, built from source off the
-user's fork branch `fix/filesystem-agentd-path-override` (local head rev
-`74919059`, not yet pushed). msb + agentd are no longer fetched from the
-upstream release tarball — they are built from the fork workspace:
-
-- `nix/packages/agentd.nix` (NEW): `pkgsStatic.rustPlatform.buildRustPackage`
-  building `-p microsandbox-agentd` as a static musl binary (guest init).
-- `nix/packages/microsandbox.nix` (rewritten): `rustPlatform.buildRustPackage`
-  (fenix-pinned toolchain) building `-p microsandbox-cli` with
-  `--no-default-features --features net,ssh`; assembles `$out/bin/msb` (from
-  cargo) + `$out/libexec/agentd` (from the agentd derivation) + libkrunfw
-  (extracted from the upstream v0.6.8 release tarball, Branch A interim).
-- `nix/packages/microsandbox-filesystem-patched.nix`: sources the filesystem
-  crate from the same fork via `builtins.fetchGit` (MSB_AGENTD_PATH fix carried
-  natively — no patch step).
-- `flake.nix`: wires `agentd` + `rustToolchain` into `microsandbox`.
-- Vendor symlink references renamed 0.5.6 → 0.6.8 across agentctl.nix preBuild,
-  devshell default.nix, both `.cargo/config.toml` files, justfile, README.md.
-
-The ONLY remaining `pkgs.lib.fakeHash` is the libkrunfw release-tar fetch in
-microsandbox.nix (Branch A). If the v0.6.8 tar 404s, Branch B (build libkrunfw
-from the fork's vendor/libkrunfw submodule @ c5503d82) becomes mandatory —
-stubbed as a TODO in microsandbox.nix.
-
-Pending host steps (ordered):
-1. `nix build .#agentd` — validates the pkgsStatic musl build + edition 2024.
-2. `nix build .#microsandbox` — paste the one libkrunfw tar sha256 (fakeHash).
-   If the tar 404s, implement Branch B (submodule build).
-3. `nix build .#workestrate` — full assembly (microsandbox + filesystem + agentctl).
-4. `nix develop -c cargo check --manifest-path control/agentctl/Cargo.toml` —
-   refresh Cargo.lock, surface any microsandbox 0.6.8 SDK API breaks.
-5. `./scripts/host-provision.sh` (reinstall the synced binary) then re-run
-   the smoke workload + litellm to confirm the host-boot fix landed.
-6. Push the fork branch and swap `builtins.fetchGit` → `fetchFromGitHub` in
-   agentd.nix, microsandbox.nix, microsandbox-filesystem-patched.nix.
-
-NOTE: the vendor wiring is fully renamed to 0.6.8 across the source tree.
-The remaining `0.5.6` references are historical docs (`docs/**`) and cargo's
-`target/` build cache only.
-
-Executes beads wrk-wv0 + the dependency half of wrk-vic.
+The 2026-08-03 pre-migration pass (host-boot fixes `b675db2`/`c6a6b47`, the
+personal URL repoint, 597 lib tests, `workestrate-pi`+`tempest` nix-layered
+image builds) is superseded by the migration. The image tarballs were GC'd;
+`STATUS.md` keeps the snapshot for reference.

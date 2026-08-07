@@ -1,138 +1,83 @@
-# STATUS — pre-KVM build/deploy pipeline state
+# STATUS — post-migration snapshot (2026-08-07)
 
-> Snapshot produced by the in-container pre-KVM build pass (2026-08-03).
-> The nix store is shared with the host, so built images are available to
-> the host without rebuild. Host-side steps (msb load + boot sequence) are
-> in NEXT-SESSION.md / the host runbook.
+> Snapshot after the microsandbox 0.6.8 fork migration LANDED
+> (commits `84a901d`…`2ec1c6e` + `c413b8a` on `migration/tool-model`).
+> The nix store is shared with the host, but NOTHING of the 0.6.8 stack is
+> built yet — all builds, loads, and boots remain host-side. The full host
+> runbook is in `handovers/2026-08-07-…md`; this file is the narrative
+> snapshot and `NEXT-SESSION.md` the resumption context.
 
-## Host-boot fix pass (2026-08-03) — fixes landed; host steps remain
+## Repo states (verified 2026-08-07)
 
-Two host-boot failures fixed in-container; the host relock + load-images + boot
-sequence remains.
+| Repo | HEAD / branch | Tree | Notes |
+|------|---------------|------|-------|
+| workestrate | `c413b8a` on `migration/tool-model` | clean, **2 ahead of origin** (c413b8a + doc commit 5dcf3cf) | migration committed; origin remote is SSH (`git@github.com:georgrybski/workestrate.git`) |
+| personal config repo | `e3d65e3` | clean | workestrate input relocked to host path; smoke workload committed; `.env.enc` present (unverifiable in-container) |
+| dev home | (workestrate-dev-home) | clean | `sources/` EMPTY; `workestrate.lock` pins personal @ `b1c87416` (pre-`e3d65e3` — refresh in B5) |
+| microsandbox fork | `74919059` on `fix/filesystem-agentd-path-override` | clean | `origin/fix/filesystem-agentd-path-override` == `74919059` (pushed); `origin/main` = `b43d7522` (#1), a different line (diverged; only a cosmetic `build.rs` reorder differs) |
 
-- **Failure 1 (mount doubling) — FIXED** (commit `b675db2`): directory-mode
-  content root now resolves at the `<repo>/workestrate/` root (not the capsule
-  dir), so a `host = "workloads/litellm"` mount no longer doubles to
-  `workestrate/workloads/litellm/workloads/litellm`. The phase-1 spec-17
-  amendment (`08a75d2`) that codified the wrong capsule-relative root is
-  superseded-with-correction in spec 17.
+## Committed migration summary
 
-- **Failure 2 (personal flake URL) — FIXED** (personal config repo commit):
-  `workestrate.url` repointed from the container-only
-  `git+file:///home/node/...` to the host path `git+file:///home/rybski/...`.
-  In-container relock is intentionally NOT done (the URL does not resolve
-  here); the user relocks on the host. Canonical fix (pinned `github:` input)
-  is a Phase-5 decision (beads `wrk-ayz`).
+Replaced the 0.5.6 pinned-trio with a source-built 0.6.8 stack from the
+user's fork, pinned via flake input at the validated rev 74919059:
 
-- **Plan-time existence preflight — ADDED** (commit `c6a6b47`): `plan` now
-  fails fast on a missing read-only mount source / seed source (the failure-1
-  signal) before any KVM work; `validate-config` runs the same check warn-only.
-  Fulfills the security-model §enforcement-points plan-time promise. New tests:
-  597 lib tests pass (clippy + fmt clean).
+- **msb + agentd source-built** from the fork workspace: `nix/packages/microsandbox.nix`
+  rewritten (`rustPlatform.buildRustPackage`, fenix-pinned toolchain,
+  `-p microsandbox-cli --no-default-features --features net,ssh`); `nix/packages/agentd.nix`
+  NEW (`pkgsStatic` musl guest-init binary).
+- **`microsandbox-fork` flake input** (`flake = false`, github pin 74919059)
+  replaces `builtins.fetchGit` + the deleted `microsandbox-filesystem-agentd.patch`.
+- **Vendored fork workspace** under `control/agentctl/vendor/microsandbox-fork`
+  (symlink recreated by the devshell shellHook); all 12 `microsandbox-*` crates
+  patched via both `.cargo/config.toml` files.
+- **libkrunfw** from the upstream v0.6.8 release tar (sha256 verified real —
+  the fakeHash is gone).
+- **build.rs version wiring** (`WORKESTRATE_REV`) + **`scripts/host-provision.sh`**.
 
-- **Beads filed:** `wrk-ayz` (canonical config-flake input URL, Phase-5
-  decision); `wrk-23b` (ensure-images eval-error fail-closed vs nix-absent
-  trust posture — decision). Both noted in spec 21 §15.
+## Store / artifact state (verified 2026-08-07)
 
-### What remains host-side (ordered)
-1. `nix flake lock --update-input workestrate` (in the personal config repo) —
-   relock against the repointed host-path URL.
-2. `just load-images` (personal repo) — load the built `workestrate-pi` +
-   `tempest` tarballs into the msb store.
-3. Boot sequence: `workestrate workload up litellm` → health →
-   `workestrate workload plan pi` / `plan tempest` (the new preflight should
-   now pass — mount sources resolve) → `exec` the agents → `batch up` → `ps`
-   → `down-all` → the 3 ignored KVM tests → E1.
+- `workestrate/flake.lock` — **`microsandbox-fork` input MISSING** (lock stale; B2 fixes).
+- `control/agentctl/Cargo.lock` — still pins **registry `microsandbox 0.5.6`** (B4 refresh).
+- `control/agentctl/vendor/` — empty in a clean checkout; the stale
+  `microsandbox-filesystem-0.5.6` symlink was removed 2026-08-07 (untracked/gitignored).
+- `/nix/store` — **NO 0.6.8 outputs, no fork-source fetch, no agentd output**
+  (only `agentd-x86_64.drv`). The pre-migration image tarballs
+  `workestrate-pi` (`vj844190…`) and `tempest` (`ajgqk1…`) are **GC'd**.
+  Remaining: `workestrate-0.1.0` output (`vg28f2s0c…`) + 0.5.6 crate drvs.
+- `workestrate/result` symlink (dangling, target GC'd) removed 2026-08-07.
+- Container `~/.microsandbox` — EMPTY store; `bin/msb` needs GLIBC 2.38+
+  (not runnable in-container). Host store state (incl. any stale
+  `workestrator-pi:latest` tag) is NOT visible from the container.
+- Cleanups this pass: removed `workestrate/result` (broken), stale vendor
+  symlink, and `workestrate/core` (1.7 GB ELF core dump). Git tree unchanged
+  (all three were untracked/gitignored).
 
+## What remains (host, ordered — B1–B9 + C)
 
-## Commits made this pass
+1. **B1** baseline: `df -h /` + `./scripts/host-check.sh` (+ `just gc` only if disk tight).
+2. **B2** `nix flake lock` in workestrate + commit.
+3. **B3** `nix build .#agentd` → `nix build .#microsandbox` → `nix build .#workestrate`.
+4. **B4** `nix develop -c bash` → `cargo check` → commit Cargo.lock refresh.
+5. **B5** personal relock (`nix flake lock --update-input workestrate`) + commit; refresh dev-home `workestrate.lock`.
+6. **B6** `git push origin migration/tool-model` (USER DECISION).
+7. **B7** `just load-images` (personal repo) — full rebuild, old tarballs GC'd.
+8. **B8** `just host-provision` (needs real age key for full doctor OK).
+9. **B9** populate `sources/<odysseus|opencode|tempest>/repo` (optional for core tests).
+10. **C** test gates in dependency order → 3 ignored KVM tests LAST → E1 → bead close-out.
 
-| Repo | Commit | Message |
-|------|--------|---------|
-| personal | 50a5fef | build(tempest): real npmDepsHash |
-| tool     | 5532eb7 | fix(recipes): add musl to npm-build buildInputs for musl native node deps |
-| personal | f5f2013 | build: relock tool input for npm-build musl fix |
+## Bead state
 
-## Tempest npmDepsHash
+- `wrk-23b` — ABSENT from `.beads/issues.jsonl` (refile PENDING, host; see NEXT-SESSION).
+- `wrk-vic` — open; expected head `27d84216` stale vs actual `74919059` (branch pushed); PR state unknown.
+- `wrk-ayz` — open; partially executed (github-input pattern used for microsandbox-fork); objective pending B6 push.
+- `wrk-wv0` — open; executed by the migration (0.6.8 pin landed).
+- `wrk-8yg` — open, blocked; first host beads sync / `bd dolt push` never done (needs user approval).
 
-- Real hash computed via `nix run nixpkgs#prefetch-npm-deps` on tempest's
-  package-lock.json: `sha256-eAueD4q+ibdZ+7E3RhmEnRkGJ62p/4ZRR/uMaStr4qE=`
-- Inlined into personal `flake.nix` (`tempestNpmDepsHash`), replacing the
-  `lib.fakeHash` placeholder. (pi's `piNpmDepsHash` was already real.)
-- NOTE: `just update-hashes` (prefetch-npm-deps) for pi fails on an optional
-  platform-specific dep (@biomejs/cli-darwin-arm64) — irrelevant for linux-x64;
-  pi's existing hash is correct and the pi build succeeds with it.
+## Historical note (superseded 2026-08-07)
 
-## Recipe fix: musl for auto-patchelf (tool 5532eb7)
-
-- Symptom: `nix build .#tempest` / `.#workestrate-pi` failed at auto-patchelf:
-  `could not satisfy dependency libc.musl-x86_64.so.1` (musl-linked native
-  node deps: lightningcss-linux-x64-musl, @rolldown/binding-linux-x64-musl,
-  @biomejs/cli-linux-x64-musl, esbuild).
-- Root cause: `nix/lib/recipes/npm-build.nix` `buildInputs` lacked musl, so
-  autoPatchelfHook could not find `libc.musl-x86_64.so.1` / `ld-musl-x86_64.so.1`.
-- Fix: `buildInputs = [ stdenv.cc.cc.lib libcap_ng pkgs.musl ];` (one line).
-- Personal `flake.lock` relocked to tool rev 5532eb7 (revCount 291). The
-  npm-deps FOD drv hash is independent of the tool rev, so already-fetched
-  deps stay reusable across the relock.
-
-## Image builds (real, in shared nix store)
-
-| Image | outPath | size | tag | tarball sanity |
-|-------|---------|------|-----|----------------|
-| workestrate-pi | /nix/store/vj844190hg0shr4r42d8gyrbysgr5v1c-workestrate-pi.tar.gz | 58M | workestrate-pi:latest | /app/bin/pi + asset mirror (CHANGELOG, README, assets/, docs/, examples/, export-html/, photon wasm) verified in layer |
-| tempest | /nix/store/ajgqk1winvx5mb64vhxq3571jazp36c1-tempest.tar.gz | 141M | tempest:latest | valid docker archive (manifest.json + layers); command ["node","dist/cli.js"]; nodejs_24 in contents |
-
-- pi command: `["/app/bin/pi"]`; tempest command: `["node", "dist/cli.js"]`.
-- Both built with the musl fix; auto-patchelf passed.
-- NOT loaded into the msb store (`msb load` is forbidden in-container — the
-  msb store is the user's). `workload build --check` reports STORE=gone for
-  both (msb store empty); the host's `just load-images` populates it.
-
-## Source builds (local_build) — HOST-only
-
-- odysseus (pip-install), opencode (bun-install), tempest (npm-build) all
-  have `local_build` recipes with `flake://` sources.
-- `workestrate source clone <name>` is a guidance no-op for flake:// sources
-  (sources are nix flake inputs, already materialized in the store); the
-  host must populate `sources/<name>/repo` (copy from the flake input or
-  `git clone`) then `source build`.
-- odysseus & tempest source repos lack a `flake.nix`, so the CLI's
-  `nix shell .` build path cannot provide the toolchain in-container.
-- opencode's source repo has a flake.nix, but the in-container disk ceiling
-  (/nix at ~99%, ~1.7GB free, 1.5GB hard stop) prevented running the build
-  (bun install + nix flake input fetch would breach the stop).
-- All three source builds are deferred to the host. Build commands:
-  - odysseus: `python3.12 -m pip install --only-binary=:all: --break-system-packages --target ./.deps -r requirements.txt` (in sources/odysseus/build)
-  - opencode: `HUSKY=0 bun install && bun run build` (in sources/opencode/build)
-  - tempest: `npm install && npm run build` (in sources/tempest/build)
-
-## End-state validation (read-only, WORKESTRATE_HOME=<dev-home>)
-
-- `validate-config`: workestrate.toml is valid.
-- `workloads`: litellm (service), odysseus (service), opencode (agent),
-  pi (agent, nix-layered:workestrate-pi:latest), tempest (agent,
-  nix-layered:tempest:latest).
-- `workload plan litellm`: renders fully (image, command, env, secrets,
-  port 4000, mounts, network ingress/egress).
-- `workload plan pi` / `plan tempest`: refuse — "dependency 'litellm' is
-  required but not running". BY DESIGN (dependents refuse while litellm is
-  down); they render once litellm is up on the host. (expected)
-- `workload build --check` (spec 21 §3.4 staleness matrix):
-  pi       — RECORD=absent, STORE=gone, DECISION=would build
-  tempest  — RECORD=absent, STORE=gone, DECISION=would build
-  (STORE=gone = msb image store; nix-store tarballs ARE built.)
-
-## What remains host-side
-
-1. `just load-images` (or `msb load` per image with the store paths above) —
-   loads the built tarballs into the msb store.
-2. Boot sequence: up litellm → health → plan/exec pi, opencode, tempest →
-   batch up → ps → down-all → KVM tests → E1. See the host runbook
-   (delivered in the session summary / NEXT-SESSION.md).
-
-## Disk note
-
-- /nix started at ~4.1GB free, ended at ~1.7GB free (never breached the
-  1.5GB hard stop). No `nix-collect-garbage` run (shared store — would
-  delete host artifacts). The musl fix + image builds consumed ~2.4GB.
+The 2026-08-03 pre-migration pass landed the host-boot fixes (`b675db2`
+mount/seed path doubling; personal flake URL repoint; `c6a6b47` plan-time
+existence preflight; 597 lib tests) and built the `workestrate-pi` + `tempest`
+nix-layered images (real tarballs, musl recipe fix `5532eb7`, real tempest
+npmDepsHash). Those tarballs were GC'd; the migration supersedes the pinned
+trio they were built against.
