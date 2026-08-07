@@ -9,7 +9,7 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, **13 ahead of origin, NOT pushed**; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, **15 ahead of origin, NOT pushed**; origin SSH |
 | personal config repo | `e3d65e3` | clean; flake.lock pins workestrate @ `c45494b` (B5 HOST-GATED) |
 | dev home | (workestrate-dev-home) | clean; `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | clean; origin/fix == 74919059 (pushed); origin/main `b43d7522` (divergent); remote ambiguous — live ls-remote before fork work |
@@ -20,10 +20,10 @@
   `/nix/store/y9rc99j2n2gcr3wvgi4n36kqbhd396v5-source`.
 - `.#agentd` → `…97ngwbmkq…-microsandbox-agentd-static-x86_64-unknown-linux-musl-0.6.8`
   (fully static, no .dynamic).
-- `.#microsandbox` → `/nix/store/2zx3nga6z0jxdyrnhk0klqx2djqjvhfn-microsandbox-0.6.8`
-  (`msb 0.6.8`; deterministic — same path as the old GC'd `result` target).
-- `.#workestrate` → `/nix/store/7cgrm2ryfk5nbr1958q7ssax14bqr0n9-workestrate-0.1.0`
-  (`workestrate 0.1.0-1b1b098`; rebuilt from the current tree WITH Change #1).
+- `.#microsandbox` → `/nix/store/8fi13yc38pwij5lwwxrl1rmpvlmzjp0h-microsandbox-0.6.8`
+  (`msb 0.6.8`; RPATH baked in via autoPatchelfHook — runs with no `LD_LIBRARY_PATH`).
+- `.#workestrate` → `/nix/store/zk6qxvlj8pm34gqiqkvbvpzlhl0mvq6s-workestrate-0.1.0`
+  (rebuilt against the RPATH-encapsulated msb; `0.1.0-<rev>` once committed).
 - Cargo.lock refreshed (165ef88): microsandbox 0.6.8 fork crates, sea-orm 2.0.1;
   no registry 0.5.6 pins remain.
 - `control/agentctl/vendor/microsandbox-fork` symlink present (→ fork source);
@@ -36,9 +36,9 @@
 ## Host build failure fixed (2026-08-07 evening)
 
 - Host `nix build .#workestrate` failed — drv `94lv9jaln8siy729pwv1xqxk30cpr41l`, exit 101. Root cause: the fork SDK `sdk/rust/build.rs` took its runtime-deps DOWNLOAD branch because the staged `msb` version probe (`installed_msb_version`, build.rs:118-133) could not exec — msb links libcap-ng dynamically without an RPATH. Hermetic host sandbox blocks the download → exit 101. In-container the same branch succeeded earlier (container sandbox permits network) — that impurity masked the bug.
-- Fix (`fix(agentctl)`): `nix/packages/agentctl.nix` preBuild exports `LD_LIBRARY_PATH` (libcap_ng) so the probe execs; MSB_HOME + MSB_AGENTD_PATH were already correct. `microsandbox.nix` unaffected (prebuilt feature OFF → no SDK staging). No feature changes anywhere.
-- Validated in-container with `--option sandbox true` (sandbox confirmed engaged): build OK, 0 "download" lines in `nix log`; new drv `pps9kx98q12v1fbxn59kdi64h9cdaik9` → `/nix/store/9w21zj1j56q7hb04s1n5qvamhzdphy6a-workestrate-0.1.0`; `.#microsandbox` no-op (cached); `workestrate --version` OK; `scripts/check-nix-paths.sh` clean.
-- Repo state: workestrate now **13 ahead of origin, NOT pushed** (2 new commits: the fix + this docs entry).
+- Fix: RPATH encapsulation — `nix/packages/microsandbox.nix` adds `autoPatchelfHook` to `nativeBuildInputs` so msb is patched in `postFixup` with an RPATH to libcap-ng + libgcc; `nix/packages/agentctl.nix` carries NO env additions (the intermediate `LD_LIBRARY_PATH` export, commit 2593604, was reverted). Zero `LD_LIBRARY_PATH` anywhere in `nix/`. `MSB_HOME` + `MSB_AGENTD_PATH` staging unchanged; no feature changes.
+- Validated in-container with `--option sandbox true` (sandbox confirmed engaged): `.#microsandbox` → `/nix/store/8fi13yc38pwij5lwwxrl1rmpvlmzjp0h-microsandbox-0.6.8`; `patchelf --print-rpath …/bin/msb` shows libcap-ng + libgcc store paths; `env -u LD_LIBRARY_PATH …/bin/msb --version` → `msb 0.6.8` (was `error while loading shared libraries: libcap-ng.so.0`); `.#workestrate` drv `200x0mjwd6klb3i6svn810j3sszh0hyf` → `/nix/store/zk6qxvlj8pm34gqiqkvbvpzlhl0mvq6s-workestrate-0.1.0`, 0 "download" lines in `nix log`; `.#agentd` no-op (cached `97ngwbmkqn3ig3mrma6y7y4kk7g5fgci`); `workestrate --version` OK; `scripts/check-nix-paths.sh` clean.
+- Repo state: workestrate now **15 ahead of origin, NOT pushed** (4 new commits: the LD_LIBRARY_PATH fix 2593604 + its docs 93df4b0 + the RPATH encapsulation fix + this docs entry).
 
 - nix 2.35.1 activated from the store (no install); default sandbox worked.
 - B2 flake lock `c162c7a`; B3 builds agentd/microsandbox/workestrate (evidence
