@@ -21,6 +21,23 @@
         "type": "github"
       }
     },
+    "microsandbox-fork": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785794096,
+        "narHash": "sha256-fVEWRe97+jY4n2ghQPMfT5bNFpLbJNdWBj4ACZbWxo8=",
+        "owner": "georgrybski",
+        "repo": "microsandbox",
+        "rev": "74919059656f59612975d823cca570b774df277b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "georgrybski",
+        "repo": "microsandbox",
+        "rev": "74919059656f59612975d823cca570b774df277b",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1780749050,
@@ -40,6 +57,7 @@
     "root": {
       "inputs": {
         "fenix": "fenix",
+        "microsandbox-fork": "microsandbox-fork",
         "nixpkgs": "nixpkgs"
       }
     },
