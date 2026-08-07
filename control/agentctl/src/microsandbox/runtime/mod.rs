@@ -33,7 +33,15 @@ use microsandbox::{MicrosandboxError, Sandbox};
 use std::path::Path;
 
 pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
-    match handle.status() {
+    // Microsandbox 0.6.8 SDK: `SandboxHandle::status()` was removed. `refresh()`
+    // returns a fresh handle whose `status_snapshot()` reflects the current DB
+    // state; fall back to the creation-time snapshot if the row is already gone.
+    let status = handle
+        .refresh()
+        .await
+        .map(|h| h.status_snapshot())
+        .unwrap_or_else(|_| handle.status_snapshot());
+    match status {
         SandboxStatus::Running | SandboxStatus::Draining | SandboxStatus::Paused => {
             if let Err(e) = handle.stop().await {
                 eprintln!("stop failed ({}), attempting kill", e);
