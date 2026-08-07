@@ -97,6 +97,77 @@ pub fn validate_seed_source(src: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a `seed_files.glob` pattern (P0). The pattern is resolved
+/// relative to the declaring config layer's content directory, so it must be
+/// a plain relative pattern that can never escape that root and is never
+/// template-substituted.
+///
+/// Rules:
+/// 1. Reject empty.
+/// 2. Reject absolute patterns (leading `/`). Glob matches resolve relative
+///    to the declaring config layer's content directory (spec 17).
+/// 3. Reject any `..` component (component-based only — brace forms like
+///    `{a,b}` are fine unless a literal `..` component appears).
+/// 4. Reject `${` anywhere — glob patterns are NOT template-substituted (a
+///    `${VAR}`-looking pattern would otherwise silently match a literal
+///    directory named `${VAR}`).
+/// 5. Must compile as a `glob::Pattern`.
+pub fn validate_seed_glob(pattern: &str) -> Result<()> {
+    use std::path::{Component, Path};
+    if pattern.is_empty() {
+        anyhow::bail!("seed_files.glob cannot be empty");
+    }
+    if pattern.starts_with('/') {
+        anyhow::bail!(
+            "seed_files.glob cannot be an absolute path (got '{pattern}');              glob patterns must be relative to the declaring config layer's directory"
+        );
+    }
+    for component in Path::new(pattern).components() {
+        if let Component::ParentDir = component {
+            anyhow::bail!(
+                "seed_files.glob contains '..' component (got '{pattern}');                  path traversal is not allowed"
+            );
+        }
+    }
+    if pattern.contains("${") {
+        anyhow::bail!(
+            "seed_files.glob='{pattern}' looks like a template token, but glob patterns              are not template-substituted; use a pattern relative to the declaring config layer"
+        );
+    }
+    glob::Pattern::new(pattern).map_err(|e| {
+        anyhow::anyhow!("seed_files.glob='{pattern}' is not a valid glob pattern: {e}")
+    })?;
+    Ok(())
+}
+
+/// Validate a `seed_files.target` value. The target is the in-sandbox
+/// destination for a seeded file; it must be a plain relative path so seeding
+/// can never write outside the sandbox-visible tree.
+///
+/// Rules:
+/// 1. Reject empty.
+/// 2. Reject absolute paths (leading `/`).
+/// 3. Reject any `..` component.
+pub fn validate_seed_target(target: &str) -> Result<()> {
+    use std::path::{Component, Path};
+    if target.is_empty() {
+        anyhow::bail!("seed_files.target cannot be empty");
+    }
+    if target.starts_with('/') {
+        anyhow::bail!(
+            "seed_files.target cannot be an absolute path (got '{target}');              seed targets must be relative to the sandbox root"
+        );
+    }
+    for component in Path::new(target).components() {
+        if let Component::ParentDir = component {
+            anyhow::bail!(
+                "seed_files.target contains '..' component (got '{target}');                  path traversal is not allowed"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Resolve mount-host template tokens (WP6(c)/A6).
 ///
 /// Matches, in precedence order:
@@ -235,6 +306,64 @@ mod tests {
         ] {
             validate_seed_source(ok)
                 .unwrap_or_else(|e| panic!("legitimate seed_source='{ok}' rejected: {e}"));
+        }
+    }
+
+    // ---- P0: validate_seed_glob / validate_seed_target ----
+
+    /// Each hostile pattern must be rejected with the message naming the
+    /// specific rule that fired (empty / absolute / '..' / template /
+    /// pattern).
+    #[test]
+    fn validate_seed_glob_rejects_bad_patterns() {
+        for (hostile, keyword) in [
+            ("", "empty"),
+            ("/abs/*.json", "absolute"),
+            ("../x/**", "'..'"),
+            ("a/../b/*.json", "'..'"),
+            ("${CWD}/**", "template"),
+            ("seed/[unclosed", "pattern"),
+        ] {
+            let err = validate_seed_glob(hostile).unwrap_err();
+            assert!(
+                err.to_string().contains(keyword),
+                "seed_glob='{hostile}' should be rejected with '{keyword}'; got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_seed_glob_accepts_relative_patterns() {
+        for ok in [
+            "agents/**/*.json",
+            "seed/*.env",
+            "conf/{a,b}.toml",
+            "a/b?/c*.txt",
+        ] {
+            validate_seed_glob(ok)
+                .unwrap_or_else(|e| panic!("legitimate seed_glob='{ok}' rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_seed_target_rejects_absolute_and_traversal() {
+        for hostile in ["/etc/x", "a/../b", ".."] {
+            assert!(
+                validate_seed_target(hostile).is_err(),
+                "seed_target='{hostile}' should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_seed_target_accepts_relative() {
+        for ok in [
+            "workspaces/pi-state/agent/x.json",
+            "var/log/f.log",
+            "agents/pi/config.json",
+        ] {
+            validate_seed_target(ok)
+                .unwrap_or_else(|e| panic!("legitimate seed_target='{ok}' rejected: {e}"));
         }
     }
 

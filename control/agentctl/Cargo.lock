@@ -6335,6 +6335,7 @@ dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "glob",
  "microsandbox",
  "schemars",
  "serde",

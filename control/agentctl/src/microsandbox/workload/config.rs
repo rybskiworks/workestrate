@@ -268,7 +268,13 @@ impl Workload for ConfigWorkload {
         };
         let state_dir = crate::config::resolve_state_dir();
         for seed in &self.workload.seed_files {
-            let source = root.join(&seed.source);
+            let source = match &seed.source {
+                Some(src) => root.join(src),
+                None => anyhow::bail!(
+                    "workload '{}' seed_files glob entries are not supported yet",
+                    self.name
+                ),
+            };
             let target =
                 if seed.target.starts_with("workspaces/") || seed.target.starts_with("var/") {
                     state_dir.join(&seed.target)

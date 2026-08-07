@@ -328,15 +328,21 @@ pub(crate) fn preflight_existence(
         .or(Some(roots.content_root))
         .or(roots.project_root);
     for seed in seed_files {
+        // P0: glob entries have no single source path (the source is the
+        // pattern's match set). Glob preflight lands in a later commit — skip
+        // the existence check entirely for them.
+        let Some(source) = &seed.source else {
+            continue;
+        };
         match &seed_root {
             Some(root) => {
-                let src = root.join(&seed.source);
+                let src = root.join(source);
                 if !src.exists() {
                     let msg = format!(
                         "workload '{}': seed source does not exist: {} (source = {:?})",
                         workload_name,
                         src.display(),
-                        seed.source
+                        source
                     );
                     if hard {
                         anyhow::bail!("{msg}");
@@ -348,7 +354,7 @@ pub(crate) fn preflight_existence(
             None => {
                 let msg = format!(
                     "workload '{}': seed source {:?} cannot be resolved (no content root)",
-                    workload_name, seed.source
+                    workload_name, source
                 );
                 if hard {
                     anyhow::bail!("{msg}");
@@ -882,9 +888,11 @@ mod tests {
         let root = unique_root("pf-seed");
         let plan = minimal_plan(vec![]);
         let seeds = vec![crate::config::SeedFileConfig {
-            source: "seed/missing.json".into(),
+            source: Some("seed/missing.json".into()),
             target: "workspaces/svc-state/missing.json".into(),
             only_if_missing: None,
+            template: false,
+            glob: None,
         }];
         let roots = roots_for(&root, None, None);
         let err =
@@ -964,9 +972,11 @@ mod tests {
             read_only: true,
         }]);
         let seeds = vec![crate::config::SeedFileConfig {
-            source: "seed/s.json".into(),
+            source: Some("seed/s.json".into()),
             target: "workspaces/svc-state/s.json".into(),
             only_if_missing: None,
+            template: false,
+            glob: None,
         }];
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &seeds, Some(&root), None, "svc", true)?;

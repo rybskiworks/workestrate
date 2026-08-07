@@ -17,4 +17,6 @@ pub use runtime::logs;
 
 // WP1 trust-boundary validators — called from `config::validate_config`.
 pub use mounts::{validate_mount_guest, validate_mount_host};
-pub use workload::{validate_env_override, validate_seed_source};
+pub use workload::{
+    validate_env_override, validate_seed_glob, validate_seed_source, validate_seed_target,
+};

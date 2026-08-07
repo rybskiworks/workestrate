@@ -447,15 +447,27 @@ impl Serialize for EnvBindings {
 
 /// A file copied from the host into the sandbox at start time
 /// (`workloads.<name>.seed_files`). `source` is the host path (validated at
-/// the trust boundary), `target` the in-sandbox destination; `only_if_missing`
-/// skips the copy when the target already exists.
+/// the trust boundary); it is `None` when the entry uses `glob` instead —
+/// exactly one of `source`|`glob` per entry is enforced by
+/// `config::validation`. `target` is the in-sandbox destination;
+/// `only_if_missing` skips the copy when the target already exists. When
+/// `template` is true, the source TEXT is rendered as a `${VAR}` template
+/// against the workload's guest-visible env view at seed time (map-only
+/// resolver; missing var = hard error; no process env). `glob` is a glob
+/// pattern relative to the declaring layer's content dir; each regular-file
+/// match seeds to `target/<rel-path>`, sorted; mutually exclusive with
+/// `source`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
 pub struct SeedFileConfig {
-    pub source: String,
+    pub source: Option<String>,
     pub target: String,
     pub only_if_missing: Option<bool>,
+    #[serde(default)]
+    pub template: bool,
+    #[serde(default)]
+    pub glob: Option<String>,
 }
 
 /// Build the workload from a local source checkout instead of pulling an
@@ -904,6 +916,112 @@ dependsOn = {}
             err.to_string().contains("unknown field"),
             "workload-level 'dependsOn' must fail: {err}"
         );
+    }
+
+    // ---- P0: seed_files source|glob + template/glob fields ----
+
+    /// A `[[workloads.svc.seed_files]]` entry carrying only source/target/
+    /// only_if_missing parses with `template` defaulting to false and `glob`
+    /// defaulting to None.
+    #[test]
+    fn seed_entry_parses_with_template_defaulting_false() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = []
+
+[[workloads.svc.seed_files]]
+source = "seed/a.json"
+target = "workspaces/svc-state/a.json"
+only_if_missing = true
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let seed = &config.workloads["svc"].seed_files[0];
+        assert_eq!(seed.source.as_deref(), Some("seed/a.json"));
+        assert_eq!(seed.target, "workspaces/svc-state/a.json");
+        assert_eq!(seed.only_if_missing, Some(true));
+        assert!(!seed.template, "template must default to false");
+        assert!(seed.glob.is_none(), "glob must default to None");
+    }
+
+    /// A glob entry with `template = true` parses and survives a
+    /// serialize/deserialize round-trip byte-for-byte (template/glob fields
+    /// must round-trip).
+    #[test]
+    fn seed_entry_glob_round_trips() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = []
+
+[[workloads.svc.seed_files]]
+glob = "seed/**/*.json"
+target = "workspaces/svc-state"
+template = true
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let seed = &config.workloads["svc"].seed_files[0];
+        assert_eq!(seed.glob.as_deref(), Some("seed/**/*.json"));
+        assert_eq!(seed.target, "workspaces/svc-state");
+        assert!(seed.template);
+        assert!(seed.source.is_none());
+
+        let serialized = toml::to_string(&config).unwrap();
+        let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, config);
+    }
+
+    /// A typo inside a seed_files entry must hard-error (closed vocabulary).
+    #[test]
+    fn seed_entry_rejects_unknown_field() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = []
+
+[[workloads.svc.seed_files]]
+source = "seed/a.json"
+target = "workspaces/svc-state/a.json"
+gloob = "x"
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "seed_files typo must fail: {err}"
+        );
+    }
+
+    /// Any non-`template` casing of the template key must be rejected as an
+    /// unknown field.
+    #[test]
+    fn seed_entry_rejects_template_casing_typo() {
+        for typo in ["templated = true", "Template = true"] {
+            let raw = format!(
+                "schema_version = 1\n\n\
+                 [workloads.svc]\n\
+                 kind = \"service\"\n\
+                 image = {{ recipe = \"registry\", ref = \"python:3.12-slim\" }}\n\
+                 command = []\n\n\
+                 [[workloads.svc.seed_files]]\n\
+                 source = \"seed/a.json\"\n\
+                 target = \"workspaces/svc-state/a.json\"\n\
+                 {typo}\n"
+            );
+            let err = toml::from_str::<ConfigFile>(&raw).unwrap_err();
+            assert!(
+                err.to_string().contains("unknown field"),
+                "seed_files template casing typo '{typo}' must fail: {err}"
+            );
+        }
     }
 
     // ---- Spec 16: final unified secret/env model — the desugar table ----

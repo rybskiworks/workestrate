@@ -372,7 +372,8 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // config-load time so hostile layers are rejected BEFORE merge / plan /
     // sandbox-start. See `80-remediation-plan.md` WP1.
     use crate::microsandbox::{
-        validate_env_override, validate_mount_guest, validate_mount_host, validate_seed_source,
+        validate_env_override, validate_mount_guest, validate_mount_host, validate_seed_glob,
+        validate_seed_source, validate_seed_target,
     };
     for (workload_name, workload) in &config.workloads {
         for m in &workload.mounts {
@@ -384,9 +385,27 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
             })?;
         }
         for seed in &workload.seed_files {
-            validate_seed_source(&seed.source).map_err(|e| {
+            match (&seed.source, &seed.glob) {
+                (None, None) => anyhow::bail!(
+                    "workload '{workload_name}' seed_files entry must declare exactly one of `source` or `glob`"
+                ),
+                (Some(_), Some(_)) => anyhow::bail!(
+                    "workload '{workload_name}' seed_files entry cannot declare both `source` and `glob`"
+                ),
+                (Some(src), None) => validate_seed_source(src).map_err(|e| {
+                    anyhow::anyhow!(
+                        "workload '{workload_name}' seed_files.source validation failed: {e}"
+                    )
+                })?,
+                (None, Some(glob)) => validate_seed_glob(glob).map_err(|e| {
+                    anyhow::anyhow!(
+                        "workload '{workload_name}' seed_files.glob validation failed: {e}"
+                    )
+                })?,
+            }
+            validate_seed_target(&seed.target).map_err(|e| {
                 anyhow::anyhow!(
-                    "workload '{workload_name}' seed_files.source validation failed: {e}"
+                    "workload '{workload_name}' seed_files.target validation failed: {e}"
                 )
             })?;
         }
@@ -988,5 +1007,100 @@ default_deny = true
         // Diamond DAG: a → {b, c}, b → c — deps before dependents, no cycle.
         let config = cycle_config(&[("a", "b"), ("a", "c"), ("b", "c")]);
         validate_config(&config)
+    }
+
+    // ---- P0: seed_files source|glob exclusivity + target safety ----
+
+    /// Base config with a source-only seed entry; the caller mutates it per
+    /// test.
+    fn seed_config() -> ConfigFile {
+        let toml = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = []
+
+[[workloads.svc.seed_files]]
+source = "seed/a.json"
+target = "workspaces/svc-state/a.json"
+
+[workloads.svc.network]
+default_deny = true
+"#;
+        toml::from_str(toml).expect("seed config must parse")
+    }
+
+    #[test]
+    fn validate_config_rejects_seed_with_both_source_and_glob() {
+        let mut config = seed_config();
+        config.workloads.get_mut("svc").unwrap().seed_files[0].glob =
+            Some("seed/**/*.json".to_string());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("cannot declare both `source` and `glob`"),
+            "source+glob together must be rejected: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_seed_with_neither_source_nor_glob() {
+        let mut config = seed_config();
+        config.workloads.get_mut("svc").unwrap().seed_files[0].source = None;
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("must declare exactly one of `source` or `glob`"),
+            "neither source nor glob must be rejected: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_config_accepts_seed_with_either() -> Result<()> {
+        // A source-only entry AND a glob-only entry in the SAME config both
+        // pass validation.
+        let toml = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = []
+
+[[workloads.svc.seed_files]]
+source = "seed/a.json"
+target = "workspaces/svc-state/a.json"
+
+[[workloads.svc.seed_files]]
+glob = "seed/**/*.env"
+target = "workspaces/svc-state/env"
+
+[workloads.svc.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        validate_config(&config)
+    }
+
+    #[test]
+    fn validate_config_rejects_absolute_seed_target() {
+        let mut config = seed_config();
+        config.workloads.get_mut("svc").unwrap().seed_files[0].target = "/etc/x".to_string();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("seed_files.target validation failed") && err.contains("absolute"),
+            "absolute seed target must be rejected: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_traversal_seed_target() {
+        let mut config = seed_config();
+        config.workloads.get_mut("svc").unwrap().seed_files[0].target = "a/../b".to_string();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("seed_files.target validation failed") && err.contains("'..'"),
+            "traversal seed target must be rejected: {err}"
+        );
     }
 }

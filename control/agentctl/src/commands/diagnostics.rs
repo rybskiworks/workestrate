@@ -599,19 +599,25 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
             .or(build_root)
             .or(project_root.as_ref());
         for seed in &wl.seed_files {
+            // P0: glob entries have no single source path (the source is the
+            // pattern's match set). Glob preflight lands in a later commit —
+            // skip the existence check entirely for them.
+            let Some(source) = &seed.source else {
+                continue;
+            };
             if let Some(root) = seed_base {
-                let src = root.join(&seed.source);
+                let src = root.join(source);
                 if !src.exists() {
                     warnings.push(format!(
                         "workload '{name}': seed source does not exist: {} (source = {:?})",
                         src.display(),
-                        seed.source
+                        source
                     ));
                 }
             } else {
                 warnings.push(format!(
                     "workload '{name}': seed source {:?} cannot be resolved (no content root)",
-                    seed.source
+                    source
                 ));
             }
         }

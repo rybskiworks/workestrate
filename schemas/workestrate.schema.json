@@ -553,13 +553,19 @@
       "additionalProperties": false
     },
     "SeedFileConfig": {
-      "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary), `target` the in-sandbox destination; `only_if_missing` skips the copy when the target already exists.",
+      "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary); it is `None` when the entry uses `glob` instead — exactly one of `source`|`glob` per entry is enforced by `config::validation`. `target` is the in-sandbox destination; `only_if_missing` skips the copy when the target already exists. When `template` is true, the source TEXT is rendered as a `${VAR}` template against the workload's guest-visible env view at seed time (map-only resolver; missing var = hard error; no process env). `glob` is a glob pattern relative to the declaring layer's content dir; each regular-file match seeds to `target/<rel-path>`, sorted; mutually exclusive with `source`.",
       "type": "object",
       "required": [
-        "source",
         "target"
       ],
       "properties": {
+        "glob": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "only_if_missing": {
           "type": [
             "boolean",
@@ -567,10 +573,17 @@
           ]
         },
         "source": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "target": {
           "type": "string"
+        },
+        "template": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "additionalProperties": false
