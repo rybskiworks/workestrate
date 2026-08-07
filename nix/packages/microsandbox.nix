@@ -77,6 +77,7 @@ rustPlatform.buildRustPackage rec {
   ];
 
   nativeBuildInputs = with pkgs; [
+    autoPatchelfHook
     pkg-config
   ];
 

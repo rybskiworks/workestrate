@@ -98,14 +98,6 @@ in
     # finds msb + agentd locally. The fork's filesystem build.rs uses the
     # MSB_AGENTD_PATH override (prebuilt feature); the staged MSB_HOME + the
     # explicit MSB_AGENTD_PATH below satisfy it without network downloads.
-    # The fork SDK build.rs probes the staged msb for its version gate
-    # (sdk/rust/build.rs installed_msb_version runs `msb --version` and
-    # compares against PREBUILT_VERSION). msb links libcap-ng dynamically
-    # without an RPATH, so the probe only execs when libcap_ng is on
-    # LD_LIBRARY_PATH; without it the probe returns None and the build
-    # script falls through to the runtime-deps download (a network fetch,
-    # which a hermetic sandbox blocks).
-    export LD_LIBRARY_PATH="${pkgs.libcap_ng}/lib:''${LD_LIBRARY_PATH:-}"
     export MSB_HOME=$TMPDIR/.microsandbox
     mkdir -p $MSB_HOME/bin $MSB_HOME/lib
     cp ${microsandbox}/bin/msb $MSB_HOME/bin/msb
