@@ -76,8 +76,12 @@ rustPlatform.buildRustPackage rec {
     "--features" "net,ssh"
   ];
 
+  # Embed the runtime search path at link time (rustc -C link-arg -> -Wl,-rpath)
+  # so the msb ELF carries its dynamic deps (libcap-ng, libgcc) with no
+  # patchelf and no LD_LIBRARY_PATH anywhere.
+  RUSTFLAGS = "-C link-arg=-Wl,-rpath,${pkgs.lib.makeLibraryPath [ pkgs.libcap_ng pkgs.stdenv.cc.cc.lib ]}";
+
   nativeBuildInputs = with pkgs; [
-    autoPatchelfHook
     pkg-config
   ];
 
