@@ -45,6 +45,18 @@
   (host path not visible in-container). URL NOT rewritten. Dev-home
   `workestrate home init` is a no-op (lock still pins `b1c87416`).
 
+## Host build failure fixed — SDK runtime-deps download eliminated (2026-08-07 evening)
+
+Root cause (host `nix build .#workestrate` → drv `94lv9jaln8siy729pwv1xqxk30cpr41l`, exit 101):
+
+- The fork's `sdk/rust/build.rs` (vendored at `control/agentctl/vendor/microsandbox-fork/sdk/rust/build.rs`) decides download-vs-skip by: if `$MSB_HOME/lib/libkrunfw.so.5.6.1` exists AND `$MSB_HOME/bin/msb --version` execs and prints `msb 0.6.8` (== `PREBUILT_VERSION`, utils crate version), it skips; otherwise it prints `warning: downloading microsandbox runtime dependencies (v0.6.8)...` and fetches the release bundle over the network (build.rs:63-84; `installed_msb_version` at build.rs:118-133).
+- The staged `msb` is dynamically linked against libcap-ng with no RPATH, so the version probe could not exec in the build → probe returned `None` → download branch → host sandbox has no network → build failed. In-container the same branch ran, but the container's sandbox permits network, so the download "succeeded" — the impurity masked the bug.
+- Fix (`fix(agentctl)`): `nix/packages/agentctl.nix` preBuild now exports `LD_LIBRARY_PATH="${pkgs.libcap_ng}/lib:...` so the probe execs and the version gate matches. The `MSB_AGENTD_PATH` contract (fork `crates/filesystem/build.rs:40-45,89-104`) was already satisfied; the missing piece was only the SDK probe's shared-library path.
+- Contract recap (read the fork commit series d8a9bf50/3d26f202/b43d7522/74919059 + code): `MSB_PATH` is RUNTIME-only (sdk/rust/bin/main.rs:65, sdk/rust/lib/config/mod.rs:765); `MSB_AGENTD_PATH` is BUILD-time-only (crates/filesystem/build.rs); `MSB_HOME` is build+runtime home (sdk/rust/build.rs:28, crates/utils/lib/lib.rs:164-171). The BUILD needs MSB_HOME + MSB_AGENTD_PATH + LD_LIBRARY_PATH. `MSB_PATH` is NOT read by any build script.
+- microsandbox.nix is UNAFFECTED: it builds the CLI with `--no-default-features --features net,ssh` (mirrors fork justfile `build-msb`), so the SDK `prebuilt` feature is OFF and its build.rs does nothing; the filesystem crate takes the non-prebuilt branch satisfied by the staged `build/agentd` (crates/filesystem/build.rs:57-86).
+- Verified in-container WITH `--option sandbox true` (sandbox engages: seccomp + no-new-privs probe): build PASSES, `nix log` has ZERO "download" lines. New drv `pps9kx98q12v1fbxn59kdi64h9cdaik9` → `/nix/store/9w21zj1j56q7hb04s1n5qvamhzdphy6a-workestrate-0.1.0`; `.#microsandbox` no-op (cached `2zx3nga6z0jxdyrnhk0klqx2djqjvhfn`); `workestrate --version` OK; `scripts/check-nix-paths.sh` clean.
+- HOST RE-RUN after syncing this branch: `cd /home/rybski/Development/agent-workbench/workestrate && nix build .#workestrate --print-out-paths` then `nix log $(nix path-info .#workestrate 2>/dev/null || true)` and confirm no `downloading microsandbox runtime dependencies` line. Expect the build to succeed with no network fetch (host sandbox now blocks nothing — there is nothing left to fetch).
+
 ## Validation gates — ALL GREEN (2026-08-07, post disk-free)
 
 - **Disk freed by user** (15G cargo cache deleted): `/` back to 49–61G free.
