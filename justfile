@@ -107,6 +107,13 @@ clippy:
 test:
     cargo test --manifest-path control/agentctl/Cargo.toml
 
+# Run the three ignored KVM tests (lifecycle_detached, flake_root_gate,
+# ensure_images_e2e) via the encapsulated entry point. HOST-KVM only:
+# preflights /dev/kvm + the runtime-store image, runs each test serially
+# in its own devshell, and prints a PASS/FAIL summary. Any shell with nix.
+kvm-tests:
+    ./scripts/kvm-tests.sh
+
 workestrate *args:
     cargo run --manifest-path control/agentctl/Cargo.toml -- {{args}}
 

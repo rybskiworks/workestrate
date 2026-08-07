@@ -73,7 +73,7 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 10 ahead of origin, NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 11 ahead of origin, NOT pushed; origin SSH |
 | personal config repo | `e3d65e3` | clean; flake.lock pins workestrate @ `c45494b` (B5 HOST-GATED) |
 | dev home | workestrate-dev-home | clean; `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |
@@ -134,7 +134,7 @@ nix flake metadata | grep -A4 '"workestrate"'
 
 ```bash
 cd ~/Development/agent-workbench/workestrate
-git log --oneline origin/migration/tool-model..HEAD   # expect 10 commits (migration + docs + build/feat)
+git log --oneline origin/migration/tool-model..HEAD   # expect 11 commits (migration + docs + build/feat + kvm-tests)
 git push origin migration/tool-model                  # origin is SSH
 ```
 - Why it matters: also unblocks the later `github:` input adoption (wrk-ayz deferred).
@@ -193,15 +193,22 @@ cargo test --manifest-path control/agentctl/Cargo.toml
 ```
 - Expected: fmt/clippy clean; 755 passed / 0 failed (already green in-container; host re-run confirms). Caveat: `just toolchain-check` needs flake.nix:28 marker uncommented (user decision) — the equivalent check (rustc 1.97 == fenix pin) passes.
 
-### 3 ignored KVM tests — LAST [DEV-SHELL]
+### 3 ignored KVM tests — LAST [ANY-SHELL]
+
+One command runs all three (no MSB_PATH/MSB_HOME/devshell knowledge required):
 
 ```bash
 cd ~/Development/agent-workbench/workestrate
-nix develop -c bash -c 'cargo test --manifest-path control/agentctl/Cargo.toml --test lifecycle_detached -- --ignored --nocapture'
-nix develop -c bash -c 'cargo test --manifest-path control/agentctl/Cargo.toml --test flake_root_gate -- --ignored --nocapture'
-nix develop -c bash -c 'MSB_PATH=$(nix path-info .#microsandbox)/bin/msb cargo test --manifest-path control/agentctl/Cargo.toml --test ensure_images_e2e -- --ignored --nocapture'
+bash scripts/kvm-tests.sh          # or: just kvm-tests
 ```
-- Expected: all 3 pass with a loaded `python:3.12-slim` image + KVM. MSB_PATH for ensure_images_e2e must be the unwrapped msb (the devshell's wrapped msb would force the wrong MSB_HOME).
+- The script preflights (`/dev/kvm`, nix, raw msb store path, `python:3.12-slim`
+  in the runtime store `~/.microsandbox`), then runs `lifecycle_detached`,
+  `flake_root_gate`, and `ensure_images_e2e` serially — each in its own
+  `nix develop -c` (devshell provides cargo + the vendor symlink) — and
+  prints a PASS/FAIL summary (exit 0 only if all three pass). It does NOT
+  auto-pull missing images: it prints the exact `pull` command and stops.
+- This encapsulates the old three-command [DEV-SHELL] form, including the
+  `MSB_PATH=<unwrapped msb>` requirement for `ensure_images_e2e`.
 
 ### E1 loopback experiment [ANY-SHELL] servers + [PROFILE] exec
 
