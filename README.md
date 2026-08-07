@@ -595,7 +595,7 @@ Reload your shell (or `source` the completion file) afterwards.
 
 - The Microsandbox SDK is pinned to `microsandbox = "=0.6.8"` with the
   `net` feature. The `microsandbox-filesystem` crate comes from the user's
-  fork branch `fix/filesystem-agentd-path-override` (local, not yet pushed).
+  fork via the pinned `microsandbox-fork` flake input at validated rev 74919059.
 - The pi microVM runs a **bun standalone binary** (`/app/bin/pi`, built by
   the config repo flake via the `bun-compile` lib recipe) with the Bun
   runtime embedded; no node/bun is needed inside the sandbox. The npm/node

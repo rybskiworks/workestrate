@@ -40,7 +40,9 @@ override (`Workload::build_path()`) can point the CLI at any built tree.
 
 ### Microsandbox
 
-MicroVM runtime. SDK version 0.5.6 with the `net` feature. Provides
+MicroVM runtime. SDK version 0.6.8 with the `net` feature, source-built
+from the user's fork via the pinned `microsandbox-fork` flake input at
+validated rev 74919059. Provides
 `Sandbox`, `SandboxBuilder`, `NetworkPolicy`, and builder methods for
 images, resources, ports, env vars, volumes, and network rules. Async-only,
 requires Tokio. Runtime execution requires a host with `/dev/kvm`.
