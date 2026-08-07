@@ -1,7 +1,7 @@
 # agentd — guest init/agent daemon for microsandbox microVMs.
 #
-# Built as a static musl binary from the user's fork branch
-# fix/filesystem-agentd-path-override (rev 74919059, not yet pushed to GitHub).
+# Built as a static musl binary from the user's fork source, pinned via the
+# `microsandbox-fork` flake input at validated rev 74919059.
 # agentd runs INSIDE the guest microVM, not on the host — a static musl binary
 # has no library deps and works with any guest rootfs (alpine/musl or glibc).
 #
@@ -11,20 +11,16 @@
 # host toolchain. If nixpkgs' rustc is too old for edition 2024 (requires
 # rustc >= 1.85), the host build will fail and we must inject the fenix
 # toolchain via fenix.combine with the musl target.
-#
-# After the fork branch is pushed, swap builtins.fetchGit -> fetchFromGitHub.
-{ pkgs }:
+
+{ pkgs, microsandbox-fork }:
 
 pkgs.pkgsStatic.rustPlatform.buildRustPackage rec {
   pname = "microsandbox-agentd";
   version = "0.6.8";
 
-  src = builtins.fetchGit {
-    url = "file:///home/rybski/Development/agent-workbench/forks/microsandbox/repo";
-    rev = "74919059656f59612975d823cca570b774df277b";
-  };
+  src = microsandbox-fork;
 
-  # fetchGit unpacks to source/; the whole workspace is needed for cargo to
+  # The flake input unpacks to source/; the whole workspace is needed for cargo to
   # resolve the agentd crate's workspace siblings (microsandbox-protocol, etc.).
   sourceRoot = "source";
 

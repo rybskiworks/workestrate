@@ -8,9 +8,14 @@
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    microsandbox-fork = {
+      url = "github:georgrybski/microsandbox/74919059656f59612975d823cca570b774df277b";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, fenix, ... }:
+  outputs = { self, nixpkgs, fenix, microsandbox-fork, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -169,12 +174,12 @@
             '';
         };
 
-      agentd = pkgs.callPackage ./nix/packages/agentd.nix {};
+      agentd = pkgs.callPackage ./nix/packages/agentd.nix { inherit microsandbox-fork; };
       microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {
-        inherit rustToolchain agentd;
+        inherit rustToolchain agentd microsandbox-fork;
       };
       tombi = pkgs.callPackage ./nix/packages/tombi.nix {};
-      microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix {};
+      microsandbox-filesystem-patched = pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix { inherit microsandbox-fork; };
       workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
         inherit microsandbox microsandbox-filesystem-patched rustToolchain;
         rev = self.shortRev or (if self ? rev then builtins.substring 0 8 self.rev else "dirty");

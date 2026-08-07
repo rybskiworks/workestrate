@@ -1,15 +1,14 @@
 # microsandbox — msb CLI + runtime libraries, built from the user's fork.
 #
-# Source provenance: fork branch fix/filesystem-agentd-path-override (local
-# head rev 74919059, NOT yet pushed to GitHub). The fork is a 0.6.8 workspace
+# Source provenance: fork branch fix/filesystem-agentd-path-override, pinned
+# via the `microsandbox-fork` flake input at validated rev 74919059. The fork is a 0.6.8 workspace
 # (edition 2024, resolver 3). msb is built from source via buildRustPackage
 # with the fenix-pinned toolchain (same as agentctl.nix) for host-toolchain
 # consistency. agentd is built separately (nix/packages/agentd.nix, musl
 # static) and assembled here. libkrunfw comes from the upstream release
 # tarball (Branch A, interim) — see CONTINGENCY below.
-#
-# After the fork branch is pushed, swap builtins.fetchGit -> fetchFromGitHub.
-{ pkgs, rustToolchain, agentd }:
+
+{ pkgs, rustToolchain, agentd, microsandbox-fork }:
 
 let
   # Mirror agentctl.nix's rustPlatform pattern: fenix-pinned toolchain so the
@@ -23,9 +22,10 @@ let
   # libkrunfw — CONTINGENCY
   # -----------------------------------------------------------------------
   # Branch A (default): fetch the upstream v0.6.8 release tarball and extract
-  # ONLY libkrunfw.so* from it. The tar sha256 is lib.fakeHash — fill from the
-  # host `nix build .#microsandbox` error output. If the tar 404s (release
-  # doesn't exist), Branch B becomes mandatory.
+  # ONLY libkrunfw.so* from it. The tar sha256 below (line ~44) is REAL and
+  # verified against the GitHub v0.6.8 release digest (SRI mSvmbOim... decodes
+  # to hex 992be66ce8a61965...). If the tar 404s (release doesn't exist),
+  # Branch B becomes mandatory.
   #
   # Branch B (spike, NOT implemented): build libkrunfw from the fork's
   # vendor/libkrunfw submodule (gitlink commit c5503d82, repo
@@ -48,12 +48,9 @@ rustPlatform.buildRustPackage rec {
   pname = "microsandbox";
   version = "0.6.8";
 
-  src = builtins.fetchGit {
-    url = "file:///home/rybski/Development/agent-workbench/forks/microsandbox/repo";
-    rev = "74919059656f59612975d823cca570b774df277b";
-  };
+  src = microsandbox-fork;
 
-  # fetchGit unpacks to source/; the whole workspace is needed for cargo to
+  # The flake input unpacks to source/; the whole workspace is needed for cargo to
   # resolve the cli crate's workspace siblings.
   sourceRoot = "source";
 
@@ -62,9 +59,17 @@ rustPlatform.buildRustPackage rec {
   };
 
   # Build only the cli crate. Features: net + ssh (matching the fork justfile's
-  # build-msb recipe exactly). keyring is excluded (matches justfile; avoids
-  # optional native deps). prebuilt is a filesystem/SDK-crate feature, not a
-  # CLI feature — cargo would reject it on -p microsandbox-cli.
+  # build-msb recipe exactly) via --no-default-features, which deliberately
+  # excludes `prebuilt` and `keyring`. NOTE: the CLI DOES define `prebuilt` in
+  # its default feature set (fork crates/cli/Cargo.toml: prebuilt =
+  # ["microsandbox-runtime/prebuilt", "microsandbox/prebuilt"]) — an earlier
+  # comment claiming it was not a CLI feature was wrong. With prebuilt
+  # excluded, the fork's filesystem crate build.rs takes the NON-prebuilt
+  # branch, which requires <workspace>/build/agentd — hence the preBuild
+  # staging below is required and correct. agentctl (SDK consumer) keeps its
+  # default features (keyring+prebuilt+net) and uses the prebuilt branch via
+  # MSB_AGENTD_PATH; feature trimming is a deliberate, deferred decision — do
+  # not change any features.
   cargoBuildFlags = [
     "-p" "microsandbox-cli"
     "--no-default-features"
