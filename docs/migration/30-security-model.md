@@ -23,7 +23,7 @@ All executable logic = named, versioned, reviewable recipes in core.
 | `image.binary.recipe = <named>` + parameters | Inline shell build scripts |
 | `local_build.recipe = <named>` + parameters | Arbitrary build commands |
 | `baked_files: [{ path, content }]` (string content only) | Baked files with executable content or templating that evaluates code |
-| `seed_files: [{ source, target, only_if_missing }]` | Arbitrary file operations |
+| `seed_files: [{ source\|glob, target, only_if_missing, template }]` (template = true renders `${VAR}` from the guest-visible env view: host-bound → `$MSB_<binding key>` placeholder, guest-bound → real value, defined-but-unbound secret → hard error; no process env) | Arbitrary file operations |
 | `egress: [{ recipe, hosts? }]` (recipe from core vocabulary) | Custom egress rules not expressible as recipes |
 | `env` map bindings: `KEY = true` (host-bound placeholder), `{ secret = "ID" }` (rename), `{ bound = "guest" }` (real value, verifier opt-in) | Inline secret values |
 

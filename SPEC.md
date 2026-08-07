@@ -82,6 +82,14 @@ registered.
   the microVM boundary is the containment layer. Connects to LiteLLM via
   the `local` provider (`TEMPEST_LOCAL_*` env vars; `TEMPEST_LOCAL_API_KEY`
   remapped from `LITELLM_MASTER_KEY`).
+- **Seed files** — `seed_files` entries support `template = true` (renders
+  `${VAR}` against the guest-visible env view: host-bound secrets →
+  `$MSB_<binding key>` placeholder, guest-bound → real value,
+  defined-but-unbound secret → hard error; no process env) and `glob`
+  patterns (each regular-file match seeds to `target/<rel-path>`, sorted;
+  mutually exclusive with `source`). This is how Pi's `models.json` and
+  Odysseus's `settings.json` get their LiteLLM provider values without
+  hardcoding them in config.
 
 See `README.md` for the full depth on each agent.
 

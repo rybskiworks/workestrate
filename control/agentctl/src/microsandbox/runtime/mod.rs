@@ -23,6 +23,9 @@ pub use ps::probe_liveness;
 pub use ps::PsKind;
 pub use ps::{format_refuse_message, occupancy_from_state, ps, Occupancy, PsEntry};
 pub use run::{exec_agent_with_spec, up_service_with_spec};
+// Crate-visible so the seed-file env-view builder (env.rs) reuses the ONE
+// resolution algorithm/order the runtime applies to the guest env.
+pub(crate) use run::resolve_plan_envs;
 pub use spawn::logs;
 pub use spawn::spawn_detached_service;
 pub use wait::{wait_for_port, DEFAULT_WAIT};

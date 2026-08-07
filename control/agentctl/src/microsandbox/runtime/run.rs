@@ -109,7 +109,7 @@ pub(crate) fn apply_plan_secrets(
 /// KNOWN LIMITATION: map values are RAW (unresolved) — a var referencing
 /// another templated plan var gets its raw `${...}` form; there is no
 /// recursive resolution.
-fn resolve_plan_envs(
+pub(crate) fn resolve_plan_envs(
     plan: &SandboxPlan,
     secrets: &HashMap<String, String>,
 ) -> Result<Vec<(String, String)>> {
