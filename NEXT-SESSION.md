@@ -73,7 +73,7 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 9 ahead of origin, NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 10 ahead of origin, NOT pushed; origin SSH |
 | personal config repo | `e3d65e3` | clean; flake.lock pins workestrate @ `c45494b` (B5 HOST-GATED) |
 | dev home | workestrate-dev-home | clean; `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |
@@ -89,27 +89,143 @@
 - Nothing of the image stack is loaded (`workestrate-pi`/`tempest` tarballs
   remain GC'd; container msb store empty).
 
-## Remaining runbook (host + user-decision)
+## HOST RUNBOOK — shell-context annotated (host, dblab42)
 
-1. ~~User frees disk~~ **DONE** (15G cache deleted; validation gates all
-   green in-container — see "Validation gates" above).
-2. **Remaining in-container (optional):** `just verify` / `just verify-full`
-   as the aggregated gate (note the `toolchain-check` parse caveat above).
-3. **B5 (HOST-GATED):** `nix flake lock --update-input workestrate` in the
-   personal repo (host path resolves there); commit; refresh dev-home
-   `workestrate.lock` via `workestrate --home <dev-home> home init`.
-4. **B6 PUSH (USER DECISION):** `git push origin migration/tool-model` (SSH;
-   8 unpushed commits incl. migration + this session's work). Unblocks the
-   later `github:` input adoption.
-5. **Fork PR re-verify (USER DECISION):** live `git ls-remote origin` in
-   forks/microsandbox/repo first; then decide open/close/leave the PR.
-6. **B7 load-images (personal repo, USER DECISION on stale tag):**
-   `just load-images` (full rebuild; old tarballs GC'd) → `msb image ls` →
-   prune stale `workestrator-pi:latest` if present.
-7. **B8 host-provision:** `just host-provision` (needs real age key for full doctor OK).
-8. **Host boot batch:** up litellm → health → plan/exec pi, opencode, tempest
-   → batch up → ps → down-all.
-9. **3 ignored KVM tests LAST** (`lifecycle_detached`, `flake_root_gate`,
-   `ensure_images_e2e` with `MSB_PATH=$(nix path-info .#microsandbox)/bin/msb`)
-   → **E1** loopback experiment (docs/validation-and-improvements/05-host-validation.md:282-321).
-10. **Bead close-out:** still deferred (user decision); no bead work.
+> User question answered: **"Will I need to run within `nix develop` / `nix run`, or are these encapsulated in the current ones?"** — Each step is tagged below. The workestrate CLI is the ONLY thing that works in any shell (it is nix-profile-installed with MSB_HOME/MSB_PATH baked in); `just`, `msb`, `cargo`, and `clippy` live ONLY in the tool devshell; git/nix/python/curl work in any shell.
+
+### Shell-context legend
+
+- **[ANY-SHELL]** — plain bash on the host with nix on PATH; no devshell needed.
+- **[DEV-SHELL]** — needs the tool devshell. One-shot: `nix develop -c bash -c '<cmd>'` (run from `~/Development/agent-workbench/workestrate`). Enter-once: `nix develop` then run commands inside.
+- **[PROFILE]** — the nix-profile-installed `workestrate` binary (nix-profile-installed with `MSB_PATH` + `MSB_HOME` baked by the wrapper — works in ANY shell; **always** pass `--home <dev-home>`).
+
+### How to get ready on the host
+
+1. nix with flakes on PATH (`command -v nix && nix --version`; host-check.sh needs flakes enabled).
+2. Disk ≥ 20G free (`df -h /`); KVM available (`ls /dev/kvm`).
+3. SSH access to GitHub for B6 (`ssh -T git@github.com`); git identity configured for commits.
+4. Age key present (`ls ~/.config/sops/age/`) for B8 full doctor OK.
+5. `dev-home` = `~/Development/agent-workbench/workestrate-dev-home`.
+
+---
+
+### PRE — baseline [ANY-SHELL]
+
+```bash
+df -h /                                   # need >= 20G free (host-check threshold)
+cd ~/Development/agent-workbench/workestrate
+./scripts/host-check.sh                   # KVM, nix, flakes, mem>=4G, disk>=20G
+```
+- Expected: `[host-check] Host looks ready…` (exit 0). Checkpoint: any FAIL → stop and report.
+- Optional GC only if disk tight: `nix-collect-garbage --delete-old && nix store optimise` **[ANY-SHELL]** (or `just gc` **[DEV-SHELL]**). Deliberate only — image tarballs are already GC'd.
+
+### B5 — personal config relock [ANY-SHELL]
+
+```bash
+cd ~/Development/agent-workbench/workestrate-dev-home/config-repos/personal
+nix flake lock --update-input workestrate      # the git+file:///home/rybski/... URL resolves HERE
+git add flake.lock && git commit -m "build(flake): relock workestrate input to post-migration rev"
+nix flake metadata | grep -A4 '"workestrate"'
+```
+- Also refresh the dev-home lock: `workestrate --home ~/Development/agent-workbench/workestrate-dev-home home init` **[PROFILE]** (rewrites workestrate.lock; idempotent), then commit `workestrate.lock`.
+- Expected: workestrate input moves from `c45494b` to the post-migration HEAD. Checkpoint: URL resolution failure → stop and paste.
+
+### B6 — PUSH (USER DECISION) [ANY-SHELL]
+
+```bash
+cd ~/Development/agent-workbench/workestrate
+git log --oneline origin/migration/tool-model..HEAD   # expect 10 commits (migration + docs + build/feat)
+git push origin migration/tool-model                  # origin is SSH
+```
+- Why it matters: also unblocks the later `github:` input adoption (wrk-ayz deferred).
+
+### Fork PR re-verify (USER DECISION) [ANY-SHELL]
+
+```bash
+cd ~/Development/agent-workbench/forks/microsandbox/repo
+git ls-remote origin | grep -E "main|fix/filesystem"
+```
+- Local refs say origin/fix == 74919059, origin/main == b43d7522, but a prior live ls-remote showed caee6378 — re-verify before deciding open/close/leave the PR. Fork is read-only for agents.
+
+### B7 — load-images (personal repo; USER DECISION on stale tag) [DEV-SHELL]
+
+**MSB_HOME rule (verified):** the runtime store is `~/.microsandbox` — the `workestrate` wrapper (`agentctl.nix:122-125`) and `msb-wrapped` (`flake.nix:192-201`) BOTH force `MSB_HOME="$HOME/.microsandbox"`; the devshell's `MSB_HOME=~/.cache/ai-workbench-msb` export (`default.nix:117`) is only for offline cargo-check staging (its staged msb is NOT on PATH). Inside the devshell, `msb` on PATH = `msb-wrapped` → **`just load-images` lands images in `~/.microsandbox`, exactly where the runtime looks.** Do NOT run it with an unwrapped msb while `MSB_HOME` points at the cache path.
+
+```bash
+cd ~/Development/agent-workbench/workestrate-dev-home/config-repos/personal
+nix develop ~/Development/agent-workbench/workestrate -c bash -c 'just load-images'
+```
+- This enters the tool devshell (provides `just` + `msb-wrapped`; nix stays from host PATH), cwd stays the personal repo so `nix build ".#workestrate-pi"/".#tempest"` and `msb load` resolve correctly. Expected: full rebuild → `workestrate-pi:latest` + `tempest:latest` in `~/.microsandbox`. Checkpoint: stale `workestrator-pi:latest` tag → report; decide prune (USER).
+
+### B8 — host-provision [ANY-SHELL]
+
+```bash
+cd ~/Development/agent-workbench/workestrate
+./scripts/host-provision.sh          # plain bash + nix; installs/syncs the profile binary when stale
+# DEV-SHELL equivalent: nix develop -c bash -c 'just host-provision'
+```
+- Expected: host-check → binary sync (`nix profile install .#workestrate`) → `workestrate doctor` → readiness verdict. Needs the real age key for full doctor OK (USER). Contingency: STALE verdict persists → `--force` and re-run.
+
+### Host boot batch [PROFILE] (+ [ANY-SHELL] curl)
+
+```bash
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload up litellm
+curl -sS http://host.microsandbox.internal:4000/health/liveliness    # [ANY-SHELL] expect 200
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload plan pi
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload exec pi
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload exec opencode
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload exec tempest
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload batch up
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload ps
+```
+- Runtime uses `~/.microsandbox` (wrapper-baked). Requires B7 (images loaded) + B8 (binary current).
+
+### C — leftover gates (optional host re-run) [DEV-SHELL]
+
+```bash
+cd ~/Development/agent-workbench/workestrate
+nix develop -c bash -c 'cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check && cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path control/agentctl/Cargo.toml'
+# enter-once form:
+nix develop
+cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
+cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path control/agentctl/Cargo.toml
+```
+- Expected: fmt/clippy clean; 755 passed / 0 failed (already green in-container; host re-run confirms). Caveat: `just toolchain-check` needs flake.nix:28 marker uncommented (user decision) — the equivalent check (rustc 1.97 == fenix pin) passes.
+
+### 3 ignored KVM tests — LAST [DEV-SHELL]
+
+```bash
+cd ~/Development/agent-workbench/workestrate
+nix develop -c bash -c 'cargo test --manifest-path control/agentctl/Cargo.toml --test lifecycle_detached -- --ignored --nocapture'
+nix develop -c bash -c 'cargo test --manifest-path control/agentctl/Cargo.toml --test flake_root_gate -- --ignored --nocapture'
+nix develop -c bash -c 'MSB_PATH=$(nix path-info .#microsandbox)/bin/msb cargo test --manifest-path control/agentctl/Cargo.toml --test ensure_images_e2e -- --ignored --nocapture'
+```
+- Expected: all 3 pass with a loaded `python:3.12-slim` image + KVM. MSB_PATH for ensure_images_e2e must be the unwrapped msb (the devshell's wrapped msb would force the wrong MSB_HOME).
+
+### E1 loopback experiment [ANY-SHELL] servers + [PROFILE] exec
+
+```bash
+python3 -m http.server 8081 --bind 127.0.0.1 &    # [ANY-SHELL]
+python3 -m http.server 8082 --bind 127.0.0.2 &
+python3 -m http.server 8083 --bind 127.0.0.3 &
+python3 -m http.server 8084 --bind 0.0.0.0 &
+ss -tlnp | grep 808
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload exec pi   # [PROFILE] interactive
+#   getent hosts host.microsandbox.internal
+#   curl -sS http://host.microsandbox.internal:8081/  # 127.0.0.1
+#   curl -sS http://host.microsandbox.internal:8082/  # 127.0.0.2
+#   curl -sS http://host.microsandbox.internal:8083/  # 127.0.0.3
+#   curl -sS http://host.microsandbox.internal:8084/  # 0.0.0.0
+# cleanup: kill the four python servers
+```
+- Record the outcome row in `06-improvements/12-per-instance-addressing.md` §open-decisions (feeds ADR 0026).
+
+### Final teardown [PROFILE]
+
+```bash
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload down-all --yes
+workestrate --home ~/Development/agent-workbench/workestrate-dev-home workload ps   # expect empty
+```
+
+### Beads — deferred (user decision 2026-08-07); no bead work.
