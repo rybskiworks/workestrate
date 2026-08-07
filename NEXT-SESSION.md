@@ -19,8 +19,9 @@
     (deterministic: same path as the old GC'd `result` target) — `msb 0.6.8`
     (run raw needs `LD_LIBRARY_PATH=<libcap-ng store>/lib`; the wrapped
     runtime handles it).
-  - `.#workestrate` → `/nix/store/b68s5ik99lww3q154shvzp0yh3kzbyzy-workestrate-0.1.0`
-    — `workestrate 0.1.0-44ee1a0` (rev-embedded version confirmed).
+  - `.#workestrate` → `/nix/store/7cgrm2ryfk5nbr1958q7ssax14bqr0n9-workestrate-0.1.0`
+    — `workestrate 0.1.0-1b1b098` (rev-embedded; rebuilt from the current tree
+    with Change #1).
 - **B4 devshell + Cargo.lock + API fix**:
   - The devshell env depends on `.#workestrate`, whose build failed on the
     STALE lock (fork requires `sea-orm ^2.0.0`; tool lock had 1.1.20) — a
@@ -44,46 +45,56 @@
   (host path not visible in-container). URL NOT rewritten. Dev-home
   `workestrate home init` is a no-op (lock still pins `b1c87416`).
 
-## Disk state (CRITICAL)
+## Validation gates — ALL GREEN (2026-08-07, post disk-free)
 
-- `/` is 98-100% used; **2.3G free** (below the 2.5G abort threshold). Heavy
-  builds/tests STOPPED per safety rules. A `nix build .#workestrate` of the
-  current tree (with Change #1) failed purely on disk ("No space left on
-  device" in an aws-lc-sys C build), NOT on code.
-- The disk hog: `~/.cache/ai-workbench/agentctl-target` is **15G** (cargo
-  clippy target). It is permission-blocked from in-container deletion; the
-  USER should delete it (`rm -rf ~/.cache/ai-workbench/agentctl-target`) or
-  run host-coordinated GC to free space, then the test suite can run
-  in-container.
+- **Disk freed by user** (15G cargo cache deleted): `/` back to 49–61G free.
+- **Compile gate (Change #1)**: `nix build .#workestrate` from the current
+  tree → `7cgrm2ryfk…` / `workestrate 0.1.0-1b1b098`. PASSED.
+- **fmt** clean; **clippy `-D warnings --all-targets`** clean.
+- **Full test suite**: `cargo test` → **755 passed / 0 failed** (604 lib +
+  151 integration/unit/doc incl. ALL 7 new Change #1 tests); 4 ignored
+  (3 KVM + 1 DB-pool) skipped by default as designed. The DB-pool ignored
+  test run ALONE (`-- --ignored`) → **ok** (17.95s).
+- **Lock stability**: `git diff --exit-code -- Cargo.lock` → stable.
+- **Repo gates**: lint-nix OK (16 nix + 6 shell/justfile + 507 docs);
+  tombi-check OK (5 files); golden-check OK; schema-check/scaffold-check/
+  spec-examples OK (in the suite); store-audit OK (no oversized source);
+  toolchain equivalent OK (rustc 1.97 == fenix pin) — NOTE the `just
+  toolchain-check` recipe itself would fail to parse because flake.nix:28
+  has the `RUST_TOOLCHAIN_VERSION` marker commented out (pre-existing;
+  uncommenting is a flake.nix edit — user decision).
+- **Binary smoke** (`workestrate --home <dev-home> validate-config`) → OK
+  ("workestrate.toml is valid"); `check` → exit 1 only on environment-gated
+  findings (host-path trusted project MISSING, sources not checked out,
+  reference config unresolved) — expected in-container.
 - GC remains prohibited in-container (shared store).
 
 ## Current repo state (verified 2026-08-07)
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | `574a2b6` `migration/tool-model` | clean, 8 ahead of origin, NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 9 ahead of origin, NOT pushed; origin SSH |
 | personal config repo | `e3d65e3` | clean; flake.lock pins workestrate @ `c45494b` (B5 HOST-GATED) |
 | dev home | workestrate-dev-home | clean; `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |
 
 ## Readiness verdict
 
-- **In-container, once disk freed:** the C test gates (611+ unit/integration,
-  including Change #1's tests) can run via `nix develop`/`cargo test` (nix
-  active, vendor symlink present, lock fresh). `just verify`/`verify-full`
-  likewise.
+- **In-container: TEST-READY** — all validation gates green (see above);
+  Change #1 fully verified (compile + 7 tests). `just verify`/`verify-full`
+  equivalents all pass.
 - **Host-only (hard constraints):** the 3 ignored KVM tests, E1 loopback,
   host boot batch, `just host-provision`, `msb load` (B7), B5 relock,
   B6 push, stale `workestrator-pi:latest` prune, age key.
 - Nothing of the image stack is loaded (`workestrate-pi`/`tempest` tarballs
-  remain GC'd; `msb image ls` empty in-container).
+  remain GC'd; container msb store empty).
 
 ## Remaining runbook (host + user-decision)
 
-1. **User frees disk** (delete `~/.cache/ai-workbench/agentctl-target`; optionally `df -h /` first).
-2. **In-container (agent):** `just toolchain-check && just check && just test`
-   (or `cargo test --manifest-path control/agentctl/Cargo.toml`) → the 1
-   DB-pool ignored test alone → `just verify` (+ `verify-full`). Paste results.
+1. ~~User frees disk~~ **DONE** (15G cache deleted; validation gates all
+   green in-container — see "Validation gates" above).
+2. **Remaining in-container (optional):** `just verify` / `just verify-full`
+   as the aggregated gate (note the `toolchain-check` parse caveat above).
 3. **B5 (HOST-GATED):** `nix flake lock --update-input workestrate` in the
    personal repo (host path resolves there); commit; refresh dev-home
    `workestrate.lock` via `workestrate --home <dev-home> home init`.

@@ -9,7 +9,7 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | `574a2b6` on `migration/tool-model` | clean, **8 ahead of origin, NOT pushed**; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, **9 ahead of origin, NOT pushed**; origin SSH |
 | personal config repo | `e3d65e3` | clean; flake.lock pins workestrate @ `c45494b` (B5 HOST-GATED) |
 | dev home | (workestrate-dev-home) | clean; `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | clean; origin/fix == 74919059 (pushed); origin/main `b43d7522` (divergent); remote ambiguous — live ls-remote before fork work |
@@ -22,9 +22,8 @@
   (fully static, no .dynamic).
 - `.#microsandbox` → `/nix/store/2zx3nga6z0jxdyrnhk0klqx2djqjvhfn-microsandbox-0.6.8`
   (`msb 0.6.8`; deterministic — same path as the old GC'd `result` target).
-- `.#workestrate` → `/nix/store/b68s5ik99lww3q154shvzp0yh3kzbyzy-workestrate-0.1.0`
-  (`workestrate 0.1.0-44ee1a0`; NOTE: built before Change #1; current-tree
-  build is disk-blocked).
+- `.#workestrate` → `/nix/store/7cgrm2ryfk5nbr1958q7ssax14bqr0n9-workestrate-0.1.0`
+  (`workestrate 0.1.0-1b1b098`; rebuilt from the current tree WITH Change #1).
 - Cargo.lock refreshed (165ef88): microsandbox 0.6.8 fork crates, sea-orm 2.0.1;
   no registry 0.5.6 pins remain.
 - `control/agentctl/vendor/microsandbox-fork` symlink present (→ fork source);
@@ -47,12 +46,15 @@
 
 ## Readiness verdict
 
-**Partially test-ready in-container**: nix + lock + vendor + Cargo.lock are
-all in place, so the C gates (611+ tests incl. Change #1 tests, `just
-verify`/`verify-full`) can run once disk is freed (**2.3G free now; the 15G
-`~/.cache/ai-workbench/agentctl-target` clippy cache blocks compiles** —
-user deletes it or host GC). **Host-only:** 3 KVM tests, E1, boot batch,
-host-provision, B5 relock, B6 push, B7 load-images + stale
+**TEST-READY in-container (all gates green, 2026-08-07):** disk freed by
+user; `nix build .#workestrate` (Change #1) PASSED → `7cgrm2ryfk…` /
+`0.1.0-1b1b098`; fmt + clippy `-D warnings --all-targets` clean; full
+`cargo test` → **755 passed / 0 failed** (incl. all 7 Change #1 tests); the
+DB-pool ignored test alone → ok; Cargo.lock stable; lint-nix / tombi-check /
+golden-check / store-audit OK; toolchain 1.97==1.97 (note: `just
+toolchain-check` recipe needs the flake.nix:28 marker uncommented — user
+decision); binary smoke `validate-config` OK. **Host-only:** 3 KVM tests, E1,
+boot batch, host-provision, B5 relock, B6 push, B7 load-images + stale
 `workestrator-pi:latest`, age key. Beads deferred.
 
 ## Remaining (ordered)
