@@ -8,7 +8,7 @@ use anyhow::Result;
 
 use crate::cli_actions::SourceAction;
 use crate::config;
-use crate::git::{git_checkout_dot, git_clone};
+use crate::git::{git_checkout_dot, git_checkout_rev, git_clone, git_clone_full};
 use crate::merge::Provenance;
 
 pub async fn cmd_source(action: SourceAction) -> Result<()> {
@@ -17,6 +17,43 @@ pub async fn cmd_source(action: SourceAction) -> Result<()> {
         SourceAction::Build { name } => cmd_source_build(&name),
         SourceAction::List => cmd_source_list(),
         SourceAction::Reset { name } => cmd_source_reset(&name),
+    }
+}
+
+/// A `flake://` source resolved to a concrete clone URL + pinned revision
+/// from the declaring config repo's `flake.lock`.
+struct LockedSource {
+    clone_url: String,
+    rev: String,
+}
+
+/// Resolve `flake://<input>` to its locked clone URL + rev from the config
+/// repo's `flake.lock`. Supports github- and git-type inputs. Returns `None`
+/// when the lock file is missing or unparseable, or the node is absent or is
+/// not a github/git node — the caller falls back to guidance.
+fn locked_source_from_flake_lock(root: &Path, input: &str) -> Option<LockedSource> {
+    let text = std::fs::read_to_string(root.join("flake.lock")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let locked = json.get("nodes")?.get(input)?.get("locked")?;
+    match locked.get("type")?.as_str()? {
+        "github" => {
+            let owner = locked.get("owner")?.as_str()?;
+            let repo = locked.get("repo")?.as_str()?;
+            let rev = locked.get("rev")?.as_str()?;
+            Some(LockedSource {
+                clone_url: format!("https://github.com/{owner}/{repo}"),
+                rev: rev.to_string(),
+            })
+        }
+        "git" => {
+            let url = locked.get("url")?.as_str()?;
+            let rev = locked.get("rev")?.as_str()?;
+            Some(LockedSource {
+                clone_url: url.to_string(),
+                rev: rev.to_string(),
+            })
+        }
+        _ => None,
     }
 }
 
@@ -47,19 +84,38 @@ pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
         // provenance/layer-dir machinery, then walk up to its flake root.
         match config_repo_content_dir(name) {
             Some(content_dir) => match find_flake_root(&content_dir) {
-                Some(root) => {
-                    println!(
-                        "flake:// sources are materialized by the config repo's flake (the repo that declares workload '{}').",
-                        name
-                    );
-                    println!("Config repo flake root: {}", root.display());
-                    println!(
-                        "To materialize the source, run: nix develop {} (materializes flake inputs), or nix build {}#...",
-                        root.display(),
-                        root.display()
-                    );
-                    println!("Flake input name: {}", input);
-                }
+                Some(root) => match locked_source_from_flake_lock(&root, input) {
+                    Some(locked) => {
+                        if dest.exists() {
+                            anyhow::bail!("source path already exists: {}", dest.display());
+                        }
+                        let parent = dest.parent().ok_or_else(|| {
+                            anyhow::anyhow!("invalid source path: {}", dest.display())
+                        })?;
+                        std::fs::create_dir_all(parent)?;
+                        // Full clone (not `--depth 1`) so the pinned rev is
+                        // reachable, then check it out detached.
+                        git_clone_full(&locked.clone_url, &dest)?;
+                        git_checkout_rev(&dest, &locked.rev)?;
+                        println!(
+                            "Materialized flake://{input} source at rev {} from the config repo's flake.lock to {}",
+                            locked.rev,
+                            dest.display()
+                        );
+                    }
+                    None => {
+                        println!(
+                            "flake://{input} is declared by the config repo at {} but its flake.lock has no github/git lock node for input '{}'.",
+                            root.display(),
+                            input
+                        );
+                        println!(
+                            "To materialize it, run: nix develop {} (materializes flake inputs), or clone manually to: {}",
+                            root.display(),
+                            dest.display()
+                        );
+                    }
+                },
                 None => {
                     println!(
                         "The config repo declaring workload '{}' (content dir: {}) has no flake.nix.",
@@ -455,5 +511,168 @@ mod tests {
             declaring_layer_content_dir_from(&provenance, &layer_dirs, "pi"),
             None
         );
+    }
+
+    // --- flake:// materialization: flake.lock parsing ----------------------
+
+    #[test]
+    fn locked_source_github_type_resolves_clone_url_and_rev() {
+        let root = uniq_dir("flake-lock-github");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("flake.lock"),
+            r#"{
+  "nodes": {
+    "odysseus": {
+      "locked": {
+        "type": "github",
+        "owner": "georgrybski",
+        "repo": "odysseus",
+        "rev": "fc8e6366ddb627935af092ba81ea5faa5d05e1b3"
+      }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let locked = locked_source_from_flake_lock(&root, "odysseus").expect("resolves");
+        assert_eq!(locked.clone_url, "https://github.com/georgrybski/odysseus");
+        assert_eq!(locked.rev, "fc8e6366ddb627935af092ba81ea5faa5d05e1b3");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Exact-case node key match: `flake://tempest` maps to the `T3MP3ST`
+    /// input (repo name is uppercase in the config flake).
+    #[test]
+    fn locked_source_exact_case_key_match() {
+        let root = uniq_dir("flake-lock-case");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("flake.lock"),
+            r#"{
+  "nodes": {
+    "T3MP3ST": {
+      "locked": {
+        "type": "github",
+        "owner": "georgrybski",
+        "repo": "T3MP3ST",
+        "rev": "ae32cf505174a422c55d7ca970f5f23816218f38"
+      }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let locked =
+            locked_source_from_flake_lock(&root, "T3MP3ST").expect("resolves exact-case key");
+        assert_eq!(locked.clone_url, "https://github.com/georgrybski/T3MP3ST");
+        assert_eq!(locked.rev, "ae32cf505174a422c55d7ca970f5f23816218f38");
+        assert!(locked_source_from_flake_lock(&root, "tempest").is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn locked_source_git_type_resolves_url_and_rev() {
+        let root = uniq_dir("flake-lock-git");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("flake.lock"),
+            r#"{
+  "nodes": {
+    "workestrate": {
+      "locked": {
+        "type": "git",
+        "url": "file:///home/rybski/Development/agent-workbench/workestrate",
+        "rev": "c45494bd1ec827489422f631294b003b34ec59f5"
+      }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let locked = locked_source_from_flake_lock(&root, "workestrate").expect("resolves");
+        assert_eq!(
+            locked.clone_url,
+            "file:///home/rybski/Development/agent-workbench/workestrate"
+        );
+        assert_eq!(locked.rev, "c45494bd1ec827489422f631294b003b34ec59f5");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn locked_source_missing_node_returns_none() {
+        let root = uniq_dir("flake-lock-missing");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("flake.lock"),
+            r#"{
+  "nodes": {
+    "pi": {
+      "locked": {
+        "type": "github",
+        "owner": "georgrybski",
+        "repo": "pi",
+        "rev": "371adcf37130629ffb9bbeed9f5548ce08ffa93b"
+      }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        assert!(locked_source_from_flake_lock(&root, "odysseus").is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn locked_source_unparseable_lock_returns_none() {
+        let root = uniq_dir("flake-lock-bad");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("flake.lock"), "not json at all {").unwrap();
+
+        assert!(locked_source_from_flake_lock(&root, "pi").is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn locked_source_missing_lock_file_returns_none() {
+        let root = uniq_dir("flake-lock-absent");
+        std::fs::create_dir_all(&root).unwrap();
+
+        assert!(locked_source_from_flake_lock(&root, "pi").is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn locked_source_non_github_git_node_returns_none() {
+        let root = uniq_dir("flake-lock-path");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "type": "path",
+        "path": "/nix/store/00000000000000000000000000000000-source"
+      }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        assert!(locked_source_from_flake_lock(&root, "nixpkgs").is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
