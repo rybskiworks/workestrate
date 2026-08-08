@@ -347,6 +347,61 @@ pub fn doctor_check_config_repos() -> Result<DoctorCheck> {
     Ok(DoctorCheck::new("config_repos", worst, message).with_repos(repos))
 }
 
+/// `schemas` check: generate both schema artifacts in-process and compare
+/// every known consumer location (tool template, tool home, registered config
+/// repos with a schemas/ dir) byte-for-byte — the same freshness rule as
+/// `schemas update --check`. A missing or mismatched file is STALE per
+/// target; the check-level status is WARN when any copy is stale (stale
+/// copies never break the tool — validate-config uses the Rust types; only
+/// editor/tombi UX is affected), never FAIL.
+pub fn doctor_check_schemas() -> Result<DoctorCheck> {
+    let (full, workload) = crate::commands::diagnostics::generate_schema_pair()?;
+    let artifacts: [(&str, &str); 2] = [
+        ("workestrate.schema.json", full.as_str()),
+        ("workestrate-workload.schema.json", workload.as_str()),
+    ];
+    let targets = crate::commands::schemas::schema_targets(None)?;
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    let mut stale = 0usize;
+    for t in &targets {
+        let mut t_stale = false;
+        for (name, content) in artifacts {
+            let p = t.dir.join(name);
+            // The canonical on-disk form carries the trailing newline (the
+            // same form `schemas update` writes and `--check` compares), so
+            // the freshness rule matches `schemas update --check` exactly.
+            let canonical = format!("{}\n", content);
+            let ok = std::fs::read(&p)
+                .map(|b| b == canonical.as_bytes())
+                .unwrap_or(false);
+            if !ok {
+                t_stale = true;
+            }
+        }
+        entries.push(serde_json::json!({
+            "target": t.label,
+            "status": if t_stale { "STALE" } else { "OK" },
+            "path": t.dir.display().to_string(),
+        }));
+        if t_stale {
+            stale += 1;
+        }
+    }
+    let status = if stale == 0 { "OK" } else { "WARN" };
+    let message = if targets.is_empty() {
+        "no consumer schema locations found".to_string()
+    } else {
+        format!(
+            "{} consumer location(s) checked, {} stale",
+            targets.len(),
+            stale
+        )
+    };
+    Ok(DoctorCheck::new("schemas", status, message)
+        .with_remediation("Run 'workestrate schemas update' to refresh consumer schema copies")
+        .with_repos(entries))
+}
+
 /// `workestrate doctor` — run environment/tool health checks (KVM, nix,
 /// sops, age, msb, home resolution, config repos), print a human report or a
 /// machine-readable JSON document, and exit non-zero when any check FAILs.
@@ -374,6 +429,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
         doctor_check_msb(),
         doctor_check_home(),
         doctor_check_config_repos()?,
+        doctor_check_schemas()?,
         doctor_check_image_records(),
     ];
     let overall = if checks.iter().any(|c| c.status == "FAIL") {
@@ -399,10 +455,20 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
             }
             if let Some(ref repos) = check.repos {
                 for repo in repos {
-                    let name = repo["name"].as_str().unwrap_or("unknown");
+                    // config_repos entries carry name/message; the schemas
+                    // row carries target/path instead.
+                    let name = repo["name"]
+                        .as_str()
+                        .or_else(|| repo["target"].as_str())
+                        .unwrap_or("unknown");
                     let status = repo["status"].as_str().unwrap_or("unknown");
                     let message = repo["message"].as_str().unwrap_or("");
-                    println!("  {}: {} ({})", name, status, message);
+                    let detail = if message.is_empty() {
+                        repo["path"].as_str().unwrap_or("")
+                    } else {
+                        message
+                    };
+                    println!("  {}: {} ({})", name, status, detail);
                 }
             }
         }

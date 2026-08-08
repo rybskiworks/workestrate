@@ -102,6 +102,7 @@ fn doctor_json_has_expected_check_names() {
         "msb",
         "home",
         "config_repos",
+        "schemas",
     ] {
         assert!(
             names.contains(&expected),
@@ -210,5 +211,180 @@ ref = "main"
     assert!(
         matches!(status, "WARN" | "FAIL"),
         "fake repo dir must not report OK; got status: {status}"
+    );
+}
+
+/// A `schemas` row is present in the JSON report with the consumer-location
+/// summary (an isolated home with no registry and no home still resolves the
+/// tool-template target from the real checkout, so the row reports "consumer
+/// location(s) checked"; status is OK or WARN depending on freshness).
+#[test]
+fn doctor_json_reports_schema_check_row() {
+    let home = IsolatedHome::new("cmd-doctor");
+    let out = home
+        .cmd()
+        .args(["doctor", "--json"])
+        .output()
+        .expect("invoke doctor --json");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("doctor --json stdout must be valid JSON");
+    let checks = doc["checks"].as_array().expect("checks must be an array");
+    let schemas = checks
+        .iter()
+        .find(|c| c["name"] == "schemas")
+        .expect("schemas check must exist");
+    let status = schemas["status"].as_str().expect("schemas missing status");
+    assert!(
+        matches!(status, "OK" | "WARN"),
+        "schemas status must be OK or WARN; got: {status}"
+    );
+    let message = schemas["message"]
+        .as_str()
+        .expect("schemas missing message");
+    assert!(
+        message.contains("consumer"),
+        "schemas message must mention consumer locations; got: {message}"
+    );
+    let repos = schemas["repos"]
+        .as_array()
+        .expect("schemas must carry a repos array");
+    assert!(
+        repos
+            .iter()
+            .all(|r| r["target"].is_string() && r["path"].is_string()),
+        "every schema entry must carry target and path: {repos:?}"
+    );
+}
+
+/// A stale consumer copy (tool home carries a hand-written workestrate.schema.json
+/// and NO workload file) makes the schemas check WARN with a per-target STALE
+/// entry; the human report carries the remediation. The tool-template target
+/// (the real checkout, P1-synced) stays FRESH, so exactly the home copy is
+/// stale.
+#[test]
+fn doctor_schemas_reports_stale_home_copy() {
+    let home = IsolatedHome::new("cmd-doctor");
+    let store = home.dir.join(".workestrate");
+    std::fs::create_dir_all(store.join("schemas")).expect("create store schemas dir");
+    std::fs::write(
+        store.join("schemas").join("workestrate.schema.json"),
+        "{\"stale\": true}\n",
+    )
+    .expect("write stale schema");
+    // No workestrate-workload.schema.json — a missing file is stale too.
+
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("invoke doctor --json");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("doctor --json stdout must be valid JSON");
+    let checks = doc["checks"].as_array().expect("checks must be an array");
+    let schemas = checks
+        .iter()
+        .find(|c| c["name"] == "schemas")
+        .expect("schemas check must exist");
+    assert_eq!(
+        schemas["status"], "WARN",
+        "stale copy must make the schemas check WARN; got: {schemas}"
+    );
+    let message = schemas["message"]
+        .as_str()
+        .expect("schemas missing message");
+    assert!(
+        message.contains("1 stale"),
+        "exactly the home copy must be stale; got: {message}"
+    );
+    let repos = schemas["repos"]
+        .as_array()
+        .expect("schemas must carry a repos array");
+    let home_entry = repos
+        .iter()
+        .find(|r| {
+            r["target"]
+                .as_str()
+                .map(|t| t.contains("tool home"))
+                .unwrap_or(false)
+        })
+        .expect("tool home target must be reported");
+    assert_eq!(
+        home_entry["status"], "STALE",
+        "the stale home copy must be STALE: {home_entry}"
+    );
+    let template_entry = repos
+        .iter()
+        .find(|r| {
+            r["target"]
+                .as_str()
+                .map(|t| t.contains("tool template"))
+                .unwrap_or(false)
+        })
+        .expect("tool template target must be reported");
+    assert_eq!(
+        template_entry["status"], "OK",
+        "the P1-synced template copy must be fresh: {template_entry}"
+    );
+
+    // Human report carries the remediation for the stale copy.
+    let out_h = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args(["doctor"])
+        .output()
+        .expect("invoke doctor");
+    let stdout_h = String::from_utf8_lossy(&out_h.stdout);
+    assert!(
+        stdout_h.contains("Run 'workestrate schemas update'"),
+        "human report must carry the schemas remediation; got:\n{stdout_h}"
+    );
+}
+
+/// After `schemas update` refreshes the stale home copy, the schemas check
+/// reports OK.
+#[test]
+fn doctor_schemas_is_ok_after_schemas_update() {
+    let home = IsolatedHome::new("cmd-doctor");
+    let store = home.dir.join(".workestrate");
+    std::fs::create_dir_all(store.join("schemas")).expect("create store schemas dir");
+    std::fs::write(
+        store.join("schemas").join("workestrate.schema.json"),
+        "{\"stale\": true}\n",
+    )
+    .expect("write stale schema");
+
+    let up = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args(["schemas", "update"])
+        .output()
+        .expect("invoke schemas update");
+    assert!(
+        up.status.success(),
+        "schemas update failed: stdout=\n{}\nstderr=\n{}",
+        String::from_utf8_lossy(&up.stdout),
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("invoke doctor --json");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("doctor --json stdout must be valid JSON");
+    let checks = doc["checks"].as_array().expect("checks must be an array");
+    let schemas = checks
+        .iter()
+        .find(|c| c["name"] == "schemas")
+        .expect("schemas check must exist");
+    assert_eq!(
+        schemas["status"], "OK",
+        "fresh copies must make the schemas check OK; got: {schemas}"
     );
 }

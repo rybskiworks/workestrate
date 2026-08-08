@@ -59,70 +59,22 @@ pub fn cmd_schemas_update(repo: Option<&str>, check: bool) -> Result<()> {
         ("workestrate-workload.schema.json", workload.as_str()),
     ];
 
-    // Collect the consumer target dirs (in target order). Only the schemas/
-    // dirs that actually qualify are collected; everything else prints a
-    // skip note and continues.
-    let mut targets: Vec<PathBuf> = Vec::new();
-
-    if repo.is_none() {
-        // Target 1: the tool repo's copier template. The template is
-        // workestrate-managed, so its schemas/ subdir is created when missing.
-        if let Some(root) = config::project_root_optional() {
-            let template = root.join("templates").join("workestrate-config");
-            if template.is_dir() {
-                targets.push(template.join("schemas"));
-            } else {
-                eprintln!(
-                    "note: tool-repo copier template {} is absent (standalone binary or non-tool checkout); skipping it",
-                    template.display()
-                );
-            }
-        }
-
-        // Target 2: the tool home. The home is workestrate-managed, so its
-        // schemas/ subdir is created when missing.
-        let (home, _kind) = config::resolve_home_with_kind();
-        if home.exists() {
-            targets.push(home.join("schemas"));
-        } else {
-            eprintln!(
-                "note: tool home {} does not exist; skipping it (run 'workestrate home init')",
-                home.display()
-            );
-        }
-    }
-
-    // Target 3: registered config repos. `--repo <name>` scopes to ONE entry
-    // (targets 1 and 2 were already skipped above); a missing name errors.
-    let registry = config::load_registry()?;
-    match repo {
-        Some(name) => {
-            let registry = registry
-                .ok_or_else(|| anyhow::anyhow!("no config repo named '{name}' in the registry"))?;
-            let entry = registry
-                .configs
-                .get(name)
-                .ok_or_else(|| anyhow::anyhow!("no config repo named '{name}' in the registry"))?;
-            push_config_repo_target(name, entry, &mut targets);
-        }
-        None => {
-            if let Some(registry) = registry {
-                let mut names: Vec<&String> = registry.configs.keys().collect();
-                names.sort();
-                for name in names {
-                    push_config_repo_target(name, &registry.configs[name], &mut targets);
-                }
-            }
-        }
+    // Collect the consumer target dirs (in target order) via the shared
+    // enumerator, plus the human skip notes. Only the schemas/ dirs that
+    // actually qualify are targets; everything else prints a skip note and
+    // continues.
+    let (targets, notes) = schema_targets_with_notes(repo)?;
+    for note in &notes {
+        eprintln!("{note}");
     }
 
     // Distribute each artifact to each collected target, idempotently.
     let mut written = 0usize;
     let mut skipped = 0usize;
     let mut stale = 0usize;
-    for dir in &targets {
+    for target in &targets {
         for (file_name, content) in artifacts {
-            let path = dir.join(file_name);
+            let path = target.dir.join(file_name);
             // The canonical on-disk form carries the trailing newline that
             // `cmd_generate_schema` writes to --output (the committed consumer
             // copies carry it; writing it keeps `schemas update` idempotent
@@ -140,7 +92,7 @@ pub fn cmd_schemas_update(repo: Option<&str>, check: bool) -> Result<()> {
                 println!("skipped {} (unchanged)", path.display());
                 skipped += 1;
             } else {
-                std::fs::create_dir_all(dir)?;
+                std::fs::create_dir_all(&target.dir)?;
                 std::fs::write(&path, canonical)?;
                 println!("wrote   {}", path.display());
                 written += 1;
@@ -162,14 +114,112 @@ pub fn cmd_schemas_update(repo: Option<&str>, check: bool) -> Result<()> {
     Ok(())
 }
 
+/// A consumer location for the generated schema artifacts.
+pub(crate) struct SchemaTarget {
+    /// Human label for reporting ("tool template", "tool home", "config repo 'x'").
+    pub label: String,
+    /// Directory that carries schemas/workestrate.schema.json (+ workload subschema).
+    pub dir: PathBuf,
+}
+
+/// Enumerate every known consumer location, applying the documented rules
+/// (see module doc): tool-repo template when project_root_optional() resolves
+/// AND templates/workestrate-config exists; tool home when it exists; each
+/// registered config repo ONLY when its schemas/ dir exists. When
+/// `repo_filter` is Some(name), ONLY that config repo is returned (and the
+/// tool template + home targets are excluded, matching --repo scoping).
+///
+/// Only PRESENT targets are returned — targets that were skipped (missing
+/// template dir / home / clone / schemas/ dir) are silent here so read-only
+/// callers like `doctor` do not emit `schemas update`'s skip notes.
+pub(crate) fn schema_targets(repo_filter: Option<&str>) -> Result<Vec<SchemaTarget>> {
+    Ok(schema_targets_with_notes(repo_filter)?.0)
+}
+
+/// The shared enumeration core: the present targets (in target order) plus
+/// the human skip notes that `schemas update` prints on stderr. Collected in
+/// one pass so side-effecting resolution (e.g. the legacy-XDG migration
+/// note from `resolve_home_with_kind`) happens exactly once per run.
+fn schema_targets_with_notes(
+    repo_filter: Option<&str>,
+) -> Result<(Vec<SchemaTarget>, Vec<String>)> {
+    let mut targets: Vec<SchemaTarget> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+
+    if repo_filter.is_none() {
+        // Target 1: the tool repo's copier template. The template is
+        // workestrate-managed, so its schemas/ subdir is created when missing.
+        if let Some(root) = config::project_root_optional() {
+            let template = root.join("templates").join("workestrate-config");
+            if template.is_dir() {
+                targets.push(SchemaTarget {
+                    label: "tool template".to_string(),
+                    dir: template.join("schemas"),
+                });
+            } else {
+                notes.push(format!(
+                    "note: tool-repo copier template {} is absent (standalone binary or non-tool checkout); skipping it",
+                    template.display()
+                ));
+            }
+        }
+
+        // Target 2: the tool home. The home is workestrate-managed, so its
+        // schemas/ subdir is created when missing.
+        let (home, _kind) = config::resolve_home_with_kind();
+        if home.exists() {
+            targets.push(SchemaTarget {
+                label: "tool home".to_string(),
+                dir: home.join("schemas"),
+            });
+        } else {
+            notes.push(format!(
+                "note: tool home {} does not exist; skipping it (run 'workestrate home init')",
+                home.display()
+            ));
+        }
+    }
+
+    // Target 3: registered config repos. `--repo <name>` scopes to ONE entry
+    // (targets 1 and 2 were already skipped above); a missing name errors.
+    let registry = config::load_registry()?;
+    match repo_filter {
+        Some(name) => {
+            let registry = registry
+                .ok_or_else(|| anyhow::anyhow!("no config repo named '{name}' in the registry"))?;
+            let entry = registry
+                .configs
+                .get(name)
+                .ok_or_else(|| anyhow::anyhow!("no config repo named '{name}' in the registry"))?;
+            push_config_repo_target(name, entry, &mut targets, &mut notes);
+        }
+        None => {
+            if let Some(registry) = registry {
+                let mut names: Vec<&String> = registry.configs.keys().collect();
+                names.sort();
+                for name in names {
+                    push_config_repo_target(
+                        name,
+                        &registry.configs[name],
+                        &mut targets,
+                        &mut notes,
+                    );
+                }
+            }
+        }
+    }
+    Ok((targets, notes))
+}
+
 /// Resolve one registered config repo's checkout and collect its `schemas/`
-/// dir when it qualifies (exists AND carries `schemas/`). Prints a skip note
+/// dir when it qualifies (exists AND carries `schemas/`). Records a skip note
 /// otherwise — the tool never creates a `schemas/` dir in a repo that does
 /// not already have one.
 fn push_config_repo_target(
     name: &str,
     entry: &crate::config::ConfigRepoEntry,
-    targets: &mut Vec<PathBuf>,
+    targets: &mut Vec<SchemaTarget>,
+    notes: &mut Vec<String>,
 ) {
     let dir = if config::entry_is_local_path(entry) {
         // Local-path entries (registered via `config new`): url IS the dir.
@@ -179,21 +229,24 @@ fn push_config_repo_target(
         config::config_repo_dir(name)
     };
     if !dir.is_dir() {
-        eprintln!(
+        notes.push(format!(
             "note: config repo '{name}' clone not present at {}; skipping it",
             dir.display()
-        );
+        ));
         return;
     }
     let schemas = dir.join("schemas");
     if !schemas.is_dir() {
-        eprintln!(
+        notes.push(format!(
             "note: config repo '{name}' is not a workestrate-managed repo (no schemas/ dir at {}); skipping it",
             schemas.display()
-        );
+        ));
         return;
     }
-    targets.push(schemas);
+    targets.push(SchemaTarget {
+        label: format!("config repo '{name}'"),
+        dir: schemas,
+    });
 }
 
 /// Whether `path` already holds exactly `content` bytes (missing file → false).
