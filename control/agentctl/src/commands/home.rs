@@ -26,11 +26,13 @@ id_rsa*
 .env
 ";
 
-/// tombi configuration written into the home repo (spec 15 §2.3):
-/// `config-repos/*/workestrate.toml` and nested capsule files
-/// `config-repos/*/workestrate/**/*.toml` are format + schema-linted against
-/// the vendored schema copy under `schemas/`; `config.toml` +
-/// `overrides.toml` are format-only. Store dirs and the lock stay excluded.
+/// tombi configuration written into the home repo (spec 15 §2.3). The
+/// `[[schemas]]` section carries two mappings: the full schema
+/// (`workestrate.schema.json`) lints the single-file `workestrate.toml` plus
+/// the directory-mode full-file entries `default.toml`/`secrets.toml`; the
+/// workload subschema (`workestrate-workload.schema.json`) lints capsule
+/// files under `workestrate/workloads/`. `config.toml` + `overrides.toml`
+/// are format-only. Store dirs and the lock stay excluded.
 const HOME_TOMBI_TOML: &str = r#"# tombi configuration for the workestrate tool home.
 # tombi 1.2.5+ — see https://tombi-toml.github.io/tombi/
 
@@ -50,7 +52,11 @@ strict = true
 
 [[schemas]]
 path = "schemas/workestrate.schema.json"
-include = ["config-repos/*/workestrate.toml", "config-repos/*/workestrate/**/*.toml"]
+include = ["config-repos/*/workestrate.toml", "config-repos/*/workestrate/default.toml", "config-repos/*/workestrate/secrets.toml"]
+
+[[schemas]]
+path = "schemas/workestrate-workload.schema.json"
+include = ["config-repos/*/workestrate/workloads/**/*.toml"]
 
 [files]
 include = [
@@ -71,6 +77,13 @@ exclude = [
 /// the home's tombi schema lint works offline. Same relative path as the
 /// scaffold copy (`src/scaffold/mod.rs`) — home.rs sits at the same depth.
 const HOME_SCHEMA_JSON: &str = include_str!("../../../../schemas/workestrate.schema.json");
+
+/// Vendored JSON Schema for workload capsule files
+/// (`workestrate/workloads/<name>/workload.toml`), embedded at compile time
+/// so the home's tombi schema lint works offline. Same relative path as the
+/// scaffold copy (`src/scaffold/mod.rs`) — home.rs sits at the same depth.
+const HOME_SCHEMA_WORKLOAD_JSON: &str =
+    include_str!("../../../../schemas/workestrate-workload.schema.json");
 
 /// Pre-commit hook installed into the home repo: rejects embedded git repos
 /// (gitlinks, mode 160000), store-dir paths, and secret material. Kept as a
@@ -170,6 +183,11 @@ pub fn cmd_home_init(config_url: Option<&str>, name: &str) -> Result<()> {
     std::fs::write(
         home.join("schemas").join("workestrate.schema.json"),
         HOME_SCHEMA_JSON,
+    )?;
+    std::fs::write(
+        home.join("schemas")
+            .join("workestrate-workload.schema.json"),
+        HOME_SCHEMA_WORKLOAD_JSON,
     )?;
 
     // 6. Pre-commit hook (executable on unix).
@@ -741,7 +759,7 @@ fn print_summary(home: &Path, with_config: bool, name: &str, ensured: &[&str]) {
     println!("Installed:");
     println!("  .gitignore (store dirs + secret material untracked; *.enc committable)");
     println!("  .git/hooks/pre-commit (rejects gitlinks, store-dir paths, secret material)");
-    println!("  tombi.toml + schemas/workestrate.schema.json (tombi TOML gates; hook runs them when tombi is present)");
+    println!("  tombi.toml + schemas/workestrate.schema.json + schemas/workestrate-workload.schema.json (tombi TOML gates; hook runs them when tombi is present)");
     if !ensured.is_empty() {
         println!();
         println!("Ensured dirs: {}", ensured.join(", "));

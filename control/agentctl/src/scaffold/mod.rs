@@ -55,6 +55,8 @@ const T_COPIER_ANSWERS: &str = include_str!("template/.copier-answers.yml.tpl");
 const T_FLAKE_NIX: &str = include_str!("template/flake.nix.tpl");
 const T_TOMBI_TOML: &str = include_str!("template/tombi.toml.tpl");
 const T_SCHEMA_JSON: &str = include_str!("../../../../schemas/workestrate.schema.json");
+const T_SCHEMA_WORKLOAD_JSON: &str =
+    include_str!("../../../../schemas/workestrate-workload.schema.json");
 
 /// Variables needed to render the scaffold. Each field maps 1:1 to a
 /// `{{ var }}` token in one or more templates.
@@ -100,13 +102,18 @@ pub fn render(template: &str, vars: &[(&str, &str)]) -> Result<String> {
 }
 
 /// Render the tombi toolchain files (`tombi.toml` + the vendored JSON
-/// schema) shared by both the full scaffold ([`render_all`]) and the
-/// `--empty` minimal scaffold in `commands::config_cmd`. Single source of
-/// truth so the two paths can never drift apart.
+/// schemas `workestrate.schema.json` and `workestrate-workload.schema.json`)
+/// shared by both the full scaffold ([`render_all`]) and the `--empty`
+/// minimal scaffold in `commands::config_cmd`. Single source of truth so the
+/// two paths can never drift apart.
 pub(crate) fn tombi_files() -> Result<Vec<(&'static str, String)>> {
     Ok(vec![
         ("tombi.toml", render(T_TOMBI_TOML, &[])?),
         ("schemas/workestrate.schema.json", T_SCHEMA_JSON.to_string()),
+        (
+            "schemas/workestrate-workload.schema.json",
+            T_SCHEMA_WORKLOAD_JSON.to_string(),
+        ),
     ])
 }
 
@@ -192,6 +199,7 @@ mod tests {
         assert!(names.contains(&".copier-answers.yml"));
         assert!(names.contains(&"tombi.toml"));
         assert!(names.contains(&"schemas/workestrate.schema.json"));
+        assert!(names.contains(&"schemas/workestrate-workload.schema.json"));
         assert!(
             !names.contains(&"flake.nix"),
             "flake.nix should be omitted when core_flake_url is None"
@@ -249,8 +257,29 @@ mod tests {
             .map(|(_, c)| c.as_str())
             .expect("tombi.toml");
         assert!(
-            tombi.contains("[[schemas]]"),
-            "tombi.toml must wire the schema catalog; got:\n{}",
+            tombi.matches("[[schemas]]").count() == 2,
+            "tombi.toml must carry two [[schemas]] mappings (full + workload subschema); got:\n{}",
+            tombi
+        );
+        assert!(
+            tombi.contains("schemas/workestrate.schema.json"),
+            "tombi.toml must reference the full schema; got:\n{}",
+            tombi
+        );
+        assert!(
+            tombi.contains("schemas/workestrate-workload.schema.json"),
+            "tombi.toml must reference the workload subschema; got:\n{}",
+            tombi
+        );
+        assert!(
+            tombi.contains("workestrate/workloads/**/*.toml"),
+            "tombi.toml must map the workload subschema to capsule files; got:\n{}",
+            tombi
+        );
+        assert!(
+            tombi.contains("workestrate/default.toml")
+                && tombi.contains("workestrate/secrets.toml"),
+            "tombi.toml must map the full schema to default/secrets full-file entries; got:\n{}",
             tombi
         );
         assert!(!tombi.contains("{{"), "unsubstituted token in tombi.toml");
@@ -262,6 +291,15 @@ mod tests {
         assert!(
             schema.contains("\"$schema\"") || schema.contains("\"title\""),
             "schemas/workestrate.schema.json must be the vendored JSON schema"
+        );
+        let workload_schema = out
+            .iter()
+            .find(|(n, _)| *n == "schemas/workestrate-workload.schema.json")
+            .map(|(_, c)| c.as_str())
+            .expect("schemas/workestrate-workload.schema.json");
+        assert!(
+            workload_schema.contains("workload capsule entry file"),
+            "schemas/workestrate-workload.schema.json must be the workload subschema"
         );
     }
 

@@ -132,7 +132,7 @@ fn init_creates_structure_gitignore_and_hook() {
         hook_content
     );
 
-    // tombi toolchain files: home tombi.toml + vendored schema (spec 15).
+    // tombi toolchain files: home tombi.toml + vendored schemas (spec 15).
     let tombi_toml = std::fs::read_to_string(store.join("tombi.toml")).expect("read tombi.toml");
     assert!(
         tombi_toml.contains("config-repos/*/workestrate.toml"),
@@ -140,13 +140,25 @@ fn init_creates_structure_gitignore_and_hook() {
         tombi_toml
     );
     assert!(
-        tombi_toml.contains("config-repos/*/workestrate/**/*.toml"),
-        "home tombi.toml must include config-repos/*/workestrate/**/*.toml:\n{}",
+        tombi_toml.contains("config-repos/*/workestrate/default.toml")
+            && tombi_toml.contains("config-repos/*/workestrate/secrets.toml"),
+        "home tombi.toml must include the full-schema directory-mode entries default.toml and \
+         secrets.toml:\n{}",
         tombi_toml
     );
     assert!(
-        tombi_toml.contains("[[schemas]]"),
-        "home tombi.toml must carry a [[schemas]] entry:\n{}",
+        tombi_toml.contains("config-repos/*/workestrate/workloads/**/*.toml"),
+        "home tombi.toml must include the workload capsule glob:\n{}",
+        tombi_toml
+    );
+    assert!(
+        tombi_toml.contains("schemas/workestrate-workload.schema.json"),
+        "home tombi.toml must reference the workload subschema:\n{}",
+        tombi_toml
+    );
+    assert!(
+        tombi_toml.matches("[[schemas]]").count() == 2,
+        "home tombi.toml must carry two [[schemas]] mappings (full + workload subschema):\n{}",
         tombi_toml
     );
     let schema = std::fs::read_to_string(store.join("schemas").join("workestrate.schema.json"))
@@ -154,6 +166,16 @@ fn init_creates_structure_gitignore_and_hook() {
     assert!(
         schema.contains("\"$schema\"") || schema.contains("\"title\""),
         "vendored schema must look like a JSON Schema document"
+    );
+    let workload_schema = std::fs::read_to_string(
+        store
+            .join("schemas")
+            .join("workestrate-workload.schema.json"),
+    )
+    .expect("read vendored workload subschema");
+    assert!(
+        workload_schema.contains("workload capsule entry file"),
+        "vendored workload subschema must carry the custom capsule title"
     );
 }
 
