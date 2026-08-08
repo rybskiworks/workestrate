@@ -81,11 +81,22 @@ Root cause (host `nix build .#workestrate` → drv `94lv9jaln8siy729pwv1xqxk30cp
   reference config unresolved) — expected in-container.
 - GC remains prohibited in-container (shared store).
 
+## seed_files template/glob feature (P0-P3 in-tree, P4 out-of-tree) — 2026-08-08
+
+- f475565 schema+validation: SeedFileConfig.source -> Option<String>; new `template: bool` (default false) and `glob: Option<String>`; exactly-one-of source|glob + validate_seed_glob/validate_seed_target at config-load; glob = "0.3.4" dep (folded in: validate_seed_glob needs glob::Pattern::new); JSON schema regenerated.
+- c374be3 renderer: guest-visible env view (build_seed_env_view, env.rs) — declared env pre-resolved like resolve_plan_envs, injected depends_on vars, host-bound secrets -> `$MSB_<binding map key>` placeholder (fork builder.rs default), guest-bound -> real value, defined-but-unbound -> hard error; map-only resolve_templated_value_with (no process env). USER DECISION pinned in docs/migration/30-security-model.md trust table + SPEC.md.
+- 1a02d8e threading: Workload::prepare(env_view) signature; build_sandbox reorder (Option A — load_secrets + plan before prepare, seeds before ensure_mount_sources/create); 6 new prepare tests incl. untemplated byte-parity + only_if_missing interplay.
+- f468519 pure refactor: shared ConfigWorkload::seed_one_file helper (byte-identical error labels; clippy::too_many_arguments scoped allow).
+- 238cd7d glob runtime+preflight: literal_glob_root + expand_seed_glob (mounts.rs); prepare glob branch (sorted regular-file matches, target/<rel-path>, per-file only_if_missing, composes with template); plan preflight hard no-match, validate-config warn; 10 new tests.
+- e9f66b1 reference config + vendored schema: config.reference gains one template seed (rendered.json.tpl) + one glob seed (config/glob/*.json) on example-service; templates/workestrate-config schema snapshot synced; goldens byte-identical (plan Display never renders seed_files).
+P4 (out-of-tree, personal repo 0f5be2e): pi workload.toml [[seed_files]] gains `template = true`; models.json keeps ${LITELLM_ADDR}/${LITELLM_MASTER_KEY} tokens (-> host.microsandbox.internal:4000 / $MSB_LITELLM_MASTER_KEY). Host migration (once): `rm -f <dev-home>/state/workspaces/pi-state/agent/models.json` — executed; the stale literal-token copy is deleted so the next `up pi` renders fresh (only_if_missing = true would otherwise keep it forever).
+Validation: full suite green per commit (fmt/clippy -D warnings/test), tombi-check, golden-check (no regen), schema-check, scaffold-check, spec-examples, check-nix-paths. In-container smoke of the personal config via WORKESTRATE_HOME=workestrate-dev-home: validate-config clean + `workload plan pi` exit 0 (LITELLM_ADDR injected, secret_env present). NOTE: the prescribed WORKESTRATE_CONFIG_DIR run hits a STALE $HOME/.workestrate registry (old personal checkout predating the default_deny_false entitlement requirement) — unrelated to this feature; re-sync that checkout or use WORKESTRATE_HOME.
+
 ## Current repo state (verified 2026-08-07)
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 11 ahead of origin, NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 7 ahead of origin, NOT pushed; origin SSH |
 | personal config repo | `e3d65e3` | clean; flake.lock pins workestrate @ `c45494b` (B5 HOST-GATED) |
 | dev home | workestrate-dev-home | clean; `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |
@@ -146,7 +157,7 @@ nix flake metadata | grep -A4 '"workestrate"'
 
 ```bash
 cd ~/Development/agent-workbench/workestrate
-git log --oneline origin/migration/tool-model..HEAD   # expect 11 commits (migration + docs + build/feat + kvm-tests)
+git log --oneline origin/migration/tool-model..HEAD   # expect 7 commits (seed_files P0-P3 feature)
 git push origin migration/tool-model                  # origin is SSH
 ```
 - Why it matters: also unblocks the later `github:` input adoption (wrk-ayz deferred).
