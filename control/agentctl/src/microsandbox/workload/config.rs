@@ -708,7 +708,7 @@ default_deny = true
             "refusal must carry the remediation lead: {msg}"
         );
         assert!(
-            msg.contains("workestrate litellm up"),
+            msg.contains("workestrate workload up litellm"),
             "refusal must name the start command: {msg}"
         );
         Ok(())

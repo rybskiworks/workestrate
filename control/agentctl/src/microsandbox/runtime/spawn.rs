@@ -156,7 +156,7 @@ pub async fn logs(name: &str) -> Result<()> {
 
     if !path.exists() {
         anyhow::bail!(
-            "no logs found for '{}'; not started? run: workestrate {} up",
+            "no logs found for '{}'; not started? run: `workestrate workload up {}`",
             name,
             name
         );

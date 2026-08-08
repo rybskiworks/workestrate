@@ -102,7 +102,7 @@ pub fn load_secrets() -> Result<std::collections::HashMap<String, String>> {
             anyhow::bail!(
                 "required secret '{}' is not satisfied.\n\
                  Layers tried: {}\n\
-                 Remediation: run 'setup-secrets --config <name> update',\n\
+                 Remediation: run `nix develop -c setup-secrets --config <name> update` (or `just setup-secrets --config <name> update`),\n\
                  set the env var directly, or add an age recipient to the\n\
                  config repo's .sops.yaml.",
                 env_var,
@@ -297,7 +297,7 @@ mod tests {
         let err_msg = format!(
             "required secret '{}' is not satisfied.\n\
              Layers tried: {}\n\
-             Remediation: run 'setup-secrets --config <name> update',\n\
+             Remediation: run `nix develop -c setup-secrets --config <name> update` (or `just setup-secrets --config <name> update`),\n\
              set the env var directly, or add an age recipient to the\n\
              config repo's .sops.yaml.",
             "LITELLM_MASTER_KEY", "reference, team, personal"

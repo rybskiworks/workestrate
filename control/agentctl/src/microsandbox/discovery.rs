@@ -232,7 +232,7 @@ pub fn resolve_depends_on(
                     }) else {
                         anyhow::bail!(
                         "--use {}@{}: no running instance '{}' of dependency '{}' is registered \
-                             (start it with `workestrate {} up --instance {}`)",
+                             (start it with `workestrate workload up {} --instance {}`)",
                         dep,
                         id,
                         id,
@@ -295,7 +295,7 @@ pub fn resolve_depends_on(
             (None, _) => {
                 if spec.required {
                     anyhow::bail!(
-                        "dependency '{}' of workload '{}' is required but not running; start it with `workestrate {} up`",
+                        "dependency '{}' of workload '{}' is required but not running; start it with `workestrate workload up {}`",
                         dep,
                         workload_name,
                         dep
@@ -341,7 +341,7 @@ fn declared_fallback(
         None => anyhow::bail!(
             "dependency '{}' cannot be resolved: it is not running and declares no ports \
              (no address can be derived). Declare at least one host port on workload '{}' \
-             or start it with `workestrate {} up`.",
+             or start it with `workestrate workload up {}`.",
             dep,
             dep,
             dep
@@ -532,7 +532,7 @@ default_deny = true
             "refusal must carry the remediation lead: {msg}"
         );
         assert!(
-            msg.contains("workestrate litellm up"),
+            msg.contains("workestrate workload up litellm"),
             "refusal must name the start command: {msg}"
         );
         let _ = std::fs::remove_dir_all(&state_dir);

@@ -109,8 +109,9 @@ enum Commands {
     Ps,
     /// Stop every running workestrate sandbox across all workloads/contexts.
     /// Destructive; confirms unless --yes.
+    #[command(alias = "down")]
     DownAll {
-        #[arg(long, help = "Skip the interactive confirmation")]
+        #[arg(long, help = "Skip the interactive confirmation", alias = "all")]
         yes: bool,
     },
     /// Remove state-dir contents (workspaces, var, run). Does not touch config-repos/sources/config.
@@ -1369,6 +1370,40 @@ mod tests {
         let names: Vec<_> = cmd.get_subcommands().map(|s| s.get_name()).collect();
         for expected in ["ps", "down-all", "generate-schema"] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
+        }
+    }
+
+    /// Root `down` is a HIDDEN clap alias of `down-all` (ADR 0027 shim
+    /// shape): `workestrate down --yes`, `workestrate down --all`, and the
+    /// primary `workestrate down-all --yes` (with its hidden `--all` arg
+    /// alias) all parse into the same `DownAll { yes: true }` action.
+    #[test]
+    fn root_down_alias_parses_as_down_all() {
+        for argv in [
+            ["workestrate", "down", "--yes"],
+            ["workestrate", "down", "--all"],
+            ["workestrate", "down-all", "--yes"],
+            ["workestrate", "down-all", "--all"],
+        ] {
+            let cli = Cli::try_parse_from(argv).expect("root down/down-all must parse");
+            match cli.command {
+                Commands::DownAll { yes } => assert!(yes, "yes must be set for: {argv:?}"),
+                _ => panic!("expected Commands::DownAll for: {argv:?}"),
+            }
+        }
+    }
+
+    /// The root `down` alias lives in the ROOT namespace only: the
+    /// `workload down <name>` verb keeps its own parse path unchanged.
+    #[test]
+    fn root_down_alias_does_not_collide_with_workload_down() {
+        let cli = Cli::try_parse_from(["workestrate", "workload", "down", "litellm"])
+            .expect("workload down litellm must parse");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Down { name, .. },
+            } => assert_eq!(name, "litellm"),
+            _ => panic!("expected workload down"),
         }
     }
 
