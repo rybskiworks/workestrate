@@ -69,6 +69,14 @@ golden-check:
 # schemars-derived ConfigFile. Writes to schemas/workestrate.schema.json.
 # Run on a nix-capable host (the dev shell's RUSTFLAGS → libcap-ng OUT lib
 # dir is required to build the aws-lc-rs / parking_lot_core native crates).
+# After regenerating, re-sync consumer copies: templates/workestrate-config/
+# schemas/workestrate.schema.json plus any external homes/config repos that
+# carry schemas/workestrate.schema.json (drift here breaks tombi schema
+# validation for consumers). The "workload-only" subschema
+# (schemas/workestrate-workload.schema.json) is NOT produced by
+# generate-schema; it is hand-derived from the canonical (top-level
+# properties = WorkloadConfig.properties; definitions minus
+# SecretDefConfig/WorkloadConfig).
 generate-schema:
     #!/usr/bin/env bash
     set -euo pipefail
