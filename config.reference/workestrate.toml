@@ -75,6 +75,15 @@ source = "agents/example-service/config/settings.json"
 target = "workspaces/example-service-state/settings.json"
 only_if_missing = true
 
+[[workloads.example-service.seed_files]]
+source = "agents/example-service/config/rendered.json.tpl"
+target = "workspaces/example-service-state/rendered.json"
+template = true
+
+[[workloads.example-service.seed_files]]
+glob = "agents/example-service/config/glob/*.json"
+target = "workspaces/example-service-state/globbed"
+
 [workloads.example-service.network]
 default_deny = true
 
