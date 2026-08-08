@@ -669,18 +669,68 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
     warnings
 }
 
-pub fn cmd_generate_schema(out: Option<&std::path::Path>) -> Result<()> {
+/// Title applied to the generated workload subschema — matches the
+/// established capsule-file convention (the previous hand-derived
+/// `schemas/workestrate-workload.schema.json` carried this exact title).
+pub(crate) const WORKLOAD_SCHEMA_TITLE: &str =
+    "workestrate workload capsule entry file (workestrate/workloads/<name>/workload.toml, bare table form)";
+
+/// Generate the canonical full schema (`workestrate.toml`) and the
+/// bare-workload subschema (a workload capsule file). Both derive from the
+/// same schemars-annotated config types — the single source of truth
+/// (ADR 0021 §8); the subschema replaces the previous hand-derived jq rule.
+pub(crate) fn generate_schema_pair() -> Result<(String, String)> {
+    // Full schema: schemars-derived ConfigFile (identical to the historical
+    // `cmd_generate_schema` behavior).
     let schema = schemars::schema_for!(crate::config::ConfigFile);
-    let json = serde_json::to_string_pretty(&schema)?;
+    let full = serde_json::to_string_pretty(&schema)?;
+
+    // Workload subschema: schemars-derived WorkloadConfig plus the
+    // post-processing that matched the previous hand-derived file exactly.
+    let mut wl = schemars::schema_for!(crate::config::WorkloadConfig);
+    // custom title (matches the established capsule-file convention)
+    if let Some(m) = wl.schema.metadata.as_mut() {
+        m.title = Some(WORKLOAD_SCHEMA_TITLE.to_string());
+    }
+    // defensive filter: WorkloadConfig is the root (never in definitions);
+    // SecretDefConfig is only reachable from ConfigFile (never in the
+    // WorkloadConfig closure). Filter so the subschema can never carry them.
+    wl.definitions.remove("WorkloadConfig");
+    wl.definitions.remove("SecretDefConfig");
+    // enforce the "additionalProperties false" rule even if schemars behavior changes
+    if let Some(obj) = wl.schema.object.as_mut() {
+        if obj.additional_properties.is_none() {
+            obj.additional_properties = Some(Box::new(schemars::schema::Schema::Bool(false)));
+        }
+    }
+    let workload = serde_json::to_string_pretty(&wl)?;
+    Ok((full, workload))
+}
+
+pub fn cmd_generate_schema(
+    out: Option<&std::path::Path>,
+    out_workload: Option<&std::path::Path>,
+) -> Result<()> {
+    if out_workload.is_some() && out.is_none() {
+        anyhow::bail!("--output-workload requires --output");
+    }
+    let (full, workload) = generate_schema_pair()?;
     match out {
         Some(p) => {
             if let Some(parent) = p.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(p, format!("{}\n", json))?;
+            std::fs::write(p, format!("{}\n", full))?;
             println!("wrote schema to {}", p.display());
         }
-        None => println!("{}", json),
+        None => println!("{}", full),
+    }
+    if let Some(p) = out_workload {
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(p, format!("{}\n", workload))?;
+        println!("wrote workload schema to {}", p.display());
     }
     Ok(())
 }

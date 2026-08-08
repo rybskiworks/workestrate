@@ -49,6 +49,44 @@ fn generate_schema_out_alias_still_works() {
     assert_schema_file_written("--out");
 }
 
+/// `generate-schema --output <path> --output-workload <wlpath>` writes BOTH
+/// the full schema and the workload subschema files.
+#[test]
+fn generate_schema_output_workload_writes_subschema_file() {
+    let tmp = TempDir::new("cmd-generate-schema");
+    let path = tmp.path().join("schema.json");
+    let wl_path = tmp.path().join("workload.json");
+    let out = Command::new(BIN)
+        .args(["generate-schema", "--output"])
+        .arg(&path)
+        .arg("--output-workload")
+        .arg(&wl_path)
+        .output()
+        .unwrap_or_else(|e| panic!("invoke generate-schema --output-workload: {e}"));
+    assert!(
+        out.status.success(),
+        "generate-schema --output-workload failed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("schema file must exist at {}: {e}", path.display()));
+    let doc: serde_json::Value =
+        serde_json::from_str(&body).expect("written schema must be valid JSON");
+    assert!(doc.is_object(), "written schema must be a JSON object");
+    let wl_body = std::fs::read_to_string(&wl_path).unwrap_or_else(|e| {
+        panic!(
+            "workload schema file must exist at {}: {e}",
+            wl_path.display()
+        )
+    });
+    let wl_doc: serde_json::Value =
+        serde_json::from_str(&wl_body).expect("written workload schema must be valid JSON");
+    assert!(
+        wl_doc.is_object(),
+        "written workload schema must be a JSON object"
+    );
+}
+
 /// `--help` shows the canonical `--output` and hides the `--out` alias.
 #[test]
 fn generate_schema_help_shows_output_hides_out() {

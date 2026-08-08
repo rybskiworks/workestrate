@@ -66,22 +66,26 @@ golden-check:
     done
 
 # Regenerate the canonical JSON Schema for workestrate.toml from the
-# schemars-derived ConfigFile. Writes to schemas/workestrate.schema.json.
-# Run on a nix-capable host (the dev shell's RUSTFLAGS → libcap-ng OUT lib
-# dir is required to build the aws-lc-rs / parking_lot_core native crates).
+# schemars-derived ConfigFile, plus the bare-workload subschema derived from
+# WorkloadConfig. Writes to schemas/workestrate.schema.json and
+# schemas/workestrate-workload.schema.json. Run on a nix-capable host (the
+# dev shell's RUSTFLAGS → libcap-ng OUT lib dir is required to build the
+# aws-lc-rs / parking_lot_core native crates).
 # After regenerating, re-sync consumer copies: templates/workestrate-config/
 # schemas/workestrate.schema.json plus any external homes/config repos that
 # carry schemas/workestrate.schema.json (drift here breaks tombi schema
-# validation for consumers). The "workload-only" subschema
-# (schemas/workestrate-workload.schema.json) is NOT produced by
-# generate-schema; it is hand-derived from the canonical (top-level
-# properties = WorkloadConfig.properties; definitions minus
-# SecretDefConfig/WorkloadConfig).
+# validation for consumers). The workload subschema is now produced by the
+# tool too (schemars-derived WorkloadConfig, with the same post-processing
+# that matched the previous hand-derived jq rule); after `just
+# generate-schema`, run `just schema-sync-check` / `workestrate schemas
+# update` to distribute BOTH artifacts to consumers (that command lands in a
+# later phase; keep the note forward-looking).
 generate-schema:
     #!/usr/bin/env bash
     set -euo pipefail
-    nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json
+    nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json --output-workload schemas/workestrate-workload.schema.json
     echo "schema written to schemas/workestrate.schema.json"
+    echo "workload schema written to schemas/workestrate-workload.schema.json"
 
 # CI drift guard for schemas/workestrate.schema.json (ADR 0021 §8).
 # Invokes control/agentctl/tests/schema_drift.rs, which runs the built

@@ -132,6 +132,11 @@ enum Commands {
         /// (`--out` is accepted as a hidden back-compat alias.)
         #[arg(short, long, value_name = "PATH", alias = "out")]
         output: Option<std::path::PathBuf>,
+        /// Also write the bare-workload subschema to this path (requires
+        /// --output). The subschema is derived from WorkloadConfig with the
+        /// same post-processing that matched the previous hand-derived file.
+        #[arg(long, value_name = "PATH")]
+        output_workload: Option<std::path::PathBuf>,
     },
     /// Manage config repositories and trusted projects
     Config {
@@ -462,7 +467,10 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::DownAll { yes } => cmd_down_all(yes, cli.json).await,
         Commands::Clean { yes } => cmd_clean(yes, cli.json),
         Commands::Context { action } => cmd_context(action, cli.json).await,
-        Commands::GenerateSchema { output } => cmd_generate_schema(output.as_deref()),
+        Commands::GenerateSchema {
+            output,
+            output_workload,
+        } => cmd_generate_schema(output.as_deref(), output_workload.as_deref()),
         Commands::Config { action } => match action {
             ConfigAction::List => {
                 if cli.json {
