@@ -7,6 +7,7 @@
 //! `validate` (trust-boundary validators + mount-template resolution). Purely
 //! mechanical — no behavior changes.
 
+use crate::microsandbox::env::SeedEnvView;
 use crate::microsandbox::plan::SandboxPlan;
 use anyhow::Result;
 
@@ -137,8 +138,14 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         args
     }
 
-    /// Optional pre-start hook (e.g., writing config files to persistent data dir).
-    fn prepare(&self) -> Result<()> {
+    /// Optional pre-start hook (e.g., seeding/writing config files to persistent data dir). Receives the workload's guest-visible env view so templated seed files can render against it.
+    ///
+    /// `SeedEnvView` is crate-internal (`pub(crate)`, env.rs); the default
+    /// implementation ignores it, and callers inside this crate are the only
+    /// ones that ever construct or consume it.
+    #[allow(private_interfaces)] // SeedEnvView is crate-internal by design
+    fn prepare(&self, env_view: &SeedEnvView) -> Result<()> {
+        let _ = env_view;
         Ok(())
     }
 

@@ -2,6 +2,7 @@ use super::secrets::{build_env_and_secret_env, build_secret_definitions};
 use super::validate::resolve_mount_host_template;
 use super::{SandboxCommand, Workload};
 use crate::config::WorkloadConfig;
+use crate::microsandbox::env::{render_seed_text, SeedEnvView};
 use crate::microsandbox::plan::{EgressRule, EnvVar, HostBoundSecret, NetworkPlan, SandboxPlan};
 use anyhow::Result;
 use std::path::PathBuf;
@@ -241,7 +242,8 @@ impl Workload for ConfigWorkload {
         }
     }
 
-    fn prepare(&self) -> Result<()> {
+    #[allow(private_interfaces)] // SeedEnvView is crate-internal by design
+    fn prepare(&self, env_view: &SeedEnvView) -> Result<()> {
         if self.workload.seed_files.is_empty() {
             return Ok(());
         }
@@ -287,14 +289,38 @@ impl Workload for ConfigWorkload {
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::copy(&source, &target).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to seed {} to {}: {}",
-                    source.display(),
-                    target.display(),
-                    e
-                )
-            })?;
+            if seed.template {
+                let text = std::fs::read_to_string(&source).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to read seed source {} for template rendering: {}",
+                        source.display(),
+                        e
+                    )
+                })?;
+                let label = format!(
+                    "seed source '{}' target '{}'",
+                    seed.source.as_deref().unwrap_or_default(),
+                    seed.target
+                );
+                let rendered = render_seed_text(&text, env_view, &label)?;
+                std::fs::write(&target, rendered).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to seed {} to {}: {}",
+                        source.display(),
+                        target.display(),
+                        e
+                    )
+                })?;
+            } else {
+                std::fs::copy(&source, &target).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to seed {} to {}: {}",
+                        source.display(),
+                        target.display(),
+                        e
+                    )
+                })?;
+            }
         }
         Ok(())
     }
@@ -840,6 +866,26 @@ only_if_missing = true
 default_deny = true
 "#;
 
+    /// Same shape as `SEED_CONFIG_TOML` but the seed entry is a
+    /// `template = true` file: `prepare()` renders it against the
+    /// guest-visible env view instead of copying byte-identical.
+    const TEMPLATE_CONFIG_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["true"]
+
+[[workloads.svc.seed_files]]
+source = "seed/settings.json.tpl"
+target = "workspaces/svc-state/settings.json"
+template = true
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
     #[test]
     fn new_resolves_content_roots_to_the_declaring_config_dir() -> Result<()> {
         let guard = DependsEnvGuard::new("cw-content-root", SEED_CONFIG_TOML);
@@ -874,7 +920,7 @@ default_deny = true
         )?;
 
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare()?;
+        svc.prepare(&empty_seed_env_view())?;
 
         let target = guard.state_dir().join("workspaces/svc-state/settings.json");
         assert_eq!(
@@ -906,7 +952,7 @@ default_deny = true
         std::env::remove_var("CARGO_MANIFEST_DIR");
         std::env::set_current_dir(&cwd)?;
 
-        let result = synthetic_workload(SEED_CONFIG_TOML, "svc").prepare();
+        let result = synthetic_workload(SEED_CONFIG_TOML, "svc").prepare(&empty_seed_env_view());
 
         match old_root {
             Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
@@ -931,7 +977,216 @@ default_deny = true
     #[test]
     fn prepare_without_seed_files_is_a_noop() -> Result<()> {
         let svc = synthetic_workload(MINIMAL_SEEDLESS_TOML, "svc");
-        svc.prepare()
+        svc.prepare(&empty_seed_env_view())
+    }
+
+    // ---- P1.2: template = true seed files render against the env view ----
+
+    /// A view with no vars and no defined secrets; the tests that need
+    /// defined secrets / vars build the struct inline.
+    fn empty_seed_env_view() -> crate::microsandbox::env::SeedEnvView {
+        crate::microsandbox::env::SeedEnvView {
+            vars: std::collections::HashMap::new(),
+            defined_secrets: std::collections::HashSet::new(),
+        }
+    }
+
+    /// P1.2: `template = true` seeds are rendered against the guest-visible
+    /// env view; the target carries the fully substituted text.
+    #[test]
+    fn prepare_renders_template_seed_file() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-render", TEMPLATE_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("settings.json.tpl"),
+            r#"{"baseUrl":"http://${LITELLM_ADDR}/v1","apiKey":"${LITELLM_MASTER_KEY}"}"#,
+        )?;
+
+        let view = crate::microsandbox::env::SeedEnvView {
+            vars: std::collections::HashMap::from([
+                (
+                    "LITELLM_ADDR".to_string(),
+                    "host.microsandbox.internal:4000".to_string(),
+                ),
+                (
+                    "LITELLM_MASTER_KEY".to_string(),
+                    "$MSB_LITELLM_MASTER_KEY".to_string(),
+                ),
+            ]),
+            defined_secrets: std::collections::HashSet::new(),
+        };
+        let svc = ConfigWorkload::new("svc")?;
+        svc.prepare(&view)?;
+
+        let target = guard.state_dir().join("workspaces/svc-state/settings.json");
+        assert_eq!(
+            std::fs::read_to_string(&target)?,
+            r#"{"baseUrl":"http://host.microsandbox.internal:4000/v1","apiKey":"$MSB_LITELLM_MASTER_KEY"}"#,
+            "rendered seed must substitute every template var against the view"
+        );
+        Ok(())
+    }
+
+    /// P1.2: a template referencing a var NOT in the view is a hard error
+    /// naming the var and the seed file.
+    #[test]
+    fn prepare_template_missing_var_hard_errors() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-missing", TEMPLATE_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("settings.json.tpl"),
+            r#"{"baseUrl":"http://${NOPE}/v1"}"#,
+        )?;
+
+        let view = empty_seed_env_view();
+        let svc = ConfigWorkload::new("svc")?;
+        let err = svc
+            .prepare(&view)
+            .expect_err("a template referencing a missing var must hard-error");
+        let msg = format!("{err}");
+        assert!(msg.contains("NOPE"), "must name the missing var: {msg}");
+        assert!(
+            msg.contains("missing env var"),
+            "must say 'missing env var': {msg}"
+        );
+        assert!(
+            msg.contains("seed source"),
+            "must name the seed file: {msg}"
+        );
+        Ok(())
+    }
+
+    /// P1.2: a template referencing a DEFINED-but-unbound secret is a hard
+    /// error naming the secret, the "not bound" remediation, and the seed
+    /// file — the real secret value never appears.
+    #[test]
+    fn prepare_template_unbound_secret_hard_errors() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-unbound", TEMPLATE_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("settings.json.tpl"),
+            r#"{"apiKey":"${UNBOUND}"}"#,
+        )?;
+
+        let view = crate::microsandbox::env::SeedEnvView {
+            vars: std::collections::HashMap::new(),
+            defined_secrets: std::collections::HashSet::from(["UNBOUND".to_string()]),
+        };
+        let svc = ConfigWorkload::new("svc")?;
+        let err = svc
+            .prepare(&view)
+            .expect_err("a template referencing an unbound secret must hard-error");
+        let msg = format!("{err}");
+        assert!(msg.contains("UNBOUND"), "must name the secret: {msg}");
+        assert!(msg.contains("not bound"), "must say 'not bound': {msg}");
+        assert!(
+            msg.contains("seed source"),
+            "must name the seed file: {msg}"
+        );
+        assert!(
+            !msg.contains("super-secret"),
+            "real secret value must never appear in the error: {msg}"
+        );
+        Ok(())
+    }
+
+    /// P1.2: `only_if_missing` (default true) wins over re-rendering — an
+    /// existing target is left untouched even for template seeds.
+    #[test]
+    fn prepare_template_respects_only_if_missing() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-oim-true", TEMPLATE_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("settings.json.tpl"),
+            r#"{"v":"${LITELLM_ADDR}"}"#,
+        )?;
+        let target = guard.state_dir().join("workspaces/svc-state/settings.json");
+        std::fs::create_dir_all(target.parent().expect("target parent"))?;
+        std::fs::write(&target, "stale")?;
+
+        let view = crate::microsandbox::env::SeedEnvView {
+            vars: std::collections::HashMap::from([(
+                "LITELLM_ADDR".to_string(),
+                "host.microsandbox.internal:4000".to_string(),
+            )]),
+            defined_secrets: std::collections::HashSet::new(),
+        };
+        let svc = ConfigWorkload::new("svc")?;
+        svc.prepare(&view)?;
+
+        assert_eq!(
+            std::fs::read_to_string(&target)?,
+            "stale",
+            "existing target must NOT be re-rendered when only_if_missing is true"
+        );
+        Ok(())
+    }
+
+    /// P1.2: `only_if_missing = false` re-renders over an existing target.
+    #[test]
+    fn prepare_template_with_only_if_missing_false_rerenders() -> Result<()> {
+        let guard = DependsEnvGuard::new(
+            "cw-oim-false",
+            &TEMPLATE_CONFIG_TOML.replace(
+                "template = true",
+                "template = true\nonly_if_missing = false",
+            ),
+        );
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("settings.json.tpl"),
+            r#"{"v":"${LITELLM_ADDR}"}"#,
+        )?;
+        let target = guard.state_dir().join("workspaces/svc-state/settings.json");
+        std::fs::create_dir_all(target.parent().expect("target parent"))?;
+        std::fs::write(&target, "stale")?;
+
+        let view = crate::microsandbox::env::SeedEnvView {
+            vars: std::collections::HashMap::from([(
+                "LITELLM_ADDR".to_string(),
+                "host.microsandbox.internal:4000".to_string(),
+            )]),
+            defined_secrets: std::collections::HashSet::new(),
+        };
+        let svc = ConfigWorkload::new("svc")?;
+        svc.prepare(&view)?;
+
+        let content = std::fs::read_to_string(&target)?;
+        assert!(
+            content.contains("host.microsandbox.internal:4000"),
+            "stale target must be re-rendered when only_if_missing is false; got: {content}"
+        );
+        Ok(())
+    }
+
+    /// P1.2 regression: an untemplated seed (template default false) is
+    /// copied BYTE-IDENTICAL — a literal `${VAR}` in the source must never
+    /// be rendered.
+    #[test]
+    fn prepare_untemplated_seed_byte_identical() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-copy", SEED_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        let source_path = guard.config_dir().join("seed").join("settings.json");
+        let text = r#"{"baseUrl":"http://${LITELLM_ADDR}/v1"}"#;
+        std::fs::write(&source_path, text)?;
+
+        let view = crate::microsandbox::env::SeedEnvView {
+            vars: std::collections::HashMap::from([(
+                "LITELLM_ADDR".to_string(),
+                "resolved.example".to_string(),
+            )]),
+            defined_secrets: std::collections::HashSet::new(),
+        };
+        let svc = ConfigWorkload::new("svc")?;
+        svc.prepare(&view)?;
+
+        let target = guard.state_dir().join("workspaces/svc-state/settings.json");
+        assert_eq!(
+            std::fs::read(&target)?,
+            std::fs::read(&source_path)?,
+            "untemplated seeds are copied byte-identical, never rendered"
+        );
+        Ok(())
     }
 
     const MINIMAL_SEEDLESS_TOML: &str = r#"

@@ -292,8 +292,6 @@ pub(crate) async fn build_sandbox<W: Workload>(
     workload: &W,
     spec: &InstanceSpec,
 ) -> Result<(Sandbox, ForegroundConfig)> {
-    workload.prepare()?;
-
     // Load secrets from .env.enc across the resolved layers. FN-9: the
     // merged map is threaded into env/secret resolution below — it is NOT
     // written into process-global env (parallel build_sandbox calls would
@@ -314,6 +312,17 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // Override the plan name with the spec instance name so display matches
     // the actual sandbox identity (slot for singleton, slot@id for parallel).
     plan.name = spec.instance.clone();
+
+    // NEW: build the guest-visible env view and seed BEFORE sandbox create.
+    // Defined-but-unbound secret detection needs the merged config's secret IDs.
+    let defined_secrets: std::collections::HashSet<String> = crate::config::load_config()?
+        .secrets
+        .keys()
+        .cloned()
+        .collect();
+    let env_view =
+        crate::microsandbox::env::build_seed_env_view(&plan, &secrets, &defined_secrets)?;
+    workload.prepare(&env_view)?;
 
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.

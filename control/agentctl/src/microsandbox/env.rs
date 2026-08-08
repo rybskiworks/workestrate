@@ -72,7 +72,6 @@ where
 /// Guest-visible env view for `template = true` seed-file rendering.
 ///
 /// Built by [`build_seed_env_view`]; consumed by [`render_seed_text`].
-#[allow(dead_code)] // consumed by seed prepare threading (next commit)
 pub(crate) struct SeedEnvView {
     pub(crate) vars: HashMap<String, String>,
     pub(crate) defined_secrets: HashSet<String>,
@@ -106,7 +105,6 @@ pub(crate) struct SeedEnvView {
 ///
 /// Resolution is map-only: NO process-env fallback for seed content beyond
 /// the env-fallback `resolve_plan_envs` applies to declared non-secret values.
-#[allow(dead_code)] // consumed by seed prepare threading (next commit)
 pub(crate) fn build_seed_env_view(
     plan: &SandboxPlan,
     secrets: &HashMap<String, String>,
@@ -137,7 +135,6 @@ pub(crate) fn build_seed_env_view(
 /// for the exposure contract). `file_label` is the caller's source→target
 /// description, included verbatim in every error so the failing seed file is
 /// unambiguous.
-#[allow(dead_code)] // consumed by seed prepare threading (next commit)
 pub(crate) fn render_seed_text(text: &str, view: &SeedEnvView, file_label: &str) -> Result<String> {
     let result = resolve_templated_value_with(text, &view.vars);
     match result {
