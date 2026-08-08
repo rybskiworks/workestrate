@@ -10,6 +10,11 @@ use crate::microsandbox::runtime::resolve_plan_envs;
 /// values flow through the map returned by `load_secrets`; process env is
 /// only consulted for ad-hoc variables (runtime/user exports), never as a
 /// read-back of secrets this process wrote.
+///
+/// The `$${` escape (envsubst convention) renders as a literal `${` and
+/// applies to BOTH declared env values and the seed-file renderer (see
+/// [`resolve_templated_value_by`]). Existing content is backward compatible:
+/// no existing content uses `$${`.
 pub(crate) fn resolve_templated_value_with(
     templated: &str,
     vars: &std::collections::HashMap<String, String>,
@@ -30,6 +35,11 @@ pub(crate) fn resolve_templated_value_with(
 /// KNOWN LIMITATION: map values are RAW (unresolved) — a var referencing
 /// another templated var in the map gets its raw `${...}` form; there is no
 /// recursive resolution.
+///
+/// The `$${` escape (envsubst convention) renders as a literal `${` and
+/// applies to BOTH declared env values and the seed-file renderer (see
+/// [`resolve_templated_value_by`]). Existing content is backward compatible:
+/// no existing content uses `$${`.
 pub(crate) fn resolve_templated_value_with_env_fallback(
     templated: &str,
     vars: &std::collections::HashMap<String, String>,
@@ -40,30 +50,70 @@ pub(crate) fn resolve_templated_value_with_env_fallback(
     })
 }
 
-/// Shared engine: resolve `${VAR}` templates through `lookup`.
+/// Shared engine: resolve `${VAR}` templates through `lookup`, with the
+/// envsubst-standard `$$` escape: `$$` renders as a LITERAL `$` (so `$${`
+/// renders as a literal `${`), is never resolved, and the emitted `$` is
+/// never re-scanned.
+///
+/// Scanning is a single left-to-right pass over `templated`:
+/// - `$$` is consumed as a unit and emits a literal `$` (envsubst
+///   convention). When the next input char is `{` (i.e. `$${`), the `{` is
+///   ordinary text, so the result is the literal `${` the caller wants — a
+///   var name after an escape is never looked up, `$${FOO}` → `${FOO}` even
+///   when `FOO` is in `lookup`, and an unclosed escaped token (`$${X` with
+///   no closing `}`) is literal text, not an error.
+/// - a plain `${VAR}` resolves through `lookup` exactly as before: missing →
+///   error, `${}` (empty name) → error, unclosed `${` → error.
+/// - everything else passes through unchanged.
+///
+/// Collapse is left-to-right and each emitted `$` is never re-scanned, so
+/// `$$$${X}` → `$${X}` (`$$` → `$`, then `$${X}` → `${X}`). Applies to
+/// declared env values and the seed-file renderer alike.
 fn resolve_templated_value_by<F>(templated: &str, lookup: F) -> Result<String>
 where
     F: for<'a> Fn(&'a str) -> std::result::Result<String, std::env::VarError>,
 {
-    let mut result = templated.to_string();
-    let mut search_from = 0;
-    while let Some(start) = templated[search_from..].find("${") {
-        let absolute = search_from + start;
-        match templated[absolute + 2..].find('}') {
-            Some(end) => {
-                let var_name = &templated[absolute + 2..absolute + 2 + end];
-                if var_name.is_empty() {
-                    anyhow::bail!(
-                        "empty variable name in secret template at position {}",
-                        absolute
-                    );
+    let mut result = String::with_capacity(templated.len());
+    let mut i = 0;
+    while i < templated.len() {
+        if templated[i..].starts_with("$$") {
+            // envsubst `$$` escape: emit a literal `$` and consume BOTH
+            // dollars so the emitted `$` is never re-scanned. `$${` therefore
+            // yields the literal `${` (the following `{` is ordinary text).
+            result.push('$');
+            i += 2;
+        } else if templated[i..].starts_with("${") {
+            match templated[i + 2..].find('}') {
+                Some(end) => {
+                    let var_name = &templated[i + 2..i + 2 + end];
+                    if var_name.is_empty() {
+                        anyhow::bail!("empty variable name in secret template at position {}", i);
+                    }
+                    let value = lookup(var_name)
+                        .map_err(|e| anyhow::anyhow!("missing env var {}: {}", var_name, e))?;
+                    result.push_str(&value);
+                    i += 2 + end + 1;
                 }
-                let value = lookup(var_name)
-                    .map_err(|e| anyhow::anyhow!("missing env var {}: {}", var_name, e))?;
-                result = result.replace(&format!("${{{}}}", var_name), &value);
-                search_from = absolute + 2 + end + 1;
+                None => anyhow::bail!("unclosed ${{ in secret template at position {}", i),
             }
-            None => anyhow::bail!("unclosed ${{ in secret template at position {}", absolute,),
+        } else {
+            // Ordinary text: copy up to the next `$` (or the remainder).
+            match templated[i..].find('$') {
+                Some(offset) if offset > 0 => {
+                    result.push_str(&templated[i..i + offset]);
+                    i += offset;
+                }
+                Some(_) => {
+                    // A lone `$` that is not part of an escape or template
+                    // passes through unchanged.
+                    result.push('$');
+                    i += 1;
+                }
+                None => {
+                    result.push_str(&templated[i..]);
+                    i = templated.len();
+                }
+            }
         }
     }
     Ok(result)
@@ -321,6 +371,59 @@ mod tests {
         );
     }
 
+    // ---- `$${` escape (envsubst convention) ----
+
+    #[test]
+    fn escape_renders_literal_dollar_brace_even_when_var_in_map() {
+        let m = vars(&[("FOO", "bar")]);
+        assert_eq!(
+            resolve_templated_value_with("$${FOO}", &m).unwrap(),
+            "${FOO}"
+        );
+    }
+
+    #[test]
+    fn escape_litellm_master_key_passthrough() {
+        let m = vars(&[("LITELLM_MASTER_KEY", "s3cr3t")]);
+        assert_eq!(
+            resolve_templated_value_with("$${LITELLM_MASTER_KEY}", &m).unwrap(),
+            "${LITELLM_MASTER_KEY}"
+        );
+    }
+
+    #[test]
+    fn mixed_escape_and_resolution() {
+        let m = vars(&[("X", "must-not-appear"), ("Y", "<Y-value>")]);
+        assert_eq!(
+            resolve_templated_value_with("a $${X} b ${Y} c", &m).unwrap(),
+            "a ${X} b <Y-value> c"
+        );
+    }
+
+    #[test]
+    fn plain_template_unchanged() {
+        let m = vars(&[("X", "plain-value")]);
+        assert_eq!(
+            resolve_templated_value_with("${X}", &m).unwrap(),
+            "plain-value"
+        );
+    }
+
+    #[test]
+    fn double_escape_collapses_once() {
+        let m = vars(&[("X", "must-not-appear")]);
+        assert_eq!(
+            resolve_templated_value_with("$$$${X}", &m).unwrap(),
+            "$${X}"
+        );
+    }
+
+    #[test]
+    fn escape_wins_over_unclosed() {
+        let m = vars(&[("X", "must-not-appear")]);
+        assert_eq!(resolve_templated_value_with("$${X", &m).unwrap(), "${X");
+    }
+
     // ---- P1.1: seed-file env view + template renderer ----
 
     #[test]
@@ -557,6 +660,59 @@ mod tests {
         assert!(
             msg.contains("src -> dst"),
             "must name the source→target: {msg}"
+        );
+        Ok(())
+    }
+
+    /// END-STATE PROOF: pi's seeded models.json renders against the guest env
+    /// view with `baseUrl` consuming the injected LITELLM_ADDR and `apiKey`
+    /// carrying the ESCAPED literal `${LITELLM_MASTER_KEY}` — the token pi
+    /// itself re-expands at runtime. The host-bound secret's guest placeholder
+    /// (`$MSB_LITELLM_MASTER_KEY`) must NEVER leak into the rendered file.
+    #[test]
+    fn render_seed_models_json_escaped_api_key_and_resolved_base_url() -> Result<()> {
+        let plan = plan_with(
+            vec![EnvVar {
+                name: "LITELLM_ADDR".to_string(),
+                value: "host.microsandbox.internal:4000".to_string(),
+                is_secret: false,
+                reject_placeholder: None,
+                injected_by: Some("litellm".to_string()),
+            }],
+            vec![HostBoundSecret {
+                name: "LITELLM_MASTER_KEY".to_string(),
+                value: "${LITELLM_MASTER_KEY}".to_string(),
+                allowed_hosts: vec![],
+                required: true,
+                reject_placeholder: None,
+            }],
+        );
+        let view = build_seed_env_view(
+            &plan,
+            &secrets_map(&[("LITELLM_MASTER_KEY", "real-secret")]),
+            &HashSet::new(),
+        )?;
+        let models_json = r#"{
+  "mcpServers": {},
+  "providers": {
+    "litellm": {
+      "baseUrl": "http://${LITELLM_ADDR}/v1",
+      "apiKey": "$${LITELLM_MASTER_KEY}"
+    }
+  }
+}"#;
+        let rendered = render_seed_text(models_json, &view, "pi models.json -> guest")?;
+        assert!(
+            rendered.contains("\"baseUrl\": \"http://host.microsandbox.internal:4000/v1\""),
+            "baseUrl must consume the injected LITELLM_ADDR: {rendered}"
+        );
+        assert!(
+            rendered.contains("\"apiKey\": \"${LITELLM_MASTER_KEY}\""),
+            "apiKey must be the escaped literal, not $MSB_...: {rendered}"
+        );
+        assert!(
+            !rendered.contains("$MSB_LITELLM_MASTER_KEY"),
+            "the guest placeholder must never leak into the seed file: {rendered}"
         );
         Ok(())
     }
