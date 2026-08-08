@@ -155,6 +155,64 @@ impl ConfigWorkload {
         }
         (format!(".workestrate-build/{}", self.name), true)
     }
+
+    /// Seed a single file from a `seed_files` entry: skip when
+    /// `only_if_missing` and the target already exists, create the target's
+    /// parent, then either template-render (`template = true`, against the
+    /// guest-visible env view) or byte-copy the source. `source_label` is the
+    /// raw relative source string for error messages (the resolved `source`
+    /// path may be content-root-joined). Shared by the per-entry loop in
+    /// `prepare()` and reused for glob-expanded entries.
+    // too_many_arguments: `target_label` preserves the raw config `target`
+    // string in error labels (the resolved `target` path is state/content-root
+    // joined); the positional shape matches the pre-refactor `prepare()` loop.
+    #[allow(clippy::too_many_arguments)]
+    fn seed_one_file(
+        &self,
+        source: &std::path::Path,
+        target: &std::path::Path,
+        target_label: &str,
+        template: bool,
+        only_if_missing: bool,
+        source_label: &str,
+        env_view: &SeedEnvView,
+    ) -> Result<()> {
+        if only_if_missing && target.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if template {
+            let text = std::fs::read_to_string(source).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to read seed source {} for template rendering: {}",
+                    source.display(),
+                    e
+                )
+            })?;
+            let label = format!("seed source '{}' target '{}'", source_label, target_label);
+            let rendered = render_seed_text(&text, env_view, &label)?;
+            std::fs::write(target, rendered).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to seed {} to {}: {}",
+                    source.display(),
+                    target.display(),
+                    e
+                )
+            })?;
+        } else {
+            std::fs::copy(source, target).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to seed {} to {}: {}",
+                    source.display(),
+                    target.display(),
+                    e
+                )
+            })?;
+        }
+        Ok(())
+    }
 }
 
 impl Workload for ConfigWorkload {
@@ -283,44 +341,15 @@ impl Workload for ConfigWorkload {
                 } else {
                     root.join(&seed.target)
                 };
-            if seed.only_if_missing.unwrap_or(true) && target.exists() {
-                continue;
-            }
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            if seed.template {
-                let text = std::fs::read_to_string(&source).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to read seed source {} for template rendering: {}",
-                        source.display(),
-                        e
-                    )
-                })?;
-                let label = format!(
-                    "seed source '{}' target '{}'",
-                    seed.source.as_deref().unwrap_or_default(),
-                    seed.target
-                );
-                let rendered = render_seed_text(&text, env_view, &label)?;
-                std::fs::write(&target, rendered).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to seed {} to {}: {}",
-                        source.display(),
-                        target.display(),
-                        e
-                    )
-                })?;
-            } else {
-                std::fs::copy(&source, &target).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to seed {} to {}: {}",
-                        source.display(),
-                        target.display(),
-                        e
-                    )
-                })?;
-            }
+            self.seed_one_file(
+                &source,
+                &target,
+                &seed.target,
+                seed.template,
+                seed.only_if_missing.unwrap_or(true),
+                seed.source.as_deref().unwrap_or_default(),
+                env_view,
+            )?;
         }
         Ok(())
     }
