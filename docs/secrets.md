@@ -7,9 +7,9 @@ the repo root. Each config repo holds its own `.env.enc` + `.sops.yaml`; a
 user-global secrets layer applies per-key across all contexts.
 
 - Encrypted file: `.env.enc` (committed in each config repo; ciphertext-safe)
-- Decrypted form: never committed; `with-secrets` injects env vars into a child process; `write-env` writes a plaintext `.env` you must remove yourself.
+- Decrypted form: never committed; `workestrate run -- <cmd>` injects env vars into a child process; `write-env` writes a plaintext `.env` you must remove yourself.
 - Key file: `~/.config/sops/age/ai-workbench-secrets.txt` on the HOST (project-specific, NEVER in repo, NEVER in bundle, NEVER under `.workestrate/` or `$WORKESTRATE_HOME`)
-- All wrappers (`setup-secrets`, `with-secrets`, `run-with-secrets`, `decrypt-env`, `write-env`) export `SOPS_AGE_KEY_FILE` defaulting to that path. These wrappers run on the host (age key present); in a container the key is absent and they fail closed by design.
+- All wrappers (`setup-secrets`, `decrypt-env`, `write-env`) export `SOPS_AGE_KEY_FILE` defaulting to that path. These wrappers run on the host (age key present); in a container the key is absent and they fail closed by design.
 
 ## The 7 secrets
 
@@ -137,17 +137,18 @@ decrypted.
 
 ## Running `workestrate` commands with secrets
 
-Inside the dev shell, `workestrate` is already on PATH. Use `run-with-secrets`
-to decrypt `.env.enc` and run `workestrate` subcommands:
+Inside the dev shell, `workestrate` is already on PATH. The CLI's secret
+command is `workestrate run -- <cmd>` — it decrypts `.env.enc` and runs
+`<cmd>` with the secrets injected into its environment:
 
 ```bash
 nix develop
-run-with-secrets workload up litellm      # service: starts detached
-run-with-secrets workload up odysseus     # service: starts detached
-run-with-secrets workload exec pi         # agent: interactive TUI attach
+workestrate run -- workload up litellm      # service: starts detached
+workestrate run -- workload up odysseus     # service: starts detached
+workestrate run -- workload exec pi         # agent: interactive TUI attach
 ```
 
-`run-with-secrets` always requires `.env.enc` to exist, so it is only for
+`workestrate run --` always requires `.env.enc` to exist, so it is only for
 commands that need decrypted secrets. For plan-only commands that do not
 need secrets, use plain `nix run`:
 
@@ -156,29 +157,23 @@ nix run . -- workload plan litellm
 nix run . -- workload plan pi
 ```
 
-For arbitrary commands inside the dev shell that need the same secrets:
+For arbitrary commands that need the same secrets (inside or outside the
+dev shell — `workestrate` is nix-profile-installed and works in any shell):
 
 ```bash
-nix develop -c with-secrets nix run . -- workload up litellm
-```
-
-Outside the dev shell you can also run:
-
-```bash
-# 'with-secrets' works anywhere; 'run-with-secrets' only inside the dev shell
-nix run .#with-secrets -- nix run . -- workload up litellm
+workestrate run -- bash -c 'echo $LITELLM_MASTER_KEY'
 ```
 
 ## How workestrate validates secrets
 
-When you run `with-secrets nix run . -- workload up litellm`, the CLI validates that
+When you run `workestrate run -- workload up litellm`, the CLI validates that
 `LITELLM_MASTER_KEY` and the provider keys defined in the config's secrets
 section are present. Service `up` and agent `exec` commands require
 `LITELLM_MASTER_KEY`. If a required secret is missing, the CLI prints a
 clear error and exits before starting any sandbox, so the failure is
 attributable to the missing secret rather than opaque sandbox-runtime output.
 `check` and `plan` commands never read secret environment variables, so
-they can run without `run-with-secrets` or `with-secrets`.
+they can run without the `run` secret command.
 
 Empty values and whitespace-only values are treated as missing, and the
 `LITELLM_MASTER_KEY` placeholder value (`sk-change-me-local-only`) is
@@ -208,8 +203,10 @@ rm .env
 | `setup-secrets` | Host (age key present) | Create/update `.env.enc` (`--config`) or `.env.local.enc` (`--global`) |
 | `decrypt-env` | Host | Print decrypted secrets to stdout |
 | `write-env` | Host | Write a short-lived plaintext `.env` (mode 0600) |
-| `with-secrets` | Host | Decrypt `.env.enc` and exec a command with secrets in env |
-| `run-with-secrets` | Host (dev shell) | `with-secrets` + `workestrate` subcommand |
+
+The CLI's secret command is `workestrate run -- <cmd>` — it decrypts
+`.env.enc` and execs `<cmd>` with the secrets in its environment (a CLI
+subcommand, not a flake wrapper).
 
 In a container, the age key is absent, so all of these fail closed by
 design.
@@ -218,7 +215,7 @@ design.
 
 A non-interactive validation script exercises the full secrets lifecycle
 (`setup-secrets init` → `decrypt-env` → `setup-secrets update` →
-`decrypt-env` → `write-env` → `with-secrets` → `run-with-secrets`) in an
+`decrypt-env` → `write-env` → `workestrate run -- env` → `workestrate --help`) in an
 isolated temp directory using a freshly generated test key. It does not
 touch the real `~/.config/sops/age/ai-workbench-secrets.txt` or any config
 repo's `.env.enc`.
@@ -241,10 +238,10 @@ The script:
    others were preserved.
 6. Runs `write-env`, asserts `.env` was created with mode `0600` and
    contains the expected values, then removes the file.
-7. Runs `with-secrets env` and asserts all secrets are exported to the
-   child process's environment.
-8. Runs `run-with-secrets --help` and asserts workestrate's help text
-   appears (proving the decrypt+exec path works end-to-end).
+7. Runs `workestrate run -- env` and asserts all secrets are exported to
+   the child process's environment.
+8. Runs `workestrate --help` and asserts workestrate's help text appears
+   (proving the CLI loads; the decrypt+exec path is covered by step 7).
 9. Cleans up the temp directory and prints a pass/fail summary.
 
 The script is hermetic: it fails fast (exit 1) if a real `.env.enc` or

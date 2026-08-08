@@ -107,7 +107,7 @@ Validation: full suite green per commit (fmt/clippy -D warnings/test), tombi-che
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 15 ahead of origin (incl. this docs commit), NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 17 ahead of origin (16 prior commits incl. the root `down` alias + canonical remediation strings f084a84, plus this docs commit), NOT pushed; origin SSH |
 | personal config repo | `e779c83` | 4 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
 | dev home | workestrate-dev-home `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |
@@ -168,7 +168,7 @@ nix flake metadata | grep -A4 '"workestrate"'
 
 ```bash
 cd ~/Development/agent-workbench/workestrate
-git log --oneline origin/migration/tool-model..HEAD   # expect 9 commits (seed_files P0-P3 + $$ escape + docs)
+git log --oneline origin/migration/tool-model..HEAD   # expect 17 commits (16 prior incl. f084a84 root down alias, plus this docs commit)
 git push origin migration/tool-model                  # origin is SSH
 ```
 - Why it matters: also unblocks the later `github:` input adoption (wrk-ayz deferred).

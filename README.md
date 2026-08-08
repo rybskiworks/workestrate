@@ -327,7 +327,7 @@ workestrate ps                               # list running instances for the ac
 workestrate ps --json                        # machine-readable (agents, CI)
 workestrate workload down litellm --instance canary   # stop one parallel instance
 workestrate workload down litellm --all-instances     # stop singleton + all parallel instances
-workestrate down --all                       # stop everything (confirms unless --yes)
+workestrate down [--yes]                  # stop everything (down-all is the canonical name; --all is accepted)
 ```
 
 The singleton slot publishes on the shared bind `127.0.0.1` at the declared
@@ -464,9 +464,8 @@ Common `just` recipes:
 | Recipe | What it does |
 |---|---|
 | `just check` | Run `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo check` for `control/agentctl` |
-| `just litellm-check` | Validate `config.reference/infra/litellm/config.yaml` against the schema indexes |
 | `just tombi-check` | TOML format/lint/schema gate via tombi 1.2.5 (repo, scaffolded config repos, homes) |
-| `just verify` | Full pre-merge gate: `just check` plus `cargo test`, `just litellm-check`, `just tombi-check`, and `Cargo.lock` stability check |
+| `just verify` | Full pre-merge gate: `just check` plus `cargo test`, `just tombi-check`, and `Cargo.lock` stability check |
 | `just verify-full` | Heaviest validation: `just verify` plus `nix build .#workestrate` |
 | `just build` | Build the `workestrate` binary |
 | `just fmt` | Format the Rust code |
@@ -764,9 +763,9 @@ require a registered config repo).
 | `workestrate validate-config` | Validate active config against schema + policy allowlists |
 | `workestrate secrets-schema` | Print secret env_var names from config |
 | `workestrate generate-env-example` | Generate `.env.example` from config secrets section |
-| `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes (instance records) |
+| `workestrate ps [--json]` | List running workestrate sandboxes (reads the port registry; covers all contexts) |
 | `workestrate workloads` | List configured workloads with kind + running status (discovery verb, ADR 0027) |
-| `workestrate down --all [--yes]` | Stop every running workestrate sandbox (destructive; confirms unless `--yes`) |
+| `workestrate down [--yes]` | Stop every running workestrate sandbox (destructive; confirms unless `--yes`); `down-all` is the canonical name and `--all` is accepted |
 | `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived from the config types; `--output` / `--output-workload` write the canonical files under `schemas/`) |
 | `workestrate schemas update [--repo <name>] [--check]` | Sync the generated schema artifacts (workestrate.schema.json + workestrate-workload.schema.json) to every consumer copy (tool copier template, tool home, registered config repos); `--check` reports staleness and exits 1 when stale |
 | `workestrate --no-project-config <cmd>` | Disable project-layer config loading |
@@ -829,9 +828,9 @@ The SOPS age private key is **NEVER** in the bundle or anywhere under this
 repository (the repo is agent-reachable via `${CWD}` mounts, so a key inside
 it would be exposed to sandboxes). It stays at
 `~/.config/sops/age/ai-workbench-secrets.txt` on the host. `workestrate`
-secret operations (`setup-secrets`, `with-secrets`, `run-with-secrets`,
-`decrypt-env`, `write-env`) therefore run on the host; in the container
-the key is simply absent and secret operations fail closed by design.
+secret operations (`setup-secrets`, `decrypt-env`, `write-env` wrappers; the CLI's
+secret command is `workestrate run -- <cmd>`) therefore run on the host; in the
+container the key is simply absent and secret operations fail closed by design.
 
 The home (`~/.workestrate`) contains the encrypted `.env.enc`, the registry,
 and config repos. If you version the home as a dotfiles repo via
