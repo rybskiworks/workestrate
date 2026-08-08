@@ -265,6 +265,61 @@ pub(crate) fn resolve_mount_roots_owned<W: crate::microsandbox::workload::Worklo
     })
 }
 
+/// Literal directory prefix of a glob pattern: everything before the first
+/// glob metacharacter (`* ? [ ] { }`). Empty when the pattern starts with a
+/// metachar.
+pub(crate) fn literal_glob_root(pattern: &str) -> std::path::PathBuf {
+    let first_metachar = pattern
+        .char_indices()
+        .find(|(_, c)| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'))
+        .map(|(idx, _)| idx);
+    match first_metachar {
+        Some(0) => std::path::PathBuf::new(),
+        Some(idx) => std::path::PathBuf::from(&pattern[..idx]),
+        None => std::path::PathBuf::from(pattern),
+    }
+}
+
+/// A seed glob expansion: the literal match root (for stripping rel paths)
+/// and the sorted regular-file matches.
+pub(crate) struct GlobExpansion {
+    pub root: std::path::PathBuf,
+    pub files: Vec<std::path::PathBuf>,
+}
+
+/// Expand a seed glob pattern relative to `root`. The pattern must already
+/// have passed validate_seed_glob. Returns the literal glob root and the
+/// sorted list of REGULAR FILE matches (directories skipped). No match is
+/// NOT an error here — callers decide hard-vs-warn.
+pub(crate) fn expand_seed_glob(root: &std::path::Path, pattern: &str) -> Result<GlobExpansion> {
+    let glob_root = root.join(literal_glob_root(pattern));
+    let pattern_owned = root.join(pattern).to_string_lossy().into_owned();
+    let mut files = Vec::new();
+    for entry in glob::glob(&pattern_owned).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to compile seed glob '{pattern}' under {}: {}",
+            root.display(),
+            e
+        )
+    })? {
+        let path = entry.map_err(|e| {
+            anyhow::anyhow!(
+                "failed to expand seed glob '{pattern}' under {}: {}",
+                root.display(),
+                e
+            )
+        })?;
+        if path.is_file() {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(GlobExpansion {
+        root: glob_root,
+        files,
+    })
+}
+
 /// Plan-time existence preflight (security-model enforcement point; fulfills
 /// docs/migration/30-security-model.md:137-141's plan-time promise).
 ///
@@ -319,42 +374,73 @@ pub(crate) fn preflight_existence(
         }
     }
 
-    // Seed sources: resolve against the seed content root (the declaring
+    // Seed entries: resolve against the seed content root (the declaring
     // layer's content root), falling back to the mount content root / project
     // root — mirroring `ConfigWorkload::prepare`'s fallback chain. A missing
-    // seed source is a hard error at plan time (prepare() would fail to copy
-    // it at runtime); warn-only under validate-config.
+    // seed source OR a seed glob with no matches is a hard error at plan time
+    // (prepare() would fail at runtime); warn-only under validate-config.
     let seed_root = seed_content_root
         .or(Some(roots.content_root))
         .or(roots.project_root);
     for seed in seed_files {
-        // P0: glob entries have no single source path (the source is the
-        // pattern's match set). Glob preflight lands in a later commit — skip
-        // the existence check entirely for them.
-        let Some(source) = &seed.source else {
-            continue;
-        };
         match &seed_root {
             Some(root) => {
-                let src = root.join(source);
-                if !src.exists() {
-                    let msg = format!(
-                        "workload '{}': seed source does not exist: {} (source = {:?})",
-                        workload_name,
-                        src.display(),
-                        source
-                    );
-                    if hard {
-                        anyhow::bail!("{msg}");
-                    } else {
-                        warnings.push(msg);
+                if let Some(src) = &seed.source {
+                    let source_path = root.join(src);
+                    if !source_path.exists() {
+                        let msg = format!(
+                            "workload '{}': seed source does not exist: {} (source = {:?})",
+                            workload_name,
+                            source_path.display(),
+                            src
+                        );
+                        if hard {
+                            anyhow::bail!("{msg}");
+                        } else {
+                            warnings.push(msg);
+                        }
+                    }
+                } else if let Some(glob) = &seed.glob {
+                    match expand_seed_glob(root, glob) {
+                        Ok(exp) if !exp.files.is_empty() => {}
+                        Ok(_) => {
+                            let msg = format!(
+                                "workload '{}': seed_files glob matched no files: {} (root = {})",
+                                workload_name,
+                                glob,
+                                root.display()
+                            );
+                            if hard {
+                                anyhow::bail!("{msg}");
+                            } else {
+                                warnings.push(msg);
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!(
+                                "workload '{}': seed_files glob expansion failed: {} (root = {})",
+                                workload_name,
+                                e,
+                                root.display()
+                            );
+                            if hard {
+                                anyhow::bail!("{msg}");
+                            } else {
+                                warnings.push(msg);
+                            }
+                        }
                     }
                 }
             }
             None => {
+                let source_label = seed
+                    .source
+                    .as_deref()
+                    .or(seed.glob.as_deref())
+                    .unwrap_or("(no source or glob)");
                 let msg = format!(
                     "workload '{}': seed source {:?} cannot be resolved (no content root)",
-                    workload_name, source
+                    workload_name, source_label
                 );
                 if hard {
                     anyhow::bail!("{msg}");
@@ -401,6 +487,7 @@ pub(crate) fn preflight_existence(
 )]
 mod tests {
     use super::{ensure_mount_sources, preflight_existence, resolve_mount_host, MountRoots};
+    use super::{expand_seed_glob, literal_glob_root};
     use super::{validate_mount_guest, validate_mount_host};
     use crate::microsandbox::plan::{MountPlan, NetworkPlan, SandboxPlan};
 
@@ -981,6 +1068,142 @@ mod tests {
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &seeds, Some(&root), None, "svc", true)?;
         assert!(warnings.is_empty(), "no warnings expected: {warnings:?}");
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    // ---- P2.2: seed_files glob expansion + preflight ----
+
+    #[test]
+    fn literal_glob_root_splits_before_first_metachar() {
+        assert_eq!(
+            literal_glob_root("seed/**/*.json"),
+            std::path::PathBuf::from("seed/")
+        );
+        assert_eq!(
+            literal_glob_root("agents/pi/*.json"),
+            std::path::PathBuf::from("agents/pi/")
+        );
+        assert_eq!(literal_glob_root("*.json"), std::path::PathBuf::new());
+        assert_eq!(
+            literal_glob_root("seed/a.json"),
+            std::path::PathBuf::from("seed/a.json")
+        );
+    }
+
+    #[test]
+    fn expand_seed_glob_returns_sorted_regular_files_only() -> anyhow::Result<()> {
+        let root = unique_root("glob-expand");
+        std::fs::create_dir_all(root.join("seed").join("sub"))?;
+        std::fs::write(root.join("seed").join("a.json"), "a")?;
+        std::fs::write(root.join("seed").join("b.json"), "b")?;
+        std::fs::write(root.join("seed").join("sub").join("c.json"), "c")?;
+        // A real directory inside the tree must never be reported as a file.
+        std::fs::create_dir_all(root.join("seed").join("dir"))?;
+
+        let expansion = expand_seed_glob(&root, "seed/**/*.json")?;
+
+        assert_eq!(expansion.root, root.join("seed"));
+        assert_eq!(
+            expansion.files,
+            vec![
+                root.join("seed").join("a.json"),
+                root.join("seed").join("b.json"),
+                root.join("seed").join("sub").join("c.json"),
+            ],
+            "regular-file matches must be sorted lexicographically; the directory must be skipped"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn expand_seed_glob_no_match_returns_empty() -> anyhow::Result<()> {
+        let root = unique_root("glob-empty");
+        std::fs::create_dir_all(&root)?;
+
+        let expansion = expand_seed_glob(&root, "seed/**/*.json")?;
+        assert!(
+            expansion.files.is_empty(),
+            "no matches → empty file list (not an error here)"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// A seed glob with no matches BAILS in hard mode (prepare() would fail
+    /// to seed anything at runtime).
+    #[test]
+    fn preflight_glob_no_match_fails_hard() -> anyhow::Result<()> {
+        let root = unique_root("pf-glob-hard");
+        let plan = minimal_plan(vec![]);
+        let seeds = vec![crate::config::SeedFileConfig {
+            source: None,
+            target: "workspaces/svc-state/globbed".into(),
+            only_if_missing: None,
+            template: false,
+            glob: Some("seed/**/*.json".into()),
+        }];
+        let roots = roots_for(&root, None, None);
+        let err =
+            preflight_existence(&roots, &plan, &seeds, Some(&root), None, "svc", true).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("matched no files"),
+            "hard preflight must bail on a no-match seed glob: {msg}"
+        );
+        assert!(msg.contains("svc"), "error must name the workload: {msg}");
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// In warn mode (validate-config), a no-match seed glob is collected as a
+    /// warning, NOT a bail.
+    #[test]
+    fn preflight_glob_warn_mode_collects_warning() -> anyhow::Result<()> {
+        let root = unique_root("pf-glob-warn");
+        let plan = minimal_plan(vec![]);
+        let seeds = vec![crate::config::SeedFileConfig {
+            source: None,
+            target: "workspaces/svc-state/globbed".into(),
+            only_if_missing: None,
+            template: false,
+            glob: Some("seed/**/*.json".into()),
+        }];
+        let roots = roots_for(&root, None, None);
+        let warnings = preflight_existence(&roots, &plan, &seeds, Some(&root), None, "svc", false)?;
+        assert_eq!(warnings.len(), 1, "exactly one glob warning: {warnings:?}");
+        assert!(
+            warnings[0].contains("matched no files"),
+            "warn-mode glob warning text: {}",
+            warnings[0]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// A seed glob that matches files → no warnings, no bail.
+    #[test]
+    fn preflight_glob_with_matches_yields_no_warnings() -> anyhow::Result<()> {
+        let root = unique_root("pf-glob-ok");
+        std::fs::create_dir_all(root.join("seed"))?;
+        std::fs::write(root.join("seed").join("x.json"), "{}")?;
+        let plan = minimal_plan(vec![]);
+        let seeds = vec![crate::config::SeedFileConfig {
+            source: None,
+            target: "workspaces/svc-state/globbed".into(),
+            only_if_missing: None,
+            template: false,
+            glob: Some("seed/*.json".into()),
+        }];
+        let roots = roots_for(&root, None, None);
+        let warnings = preflight_existence(&roots, &plan, &seeds, Some(&root), None, "svc", true)?;
+        assert!(
+            warnings.is_empty(),
+            "a matching seed glob must yield no warnings: {warnings:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }

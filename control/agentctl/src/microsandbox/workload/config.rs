@@ -328,28 +328,65 @@ impl Workload for ConfigWorkload {
         };
         let state_dir = crate::config::resolve_state_dir();
         for seed in &self.workload.seed_files {
-            let source = match &seed.source {
-                Some(src) => root.join(src),
-                None => anyhow::bail!(
-                    "workload '{}' seed_files glob entries are not supported yet",
-                    self.name
-                ),
-            };
-            let target =
+            let target_dir =
                 if seed.target.starts_with("workspaces/") || seed.target.starts_with("var/") {
                     state_dir.join(&seed.target)
                 } else {
                     root.join(&seed.target)
                 };
-            self.seed_one_file(
-                &source,
-                &target,
-                &seed.target,
-                seed.template,
-                seed.only_if_missing.unwrap_or(true),
-                seed.source.as_deref().unwrap_or_default(),
-                env_view,
-            )?;
+            match &seed.source {
+                Some(src) => {
+                    let source = root.join(src);
+                    self.seed_one_file(
+                        &source,
+                        &target_dir,
+                        &seed.target,
+                        seed.template,
+                        seed.only_if_missing.unwrap_or(true),
+                        src,
+                        env_view,
+                    )?;
+                }
+                None => {
+                    // Validation enforces exactly one of source|glob; if a
+                    // config ever bypassed it, refuse rather than panic.
+                    let Some(glob) = seed.glob.as_deref() else {
+                        anyhow::bail!(
+                            "workload '{}' seed_files entry has neither source nor glob \
+                             (config validation should have rejected it)",
+                            self.name
+                        );
+                    };
+                    let expansion = crate::microsandbox::mounts::expand_seed_glob(&root, glob)?;
+                    if expansion.files.is_empty() {
+                        anyhow::bail!(
+                            "workload '{}' seed_files glob '{}' matched no files under {}",
+                            self.name,
+                            glob,
+                            root.display()
+                        );
+                    }
+                    for file in &expansion.files {
+                        let rel = file.strip_prefix(&expansion.root).map_err(|_| {
+                            anyhow::anyhow!(
+                                "seed glob match {} escaped the glob root {}",
+                                file.display(),
+                                expansion.root.display()
+                            )
+                        })?;
+                        let target = target_dir.join(rel);
+                        self.seed_one_file(
+                            file,
+                            &target,
+                            &seed.target,
+                            seed.template,
+                            seed.only_if_missing.unwrap_or(true),
+                            &rel.to_string_lossy(),
+                            env_view,
+                        )?;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -915,6 +952,44 @@ template = true
 default_deny = true
 "#;
 
+    /// P2.2: a glob seed entry (no `source`; validation enforces exactly one
+    /// of source|glob). Each regular-file match of `seed/**/*.json` seeds to
+    /// `target/<rel-path>` (rel = match minus the literal glob root `seed/`).
+    const GLOB_CONFIG_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["true"]
+
+[[workloads.svc.seed_files]]
+glob = "seed/**/*.json"
+target = "workspaces/svc-state/globbed"
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
+    /// P2.2 template+glob variant: every matched `.tpl` file is rendered
+    /// against the guest-visible env view before being seeded.
+    const GLOB_TEMPLATE_CONFIG_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["true"]
+
+[[workloads.svc.seed_files]]
+glob = "seed/**/*.tpl"
+target = "workspaces/svc-state/globbed"
+template = true
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
     #[test]
     fn new_resolves_content_roots_to_the_declaring_config_dir() -> Result<()> {
         let guard = DependsEnvGuard::new("cw-content-root", SEED_CONFIG_TOML);
@@ -1214,6 +1289,142 @@ default_deny = true
             std::fs::read(&target)?,
             std::fs::read(&source_path)?,
             "untemplated seeds are copied byte-identical, never rendered"
+        );
+        Ok(())
+    }
+
+    // ---- P2.2: glob seed_files expand end-to-end in prepare() ----
+
+    /// P2.2: a glob seed entry expands every regular-file match to
+    /// `target/<rel-path>` (rel = match minus the literal glob root), sorted
+    /// and preserving subdirectories; directories are never seeded.
+    #[test]
+    fn prepare_glob_expands_sorted_preserving_subdirs() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-glob", GLOB_CONFIG_TOML);
+        // Files intentionally written out of sorted order (b before a) to
+        // prove prepare() seeds deterministically; `expand_seed_glob` sorts.
+        std::fs::create_dir_all(guard.config_dir().join("seed").join("a"))?;
+        std::fs::write(guard.config_dir().join("seed").join("b.json"), "b")?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("a").join("x.json"),
+            "x",
+        )?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("a").join("sub.json"),
+            "s",
+        )?;
+        // A real directory inside the match tree must never be seeded.
+        std::fs::create_dir_all(guard.config_dir().join("seed").join("emptydir"))?;
+
+        let svc = ConfigWorkload::new("svc")?;
+        svc.prepare(&empty_seed_env_view())?;
+
+        let globbed = guard.state_dir().join("workspaces/svc-state/globbed");
+        let expect = [("a/x.json", "x"), ("a/sub.json", "s"), ("b.json", "b")];
+        for (rel, content) in expect {
+            let target = globbed.join(rel);
+            assert!(
+                target.is_file(),
+                "globbed target missing: {}",
+                target.display()
+            );
+            assert_eq!(
+                std::fs::read_to_string(&target)?,
+                content,
+                "globbed target content: {}",
+                target.display()
+            );
+        }
+        // The directory produced no file under the target.
+        assert!(
+            !globbed.join("emptydir").exists(),
+            "a directory match must never be seeded under the target"
+        );
+        Ok(())
+    }
+
+    /// P2.2: a glob with no matches is a hard error at prepare time.
+    #[test]
+    fn prepare_glob_no_match_hard_errors() -> Result<()> {
+        let _guard = DependsEnvGuard::new("cw-glob-nomatch", GLOB_CONFIG_TOML);
+        // No `seed/` tree at all → the pattern matches nothing.
+        let svc = ConfigWorkload::new("svc")?;
+        let err = svc
+            .prepare(&empty_seed_env_view())
+            .expect_err("a no-match seed glob must hard-error in prepare()");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("matched no files"),
+            "error must say 'matched no files': {msg}"
+        );
+        assert!(msg.contains("svc"), "error must name the workload: {msg}");
+        Ok(())
+    }
+
+    /// P2.2: `only_if_missing` (default true) applies PER FILE — a glob match
+    /// whose target already exists is skipped while the others are seeded.
+    #[test]
+    fn prepare_glob_only_if_missing_applies_per_file() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-glob-oim", GLOB_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        std::fs::write(guard.config_dir().join("seed").join("a.json"), "fresh-a")?;
+        std::fs::write(guard.config_dir().join("seed").join("b.json"), "fresh-b")?;
+        // Pre-create the target for a.json → only b.json may be seeded.
+        let globbed = guard.state_dir().join("workspaces/svc-state/globbed");
+        std::fs::create_dir_all(&globbed)?;
+        std::fs::write(globbed.join("a.json"), "stale")?;
+
+        let svc = ConfigWorkload::new("svc")?;
+        svc.prepare(&empty_seed_env_view())?;
+
+        assert_eq!(
+            std::fs::read_to_string(globbed.join("a.json"))?,
+            "stale",
+            "existing target must NOT be overwritten when only_if_missing is true"
+        );
+        assert_eq!(
+            std::fs::read_to_string(globbed.join("b.json"))?,
+            "fresh-b",
+            "the non-existing target must be seeded"
+        );
+        Ok(())
+    }
+
+    /// P2.2: `template = true` composes with globs — every matched file is
+    /// rendered against the guest-visible env view.
+    #[test]
+    fn prepare_glob_and_template_compose() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-glob-tpl", GLOB_TEMPLATE_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed").join("sub"))?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("a.tpl"),
+            "a:${LITELLM_ADDR}",
+        )?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("sub").join("b.tpl"),
+            "b:${LITELLM_ADDR}",
+        )?;
+
+        let view = crate::microsandbox::env::SeedEnvView {
+            vars: std::collections::HashMap::from([(
+                "LITELLM_ADDR".to_string(),
+                "host.microsandbox.internal:4000".to_string(),
+            )]),
+            defined_secrets: std::collections::HashSet::new(),
+        };
+        let svc = ConfigWorkload::new("svc")?;
+        svc.prepare(&view)?;
+
+        let globbed = guard.state_dir().join("workspaces/svc-state/globbed");
+        assert_eq!(
+            std::fs::read_to_string(globbed.join("a.tpl"))?,
+            "a:host.microsandbox.internal:4000",
+            "each glob match must be template-rendered"
+        );
+        assert_eq!(
+            std::fs::read_to_string(globbed.join("sub").join("b.tpl"))?,
+            "b:host.microsandbox.internal:4000",
+            "nested glob matches keep their rel-path and are rendered too"
         );
         Ok(())
     }

@@ -599,10 +599,33 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
             .or(build_root)
             .or(project_root.as_ref());
         for seed in &wl.seed_files {
-            // P0: glob entries have no single source path (the source is the
-            // pattern's match set). Glob preflight lands in a later commit —
-            // skip the existence check entirely for them.
             let Some(source) = &seed.source else {
+                // Glob entry: no single source path — expand the pattern and
+                // warn when it matches nothing or fails to expand. Mirrors
+                // preflight_existence's glob branch (warn-only here).
+                if let Some(glob) = &seed.glob {
+                    match seed_base {
+                        Some(root) => {
+                            match crate::microsandbox::mounts::expand_seed_glob(root, glob) {
+                                Ok(exp) if exp.files.is_empty() => warnings.push(format!(
+                                    "workload '{name}': seed_files glob matched no files: {} (root = {})",
+                                    glob,
+                                    root.display()
+                                )),
+                                Ok(_) => {}
+                                Err(e) => warnings.push(format!(
+                                    "workload '{name}': seed_files glob expansion failed: {} (root = {})",
+                                    e,
+                                    root.display()
+                                )),
+                            }
+                        }
+                        None => warnings.push(format!(
+                            "workload '{name}': seed_files glob {} cannot be resolved (no content root)",
+                            glob
+                        )),
+                    }
+                }
                 continue;
             };
             if let Some(root) = seed_base {
