@@ -287,6 +287,53 @@ golden-check:
 | 2 | Core exports `lib.*`. Config-repo-flake builds images. Copier template works. (All HOST-NIX.) |
 | 3 | Fixture-repo merge tests pass. `plan --show-source` works. Multi-recipient SOPS works. Copier template finalized. |
 
+## Schema authority model (single source of truth)
+
+The schema single-source-of-truth model is enforced by the compiled tool,
+not by the JSON Schema files:
+
+- **The checker is the compiled tool.** `workestrate validate-config`
+  validates via the Rust types (`ConfigFile` / `WorkloadConfig`,
+  `deny_unknown_fields`, `schema_version` gate); it does NOT read the JSON
+  Schema files.
+- **The JSON Schema files are tool-derived projections for editor/tombi UX
+  only:** `schemas/workestrate.schema.json` (ConfigFile) +
+  `schemas/workestrate-workload.schema.json` (WorkloadConfig), both generated
+  by `workestrate generate-schema` (schemars) and pinned byte-for-byte by
+  `tests/schema_drift.rs` + `tests/schema_subschema_drift.rs`.
+- **Distribution:** `workestrate schemas update` writes the binary's own
+  generated artifacts to every known consumer location (tool copier template
+  `templates/workestrate-config/schemas/`, tool home `schemas/`, and each
+  registered config repo that carries a `schemas/` dir — workestrate-managed
+  repos). Idempotent byte compare. `--check` is the CI gate wired as `just
+  schema-sync-check` in `just verify`; `workestrate doctor` reports stale
+  copies at provisioning time.
+
+### Migration policy
+
+- **Additive schema changes** (new optional fields, e.g. seed_files
+  template/glob) do NOT bump `schema_version`; old binaries reading new
+  configs fail at validate-config via unknown-field rejection, new binaries
+  read old configs fine. Editors with stale schema copies are fixed
+  mechanically by `workestrate schemas update`.
+- **Breaking changes** bump `schema_version`; `schema_version = 2` is already
+  a hard error in validate-config (see `config/validation.rs`), so old
+  binaries refuse new configs instead of misinterpreting them.
+- **Template evolution** for scaffolded config repos rides `copier update`
+  (`.copier-answers.yml` is written by `config new`); schema copies in repos
+  refresh via `schemas update`.
+- **`workestrate migrate-config --from/--to` is DEFERRED** until the first
+  real breaking change lands; the v1→v2 retraction event predates production
+  configs, so no historical migration machinery is owed. When the first
+  breaking change arrives, implement a `--dry-run` transform command at that
+  time.
+
+### Workflow
+
+After changing config types: run `just generate-schema` (writes both files),
+then `just schema-sync-check` (CI gate) / `workestrate schemas update`
+(distribute), and commit consumer repo changes.
+
 ## Phase 3 implementation status (updated)
 
 **Status**: IMPLEMENTED (cargo-verified in-container; HOST-GATE items below)

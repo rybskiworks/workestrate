@@ -71,15 +71,11 @@ golden-check:
 # schemas/workestrate-workload.schema.json. Run on a nix-capable host (the
 # dev shell's RUSTFLAGS → libcap-ng OUT lib dir is required to build the
 # aws-lc-rs / parking_lot_core native crates).
-# After regenerating, re-sync consumer copies: templates/workestrate-config/
-# schemas/workestrate.schema.json plus any external homes/config repos that
-# carry schemas/workestrate.schema.json (drift here breaks tombi schema
-# validation for consumers). The workload subschema is now produced by the
-# tool too (schemars-derived WorkloadConfig, with the same post-processing
-# that matched the previous hand-derived jq rule); after `just
-# generate-schema`, run `just schema-sync-check` / `workestrate schemas
-# update` to distribute BOTH artifacts to consumers (that command lands in a
-# later phase; keep the note forward-looking).
+# After regenerating, run `just schema-sync-check` (CI gate; exits 1 when a
+# consumer copy is stale) and `workestrate schemas update` to distribute BOTH
+# artifacts (full + workload subschema) to the copier template
+# (templates/workestrate-config/schemas/), tool home (schemas/), and each
+# registered config repo that carries a schemas/ dir.
 generate-schema:
     #!/usr/bin/env bash
     set -euo pipefail

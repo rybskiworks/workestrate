@@ -93,13 +93,23 @@ P4 (out-of-tree, personal repo 0f5be2e): pi workload.toml [[seed_files]] gains `
 - 650bcbe: envsubst-standard `$${` escape in the seed template engine (control/agentctl/src/microsandbox/env.rs) — a `$${` in a seed source renders as a literal `${`, so a seed may emit a token for the guest app to expand itself (pi's models.json apiKey uses `$${LITELLM_MASTER_KEY}` so the rendered file contains `${LITELLM_MASTER_KEY}`); `$$` collapses to a literal `$`; baseUrl-style tokens stay tool-rendered (`${LITELLM_ADDR}`).
 Validation: full suite green per commit (fmt/clippy -D warnings/test), tombi-check, golden-check (no regen), schema-check, scaffold-check, spec-examples, check-nix-paths. In-container smoke of the personal config via WORKESTRATE_HOME=workestrate-dev-home: validate-config clean + `workload plan pi` exit 0 (LITELLM_ADDR injected, secret_env present). NOTE: the prescribed WORKESTRATE_CONFIG_DIR run hits a STALE $HOME/.workestrate registry (old personal checkout predating the default_deny_false entitlement requirement) — unrelated to this feature; re-sync that checkout or use WORKESTRATE_HOME.
 
-## Current repo state (verified 2026-08-07)
+## Schema single-source-of-truth (P1-P5) — 2026-08-08
+
+- **generate-schema now emits both schema files**: `schemas/workestrate.schema.json` (ConfigFile) + `schemas/workestrate-workload.schema.json` (WorkloadConfig subschema, replacing the hand-derived jq rule; pinned by `schema_subschema_drift.rs`).
+- **`workestrate schemas update [--repo <name>] [--check]`** syncs consumer schema copies idempotently (byte compare; `--check` exits 1 when stale).
+- **`just schema-sync-check`** wired into `just verify` (CI gate).
+- **`workestrate doctor`** reports stale consumer schema copies at provisioning time.
+- **Scaffold + home init + copier template** now write both schema files and split tombi mappings (full schema → `workestrate.toml` / `default.toml` / `secrets.toml`; workload subschema → `workloads/**/*.toml`).
+- **dev-home + personal repos synced**: both carry both schema files byte-identical to the binary's generated output.
+- P5 (this commit): docs — README command rows, schema authority model in `docs/migration/40-migration-process.md`, security note in `30-security-model.md`, justfile generate-schema note, NEXT-SESSION/STATUS updates.
+
+## Current repo state (verified 2026-08-08)
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 9 ahead of origin (incl. this docs commit), NOT pushed; origin SSH |
-| personal config repo | `e3d65e3` | clean; flake.lock pins workestrate @ `c45494b` (B5 HOST-GATED) |
-| dev home | workestrate-dev-home | clean; `sources/` EMPTY; workestrate.lock pins `b1c87416` |
+| workestrate | HEAD on `migration/tool-model` | clean, 15 ahead of origin (incl. this docs commit), NOT pushed; origin SSH |
+| personal config repo | `e779c83` | 4 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
+| dev home | workestrate-dev-home `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |
 
 ## Readiness verdict

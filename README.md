@@ -767,7 +767,8 @@ require a registered config repo).
 | `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes (instance records) |
 | `workestrate workloads` | List configured workloads with kind + running status (discovery verb, ADR 0027) |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox (destructive; confirms unless `--yes`) |
-| `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` (schemars-derived; committed at `control/agentctl/schema/workestrate.toml.json`) |
+| `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived from the config types; `--output` / `--output-workload` write the canonical files under `schemas/`) |
+| `workestrate schemas update [--repo <name>] [--check]` | Sync the generated schema artifacts (workestrate.schema.json + workestrate-workload.schema.json) to every consumer copy (tool copier template, tool home, registered config repos); `--check` reports staleness and exits 1 when stale |
 | `workestrate --no-project-config <cmd>` | Disable project-layer config loading |
 
 ### Secrets targeting

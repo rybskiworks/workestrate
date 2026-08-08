@@ -11,6 +11,14 @@ and Kustomize (overlays are untrusted; the base + strategic merge is the
 contract). Config can come from arbitrary paths/repos; the allowlist is checked
 against the loaded config's contents, not its provenance.
 
+The JSON Schema files (`schemas/workestrate.schema.json` +
+`schemas/workestrate-workload.schema.json`) are derived artifacts for
+editor/tombi UX, NOT a trust boundary — the authoritative checker is the
+compiled tool (`validate-config` enforces `deny_unknown_fields` + the
+`schema_version` gate regardless of what any editor-side schema says);
+`workestrate schemas update` only refreshes derived copies and cannot weaken
+validation.
+
 ## Purity invariant
 
 **Config repo = declarative data + SOPS-encrypted secrets + static files ONLY.**

@@ -5,13 +5,13 @@
 > the host and now holds real 0.6.8 build outputs. The full operations doc
 > is `NEXT-SESSION.md`.
 
-## Repo states (verified 2026-08-07)
+## Repo states (verified 2026-08-08)
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, **9 ahead of origin, NOT pushed**; origin SSH |
-| personal config repo | `e3d65e3` | clean; flake.lock pins workestrate @ `c45494b` (B5 HOST-GATED) |
-| dev home | (workestrate-dev-home) | clean; `sources/` EMPTY; workestrate.lock pins `b1c87416` |
+| workestrate | HEAD on `migration/tool-model` | clean, **15 ahead of origin, NOT pushed** (incl. the P5 docs commit); origin SSH |
+| personal config repo | `e779c83` | 4 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
+| dev home | (workestrate-dev-home) `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | clean; origin/fix == 74919059 (pushed); origin/main `b43d7522` (divergent); remote ambiguous — live ls-remote before fork work |
 
 ## Store / artifact state (verified 2026-08-07)
