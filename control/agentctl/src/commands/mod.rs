@@ -8,5 +8,6 @@ pub mod home;
 pub mod init;
 pub mod lifecycle;
 pub mod migrate;
+pub mod schemas;
 pub mod secrets_target;
 pub mod source;

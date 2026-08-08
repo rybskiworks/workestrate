@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use workestrate::cli_actions::{
-    AgentAction, ConfigAction, ContextAction, HomeAction, ServiceAction, SourceAction,
-    WorkloadAction,
+    AgentAction, ConfigAction, ContextAction, HomeAction, SchemasAction, ServiceAction,
+    SourceAction, WorkloadAction,
 };
 use workestrate::cli_error::{classify_exit_code, emit_error};
 use workestrate::commands::config_cmd::{
@@ -23,6 +23,7 @@ use workestrate::commands::lifecycle::{
     cmd_clean, cmd_down_all, dispatch_agent, dispatch_service, workload_route, WorkloadRoute,
 };
 use workestrate::commands::migrate::cmd_migrate_home;
+use workestrate::commands::schemas::cmd_schemas;
 use workestrate::commands::secrets_target::{cmd_secrets_schema, cmd_secrets_target};
 use workestrate::commands::source::cmd_source;
 use workestrate::microsandbox::workload::ConfigWorkload;
@@ -147,6 +148,12 @@ enum Commands {
     Home {
         #[command(subcommand)]
         action: HomeAction,
+    },
+    /// Manage the generated JSON Schema artifacts (workestrate.schema.json +
+    /// workestrate-workload.schema.json) at every consumer location.
+    Schemas {
+        #[command(subcommand)]
+        action: SchemasAction,
     },
     /// Resolve a registered config repo's secrets target paths (for setup-secrets).
     SecretsTarget {
@@ -509,6 +516,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             other => cmd_config(other).await,
         },
         Commands::Home { action } => cmd_home(action),
+        Commands::Schemas { action } => cmd_schemas(action),
         Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
         Commands::Doctor => cmd_doctor(cli.json),
         Commands::Source { action } => cmd_source(action).await,
@@ -701,6 +709,7 @@ mod tests {
             "generate-env-example",
             "config",
             "home",
+            "schemas",
             "secrets-target",
             "doctor",
             "clean",

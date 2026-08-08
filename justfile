@@ -43,7 +43,7 @@ spec-examples:
 
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # golden-check, schema drift, lock-file stability, AND nix-purity lint.
-verify: toolchain-check check test spec-examples tombi-check golden-check schema-check scaffold-check lint-nix store-audit
+verify: toolchain-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
@@ -92,6 +92,12 @@ generate-schema:
 # `workestrate generate-schema` and diffs against the committed file.
 schema-check:
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_drift
+
+# CI drift guard for the consumer schema copies (schemas/ at templates/,
+# tool home, and registered config repos). Exits 1 when any consumer copy
+# is stale or missing; run `workestrate schemas update` to refresh.
+schema-sync-check:
+    cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- schemas update --check
 
 # CI drift guard for the `workestrate config new` scaffold. Invokes
 # control/agentctl/tests/scaffold_template.rs, which renders the embedded

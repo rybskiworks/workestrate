@@ -515,3 +515,20 @@ pub enum SourceAction {
     /// Reset agent source to canonical (discard local edits)
     Reset { name: String },
 }
+
+/// Actions for managing the generated JSON Schema artifacts.
+#[derive(Subcommand)]
+pub enum SchemasAction {
+    /// Write the generated JSON Schema artifacts to every known consumer
+    /// location (tool-repo copier template, tool home, registered config
+    /// repos). Idempotent: files whose content already matches are skipped.
+    Update {
+        /// Only update one registered config repo (by registry name).
+        #[arg(long, value_name = "NAME")]
+        repo: Option<String>,
+        /// Report staleness without writing anything; exit 1 when any
+        /// consumer file is stale or missing.
+        #[arg(long)]
+        check: bool,
+    },
+}
