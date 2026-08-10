@@ -121,10 +121,16 @@ impl ConfigWorkload {
         }
         let ports_source = source_of(&format!("workloads.{}.ports", self.name));
         for p in &plan.ports {
+            let name_prefix = p
+                .name
+                .as_deref()
+                .map(|n| format!("{n}:"))
+                .unwrap_or_default();
+            let auto_suffix = if p.host == 0 { " (auto)" } else { "" };
             write_line(
                 &mut out,
                 "",
-                &format!("port: {}:{}", p.host, p.guest),
+                &format!("port: {}{}:{}{}", name_prefix, p.host, p.guest, auto_suffix),
                 ports_source,
             );
         }

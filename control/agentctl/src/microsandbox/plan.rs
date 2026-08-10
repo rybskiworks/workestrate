@@ -238,10 +238,28 @@ impl fmt::Display for SandboxPlan {
             // legacy `port: <host>:<guest>` line BYTE-IDENTICAL (the golden
             // plans pin this); non-default binds render
             // `port: <bind_ip>:<host>:<guest>`.
+            // P1: a port name (when present) prefixes the line
+            // (`port: <name>:<host>:<guest>`); `host = 0` marks an auto port
+            // and renders an `(auto)` suffix (the allocation happens at boot,
+            // so 0 is the honest prospective view).
+            let name_prefix = p
+                .name
+                .as_deref()
+                .map(|n| format!("{n}:"))
+                .unwrap_or_default();
+            let auto_suffix = if p.host == 0 { " (auto)" } else { "" };
             if p.bind_ip == default_bind_ip() {
-                writeln!(f, "port: {}:{}", p.host, p.guest)?;
+                writeln!(
+                    f,
+                    "port: {}{}:{}{}",
+                    name_prefix, p.host, p.guest, auto_suffix
+                )?;
             } else {
-                writeln!(f, "port: {}:{}:{}", p.bind_ip, p.host, p.guest)?;
+                writeln!(
+                    f,
+                    "port: {}{}:{}:{}{}",
+                    name_prefix, p.bind_ip, p.host, p.guest, auto_suffix
+                )?;
             }
         }
         for m in &self.mounts {
@@ -500,6 +518,94 @@ network: default_deny=true
         assert!(
             !rendered.contains("127.0.0.1"),
             "default bind must NOT print the bind IP; got:\n{rendered}"
+        );
+    }
+
+    /// P1 (namespaced ports): a port name prefixes the line and `host = 0`
+    /// renders an `(auto)` suffix; unnamed non-auto ports keep the legacy
+    /// byte-identical format (golden-plan invariant).
+    #[test]
+    fn sandbox_plan_display_renders_names_and_auto_marker() {
+        let base = |ports: Vec<PortMapping>| SandboxPlan {
+            name: "names".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports,
+            mounts: vec![],
+            network: NetworkPlan {
+                default_deny: false,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+            },
+        };
+
+        // Named port on the default bind → `port: <name>:<host>:<guest>`.
+        let named = base(vec![PortMapping {
+            host: 4000,
+            guest: 4000,
+            bind_ip: default_bind_ip(),
+            name: Some("api".to_string()),
+        }]);
+        let rendered = format!("{named}");
+        assert!(
+            rendered.contains("port: api:4000:4000\n"),
+            "named port must render a name prefix; got:\n{rendered}"
+        );
+
+        // Named port on a non-default bind → the bind IP joins the line.
+        let named_parallel = base(vec![PortMapping {
+            host: 8080,
+            guest: 80,
+            bind_ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+            name: Some("api".to_string()),
+        }]);
+        let rendered = format!("{named_parallel}");
+        assert!(
+            rendered.contains("port: api:127.0.0.2:8080:80\n"),
+            "named non-default-bind port must render name + bind IP; got:\n{rendered}"
+        );
+
+        // Auto port (host = 0) → `(auto)` suffix; named auto prefixes too.
+        let auto = base(vec![PortMapping::new(0, 4000)]);
+        let rendered = format!("{auto}");
+        assert!(
+            rendered.contains("port: 0:4000 (auto)\n"),
+            "host=0 port must render the (auto) marker; got:\n{rendered}"
+        );
+
+        let named_auto = base(vec![PortMapping {
+            host: 0,
+            guest: 4000,
+            bind_ip: default_bind_ip(),
+            name: Some("api".to_string()),
+        }]);
+        let rendered = format!("{named_auto}");
+        assert!(
+            rendered.contains("port: api:0:4000 (auto)\n"),
+            "named auto port must render name + (auto); got:\n{rendered}"
+        );
+
+        // Legacy unnamed non-auto stays byte-identical AND the named/auto
+        // formats never leak into it.
+        let legacy = base(vec![PortMapping::new(4000, 4000)]);
+        let rendered = format!("{legacy}");
+        assert_eq!(
+            rendered,
+            "name: names\nport: 4000:4000\nnetwork: default_deny=false\n"
+        );
+        assert!(
+            !rendered.contains("(auto)"),
+            "legacy unnamed non-auto port must not render (auto); got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("port: api:"),
+            "legacy output must not contain the named-port format; got:\n{rendered}"
         );
     }
 

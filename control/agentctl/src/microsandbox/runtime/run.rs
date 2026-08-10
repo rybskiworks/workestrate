@@ -286,6 +286,52 @@ pub(crate) async fn run_service_interactive(
     outcome
 }
 
+/// Assign a probed free port to every mapping whose `host == 0` (auto).
+///
+/// Each 0-marked port is probed individually via
+/// [`crate::microsandbox::port_registry::probe_free_ports`] on `bind`. The
+/// probed value is NOT a reservation (same TOCTOU contract as --port-auto:
+/// the post-create atomic check+register closes the registry-side window).
+/// A candidate is REJECTED (re-probed) when it equals any already-concrete
+/// host in `ports` — either a declared non-zero port of this workload or a
+/// previously assigned auto port — so a workload mixing `host = 4000` and
+/// `host = 0` can never double-publish. Bounded retries; fail-closed on
+/// exhaustion.
+fn apply_auto_ports(state_dir: &Path, bind: IpAddr, ports: &mut [PortMapping]) -> Result<()> {
+    let auto_indices: Vec<usize> = ports
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.host == 0)
+        .map(|(i, _)| i)
+        .collect();
+    if auto_indices.is_empty() {
+        return Ok(());
+    }
+    const MAX_AUTO_ATTEMPTS: usize = 16;
+    let mut attempts = 0usize;
+    let mut next = 0usize;
+    while next < auto_indices.len() {
+        attempts += 1;
+        if attempts > MAX_AUTO_ATTEMPTS {
+            anyhow::bail!(
+                "host=0 auto port(s): failed to probe {} distinct free port(s) on {} after {} attempts; \
+                 retry, or publish explicit host ports",
+                auto_indices.len(),
+                bind,
+                MAX_AUTO_ATTEMPTS
+            );
+        }
+        let probed = super::super::port_registry::probe_free_ports(state_dir, bind, 1)?[0];
+        let collides = ports.iter().any(|p| p.host == probed);
+        if collides {
+            continue;
+        }
+        ports[auto_indices[next]].host = probed;
+        next += 1;
+    }
+    Ok(())
+}
+
 /// Prepare, resolve, and create the sandbox plus the foreground config used
 /// to run the workload's real command.
 pub(crate) async fn build_sandbox<W: Workload>(
@@ -352,6 +398,12 @@ pub(crate) async fn build_sandbox<W: Workload>(
         for (p, host) in plan.ports.iter_mut().zip(probed) {
             p.host = host;
         }
+    } else {
+        // P1: host = 0 marks a per-port auto allocation (namespaced ports).
+        // Each 0-marked port is probed individually on the slot's bind. This
+        // runs even when --port-auto is absent; --port-auto above wins when
+        // both are used (it overwrites every host, including 0-marked ones).
+        apply_auto_ports(&state_dir, bind_ip, &mut plan.ports)?;
     }
 
     check_occupied_or_replace(spec, &state_dir).await?;
@@ -710,6 +762,174 @@ mod tests {
         // … makes the next parallel slot draw 127.0.0.3.
         let ip = slot_bind_ip("personal-litellm@blue", &state_dir)?;
         assert_eq!(ip, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)));
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- P1: host = 0 per-port auto allocation (namespaced ports) ----
+
+    /// Apply `apply_auto_ports` to `original` and assert every auto-marked
+    /// host satisfies the P1 invariants: non-zero, mutually distinct, distinct
+    /// from the declared (non-auto) hosts, and bindable on `bind` RIGHT NOW.
+    ///
+    /// FLAKE-GUARD (TOCTOU): `probe_free_ports` is deliberately NOT a
+    /// reservation — under `cargo test`'s parallel harness another thread (or
+    /// an unrelated process) can claim a probed port between the probe and
+    /// this assertion's bind. Retrying the whole apply+assert cycle a few
+    /// times distinguishes that benign race from a real regression (mirrors
+    /// store.rs `assert_probed_ports_bindable`).
+    fn assert_auto_ports_assign(
+        state_dir: &Path,
+        bind: IpAddr,
+        original: Vec<PortMapping>,
+        auto_indices: &[usize],
+    ) -> Vec<PortMapping> {
+        let declared: Vec<u16> = original
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !auto_indices.contains(i))
+            .map(|(_, p)| p.host)
+            .collect();
+        const MAX_CYCLES: usize = 8;
+        for cycle in 1..=MAX_CYCLES {
+            let mut ports = original.clone();
+            apply_auto_ports(state_dir, bind, &mut ports).expect("apply_auto_ports must succeed");
+            let assigned: Vec<u16> = auto_indices.iter().map(|&i| ports[i].host).collect();
+            // Deterministic invariants (a violation is a real regression, not
+            // a flake): assert directly, no retry.
+            assert!(
+                assigned.iter().all(|p| *p != 0),
+                "auto ports must be non-zero: {assigned:?}"
+            );
+            let distinct: std::collections::HashSet<u16> = assigned.iter().copied().collect();
+            assert_eq!(
+                distinct.len(),
+                assigned.len(),
+                "auto ports must be mutually distinct: {assigned:?}"
+            );
+            for p in &assigned {
+                assert!(
+                    !declared.contains(p),
+                    "auto port {p} collides with a declared host {declared:?}"
+                );
+            }
+            // Bindability is racy (the probe is not a reservation): hold every
+            // successfully bound listener while attempting the rest, so the
+            // assertion is "all assigned ports are SIMULTANEOUSLY bindable".
+            let mut held = Vec::with_capacity(assigned.len());
+            let mut conflict = None;
+            for p in &assigned {
+                match std::net::TcpListener::bind((bind, *p)) {
+                    Ok(listener) => held.push(listener),
+                    Err(e) => {
+                        conflict = Some((*p, e));
+                        break;
+                    }
+                }
+            }
+            drop(held);
+            if let Some((port, err)) = conflict {
+                assert!(
+                    cycle < MAX_CYCLES,
+                    "auto-assigned port {port} on {bind} must be bindable after the probe \
+                     (failed all {MAX_CYCLES} apply/assert cycles): {err:?}"
+                );
+                eprintln!(
+                    "auto-port cycle {cycle}/{MAX_CYCLES}: auto port {port} on {bind} was \
+                     claimed before the assertion bind ({err}); re-applying"
+                );
+            } else {
+                return ports;
+            }
+        }
+        unreachable!("the loop returns on success or asserts on exhaustion");
+    }
+
+    #[test]
+    fn apply_auto_ports_no_auto_marked_ports_is_noop() -> Result<()> {
+        let state_dir = unique_state_dir("auto-noop");
+        let mut ports = vec![PortMapping::new(4000, 4000), PortMapping::new(3000, 3000)];
+        apply_auto_ports(&state_dir, IpAddr::V4(Ipv4Addr::LOCALHOST), &mut ports)?;
+        assert_eq!(ports[0].host, 4000);
+        assert_eq!(ports[1].host, 3000);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn apply_auto_ports_assigns_one_auto_port_distinct_from_declared() -> Result<()> {
+        let state_dir = unique_state_dir("auto-one");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        // One declared host, one host=0 auto port: the auto host must never
+        // double-publish the declared 4000.
+        let original = vec![PortMapping::new(4000, 4000), PortMapping::new(0, 8080)];
+        let ports = assert_auto_ports_assign(&state_dir, bind, original, &[1]);
+        assert_ne!(
+            ports[1].host, 4000,
+            "auto host must not equal the declared host"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn apply_auto_ports_assigns_all_auto_ports_distinct() -> Result<()> {
+        let state_dir = unique_state_dir("auto-multi");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let original = vec![
+            PortMapping::new(4000, 4000),
+            PortMapping::new(0, 8080),
+            PortMapping::new(0, 9090),
+            PortMapping::new(0, 7070),
+        ];
+        // The helper asserts every P1 invariant (non-zero, distinct, distinct
+        // from declared hosts, bindable right now) for all assigned hosts.
+        assert_auto_ports_assign(&state_dir, bind, original, &[1, 2, 3]);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn apply_auto_ports_assigned_hosts_are_recorded_on_registration() -> Result<()> {
+        let state_dir = unique_state_dir("auto-record");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let original = vec![PortMapping::new(4000, 4000), PortMapping::new(0, 8080)];
+        let ports = assert_auto_ports_assign(&state_dir, bind, original, &[1]);
+        // Mirror build_sandbox: the (mutated) plan is the single source of
+        // truth for the record's `ports` and `port_pairs`.
+        let host_ports: Vec<u16> = ports.iter().map(|p| p.host).collect();
+        let port_pairs: Vec<PortMapping> = ports
+            .iter()
+            .map(|p| PortMapping {
+                bind_ip: bind,
+                ..p.clone()
+            })
+            .collect();
+        super::super::super::port_registry::check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-test",
+            None,
+            "test",
+            bind,
+            &host_ports,
+            &port_pairs,
+            "2026-08-10T00:00:00Z",
+        )?;
+        let record = super::super::super::port_registry::find_record(&state_dir, "personal-test")?
+            .expect("record must exist after registration");
+        assert_eq!(
+            record.ports, host_ports,
+            "record.ports must carry the assigned hosts"
+        );
+        let recorded_hosts: Vec<u16> = record.port_pairs.iter().map(|p| p.host).collect();
+        assert_eq!(
+            recorded_hosts, host_ports,
+            "record.port_pairs hosts must carry the assigned hosts"
+        );
+        assert!(
+            record.ports.contains(&ports[1].host),
+            "the auto-assigned host must be recorded (not 0)"
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
