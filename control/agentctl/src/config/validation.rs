@@ -630,6 +630,27 @@ pub(crate) mod tests {
         );
     }
 
+    /// A bun-compile binary WITHOUT a worker (prime-agent compiles workerless)
+    /// must validate clean.
+    #[test]
+    fn validate_accepts_binary_without_worker() {
+        let toml = "schema_version = 1\n\n[workloads.prime]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"prime\", tag = \"latest\", binary = { recipe = \"bun-compile\", src = \"flake://prime\", entrypoint = \"packages/coding-agent/dist/bun/cli.js\" } }\ncommand = []\n\n[workloads.prime.network]\ndefault_deny = true";
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        validate_config(&config)
+            .unwrap_or_else(|e| panic!("workerless bun-compile binary should validate clean: {e}"));
+    }
+
+    /// A bun-compile binary WITH a worker (pi passes its image-resize-worker.ts)
+    /// must validate clean.
+    #[test]
+    fn validate_accepts_binary_with_worker() {
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"pi\", tag = \"latest\", binary = { recipe = \"bun-compile\", src = \"flake://pi\", entrypoint = \"packages/coding-agent/dist/bun/cli.js\", worker = \"packages/coding-agent/src/utils/image-resize-worker.ts\" } }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true";
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        validate_config(&config).unwrap_or_else(|e| {
+            panic!("bun-compile binary with worker should validate clean: {e}")
+        });
+    }
+
     #[test]
     fn validate_rejects_unknown_local_build_recipe() {
         let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true\n\n[workloads.pi.local_build]\nrecipe = \"make\"\nsource = \"flake://pi\"";

@@ -846,6 +846,68 @@ path = "/tmp/project"
         assert_eq!(registry.trusted_projects.len(), 1);
     }
 
+    // ---- image.binary (BinarySpec): worker is optional ----
+
+    /// A `BinarySpec` with the worker omitted (prime-agent compiles workerless,
+    /// no image-resize-worker) must parse with `worker == None`.
+    #[test]
+    fn binary_spec_worker_omitted_parses_as_none() {
+        let raw = r#"
+recipe = "bun-compile"
+src = "flake://prime"
+entrypoint = "packages/coding-agent/dist/bun/cli.js"
+"#;
+        let spec: BinarySpec = toml::from_str(raw).unwrap();
+        assert_eq!(spec.recipe, "bun-compile");
+        assert_eq!(spec.src, "flake://prime");
+        assert_eq!(
+            spec.entrypoint.as_deref(),
+            Some("packages/coding-agent/dist/bun/cli.js")
+        );
+        assert_eq!(
+            spec.worker, None,
+            "worker must default to None when omitted"
+        );
+    }
+
+    /// A `BinarySpec` with a worker present (pi passes its
+    /// image-resize-worker.ts) must parse with `worker == Some(...)` and the
+    /// full inline `image.binary` form inside a workload must also parse.
+    #[test]
+    fn binary_spec_worker_present_parses_as_some() {
+        let raw = r#"
+recipe = "bun-compile"
+src = "flake://pi"
+entrypoint = "packages/coding-agent/dist/bun/cli.js"
+worker = "packages/coding-agent/src/utils/image-resize-worker.ts"
+"#;
+        let spec: BinarySpec = toml::from_str(raw).unwrap();
+        assert_eq!(
+            spec.worker.as_deref(),
+            Some("packages/coding-agent/src/utils/image-resize-worker.ts")
+        );
+
+        // The same shape inside a workload's inline image table.
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "nix-layered", name = "pi", tag = "latest", binary = { recipe = "bun-compile", src = "flake://pi", entrypoint = "packages/coding-agent/dist/bun/cli.js", worker = "packages/coding-agent/src/utils/image-resize-worker.ts" } }
+command = []
+
+[workloads.pi.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let binary = config.workloads["pi"].image.binary.as_ref().unwrap();
+        assert_eq!(binary.recipe, "bun-compile");
+        assert_eq!(
+            binary.worker.as_deref(),
+            Some("packages/coding-agent/src/utils/image-resize-worker.ts")
+        );
+    }
+
     // ---- ADR 0026(d): depends_on dependency declarations ----
 
     /// A `[workloads.pi.depends_on.litellm]` table carrying only `env` must
