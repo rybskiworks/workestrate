@@ -61,6 +61,7 @@ pub(super) fn build_env_and_secret_env(
                         is_secret: true,
                         reject_placeholder: def.placeholder.clone(),
                         injected_by: None,
+                        injected_port: None,
                     }),
                     _ => secret_env.push(HostBoundSecret {
                         name: name.clone(),

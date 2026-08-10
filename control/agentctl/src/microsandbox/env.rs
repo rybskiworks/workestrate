@@ -441,6 +441,7 @@ mod tests {
                     is_secret: false,
                     reject_placeholder: None,
                     injected_by: Some("litellm".to_string()),
+                    injected_port: None,
                 },
             ],
             vec![],
@@ -475,6 +476,7 @@ mod tests {
                 is_secret: true,
                 reject_placeholder: None,
                 injected_by: None,
+                injected_port: None,
             }],
             vec![],
         );
@@ -561,6 +563,7 @@ mod tests {
                 is_secret: false,
                 reject_placeholder: None,
                 injected_by: Some("litellm".to_string()),
+                injected_port: None,
             }],
             vec![],
         );
@@ -678,6 +681,7 @@ mod tests {
                 is_secret: false,
                 reject_placeholder: None,
                 injected_by: Some("litellm".to_string()),
+                injected_port: None,
             }],
             vec![HostBoundSecret {
                 name: "LITELLM_MASTER_KEY".to_string(),

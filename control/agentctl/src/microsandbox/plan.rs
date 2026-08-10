@@ -143,6 +143,11 @@ pub struct EnvVar {
     /// so declared-env JSON is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub injected_by: Option<String>,
+    /// ADR 0026(d) discovery-lite: the named port this var was injected for
+    /// (`None` = the primary/unnamed port). Additive serde default; skipped
+    /// when `None` so declared-env JSON is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injected_port: Option<String>,
 }
 
 impl fmt::Display for EnvVar {
@@ -152,15 +157,21 @@ impl fmt::Display for EnvVar {
         } else {
             self.value.as_str()
         };
-        // ADR 0026(d): an injected var is marked with its origin dependency;
-        // declared env keeps the legacy `NAME=value` form byte-identical.
-        match &self.injected_by {
-            Some(dep) => write!(
+        // ADR 0026(d): an injected var is marked with its origin dependency
+        // (and, when present, the named port it was injected for); declared
+        // env keeps the legacy `NAME=value` form byte-identical.
+        match (&self.injected_by, &self.injected_port) {
+            (Some(dep), Some(port)) => write!(
+                f,
+                "{}={} (injected: depends_on '{}' port '{}')",
+                self.name, value, dep, port
+            ),
+            (Some(dep), None) => write!(
                 f,
                 "{}={} (injected: depends_on '{}')",
                 self.name, value, dep
             ),
-            None => write!(f, "{}={}", self.name, value),
+            (None, _) => write!(f, "{}={}", self.name, value),
         }
     }
 }
@@ -307,6 +318,7 @@ impl EnvVar {
             is_secret: false,
             reject_placeholder: None,
             injected_by: None,
+            injected_port: None,
         }
     }
 }
@@ -411,6 +423,7 @@ mod tests {
                     is_secret: true,
                     reject_placeholder: None,
                     injected_by: None,
+                    injected_port: None,
                 },
             ],
             secret_env: vec![HostBoundSecret {
@@ -645,6 +658,7 @@ network: default_deny=true
             is_secret: true,
             reject_placeholder: None,
             injected_by: None,
+            injected_port: None,
         };
         let shown = format!("{secret}");
         assert_eq!(shown, "S=(redacted)");
@@ -676,6 +690,7 @@ network: default_deny=true
             is_secret: false,
             reject_placeholder: None,
             injected_by: Some("litellm".to_string()),
+            injected_port: None,
         };
         assert_eq!(
             format!("{injected}"),
@@ -683,6 +698,38 @@ network: default_deny=true
         );
         let declared = EnvVar::literal("PLAIN", "value");
         assert_eq!(format!("{declared}"), "PLAIN=value");
+    }
+
+    /// P2 (namespaced exports): an injected var carrying a NAMED port renders
+    /// `(injected: depends_on '<dep>' port '<port>')`; the primary-port form
+    /// (no port) stays the byte-identical legacy `(injected: depends_on
+    /// '<dep>')` line, and declared env never renders a marker at all.
+    #[test]
+    fn env_var_display_marks_injected_port_when_present() {
+        let named = EnvVar {
+            name: "LITELLM_API_URL".to_string(),
+            value: "host.microsandbox.internal:14000".to_string(),
+            is_secret: false,
+            reject_placeholder: None,
+            injected_by: Some("litellm".to_string()),
+            injected_port: Some("api".to_string()),
+        };
+        assert_eq!(
+            format!("{named}"),
+            "LITELLM_API_URL=host.microsandbox.internal:14000 (injected: depends_on 'litellm' port 'api')"
+        );
+        let primary = EnvVar {
+            name: "LITELLM_URL".to_string(),
+            value: "host.microsandbox.internal:4000".to_string(),
+            is_secret: false,
+            reject_placeholder: None,
+            injected_by: Some("litellm".to_string()),
+            injected_port: None,
+        };
+        assert_eq!(
+            format!("{primary}"),
+            "LITELLM_URL=host.microsandbox.internal:4000 (injected: depends_on 'litellm')"
+        );
     }
 
     /// A derived egress rule renders the ` (derived: depends_on '<dep>')`

@@ -19,6 +19,17 @@
 //!    egress. Derivation only ADDS — `default_deny` is never touched
 //!    (monotonic; FS-16 entitlement untouched).
 //!
+//! P2 namespaced ports (ADR 0026(d) namespaced-ports rule): resolution emits
+//! ONE request per injected var — the `env` request targets the PRIMARY port
+//! (the record's UNNAMED published port if it has one, else its first
+//! published port — the legacy [`record_host_port`] rule), and each
+//! `exports` entry (port name -> env var) targets that NAMED port. Two
+//! resolution refusals are hard errors even for optional deps: an
+//! auto-allocated DECLARED port (`host = 0`) is never injected (an auto port
+//! has no address until the dependency runs), and a named port MISSING on a
+//! RUNNING record requires restarting the dependency so its named ports are
+//! recorded.
+//!
 //! Refusal/fallback matrix (ADR 0026(d), spec 12 §3):
 //!
 //! | registry view                          | required = true | required = false |
@@ -27,9 +38,12 @@
 //! | singleton record, NO ports             | declared port + warn | declared port + warn |
 //! | no singleton record                    | REFUSE with remediation | declared port + warn |
 //! | no record and NO declared ports        | config error    | config error     |
+//! | auto-allocated declared port (host = 0)| REFUSE          | REFUSE (no address until the dep runs) |
+//! | named port missing on a running record | REFUSE with remediation | REFUSE with remediation |
 //!
-//! Determinism: `depends_on` is iterated SORTED by dependency name (the
-//! `HashMap` order is random; plan output must be deterministic).
+//! Determinism: `depends_on` is iterated SORTED by dependency name and each
+//! dep's `exports` SORTED by port name (the `HashMap` order is random; plan
+//! output must be deterministic).
 
 use std::path::Path;
 
@@ -96,12 +110,14 @@ pub fn parse_use_overrides(values: &[String]) -> Result<Vec<(String, String)>> {
     Ok(overrides)
 }
 
-/// The plan-time resolution of one declared dependency.
+/// The plan-time resolution of one declared dependency request: the spec's
+/// `env` var (primary/unnamed port) or one `exports` entry (named port).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedDependency {
     /// Dependency workload name (the `depends_on.<dep>` key).
     pub dep: String,
-    /// Env var the resolved address is injected as (the spec's `env`).
+    /// Env var the resolved address is injected as (the spec's `env` or an
+    /// `exports` value).
     pub env_var: String,
     /// Guest-visible injected address (`host.microsandbox.internal:<port>`).
     pub address: String,
@@ -110,6 +126,8 @@ pub struct ResolvedDependency {
     /// Whether the address came from a running record or the declared-port
     /// fallback.
     pub source: ResolutionSource,
+    /// Port name this resolution targeted (`None` = the primary/unnamed port).
+    pub port_name: Option<String>,
 }
 
 impl ResolvedDependency {
@@ -146,6 +164,49 @@ fn declared_host_port(config: &ConfigFile, dep: &str) -> Option<u16> {
         .map(|p| p.host)
 }
 
+/// The PRIMARY host port a running record is reachable on (ADR 0026(d)
+/// namespaced-ports rule): the record's UNNAMED published port if it has one,
+/// else the first published port (the legacy [`record_host_port`] rule).
+fn record_primary_port(record: &SandboxInstanceRecord) -> Option<u16> {
+    record
+        .port_pairs
+        .iter()
+        .find(|p| p.name.is_none())
+        .map(|p| p.host)
+        .or_else(|| record_host_port(record))
+}
+
+/// The host port of a NAMED published port on a running record
+/// (`port_pairs` entry whose `name` matches). `None` when the record has no
+/// such port — including legacy records that carry no names at all.
+fn record_port_by_name(record: &SandboxInstanceRecord, name: &str) -> Option<u16> {
+    record
+        .port_pairs
+        .iter()
+        .find(|p| p.name.as_deref() == Some(name))
+        .map(|p| p.host)
+}
+
+/// The dependency's PRIMARY DECLARED host port from the merged config: the
+/// unnamed port if declared, else the first declared port (legacy rule).
+fn declared_primary_port(config: &ConfigFile, dep: &str) -> Option<u16> {
+    config
+        .workloads
+        .get(dep)
+        .and_then(|w| w.ports.iter().find(|p| p.name.is_none()))
+        .map(|p| p.host)
+        .or_else(|| declared_host_port(config, dep))
+}
+
+/// The DEPENDENCY's DECLARED host port for a NAMED port from the merged config.
+fn declared_port_by_name(config: &ConfigFile, dep: &str, name: &str) -> Option<u16> {
+    config
+        .workloads
+        .get(dep)
+        .and_then(|w| w.ports.iter().find(|p| p.name.as_deref() == Some(name)))
+        .map(|p| p.host)
+}
+
 /// Resolve every dependency declared by `workload_name` against the port
 /// registry at `state_dir` (ADR 0026(d) discovery-lite).
 ///
@@ -164,12 +225,20 @@ fn declared_host_port(config: &ConfigFile, dep: &str) -> Option<u16> {
 ///   explicitly chose an instance).
 ///
 /// Iterates `depends_on` SORTED by dependency name (determinism: the plan
-/// output derived from this list must not depend on `HashMap` order).
+/// output derived from this list must not depend on `HashMap` order) and
+/// emits ONE [`ResolvedDependency`] per request: the spec's `env` targets
+/// the PRIMARY port (unnamed-if-present-else-first) and each `exports` entry
+/// targets the NAMED port it references, with `exports` iterated SORTED by
+/// port name.
 ///
-/// Returns one [`ResolvedDependency`] per declared dep, or a hard error when
-/// (a) a `required = true` dependency has no running singleton record (the
-/// refusal names the start command), or (b) no address can be derived at all
-/// (no running record AND no declared ports).
+/// Returns one [`ResolvedDependency`] per env/export request, or a hard error
+/// when (a) a `required = true` dependency has no running singleton record
+/// (the refusal names the start command), (b) no address can be derived at
+/// all (no running record AND no declared ports), (c) an exports port name is
+/// missing on a RUNNING record (restart it so its named ports are recorded),
+/// or (d) the only declared port is auto-allocated (`host = 0`) — an auto
+/// port has no address until the dependency runs, so even an optional dep
+/// refuses rather than inject `host.microsandbox.internal:0`.
 ///
 /// Warnings (fallbacks, per-IP binds, port-less records) are emitted on
 /// stderr via `eprintln!`, matching the house "WARNING:"/"warning:"
@@ -218,15 +287,19 @@ pub fn resolve_depends_on(
 
     let mut resolved = Vec::with_capacity(deps.len());
     for (dep, spec) in deps {
-        // P0 transitional rule: an exports-only dependency (`env` is None) has
-        // its named-port exports resolution deferred to P2 — skip resolution
-        // for that dep entirely (pushing nothing). This also means a
-        // `required = true` exports-only dep does NOT refuse in P0 (accepted
-        // transitional gap); validation still enforces the at-least-one rule
-        // and that every exports key names a declared port.
-        let Some(env_var) = &spec.env else {
-            continue;
-        };
+        // P2: one resolution request per `env` (primary/unnamed port) and per
+        // `exports` entry (named port). exports are sorted by port name so
+        // plan output is deterministic (HashMap order is random).
+        let mut requests: Vec<(String, Option<String>)> = Vec::new();
+        if let Some(env_var) = &spec.env {
+            requests.push((env_var.clone(), None));
+        }
+        let mut exports: Vec<(&String, &String)> = spec.exports.iter().collect();
+        exports.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, env_var) in exports {
+            requests.push((env_var.clone(), Some(name.clone())));
+        }
+
         let records = list_records_for_workload(state_dir, dep)?;
         // Selection (ADR 0026(d)): default = the dependency's SINGLETON slot
         // record (the one whose `instance` name contains no `@`); a `--use
@@ -260,79 +333,143 @@ pub fn resolve_depends_on(
                 ),
             };
 
-        match (selected, selector) {
-            (Some(record), selector) => match record_host_port(record) {
-                Some(port) => {
-                    // ADR 0026(f) DEFERRED-PENDING-E1: a record published on
-                    // a per-IP parallel bind (bind_ip != 127.0.0.1) is NOT
-                    // guest-reachability-verified. Inject the SAME guest form
-                    // (host.microsandbox.internal:<port>) but warn loudly.
-                    if record.bind_ip != crate::microsandbox::plan::default_bind_ip() {
-                        eprintln!(
-                            "warning: depends_on '{}': selected record '{}' ({}) is published on the per-IP bind {}; \
-                             guest-reachability of non-127.0.0.1 loopbacks via {} is DEFERRED-PENDING-E1 \
-                             (ADR 0026(f) conservative default) — the injected address may not be reachable from the guest",
-                            dep,
-                            record.instance,
-                            selector,
-                            record.bind_ip,
-                            GUEST_HOST_ALIAS
-                        );
+        for (env_var, port_name) in requests {
+            let resolved_one = match (selected, &port_name) {
+                // PRIMARY rule: the unnamed port if present, else the first port.
+                (Some(record), None) => match record_primary_port(record) {
+                    Some(port) => {
+                        // ADR 0026(f) DEFERRED-PENDING-E1: a record published on
+                        // a per-IP parallel bind (bind_ip != 127.0.0.1) is NOT
+                        // guest-reachability-verified. Inject the SAME guest form
+                        // (host.microsandbox.internal:<port>) but warn loudly.
+                        if record.bind_ip != crate::microsandbox::plan::default_bind_ip() {
+                            eprintln!(
+                                "warning: depends_on '{}': selected record '{}' ({}) is published on the per-IP bind {}; \
+                                 guest-reachability of non-127.0.0.1 loopbacks via {} is DEFERRED-PENDING-E1 \
+                                 (ADR 0026(f) conservative default) — the injected address may not be reachable from the guest",
+                                dep,
+                                record.instance,
+                                selector,
+                                record.bind_ip,
+                                GUEST_HOST_ALIAS
+                            );
+                        }
+                        ResolvedDependency {
+                            dep: dep.clone(),
+                            env_var,
+                            address: format!("{}:{}", GUEST_HOST_ALIAS, port),
+                            host_port: port,
+                            source: ResolutionSource::RunningInstance,
+                            port_name: None,
+                        }
                     }
-                    resolved.push(ResolvedDependency {
-                        dep: dep.clone(),
-                        env_var: env_var.clone(),
-                        address: format!("{}:{}", GUEST_HOST_ALIAS, port),
-                        host_port: port,
-                        source: ResolutionSource::RunningInstance,
-                    });
-                }
-                None => {
-                    // A running record with NO ports at all carries no
-                    // address: fall back to the declared-port behavior + warn.
-                    resolved.push(declared_fallback(
+                    None => declared_fallback(
                         config,
                         dep,
-                        env_var,
+                        &env_var,
+                        None,
                         &format!(
                             "its {} record '{}' publishes no ports",
                             selector, record.instance
                         ),
-                    )?);
-                }
-            },
-            (None, _) => {
-                if spec.required {
-                    anyhow::bail!(
-                        "dependency '{}' of workload '{}' is required but not running; start it with `workestrate workload up {}`",
+                    )?,
+                },
+                (Some(record), Some(name)) => match record_port_by_name(record, name) {
+                    Some(port) => {
+                        // ADR 0026(f) DEFERRED-PENDING-E1 (named-port arm): as
+                        // above, warn loudly on per-IP binds and inject the
+                        // same guest form.
+                        if record.bind_ip != crate::microsandbox::plan::default_bind_ip() {
+                            eprintln!("warning: depends_on '{}': selected record '{}' ({}) is published on the per-IP bind {}; guest-reachability of non-127.0.0.1 loopbacks via {} is DEFERRED-PENDING-E1 (ADR 0026(f) conservative default) — the injected address for port '{}' may not be reachable from the guest", dep, record.instance, selector, record.bind_ip, GUEST_HOST_ALIAS, name);
+                        }
+                        ResolvedDependency {
+                            dep: dep.clone(),
+                            env_var,
+                            address: format!("{}:{}", GUEST_HOST_ALIAS, port),
+                            host_port: port,
+                            source: ResolutionSource::RunningInstance,
+                            port_name: Some(name.clone()),
+                        }
+                    }
+                    None => anyhow::bail!(
+                        "dependency '{}' is running ({} '{}') but has no published port named '{}'{}; \
+                         restart it with `workestrate workload up {}` so its named ports are recorded",
                         dep,
-                        workload_name,
+                        selector,
+                        record.instance,
+                        name,
+                        if record.port_pairs.is_empty() {
+                            " (its registry record is legacy — it stores no port names)"
+                        } else {
+                            ""
+                        },
                         dep
-                    );
+                    ),
+                },
+                (None, _) => {
+                    if spec.required {
+                        anyhow::bail!(
+                            "dependency '{}' of workload '{}' is required but not running; start it with `workestrate workload up {}`",
+                            dep,
+                            workload_name,
+                            dep
+                        );
+                    }
+                    let reason = match &port_name {
+                        None => "no singleton instance is running".to_string(),
+                        Some(name) => format!("no singleton instance is running (port '{name}')"),
+                    };
+                    declared_fallback(
+                        config,
+                        dep,
+                        &env_var,
+                        port_name.as_deref(),
+                        &reason,
+                    )?
                 }
-                resolved.push(declared_fallback(
-                    config,
-                    dep,
-                    env_var,
-                    "no singleton instance is running",
-                )?);
-            }
+            };
+            resolved.push(resolved_one);
         }
     }
     Ok(resolved)
 }
 
-/// The declared-port fallback arm: resolve to the dependency's first
-/// DECLARED host port on the shared bind (the convention address), warning
-/// on stderr. A hard config error when the dependency declares no ports —
-/// no address can be derived.
+/// The declared-port fallback arm: resolve to the dependency's DECLARED host
+/// port on the shared bind (the convention address), warning on stderr.
+///
+/// `port_name` selects the NAMED declared port (`None` = the primary/unnamed
+/// port). Refusals (hard errors, even for optional deps):
+///
+/// - an auto-allocated declared port (`host = 0`) is NEVER injected — an auto
+///   port has no address until the dependency runs, so the fallback refuses
+///   instead of producing `host.microsandbox.internal:0`;
+/// - no declared port at all → a config error (no address can be derived).
 fn declared_fallback(
     config: &ConfigFile,
     dep: &str,
     env_var: &str,
+    port_name: Option<&str>,
     reason: &str,
 ) -> Result<ResolvedDependency> {
-    match declared_host_port(config, dep) {
+    let port = match port_name {
+        None => declared_primary_port(config, dep),
+        Some(name) => declared_port_by_name(config, dep, name),
+    };
+    match port {
+        Some(0) => {
+            let port_label = match port_name {
+                Some(name) => format!(" '{}'", name),
+                None => String::new(),
+            };
+            anyhow::bail!(
+                "dependency '{}' declares an auto-allocated port{} but is not running; start it first \
+                 (`workestrate workload up {}`) so its port is allocated and recorded (an auto port has \
+                 no address until the dependency runs)",
+                dep,
+                port_label,
+                dep
+            );
+        }
         Some(port) => {
             eprintln!(
                 "warning: depends_on '{}': {} — falling back to the declared port {} on {} (the convention address); \
@@ -345,16 +482,28 @@ fn declared_fallback(
                 address: format!("{}:{}", GUEST_HOST_ALIAS, port),
                 host_port: port,
                 source: ResolutionSource::DeclaredFallback,
+                port_name: port_name.map(str::to_string),
             })
         }
-        None => anyhow::bail!(
-            "dependency '{}' cannot be resolved: it is not running and declares no ports \
-             (no address can be derived). Declare at least one host port on workload '{}' \
-             or start it with `workestrate workload up {}`.",
-            dep,
-            dep,
-            dep
-        ),
+        None => match port_name {
+            None => anyhow::bail!(
+                "dependency '{}' cannot be resolved: it is not running and declares no ports \
+                 (no address can be derived). Declare at least one host port on workload '{}' \
+                 or start it with `workestrate workload up {}`.",
+                dep,
+                dep,
+                dep
+            ),
+            Some(name) => anyhow::bail!(
+                "dependency '{}' cannot be resolved for port '{}': it is not running and declares no \
+                 port named '{}'. Declare it on workload '{}' or start it with `workestrate workload up {}`.",
+                dep,
+                name,
+                name,
+                dep,
+                dep
+            ),
+        },
     }
 }
 
@@ -396,6 +545,7 @@ pub fn apply_resolution(
                 is_secret: false,
                 reject_placeholder: None,
                 injected_by: Some(r.dep.clone()),
+                injected_port: r.port_name.clone(),
             });
         }
         let rule = r.derived_egress_rule();
@@ -499,6 +649,53 @@ default_deny = true
             }],
             "2026-07-30T00:00:00Z",
         )
+    }
+
+    /// Register a singleton lifecycle record for `workload` with one NAMED
+    /// host:guest pair on `bind` (namespaced-ports records; P2).
+    fn register_singleton_named(
+        state_dir: &Path,
+        workload: &str,
+        bind: IpAddr,
+        host: u16,
+        guest: u16,
+        name: &str,
+    ) -> Result<()> {
+        check_and_register_sandbox_lifecycle(
+            state_dir,
+            &format!("personal-{workload}"),
+            Some("personal"),
+            workload,
+            bind,
+            &[host],
+            &[PortMapping {
+                host,
+                guest,
+                bind_ip: bind,
+                name: Some(name.to_string()),
+            }],
+            "2026-07-30T00:00:00Z",
+        )
+    }
+
+    /// `depends_config()` variant: `litellm` ALSO declares a named port
+    /// `api:14000:14000` next to its legacy unnamed 4000 — the canonical
+    /// namespaced-exports fixture. Callers mutate `pi.depends_on.litellm`
+    /// (`exports`, `required`, `env`) per test.
+    fn named_config() -> ConfigFile {
+        let mut config = depends_config();
+        config
+            .workloads
+            .get_mut("litellm")
+            .unwrap()
+            .ports
+            .push(PortMapping {
+                host: 14000,
+                guest: 14000,
+                bind_ip: loopback(1),
+                name: Some("api".to_string()),
+            });
+        config
     }
 
     // (1) Singleton resolution: a running singleton record supplies the
@@ -994,6 +1191,382 @@ default_deny = true
             "error must explain the workload has no depends_on: {msg}"
         );
         assert!(msg.contains("litellm"), "error must name the dep: {msg}");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- P2 namespaced ports: exports (named-port) resolution ----
+
+    // (1) exports→named resolution: a running singleton carrying a NAMED
+    // port `api` resolves the `exports` entry to that port's host, marks the
+    // resolution with the port name, and derives the matching egress rule.
+    #[test]
+    fn exports_resolve_to_named_port_of_running_dep() -> Result<()> {
+        let state_dir = unique_state_dir("disc-exports-named");
+        register_singleton_named(&state_dir, "litellm", loopback(1), 14000, 14000, "api")?;
+        let mut config = named_config();
+        let spec = config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap();
+        spec.env = None;
+        spec.exports
+            .insert("api".to_string(), "LITELLM_API_URL".to_string());
+
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        assert_eq!(resolved.len(), 1);
+        let r = &resolved[0];
+        assert_eq!(r.dep, "litellm");
+        assert_eq!(r.env_var, "LITELLM_API_URL");
+        assert_eq!(r.address, "host.microsandbox.internal:14000");
+        assert_eq!(r.host_port, 14000);
+        assert_eq!(r.source, ResolutionSource::RunningInstance);
+        assert_eq!(r.port_name.as_deref(), Some("api"));
+        // The derived egress rule matches the NAMED port's host.
+        assert_eq!(r.derived_egress_rule().port, 14000);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // (2) PRIMARY rule — unnamed-wins: a running record with BOTH an unnamed
+    // port (4000) and a named `api` (14000) resolves `env` to the UNNAMED
+    // port, never the named one.
+    #[test]
+    fn primary_rule_prefers_unnamed_port_when_present() -> Result<()> {
+        let state_dir = unique_state_dir("disc-primary-unnamed");
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            loopback(1),
+            &[4000, 14000],
+            &[
+                PortMapping {
+                    host: 4000,
+                    guest: 4000,
+                    bind_ip: loopback(1),
+                    name: None,
+                },
+                PortMapping {
+                    host: 14000,
+                    guest: 14000,
+                    bind_ip: loopback(1),
+                    name: Some("api".to_string()),
+                },
+            ],
+            "2026-07-30T00:00:00Z",
+        )?;
+        let config = depends_config();
+
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].port_name, None);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // (3) PRIMARY rule — else-first: a running record with ONLY named ports
+    // (`api` first) resolves `env` to the FIRST published port (the legacy
+    // first-port rule, with no `port_name` marker).
+    #[test]
+    fn primary_rule_falls_back_to_first_port_when_only_named() -> Result<()> {
+        let state_dir = unique_state_dir("disc-primary-first");
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            loopback(1),
+            &[14000, 15000],
+            &[
+                PortMapping {
+                    host: 14000,
+                    guest: 4000,
+                    bind_ip: loopback(1),
+                    name: Some("api".to_string()),
+                },
+                PortMapping {
+                    host: 15000,
+                    guest: 5000,
+                    bind_ip: loopback(1),
+                    name: Some("admin".to_string()),
+                },
+            ],
+            "2026-07-30T00:00:00Z",
+        )?;
+        let config = depends_config();
+
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].address, "host.microsandbox.internal:14000");
+        assert_eq!(resolved[0].host_port, 14000);
+        assert_eq!(resolved[0].port_name, None);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // (4) exports determinism: two exports are resolved SORTED by port name
+    // (`admin` before `api`), regardless of the HashMap's iteration order.
+    #[test]
+    fn exports_resolve_sorted_by_port_name() -> Result<()> {
+        let state_dir = unique_state_dir("disc-exports-order");
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            loopback(1),
+            &[14000, 15000],
+            &[
+                PortMapping {
+                    host: 14000,
+                    guest: 4000,
+                    bind_ip: loopback(1),
+                    name: Some("api".to_string()),
+                },
+                PortMapping {
+                    host: 15000,
+                    guest: 5000,
+                    bind_ip: loopback(1),
+                    name: Some("admin".to_string()),
+                },
+            ],
+            "2026-07-30T00:00:00Z",
+        )?;
+        let mut config = named_config();
+        let spec = config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap();
+        spec.env = None;
+        spec.exports
+            .insert("admin".to_string(), "LITELLM_ADMIN_URL".to_string());
+        spec.exports
+            .insert("api".to_string(), "LITELLM_API_URL".to_string());
+
+        for _ in 0..8 {
+            let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+            assert_eq!(resolved.len(), 2);
+            let env_order: Vec<&str> = resolved.iter().map(|r| r.env_var.as_str()).collect();
+            assert_eq!(env_order, vec!["LITELLM_ADMIN_URL", "LITELLM_API_URL"]);
+            let port_order: Vec<Option<&str>> =
+                resolved.iter().map(|r| r.port_name.as_deref()).collect();
+            assert_eq!(port_order, vec![Some("admin"), Some("api")]);
+        }
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // (5a) AUTO-allocated declared port (host = 0) + NOT running: refused
+    // even when required = false — an auto port has no address until the dep
+    // runs. Exercised through an EXPORTS entry (env-less spec).
+    #[test]
+    fn auto_port_on_not_running_dep_refuses_via_exports() -> Result<()> {
+        let state_dir = unique_state_dir("disc-auto-refuse-exports");
+        let mut config = named_config();
+        // litellm's ONLY declared port is an auto-allocated NAMED port.
+        config.workloads.get_mut("litellm").unwrap().ports.clear();
+        config
+            .workloads
+            .get_mut("litellm")
+            .unwrap()
+            .ports
+            .push(PortMapping {
+                host: 0,
+                guest: 14000,
+                bind_ip: loopback(1),
+                name: Some("api".to_string()),
+            });
+        let spec = config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap();
+        spec.env = None;
+        spec.exports
+            .insert("api".to_string(), "LITELLM_API_URL".to_string());
+
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("auto-allocated"),
+            "refusal must mention the auto port: {msg}"
+        );
+        assert!(
+            msg.contains("start it first"),
+            "refusal must direct the user to start the dep: {msg}"
+        );
+        assert!(msg.contains("'api'"), "refusal must name the port: {msg}");
+        assert!(
+            !msg.contains("host.microsandbox.internal:0"),
+            "no :0 address may be produced: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // (5b) AUTO-allocated declared port (host = 0) + NOT running: refused via
+    // the `env` (primary) request.
+    #[test]
+    fn auto_port_on_not_running_dep_refuses_via_env() -> Result<()> {
+        let state_dir = unique_state_dir("disc-auto-refuse-env");
+        let mut config = depends_config();
+        // litellm's ONLY declared port is an auto-allocated UNNAMED port.
+        config.workloads.get_mut("litellm").unwrap().ports.clear();
+        config
+            .workloads
+            .get_mut("litellm")
+            .unwrap()
+            .ports
+            .push(PortMapping::new(0, 4000));
+
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("auto-allocated"),
+            "refusal must mention the auto port: {msg}"
+        );
+        assert!(
+            msg.contains("start it first"),
+            "refusal must direct the user to start the dep: {msg}"
+        );
+        assert!(
+            !msg.contains("host.microsandbox.internal:0"),
+            "no :0 address may be produced: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // (6) MISSING named port on a LEGACY running record (register_sandbox:
+    // no port_pairs): the exports entry for that name is a hard error naming
+    // the port and directing a restart so named ports get recorded.
+    #[test]
+    fn exports_to_missing_named_port_on_legacy_record_is_a_hard_error() -> Result<()> {
+        let state_dir = unique_state_dir("disc-legacy-missing-name");
+        // Legacy record: register_sandbox writes NO port_pairs (no names).
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        let mut config = named_config();
+        let spec = config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap();
+        spec.env = None;
+        spec.exports
+            .insert("api".to_string(), "LITELLM_API_URL".to_string());
+
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("'api'"), "error must name the port: {msg}");
+        assert!(
+            msg.contains("restart it"),
+            "error must direct a restart: {msg}"
+        );
+        assert!(
+            msg.contains("legacy"),
+            "error must explain the record stores no port names: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // (7) Named port NOT declared on a RUNNING record: exports referencing
+    // `admin` when the dep only declares/runs `api` → hard error naming
+    // `admin` (runtime enforcement; discovery does not rely on validation).
+    #[test]
+    fn exports_to_undeclared_named_port_of_running_dep_is_a_hard_error() -> Result<()> {
+        let state_dir = unique_state_dir("disc-undeclared-name");
+        register_singleton_named(&state_dir, "litellm", loopback(1), 14000, 14000, "api")?;
+        let mut config = named_config();
+        let spec = config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap();
+        spec.env = None;
+        spec.exports
+            .insert("admin".to_string(), "LITELLM_ADMIN_URL".to_string());
+
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("'admin'"), "error must name the port: {msg}");
+        assert!(
+            msg.contains("restart it"),
+            "error must direct a restart: {msg}"
+        );
+        assert!(
+            !msg.contains("'api'"),
+            "error must name the MISSING port, not the present one: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // (8) `--use <dep>@<id>` + exports: the export resolves from the
+    // SELECTED parallel record's named port, not the singleton's.
+    #[test]
+    fn use_override_selects_parallel_record_for_exports() -> Result<()> {
+        let state_dir = unique_state_dir("disc-use-exports");
+        // Singleton WITHOUT the named port; the parallel `canary` has it.
+        register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm@canary",
+            Some("personal"),
+            "litellm",
+            loopback(2),
+            &[14000],
+            &[PortMapping {
+                host: 14000,
+                guest: 4000,
+                bind_ip: loopback(2),
+                name: Some("api".to_string()),
+            }],
+            "2026-07-30T00:00:00Z",
+        )?;
+        let mut config = named_config();
+        let spec = config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap();
+        spec.env = None;
+        spec.exports
+            .insert("api".to_string(), "LITELLM_API_URL".to_string());
+
+        let overrides = vec![("litellm".to_string(), "canary".to_string())];
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &overrides)?;
+        assert_eq!(resolved.len(), 1);
+        let r = &resolved[0];
+        assert_eq!(r.env_var, "LITELLM_API_URL");
+        assert_eq!(r.address, "host.microsandbox.internal:14000");
+        assert_eq!(r.host_port, 14000);
+        assert_eq!(r.port_name.as_deref(), Some("api"));
+        assert_eq!(r.source, ResolutionSource::RunningInstance);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

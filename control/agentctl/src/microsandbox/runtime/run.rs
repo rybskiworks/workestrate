@@ -579,6 +579,7 @@ mod tests {
                 is_secret: false,
                 reject_placeholder: None,
                 injected_by: Some("litellm".to_string()),
+                injected_port: None,
             },
         ]);
         let resolved = resolve_plan_envs(&plan, &secrets_map(&[]))?;
@@ -627,6 +628,7 @@ mod tests {
             is_secret: true,
             reject_placeholder: None,
             injected_by: None,
+            injected_port: None,
         }]);
         let secrets = secrets_map(&[("LITELLM_MASTER_KEY", "real-key")]);
         let resolved = resolve_plan_envs(&plan, &secrets)?;
@@ -647,6 +649,7 @@ mod tests {
             is_secret: true,
             reject_placeholder: None,
             injected_by: None,
+            injected_port: None,
         }]);
         let secrets = secrets_map(&[("LITELLM_MASTER_KEY", "real-key")]);
         let resolved = resolve_plan_envs(&plan, &secrets)?;
@@ -669,6 +672,7 @@ mod tests {
                 is_secret: false,
                 reject_placeholder: None,
                 injected_by: Some("litellm".to_string()),
+                injected_port: None,
             },
         ]);
         let resolved = resolve_plan_envs(&plan, &secrets_map(&[]))?;
@@ -697,6 +701,7 @@ mod tests {
                 is_secret: false,
                 reject_placeholder: None,
                 injected_by: Some("litellm".to_string()),
+                injected_port: None,
             },
             EnvVar {
                 name: "LITELLM_MASTER_KEY".to_string(),
@@ -704,6 +709,7 @@ mod tests {
                 is_secret: true,
                 reject_placeholder: None,
                 injected_by: None,
+                injected_port: None,
             },
         ]);
         let secrets = secrets_map(&[("LITELLM_MASTER_KEY", "real-key")]);
