@@ -26,6 +26,11 @@ pub const ALLOWED_PACKAGES: &[&str] = &[
     "nodejs_24",
     "nmap",
     "dnsutils",
+    // prime-agent kernel env (Python 3.11 + ipykernel) + file/tooling utils.
+    "python311_kernel",
+    "ripgrep",
+    "fd",
+    "gnutar",
 ];
 
 #[cfg(test)]
@@ -82,7 +87,18 @@ mod tests {
     fn allowed_packages_non_empty_no_dupes() {
         assert!(!ALLOWED_PACKAGES.is_empty());
         assert_no_dupes(ALLOWED_PACKAGES, "ALLOWED_PACKAGES");
-        for pkg in ["cacert", "busybox", "nodejs_24"] {
+        for pkg in [
+            "cacert",
+            "busybox",
+            "fakeNss",
+            "nodejs_24",
+            "nmap",
+            "dnsutils",
+            "python311_kernel",
+            "ripgrep",
+            "fd",
+            "gnutar",
+        ] {
             assert!(
                 ALLOWED_PACKAGES.contains(&pkg),
                 "ALLOWED_PACKAGES missing '{pkg}'"

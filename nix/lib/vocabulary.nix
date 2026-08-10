@@ -12,6 +12,12 @@ rec
     nodejs_24 = pkgs.nodejs_24;
     nmap = pkgs.nmap;
     dnsutils = pkgs.bind.dnsutils;
+    # prime-agent kernel env: pre-baked Python 3.11 + ipykernel, plus the
+    # file/tooling utilities the agent workloads rely on (ripgrep, fd, tar).
+    python311_kernel = pkgs.python311.withPackages (ps: [ ps.ipykernel ]);
+    ripgrep = pkgs.ripgrep;
+    fd = pkgs.fd;
+    gnutar = pkgs.gnutar;
   };
 
   # Named shell snippets for extraCommands (closed vocabulary)
