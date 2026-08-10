@@ -121,9 +121,9 @@ For M1: master key + network policy (Microsandbox default-deny) is the security 
 
 1. **Add pi-provider-litellm to the Pi sandbox plan**: Either install it at image build time or mount it into the sandbox.
 
-2. **Set LITELLM_BASE_URL and LITELLM_API_KEY env vars**: Currently the plan sets `OPENAI_API_KEY` bound to `LITELLM_MASTER_KEY`. Pi needs `LITELLM_BASE_URL=http://host.microsandbox.internal:4000` and `LITELLM_API_KEY` pointing at the master key.
+2. **Pi gets the provider URL + key from the seeded `models.json`, NOT env vars**: Pi does NOT need `LITELLM_BASE_URL`/`LITELLM_API_KEY` env vars. The provider URL and key come from the seeded `models.json` (`[[seed_files]]` with `template = true`): `depends_on.litellm` injects `LITELLM_ADDR` (guest-visible `host.microsandbox.internal:4000`), which the seed template renders into the `baseUrl` (`http://host.microsandbox.internal:4000/v1`); the seed's `apiKey` token `$${LITELLM_MASTER_KEY}` renders to the literal `${LITELLM_MASTER_KEY}`, which pi expands to the `$MSB_LITELLM_MASTER_KEY` placeholder, substituted by the host egress proxy.
 
-3. **Seed `~/.pi/agent/models.json`**: If env vars aren't sufficient, pre-seed the models config with a custom provider entry.
+3. **Seed `models.json` via `seed_files template = true`** (authoritative delivery path): the pi workload's `[[seed_files]]` renders `models.json` at seed time (rendered `baseUrl` + `$${…}`-escaped `apiKey`; acceptance is B13.2 in `docs/validation-and-improvements/05-host-validation.md`). No env vars are involved.
 
 4. **Build and link Pi**: The Pi monorepo needs to be built (`npm run build`) before it can run. Either build in the Nix image or pre-build and copy the artifacts.
 

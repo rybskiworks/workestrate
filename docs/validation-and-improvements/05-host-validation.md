@@ -614,7 +614,7 @@ authenticated request that can only succeed if the guest holds the real value.
 | Runtime parity (mounts/env) | B11: inferred from plan parity + service boot | plan matches baseline AND services boot (no headless in-sandbox exec exists) |
 | Runtime parity (egress) | B11: interactive `workestrate workload exec pi` | denied domain (`.pi.dev`) fails; allowed domain (`github.com`) succeeds |
 | Master key env delivery (P0) | B13.1: `workestrate workload up litellm` + `curl /v1/models -H "Bearer $LITELLM_MASTER_KEY"` | HTTP 200 (proves REAL value in guest, not the literal template) |
-| models.json substitution | B13.2: interactive `workestrate workload exec pi` → `cat /data/agent/models.json` | no `${...}` literal remains; `${LITELLM_ADDR}` matches `workestrate ps` record |
+| models.json substitution | B13.2: interactive `workestrate workload exec pi` → `cat /data/agent/models.json` | PASS-ELIGIBLE: `"baseUrl": "http://host.microsandbox.internal:4000/v1"` (rendered at seed time; matches the ps record) AND `"apiKey": "${LITELLM_MASTER_KEY}"` (the `$$`-escaped literal that REMAINS by design — pi expands it to the `$MSB_LITELLM_MASTER_KEY` placeholder, which the host egress proxy substitutes) |
 | Admin password env delivery | B13.3: `workestrate workload plan odysseus` + admin-authenticated request | env line, no hosts; real-password auth succeeds |
 | OPENAI_API_KEY env flip | B13.4: `workestrate workload exec opencode` → `env \| grep OPENAI_API_KEY` | REAL value in guest env; end-to-end litellm call works on 0.5.6 |
 | Provider key host-binding | B13.5: plan + per-provider chat completion | `$MSB_*` placeholders only; `coding.free`/`kimi-code-k3`/`minimax-m3`/`coding.fast` all 200 |

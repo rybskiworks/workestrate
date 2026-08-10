@@ -9,8 +9,8 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, **17 ahead of origin, NOT pushed** (16 prior commits incl. the root `down` alias + canonical remediation strings f084a84, plus this docs commit); origin SSH |
-| personal config repo | `e779c83` | 4 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
+| workestrate | HEAD on `migration/tool-model` | clean, **18 ahead of origin, NOT pushed** (17 prior commits incl. the root `down` alias + canonical remediation strings f084a84, plus this docs commit); origin SSH |
+| personal config repo | `6917f3d` | 5 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, 6917f3d); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
 | dev home | (workestrate-dev-home) `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | clean; origin/fix == 74919059 (pushed); origin/main `b43d7522` (divergent); remote ambiguous — live ls-remote before fork work |
 
