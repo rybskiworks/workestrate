@@ -129,3 +129,17 @@ decision.
   `ConfigWorkload` is constructed (otherwise the required-refusal fires
   first).
 - The E1 deferral (per-IP guest-reachability, ADR 0026 (f)) is UNCHANGED.
+
+---
+
+## Addendum (2026-08-10): namespaced ports + auto-allocation + named exports
+
+- `[[ports]]` entries gain an optional `name` (slug `^[a-z0-9][a-z0-9-]*$`); the
+  UNNAMED port stays the primary (legacy `env`) port. `host = 0` marks an
+  auto-allocated port: the registry probes a free port on the slot's bind at
+  boot (per-port `--port-auto`), recorded in the instance record.
+- `depends_on.<dep>` gains `exports = { <port-name> = "<ENV_VAR>" }`: each entry
+  injects the resolved address of that NAMED port; `env` remains the primary
+  port. At least one of env/exports is required; an auto port on a
+  not-running dep refuses (no address until it runs).
+- (Schema: `docs/migration/20-target-system-spec.md` §3.)

@@ -103,11 +103,36 @@ Validation: full suite green per commit (fmt/clippy -D warnings/test), tombi-che
 - **dev-home + personal repos synced**: both carry both schema files byte-identical to the binary's generated output.
 - P5 (this commit): docs — README command rows, schema authority model in `docs/migration/40-migration-process.md`, security note in `30-security-model.md`, justfile generate-schema note, NEXT-SESSION/STATUS updates.
 
+## namespaced ports + auto-allocation (P0-P4) — 2026-08-10
+
+- **Schema (P0, 217f7a3)**: `[[ports]]` entries accept `name` (slug
+  `^[a-z0-9][a-z0-9-]*$`; unique within a workload) and `host = 0`
+  (auto-allocation); `depends_on.<dep>` accepts `env` (primary/unnamed port)
+  OR `exports = { <port-name> = "<ENV_VAR>" }`.
+- **Validation (P0)**: at least one of env/exports required per depends_on
+  entry; every `exports` key must name a port the dependency declares; port
+  names slug-validated + unique; `host = 0` is legal (no reject).
+- **Auto allocation (P1, 262802e)**: `host = 0` asks the registry to probe a
+  free port on the slot's bind at boot (per-port `--port-auto`); the chosen
+  port is recorded in the instance record.
+- **Namespaced resolution + provenance (P2, 1f2336f)**: each `exports` entry
+  resolves its NAMED port (`host.microsandbox.internal:<port>`) and derives
+  its own egress rule; plan Display renders `port: <name>:<host>:<guest>`,
+  `(auto)` for auto ports, and `(injected: depends_on '<dep>' port '<port>')`;
+  a not-running dep with an auto port refuses at plan time.
+- **Registry + `ps` (P3, 3e7c2e0)**: records carry port names; `ps` renders
+  `port: <name>:<host>:<guest>` / `port: <name>:0:<guest> (auto)`.
+- **Reference example + docs (P4, this commit)**: config.reference gains
+  named `api` (4000) + auto `metrics` (0→9090) ports on example-litellm and an
+  exports-only `example-exports` workload; README/ADR 0026 addendum updated;
+  golden plans for example-service/example-agent/example-offensive remain
+  byte-identical.
+
 ## Current repo state (verified 2026-08-08)
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 18 ahead of origin (17 prior commits incl. the root `down` alias + canonical remediation strings f084a84, plus this docs commit), NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 6 ahead of origin/migration/tool-model (5 feature commits this session + prior docs commit 4c9cdfb), 305 ahead of origin/main; NOT pushed; origin SSH |
 | personal config repo | `6917f3d` | 5 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, 6917f3d); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
 | dev home | workestrate-dev-home `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |

@@ -9,7 +9,7 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, **18 ahead of origin, NOT pushed** (17 prior commits incl. the root `down` alias + canonical remediation strings f084a84, plus this docs commit); origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 6 ahead of origin/migration/tool-model (5 feature commits this session + prior docs commit 4c9cdfb), 305 ahead of origin/main; NOT pushed; origin SSH |
 | personal config repo | `6917f3d` | 5 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, 6917f3d); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
 | dev home | (workestrate-dev-home) `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | clean; origin/fix == 74919059 (pushed); origin/main `b43d7522` (divergent); remote ambiguous — live ls-remote before fork work |
@@ -34,6 +34,25 @@
 ## What landed this session
 
 - seed_files template/glob feature P0-P3 landed (see NEXT-SESSION.md summary): templated seed rendering from the guest-visible env view ($MSB_<binding key> placeholders; no process env) + glob-capable seeds with plan preflight/validate-config warnings; personal config pi seeds rendered on next up (0f5be2e).
+
+## namespaced ports + auto-allocation (P0-P4) — 2026-08-10
+
+- Schema: `[[ports]]` entries accept `name` (slug `^[a-z0-9][a-z0-9-]*$`) and
+  `host = 0` (auto-allocation); `depends_on.<dep>` accepts `env` (primary) OR
+  `exports = { <port-name> = "<ENV_VAR>" }` (at least one required; exports
+  keys must name a declared port on the dependency).
+- `host = 0` probes a free port on the slot's bind at boot (per-port
+  `--port-auto`); recorded in the instance record; `ps` shows the effective
+  port. A not-running dep with an auto port refuses at plan time.
+- Namespaced resolution + provenance: plan Display renders
+  `port: <name>:<host>:<guest>`, `(auto)`, and
+  `(injected: depends_on '<dep>' port '<port>')`; `ps` renders named ports.
+- Reference example (config.reference): example-litellm gains named `api`
+  (4000) + auto `metrics` (0→9090) ports; new exports-only `example-exports`
+  workload; goldens for example-service/example-agent/example-offensive
+  byte-identical.
+- Commits: 217f7a3 (P0), 262802e (P1), 1f2336f (P2), 3e7c2e0 (P3), this
+  docs commit (P4).
 
 ## Host build failure fixed (2026-08-07 evening)
 

@@ -33,9 +33,25 @@ log_stop_errors = true
 [workloads.example-litellm.env]
 PORT = "4000"
 
+# Named ports (P0/P2): `name` gives a port a stable identity for
+# `depends_on.<dep>.exports = { <name> = "<ENV_VAR>" }` resolution. The
+# UNNAMED port is the legacy primary (env) port; here `api` is the only
+# HTTP port and the primary rule resolves to it.
 [[workloads.example-litellm.ports]]
+name = "api"
 host = 4000
 guest = 4000
+
+# Auto-allocated port (P1): `host = 0` asks the registry to probe a free
+# port on the slot's bind at boot (same mechanism as --port-auto, per port).
+# The chosen port is recorded in the instance record; `ps` shows the
+# effective port. A dependency's auto port has NO address until it runs, so
+# a not-running dep with an auto port refuses at plan time ("start it
+# first").
+[[workloads.example-litellm.ports]]
+name = "metrics"
+host = 0
+guest = 9090
 
 [workloads.example-litellm.network]
 default_deny = true
@@ -107,6 +123,38 @@ scope = "local"
 # config repos) use required = true per spec 12 §4.
 [workloads.example-service.depends_on.example-litellm]
 env = "LITELLM_ADDR"
+required = false
+
+# Exports-only depends_on (P2 namespaced ports): resolves the DEPENDENCY's
+# NAMED ports and injects each resolved address as its own env var. `env` is
+# omitted here on purpose — validation requires at least one of env/exports.
+# (`metrics` is intentionally NOT exported: it is auto-allocated, so it has
+# no address until example-litellm runs — a not-running auto dep refuses by
+# design.)
+[workloads.example-exports]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 1
+memory_mib = 256
+command = ["python", "-m", "http.server", "9999"]
+log_stop_errors = true
+
+[workloads.example-exports.env]
+PORT = "9999"
+
+[[workloads.example-exports.ports]]
+host = 9999
+guest = 9999
+
+[workloads.example-exports.network]
+default_deny = true
+
+[[workloads.example-exports.network.egress]]
+recipe = "dns"
+
+[workloads.example-exports.depends_on.example-litellm]
+exports = { api = "LITELLM_API_URL" }
 required = false
 
 [workloads.example-agent]

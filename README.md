@@ -337,7 +337,10 @@ loopback IPs (`127.0.0.N`, `N >= 2`) drawn from a locked allocator in the
 port registry. Collisions are keyed on `(bind_ip, port)` — the same port on
 different bind IPs does not collide. `--port-auto` picks a lock-probed free
 port on the slot's bind for cases where even the per-IP port must not be
-assumed. See [ADR 0026](docs/migration/50-decisions/0026-per-instance-addressing-and-discovery.md)
+assumed. Ports can be named (`[[ports]] name = "api"`) and a dependent can
+export a dependency's named ports to its own env vars
+(`depends_on.<dep>.exports = { api = "API_URL" }`); `host = 0` allocates a
+free port at boot. See [ADR 0026](docs/migration/50-decisions/0026-per-instance-addressing-and-discovery.md)
 and [ADR 0021](docs/migration/50-decisions/0021-instance-lifecycle-model.md).
 
 ### Blue-green config changes
