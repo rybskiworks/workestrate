@@ -9,7 +9,7 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 6 ahead of origin/migration/tool-model (5 feature commits this session + prior docs commit 4c9cdfb), 305 ahead of origin/main; NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 8 ahead of origin/migration/tool-model (6 prior + require_tls fix + this docs entry), 307 ahead of origin/main; NOT pushed; origin SSH |
 | personal config repo | `6917f3d` | 5 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, 6917f3d); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
 | dev home | (workestrate-dev-home) `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | clean; origin/fix == 74919059 (pushed); origin/main `b43d7522` (divergent); remote ambiguous — live ls-remote before fork work |
@@ -53,6 +53,23 @@
   byte-identical.
 - Commits: 217f7a3 (P0), 262802e (P1), 1f2336f (P2), 3e7c2e0 (P3), this
   docs commit (P4).
+
+## plain-HTTP secret substitution fix (require_tls_identity) — 2026-08-10
+
+- Root cause: the fork's host egress proxy substitutes secret placeholders
+  (`$MSB_LITELLM_MASTER_KEY` → real value) ONLY when the secret's
+  `require_tls_identity` is false on plain-HTTP connections (or under TLS
+  interception). The fork's SecretBuilder defaults `require_tls_identity:
+  true` and the SDK's 3-arg `secret_env` leaves it true, so workestrate's
+  host-bound secrets were never substituted over the plain-HTTP pi →
+  `host.microsandbox.internal:4000` path — litellm received the literal
+  placeholder → 400 "No connected db".
+- Fix (33afae4): `apply_plan_secrets` now builds each host-bound SecretEntry
+  via the full builder — `require_tls_identity(false)` for the local proxy
+  alias `host.microsandbox.internal`, `true` for external hosts
+  (`secret_requires_tls_identity` helper; `$MSB_<name>` placeholder
+  auto-naming unchanged). 3 new tests; full suite green (849 passed / 0
+  failed / 4 ignored).
 
 ## Host build failure fixed (2026-08-07 evening)
 
