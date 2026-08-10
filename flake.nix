@@ -126,6 +126,7 @@
                   null;
                 bakedFiles = workloads.${name}.image.baked_files or [];
                 features = workloads.${name}.image.features or [];
+                env = workloads.${name}.image.env or {};
               };
             }) nixLayered);
 
