@@ -343,6 +343,31 @@ export a dependency's named ports to its own env vars
 free port at boot. See [ADR 0026](docs/migration/50-decisions/0026-per-instance-addressing-and-discovery.md)
 and [ADR 0021](docs/migration/50-decisions/0021-instance-lifecycle-model.md).
 
+### Ports, dependencies, and seed files
+
+The config model composes three primitives for wiring workloads together:
+
+- **Named ports + auto-allocation.** A `[[ports]]` entry may carry a stable
+  `name = "api"` (slug, unique within the workload) and/or `host = 0` — the
+  registry probes a free host port at boot (the effective port is recorded in
+  the instance record; `ps` shows it). An unnamed port is the legacy
+  **primary** port.
+- **Dependency exports.** `[workloads.<name>.depends_on.<dep>]` injects the
+  dependency's resolved addresses into the dependent's env:
+  `env = "LITELLM_ADDR"` for the primary/unnamed port, and/or
+  `exports = { api = "API_URL" }` — one env var per named port, each carrying
+  that port's resolved address. At least one of `env`/`exports` is required;
+  `required = true` makes a not-running dependency a plan-time refusal.
+- **Seed files.** `[[seed_files]]` copies a file (or a set of files) into the
+  sandbox before start. `template = true` renders the source text as a
+  `${VAR}` template against the workload's **guest-visible env view** (exactly
+  what the guest process sees — host-bound secrets appear as their
+  `$MSB_<name>` placeholders); `$$` emits a literal `$` (`$${FOO}` renders as
+  `${FOO}` for the guest to expand itself), and a missing var is a hard
+  error. `glob = "seed/**/*.json"` seeds every sorted regular-file match to
+  `target/<rel-path>` (`target` becomes a directory; a glob with no matches
+  is a hard error). `source` and `glob` are mutually exclusive.
+
 ### Blue-green config changes
 
 The refuse-on-occupied default + `--new`/per-instance addressing make a safe

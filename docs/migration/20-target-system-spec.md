@@ -239,11 +239,12 @@ schema_version = 1  # integer; workestrate checks compatibility on load
                            #   { secret = "ID" } = renamed placeholder,
                            #   { bound = "guest" } = real value (verifier opt-in))
                            #   or legacy array-of-tables (no `bound`)
-# ports: [[table]]         # port mappings
+# ports: [[table]]         # port mappings (`name` = exportable named port; `host = 0` = auto-allocate at boot)
 # mounts: [[table]]        # mount declarations
 # network: table           # network policy
-# seed_files: [[table]]    # files to seed before start (replaces prepare())
+# seed_files: [[table]]    # files to seed before start (replaces prepare(); `template = true` renders ${VAR}; `glob` seeds target/<rel-path>)
 # local_build: table?      # local build recipe (replaces build_path())
+# depends_on: table        # dependency declarations (`env` = primary-port address; `exports` = named-port → env var)
 ```
 
 ### Complete annotated example (all 5 current workloads)
@@ -311,9 +312,22 @@ KIMI_CODE_API_KEY = true                                    # placeholder
 NEURALWATT_API_KEY = true                                   # placeholder
 MINIMAX_CODING_API_KEY = true                               # placeholder
 
+# Named port: `name` gives the port a stable identity that a dependent
+# resolves via `depends_on.<dep>.exports = { api = "LITELLM_API_URL" }`
+# (one exported env var per named port). The unnamed port is the legacy
+# primary port, addressed via `depends_on.<dep>.env`.
 [[workloads.litellm.ports]]
+name = "api"
 host = 4000
 guest = 4000
+
+# Auto-allocated port: `host = 0` probes a free host port on the slot's
+# bind at boot (recorded in the instance record; `ps` shows the effective
+# port).
+[[workloads.litellm.ports]]
+name = "metrics"
+host = 0
+guest = 9090
 
 [[workloads.litellm.mounts]]
 host = "${MSB_HOME}/sandboxes/litellm/logs"
@@ -380,6 +394,13 @@ domain_suffix = ".pi.dev"
 source = "agents/pi/config/models.json"   # config-relative
 target = "workspaces/pi-state/agent/models.json"  # state_dir-relative
 only_if_missing = true
+template = true   # render ${VAR} against the guest-visible env view; `$$` emits a literal `$`
+
+[workloads.pi.depends_on.litellm]
+# `env` injects the resolved address of litellm's primary/unnamed port;
+# `required = true` makes a not-running litellm a plan-time refusal.
+env = "LITELLM_ADDR"
+required = true
 
 # ─── odysseus ───────────────────────────────────────────────────────────────
 
@@ -437,6 +458,19 @@ scope = "local"
 source = "agents/odysseus/config/settings.json"
 target = "workspaces/odysseus-state/settings.json"
 only_if_missing = true
+
+# Glob seed: `target` becomes a directory; each sorted regular-file match
+# seeds to `target/<rel-path>`; no match is a hard error at seed time.
+[[workloads.odysseus.seed_files]]
+glob = "agents/odysseus/config/settings.d/*.json"
+target = "workspaces/odysseus-state/settings"
+
+[workloads.odysseus.depends_on.litellm]
+# `exports` injects the resolved address of each NAMED port as its own env
+# var (here: litellm's `api` port → LITELLM_API_URL). Exports keys must
+# name a port the dependency declares.
+exports = { api = "LITELLM_API_URL" }
+required = true
 
 [workloads.odysseus.local_build]
 recipe = "pip-install"
@@ -1062,7 +1096,7 @@ Merge order: `config.reference/` (base) → `work` (layer 1) → `personal`
 ### Provenance (`plan --show-source`)
 
 ```bash
-$ workestrate plan pi --show-source
+$ workestrate workload plan pi --show-source
 name: pi
 image: workestrate-pi:latest                    [personal]
 cpus: 2                                          [work]

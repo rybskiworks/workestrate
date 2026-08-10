@@ -28,9 +28,11 @@ secret-bearing escape hatch (`run`). `plan` prints sandbox configurations
 built with `SandboxBuilder` and `NetworkPolicyBuilder`; `plan --show-source`
 annotates per-field provenance with layer names. `up`/`exec` target a slot
 (singleton `<workload>` or `<context>-<workload>`) or a parallel instance
-(`<slot>@<id>`); occupied slots refuse by default (`--replace` to recycle,
-`--instance <id> --port-offset N` or `--new --port-offset N` for parallel
-canaries). `--port-offset N` shifts host ports by `+=N` (guest unchanged).
+(`<slot>@<id>`); occupied slots refuse by default (`--replace` to recycle;
+`--instance <id>`/`--new` start a parallel canary on its own per-instance
+loopback IP `127.0.0.N`). Declared ports publish per instance; `host = 0`
+ports (and `--port-auto`) probe a free port at boot (`--port-offset` was
+removed pre-release, ADR 0026).
 
 `apps.default` runs the workestrate CLI directly. Workload image builds
 live in the config repo flake (cleanup phase 3), which consumes the tool

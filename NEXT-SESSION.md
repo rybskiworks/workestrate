@@ -170,13 +170,36 @@ Validation: full suite green per commit (fmt/clippy -D warnings/test), tombi-che
   (host-check needs KVM; profile install would write the container
   profile).
 
+## config-model docs + schema understandability — 2026-08-10
+
+- **fce23c9** schema doc-comment pass: `PortMapping.host` documents
+  `host = 0` auto-allocation; `PortMapping.name` documents the exportable
+  named-port identity (unnamed = legacy primary, addressed via
+  `depends_on.<dep>.env`); `DependsOnSpec` env/exports and `SeedFileConfig`
+  template/glob gain concise field docs (`$$` escape; glob target-directory
+  + `target/<rel-path>` semantics; no-match = hard error). Both JSON schemas
+  regenerated; copier template copies synced; schema_drift + subschema_drift
+  green.
+- **This docs commit**: spec 20 annotated example now demonstrates a named
+  port (`name = "api"`), an auto port (`host = 0`), depends_on `env`
+  (pi) and `exports` (odysseus), a `template = true` seed (pi) and a `glob`
+  seed (odysseus); README gains a "Ports, dependencies, and seed files"
+  subsection; SPEC.md drops the removed `--port-offset` form; outdated-sweep
+  grep clean (remaining `--port-offset`/legacy references are historical
+  ADRs/docs, intentionally untouched).
+- Validation: cargo test full green; fmt/clippy; spec_examples_parse +
+  scaffold_template + schema_drift + subschema_drift; check-nix-paths.sh.
+- NOTE: dev-home (`c3dd7d5`) and personal (`3dcaf9e`) consumer schema copies
+  are now ONE regen behind (they carry the pre-description schemas); a future
+  `workestrate schemas update` syncs them (out of scope this session).
+
 ## Current repo state (verified 2026-08-08)
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 9 ahead of origin/migration/tool-model (6 prior + require_tls fix + host-provision fix + this docs entry), 307 ahead of origin/main; NOT pushed; origin SSH |
-| personal config repo | `6917f3d` | 5 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, 6917f3d); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
-| dev home | workestrate-dev-home `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
+| workestrate | HEAD on `migration/tool-model` | clean, 11 ahead of origin/migration/tool-model (9 prior + fce23c9 schema-docs regen + this docs entry), 310 ahead of origin/main; NOT pushed; origin SSH |
+| personal config repo | `3dcaf9e` | 7 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, b41cdaa, 6917f3d, 3dcaf9e); no remote; clean (user WIP resolved) |
+| dev home | workestrate-dev-home `c3dd7d5` | clean, 6 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |
 
 ## Readiness verdict

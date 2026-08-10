@@ -9,9 +9,9 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 9 ahead of origin/migration/tool-model (6 prior + require_tls fix + host-provision fix + this docs entry), 307 ahead of origin/main; NOT pushed; origin SSH |
-| personal config repo | `6917f3d` | 5 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, 6917f3d); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
-| dev home | (workestrate-dev-home) `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
+| workestrate | HEAD on `migration/tool-model` | clean, 11 ahead of origin/migration/tool-model (9 prior + fce23c9 schema-docs regen + this docs entry), 310 ahead of origin/main; NOT pushed; origin SSH |
+| personal config repo | `3dcaf9e` | 7 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, b41cdaa, 6917f3d, 3dcaf9e); no remote; clean (user WIP resolved) |
+| dev home | (workestrate-dev-home) `c3dd7d5` | clean, 6 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | clean; origin/fix == 74919059 (pushed); origin/main `b43d7522` (divergent); remote ambiguous — live ls-remote before fork work |
 
 ## Store / artifact state (verified 2026-08-07)
@@ -85,6 +85,20 @@
   otherwise unchanged. Validated: `bash -n` + in-container capture proof
   (single clean store path; simulated uncached build shows old `2>&1`
   noise vs new clean capture).
+
+## config-model docs + schema understandability — 2026-08-10
+
+- fce23c9: schema doc-comment improvements + regen — `host = 0`
+  auto-allocation, named-port identity/unnamed-primary, depends_on
+  env/exports, and seed template/glob/`$$` escape now appear as concise
+  descriptions in the generated schema; copier template copies synced.
+- This docs commit: spec 20 annotated example demonstrates the new fields
+  (named + auto ports, depends_on env/exports, template/glob seeds); README
+  gains a "Ports, dependencies, and seed files" subsection; SPEC.md drops
+  the removed `--port-offset` form.
+- dev-home (`c3dd7d5`) and personal (`3dcaf9e`) consumer schema copies are
+  one regen behind (pre-description schemas); next `workestrate schemas
+  update` syncs them.
 
 ## Host build failure fixed (2026-08-07 evening)
 
