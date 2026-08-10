@@ -203,18 +203,18 @@
       }
     },
     "DependsOnSpec": {
-      "description": "A single dependency declaration of a workload (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d) discovery-lite). `env` (optional) names the environment variable the resolved address of dependency `<dep>`'s primary/unnamed port is injected as; `required` (default false) makes a not-running dependency a plan-time refusal instead of a skip; `exports` maps named-port -> env var, each injecting the resolved host address of that named port.",
+      "description": "A single dependency declaration of a workload (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d) discovery-lite). `env` (optional) names the environment variable the resolved address of dependency `<dep>`'s primary/unnamed port is injected as; `required` (default false) makes a not-running dependency a plan-time refusal instead of a skip; `exports` maps named-port -> env var, injecting the resolved host address of each named port (one env var per named port).",
       "type": "object",
       "properties": {
         "env": {
-          "description": "Env var the resolved address of dependency `<dep>` is injected as (primary/legacy form). Optional: an exports-only dependency may omit it.",
+          "description": "Env var the resolved address of dependency `<dep>`'s primary/unnamed port is injected as (legacy primary form). Optional: an exports-only dependency may omit it.",
           "type": [
             "string",
             "null"
           ]
         },
         "exports": {
-          "description": "Named-port exports: port name -> env var name. Each entry injects the resolved host address of the named port as that env var.",
+          "description": "Named-port exports: port name -> env var name. Each entry injects the resolved host address of that named port as one env var per named port; every key must name a port the dependency declares.",
           "default": {},
           "type": "object",
           "additionalProperties": {
@@ -598,12 +598,13 @@
           "minimum": 0.0
         },
         "host": {
+          "description": "Host port to publish on `bind_ip`. `0` = auto-allocate a free port at boot (probed from the port registry; the effective port is recorded in the instance record and shown by `ps`).",
           "type": "integer",
           "format": "uint16",
           "minimum": 0.0
         },
         "name": {
-          "description": "Optional port name (namespaced ports). Unnamed = the legacy primary port. Additive serde default so older plans/configs parse cleanly; skipped when `None` so legacy JSON is byte-identical.",
+          "description": "Optional port name (namespaced ports): gives the port a stable identity that `depends_on.<dep>.exports = { <name> = \"<ENV_VAR>\" }` resolves (one exported env var per named port). Unnamed = the legacy primary port, addressed via `depends_on.<dep>.env`. Additive serde default so older plans/configs parse cleanly; skipped when `None` so legacy JSON is byte-identical.",
           "type": [
             "string",
             "null"
@@ -638,13 +639,14 @@
       ]
     },
     "SeedFileConfig": {
-      "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary); it is `None` when the entry uses `glob` instead — exactly one of `source`|`glob` per entry is enforced by `config::validation`. `target` is the in-sandbox destination; `only_if_missing` skips the copy when the target already exists. When `template` is true, the source TEXT is rendered as a `${VAR}` template against the workload's guest-visible env view at seed time (map-only resolver; missing var = hard error; no process env). `glob` is a glob pattern relative to the declaring layer's content dir; each regular-file match seeds to `target/<rel-path>`, sorted; mutually exclusive with `source`.",
+      "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary); it is `None` when the entry uses `glob` instead — exactly one of `source`|`glob` per entry is enforced by `config::validation`. `target` is the in-sandbox destination; `only_if_missing` skips the copy when the target already exists. When `template` is true, the source TEXT is rendered as a `${VAR}` template against the workload's guest-visible env view at seed time (`$$` emits a literal `$`, so `$${FOO}` renders as `${FOO}`; map-only resolver; missing var = hard error; no process env). `glob` is a glob pattern relative to the declaring layer's content dir: `target` becomes a directory and each regular-file match seeds to `target/<rel-path>`, sorted; a glob with no matches is a hard error at seed time; mutually exclusive with `source`.",
       "type": "object",
       "required": [
         "target"
       ],
       "properties": {
         "glob": {
+          "description": "Glob pattern (relative to the declaring layer's content dir): `target` becomes a directory and each sorted regular-file match seeds to `target/<rel-path>`. No match = hard error at seed time. Mutually exclusive with `source`.",
           "default": null,
           "type": [
             "string",
@@ -667,6 +669,7 @@
           "type": "string"
         },
         "template": {
+          "description": "When true, render the source TEXT as a `${VAR}` template against the workload's guest-visible env view at seed time (`$$` emits a literal `$`; a missing var is a hard error).",
           "default": false,
           "type": "boolean"
         }

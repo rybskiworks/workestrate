@@ -88,14 +88,20 @@ pub struct SandboxPlan {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PortMapping {
+    /// Host port to publish on `bind_ip`. `0` = auto-allocate a free port at
+    /// boot (probed from the port registry; the effective port is recorded in
+    /// the instance record and shown by `ps`).
     pub host: u16,
     pub guest: u16,
     /// Host bind address (ADR 0026). Defaults to 127.0.0.1 (the shared singleton bind).
     #[serde(default = "default_bind_ip")]
     pub bind_ip: IpAddr,
-    /// Optional port name (namespaced ports). Unnamed = the legacy primary port.
-    /// Additive serde default so older plans/configs parse cleanly; skipped when
-    /// `None` so legacy JSON is byte-identical.
+    /// Optional port name (namespaced ports): gives the port a stable identity
+    /// that `depends_on.<dep>.exports = { <name> = "<ENV_VAR>" }` resolves
+    /// (one exported env var per named port). Unnamed = the legacy primary
+    /// port, addressed via `depends_on.<dep>.env`. Additive serde default so
+    /// older plans/configs parse cleanly; skipped when `None` so legacy JSON
+    /// is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }

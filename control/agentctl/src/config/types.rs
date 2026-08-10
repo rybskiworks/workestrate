@@ -452,11 +452,12 @@ impl Serialize for EnvBindings {
 /// `config::validation`. `target` is the in-sandbox destination;
 /// `only_if_missing` skips the copy when the target already exists. When
 /// `template` is true, the source TEXT is rendered as a `${VAR}` template
-/// against the workload's guest-visible env view at seed time (map-only
-/// resolver; missing var = hard error; no process env). `glob` is a glob
-/// pattern relative to the declaring layer's content dir; each regular-file
-/// match seeds to `target/<rel-path>`, sorted; mutually exclusive with
-/// `source`.
+/// against the workload's guest-visible env view at seed time (`$$` emits a
+/// literal `$`, so `$${FOO}` renders as `${FOO}`; map-only resolver; missing
+/// var = hard error; no process env). `glob` is a glob pattern relative to
+/// the declaring layer's content dir: `target` becomes a directory and each
+/// regular-file match seeds to `target/<rel-path>`, sorted; a glob with no
+/// matches is a hard error at seed time; mutually exclusive with `source`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -464,8 +465,15 @@ pub struct SeedFileConfig {
     pub source: Option<String>,
     pub target: String,
     pub only_if_missing: Option<bool>,
+    /// When true, render the source TEXT as a `${VAR}` template against the
+    /// workload's guest-visible env view at seed time (`$$` emits a literal
+    /// `$`; a missing var is a hard error).
     #[serde(default)]
     pub template: bool,
+    /// Glob pattern (relative to the declaring layer's content dir): `target`
+    /// becomes a directory and each sorted regular-file match seeds to
+    /// `target/<rel-path>`. No match = hard error at seed time. Mutually
+    /// exclusive with `source`.
     #[serde(default)]
     pub glob: Option<String>,
 }
@@ -509,19 +517,21 @@ pub struct NetworkConfig {
 /// discovery-lite). `env` (optional) names the environment variable the
 /// resolved address of dependency `<dep>`'s primary/unnamed port is injected
 /// as; `required` (default false) makes a not-running dependency a plan-time
-/// refusal instead of a skip; `exports` maps named-port -> env var, each
-/// injecting the resolved host address of that named port.
+/// refusal instead of a skip; `exports` maps named-port -> env var, injecting
+/// the resolved host address of each named port (one env var per named port).
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
 pub struct DependsOnSpec {
-    /// Env var the resolved address of dependency `<dep>` is injected as
-    /// (primary/legacy form). Optional: an exports-only dependency may omit it.
+    /// Env var the resolved address of dependency `<dep>`'s primary/unnamed
+    /// port is injected as (legacy primary form). Optional: an exports-only
+    /// dependency may omit it.
     pub env: Option<String>,
     #[serde(default)]
     pub required: bool,
     /// Named-port exports: port name -> env var name. Each entry injects the
-    /// resolved host address of the named port as that env var.
+    /// resolved host address of that named port as one env var per named
+    /// port; every key must name a port the dependency declares.
     #[serde(default)]
     pub exports: HashMap<String, String>,
 }
