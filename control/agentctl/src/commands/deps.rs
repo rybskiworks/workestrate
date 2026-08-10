@@ -506,6 +506,7 @@ guest = 4003
                 host,
                 guest,
                 bind_ip: bind,
+                name: None,
             }],
             "2026-08-01T00:00:00Z",
         )

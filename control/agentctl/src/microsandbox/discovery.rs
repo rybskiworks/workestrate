@@ -218,6 +218,15 @@ pub fn resolve_depends_on(
 
     let mut resolved = Vec::with_capacity(deps.len());
     for (dep, spec) in deps {
+        // P0 transitional rule: an exports-only dependency (`env` is None) has
+        // its named-port exports resolution deferred to P2 — skip resolution
+        // for that dep entirely (pushing nothing). This also means a
+        // `required = true` exports-only dep does NOT refuse in P0 (accepted
+        // transitional gap); validation still enforces the at-least-one rule
+        // and that every exports key names a declared port.
+        let Some(env_var) = &spec.env else {
+            continue;
+        };
         let records = list_records_for_workload(state_dir, dep)?;
         // Selection (ADR 0026(d)): default = the dependency's SINGLETON slot
         // record (the one whose `instance` name contains no `@`); a `--use
@@ -272,7 +281,7 @@ pub fn resolve_depends_on(
                     }
                     resolved.push(ResolvedDependency {
                         dep: dep.clone(),
-                        env_var: spec.env.clone(),
+                        env_var: env_var.clone(),
                         address: format!("{}:{}", GUEST_HOST_ALIAS, port),
                         host_port: port,
                         source: ResolutionSource::RunningInstance,
@@ -284,7 +293,7 @@ pub fn resolve_depends_on(
                     resolved.push(declared_fallback(
                         config,
                         dep,
-                        &spec.env,
+                        env_var,
                         &format!(
                             "its {} record '{}' publishes no ports",
                             selector, record.instance
@@ -304,7 +313,7 @@ pub fn resolve_depends_on(
                 resolved.push(declared_fallback(
                     config,
                     dep,
-                    &spec.env,
+                    env_var,
                     "no singleton instance is running",
                 )?);
             }
@@ -486,6 +495,7 @@ default_deny = true
                 host,
                 guest,
                 bind_ip: bind,
+                name: None,
             }],
             "2026-07-30T00:00:00Z",
         )
@@ -571,8 +581,9 @@ default_deny = true
         config.workloads.get_mut("pi").unwrap().depends_on.insert(
             "noports".to_string(),
             crate::config::DependsOnSpec {
-                env: "NOPORTS_URL".to_string(),
+                env: Some("NOPORTS_URL".to_string()),
                 required: false,
+                exports: Default::default(),
             },
         );
 
@@ -667,8 +678,9 @@ default_deny = true
         config.workloads.get_mut("pi").unwrap().depends_on.insert(
             "aaa".to_string(),
             crate::config::DependsOnSpec {
-                env: "AAA_URL".to_string(),
+                env: Some("AAA_URL".to_string()),
                 required: false,
+                exports: Default::default(),
             },
         );
         // Give the `litellm` workload an alias `aaa` with its own declared
@@ -700,8 +712,9 @@ default_deny = true
         config.workloads.get_mut("pi").unwrap().depends_on.insert(
             "noports".to_string(),
             crate::config::DependsOnSpec {
-                env: "NOPORTS_URL".to_string(),
+                env: Some("NOPORTS_URL".to_string()),
                 required: false,
+                exports: Default::default(),
             },
         );
 
@@ -734,8 +747,9 @@ default_deny = true
         config.workloads.get_mut("pi").unwrap().depends_on.insert(
             "noports".to_string(),
             crate::config::DependsOnSpec {
-                env: "NOPORTS_URL".to_string(),
+                env: Some("NOPORTS_URL".to_string()),
                 required: false,
+                exports: Default::default(),
             },
         );
         // `noports` declares no ports either → the fallback itself errors.
@@ -778,6 +792,7 @@ default_deny = true
                 host: 14000,
                 guest: 4000,
                 bind_ip: loopback(2),
+                name: None,
             }],
             "2026-07-30T00:00:00Z",
         )?;
@@ -835,6 +850,7 @@ default_deny = true
                 host,
                 guest,
                 bind_ip: bind,
+                name: None,
             }],
             "2026-07-30T00:00:00Z",
         )

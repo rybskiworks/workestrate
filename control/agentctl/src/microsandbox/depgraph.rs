@@ -287,6 +287,7 @@ env = "A_URL"
                 host,
                 guest,
                 bind_ip: bind,
+                name: None,
             }],
             "2026-07-30T00:00:00Z",
         )
@@ -312,6 +313,7 @@ env = "A_URL"
                 host,
                 guest,
                 bind_ip: bind,
+                name: None,
             }],
             "2026-07-30T00:00:00Z",
         )

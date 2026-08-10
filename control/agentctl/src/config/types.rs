@@ -506,16 +506,24 @@ pub struct NetworkConfig {
 
 /// A single dependency declaration of a workload
 /// (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d)
-/// discovery-lite). `env` names the environment variable the resolved address
-/// of dependency `<dep>` is injected as; `required` (default false) makes a
-/// not-running dependency a plan-time refusal instead of a skip.
+/// discovery-lite). `env` (optional) names the environment variable the
+/// resolved address of dependency `<dep>`'s primary/unnamed port is injected
+/// as; `required` (default false) makes a not-running dependency a plan-time
+/// refusal instead of a skip; `exports` maps named-port -> env var, each
+/// injecting the resolved host address of that named port.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
 pub struct DependsOnSpec {
-    pub env: String,
+    /// Env var the resolved address of dependency `<dep>` is injected as
+    /// (primary/legacy form). Optional: an exports-only dependency may omit it.
+    pub env: Option<String>,
     #[serde(default)]
     pub required: bool,
+    /// Named-port exports: port name -> env var name. Each entry injects the
+    /// resolved host address of the named port as that env var.
+    #[serde(default)]
+    pub exports: HashMap<String, String>,
 }
 
 /// A single workload definition (`workloads.<name>` in workestrate.toml).
@@ -847,7 +855,7 @@ env = "LITELLM_URL"
 "#;
         let config: ConfigFile = toml::from_str(raw).unwrap();
         let spec = &config.workloads["pi"].depends_on["litellm"];
-        assert_eq!(spec.env, "LITELLM_URL");
+        assert_eq!(spec.env.as_deref(), Some("LITELLM_URL"));
         assert!(!spec.required, "required must default to false");
     }
 
@@ -869,7 +877,7 @@ required = true
 "#;
         let config: ConfigFile = toml::from_str(raw).unwrap();
         let spec = &config.workloads["pi"].depends_on["litellm"];
-        assert_eq!(spec.env, "LITELLM_URL");
+        assert_eq!(spec.env.as_deref(), Some("LITELLM_URL"));
         assert!(spec.required);
 
         let serialized = toml::to_string(&config).unwrap();

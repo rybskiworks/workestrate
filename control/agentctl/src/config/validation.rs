@@ -2,6 +2,7 @@
 //! policy allowlists, trust-boundary validators, and identifier validators.
 
 use anyhow::Result;
+use std::collections::HashMap;
 
 use crate::config::types::ConfigFile;
 use crate::policy;
@@ -113,6 +114,20 @@ fn is_valid_env_var_name(name: &str) -> bool {
         chars.next(),
         Some(c) if c.is_ascii_alphabetic() || c == '_'
     ) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether `name` is a syntactically valid named-port slug:
+/// `^[a-z0-9][a-z0-9-]*$` — first char `[a-z0-9]`, remaining chars
+/// `[a-z0-9-]`, empty invalid. Named ports are referenced by
+/// `depends_on.exports` keys and flow into plan/registry JSON, so the charset
+/// is deliberately narrow (lowercase/digits/hyphens; no uppercase,
+/// underscores, dots, or leading hyphen).
+fn is_valid_port_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(
+        chars.next(),
+        Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit()
+    ) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// Validate a parsed [`ConfigFile`] against the invariants the TOML schema
@@ -330,7 +345,8 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
 
     // ADR 0026(d): depends_on entries must name an existing workload (a
     // workload may NOT depend on itself — self-dependency is nonsensical for
-    // discovery), and the injected `env` target must be a valid env-var name.
+    // discovery), and the injected `env` target (when present) must be a
+    // valid env-var name.
     for (workload_name, workload) in &config.workloads {
         for (dep, spec) in &workload.depends_on {
             if dep == workload_name {
@@ -346,12 +362,160 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                     dep
                 );
             }
-            if !is_valid_env_var_name(&spec.env) {
+            if let Some(env) = &spec.env {
+                if !is_valid_env_var_name(env) {
+                    anyhow::bail!(
+                        "workload '{}' depends_on '{}' env '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
+                        workload_name,
+                        dep,
+                        env
+                    );
+                }
+            }
+        }
+    }
+
+    // P0: namespaced ports + depends_on exports (ADR 0026(d) exports).
+    // NOTE: `host = 0` is LEGAL (auto-allocation) — it means "allocate a free
+    // port at boot" (allocator: port_registry probe_free_ports); no code
+    // check rejects it here.
+    //
+    // (a) At-least-one rule: a depends_on entry must inject via `env` and/or
+    // `exports` — an entry declaring neither resolves nothing.
+    for (workload_name, workload) in &config.workloads {
+        for (dep, spec) in &workload.depends_on {
+            if spec.env.is_none() && spec.exports.is_empty() {
                 anyhow::bail!(
-                    "workload '{}' depends_on '{}' env '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
+                    "workload '{}' depends_on '{}' must declare `env` (primary/legacy form) or at least one `exports` entry",
                     workload_name,
-                    dep,
-                    spec.env
+                    dep
+                );
+            }
+        }
+    }
+
+    // (b)/(c) Port names: unique within a workload and `^[a-z0-9][a-z0-9-]*$`
+    // (first char ascii_lowercase/ascii_digit; then ascii_lowercase/ascii_digit/
+    // '-'; empty invalid). Unnamed ports are the legacy primary port and need
+    // no validation here.
+    for (workload_name, workload) in &config.workloads {
+        let mut seen: Vec<&str> = Vec::new();
+        for p in &workload.ports {
+            let Some(name) = p.name.as_deref() else {
+                continue;
+            };
+            if !is_valid_port_name(name) {
+                anyhow::bail!(
+                    "workload '{}' port name '{}' is not a valid port name (must match ^[a-z0-9][a-z0-9-]*$)",
+                    workload_name,
+                    name
+                );
+            }
+            if seen.contains(&name) {
+                anyhow::bail!(
+                    "workload '{}' declares duplicate port name '{}' (port names must be unique within a workload)",
+                    workload_name,
+                    name
+                );
+            }
+            seen.push(name);
+        }
+    }
+
+    // (d) Every `exports` key must name a port the dependency DECLARES
+    // (`config.workloads[dep].ports` with `name == Some(key)`); a typo'd or
+    // stale key would silently inject nothing, so it is a hard error.
+    for (workload_name, workload) in &config.workloads {
+        let mut deps: Vec<&String> = workload.depends_on.keys().collect();
+        deps.sort();
+        for dep in deps {
+            let spec = &workload.depends_on[dep];
+            if spec.exports.is_empty() {
+                continue;
+            }
+            let declared: Vec<&str> = config
+                .workloads
+                .get(dep)
+                .map(|w| w.ports.iter().filter_map(|p| p.name.as_deref()).collect())
+                .unwrap_or_default();
+            let mut keys: Vec<&String> = spec.exports.keys().collect();
+            keys.sort();
+            for key in keys {
+                if !declared.contains(&key.as_str()) {
+                    let declared_str = if declared.is_empty() {
+                        "none".to_string()
+                    } else {
+                        declared.join(", ")
+                    };
+                    anyhow::bail!(
+                        "workload '{}' depends_on '{}' exports key '{}' does not name a port declared by dependency '{}' (declared named ports: {})",
+                        workload_name,
+                        dep,
+                        key,
+                        dep,
+                        declared_str
+                    );
+                }
+            }
+        }
+    }
+
+    // (e) Every injected env-var name — `spec.env` (validated in the ADR
+    // 0026(d) loop above) and EVERY `exports` VALUE — must be a valid
+    // env-var name (WP10/A11; a name no shell or `exec` could set).
+    for (workload_name, workload) in &config.workloads {
+        for (dep, spec) in &workload.depends_on {
+            let mut ports: Vec<&String> = spec.exports.keys().collect();
+            ports.sort();
+            for port_name in ports {
+                let env_name = &spec.exports[port_name];
+                if !is_valid_env_var_name(env_name) {
+                    anyhow::bail!(
+                        "workload '{}' depends_on '{}' exports port '{}' env var '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
+                        workload_name,
+                        dep,
+                        port_name,
+                        env_name
+                    );
+                }
+            }
+        }
+    }
+
+    // (f) Injected env names must be unique across a workload's deps: two
+    // different deps (or the same dep twice, via env + an exports value)
+    // injecting the SAME env name would clobber at plan time. Deterministic:
+    // deps iterated SORTED by name; env names reported SORTED.
+    for (workload_name, workload) in &config.workloads {
+        let mut deps: Vec<&String> = workload.depends_on.keys().collect();
+        deps.sort();
+        let mut by_env: HashMap<&str, Vec<&str>> = HashMap::new();
+        for dep in deps {
+            let spec = &workload.depends_on[dep];
+            if let Some(env) = &spec.env {
+                by_env.entry(env.as_str()).or_default().push(dep.as_str());
+            }
+            let mut ports: Vec<&String> = spec.exports.keys().collect();
+            ports.sort();
+            for port_name in ports {
+                by_env
+                    .entry(spec.exports[port_name].as_str())
+                    .or_default()
+                    .push(dep.as_str());
+            }
+        }
+        let mut env_names: Vec<&&str> = by_env.keys().collect();
+        env_names.sort();
+        for env_name in env_names {
+            if by_env[env_name].len() > 1 {
+                let mut sources = by_env[env_name].clone();
+                sources.sort();
+                sources.dedup();
+                anyhow::bail!(
+                    "workload '{}' depends_on injects env var '{}' from multiple sources (dependencies: {}); each injected env var must come from exactly one source",
+                    workload_name,
+                    env_name,
+                    sources.join(", ")
                 );
             }
         }
@@ -912,8 +1076,9 @@ default_deny = true
         config.workloads.get_mut("pi").unwrap().depends_on.insert(
             "missing".to_string(),
             crate::config::DependsOnSpec {
-                env: "MISSING_URL".to_string(),
+                env: Some("MISSING_URL".to_string()),
                 required: false,
+                exports: Default::default(),
             },
         );
         let err = validate_config(&config).unwrap_err().to_string();
@@ -929,8 +1094,9 @@ default_deny = true
         config.workloads.get_mut("pi").unwrap().depends_on.insert(
             "pi".to_string(),
             crate::config::DependsOnSpec {
-                env: "SELF_URL".to_string(),
+                env: Some("SELF_URL".to_string()),
                 required: false,
+                exports: Default::default(),
             },
         );
         let err = validate_config(&config).unwrap_err().to_string();
@@ -950,12 +1116,259 @@ default_deny = true
             .depends_on
             .get_mut("litellm")
             .unwrap()
-            .env = "BAD-NAME".to_string();
+            .env = Some("BAD-NAME".to_string());
         let err = validate_config(&config).unwrap_err().to_string();
         assert_eq!(
             err,
             "workload 'pi' depends_on 'litellm' env 'BAD-NAME' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)"
         );
+    }
+
+    // ---- P0: namespaced ports + depends_on exports validation ----
+
+    /// Base config with a named port (`http`) on `litellm` that `pi` exports;
+    /// the caller mutates it per test.
+    fn named_ports_depends_config() -> ConfigFile {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+log_stop_errors = false
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+exports = { http = "LITELLM_HTTP_URL" }
+
+[workloads.pi.network]
+default_deny = true
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[[workloads.litellm.ports]]
+host = 4000
+guest = 4000
+name = "http"
+
+[workloads.litellm.network]
+default_deny = true
+"#;
+        toml::from_str(toml).expect("named-ports depends_on config must parse")
+    }
+
+    #[test]
+    fn validate_config_accepts_named_ports_with_exports() -> Result<()> {
+        // Positive: env + a valid exports entry, and the dependency declares
+        // the exported named port.
+        let config = named_ports_depends_config();
+        validate_config(&config)
+    }
+
+    #[test]
+    fn validate_config_accepts_exports_only_depends_on() -> Result<()> {
+        // At-least-one rule: exports-only (no `env`) is legal.
+        let mut config = named_ports_depends_config();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .env = None;
+        validate_config(&config)
+    }
+
+    #[test]
+    fn validate_config_rejects_depends_on_without_env_or_exports() {
+        let mut config = depends_on_config();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .env = None;
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on 'litellm' must declare `env` (primary/legacy form) or at least one `exports` entry"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_duplicate_port_name() {
+        let mut config = depends_on_config();
+        config.workloads.get_mut("litellm").unwrap().ports.extend([
+            crate::microsandbox::plan::PortMapping::new(4000, 4000),
+            crate::microsandbox::plan::PortMapping::new(4001, 4001),
+        ]);
+        for p in config
+            .workloads
+            .get_mut("litellm")
+            .unwrap()
+            .ports
+            .iter_mut()
+        {
+            p.name = Some("http".to_string());
+        }
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'litellm' declares duplicate port name 'http' (port names must be unique within a workload)"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_port_name_slug() {
+        let mut config = depends_on_config();
+        config
+            .workloads
+            .get_mut("litellm")
+            .unwrap()
+            .ports
+            .push(crate::microsandbox::plan::PortMapping::new(4000, 4000));
+        config.workloads.get_mut("litellm").unwrap().ports[0].name = Some("HTTP_Port".to_string());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("is not a valid port name") && err.contains("HTTP_Port"),
+            "invalid slug must be rejected and name the value: {err}"
+        );
+        assert!(
+            err.contains("^[a-z0-9][a-z0-9-]*$"),
+            "error must carry the pattern: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_exports_key_for_undeclared_port() {
+        let mut config = named_ports_depends_config();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .exports
+            .insert("admin".to_string(), "LITELLM_ADMIN_URL".to_string());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on 'litellm' exports key 'admin' does not name a port declared by dependency 'litellm' (declared named ports: http)"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_exports_key_when_dependency_has_no_named_ports() {
+        // The dependency declares ONLY unnamed ports → declared list is "none".
+        let mut config = named_ports_depends_config();
+        config
+            .workloads
+            .get_mut("litellm")
+            .unwrap()
+            .ports
+            .iter_mut()
+            .for_each(|p| p.name = None);
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on 'litellm' exports key 'http' does not name a port declared by dependency 'litellm' (declared named ports: none)"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_exports_env_var_name() {
+        let mut config = named_ports_depends_config();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .exports
+            .insert("http".to_string(), "BAD-NAME".to_string());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on 'litellm' exports port 'http' env var 'BAD-NAME' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_duplicate_injected_env_across_deps() {
+        // Two deps (ahead < litellm, sorted deterministically) both inject
+        // `SHARED_URL`; the error names the workload, the var, and both deps.
+        let mut config = named_ports_depends_config();
+        let litellm = config.workloads.get("litellm").unwrap().clone();
+        config.workloads.insert("ahead".to_string(), litellm);
+        config.workloads.get_mut("pi").unwrap().depends_on.insert(
+            "ahead".to_string(),
+            crate::config::DependsOnSpec {
+                env: Some("SHARED_URL".to_string()),
+                required: false,
+                exports: Default::default(),
+            },
+        );
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .env = Some("SHARED_URL".to_string());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on injects env var 'SHARED_URL' from multiple sources (dependencies: ahead, litellm); each injected env var must come from exactly one source"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_same_dep_env_and_exports_collision() {
+        // Same dep injecting the same env name via BOTH env and an exports
+        // value is also a duplicate source.
+        let mut config = named_ports_depends_config();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .env = Some("LITELLM_HTTP_URL".to_string());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'pi' depends_on injects env var 'LITELLM_HTTP_URL' from multiple sources (dependencies: litellm); each injected env var must come from exactly one source"
+        );
+    }
+
+    #[test]
+    fn port_name_helper_matches_slug_shape() {
+        for ok in ["a", "http", "db-0", "a1", "0", "x-y-z"] {
+            assert!(is_valid_port_name(ok), "'{ok}' should be a valid port name");
+        }
+        for bad in [
+            "",
+            "A",
+            "HTTP",
+            "http_port",
+            "http.port",
+            "-lead",
+            "a b",
+            "a/b",
+        ] {
+            assert!(!is_valid_port_name(bad), "'{bad}' should be invalid");
+        }
     }
 
     // ---- ADR 0026 addendum (2026-08-01): dependency CYCLE detection ----

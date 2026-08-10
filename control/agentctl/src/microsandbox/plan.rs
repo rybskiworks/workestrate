@@ -93,6 +93,11 @@ pub struct PortMapping {
     /// Host bind address (ADR 0026). Defaults to 127.0.0.1 (the shared singleton bind).
     #[serde(default = "default_bind_ip")]
     pub bind_ip: IpAddr,
+    /// Optional port name (namespaced ports). Unnamed = the legacy primary port.
+    /// Additive serde default so older plans/configs parse cleanly; skipped when
+    /// `None` so legacy JSON is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl PortMapping {
@@ -102,6 +107,7 @@ impl PortMapping {
             host,
             guest,
             bind_ip: default_bind_ip(),
+            name: None,
         }
     }
 }
@@ -476,6 +482,7 @@ network: default_deny=true
             host: 8080,
             guest: 80,
             bind_ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+            name: None,
         }]);
         let rendered = format!("{parallel}");
         assert!(

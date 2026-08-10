@@ -1454,10 +1454,14 @@ mod tests {
 
         assert_eq!(pi.depends_on.len(), 2, "A overridden + B appended");
         let a = &pi.depends_on["litellm"];
-        assert_eq!(a.env, "LITELLM_BASE_URL", "override wins per dep key");
+        assert_eq!(
+            a.env.as_deref(),
+            Some("LITELLM_BASE_URL"),
+            "override wins per dep key"
+        );
         assert!(a.required);
         let b = &pi.depends_on["db"];
-        assert_eq!(b.env, "DB_URL");
+        assert_eq!(b.env.as_deref(), Some("DB_URL"));
         assert!(!b.required, "required defaults to false");
 
         assert_eq!(
