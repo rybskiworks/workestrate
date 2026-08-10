@@ -145,11 +145,36 @@ Validation: full suite green per commit (fmt/clippy -D warnings/test), tombi-che
   auto-naming unchanged). 3 new tests; full suite green (849 passed / 0
   failed / 4 ignored).
 
+## host-provision false "NOT READY" fixed (binary path capture) — 2026-08-10
+
+- **Root cause**: `scripts/host-provision.sh` Step B captured the fresh
+  store path with `want=$(nix build .#workestrate --no-link
+  --print-out-paths 2>&1)`. When a build is actually needed (not fully
+  cached) nix writes progress to stderr ("these N derivations will be
+  built:", "building '...'"), and `2>&1` merges it into `want`, making it
+  multi-line garbage. The fresh comparison
+  `[[ "$got" = "$want/bin/workestrate" ]]` then failed even after a
+  successful `nix profile install`, producing the false FAIL "binary still
+  mismatched after install" and a "NOT READY" verdict — observed on the
+  host (rev 4cad345; the installed binary was actually current).
+- **Fix (this commit)**: capture stdout and stderr separately —
+  `want=$(nix build ... 2>"$build_log")`; on failure `fail` reports
+  `$(cat "$build_log")`, on success logs the clean path; the `mktemp`
+  build log is removed afterwards. Exit-code handling, fresh/stale logic,
+  `do_install`, `--check-only`/`--force` unchanged (minimal diff).
+- **Validation**: `bash -n scripts/host-provision.sh` OK; in-container
+  capture proof (build cached) → `want` is a SINGLE clean `/nix/store/...`
+  path; a simulated uncached build shows the old `2>&1` form yielding 4
+  noise lines vs the new form yielding 1 clean path (stderr preserved for
+  error reporting). Full host-provision run NOT executed in-container
+  (host-check needs KVM; profile install would write the container
+  profile).
+
 ## Current repo state (verified 2026-08-08)
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 8 ahead of origin/migration/tool-model (6 prior + require_tls fix + this docs entry), 307 ahead of origin/main; NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 9 ahead of origin/migration/tool-model (6 prior + require_tls fix + host-provision fix + this docs entry), 307 ahead of origin/main; NOT pushed; origin SSH |
 | personal config repo | `6917f3d` | 5 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, 6917f3d); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
 | dev home | workestrate-dev-home `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | local clean; origin/fix == 74919059 (pushed); origin/main = `b43d7522` (divergent); remote state AMBIGUOUS — re-verify with live `git ls-remote` before fork work |

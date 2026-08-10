@@ -79,15 +79,17 @@ got=""
 installed_rev="UNKNOWN"
 
 set +e
-want=$(nix build .#workestrate --no-link --print-out-paths 2>&1)
+build_log=$(mktemp)
+want=$(nix build .#workestrate --no-link --print-out-paths 2>"$build_log")
 nix_build_exit=$?
 set -e
 if [[ "$nix_build_exit" -ne 0 ]]; then
-  fail "nix build .#workestrate failed (exit $nix_build_exit): $want"
+  fail "nix build .#workestrate failed (exit $nix_build_exit): $(cat "$build_log")"
   want=""
 else
   log "fresh store path: $want"
 fi
+rm -f "$build_log"
 
 set +e
 got=$(readlink -f "$(command -v workestrate 2>/dev/null)" 2>/dev/null)

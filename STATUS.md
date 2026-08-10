@@ -9,7 +9,7 @@
 
 | Repo | HEAD / branch | State |
 |------|---------------|-------|
-| workestrate | HEAD on `migration/tool-model` | clean, 8 ahead of origin/migration/tool-model (6 prior + require_tls fix + this docs entry), 307 ahead of origin/main; NOT pushed; origin SSH |
+| workestrate | HEAD on `migration/tool-model` | clean, 9 ahead of origin/migration/tool-model (6 prior + require_tls fix + host-provision fix + this docs entry), 307 ahead of origin/main; NOT pushed; origin SSH |
 | personal config repo | `6917f3d` | 5 commits above `c184b29` (0f5be2e, 7cd9e0e, 7613931, e779c83, 6917f3d); no remote; WIP: uncommitted `workestrate/workloads/pi/workload.toml` (user WIP, untouched) |
 | dev home | (workestrate-dev-home) `93b7482` | clean, 5 ahead of origin/master (`/home/rybski/.workestrate`); `sources/` EMPTY; workestrate.lock pins `b1c87416` |
 | microsandbox fork | `74919059` `fix/filesystem-agentd-path-override` | clean; origin/fix == 74919059 (pushed); origin/main `b43d7522` (divergent); remote ambiguous — live ls-remote before fork work |
@@ -70,6 +70,21 @@
   (`secret_requires_tls_identity` helper; `$MSB_<name>` placeholder
   auto-naming unchanged). 3 new tests; full suite green (849 passed / 0
   failed / 4 ignored).
+
+## host-provision false "NOT READY" fixed (binary path capture) — 2026-08-10
+
+- Root cause: `scripts/host-provision.sh` Step B captured the fresh store
+  path with `want=$(nix build .#workestrate --no-link --print-out-paths
+  2>&1)`; when a build is actually needed, nix's stderr progress lines
+  ("these N derivations will be built:", "building '...'") merged into
+  `want`, so the fresh comparison failed even after a successful
+  `nix profile install` → false "binary still mismatched after install"
+  / "NOT READY" (observed on host at rev 4cad345).
+- Fix: separate capture — `want=$(nix build ... 2>"$build_log")`, failure
+  reports `$(cat "$build_log")`, `$build_log` removed after; behavior
+  otherwise unchanged. Validated: `bash -n` + in-container capture proof
+  (single clean store path; simulated uncached build shows old `2>&1`
+  noise vs new clean capture).
 
 ## Host build failure fixed (2026-08-07 evening)
 
