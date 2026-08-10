@@ -12,9 +12,12 @@ rec
     nodejs_24 = pkgs.nodejs_24;
     nmap = pkgs.nmap;
     dnsutils = pkgs.bind.dnsutils;
-    # prime-agent kernel env: pre-baked Python 3.11 + ipykernel, plus the
-    # file/tooling utilities the agent workloads rely on (ripgrep, fd, tar).
-    python311_kernel = pkgs.python311.withPackages (ps: [ ps.ipykernel ]);
+    # prime-agent kernel env. The pinned nixpkgs (rev a799d3e) cannot build a
+    # python311 ipykernel env (sphinx-9.1.0 dropped python3.11 support; even
+    # python311Packages.stack-data fails to evaluate), so this ships a
+    # python312 env. [HOST-VERIFY] prime accepts a 3.12 kernel (ipykernel is
+    # version-agnostic in practice; prime's docs say 3.11).
+    python311_kernel = pkgs.python312.withPackages (ps: [ ps.ipykernel ]);
     ripgrep = pkgs.ripgrep;
     fd = pkgs.fd;
     gnutar = pkgs.gnutar;
