@@ -38,6 +38,10 @@ pub struct PsPortJson {
     /// Host bind address (ADR 0026). Always serialized (uniform shape;
     /// additive field) — serde renders it as a string, e.g. "127.0.0.1".
     pub bind_ip: std::net::IpAddr,
+    /// Optional port name (P3 namespaced ports). Skipped when absent so
+    /// legacy output stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -69,6 +73,7 @@ pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec
                     host: p.host,
                     guest: p.guest,
                     bind_ip: p.bind_ip,
+                    name: p.name.clone(),
                 })
                 .collect(),
             stale: e.stale,
@@ -140,4 +145,64 @@ pub fn build_results_json(
             action_taken: r.action_taken.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+
+    /// P3: `ps --json` carries the port `name` when present and omits it
+    /// entirely when absent (additive; legacy JSON stays byte-identical).
+    #[test]
+    fn ps_entries_json_serializes_name_when_present_and_omits_when_absent() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        let entries = vec![
+            PsEntry {
+                instance: "personal-litellm".to_string(),
+                workload: "litellm".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-litellm".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping {
+                    host: 4000,
+                    guest: 4000,
+                    bind_ip: crate::microsandbox::plan::default_bind_ip(),
+                    name: Some("api".to_string()),
+                }],
+                started_at: "2026-07-20T14:03:11Z".to_string(),
+                stale: false,
+            },
+            PsEntry {
+                instance: "personal-pi".to_string(),
+                workload: "pi".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-pi".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping::new(3000, 3000)],
+                started_at: "2026-07-20T14:06:00Z".to_string(),
+                stale: false,
+            },
+        ];
+
+        let json = serde_json::to_string_pretty(&ps_entries_json(&entries)).expect("serialize");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        // Named port: the name key is present with the declared value.
+        assert_eq!(
+            value[0]["ports"][0]["name"], "api",
+            "named port must serialize its name; got:\n{json}"
+        );
+        // Unnamed port: no name key at all (legacy shape preserved).
+        assert!(
+            value[1]["ports"][0].get("name").is_none(),
+            "unnamed port must omit the name key; got:\n{json}"
+        );
+    }
 }

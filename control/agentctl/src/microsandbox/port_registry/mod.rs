@@ -30,6 +30,9 @@ pub struct SandboxInstanceRecord {
     pub ports: Vec<u16>,
     /// Full host:guest port pairs. Populated by the instance-lifecycle path;
     /// absent (empty) on legacy records.
+    /// Namespaced ports (P3): the mappings carry the declared port `name`, so
+    /// `ps` and `depends_on` resolution surface the same names the workload
+    /// declared.
     #[serde(default)]
     pub port_pairs: Vec<PortMapping>,
     /// RFC3339 timestamp the instance was registered. Empty for legacy records.

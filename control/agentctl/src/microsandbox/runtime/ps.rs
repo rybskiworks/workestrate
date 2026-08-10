@@ -358,6 +358,49 @@ mod tests {
     }
 
     #[test]
+    fn ps_preserves_port_names_through_registry_round_trip() -> anyhow::Result<()> {
+        let dir = unique_state_dir_runtime("ps-named");
+        // P3: a lifecycle record whose port_pairs carry declared names.
+        let pairs = vec![
+            PortMapping {
+                host: 14000,
+                guest: 4000,
+                bind_ip: crate::microsandbox::plan::default_bind_ip(),
+                name: Some("api".to_string()),
+            },
+            PortMapping::new(14001, 4001),
+        ];
+        crate::microsandbox::port_registry::register_sandbox_lifecycle(
+            &dir,
+            "personal-litellm@canary",
+            Some("personal"),
+            "litellm",
+            crate::microsandbox::plan::default_bind_ip(),
+            &[14000, 14001],
+            &pairs,
+            "2026-07-20T14:05:42Z",
+        )?;
+        let entries = ps(&dir)?;
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.ports.len(), 2);
+        // P3: names flow through the registry file into ps() intact.
+        assert_eq!(
+            e.ports[0].name.as_deref(),
+            Some("api"),
+            "named pair must survive the registry round-trip"
+        );
+        assert_eq!(e.ports[0].host, 14000);
+        assert_eq!(e.ports[0].guest, 4000);
+        // Unnamed pair stays None.
+        assert_eq!(e.ports[1].name, None);
+        assert_eq!(e.ports[1].host, 14001);
+        assert_eq!(e.ports[1].guest, 4001);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
     fn ps_synthesizes_port_pairs_for_legacy_records() -> anyhow::Result<()> {
         let dir = unique_state_dir_runtime("ps-legacy");
         // Legacy record: only the bare host-port list; no port_pairs.
@@ -377,6 +420,9 @@ mod tests {
         assert_eq!(e.ports[0].guest, 4000);
         assert_eq!(e.ports[1].host, 4001);
         assert_eq!(e.ports[1].guest, 4001);
+        // P3: synthesized PortMapping::new(h, h) carries name: None.
+        assert_eq!(e.ports[0].name, None);
+        assert_eq!(e.ports[1].name, None);
         // Legacy record: singleton (no `@`), slot == instance.
         assert_eq!(e.slot, "legacy-litellm");
         assert_eq!(e.kind, PsKind::Singleton);

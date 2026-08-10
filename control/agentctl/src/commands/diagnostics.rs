@@ -248,10 +248,19 @@ pub fn print_ps_text_to<W: std::io::Write>(
             .ports
             .iter()
             .map(|p| {
+                // P3: a port name (when present) prefixes the pair
+                // (`api:4000:4000`, or `api:127.0.0.2:14000:4000` on a
+                // non-default bind); unnamed pairs keep the legacy form
+                // byte-identical.
+                let name_prefix = p
+                    .name
+                    .as_deref()
+                    .map(|n| format!("{n}:"))
+                    .unwrap_or_default();
                 if p.bind_ip == crate::microsandbox::plan::default_bind_ip() {
-                    format!("{}:{}", p.host, p.guest)
+                    format!("{}{}:{}", name_prefix, p.host, p.guest)
                 } else {
-                    format!("{}:{}:{}", p.bind_ip, p.host, p.guest)
+                    format!("{}{}:{}:{}", name_prefix, p.bind_ip, p.host, p.guest)
                 }
             })
             .collect::<Vec<_>>()
@@ -1041,6 +1050,84 @@ mod tests {
         assert!(
             json.contains(r#""bind_ip": "127.0.0.2""#),
             "parallel port must serialize bind_ip 127.0.0.2; got:\n{json}"
+        );
+    }
+
+    /// P3: a named port prefixes the text PORTS column pair (`api:4000:4000`
+    /// on the default bind; `api:127.0.0.2:14000:4000` on a non-default
+    /// bind). Unnamed pairs keep the legacy form byte-identical — no
+    /// colon-prefixed name may leak into an unnamed row.
+    #[test]
+    fn ps_text_renders_named_ports_with_name_prefix() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{PsEntry, PsKind};
+
+        let entries = vec![
+            PsEntry {
+                instance: "personal-litellm".to_string(),
+                workload: "litellm".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-litellm".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping {
+                    host: 4000,
+                    guest: 4000,
+                    bind_ip: crate::microsandbox::plan::default_bind_ip(),
+                    name: Some("api".to_string()),
+                }],
+                started_at: "2026-07-20T14:03:11Z".to_string(),
+                stale: false,
+            },
+            PsEntry {
+                instance: "personal-litellm@canary".to_string(),
+                workload: "litellm".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-litellm".to_string(),
+                kind: PsKind::Parallel,
+                ports: vec![PortMapping {
+                    host: 14000,
+                    guest: 4000,
+                    bind_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2)),
+                    name: Some("api".to_string()),
+                }],
+                started_at: "2026-07-20T14:05:42Z".to_string(),
+                stale: false,
+            },
+            PsEntry {
+                instance: "personal-pi".to_string(),
+                workload: "pi".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-pi".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping::new(3000, 3000)],
+                started_at: "2026-07-20T14:06:00Z".to_string(),
+                stale: false,
+            },
+        ];
+
+        let mut buf: Vec<u8> = Vec::new();
+        print_ps_text_to(&entries, &mut buf).expect("render ps text");
+        let out = String::from_utf8(buf).expect("utf8");
+
+        // Named default-bind pair: `<name>:<host>:<guest>` (no bind IP).
+        assert!(
+            out.contains("api:4000:4000"),
+            "named default-bind pair must render <name>:<host>:<guest>; got:\n{out}"
+        );
+        // Named non-default-bind pair: `<name>:<bind_ip>:<host>:<guest>`.
+        assert!(
+            out.contains("api:127.0.0.2:14000:4000"),
+            "named non-default-bind pair must render <name>:<bind_ip>:<host>:<guest>; got:\n{out}"
+        );
+        // Unnamed pair: exact legacy form — no colon-prefixed name or bind
+        // IP leaks past the pair.
+        assert!(
+            out.contains("3000:3000"),
+            "unnamed pair must keep the legacy <host>:<guest> form; got:\n{out}"
+        );
+        assert!(
+            !out.contains("3000:3000:"),
+            "unnamed pair must not render a colon-prefixed name; got:\n{out}"
         );
     }
 
