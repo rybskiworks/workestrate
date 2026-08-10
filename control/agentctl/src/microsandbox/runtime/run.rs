@@ -43,6 +43,17 @@ fn reject_if_placeholder(value: &str, placeholder: &Option<String>, label: &str)
     Ok(())
 }
 
+/// Whether a host-bound secret requires verified TLS identity before the
+/// host egress proxy substitutes it.
+///
+/// A secret bound to the local proxy alias may be substituted over plain
+/// HTTP (pi → `host.microsandbox.internal:4000`). External hosts keep
+/// `require_tls_identity = true` so substitution only fires under TLS
+/// interception.
+pub(crate) fn secret_requires_tls_identity(host: &str) -> bool {
+    !host.eq_ignore_ascii_case(crate::microsandbox::discovery::GUEST_HOST_ALIAS)
+}
+
 pub(crate) fn apply_plan_secrets(
     builder: SandboxBuilder,
     plan: &SandboxPlan,
@@ -65,7 +76,18 @@ pub(crate) fn apply_plan_secrets(
                     );
                 }
                 for host in &s.allowed_hosts {
-                    b = b.secret_env(&s.name, value.clone(), host);
+                    // Build the SecretEntry explicitly so each host carries
+                    // its own require_tls_identity: false for the local proxy
+                    // alias (plain HTTP substitution), true for external hosts.
+                    // No explicit .placeholder() — the auto-generated
+                    // `$MSB_<name>` must stay unchanged.
+                    let require_tls = secret_requires_tls_identity(host);
+                    b = b.secret(|sb| {
+                        sb.env(s.name.clone())
+                            .value(value.clone())
+                            .allow_host(host.clone())
+                            .require_tls_identity(require_tls)
+                    });
                 }
             }
             Err(_) if !s.required => {
@@ -533,7 +555,7 @@ pub async fn exec_agent_with_spec<W: Workload>(workload: &W, spec: &InstanceSpec
 mod tests {
     use super::*;
     use crate::config::test_support::unique_state_dir;
-    use crate::microsandbox::plan::{EnvVar, NetworkPlan};
+    use crate::microsandbox::plan::{EnvVar, HostBoundSecret, NetworkPlan};
 
     fn empty_plan_with_env(env: Vec<EnvVar>) -> SandboxPlan {
         SandboxPlan {
@@ -561,6 +583,27 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    fn empty_plan_with_secrets(secret_env: Vec<HostBoundSecret>) -> SandboxPlan {
+        SandboxPlan {
+            name: "test".to_string(),
+            image: None,
+            workdir: None,
+            command: Vec::new(),
+            cpus: None,
+            memory_mib: None,
+            env: Vec::new(),
+            secret_env,
+            ports: Vec::new(),
+            mounts: Vec::new(),
+            network: NetworkPlan {
+                default_deny: false,
+                egress_rules: Vec::new(),
+                deny_rules: Vec::new(),
+                ingress_rules: Vec::new(),
+            },
+        }
     }
 
     // ---- spec 12 §4: injected depends_on vars are visible to templated
@@ -725,6 +768,55 @@ mod tests {
                 ("LITELLM_MASTER_KEY".to_string(), "real-key".to_string()),
             ]
         );
+        Ok(())
+    }
+
+    // ---- host-bound secret substitution: require_tls_identity ----
+
+    #[test]
+    fn secret_requires_tls_identity_local_proxy_alias_is_false() {
+        assert!(!secret_requires_tls_identity("host.microsandbox.internal"));
+        // Case variation: the alias match is case-insensitive.
+        assert!(!secret_requires_tls_identity("HOST.MICROSANDBOX.INTERNAL"));
+    }
+
+    #[test]
+    fn secret_requires_tls_identity_external_host_is_true() {
+        assert!(secret_requires_tls_identity("openrouter.ai"));
+        assert!(secret_requires_tls_identity("github.com"));
+    }
+
+    #[test]
+    fn apply_plan_secrets_builds_secret_for_alias_and_external_hosts() -> Result<()> {
+        // One secret bound to the local proxy alias (plain-HTTP substitution
+        // allowed) and the same secret bound to an external host (keeps
+        // require_tls_identity = true).
+        let plan = empty_plan_with_secrets(vec![
+            HostBoundSecret {
+                name: "LITELLM_MASTER_KEY".to_string(),
+                value: "${LITELLM_MASTER_KEY}".to_string(),
+                allowed_hosts: vec!["host.microsandbox.internal".to_string()],
+                required: true,
+                reject_placeholder: None,
+            },
+            HostBoundSecret {
+                name: "LITELLM_MASTER_KEY".to_string(),
+                value: "${LITELLM_MASTER_KEY}".to_string(),
+                allowed_hosts: vec!["openrouter.ai".to_string()],
+                required: true,
+                reject_placeholder: None,
+            },
+        ]);
+        let secrets = secrets_map(&[("LITELLM_MASTER_KEY", "real")]);
+        let builder = apply_plan_secrets(Sandbox::builder("test"), &plan, &secrets)?;
+        // LIMITATION: the SDK's built config internals are pub(crate), not
+        // inspectable from workestrate, so we cannot assert the per-entry
+        // require_tls_identity on the produced config. Instead we assert the
+        // pure helper derives the value for both host kinds and that the
+        // builder call (which applies the helper per host) succeeds.
+        assert!(!secret_requires_tls_identity("host.microsandbox.internal"));
+        assert!(secret_requires_tls_identity("openrouter.ai"));
+        let _ = builder;
         Ok(())
     }
 
