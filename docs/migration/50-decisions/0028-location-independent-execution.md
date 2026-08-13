@@ -1,7 +1,8 @@
 # ADR 0028: Location-independent execution (CWD-independent root resolution)
 
-**Status:** Accepted
+**Status:** Implemented (E0, 2026-08-13)
 **Date:** 2026-08-13
+**Implemented:** commit `bf8161a` (E0, runbook step)
 **References:** ADR 0023 (single tool home), ADR 0017 (synthetic reference),
 spec 17 (`docs/validation-and-improvements/06-improvements/17-config-repo-directory-mode.md`,
 F1/F2/F3 path-resolution family),
@@ -59,26 +60,39 @@ must follow the same rule.
 
 ## Consequences
 
-- `workload up` / `exec` / `build` work from any CWD (e.g.
+- `workload up` / `exec` / `plan` work from any CWD (e.g.
   `~/Development/agent-workbench`), as long as the declaring config repo is
-  registered and contains `flake.nix` at its root.
+  registered and contains `flake.nix` at its root. `build` already resolved
+  the flake root from declaring-layer provenance (`repo_identity_for`); the
+  sandbox-build F2 gate now uses the same rule.
 - The failure mode narrows to the honest one: a nix-layered workload whose
   declaring repo genuinely lacks `flake.nix` (spec 21 §7 hard error naming
   the repo) — never a CWD artifact.
 - Mount/seed F1 content-root semantics are unchanged; only the F2 gate's root
   source changes.
+- Companion guard (E0): exact-duplicate mount guest paths are a validate-time
+  hard error; nested guest paths remain legal (spec 01 shadow pattern); a
+  plan-time warning surfaces overlapping resolved host dirs (the `${CWD}` vs
+  declared state-mount case).
 
 ## Acceptance criteria
 
 1. `workestrate --home <dev-home> workload exec prime` (and `plan` / `build`)
    succeeds from any CWD — including a directory that is neither the tool
    checkout nor a config repo — with no `AGENTCTL_ROOT` set.
+   **Verified by `f2_gate_resolves_declaring_repo_flake_root_from_flakeless_cwd`
+   and `preflight_existence_ok_from_foreign_cwd_for_directory_mode`.**
 2. From a CWD inside the declaring repo, behavior is unchanged.
+   **Covered by the existing F2/mount-root test family (no regressions).**
 3. A nix-layered workload declared by a flake-less repo still fails with the
    spec 21 §7 error naming the repo (single target) / skip-with-note (batch)
-   — no CWD wording.
+   — no CWD wording. **Synthetic-layer tier preserved + byte-pinned by
+   `f2_gate_synthetic_layer_legacy_error_is_preserved`.**
 4. `AGENTCTL_ROOT` continues to pin the tool checkout where tool-relative
    fixtures need it (reference config), and no longer appears in
-   declaring-repo-derived failure paths.
+   declaring-repo-derived failure paths. **Tier-1 override verified by
+   `f2_gate_agentctl_root_override_wins_over_declaring_repo`.**
 5. Unit tests: the F2 gate resolves the declaring-repo flake root with cwd set
-   outside the repo; the CWD-fallback regression is removed.
+   outside the repo; the CWD-fallback regression is removed. **Landed (7 new
+   tests: f2_gate × 3, preflight_existence, host-overlap warning,
+   duplicate-guest rejection, nested-guest allowance).**
