@@ -23,7 +23,7 @@
 # the defaults preserve the historical $out/bin/app behavior exactly.
 { pkgs, bun, stdenv, lib, removeReferencesTo }:
 
-{ src, entrypoint, worker ? null, assets ? [], binaryName ? "app", installDir ? "bin", ... }:
+{ src, entrypoint, worker ? null, assets ? [], binaryName ? "app", installDir ? "bin", stripSrcReferences ? true, ... }:
 let
   # B4: generate the asset-mirroring shell. For each {from, to}:
   #   mkdir -p the destination's parent dir under $out/${installDir}
@@ -53,6 +53,27 @@ let
     fi
   '';
   workerArg = if worker == null then "" else " \"$wk\"";
+  # A (fix A, handover 2026-08-11 §5b.3): whether to strip the baked store
+  # reference to `src` from the compiled binary. Default true = historical
+  # behavior (pi): the standalone bun binary is self-contained and does not
+  # need the source tree at runtime. prime sets false: externalized native
+  # addons (zeromq, koffi) bake absolute /nix/store/<hash>-npm-build-... paths
+  # into the binary, and the image includes the npm-build tree at that path,
+  # so stripping the reference would leave the loader's manifest path
+  # dangling. The true-branch text is byte-identical to the pre-fix
+  # installPhase lines so default callers produce identical derivations.
+  #
+  # Implementation detail: this MUST be a plain string (explicit \n, no
+  # leading whitespace), not an indented ''...'' string — interpolation is
+  # spliced after the outer indented-string dedent, so an indented value
+  # would carry its own dedented indentation and corrupt the installPhase
+  # byte layout.
+  stripSrcCmd = if stripSrcReferences then
+    "# Strip the store reference to the source tree (e.g. pi-0.79.10 node_modules\n"
+    + "# bloat) from the compiled binary. The bun binary is self-contained and does\n"
+    + "# not need the source tree at runtime.\n"
+    + "remove-references-to -t ${src} $out/${installDir}/${binaryName}"
+  else "";
 in
 stdenv.mkDerivation {
   pname = "bun-compile";
@@ -89,10 +110,7 @@ stdenv.mkDerivation {
     runHook preInstall
 
     chmod -R +w $out/${installDir}
-    # Strip the store reference to the source tree (e.g. pi-0.79.10 node_modules
-    # bloat) from the compiled binary. The bun binary is self-contained and does
-    # not need the source tree at runtime.
-    remove-references-to -t ${src} $out/${installDir}/${binaryName}
+    ${stripSrcCmd}
 
     # Remove the doom-overlay build.sh that references bash (dev-time only).
     rm -f $out/${installDir}/examples/extensions/doom-overlay/doom/build.sh

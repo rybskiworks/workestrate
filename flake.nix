@@ -85,6 +85,12 @@
                     # preserve the historical $out/bin/app layout.
                     binaryName = binary.binary_name or "app";
                     installDir = binary.install_dir or "bin";
+                    # A (fix A): strip_src_references is a nix-only enrichment
+                    # field; default true preserves the historical stripping
+                    # (pi). prime sets false so the binary keeps its baked
+                    # /nix/store/<hash>-npm-build-... paths for externalized
+                    # native addons (zeromq, koffi).
+                    stripSrcReferences = binary.strip_src_references or true;
                   }
                 else if binary.recipe == "npm-build" then
                   recipesForPkgs.build.npm-build {
@@ -127,6 +133,12 @@
                 bakedFiles = workloads.${name}.image.baked_files or [];
                 features = workloads.${name}.image.features or [];
                 env = workloads.${name}.image.env or {};
+                # A (fix A): extra_contents is a nix-only enrichment field —
+                # list of derivations added to the image contents beyond the
+                # closed-vocabulary TOML strings (e.g. primeBuilt, the
+                # npm-build tree, so baked externalized-addon store paths
+                # resolve inside the image). Default [] = back-compat no-op.
+                extraContents = workloads.${name}.image.extra_contents or [];
               };
             }) nixLayered);
 
