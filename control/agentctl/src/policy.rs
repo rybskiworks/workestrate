@@ -22,6 +22,8 @@ pub const GITHUB_HOSTS: &[&str] = &["github.com", "api.github.com"];
 pub const ALLOWED_PACKAGES: &[&str] = &[
     "cacert",
     "busybox",
+    // prime's IPython %%bash cells spawn `bash` by name (busybox only has sh).
+    "bash",
     "fakeNss",
     "nodejs_24",
     "nmap",

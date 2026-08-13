@@ -8,6 +8,10 @@ rec
   packages = {
     cacert = pkgs.cacert;
     busybox = pkgs.busybox;
+    # bash — needed by prime's IPython `%%bash` cells (IPython's %%bash magic
+    # spawns `bash` by name; busybox only provides `sh`). The coding-agent's
+    # bash tool also prefers /bin/bash. Added 2026-08-13 (handover §5n).
+    bash = pkgs.bash;
     fakeNss = pkgs.dockerTools.fakeNss;
     nodejs_24 = pkgs.nodejs_24;
     nmap = pkgs.nmap;
