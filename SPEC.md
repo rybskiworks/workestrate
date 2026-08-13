@@ -58,7 +58,7 @@ virtual keys and per-agent spend tracking are deferred to a future
 milestone (M4). Provider keys are injected into the LiteLLM microVM via
 host-bound `secret_env`.
 
-### Agents (pi / odysseus / opencode / tempest)
+### Agents (pi / prime / odysseus / opencode / tempest)
 
 Agents are **defined by the config repo**, not by the tool. A fresh clone
 ships only synthetic reference workloads (`example-service`,
@@ -71,9 +71,20 @@ registered.
   ~110 MB, Bun runtime embedded, exec'd at `/app/bin/pi`) and an npm/node
   fallback. Pi does not honor
   `OPENAI_BASE_URL`; it requires seeding `~/.pi/agent/models.json` with a
-  custom provider pointing at LiteLLM. The bun-binary path is compile- and
-  plan-verified but pending KVM runtime validation; the npm/node variant
-  is the fallback.
+  custom provider pointing at LiteLLM. The bun-binary path is
+  host-validated; the npm/node variant is the fallback. Prime (same lineage)
+  instead REQUIRES node — see below.
+- **Prime** — prime-agent (pi-lineage coding agent, same npm-workspaces
+  monorepo shape). Defined in the personal config repo; built as a
+  nix-layered image with a **nodejs_24 wrapper** at `/app/bin/prime` (bun
+  cannot run prime's zeromq native addon — `uv_async_init` unimplemented,
+  bun#18546 / PR #35475 unmerged). Kernel env: python312 + ipykernel +
+  prime-agent-runtime (the vocabulary entry is named `python311_kernel` but
+  ships 3.12 — pinned nixpkgs cannot build a py3.11 ipykernel). `models.json`
+  uses seed-time substitution: `apiKey = "${LITELLM_MASTER_KEY}"` (single
+  dollar) renders to `$MSB_LITELLM_MASTER_KEY`; pi keeps the `$$` escaped
+  runtime-expansion form (REQUIRED — pi's parser expands brace-less
+  `$VAR`). Host-validated 2026-08-13.
 - **Odysseus** — coding agent (service). Requires `ODYSSEUS_ADMIN_PASSWORD`
   because `AUTH_ENABLED=true`. Does not honor `OPENAI_BASE_URL`; requires
   seeding `data/settings.json` with a custom provider pointing at LiteLLM.
@@ -263,12 +274,11 @@ config is used (placeholder secrets — `example-service plan` works;
 
 ### Host-gated (remaining unvalidated pieces)
 
-- **KVM runtime** — the remaining unvalidated piece. `up`/`exec`/`logs`,
-  detached mode, internal secret loading, the bun binary in the microVM,
-  egress enforcement, and secret isolation are all compile- and
-  plan-verified but PENDING KVM runtime validation. This container has no
-  `/dev/kvm`. `.#pi` (node) is the fallback if the bun binary misbehaves
-  at runtime.
+- **KVM runtime** — HOST-VALIDATED 2026-08-13 (pi/prime microVM boots,
+  egress + secret substitution, kernel env). This container itself has no
+  `/dev/kvm`; host runs happen on dblab42. Remaining unvalidated pieces:
+  tempest/odysseus/opencode runtime parity and the spec-21 phase-F
+  multi-repo migration.
 - **HOST-NIX** — nix builds (`nix build .#workestrate`, image builds,
   config-repo flake builds) require a host with nix; this container has
   none.
@@ -292,7 +302,9 @@ config is used (placeholder secrets — `example-service plan` works;
 
 ## Known gaps
 
-- Runtime testing blocked by missing KVM (the remaining unvalidated piece)
+- Container has no KVM; host-side runtime is validated for pi/prime
+  (2026-08-13); tempest/odysseus/opencode runtime parity remains
+  host-unvalidated
 - Agent integration with LiteLLM requires native config seeding, not
   `OPENAI_BASE_URL`
 - Secret injection and egress enforcement are compile-checked but

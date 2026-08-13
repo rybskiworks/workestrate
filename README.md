@@ -533,7 +533,11 @@ repo consumes under `lib.x86_64-linux`:
   `binary.src` URIs against a caller-supplied `sources` attrset and
   supporting the nix-only enrichment fields (`binary_name`, `install_dir`,
   `npm_deps_hash`, `assets`, `dont_npm_build`, `build_phase`,
-  `install_phase`) the config repo attaches post-parse.
+  `install_phase`, `strip_src_references`, `extra_contents`) the config
+  repo attaches post-parse (`strip_src_references` lets a workload keep its
+  real baked nix store paths so externalized native deps resolve inside the
+  image; `extra_contents` appends derivations to the image contents at their
+  store paths).
 - `lib.checks.validateConfig` / `lib.checks.tombiCheck` — config-repo CI
   gates.
 
@@ -545,7 +549,14 @@ The personal config repo
 `.#workestrate-pi` (bun-compiled pi binary + asset mirror on a nix-glibc
 image) and `.#tempest` (npm-built T3MP3ST tree + nmap/dnsutils), and its
 justfile loads them into the microsandbox store (`workestrate-pi:latest`,
-`tempest:latest`).
+`tempest:latest`). A third workload, `.#workestrate-prime`, runs the
+prime-agent coding agent under a nodejs_24 wrapper (bun cannot run prime's
+zeromq native addon — `uv_async_init` is unimplemented in bun, PR #35475
+unmerged), with a python312 kernel env and seed-time `models.json` apiKey
+substitution (`${LITELLM_MASTER_KEY}` → `$MSB_LITELLM_MASTER_KEY`); pi
+intentionally keeps the `$$` escaped runtime-expansion form. The tool repo
+now also ships `ensure-images` (spec 21), so the CLI builds+loads nix-layered
+images itself on `up`/`exec`.
 
 **Fork-carries-compat policy.** nix-build compatibility (patches,
 lockfile, committed catalogs) lives on the agent fork itself, not as
@@ -559,10 +570,11 @@ config repo's flake.lock).
 any wrapper) can point workestrate at a nix store path or local build
 tree without touching the CLI.
 
-**Runtime caveat.** The bun binary in the microVM, `up`/`exec`/`logs`,
-and detached-mode + internal secret loading are compile- and
-plan-verified but pending KVM runtime validation. The npm/node variant
-is the fallback if the bun binary misbehaves at runtime.
+**Runtime status (2026-08-13).** Runtime is HOST-VALIDATED: the pi/prime
+microVMs boot on a KVM host, litellm reachability + secret substitution are
+proven end-to-end, and prime's node-pivot image runs its kernel (python312 +
+prime-agent-runtime). The npm/node variant remains pi's fallback; prime
+REQUIRES node (bun cannot run its zeromq addon).
 
 ## Derivation purity
 
@@ -625,8 +637,10 @@ Reload your shell (or `source` the completion file) afterwards.
   fork via the pinned `microsandbox-fork` flake input at validated rev 74919059.
 - The pi microVM runs a **bun standalone binary** (`/app/bin/pi`, built by
   the config repo flake via the `bun-compile` lib recipe) with the Bun
-  runtime embedded; no node/bun is needed inside the sandbox. The npm/node
-  variant is the fallback. The config repo can wrap workestrate to bake
+  runtime embedded — no node/bun needed inside the pi sandbox. Prime (same
+  lineage) is the counter-example: it runs under a nodejs_24 wrapper because
+  bun cannot load its zeromq native addon. The npm/node variant remains pi's
+  fallback. The config repo can wrap workestrate to bake
   `WORKESTRATE_PI_BUILD` so the CLI runs against the hermetic store path.
 - Sandbox plans use a default-deny network policy; only the
   destinations listed above have explicit egress.
@@ -642,9 +656,11 @@ Reload your shell (or `source` the completion file) afterwards.
 except the explicitly-allowed ones (`openrouter.ai`, `api.kimi.com`,
 `api.neuralwatt.com`, `api.minimax.io`, `github.com`). The network policy — not
   credential binding — is what prevents misuse of the key.
-- Runtime enforcement of egress and secret isolation is designed but
-  unverified in M1 (compile-checked only; requires a KVM host for
-  runtime testing).
+- Runtime enforcement of egress and secret isolation is HOST-VALIDATED
+  (2026-08-13): the guest→egress→litellm and host→litellm paths are proven,
+  and the host egress proxy substitutes `$MSB_<key>` placeholders for
+  host-bound secrets (401/200 probes; `require_tls_identity` handling landed
+  2026-08-10, commit 33afae4).
 - LiteLLM runs in-memory; no Postgres, no virtual keys, no persistent
   spend tracking in M1.
 - Odysseus and OpenCode receive `OPENAI_API_KEY` (remapped from
@@ -665,6 +681,13 @@ The top-level layout (already documented in
 
 ## Troubleshooting
 
+- **"Set AGENTCTL_ROOT or run from the workbench root directory".** Stale
+  failure mode (pre-ADR 0028, 2026-08-13): flake/image-build roots now
+  resolve from the DECLARING config repo (registry-known), so
+  `workload up/exec/build` work from any CWD. `AGENTCTL_ROOT` is an explicit
+  override for tool-relative fixtures, never a requirement. If a nix-layered
+  workload still fails, it is because its declaring repo genuinely lacks
+  `flake.nix` (add one, or load the image via the config-repo ritual).
 - **`/dev/kvm` issues.** Load the `kvm` and `kvm_intel` (or `kvm_amd`)
   kernel modules, add your user to the `kvm` group, log out and back in,
   and confirm virtualization is enabled in firmware. `just host-check`
@@ -694,11 +717,11 @@ clone the agent repos into `agents/<name>/repo` only if you intend to run them.
 
 ## Important notes
 
-- **M1 scope.** Sandbox plans, the `workestrate` CLI, and the LiteLLM
+- **Runtime status.** Sandbox plans, the `workestrate` CLI, and the LiteLLM
   proxy are implemented and cargo-verified in-container. Runtime
-  `up`/`exec`/detached-mode is HOST-KVM gated (pending runtime validation;
-  this container has no `/dev/kvm`), so end-to-end agent runs are
-  plan-verified but not yet runtime-validated.
+  `up`/`exec`/detached-mode has been HOST-VALIDATED on a KVM host (pi/prime
+  boots, litellm reachability + secret substitution, kernel env). This
+  container itself has no `/dev/kvm`; host runs happen on dblab42.
 - **In-memory LiteLLM.** No Postgres, no virtual keys, no persistent
   state. Agents reuse `LITELLM_MASTER_KEY` for the lifetime of the
   proxy; rotating the master key requires a `workestrate workload down litellm` followed by

@@ -70,6 +70,7 @@ files. Read in this order:
 | [`06-improvements/18-cross-home-dependencies.md`](06-improvements/18-cross-home-dependencies.md) | Cross-home dependencies: wider `workestrate up` across homes/config sets (port-registry blind spot; design space + questions) | `STATUS: INTENT-TO-EXPLORE` |
 | [`06-improvements/19-visualization-inspection.md`](06-improvements/19-visualization-inspection.md) | Visualization + inspection surfaces beyond the W3 `workestrate workloads` verb (--json-first, dependency graph, home inspect; data sources) | `STATUS: INTENT-TO-EXPLORE` |
 | [`06-improvements/20-schema-evolution-and-migrations.md`](06-improvements/20-schema-evolution-and-migrations.md) | Schema evolution policy + config migration tooling (post-launch: pull+lock vendored schema, `config migrate` framework) | `STATUS: SPEC (design; not yet implemented)` |
+| [`21-image-build-lifecycle.md`](06-improvements/21-image-build-lifecycle.md) | Image build/load lifecycle (ensure-images, change detection, selectors, reserved build dir) | `STATUS: IMPLEMENTED (phases A–E landed 2026-08-02/03; phase F multi-repo migration pending; ADR 0028 CWD independence)` |
 | [`07-execution-order.md`](07-execution-order.md) | Recommended sequencing across all tracks | STATUS: READY-TO-EXECUTE |
 | [`NEXT-SESSION.md`](NEXT-SESSION.md) | Self-contained handoff prompt for the next contextless session | `STATUS: HANDOFF` |
 

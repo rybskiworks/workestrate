@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-07-18+):** this file is the EARLY pre-migration ADR list
+> (ADR 0001–0005). The authoritative ADR set moved to
+> `docs/migration/50-decisions/` (ADR 0001–0028) during the tool+XDG
+> migration; the migration README at `docs/migration/README.md` is the design
+> record. Kept only as history.
+
 # Architecture Decisions
 
 ## ADR 0001: Single-root ai-workbench

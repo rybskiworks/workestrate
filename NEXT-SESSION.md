@@ -4,11 +4,25 @@
 > top-to-bottom; the runbook is self-contained. Beads are DEFERRED (user
 > decision 2026-08-07) — do not chase wrk-*.
 
+> **2026-08-13 UPDATE — CWD bug + ADR 0028:** `workload exec prime` from a
+> non-tool-checkout cwd failed ("resolved project root ... does not contain
+> flake.nix. Set AGENTCTL_ROOT or run from the workbench root directory")
+> because the nix-layered-image F2 gate resolved the flake root via
+> `config::project_root()` (CWD tier). ADR 0028 (commit 9a4b510) locks the
+> requirement: flake/image-build roots resolve from the DECLARING config repo
+> (registry-known), CWD is never the origin unless the CWD IS the declaring
+> repo, and AGENTCTL_ROOT is an explicit override, not a requirement. Code
+> fix (phase 0 of the 2026-08-13 plan) is planned, not yet implemented. The
+> prime-agent workload state (node pivot, kernel env, host validation) is in
+> handovers/2026-08-11-prime-agent-workload.md.
+
 ## What landed (2026-08-07 session set)
 
 - **nix activated in-container** (no install): `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin/nix`
-  (export PATH to use it). The shared store is node-owned and writable;
-  sandbox builds worked with the DEFAULT sandbox (no `--option sandbox false`
+  (export PATH to use it). The container store is node-owned and writable;
+  sandbox builds worked with the DEFAULT sandbox (2026-08-13: container and
+  host nix stores are SEPARATE — shared filesystem only; see
+  handovers/2026-08-11-prime-agent-workload.md §5.5) (no `--option sandbox false`
   needed). The 2026-08-03 in-container-build pattern is confirmed real.
 - **B2 flake lock** — `c162c7a`: `microsandbox-fork` input added (github pin
   74919059, narHash verified); fork source at `/nix/store/y9rc99j2n2gcr3wvgi4n36kqbhd396v5-source`.

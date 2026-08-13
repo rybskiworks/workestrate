@@ -1,9 +1,15 @@
 # STATUS — post-migration + in-container execution snapshot (2026-08-07)
 
 > Snapshot after: the 0.6.8 fork migration committed, and this session's
-> in-container execution of B2–B4 + Change #1. The nix store is shared with
-> the host and now holds real 0.6.8 build outputs. The full operations doc
+> in-container execution of B2–B4 + Change #1. The full operations doc
 > is `NEXT-SESSION.md`.
+>
+> **2026-08-13 UPDATE (SUPERSEDED CLAIM):** the next line was removed because
+> it was WRONG — "The nix store is shared with the host". Container and host
+> nix STORES ARE SEPARATE (shared filesystem only); each side realizes its own
+> store paths (handover `handovers/2026-08-11-prime-agent-workload.md` §5.5).
+> Latest authoritative state: that handover (prime-agent workload, node-pivot,
+> host-validated).
 
 ## Repo states (verified 2026-08-08)
 
