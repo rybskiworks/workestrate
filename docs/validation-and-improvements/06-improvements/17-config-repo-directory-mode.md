@@ -174,6 +174,25 @@ meaningful, so failing closed costs nothing and removes an ambiguity class).
 
 ---
 
+## 3a. Location-independent execution (ADR 0028, 2026-08-13)
+
+Directory mode makes the config repo a self-contained deployment unit — so a
+workload's flake root must come from the repo, not the caller's CWD. ADR 0028
+locks: flake/image-build roots resolve from the declaring config repo
+(registry-known; nearest `flake.nix` ancestor of the declaring layer dir); CWD
+is never the resolution origin unless the CWD IS the declaring repo;
+`AGENTCTL_ROOT` is an explicit override, not a requirement. This completes the
+F1/F2/F3 path-resolution family: F1 (mount/seed content root = declaring layer
+dir), F2 (flake-root gate = declaring repo root, lazy), F3 (no silent cwd
+fallback for seeds). The image-build path (`repo_identity_for`,
+`images/repo_key.rs`) already follows this rule; the sandbox-build F2 gate
+(`mounts.rs resolve_mount_roots_owned`, `config::project_root`) is the code
+surface to align (the 2026-08-13 CWD bug: `workload exec prime` from
+`~/Development/agent-workbench` resolved project root = cwd → no flake.nix →
+hard error).
+
+---
+
 ## 4. Rationale
 
 - **Precedent.** docker-compose multi-file/`extends`; kustomize

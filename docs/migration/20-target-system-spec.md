@@ -592,6 +592,19 @@ fallback = "sources/tempest/build"
 | `agents/...` | Config-repo-relative | Rust CLI at runtime (agent configs moved to config repo) |
 | `infra/...` | Config-repo-relative | Rust CLI at runtime |
 
+### Location-independent execution (ADR 0028)
+
+`workestrate` executes correctly from ANY working directory. Flake/image-build
+roots resolve from the **declaring config repo** (registry-known path), never
+from CWD unless the CWD IS the declaring repo; `AGENTCTL_ROOT` is an explicit
+override, not a requirement (ADR 0028, 2026-08-13). The F2 flake-root gate for
+nix-layered images / local_build / relative build-path mounts uses the
+declaring layer's nearest `flake.nix` ancestor, mirroring the F1 content-root
+rule above and `repo_identity_for` in the image-build path
+(`images/repo_key.rs`). The tool checkout root remains only a fallback for
+tool-relative fixtures (reference config) and synthetic layers. Acceptance
+criteria: ADR 0028.
+
 ### Mount `read_only` field
 
 Each `[[workloads.<name>.mounts]]` entry declares its access mode with the
@@ -629,7 +642,7 @@ new full-config example, omit the skip marker and include
 | Recipe | Parameters | Core implementation | Replaces |
 |---|---|---|---|
 | `npm-build` | `src, npm_deps_hash, node_version?, dont_npm_build?, build_phase?, install_phase?` | `nix/packages/pi.nix`, `tempest.nix` | Per-agent nix build files |
-| `bun-compile` | `src, entrypoint, worker, assets?` | `nix/packages/pi-bun.nix` (incl. `removeReferencesTo` strip) | `pi-bun.nix` |
+| `bun-compile` | `src, entrypoint, worker? (optional), assets?, stripSrcReferences? (default true)` | `nix/lib/recipes/bun-compile.nix` (incl. optional `removeReferencesTo` strip) | `pi-bun.nix` |
 | `pip-install` | `source, requirements_file, target` | `nix/devshells/default.nix:225-227` | Devshell inline build |
 | `bun-install` | `source` | `nix/devshells/default.nix:230-232` | Devshell inline build |
 

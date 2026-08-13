@@ -388,6 +388,7 @@ build** / `WORKESTRATE_<NAME>_BUILD` env_override mechanism:
 |---|---|
 | fakeHash placeholder in the flake | Eval-only change detection works fine (§3.1); the BUILD fails at the FOD — the error points at the config repo's `update-hashes` recipe, NOT a raw nix hash-mismatch error wall |
 | No `flake.nix` in the declaring repo | HARD ERROR naming the repo; under `batch-up` / `--all-repos` → skip-with-note (the missing flake is named, the rest of the batch proceeds) |
+| CWD-derived project root (nix-layered workload, cwd not the declaring repo) | RESOLVED by ADR 0028 (2026-08-13): the flake root comes from the declaring config repo (registry-known), never CWD; the CWD/"Set AGENTCTL_ROOT" error is gone. The remaining failure is the row above (declaring repo genuinely flake-less) |
 | nix absent from PATH + store tag present | Proceed with a stderr note (the tag may be fresh; nothing verifiable without nix — degrade, don't block) |
 | nix absent from PATH + store tag missing | HARD ERROR + remediation (install nix or load the image manually via the config-repo ritual) |
 | msb store unreachable | Reuse the `ps.rs` unreachable-DB vocabulary — same error shape and remediation wording as the port-registry/instance-DB unreachable path |
@@ -633,6 +634,7 @@ deliberate act, not an afterthought.
 - [x] HOST-VERIFY cluster (§11) items each recorded verified-or-deferred in
       the phase-D/E gate notes (recorded phase D 932b476 — §11 verification block: 4 of 5 verified in-container, item 4 partially; host remainders noted).
 - [x] No config-schema change; `schema_version` stays `1` (§12.1) (true throughout).
+- The build/ensure path works from any CWD: the flake root resolves from the declaring config repo (ADR 0028); `AGENTCTL_ROOT` is never required for config-repo-derived roots.
 
 **Key decision:** the tool owns freshness via eval-only drvPath change
 detection against an advisory per-home record — the msb store stays ground
