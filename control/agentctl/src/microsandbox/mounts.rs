@@ -70,6 +70,22 @@ pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathB
     }
 }
 
+/// Spec 22 §12 SDK integration seam. SDK `microsandbox =0.5.6` has no policy
+/// field, so this intentionally does nothing until the fork dependency lands.
+/// TODO(spec 22 §12, SDK switch): once the Cargo dep moves to the fork, replace
+/// this with the exact per-mount SDK call (using each MountPlan.policy_file):
+/// `builder = builder.volume(&m.guest, |v| { v.bind(host).policy_file(m.policy_file.as_ref()) });`
+/// or the fork's final equivalent if its API settles on a per-sandbox method.
+pub(crate) fn apply_mount_policy(
+    builder: SandboxBuilder,
+    plan: &SandboxPlan,
+) -> Result<SandboxBuilder> {
+    for m in &plan.mounts {
+        let _ = m.policy_file.as_ref();
+    }
+    Ok(builder)
+}
+
 /// Validate a mount host string as it appears in the raw config TOML
 /// (before `${CWD}` / `${WORKESTRATE_<NAME>_BUILD}` template substitution).
 ///
@@ -571,6 +587,8 @@ mod tests {
             host: "nested/state".into(),
             guest: "/data".into(),
             read_only: false,
+            policy: None,
+            policy_file: None,
         }]);
 
         ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan)?;
@@ -596,6 +614,8 @@ mod tests {
             host: "missing/config.json".into(),
             guest: "/app/config.json".into(),
             read_only: true,
+            policy: None,
+            policy_file: None,
         }]);
 
         let result =
@@ -960,6 +980,8 @@ mod tests {
             host: "missing/config.json".into(),
             guest: "/app/config.json".into(),
             read_only: true,
+            policy: None,
+            policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
         let err = preflight_existence(&roots, &plan, &[], None, None, "svc", true).unwrap_err();
@@ -982,6 +1004,8 @@ mod tests {
             host: "nested/state".into(),
             guest: "/data".into(),
             read_only: false,
+            policy: None,
+            policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", true)?;
@@ -1059,6 +1083,8 @@ mod tests {
             host: "missing/cfg.yaml".into(),
             guest: "/app/cfg.yaml".into(),
             read_only: true,
+            policy: None,
+            policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", false)?;
@@ -1084,6 +1110,8 @@ mod tests {
             host: "cfg/app.yaml".into(),
             guest: "/app/app.yaml".into(),
             read_only: true,
+            policy: None,
+            policy_file: None,
         }]);
         let seeds = vec![crate::config::SeedFileConfig {
             source: Some("seed/s.json".into()),

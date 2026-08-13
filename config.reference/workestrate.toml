@@ -12,6 +12,23 @@ schema_version = 1
 # real litellm service so the example workloads keep exercising the
 # depends_on env-injection / derived-egress / declared-port-fallback paths.
 
+# Sensitive-path defaults (spec 22 §9). These are the lowest-scope reference
+# defaults: every workload under config.reference inherits them, and any
+# config-repo / workload layer may relax them via `unmask`. They are all
+# `overridable = true` (the default) — `protect` is operator-only and is
+# intentionally NOT declared here (the reference config is not operator scope).
+[policy.mounts]
+mask = [
+  "**/.env",
+  "**/.env.*",
+  "**/.ssh/**",
+  "**/*.pem",
+  "**/*.key",
+  "**/.git/**",
+  "**/.sops.yaml",
+  "**/node_modules/.npmrc",
+]
+
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
 required = true

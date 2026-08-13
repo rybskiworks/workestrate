@@ -1,5 +1,5 @@
 use super::super::env::{resolve_templated_value_with, resolve_templated_value_with_env_fallback};
-use super::super::mounts::{apply_plan_mounts, ensure_mount_sources};
+use super::super::mounts::{apply_mount_policy, apply_plan_mounts, ensure_mount_sources};
 use super::super::plan::{PortMapping, SandboxPlan};
 use super::super::workload::{EntrypointSpec, SandboxCommand, Workload};
 use super::{check_occupied_or_replace, ForegroundConfig, InstanceSpec};
@@ -395,6 +395,18 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.
     let state_dir = crate::config::resolve_state_dir();
+    for m in &mut plan.mounts {
+        if let Some(program) = workload.mount_policy_for(&m.guest) {
+            let slug = crate::microsandbox::policy_file::mount_slug(&m.guest);
+            let path = crate::microsandbox::policy_file::write_policy_file(
+                &state_dir,
+                &spec.instance,
+                &slug,
+                program,
+            )?;
+            m.policy_file = Some(path);
+        }
+    }
 
     // ADR 0026(a)/C2: resolve the slot's bind IP BEFORE the builder port
     // loop. Parallel slots draw a per-instance loopback from the locked
@@ -464,6 +476,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
 
     builder = apply_plan_envs(builder, &plan, &secrets)?;
     builder = apply_plan_mounts(builder, &mount_roots, &plan)?;
+    builder = apply_mount_policy(builder, &plan)?;
     builder = apply_plan_secrets(builder, &plan, &secrets)?;
 
     let builder = if spec.replace {

@@ -1,6 +1,6 @@
 # STATUS — comprehensive state report for the next session
 
-> **STATUS: CURRENT (2026-08-03, HEAD `3efd377`; Phase E implemented-uncommitted-unvalidated in the working tree)**
+> **STATUS: CURRENT (2026-08-13, HEAD `894e1bc` on `feature/mount-masking`; mount-masking library+config+CLI landed, rebased onto sibling/migration/tool-model c45494b; SDK seam dormant; merge onto wr `migration/tool-model` PLANNED — merge-readiness addendum below)**
 > Prerequisites / see-also: [README.md](README.md) · [NEXT-SESSION.md](NEXT-SESSION.md) ·
 > [07-execution-order.md](07-execution-order.md) · [06-improvements/00-index.md](06-improvements/00-index.md) ·
 > [02-config-requirements.md](02-config-requirements.md)
@@ -11,6 +11,58 @@ up the `migration/tool-model` branch. It consolidates the two 2026-08-01 audits
 docs. Where this file conflicts with an older doc, **this file wins for state**;
 the cited docs win for semantics and procedures. Read this file first; then pick
 work from §5.
+
+---
+
+### 0.1 MERGE-READINESS (2026-08-13, assessment complete — merges NOT executed)
+
+- Branch = base c45494b + 24 spec-22/23 commits; target `migration/tool-model`
+  @ `5c341ad` (wr side +59 commits since the same base).
+- Verified conflict map (`git merge-tree --write-tree`): **8 content conflicts**
+  (control/agentctl Cargo.{lock,toml}, src/cli_actions.rs, src/commands/mod.rs,
+  src/main.rs, src/microsandbox/mod.rs, docs/migration/50-decisions/README.md,
+  docs/validation-and-improvements/06-improvements/00-index.md) + **12
+  auto-merged files needing semantic review** (config/types.rs,
+  config/validation.rs, merge.rs, microsandbox/{mounts,plan,runtime/{mod,run},
+  workload/{config,mod}}.rs, workestrate.schema.json,
+  templates/workestrate-config/schemas/workestrate.schema.json,
+  config.reference/workestrate.toml).
+- **ADR 0028 collision:** this branch + the target each carry a different
+  `0028-*.md`; plan = renumber this branch's policy-scopes ADR → **0029**.
+- Next actions: transport branch to github origin → merge/rebase onto 5c341ad
+  → resolve conflicts + renumber ADR → regen schemas → gates (cargo test,
+  clippy, nix build) → flake pin bump → SDK seam → HOST-KVM e2e. Full runbook:
+  `handovers/2026-08-13-mount-merge-readiness.md` §6.
+
+
+## 0.0 DESIGN DOCS — spec 22 + ADR 0029 + spec 23 (2026-08-04, `experimental` branch, rebased onto `sibling/migration/tool-model` c45494b)
+
+**Mount-masking feature state (spec 22):** the compiler library, hierarchical
+scope collection, config wiring, per-mount `policy_file` lifecycle, sensitive
+defaults (§9), validation (§12), and the diagnostics CLI (`workestrate policy
+mounts explain|preview`, §13) are **LANDED**. The `case_sensitivity` parity
+from the msb side is ported (deserialize-path recompile, commit `587e3af`).
+The dead `mount_policy()` shim is removed (commit `d42001a`). The branch is
+rebased onto `sibling/migration/tool-model` @ `c45494b`, bringing spec 21
+(image build/load lifecycle, plan-time preflight, directory-mode fixes) into
+the experimental lineage without conflict.
+
+**SDK seam status:** `apply_mount_policy` (runtime/run.rs) is a **no-op**
+pending the microsandbox fork dependency switch (spec 23, DESIGN/DEFERRED).
+Config compilation, validation, and the diagnostics CLI work today; end-to-end
+runtime enforcement is NOT exercised (no KVM in container).
+
+- **Spec 22** (dynamic mount masking policy, [06-improvements/22-dynamic-mount-masking-policy.md](06-improvements/22-dynamic-mount-masking-policy.md)) and **ADR 0029** (policy scopes: collect-and-compile) authored as DESIGN-APPROVED/Accepted on the `experimental` branch.
+- **Spec 23** (microsandbox fork as nix flake output) is DESIGN/DEFERRED at [06-improvements/23-microsandbox-fork-nix-flake-packaging.md](06-improvements/23-microsandbox-fork-nix-flake-packaging.md).
+- **Spec 01 dispositioned to SECONDARY/FALLBACK:** WP1–WP4 frozen; kept as the degraded-mode/static fallback (WP5 staging-copy essence survives); deleted if spec 22 lands.
+- **2026-08-03 consolidated amendment:** spec 22 now locks write-rules/protect/tagging/cascade/symlink semantics and the corrected host-side transmission channel; ADR 0029 carries the addendum.
+- **Operator guide:** [mount-masking-operator-guide.md](mount-masking-operator-guide.md). **Example configs:** [examples/mount-masking-multi-mount.toml](examples/mount-masking-multi-mount.toml), [examples/mount-masking-protect-writes.toml](examples/mount-masking-protect-writes.toml).
+
+**Remaining steps:** (1) rebase DONE; (2) msb side (`feat/passthrough-mount-path-policy`) needs rebase onto the fork `4a3133e5` lineage; (3) dep switch — implement spec 23 (microsandbox fork as nix flake output) and flip `apply_mount_policy` to a real per-mount SDK call; (4) HOST-KVM runtime smoke for spec 22 §14 enforcement. The 11 beads handover issues (`.beads/issues.jsonl`, `wrk-bnm`/`wrk-cbz`/`wrk-0kj`/`wrk-wtx`/`wrk-2px`/`wrk-mgk`/`wrk-e1e`/`wrk-rtk`/`wrk-24m`/`wrk-rnt`/`wrk-v53`) track the remaining work.
+- **Spec 23** ([06-improvements/23-microsandbox-fork-nix-flake-packaging.md](06-improvements/23-microsandbox-fork-nix-flake-packaging.md))
+  was authored DESIGN/DEFERRED on the `experimental` branch: it captures the
+  fork-as-flake packaging idea, with implementation deferred until host
+  stabilization. No ADR was created because this is a deferred design.
 
 ---
 
@@ -749,6 +801,7 @@ still say SPEC (bookkeeping pending, §5 item 9).
 | 18 | Cross-home dependencies | INTENT-TO-EXPLORE | exploration only (questions enumerated in spec) |
 | 19 | Visualization + inspection | INTENT-TO-EXPLORE | exploration only (candidates + data sources in spec) |
 | 20 | Schema evolution + migrations | SPEC (design written, `0b401d9`) | implement: schema pull+lock (vendored schema refresh, lockfile provenance, fail-closed) + `config migrate` framework |
+| 23 | microsandbox fork nix flake packaging | DESIGN / DEFERRED (2026-08-03) | implementation deferred until workestrate+passthrough usage stabilizes on host |
 
 The index file itself (`06-improvements/00-index.md`) is STATUS: INDEX and
 current post-flips except the spec-05 row above.

@@ -1,0 +1,51 @@
+# Example: protect tier and write rules (spec 22 §10).
+#
+# `protect` is an operator-only tier: protected paths are hidden AND untouchable,
+# independently of overridability. Only operator scopes (home registry,
+# user-global overrides) may declare terminal protect. Write rules are
+# pattern-keyed: default is allow+tag; deny beats allow; terminal deny freezes.
+#
+# This file is a fragment illustrating the operator-scope (home registry)
+# policy surface. It is NOT a complete config (no schema_version/workloads) —
+# it is meant to be dropped into a home registry `config.toml` or
+# `overrides.toml`.
+
+# ---------------------------------------------------------------------------
+# Operator scope: home registry [policy.mounts].
+# Protect the admin tree (hidden + untouchable) and deny writes to config.
+# ---------------------------------------------------------------------------
+[policy.mounts]
+# Protect is operator-only. A config-repo or workload layer cannot unprotect
+# these paths (terminal, operator trust model — spec 22 §5).
+protect = ["**/admin/**"]
+
+# Mask the secrets tree; lower scopes may unmask specific files.
+mask = ["secrets/**"]
+
+[policy.mounts.writes]
+# Deny writes to the config tree; allow writes to the data tree.
+# Deny beats allow on overlap; a terminal deny (overridable = false) freezes.
+deny = [
+  "config/**",
+  { pattern = "state/lock/**", overridable = false },
+]
+allow = ["data/**"]
+
+# ---------------------------------------------------------------------------
+# A workload that inherits the operator protect + write rules and adds its
+# own workload-scope mask. The workload CANNOT unprotect admin/ (operator-
+# only) but CAN unmask a specific secret file (overridable default).
+# ---------------------------------------------------------------------------
+[workloads.worker]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["python", "-m", "http.server", "9000"]
+
+[workloads.worker.policy.mounts]
+# Unmask a specific secret the worker needs (the operator mask is overridable).
+unmask = ["secrets/api-token"]
+
+[[workloads.worker.mounts]]
+host = "workspaces/worker"
+guest = "/data"
+read_only = false

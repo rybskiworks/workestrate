@@ -72,3 +72,14 @@ required = false
 #
 # [[workloads.my-agent.network.egress]]
 # recipe = "agent_base"
+
+# ─── Mount policy (spec 22) ────────────────────────────────────────────────
+# Optional [policy.mounts] block (global) and per-mount `policy = { ... }`
+# entries. See spec 22 for the full mask/unmask/protect/writes vocabulary.
+# [policy.mounts]
+# mask = ["**/.env", "**/.ssh/**"]
+# unmask = ["**/.env.example"]
+# protect = ["**/.secret"]            # operator-only; not valid in config repos
+# [policy.mounts.writes]
+# allow = ["**/.tmp/**"]
+# deny = ["**/.secret/**"]

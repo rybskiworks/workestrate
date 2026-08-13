@@ -3,6 +3,7 @@ pub mod discovery;
 mod env;
 pub(crate) mod mounts;
 pub mod plan;
+pub mod policy_file;
 pub mod port_registry;
 pub mod runtime;
 pub mod secrets;
@@ -17,6 +18,9 @@ pub use runtime::logs;
 
 // WP1 trust-boundary validators — called from `config::validate_config`.
 pub use mounts::{validate_mount_guest, validate_mount_host};
+pub use policy_file::{
+    mount_slug, policy_dir, policy_file_path, remove_policy_dir, write_policy_file,
+};
 pub use workload::{
     validate_env_override, validate_seed_glob, validate_seed_source, validate_seed_target,
 };

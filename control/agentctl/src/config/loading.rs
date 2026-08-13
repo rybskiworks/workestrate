@@ -290,8 +290,10 @@ pub fn load_config() -> Result<ConfigFile> {
         if path.exists() {
             set_active_context(None);
             let layer = crate::merge::Layer::load("local", &path)?;
+            let collected = collect_policy_scopes(None, std::slice::from_ref(&layer))?;
             let layer_dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&layer));
             let (merged, provenance) = crate::merge::merge_layers(&[layer])?;
+            crate::mount_policy::set_collected_policy(Some(collected));
             crate::merge::set_provenance(Some(provenance));
             crate::merge::set_layer_dirs(Some(layer_dirs));
             validate_config(&merged)?;
@@ -300,6 +302,7 @@ pub fn load_config() -> Result<ConfigFile> {
     }
 
     let mut layers: Vec<crate::merge::Layer> = Vec::new();
+    let registry = load_registry()?;
 
     // 2. Reference config as the base layer (opt-in: reference_config_path()
     //    returns None unless WORKESTRATE_REFERENCE_CONFIG=1).
@@ -388,10 +391,98 @@ pub fn load_config() -> Result<ConfigFile> {
 
     let layer_dirs = crate::merge::layer_dirs_from(&layers);
     let (merged, provenance) = crate::merge::merge_layers(&layers)?;
+    crate::mount_policy::set_collected_policy(Some(collect_policy_scopes(
+        registry.as_ref(),
+        &layers,
+    )?));
     crate::merge::set_provenance(Some(provenance));
     crate::merge::set_layer_dirs(Some(layer_dirs));
     validate_config(&merged)?;
     Ok(merged)
+}
+
+/// Collect policy fragments in the loader's actual order. This deliberately
+/// reads each layer independently; no policy field is passed through
+/// `merge_layers`.
+fn collect_policy_scopes(
+    registry: Option<&crate::config::Registry>,
+    layers: &[crate::merge::Layer],
+) -> Result<crate::mount_policy::CollectedPolicy> {
+    use crate::mount_policy::{CollectedPolicy, PolicyScope, ScopeKind};
+    let mut collected = CollectedPolicy::default();
+    if let Some(registry) = registry {
+        if let Some(fragment) = registry.policy.mounts.clone() {
+            collected.global.push(PolicyScope::new(
+                ScopeKind::HomeRegistry,
+                "home-registry",
+                crate::config::registry_path(),
+                fragment,
+            ));
+        }
+    }
+    for layer in layers {
+        let source = layer
+            .source_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(&layer.name));
+        let kind = if layer.name == "reference" {
+            ScopeKind::ReferenceConfig
+        } else if layer.name.ends_with("-override") {
+            ScopeKind::UserGlobalOverrides
+        } else {
+            ScopeKind::ConfigRepoLayer
+        };
+        if let Some(fragment) = layer.config.policy.mounts.clone() {
+            collected.global.push(PolicyScope::new(
+                kind,
+                layer.name.clone(),
+                source.clone(),
+                fragment,
+            ));
+        }
+        for (name, workload) in &layer.config.workloads {
+            if let Some(fragment) = workload.policy.mounts.clone() {
+                collected
+                    .workloads
+                    .entry(name.clone())
+                    .or_default()
+                    .push(PolicyScope::new(
+                        ScopeKind::Workload,
+                        layer.name.clone(),
+                        source.clone(),
+                        fragment,
+                    ));
+            }
+        }
+        // Mount rows are wholesale-replaced. Only the final layer that
+        // declares this workload's `mounts` contributes entry policies.
+        for (name, workload) in &layer.config.workloads {
+            let declares_mounts = layer
+                .raw()
+                .get("workloads")
+                .and_then(|v| v.get(name))
+                .and_then(|v| v.as_table())
+                .is_some_and(|t| t.contains_key("mounts"));
+            if declares_mounts {
+                let entries = collected.workloads.entry(name.clone()).or_default();
+                entries.retain(|scope| scope.scope_kind != ScopeKind::MountEntry);
+                for mount in &workload.mounts {
+                    if let Some(fragment) = mount.policy.clone() {
+                        entries.push(
+                            PolicyScope::new(
+                                ScopeKind::MountEntry,
+                                layer.name.clone(),
+                                source.clone(),
+                                fragment,
+                            )
+                            .for_mount(mount.guest.clone()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(collected)
 }
 
 // ---------------------------------------------------------------------------
@@ -1951,6 +2042,192 @@ pub(crate) mod tests {
             "error names the missing entry file: {err}"
         );
         let _ = std::fs::remove_dir_all(&repo);
+        Ok(())
+    }
+
+    // --- ADR 0028: policy collection stays separate from config merging ---
+
+    fn policy_layer(name: &str, source: &Path, body: &str) -> crate::merge::Layer {
+        crate::merge::Layer::from_string_with_path(name, body, Some(source.to_path_buf())).unwrap()
+    }
+
+    #[test]
+    fn policy_compact_and_expanded_forms_are_strict_at_config_boundary() -> Result<()> {
+        let layer = crate::merge::Layer::from_string(
+            "policy",
+            r#"
+schema_version = 1
+
+[policy.mounts]
+mask = ["compact", { pattern = "expanded", overridable = false }]
+unmask = [{ pattern = "carve-out" }]
+"#,
+        )?;
+        let fragment = layer.config.policy.mounts.unwrap();
+        assert_eq!(fragment.mask[0].value, "compact");
+        assert!(fragment.mask[0].overridable);
+        assert_eq!(fragment.mask[1].value, "expanded");
+        assert!(!fragment.mask[1].overridable);
+        assert_eq!(fragment.unmask[0].value, "carve-out");
+        assert!(fragment.unmask[0].overridable);
+
+        let err = match crate::merge::Layer::from_string(
+            "bad-policy",
+            "schema_version = 1\n[policy.mounts]\nmask = [{ pattern = \"x\", typo = true }]\n",
+        ) {
+            Ok(_) => panic!("unknown policy field must be rejected"),
+            Err(err) => format!("{err:#}"),
+        };
+        assert!(
+            err.contains("unknown field") && err.contains("typo"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn policy_collection_preserves_home_config_workload_and_mount_precedence() -> Result<()> {
+        let source = PathBuf::from("/tmp/policy-config.toml");
+        let registry = crate::config::Registry {
+            policy: crate::config::PolicyConfig {
+                mounts: Some(crate::mount_policy::MountsFragment {
+                    mask: vec![crate::mount_policy::PolicyValue::overridable("home".into())],
+                    ..Default::default()
+                }),
+            },
+            ..Default::default()
+        };
+        let layer = policy_layer(
+            "repo#workestrate/workloads/pi/workload.toml",
+            &source,
+            r#"
+schema_version = 1
+
+[policy.mounts]
+mask = ["config"]
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.policy.mounts]
+mask = ["workload"]
+
+[[workloads.pi.mounts]]
+host = "config"
+guest = "/config"
+read_only = true
+
+[workloads.pi.mounts.policy]
+mask = ["mount"]
+"#,
+        );
+        let collected = collect_policy_scopes(Some(&registry), &[layer])?;
+        let global = collected
+            .global
+            .iter()
+            .map(|scope| (scope.scope_kind, scope.fragment.mask[0].value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(global.len(), 2);
+        assert_eq!(global[0].0, crate::mount_policy::ScopeKind::HomeRegistry);
+        assert_eq!(global[0].1, "home");
+        assert_eq!(global[1].0, crate::mount_policy::ScopeKind::ConfigRepoLayer);
+        assert_eq!(global[1].1, "config");
+
+        let workload = &collected.workloads["pi"];
+        assert_eq!(workload.len(), 2);
+        assert_eq!(
+            workload[0].scope_kind,
+            crate::mount_policy::ScopeKind::Workload
+        );
+        assert_eq!(workload[0].fragment.mask[0].value, "workload");
+        assert_eq!(
+            workload[1].scope_kind,
+            crate::mount_policy::ScopeKind::MountEntry
+        );
+        assert_eq!(workload[1].fragment.mask[0].value, "mount");
+        Ok(())
+    }
+
+    #[test]
+    fn policy_collection_keeps_only_the_winning_mounts_array() -> Result<()> {
+        let lower = policy_layer(
+            "lower",
+            Path::new("/tmp/lower.toml"),
+            r#"
+schema_version = 1
+[workloads.pi]
+[[workloads.pi.mounts]]
+host = "old"
+guest = "/old"
+read_only = true
+[workloads.pi.mounts.policy]
+mask = ["old-policy"]
+"#,
+        );
+        let higher = policy_layer(
+            "higher",
+            Path::new("/tmp/higher.toml"),
+            r#"
+schema_version = 1
+[workloads.pi]
+mounts = []
+"#,
+        );
+        let collected = collect_policy_scopes(None, &[lower, higher])?;
+        assert!(collected.workloads.get("pi").is_none_or(Vec::is_empty));
+        Ok(())
+    }
+
+    #[test]
+    fn policy_collection_preserves_directory_and_capsule_source_provenance() -> Result<()> {
+        let repo = uniq_dir("policy-provenance");
+        write_repo_file(&repo, "workestrate/default.toml", "schema_version = 1\n");
+        write_repo_file(
+            &repo,
+            "workestrate/workloads/capsule/workload.toml",
+            "kind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n[policy.mounts]\nmask = [\"capsule\"]\n",
+        );
+        let layers = load_config_repo_layers("personal", &repo)?;
+        let collected = collect_policy_scopes(None, &layers)?;
+        let scope = &collected.workloads["capsule"][0];
+        assert_eq!(
+            scope.layer_name,
+            "personal#workestrate/workloads/capsule/workload.toml"
+        );
+        assert_eq!(
+            scope.source_path,
+            repo.join("workestrate/workloads/capsule/workload.toml")
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+        Ok(())
+    }
+
+    #[test]
+    fn non_operator_terminal_unmask_is_rejected_after_collection() -> Result<()> {
+        let layer = policy_layer(
+            "repo",
+            Path::new("/tmp/repo.toml"),
+            "schema_version = 1\n[policy.mounts]\nunmask = [{ pattern = \".env\", overridable = false }]\n",
+        );
+        let collected = collect_policy_scopes(None, &[layer])?;
+        let err = crate::mount_policy::compile(collected.global).unwrap_err();
+        assert!(err.to_string().contains("terminal unmask") && err.to_string().contains(".env"));
+        Ok(())
+    }
+
+    #[test]
+    fn no_policy_collection_is_empty_and_config_merge_is_unchanged() -> Result<()> {
+        let layer = policy_layer(
+            "plain",
+            Path::new("/tmp/plain.toml"),
+            "schema_version = 1\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n",
+        );
+        let expected = layer.config.clone();
+        let collected = collect_policy_scopes(None, &[layer])?;
+        assert!(collected.is_empty());
+        assert_eq!(expected.workloads["pi"].kind, "agent");
         Ok(())
     }
 }

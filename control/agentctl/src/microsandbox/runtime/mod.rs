@@ -257,10 +257,12 @@ async fn down_one(state_dir: &Path, instance: &str) -> Result<DownOutcome> {
         Ok(handle) => {
             stop_and_remove(handle).await?;
             let _ = super::port_registry::unregister_sandbox(state_dir, instance);
+            let _ = super::policy_file::remove_policy_dir(state_dir, instance);
             Ok(DownOutcome::Stopped)
         }
         Err(MicrosandboxError::SandboxNotFound(_)) => {
             let _ = super::port_registry::unregister_sandbox(state_dir, instance);
+            let _ = super::policy_file::remove_policy_dir(state_dir, instance);
             Ok(DownOutcome::NotFound)
         }
         Err(e) => Err(e.into()),

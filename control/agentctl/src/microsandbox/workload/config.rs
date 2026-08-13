@@ -49,6 +49,10 @@ pub struct ConfigWorkload {
     /// path). `plan()` appends the injected env AFTER the declared env and
     /// the derived egress AFTER the expanded declared egress rules.
     pub(super) depends_resolved: Vec<crate::microsandbox::discovery::ResolvedDependency>,
+    /// Compiled policies in mount declaration order. The runtime will select
+    /// the program for the relevant guest mount when per-mount transmission is
+    /// wired.
+    pub(super) mount_policies: Vec<(String, crate::mount_policy::MountPolicyProgram)>,
 }
 
 impl ConfigWorkload {
@@ -155,6 +159,41 @@ impl ConfigWorkload {
             .ok_or_else(|| anyhow::anyhow!("workload '{}' not found in config", name))?
             .clone();
 
+        let mount_policies = crate::mount_policy::get_collected_policy()
+            .map(|collected| {
+                workload
+                    .mounts
+                    .iter()
+                    .filter_map(|mount| {
+                        let mut scopes = collected.global.clone();
+                        scopes.extend(
+                            collected
+                                .workloads
+                                .get(name)
+                                .into_iter()
+                                .flat_map(|scopes| scopes.iter())
+                                .filter(|scope| {
+                                    scope.scope_kind != crate::mount_policy::ScopeKind::MountEntry
+                                        || scope.mount_guest.as_deref() == Some(mount.guest.as_str())
+                                })
+                                .cloned(),
+                        );
+                        if scopes.is_empty() {
+                            return None;
+                        }
+                        let guest = mount.guest.clone();
+                        let program = crate::mount_policy::compile(scopes).map_err(|e| {
+                            anyhow::anyhow!(
+                                "mount policy for workload '{name}' mount '{guest}' failed to compile: {e}"
+                            )
+                        });
+                        Some(program.map(|program| (guest, program)))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+
         // Content roots (spec 17): repo-relative mount hosts and seed-file
         // paths resolve against the DECLARING layer's directory, not the
         // flake project root. Mounts and seed_files merge wholesale-replace,
@@ -187,6 +226,7 @@ impl ConfigWorkload {
             mount_content_root,
             seed_content_root,
             depends_resolved,
+            mount_policies,
         })
     }
 
@@ -373,6 +413,13 @@ impl Workload for ConfigWorkload {
 
     fn show_source(&self) -> String {
         self.show_source_render()
+    }
+
+    fn mount_policy_for(&self, guest: &str) -> Option<&crate::mount_policy::MountPolicyProgram> {
+        self.mount_policies
+            .iter()
+            .find(|(mount_guest, _)| mount_guest == guest)
+            .map(|(_, policy)| policy)
     }
 
     fn exec(&self) -> SandboxCommand {
@@ -1097,6 +1144,70 @@ default_deny = true
         Ok(())
     }
 
+    #[test]
+    fn mount_policies_do_not_cross_contaminate_mounts() -> Result<()> {
+        let _guard = DependsEnvGuard::new("cw-per-mount-policy", PER_MOUNT_POLICY_TOML);
+        let wl = ConfigWorkload::new("svc")?;
+        let workspace = wl
+            .mount_policy_for("/workspace")
+            .expect("workspace policy must compile");
+        let data = wl
+            .mount_policy_for("/data")
+            .expect("data policy must compile");
+
+        assert_eq!(
+            workspace
+                .decide(&crate::mount_policy::LexicalPath::new(
+                    "data/node_modules/foo",
+                )?)
+                .decision,
+            crate::mount_policy::Decision::Visible
+        );
+        assert_eq!(
+            data.decide(&crate::mount_policy::LexicalPath::new(
+                "workspace/secrets/foo",
+            )?)
+            .decision,
+            crate::mount_policy::Decision::Visible
+        );
+        assert_eq!(
+            workspace
+                .decide(&crate::mount_policy::LexicalPath::new("node_modules/foo")?)
+                .decision,
+            crate::mount_policy::Decision::Masked
+        );
+        assert_eq!(
+            data.decide(&crate::mount_policy::LexicalPath::new("secrets/foo")?)
+                .decision,
+            crate::mount_policy::Decision::Masked
+        );
+        Ok(())
+    }
+
+    const PER_MOUNT_POLICY_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "alpine:latest" }
+command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "."
+guest = "/workspace"
+read_only = false
+policy = { mask = ["node_modules/"] }
+
+[[workloads.svc.mounts]]
+host = "."
+guest = "/data"
+read_only = false
+policy = { mask = ["secrets/"] }
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
     /// F3: prepare() copies seed files from the DECLARING layer's dir
     /// (colocated seed payload), never silently from cwd.
     #[test]
@@ -1541,6 +1652,7 @@ default_deny = true
             mount_content_root: None,
             seed_content_root: None,
             depends_resolved: Vec::new(),
+            mount_policies: Vec::new(),
         }
     }
 
@@ -1670,6 +1782,7 @@ default_deny = true
             mount_content_root: Some(repo.clone()),
             seed_content_root: None,
             depends_resolved: Vec::new(),
+            mount_policies: Vec::new(),
         };
         (repo, wl)
     }
@@ -1878,6 +1991,7 @@ default_deny = true
             mount_content_root: None,
             seed_content_root: None,
             depends_resolved: Vec::new(),
+            mount_policies: Vec::new(),
         };
         let plan = wl.plan(); // emits the warning to stderr; assert via the helper
                               // The substituted mounts: ${CWD} = nested (absolute), workspaces/... = state join.

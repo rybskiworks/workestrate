@@ -3,6 +3,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 
 use crate::microsandbox::secrets::SecretDefinition;
+use crate::mount_policy::MountsFragment;
 
 /// Default host bind address for published ports (ADR 0026): `127.0.0.1`,
 /// the shared singleton bind. Parallel slots bind per-instance loopbacks
@@ -124,6 +125,13 @@ pub struct MountPlan {
     pub host: String,
     pub guest: String,
     pub read_only: bool,
+    /// Mount-entry policy is collected from the same declaring layer as this
+    /// row; it is intentionally not part of mount-row merging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<MountsFragment>"))]
+    pub policy: Option<MountsFragment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_file: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -282,6 +290,9 @@ impl fmt::Display for SandboxPlan {
         for m in &self.mounts {
             let ro = if m.read_only { " (ro)" } else { "" };
             writeln!(f, "mount: {}:{}{}", m.host, m.guest, ro)?;
+            if let Some(pf) = &m.policy_file {
+                writeln!(f, "  policy_file: {}", pf.display())?;
+            }
         }
         writeln!(f, "network: default_deny={}", self.network.default_deny)?;
         for rule in &self.network.ingress_rules {
@@ -445,11 +456,15 @@ mod tests {
                     host: "/data".to_string(),
                     guest: "/mnt".to_string(),
                     read_only: false,
+                    policy: None,
+                    policy_file: None,
                 },
                 MountPlan {
                     host: "/cfg".to_string(),
                     guest: "/etc/cfg".to_string(),
                     read_only: true,
+                    policy: None,
+                    policy_file: None,
                 },
             ],
             network: NetworkPlan {

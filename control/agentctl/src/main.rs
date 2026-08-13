@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use workestrate::cli_actions::{
-    AgentAction, ConfigAction, ContextAction, HomeAction, SchemasAction, ServiceAction,
-    SourceAction, WorkloadAction,
+    AgentAction, ConfigAction, ContextAction, HomeAction, PolicyAction, SchemasAction,
+    ServiceAction, SourceAction, WorkloadAction,
 };
 use workestrate::cli_error::{classify_exit_code, emit_error};
 use workestrate::commands::config_cmd::{
@@ -195,6 +195,11 @@ enum Commands {
     },
     /// List configured workloads (name, kind, image, running status).
     Workloads,
+    /// Diagnose mount masking policy (spec 22 §13).
+    Policy {
+        #[command(subcommand)]
+        action: PolicyAction,
+    },
 }
 
 /// Pre-scan argv for a global `--json` flag so ANY error (including clap
@@ -680,6 +685,9 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             }
         }
         Commands::Workloads => cmd_workloads(cli.json),
+        Commands::Policy { action } => {
+            workestrate::commands::policy::cmd_policy(action, cli.json).await
+        }
     }
 }
 

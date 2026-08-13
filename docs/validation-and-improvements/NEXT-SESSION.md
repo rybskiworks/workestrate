@@ -1,9 +1,16 @@
 # NEXT-SESSION — handoff prompt
 
+Spec 22 host policy-file preparation and diagnostics CLI landed. Continue at the documented
+SDK integration seam when the pinned microsandbox dependency gains the policy field.
+
+> **2026-08-13 update — MERGE-READINESS ASSESSMENT DONE (no merges executed).** `feature/mount-masking` (24 commits on base c45494b) is ready to merge onto wr `migration/tool-model` @ `5c341ad` once the 8 content conflicts + 12 semantic auto-merges are resolved and the ADR 0028 collision is handled (renumber this branch's policy-scopes ADR → 0029). msb side verified mergeable (33 commits linear on fork main b43d7522). Full inventory + runbook: `~/Development/agent-workbench/handovers/2026-08-13-mount-merge-readiness.md`.
+
 > **STATUS: HANDOFF**
 > Prerequisites / see-also: [README.md](README.md) · [00-overview.md](00-overview.md) ·
 > [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md) ·
 > [07-execution-order.md](07-execution-order.md)
+
+> **2026-08-03 update — spec 23 (microsandbox fork nix flake packaging) authored** as DESIGN/DEFERRED at [06-improvements/23-microsandbox-fork-nix-flake-packaging.md](06-improvements/23-microsandbox-fork-nix-flake-packaging.md). Captures the deferred idea of packaging the fork as a nix flake output (encapsulated source-build; lockstep binary+SDK from one rev; reversibility via input-ref change). Implementation explicitly deferred until workestrate+passthrough usage stabilizes on host; no flake code written now; no ADR (deferred design). Supersedes spec 09 option 3 for the masking use case; unblocks spec 22 §14 runtime enforcement when implemented.
 
 This file is the self-contained handoff for the next contextless session working
 the `migration/tool-model` branch. It assumes no prior conversation. Everything
@@ -24,6 +31,30 @@ re-derive their contents.
 ---
 
 ## Current state (as of 2026-08-01)
+
+
+> **2026-08-04 update (12) — mount-masking polish + rebase complete on
+> `experimental`:** the branch is rebased onto
+> `sibling/migration/tool-model` @ `c45494b` (spec 21 image build/load
+> lifecycle + plan-time preflight + directory-mode fixes now in the
+> experimental lineage). The `case_sensitivity` parity is ported from the msb
+> side (deserialize-path recompile, commit `587e3af`). The dead
+> `mount_policy()` shim is removed (`d42001a`). An operator guide
+> ([mount-masking-operator-guide.md](mount-masking-operator-guide.md)) and
+> example configs ([examples/](examples/)) are added. HEAD is `0f7ca20`.
+> The SDK seam (`apply_mount_policy`) remains a no-op pending the fork dep
+> switch (spec 23, DESIGN/DEFERRED). Remaining: msb-side rebase onto fork
+> `4a3133e5` lineage, dep switch (spec 23), HOST-KVM runtime smoke for spec 22
+> §14. The 11 beads handover issues (`.beads/issues.jsonl`) track the rest.
+
+
+> **2026-08-02 update (7-spec22) — spec 22 + ADR 0029 authored on the
+> `experimental` branch:** spec 22 (dynamic mount masking policy) is
+> DESIGN-APPROVED at
+> [06-improvements/22-dynamic-mount-masking-policy.md](06-improvements/22-dynamic-mount-masking-policy.md);
+> ADR 0029 records collect-and-compile (never merge). Spec 01 is
+> dispositioned to SECONDARY/FALLBACK (WP1–WP4 frozen; deleted if spec 22
+> lands).
 
 > **2026-08-03 update (11) — spec 21 phase E (lifecycle wiring) is IMPLEMENTED
 > in the working tree but UNCOMMITTED and UNVALIDATED.** HEAD is `3efd377`
@@ -147,6 +178,16 @@ re-derive their contents.
 > (declaring-layer-relative; declared fallbacks never overridden). Spec 21
 > phases B–F remain (B `verifiable-here`; C/D/F `HOST-NIX`; E `HOST-KVM`;
 > msb HOST-VERIFY cluster).
+
+> **2026-08-02 update (8) — config-surface slice:** registry/config/workload/
+> mount policy fields now collect ordered provenance-bearing fragments without
+> merge.rs policy merging; runtime transmission and CLI diagnostics remain
+> future slices.
+
+> **2026-08-03 amendment:** consolidated write-rules, protect, tagging,
+> cascade, symlink, and host-side transmission semantics landed; see spec 22
+> §10/§12 and the ADR 0029 addendum. The pure library was revised; msb work is
+> still pending.
 
 > **2026-08-02 update (6) — spec 21 (image build/load lifecycle) authored**
 > as DESIGN-APPROVED at

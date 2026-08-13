@@ -16,6 +16,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::microsandbox::plan::{DenyDomainRule, IngressRule, MountPlan, PortMapping};
+use crate::mount_policy::MountsFragment;
 use crate::recipes::EgressRecipeRef;
 
 /// How to obtain the sandbox image for a workload (`image = { ... }` inline
@@ -568,6 +569,8 @@ pub struct WorkloadConfig {
     pub local_build: Option<LocalBuildConfig>,
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub policy: PolicyConfig,
     /// Config-declared entitlements (`workloads.<name>.entitlements`). The
     /// closed vocabulary core understands lives in `config::validation`
     /// (currently only `"default_deny_false"`, which permits
@@ -622,6 +625,18 @@ pub struct ConfigFile {
     pub secrets: HashMap<String, SecretDefConfig>,
     #[serde(default)]
     pub workloads: HashMap<String, WorkloadConfig>,
+    #[serde(default)]
+    pub policy: PolicyConfig,
+}
+
+/// A policy namespace. Keeping the `mounts` table nested makes the config
+/// surface match `[policy.mounts]` while leaving policy fragments outside the
+/// ordinary merge algebra.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyConfig {
+    #[serde(default)]
+    pub mounts: Option<MountsFragment>,
 }
 
 // ---------------------------------------------------------------------------
@@ -710,6 +725,8 @@ pub struct Registry {
     pub contexts: HashMap<String, Context>,
     #[serde(default)]
     pub trusted_projects: Vec<TrustedProject>,
+    #[serde(default)]
+    pub policy: PolicyConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -717,7 +734,7 @@ pub struct Registry {
 // ---------------------------------------------------------------------------
 
 /// Known top-level ConfigFile fields (for unknown-field detection in overrides).
-pub(crate) const CONFIG_FIELDS: &[&str] = &["schema_version", "secrets", "workloads"];
+pub(crate) const CONFIG_FIELDS: &[&str] = &["schema_version", "secrets", "workloads", "policy"];
 
 /// Known WorkloadConfig fields (for unknown-field detection in overrides).
 pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
@@ -734,6 +751,7 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
     "seed_files",
     "local_build",
     "network",
+    "policy",
     "depends_on",
 ];
 
