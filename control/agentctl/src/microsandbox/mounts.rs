@@ -196,6 +196,7 @@ pub(crate) fn ensure_mount_sources(roots: &MountRoots, plan: &SandboxPlan) -> Re
 /// [`MountRoots`] borrows from it for the lifetime of a build/plan/preflight.
 /// Extracted from `build_sandbox` so the plan-time existence preflight reuses
 /// the SAME root-resolution logic as the runtime build path (F1/F2).
+#[derive(Debug)]
 pub(crate) struct MountRootsOwned {
     pub content_root: PathBuf,
     pub project_root: Option<PathBuf>,
@@ -222,19 +223,45 @@ pub(crate) fn resolve_mount_roots_owned<W: crate::microsandbox::workload::Worklo
     workload: &W,
     plan: &SandboxPlan,
 ) -> Result<MountRootsOwned> {
-    // F2 LAZY GATE: `project_root()` hard-errors when the resolved root lacks
-    // flake.nix, so it is called ONLY when the workload genuinely needs the
-    // flake checkout. Registry-image workloads with no local_build and no
-    // relative build-path mounts never touch the gate.
+    // F2 LAZY GATE (ADR 0028): the flake project root is resolved ONLY when
+    // the workload genuinely needs the flake checkout (nix-layered image /
+    // local_build / relative build-path mount — `flake_root_requirement`);
+    // registry-image workloads with none of those never touch the gate.
+    //
+    // Resolution order (location-independent):
+    //   1. `AGENTCTL_ROOT` — EXPLICIT override only, and only when it
+    //      contains flake.nix (`source::flake_root_override`). It is never
+    //      *required* for declaring-repo-derived roots.
+    //   2. The DECLARING config repo's flake root — the nearest flake.nix
+    //      ancestor of the declaring layer's content root (`mount_content_root`
+    //      + `source::find_flake_root`; the same resolution `build_cmd` /
+    //      `repo_key::repo_identity_for` uses). Directory-mode config repos
+    //      carry flake.nix at their own root, so exec/up/plan work from ANY
+    //      CWD — the CWD is never the origin (ADR 0028 §Decision 2).
+    //   3. Legacy `project_root()` hard gate — synthetic / single-file layers
+    //      with no declaring dir (CWD tier preserved; the exact error wording
+    //      contract for the no-declaring-root case is unchanged).
     let project_root: Option<PathBuf> = match workload.flake_root_requirement(plan) {
-        Some(feature) => Some(crate::config::project_root().map_err(|e| {
-            anyhow::anyhow!(
-                "workload '{}' uses {}, which requires a flake project root: {}",
-                workload.name(),
-                feature,
-                e
-            )
-        })?),
+        Some(feature) => {
+            let root = crate::commands::source::flake_root_override()
+                .or_else(|| {
+                    workload
+                        .mount_content_root()
+                        .as_deref()
+                        .and_then(crate::commands::source::find_flake_root)
+                })
+                .map(Ok)
+                .unwrap_or_else(crate::config::project_root)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "workload '{}' uses {}, which requires a flake project root: {}",
+                        workload.name(),
+                        feature,
+                        e
+                    )
+                })?;
+            Some(root)
+        }
         None => crate::config::project_root_optional(),
     };
 

@@ -3,7 +3,9 @@ use super::validate::resolve_mount_host_template;
 use super::{SandboxCommand, Workload};
 use crate::config::WorkloadConfig;
 use crate::microsandbox::env::{render_seed_text, SeedEnvView};
-use crate::microsandbox::plan::{EgressRule, EnvVar, HostBoundSecret, NetworkPlan, SandboxPlan};
+use crate::microsandbox::plan::{
+    EgressRule, EnvVar, HostBoundSecret, MountPlan, NetworkPlan, SandboxPlan,
+};
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -50,6 +52,84 @@ pub struct ConfigWorkload {
 }
 
 impl ConfigWorkload {
+    /// Plan-time host-overlap WARNING (ADR 0028 companion, E0): after
+    /// `${CWD}` / `${WORKESTRATE_<NAME>_BUILD}` substitution, two mounts
+    /// whose RESOLVED host directories overlap (identical, or one is an
+    /// ancestor of the other) get a stderr warning. The classic trigger is
+    /// a `${CWD}` mount run from inside a declared state mount's host
+    /// (e.g. `exec` from `…/state/workspaces/prime-state` when another
+    /// mount binds that dir). Warn only — overlapping HOST dirs are
+    /// semantically harmless (separate virtiofs tags, coherent views)
+    /// unless combined with per-mount masking (spec 22), where an
+    /// unmasked tag would see what a masked tag hides. Nested GUEST paths
+    /// are a separate, LEGAL spec 01 shadow pattern and are never warned.
+    fn host_overlap_warnings(&self, mounts: &[MountPlan]) -> Vec<String> {
+        use std::path::{Component, Path, PathBuf};
+
+        // Resolve each host the way the runtime would bind it, so a
+        // `${CWD}` absolute path is comparable with a `workspaces/...`
+        // state-dir host or a declaring-content-root-relative host.
+        let state_dir = crate::config::resolve_state_dir();
+        let content_root = self.mount_content_root();
+        let mut resolved: Vec<(String, PathBuf)> = Vec::new();
+        for m in mounts {
+            let host = if m.host.starts_with("workspaces/") || m.host.starts_with("var/") {
+                state_dir.join(&m.host)
+            } else if m.host.starts_with("${MSB_HOME}/") {
+                // Sandbox-internal home dir; cannot overlap a workload host.
+                continue;
+            } else {
+                let p = Path::new(&m.host);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else if let Some(root) = &content_root {
+                    root.join(p)
+                } else {
+                    continue; // unresolvable relative host without a content root
+                }
+            };
+            // Lexical normalization (collapse `.` / `..`) — rw mounts may not
+            // exist yet, so fs::canonicalize would fail; component-wise is
+            // deterministic and testable.
+            let mut norm = PathBuf::new();
+            for comp in host.components() {
+                match comp {
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        norm.pop();
+                    }
+                    other => norm.push(other.as_os_str()),
+                }
+            }
+            resolved.push((m.guest.clone(), norm));
+        }
+
+        let mut warnings = Vec::new();
+        for i in 0..resolved.len() {
+            for j in (i + 1)..resolved.len() {
+                let (guest_a, host_a) = &resolved[i];
+                let (guest_b, host_b) = &resolved[j];
+                if guest_a == guest_b {
+                    continue; // exact-duplicate guests are already a validate-time error
+                }
+                let overlaps =
+                    host_a == host_b || host_a.starts_with(host_b) || host_b.starts_with(host_a);
+                if overlaps {
+                    warnings.push(format!(
+                        "workload '{}': mount host '{}' (guest '{}') overlaps host '{}' (guest '{}'); \
+                         both resolve under the same host directory — verify this is intended (spec 22 masking is per-mount)",
+                        self.name,
+                        host_a.display(),
+                        guest_a,
+                        host_b.display(),
+                        guest_b
+                    ));
+                }
+            }
+        }
+        warnings
+    }
+
     /// Load the active config and construct a workload by name.
     pub fn new(name: &str) -> Result<Self> {
         Self::new_with_use_overrides(name, &[])
@@ -264,6 +344,11 @@ impl Workload for ConfigWorkload {
         for m in &mut mounts {
             m.host =
                 resolve_mount_host_template(&m.host, self.name(), &self.build_path(), env_override);
+        }
+        // ADR 0028 companion (E0): warn-only on overlapping resolved HOST
+        // dirs (the `${CWD}`-vs-state-mount case); never an error.
+        for w in self.host_overlap_warnings(&mounts) {
+            eprintln!("warning: {w}");
         }
 
         SandboxPlan {
@@ -1547,6 +1632,268 @@ default_deny = true
         let svc = synthetic_workload(toml, "svc");
         assert_eq!(svc.flake_root_requirement(&svc.plan()), None);
         std::env::remove_var("WORKESTRATE_SVC_BUILD");
+        Ok(())
+    }
+
+    // ---- E0 / ADR 0028: F2 gate resolves the flake root location-independently ----
+
+    /// A nix-layered workload declared by a directory-mode config repo: the
+    /// F2 gate resolves the DECLARING repo's flake root even when the cwd is
+    /// a flake-less foreign directory (ADR 0028 acceptance 1). Builds a
+    /// ConfigWorkload with `mount_content_root` = the repo root (the same
+    /// provenance-derived value `ConfigWorkload::new` sets for directory
+    /// mode) and a `flake.nix` at the repo root.
+    fn declaring_repo_fixture(label: &str) -> (PathBuf, ConfigWorkload) {
+        use crate::config::test_support::uniq_dir;
+        let repo = uniq_dir(label);
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("flake.nix"), "{}\n").unwrap();
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "nix-layered", name = "img-pi" }
+command = []
+
+[workloads.pi.network]
+default_deny = true
+"#;
+        let cf: crate::config::ConfigFile = toml::from_str(toml).unwrap();
+        let workload = cf.workloads.get("pi").unwrap().clone();
+        let wl = ConfigWorkload {
+            name: "pi".to_string(),
+            workload,
+            env: Vec::new(),
+            secret_env: Vec::new(),
+            provenance: None,
+            mount_content_root: Some(repo.clone()),
+            seed_content_root: None,
+            depends_resolved: Vec::new(),
+        };
+        (repo, wl)
+    }
+
+    /// Test (a): the F2 gate resolves the DECLARING repo's flake root from a
+    /// flake-less CWD — the ADR 0028 core fix.
+    #[test]
+    fn f2_gate_resolves_declaring_repo_flake_root_from_flakeless_cwd() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+        let (repo, wl) = declaring_repo_fixture("f2-declaring");
+        // Foreign, flake-less cwd (not the tool checkout, not the repo).
+        let foreign = crate::config::test_support::uniq_dir("f2-flakeless-cwd");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::env::set_current_dir(&foreign)?;
+        std::env::remove_var("AGENTCTL_ROOT");
+
+        let plan = wl.plan();
+        let roots = crate::microsandbox::mounts::resolve_mount_roots_owned(&wl, &plan)?;
+        assert_eq!(
+            roots.project_root.expect("nix-layered requires a root"),
+            repo.canonicalize()?,
+            "declaring repo's flake root wins over the flake-less cwd"
+        );
+        assert_eq!(
+            roots.content_root, repo,
+            "F1 content root = declaring layer dir (spec 17)"
+        );
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&foreign);
+        Ok(())
+    }
+
+    /// Test (b): AGENTCTL_ROOT remains the EXPLICIT override — it beats the
+    /// declaring repo when set (and contains flake.nix).
+    #[test]
+    fn f2_gate_agentctl_root_override_wins_over_declaring_repo() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+        let (repo, wl) = declaring_repo_fixture("f2-override");
+        let override_root = crate::config::test_support::uniq_dir("f2-override-root");
+        std::fs::create_dir_all(&override_root).unwrap();
+        std::fs::write(override_root.join("flake.nix"), "{}\n").unwrap();
+        std::env::set_var("AGENTCTL_ROOT", &override_root);
+        // Foreign cwd so tier 3 cannot accidentally win.
+        let foreign = crate::config::test_support::uniq_dir("f2-override-cwd");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::env::set_current_dir(&foreign)?;
+
+        let plan = wl.plan();
+        let roots = crate::microsandbox::mounts::resolve_mount_roots_owned(&wl, &plan)?;
+        assert_eq!(
+            roots.project_root.expect("nix-layered requires a root"),
+            override_root,
+            "AGENTCTL_ROOT explicit override beats the declaring repo (ADR 0028 §Decision 3)"
+        );
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&override_root);
+        let _ = std::fs::remove_dir_all(&foreign);
+        Ok(())
+    }
+
+    /// Test (c): a SYNTHETIC layer (no declaring dir) preserves the legacy
+    /// hard gate + exact error wording — byte-pinned per the repo's wording
+    /// contract (the F2 error wrapper + the project_root() message).
+    #[test]
+    fn f2_gate_synthetic_layer_legacy_error_is_preserved() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+        let old_root = std::env::var("AGENTCTL_ROOT").ok();
+        let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
+        let cwd = crate::config::test_support::uniq_dir("f2-synthetic-cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::env::remove_var("AGENTCTL_ROOT");
+        std::env::remove_var("CARGO_MANIFEST_DIR");
+        std::env::set_current_dir(&cwd)?;
+
+        // Synthetic workload: mount_content_root = None → tier 2 skipped.
+        let toml = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "agent"
+image = { recipe = "nix-layered", name = "img-svc" }
+command = []
+
+[workloads.svc.network]
+default_deny = true
+"#;
+        let wl = synthetic_workload(toml, "svc");
+        let plan = wl.plan();
+        let err = crate::microsandbox::mounts::resolve_mount_roots_owned(&wl, &plan)
+            .expect_err("no declaring dir + no AGENTCTL_ROOT + flake-less cwd must hard-error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("workload 'svc' uses nix-layered image"),
+            "F2 wrapper names the workload + feature: {msg}"
+        );
+        assert!(
+            msg.contains("requires a flake project root"),
+            "F2 wrapper wording: {msg}"
+        );
+        assert!(
+            msg.contains("does not contain flake.nix"),
+            "legacy project_root() error preserved: {msg}"
+        );
+
+        match old_root {
+            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
+            None => std::env::remove_var("AGENTCTL_ROOT"),
+        }
+        match old_manifest {
+            Some(v) => std::env::set_var("CARGO_MANIFEST_DIR", v),
+            None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&cwd);
+        Ok(())
+    }
+
+    /// Test (d) end-to-end: preflight_existence (the plan path —
+    /// lifecycle.rs:184/239) is Ok from a foreign CWD for a directory-mode
+    /// nix-layered workload (ADR 0028 acceptance 1).
+    #[test]
+    fn preflight_existence_ok_from_foreign_cwd_for_directory_mode() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+        let (repo, wl) = declaring_repo_fixture("f2-preflight");
+        let foreign = crate::config::test_support::uniq_dir("f2-preflight-cwd");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::env::set_current_dir(&foreign)?;
+        std::env::remove_var("AGENTCTL_ROOT");
+
+        let plan = wl.plan();
+        // hard = true (the `plan` command semantics): must succeed.
+        let warnings = wl.preflight_existence(&plan, true)?;
+        assert!(
+            warnings.is_empty(),
+            "no mount/seed warnings expected in this fixture: {warnings:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&foreign);
+        Ok(())
+    }
+
+    /// Test (g): the plan-time host-overlap WARNING fires for a `${CWD}`
+    /// mount overlapping a declared state-dir mount (both rw). Warn only —
+    /// plan() succeeds.
+    #[test]
+    fn plan_warns_on_overlapping_cwd_and_state_mount_hosts() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+        let home = crate::config::test_support::uniq_dir("host-overlap-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var("WORKESTRATE_HOME", &home);
+        std::env::remove_var("WORKESTRATE_STATE_DIR");
+
+        // Make the cwd a SUBDIR of the state dir that `workspaces/prime-state`
+        // resolves to, so the two resolved hosts nest.
+        let state = crate::config::resolve_state_dir();
+        let nested = state.join("workspaces").join("prime-state").join("cwd");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::env::set_current_dir(&nested)?;
+
+        let toml = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.svc.mounts]]
+host = "workspaces/prime-state"
+guest = "/data"
+read_only = false
+
+[[workloads.svc.mounts]]
+host = "${CWD}"
+guest = "/work"
+read_only = false
+
+[workloads.svc.network]
+default_deny = true
+"#;
+        let cf: crate::config::ConfigFile = toml::from_str(toml).unwrap();
+        let workload = cf.workloads.get("svc").unwrap().clone();
+        let wl = ConfigWorkload {
+            name: "svc".to_string(),
+            workload,
+            env: Vec::new(),
+            secret_env: Vec::new(),
+            provenance: None,
+            mount_content_root: None,
+            seed_content_root: None,
+            depends_resolved: Vec::new(),
+        };
+        let plan = wl.plan(); // emits the warning to stderr; assert via the helper
+                              // The substituted mounts: ${CWD} = nested (absolute), workspaces/... = state join.
+        let warnings = wl.host_overlap_warnings(&plan.mounts);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "exactly one overlapping pair: {warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("overlaps host"),
+            "warning names the overlap: {}",
+            warnings[0]
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }
 }

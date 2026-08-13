@@ -548,6 +548,23 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                 anyhow::anyhow!("workload '{workload_name}' mount guest validation failed: {e}")
             })?;
         }
+        // Cross-mount pass: EXACT-duplicate guest paths are a hard error —
+        // two binds at the same guest would emit the SAME virtiofs tag
+        // (`guest_mount_tag` hashes the guest path) and silently last-wins
+        // in-guest (spawn.rs dir-mount path). Mirrors the SDK's
+        // canonicalized duplicate-disk rejection (spawn.rs:1407-1415).
+        // NESTED guest paths stay LEGAL — that is the spec 01 shadow-mount
+        // pattern (a read-only base plus a nested read-write shadow), so only
+        // exact duplicates are rejected here.
+        let mut seen_guests: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for m in &workload.mounts {
+            if !seen_guests.insert(m.guest.as_str()) {
+                anyhow::bail!(
+                    "workload '{workload_name}' declares more than one mount with guest '{}':                      duplicate guest paths would emit the same virtiofs tag and mount                      last-wins in-guest; merge the mounts (nested guests remain legal —                      spec 01 shadow-mount pattern)",
+                    m.guest
+                );
+            }
+        }
         for seed in &workload.seed_files {
             match (&seed.source, &seed.glob) {
                 (None, None) => anyhow::bail!(
@@ -1536,5 +1553,75 @@ default_deny = true
             err.contains("seed_files.target validation failed") && err.contains("'..'"),
             "traversal seed target must be rejected: {err}"
         );
+    }
+    // ---- E0 / ADR 0028 companion: duplicate-guest guard ----
+
+    /// Exact-duplicate guest paths are a HARD error (two binds at the same
+    /// guest would emit the same virtiofs tag and silently last-wins
+    /// in-guest — mirrors the SDK disk-mount duplicate rejection).
+    #[test]
+    fn validate_rejects_exact_duplicate_mount_guests() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.mounts]]
+host = "state/a"
+guest = "/work"
+read_only = false
+
+[[workloads.pi.mounts]]
+host = "state/b"
+guest = "/work"
+read_only = false
+
+[workloads.pi.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("workload 'pi'") && err.contains("guest '/work'"),
+            "error names the workload + the duplicated guest: {err}"
+        );
+        assert!(
+            err.contains("duplicate guest paths"),
+            "duplicate-guest wording: {err}"
+        );
+    }
+
+    /// NESTED guest paths stay LEGAL — the spec 01 shadow-mount pattern
+    /// (a read-only base plus a nested read-write shadow). Pinned so the
+    /// duplicate-guest guard never over-reaches into nesting.
+    #[test]
+    fn validate_allows_nested_mount_guests_spec01_shadow() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pi.mounts]]
+host = "config"
+guest = "/config"
+read_only = true
+
+[[workloads.pi.mounts]]
+host = "config-repos"
+guest = "/config/config-repos"
+read_only = false
+
+[workloads.pi.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        validate_config(&config)
+            .unwrap_or_else(|e| panic!("nested guests (spec 01 shadow) must validate clean: {e}"));
     }
 }

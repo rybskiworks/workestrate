@@ -167,6 +167,25 @@ pub fn find_flake_root(start: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// Explicit `AGENTCTL_ROOT` override (ADR 0028): the pinned root when the
+/// env var is set AND it contains a `flake.nix`. Returns `None` otherwise —
+/// a set-but-flakeless `AGENTCTL_ROOT` is NOT an error here; it just does
+/// not participate in declaring-repo-derived resolution (the F2 gate falls
+/// through to the declaring repo / legacy `project_root()` tiers).
+///
+/// This isolates the explicit-override tier from `project_root_optional`'s
+/// fold (which would let the CWD tier win before the declaring repo is
+/// tried) — the F2 gate's tier order is: AGENTCTL_ROOT → declaring repo →
+/// legacy CWD gate (see `microsandbox/mounts.rs` `resolve_mount_roots_owned`).
+pub fn flake_root_override() -> Option<PathBuf> {
+    let root = std::env::var("AGENTCTL_ROOT").ok().map(PathBuf::from)?;
+    if root.join("flake.nix").is_file() {
+        Some(root)
+    } else {
+        None
+    }
+}
+
 /// Pure core of [`config_repo_content_dir`]: resolve the content dir of the
 /// layer that DECLARED `workload`'s local_build, from an explicit
 /// provenance + layer-dirs pair.
