@@ -1,6 +1,6 @@
 # 22 — Dynamic mount masking policy: hierarchical [policy.mounts] scopes, collect-and-compile, runtime program
 
-> **STATUS: DESIGN-AMENDED (consolidated semantics locked 2026-08-03; pure-library revised; msb enforcement pending)**
+> **STATUS: DESIGN-AMENDED → LANDED (library/config/CLI landed on `feature/mount-masking` @ `894e1bc`; msb enforcement pending the microsandbox fork dependency switch; merge onto `migration/tool-model` PLANNED — see merge-readiness addendum 2026-08-13)**
 > Prerequisites / see-also: [00-index.md](00-index.md) ·
 > [01-mount-filtering-shadowing.md](01-mount-filtering-shadowing.md) ·
 > [../../migration/50-decisions/0004-security-allowlist-policy-rs.md](../../migration/50-decisions/0004-security-allowlist-policy-rs.md) ·
@@ -424,3 +424,32 @@ handling together; they are not a write-denial-only slice.
 masking is a read boundary, write rules default to allow+tag, protection is an
 independent operator-controlled tier, and the host loads one immutable,
 versioned program before the guest starts.
+
+
+---
+
+## Merge-readiness addendum (2026-08-13)
+
+> Assessment by the cross-repo merge-readiness session (see
+> `~/Development/agent-workbench/handovers/2026-08-13-mount-merge-readiness.md`).
+
+- **Branch:** `feature/mount-masking` @ `894e1bc` = common history through
+  `c45494b` + **exactly 24 spec-22/23 commits** (verified via `git merge-base`).
+- **Target:** workestrate `migration/tool-model` @ `5c341ad` (59 commits past
+  the same base on the prime-work lineage). Merge is NOT conflict-free:
+  `git merge-tree --write-tree` reports **8 content conflicts** (agentctl
+  Cargo.{lock,toml}, cli_actions.rs, commands/mod.rs, main.rs,
+  microsandbox/mod.rs, 50-decisions/README.md, 00-index.md) plus **12
+  auto-merged files that need semantic verification** (mounts.rs, plan.rs,
+  types.rs, validation.rs, run.rs, schema JSONs, …).
+- **ADR 0028 collision:** this branch carries
+  `0028-policy-scopes-collect-and-compile.md` while the target carries
+  `0028-location-independent-execution.md` (same number, unrelated topics).
+  Resolution plan: renumber this ADR → **0029** during the merge and update its
+  references (spec 22, spec 21, 50-decisions/README.md, 00-index.md, STATUS,
+  NEXT-SESSION, MOUNT-MASKING-HANDOVER).
+- **SDK seam:** `apply_mount_policy` (runtime/run.rs) remains a no-op until the
+  workestrate flake pin moves from `74919059` to a fork rev containing the msb
+  mount path policy field (Phase 3 of the runbook).
+- **Tests:** committed on this branch (`tests/cmd_policy.rs` + policy suite);
+  must be re-run against the merged tree (schema regen re-run included).

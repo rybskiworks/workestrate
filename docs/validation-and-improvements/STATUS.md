@@ -1,6 +1,6 @@
 # STATUS — comprehensive state report for the next session
 
-> **STATUS: CURRENT (2026-08-04, HEAD `0f7ca20` on `experimental`; mount-masking library+config+CLI landed, rebased onto sibling/migration/tool-model c45494b; SDK seam dormant)**
+> **STATUS: CURRENT (2026-08-13, HEAD `894e1bc` on `feature/mount-masking`; mount-masking library+config+CLI landed, rebased onto sibling/migration/tool-model c45494b; SDK seam dormant; merge onto wr `migration/tool-model` PLANNED — merge-readiness addendum below)**
 > Prerequisites / see-also: [README.md](README.md) · [NEXT-SESSION.md](NEXT-SESSION.md) ·
 > [07-execution-order.md](07-execution-order.md) · [06-improvements/00-index.md](06-improvements/00-index.md) ·
 > [02-config-requirements.md](02-config-requirements.md)
@@ -13,6 +13,27 @@ the cited docs win for semantics and procedures. Read this file first; then pick
 work from §5.
 
 ---
+
+### 0.1 MERGE-READINESS (2026-08-13, assessment complete — merges NOT executed)
+
+- Branch = base c45494b + 24 spec-22/23 commits; target `migration/tool-model`
+  @ `5c341ad` (wr side +59 commits since the same base).
+- Verified conflict map (`git merge-tree --write-tree`): **8 content conflicts**
+  (control/agentctl Cargo.{lock,toml}, src/cli_actions.rs, src/commands/mod.rs,
+  src/main.rs, src/microsandbox/mod.rs, docs/migration/50-decisions/README.md,
+  docs/validation-and-improvements/06-improvements/00-index.md) + **12
+  auto-merged files needing semantic review** (config/types.rs,
+  config/validation.rs, merge.rs, microsandbox/{mounts,plan,runtime/{mod,run},
+  workload/{config,mod}}.rs, workestrate.schema.json,
+  templates/workestrate-config/schemas/workestrate.schema.json,
+  config.reference/workestrate.toml).
+- **ADR 0028 collision:** this branch + the target each carry a different
+  `0028-*.md`; plan = renumber this branch's policy-scopes ADR → **0029**.
+- Next actions: transport branch to github origin → merge/rebase onto 5c341ad
+  → resolve conflicts + renumber ADR → regen schemas → gates (cargo test,
+  clippy, nix build) → flake pin bump → SDK seam → HOST-KVM e2e. Full runbook:
+  `handovers/2026-08-13-mount-merge-readiness.md` §6.
+
 
 ## 0.0 DESIGN DOCS — spec 22 + ADR 0028 + spec 23 (2026-08-04, `experimental` branch, rebased onto `sibling/migration/tool-model` c45494b)
 

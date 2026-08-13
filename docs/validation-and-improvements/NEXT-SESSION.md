@@ -3,6 +3,8 @@
 Spec 22 host policy-file preparation and diagnostics CLI landed. Continue at the documented
 SDK integration seam when the pinned microsandbox dependency gains the policy field.
 
+> **2026-08-13 update — MERGE-READINESS ASSESSMENT DONE (no merges executed).** `feature/mount-masking` (24 commits on base c45494b) is ready to merge onto wr `migration/tool-model` @ `5c341ad` once the 8 content conflicts + 12 semantic auto-merges are resolved and the ADR 0028 collision is handled (renumber this branch's policy-scopes ADR → 0029). msb side verified mergeable (33 commits linear on fork main b43d7522). Full inventory + runbook: `~/Development/agent-workbench/handovers/2026-08-13-mount-merge-readiness.md`.
+
 > **STATUS: HANDOFF**
 > Prerequisites / see-also: [README.md](README.md) · [00-overview.md](00-overview.md) ·
 > [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md) ·
