@@ -70,22 +70,6 @@ pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathB
     }
 }
 
-/// Spec 22 §12 SDK integration seam. SDK `microsandbox =0.5.6` has no policy
-/// field, so this intentionally does nothing until the fork dependency lands.
-/// TODO(spec 22 §12, SDK switch): once the Cargo dep moves to the fork, replace
-/// this with the exact per-mount SDK call (using each MountPlan.policy_file):
-/// `builder = builder.volume(&m.guest, |v| { v.bind(host).policy_file(m.policy_file.as_ref()) });`
-/// or the fork's final equivalent if its API settles on a per-sandbox method.
-pub(crate) fn apply_mount_policy(
-    builder: SandboxBuilder,
-    plan: &SandboxPlan,
-) -> Result<SandboxBuilder> {
-    for m in &plan.mounts {
-        let _ = m.policy_file.as_ref();
-    }
-    Ok(builder)
-}
-
 /// Validate a mount host string as it appears in the raw config TOML
 /// (before `${CWD}` / `${WORKESTRATE_<NAME>_BUILD}` template substitution).
 ///
@@ -184,6 +168,14 @@ pub(crate) fn apply_plan_mounts(
         let host = resolve_mount_host(roots, &m.host)?;
         b = b.volume(&m.guest, |v| {
             let v = v.bind(host);
+            // Spec 22 §12 SDK integration: when the plan carries a compiled
+            // per-mount policy file (written by the runtime from the
+            // hierarchical [policy.mounts] scopes), hand it to the SDK so the
+            // passthrough mount enforces hide/protect/writes.deny in-guest.
+            let v = match &m.policy_file {
+                Some(pf) => v.mount_policy(pf),
+                None => v,
+            };
             if m.read_only {
                 v.readonly()
             } else {

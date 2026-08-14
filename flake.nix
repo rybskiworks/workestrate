@@ -10,7 +10,7 @@
     };
 
     microsandbox-fork = {
-      url = "github:georgrybski/microsandbox/74919059656f59612975d823cca570b774df277b";
+      url = "git+file:///home/node/Development/agent-workbench/microsandbox-mount-policy?rev=3bd051bf62b1c53a57853ba3c6bdd98f3535578c";
       flake = false;
     };
   };
