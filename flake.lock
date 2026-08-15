@@ -26,16 +26,16 @@
       "locked": {
         "lastModified": 1786656059,
         "narHash": "sha256-qC31fIgT2KaumW0yRnoOTe8x+pFpiFCo3ZD4ZO/tlGs=",
-        "ref": "refs/heads/feat/passthrough-mount-path-policy-v2",
+        "owner": "georgrybski",
+        "repo": "microsandbox",
         "rev": "3bd051bf62b1c53a57853ba3c6bdd98f3535578c",
-        "revCount": 869,
-        "type": "git",
-        "url": "file:///home/node/Development/agent-workbench/microsandbox-mount-policy"
+        "type": "github"
       },
       "original": {
+        "owner": "georgrybski",
+        "repo": "microsandbox",
         "rev": "3bd051bf62b1c53a57853ba3c6bdd98f3535578c",
-        "type": "git",
-        "url": "file:///home/node/Development/agent-workbench/microsandbox-mount-policy"
+        "type": "github"
       }
     },
     "nixpkgs": {

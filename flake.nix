@@ -10,7 +10,12 @@
     };
 
     microsandbox-fork = {
-      url = "git+file:///home/node/Development/agent-workbench/microsandbox-mount-policy?rev=3bd051bf62b1c53a57853ba3c6bdd98f3535578c";
+      # Transient local pin replaced by the pinned fork rev (v2 merge
+      # 3bd051bf62b1c53a57853ba3c6bdd98f3535578c — verified pushed to origin;
+      # origin is HTTPS-reachable from the container). Moves to `develop`
+      # tracking or a signed rev later per the merge runbook (signing
+      # currently deferred by user).
+      url = "github:georgrybski/microsandbox/3bd051bf62b1c53a57853ba3c6bdd98f3535578c";
       flake = false;
     };
   };
