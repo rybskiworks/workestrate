@@ -141,6 +141,13 @@ scope = "local"
 [workloads.example-service.depends_on.example-litellm]
 env = "LITELLM_ADDR"
 required = false
+# on_conflict (default "reuse"): what dependency auto-start does when the
+# dep's singleton slot is already occupied at auto-start time. "reuse":
+# reuse the running instance when healthy (short host port probe);
+# auto-replace (down + start fresh) when the exec'd process is dead inside
+# the keep-alive sandbox. "replace": always down + start fresh. "fail":
+# refuse with the standard occupied-instance error.
+on_conflict = "reuse"
 
 # Exports-only depends_on (P2 namespaced ports): resolves the DEPENDENCY's
 # NAMED ports and injects each resolved address as its own env var. `env` is

@@ -1484,4 +1484,45 @@ mod tests {
         );
         Ok(())
     }
+
+    /// depends_on maps merge union-by-dependency-name with the whole spec
+    /// (INCLUDING on_conflict) replaced per dep — a higher layer declaring the
+    /// dep replaces the lower layer's on_conflict; a higher layer that does
+    /// not re-declare the dep leaves the lower layer's value untouched.
+    #[test]
+    fn depends_on_on_conflict_merge_last_layer_wins_per_dep() -> Result<()> {
+        // Closure so the same base layer can be merged twice (the array
+        // expression `&[base, top]` moves its elements, so a reused layer
+        // must be re-created per call — same pattern as the
+        // secret_def_allowed_hosts_inherit_and_replace test above).
+        let base = || {
+            Layer::from_string(
+                "base",
+                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.pi.depends_on.litellm]\nenv = \"LITELLM_URL\"\non_conflict = \"replace\"",
+            )
+            .expect("base layer must parse")
+        };
+        let top = Layer::from_string(
+            "top",
+            "schema_version = 1\n\n[workloads.pi]\n\n[workloads.pi.depends_on.litellm]\nenv = \"LITELLM_URL\"",
+        )?;
+        let (merged, _) = merge_layers(&[base(), top])?;
+        assert_eq!(
+            merged.workloads["pi"].depends_on["litellm"].on_conflict,
+            None,
+            "a higher layer re-declaring the dep replaces the whole spec (on_conflict back to default)"
+        );
+
+        let top2 = Layer::from_string(
+            "top2",
+            "schema_version = 1\n\n[workloads.pi]\n\n[workloads.pi.depends_on.litellm]\nenv = \"LITELLM_URL\"\non_conflict = \"fail\"",
+        )?;
+        let (merged2, _) = merge_layers(&[base(), top2])?;
+        assert_eq!(
+            merged2.workloads["pi"].depends_on["litellm"].on_conflict,
+            Some(crate::config::DepConflict::Fail),
+            "a higher layer explicitly setting on_conflict wins"
+        );
+        Ok(())
+    }
 }

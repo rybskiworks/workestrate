@@ -212,6 +212,32 @@
         }
       }
     },
+    "DepConflict": {
+      "description": "Auto-start conflict policy for a dependency (`depends_on.<dep>.on_conflict`; ADR 0026 addendum 2026-08-16). Decides what dependency auto-start does when the dep's singleton slot is already occupied at auto-start time (a port-registry record OR an msb-running sandbox).\n\nTOML values: `on_conflict = \"reuse\"` / `\"replace\"` / `\"fail\"`.",
+      "oneOf": [
+        {
+          "description": "Use the running instance when it is healthy (short host TCP port probe); auto-replace (down + start fresh) when the exec'd process is dead inside the keep-alive sandbox. A dep with no published ports cannot be probed cheaply, so it is reused optimistically (use `on_conflict = \"replace\"` to force a fresh start). The default.",
+          "type": "string",
+          "enum": [
+            "reuse"
+          ]
+        },
+        {
+          "description": "Always down + start fresh, replacing any running instance.",
+          "type": "string",
+          "enum": [
+            "replace"
+          ]
+        },
+        {
+          "description": "Refuse with the standard occupied-instance error (the pre-fix failure behavior) instead of reusing or replacing.",
+          "type": "string",
+          "enum": [
+            "fail"
+          ]
+        }
+      ]
+    },
     "DependsOnSpec": {
       "description": "A single dependency declaration of a workload (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d) discovery-lite). `env` (optional) names the environment variable the resolved address of dependency `<dep>`'s primary/unnamed port is injected as; `required` (default false) makes a not-running dependency a plan-time refusal instead of a skip; `exports` maps named-port -> env var, injecting the resolved host address of each named port (one env var per named port).",
       "type": "object",
@@ -230,6 +256,18 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "on_conflict": {
+          "description": "Auto-start conflict policy when the dependency's singleton slot is already occupied (ADR 0026 addendum 2026-08-16). `None` (default) resolves to `\"reuse\"` at auto-start time. \"reuse\": reuse the running instance when healthy (host port probe), auto-replace (down + start fresh) when the exec'd process is dead inside the keep-alive sandbox; \"replace\": always down + start fresh; \"fail\": refuse with the standard occupied message.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DepConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "required": {
           "default": false,

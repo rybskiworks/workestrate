@@ -513,6 +513,29 @@ pub struct NetworkConfig {
     pub ingress: Vec<IngressRule>,
 }
 
+/// Auto-start conflict policy for a dependency (`depends_on.<dep>.on_conflict`;
+/// ADR 0026 addendum 2026-08-16). Decides what dependency auto-start does when
+/// the dep's singleton slot is already occupied at auto-start time (a
+/// port-registry record OR an msb-running sandbox).
+///
+/// TOML values: `on_conflict = "reuse"` / `"replace"` / `"fail"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub enum DepConflict {
+    /// Use the running instance when it is healthy (short host TCP port
+    /// probe); auto-replace (down + start fresh) when the exec'd process is
+    /// dead inside the keep-alive sandbox. A dep with no published ports
+    /// cannot be probed cheaply, so it is reused optimistically (use
+    /// `on_conflict = "replace"` to force a fresh start). The default.
+    Reuse,
+    /// Always down + start fresh, replacing any running instance.
+    Replace,
+    /// Refuse with the standard occupied-instance error (the pre-fix failure
+    /// behavior) instead of reusing or replacing.
+    Fail,
+}
+
 /// A single dependency declaration of a workload
 /// (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d)
 /// discovery-lite). `env` (optional) names the environment variable the
@@ -535,6 +558,15 @@ pub struct DependsOnSpec {
     /// port; every key must name a port the dependency declares.
     #[serde(default)]
     pub exports: HashMap<String, String>,
+    /// Auto-start conflict policy when the dependency's singleton slot is
+    /// already occupied (ADR 0026 addendum 2026-08-16). `None` (default)
+    /// resolves to `"reuse"` at auto-start time. "reuse": reuse the running
+    /// instance when healthy (host port probe), auto-replace (down + start
+    /// fresh) when the exec'd process is dead inside the keep-alive sandbox;
+    /// "replace": always down + start fresh; "fail": refuse with the standard
+    /// occupied message.
+    #[serde(default)]
+    pub on_conflict: Option<DepConflict>,
 }
 
 /// A single workload definition (`workloads.<name>` in workestrate.toml).
@@ -993,6 +1025,100 @@ evn = "X"
         assert!(
             err.to_string().contains("unknown field"),
             "depends_on spec typo must fail: {err}"
+        );
+    }
+
+    /// `depends_on.<dep>.on_conflict` accepts the three closed variants and
+    /// defaults to None (the "reuse" default is applied at auto-start time).
+    #[test]
+    fn depends_on_on_conflict_variants_parse_and_default_none() {
+        for (value, expected) in [
+            ("reuse", DepConflict::Reuse),
+            ("replace", DepConflict::Replace),
+            ("fail", DepConflict::Fail),
+        ] {
+            let raw = format!(
+                "schema_version = 1\n\n\
+                 [workloads.pi]\n\
+                 kind = \"agent\"\n\
+                 image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
+                 command = []\n\n\
+                 [workloads.pi.depends_on.litellm]\n\
+                 env = \"LITELLM_URL\"\n\
+                 on_conflict = \"{value}\"\n"
+            );
+            let config: ConfigFile = toml::from_str(&raw).unwrap();
+            assert_eq!(
+                config.workloads["pi"].depends_on["litellm"].on_conflict,
+                Some(expected),
+                "on_conflict = \"{value}\" must parse"
+            );
+        }
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].depends_on["litellm"].on_conflict, None,
+            "omitted on_conflict must default to None"
+        );
+    }
+
+    /// An unknown on_conflict variant is rejected by serde (closed
+    /// vocabulary), naming the offending value.
+    #[test]
+    fn depends_on_on_conflict_rejects_unknown_variant() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = "nuke"
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown variant"),
+            "unknown on_conflict variant must fail: {msg}"
+        );
+        assert!(msg.contains("nuke"), "error must name the value: {msg}");
+    }
+
+    /// An explicit on_conflict survives a serialize/deserialize round-trip.
+    #[test]
+    fn depends_on_on_conflict_round_trips() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = "replace"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let serialized = toml::to_string(&config).unwrap();
+        let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, config);
+        assert_eq!(
+            reparsed.workloads["pi"].depends_on["litellm"].on_conflict,
+            Some(DepConflict::Replace)
         );
     }
 

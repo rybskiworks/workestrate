@@ -143,3 +143,34 @@ decision.
   port. At least one of env/exports is required; an auto port on a
   not-running dep refuses (no address until it runs).
 - (Schema: `docs/migration/20-target-system-spec.md` §3.)
+
+## Addendum (2026-08-16): idempotent dependency auto-start + on_conflict
+
+- Auto-start now RECONCILES the planner's record-as-authoritative view with
+  the msb runtime BEFORE starting a dep: a singleton slot that msb reports
+  Running is treated as SATISFIED (reuse) even when no port-registry record
+  exists in the active state dir. Previously the planner emitted StartService
+  and the detached child hit the occupancy gate ("instance '<slot>' is
+  already running", exit 3) — the observed `workload exec prime` failure.
+- `depends_on.<dep>` gains `on_conflict = "reuse" | "replace" | "fail"`
+  (default "reuse"):
+  - "reuse": use the running instance when healthy — a short host TCP probe
+    (500ms) of the published host ports. A dep with no published ports cannot
+    be probed cheaply, so it is reused optimistically (use "replace" to force
+    a fresh start). A slot whose record was created within the last 30s is
+    treated as BOOTING and reused (never killed mid-boot). A keep-alive
+    zombie (msb Running, port dead, record old) is AUTO-REPLACED (down +
+    start fresh); a stale record (record present, msb NOT running) is also
+    replaced (down clears it, then start fresh).
+  - "replace": always down + start fresh.
+  - "fail": refuse with the standard occupied-instance message (the pre-fix
+    failure mode, opted in).
+- Keep-alive hazard (unchanged mechanics, now handled): the sandbox entrypoint
+  is `tail -f /dev/null` (run.rs), so msb "Running" does NOT imply the exec'd
+  service process is alive. The reuse path therefore probes the published
+  host ports instead of trusting sandbox status.
+- Merge: depends_on maps merge union-by-dependency-name, last layer wins per
+  dep — the WHOLE spec (including on_conflict) is replaced. A higher layer
+  re-declaring a dep without on_conflict resets it to the "reuse" default.
+- Bare `workestrate workload up` (all workloads) keeps record-as-authoritative
+  skipping; the same msb reconciliation there is tracked as a follow-up.

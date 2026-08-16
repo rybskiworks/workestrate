@@ -1162,6 +1162,7 @@ default_deny = true
                 env: Some("MISSING_URL".to_string()),
                 required: false,
                 exports: Default::default(),
+                on_conflict: None,
             },
         );
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1180,6 +1181,7 @@ default_deny = true
                 env: Some("SELF_URL".to_string()),
                 required: false,
                 exports: Default::default(),
+                on_conflict: None,
             },
         );
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1398,6 +1400,7 @@ default_deny = true
                 env: Some("SHARED_URL".to_string()),
                 required: false,
                 exports: Default::default(),
+                on_conflict: None,
             },
         );
         config

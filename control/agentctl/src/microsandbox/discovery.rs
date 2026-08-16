@@ -781,6 +781,7 @@ default_deny = true
                 env: Some("NOPORTS_URL".to_string()),
                 required: false,
                 exports: Default::default(),
+                on_conflict: None,
             },
         );
 
@@ -878,6 +879,7 @@ default_deny = true
                 env: Some("AAA_URL".to_string()),
                 required: false,
                 exports: Default::default(),
+                on_conflict: None,
             },
         );
         // Give the `litellm` workload an alias `aaa` with its own declared
@@ -912,6 +914,7 @@ default_deny = true
                 env: Some("NOPORTS_URL".to_string()),
                 required: false,
                 exports: Default::default(),
+                on_conflict: None,
             },
         );
 
@@ -947,6 +950,7 @@ default_deny = true
                 env: Some("NOPORTS_URL".to_string()),
                 required: false,
                 exports: Default::default(),
+                on_conflict: None,
             },
         );
         // `noports` declares no ports either → the fallback itself errors.
