@@ -2,6 +2,8 @@
 
 **Status:** DRAFT — proposal for adjudication (no code changes this round)
 **Date:** 2026-08-16
+**Addendum:** 2026-08-16 (user design threads — depends_on scoping, parallel deps,
+dynamic ports; refined phased plan; supersedes §6)
 **References:** ADR 0021 (instance lifecycle model), ADR 0026 (per-instance
 addressing + discovery-lite, incl. the 2026-08-16 on_conflict addendum),
 ADR 0019 (contexts + `<context>-<workload>` namespacing), ADR 0027 (verb-first
@@ -481,3 +483,302 @@ dir-aware occupancy for the named path, (c) one shared reconcile step across
 all lifecycle verbs, and (d) the observability surface. d452575 remains the
 record of the dep-path fix; this ADR supersedes its "bare-up reconciliation
 tracked as a follow-up" note.
+
+---
+
+## Addendum (2026-08-16): user design threads — depends_on scoping, parallel deps, dynamic ports
+
+This addendum resolves the user's three design threads and refines the phased
+plan. It SUPERSEDES §6 (phased plan) and answers open questions Q1, Q3
+(partially), and Q4 (partially) from §8; Q2, Q5, Q6 remain open (marked
+below).
+
+### T1. depends_on scoping — per-config namespace
+
+**User thread:** "scoping that to be per config, so you can have it depend on
+that config's workloads and namespacing would go there."
+
+#### T1.1 Today (verified from code)
+
+- `resolve_depends_on` (discovery.rs:246) resolves each declared dep by
+  filtering ALL registry records in the ACTIVE state dir by the bare
+  `workload` field (`list_records_for_workload`), then selecting the
+  singleton record (no `@`) or a `--use <dep>@<instance>`-selected parallel
+  record. The slot is NOT computed at resolution time — the record's
+  `instance` field already carries `<context>-<workload>` or `<workload>`.
+- `plan_dep_starts` (deps.rs:251) computes the dep's slot via
+  `slot_for(&dep, context)` where `context = active_context_name()` —
+  process-level state set once per invocation inside `load_config` from
+  `--context` / env / `settings.default_context` (ADR 0019).
+- The config is MERGED across layers (config repos are layers;
+  `merge_layers`), so `depends_on.<dep>` can name ANY workload in the merged
+  config — including one declared by a DIFFERENT config repo. There is NO
+  repo scoping today; the registry record has `workload` + `context` fields
+  but no namespace field.
+- **The declaring-repo seam already exists:** `merge_layers` returns
+  `(ConfigFile, Provenance)` where `Provenance: HashMap<String, String>`
+  maps `workloads.<name>.<field>` → layer name (merge.rs:433+), and
+  `images/build_cmd.rs` already resolves each workload's repo identity from
+  declaring-layer provenance (spec 17). `new_with_use_overrides`
+  (workload/config.rs:151) already takes `take_provenance()`.
+
+#### T1.2 Proposed: namespace-scoped resolution
+
+- **Dep identity becomes `(namespace, workload, instance?)`** where
+  `namespace` = the declaring config repo/layer of the DEPENDENT workload
+  (from provenance). A workload depends on ITS OWN config's workloads.
+- **Registry record gains a `namespace` field** (serde-default `"default"`
+  for legacy records). Resolution filters records by
+  `(namespace, workload)` instead of `workload` alone; `--use <dep>@<id>`
+  selects within that namespace.
+- **Slot scheme unchanged:** the singleton slot stays
+  `<context>-<workload>`; the namespace is a resolution FILTER, not a slot
+  prefix — existing records and the `ps`/`down` surfaces keep working.
+- **Named-port exports unchanged in mechanics:** `exports` still reads the
+  selected record's `port_pairs`; only SELECTION changes (scoped to the
+  namespace).
+- **Merge collision note (documented limitation):** the merged config's
+  `workloads` map is keyed by bare name — two repos declaring the SAME
+  workload name still collide (last layer wins). Namespacing does NOT
+  reopen that merge decision; coexistence of same-name variants uses the
+  parallel-instance mechanism (`litellm@dev`) or distinct names. The
+  namespace field makes the collision VISIBLE (resolution refuses when the
+  dependent's namespace has no record but another namespace does, with a
+  remediation naming the namespace).
+
+### T2. Parallel dependents + shared/owned deps
+
+**User thread:** "check whether we need custom behavior for parallel
+depends_on — if it'll just work properly instantiating a new one or reuse
+existing, or if we need some policy on depends_on to specify whether it's
+depends_on existing, new, etc — but better naming — or if it'd just follow
+the workload's default strategy."
+
+#### T2.1 The question
+
+If prime runs parallel instances (`prime@1`, `prime@2`), what should litellm
+mean to each? Today: dep auto-start targets the dep's SINGLETON slot
+(`slot_for(&dep, context)`), so both share one litellm (the "shared" model).
+
+#### T2.2 Options evaluated
+
+1. **Follow the DEP's own instance strategy.** Ambiguous about WHO creates
+   the instance and how it is named; conflates the dep's own lifecycle with
+   the dependent's needs. REJECTED as the primary mechanism.
+2. **Per-depends_on-entry policy** (`instance = "shared" | "scoped" |
+   "fresh"`). Explicit at the point of use; the dependent declares what it
+   needs from the dep. SELECTED.
+3. **Just follow the workload's default strategy.** Adopted as the DEFAULT
+   for the per-entry policy (see below), not as the whole answer.
+
+#### T2.3 The chosen model
+
+New field `depends_on.<dep>.instance` (closed vocabulary):
+
+| value | meaning |
+|---|---|
+| `shared` (default) | target the dep's SINGLETON slot (today's model; all dependents share). |
+| `scoped` | target a dep instance scoped to the DEPENDENT's instance: `litellm@prime-1` for dependent `prime@1`. Auto-start creates it if absent (using the dep's own strategy/on_conflict); each parallel dependent gets its own litellm. |
+| `fresh` | target a fresh auto-slug dep instance per start (like `--new` for the dep). Each dependent start creates a new one. |
+
+**Default = the DEP's own `instance.strategy`:** dep strategy
+`singleton`/`replace`/`reuse` → default `shared`; dep strategy `parallel` →
+default `fresh` (matches the "many concurrent instances" intent). This is
+the "follow the workload's default strategy" answer as the default, with the
+per-entry override for the cases that need custom behavior.
+
+**Orthogonal to `on_conflict`:** `instance` SELECTS the target slot;
+`on_conflict` (reuse/replace/fail, d452575) DISPOSES on the selected slot.
+They compose cleanly: `scoped` + `reuse` = reuse my scoped litellm if
+healthy, replace if zombie; `fresh` + `fail` = never reuse, refuse if the
+fresh slug collides (effectively unreachable).
+
+**Naming rationale:** `shared | scoped | fresh` is better than the user's
+"existing/new" because it names the RELATIONSHIP (shared = one for all,
+scoped = one per dependent, fresh = new each time), not the action.
+
+**Answers Q3 (partially):** for the workload's OWN `strategy = "parallel"`,
+the default id is auto-slug (`fresh`-style); `scoped` derives the dep
+instance id from the dependent's instance id. The remaining sub-question
+(declared default id vs auto-slug for the workload's own parallel starts)
+stays open — auto-slug is the recommended default.
+
+### T3. Dynamic ports for litellm
+
+**User thread:** "start using the auto port for litellm (test that first) —
+potentially have a default port it tries and option to allocate auto in case
+of failure — evaluate how to handle/implement this and if it makes sense —
+e.g. a policy in the configs."
+
+#### T3.1 Current machinery verdict (verified from code)
+
+- **Per-port `host = 0` auto-allocation EXISTS and WORKS:** `apply_auto_ports`
+  (run.rs:322) probes a free port on the slot's bind at boot, rejects
+  candidates colliding with declared hosts, bounded retries, fail-closed.
+- **`--port-auto` (ADR 0026(c))** replaces ALL declared hosts with probed
+  free ports.
+- **`probe_free_ports` (store.rs:431)** is lock-serialized, skips
+  registry-recorded ports on the same bind, and is NOT a reservation (the
+  post-create atomic check+register closes the TOCTOU).
+- **Effective-port recording:** `check_and_register_sandbox_lifecycle`
+  records the (mutated) plan's host ports + port_pairs; `ps`/`down`/
+  discovery read the effective ports.
+- **Named-port exports flow effective ports:** `record_port_by_name`
+  (discovery.rs:182) reads the record's `port_pairs`, so `LITELLM_ADDR` =
+  `host.microsandbox.internal:<effective>` once running. VERIFIED.
+- **Occupied FIXED port → hard error:** `check_port_collisions_locked`
+  (store.rs:69) errors on `(bind_ip, port)` collision; the sandbox create
+  fails. There is NO "skip to a free one" for a fixed port — only
+  `host = 0` / `--port-auto` probe free ports. This is the current litellm
+  failure mode (4000 occupied → `up` fails).
+
+#### T3.2 The chosen capsule surface
+
+`instance.port` becomes a union:
+
+```toml
+[workloads.litellm.instance]
+port = 4000                                  # strict (current behavior): occupied → fail
+# port = "auto"                             # always auto-allocate (host=0 on all ports)
+# port = { preferred = 4000, on_occupied = "auto" }   # RECOMMENDED
+# port = { preferred = 4000, on_occupied = "fail" }   # strict-with-preferred
+```
+
+- `port = 4000` (integer): strict, current behavior.
+- `port = "auto"`: always auto-allocate (equivalent to `host = 0` on every
+  declared port / `--port-auto`).
+- `port = { preferred = N, on_occupied = "auto" | "fail" }` (RECOMMENDED):
+  try the preferred port; if occupied, auto-allocate (or fail).
+- Schema/merge/validation: `instance.port` is a serde untagged union
+  (integer | "auto" | table); merge = whole-field replace (consistent with
+  the instance table); validation = `preferred` in 1..=65535, `on_occupied`
+  closed vocabulary. `generate-schema` + drift guard regenerate.
+
+**Why recommended:** litellm's ecosystem is built around the well-known
+4000 (agent_base egress, static configs, the smoke); a pure `"auto"` port
+breaks every hardcoded consumer. `preferred + on_occupied = "auto"` keeps
+4000 when free (stable, zero churn) and degrades gracefully to a free port
+only when occupied — the exact "default port it tries and option to allocate
+auto in case of failure" the user asked for.
+
+#### T3.3 Downstream implications (verified)
+
+- **LITELLM_ADDR export renders the EFFECTIVE port** (T3.1) — the export is
+  correct on any port once litellm is running.
+- **prime models.json renders at SEED TIME** from the env view
+  (`build_seed_env_view` → `render_seed_text`, env.rs; `prepare` called in
+  `build_sandbox` BEFORE create, run.rs:393). The env view includes the
+  injected `LITELLM_ADDR`, so models.json renders the effective port at
+  prime's BUILD time. **Staleness window:** if litellm's port changes after
+  prime is built (litellm replaced on a different port), prime's baked
+  `LITELLM_ADDR` + models.json are stale until prime is rebuilt. Mitigations:
+  (a) the reconcile "reuse" default keeps the same instance (same port), so
+  replacements are minimized; (b) `preferred = 4000` keeps the port stable
+  across restarts when 4000 is free; (c) a future runtime-discovery
+  improvement (re-resolve exports at exec time) is OUT OF SCOPE here but
+  noted.
+- **The smoke has FOUR hardcoded `:4000` references** (flake.nix):
+  `models-json` baseUrl assert, `litellm-guest`, `litellm-subst`,
+  `litellm-host`. All must move to reading the effective port (from
+  `workestrate ps --json` / the registry record / the export).
+- **agent_base egress — CORRECTION to the premise:** `agent_base`
+  (plan.rs:397) embeds `litellm_proxy` = **tcp:4000 → host** — it is
+  PORT-based, not host-based. HOWEVER, the depends_on-derived egress rule
+  (`ResolvedDependency::derived_egress_rule`, discovery.rs:136) emits
+  tcp:<effective-port> → host, so prime's plan covers the effective port on
+  ANY port. The agent_base tcp:4000 rule becomes redundant-but-harmless when
+  litellm moves. No egress change needed.
+
+### T4. Litellm dynamic-port TEST-FIRST sequence (user: "test that first")
+
+Bounded validation sequence, run BEFORE the general dynamic-port policy
+lands (Phase 3 gate):
+
+1. **Capsule change:** litellm workload.toml gains
+   `[workloads.litellm.instance] port = { preferred = 4000, on_occupied = "auto" }`
+   (requires Phase 1 schema; the sequence runs at Phase 3).
+2. **Test A — preferred path (free host):** `workload up litellm` → binds
+   4000; assert `workestrate ps --json` port_pairs host == 4000; assert
+   prime's `LITELLM_ADDR` == `host.microsandbox.internal:4000`; assert
+   models.json baseUrl renders `:4000`; prime chat works through it.
+3. **Test B — auto-fallback path (4000 occupied):** occupy 4000 (start a
+   dev litellm or a dummy listener on 127.0.0.1:4000) → `workload up
+   litellm` → auto-allocates a free port; assert the record carries the
+   EFFECTIVE port; assert prime's `LITELLM_ADDR` ==
+   `host.microsandbox.internal:<effective>`; assert models.json renders
+   `<effective>`; prime chat works through it.
+4. **Smoke update:** replace the four hardcoded `:4000` probes with the
+   effective port read from `workestrate ps --json` (or the registry
+   record); the `models-json` assert becomes value-driven on the effective
+   port.
+5. **Regression:** re-run the full prime-smoke on BOTH paths; `just verify`
+   green.
+
+### T5. Resolved / remaining open questions
+
+**Resolved by this addendum:**
+
+- **Q1 (default `on_conflict` = reuse):** HOLDS under the parallel model.
+  `on_conflict` is the disposition on the SELECTED slot; the parallel model
+  changes SELECTION (`depends_on.<dep>.instance`), not disposition. Reuse
+  remains the recommended default for named verbs and for `shared`/`scoped`
+  dep targets.
+- **Q3 (parallel default id, partial):** auto-slug for `fresh` and for the
+  workload's own `strategy = "parallel"`; `scoped` derives the dep instance
+  id from the dependent's instance id. Remaining sub-question (declared
+  default id vs auto-slug) stays open.
+- **Q4 (version/config identity, partial):** the NAMESPACE (T1) is the
+  config identity for resolution; `instance.label`/version remains for
+  display/grouping. Whether a stronger validated `version` field is wanted
+  stays open.
+
+**Still open for the user:**
+
+- **Q2 (stopped-sandbox disposition under `reuse`):** START (preserves
+  state) vs REPLACE (cleaner, destructive). Not addressed by these threads;
+  recommendation unchanged (START for `reuse`, REPLACE for `replace`).
+- **Q5 (`instances` verb):** new verb vs extending `workloads`/`ps`.
+  Recommendation unchanged (new verb, ADR 0027 style).
+- **Q6 (bare `workload up` batch):** adopt the reconcile step in Phase 0.2
+  vs stay conservative until Phase 2. Recommendation unchanged (adopt in
+  Phase 0.2).
+- **NEW — namespace merge collision:** two repos declaring the same
+  workload name still collide in the merged config (last layer wins). Is
+  that acceptable (coexist via parallel instances / distinct names), or do
+  you want namespace-aware merge (bigger change, out of scope here)?
+
+### T6. Refined phased plan (SUPERSEDES §6)
+
+| Phase | Scope | Gates | Sizing |
+|---|---|---|---|
+| **0 — Immediate small fixes** | 0.1 status-aware + dir-aware occupancy (Stopped/Crashed → `handle.start()` or replace; lingering sandbox dir cleaned); 0.2 extract the shared reconcile step from d452575 + wire into named `up`/`exec`, `down`, bare `workload up`; 0.3 default `on_conflict = "reuse"` for named verbs (`fail` opt-in). | AC 1–5 host (KVM); `just verify`; no schema change. | ~3 files (runtime/mod.rs, runtime/run.rs, commands/deps.rs) + flag plumbing; small. |
+| **1 — Instance policy schema** | `[workloads.<name>.instance]` (`strategy`, `on_conflict`, `port` union, optional `label`); validation; merge (whole-table replace); `generate-schema` + drift guard; wire policy into `InstanceSpec` (flags override). | schema parse/deny/round-trip; merge tests; drift guard; `plan` renders disposition. | config/types.rs + validation.rs + merge.rs + schemas; medium. |
+| **2 — depends_on scoping + parallel semantics** | T1: registry record `namespace` field + namespace-scoped resolution (provenance-driven); T2: `depends_on.<dep>.instance = shared\|scoped\|fresh` with dep-strategy default; extend the reconcile step for scoped/fresh targets. | AC 4; unit tests for namespace filtering + scoped/fresh disposition; KVM e2e: two parallel primes each with scoped litellm. | discovery.rs + deps.rs + port_registry/store.rs + config/types.rs; medium-large. |
+| **3 — Dynamic port policy + litellm migration** | `instance.port` union (`preferred`/`on_occupied`); the T4 test-first sequence (capsule change → Test A preferred → Test B auto-fallback → smoke update → regression). | T4 steps 2–5 all pass; AC 7; `just verify`. | run.rs (apply_auto_ports extension for preferred+fallback) + config + smoke (flake.nix, personal repo); medium. |
+| **4 — Observability surface** | `workestrate instances [<workload>]` verb; `workloads` policy/namespace/version columns; `ps` 5-state status; `--json` shapes (back-compat `stale`). | AC 6; golden/JSON tests; docs (spec 12 / target spec §13). | diagnostics.rs + json_out.rs + main.rs; medium. |
+
+**Dependencies / seams:**
+
+- Phase 0–1 depend on NOTHING external (current msb SDK surface:
+  `handle.start()`, `status_snapshot()`, dir checks — all present in 0.6.8).
+- Phase 2 depends on Phase 1 (the `instance` policy provides the dep-strategy
+  default for `depends_on.<dep>.instance`) and on the Phase 0.2 reconcile
+  step (scoped/fresh targets need the disposition machinery).
+- Phase 3 depends on Phase 1 (the `port` union lives in the instance policy).
+- **Pending msb v2/develop work (mount-masking, spec 22):** NOTHING here
+  hard-blocks on it. The fork pin is at the unsigned v2 rev `3bd051bf`
+  (content-identical to the future signed rev); the SDK surface used by
+  Phases 0–3 exists in 0.6.8. Seam to re-verify after the v2/develop move:
+  the reconcile step's msb mutations (start/stop/remove) and the create
+  surface — if v2 changes them, re-run the Phase 0/2 KVM gates.
+- Phase 4 is independent and can run in parallel with Phase 3.
+
+### T7. What this addendum does NOT change
+
+- §4.1–4.6 (policy design, reconcile algorithm, CLI surface, migration)
+  stand; T1–T3 refine the SELECTION and PORT dimensions, not the reconcile
+  core.
+- §7 (out of scope) stands; the runtime-discovery improvement (re-resolve
+  exports at exec time) is added to the noted future work, not to scope.
+- The d452575 dep-path fix and its `on_conflict` knob are unchanged; the
+  per-entry `instance` field is additive.
