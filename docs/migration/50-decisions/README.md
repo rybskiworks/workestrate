@@ -34,3 +34,5 @@ Architecture Decision Records for the workestrator tool+XDG migration.
 | 0028 | Location-independent execution (CWD-independent root resolution) | Accepted | Flake/image-build roots resolve from the declaring config repo (registry-known); CWD is never the origin unless the CWD IS the declaring repo; `AGENTCTL_ROOT` = explicit override, not a requirement |
 
 | 0029 | Policy scopes: collect-and-compile (never merge) | Accepted | `[policy.mounts]` fragments collected per layer in stack order; a compiler owns precedence/freeze/trust; merge.rs untouched (0020 Ruling 1 unamended); spec 22 primary, spec 01 fallback |
+
+| 0030 | Instance lifecycle + conflict management + namespacing (DRAFT) | Draft | Per-workload `instance` policy (strategy singleton/parallel/replace/reuse + on_conflict default + port fixed/dynamic); one authoritative registry↔msb↔liveness reconcile step used by up/exec/down/ps; `instances` verb + 5-state status; generalizes d452575 dep on_conflict to the named path |
