@@ -677,10 +677,12 @@ auto in case of failure" the user asked for.
   across restarts when 4000 is free; (c) a future runtime-discovery
   improvement (re-resolve exports at exec time) is OUT OF SCOPE here but
   noted.
-- **The smoke has FOUR hardcoded `:4000` references** (flake.nix):
-  `models-json` baseUrl assert, `litellm-guest`, `litellm-subst`,
-  `litellm-host`. All must move to reading the effective port (from
-  `workestrate ps --json` / the registry record / the export).
+- **The smoke has SIX hardcoded `:4000` references** (flake.nix):
+  the `models-json` baseUrl assert, the `litellm-guest` probe, the
+  `litellm-subst` probe, the `litellm-host` probe, the optional
+  `litellm-host-auth` probe, and the `models-json` PASS message. All must
+  move to reading the effective port (from `workestrate ps --json` / the
+  registry record / the export).
 - **agent_base egress — CORRECTION to the premise:** `agent_base`
   (plan.rs:397) embeds `litellm_proxy` = **tcp:4000 → host** — it is
   PORT-based, not host-based. HOWEVER, the depends_on-derived egress rule
@@ -707,7 +709,7 @@ lands (Phase 3 gate):
    EFFECTIVE port; assert prime's `LITELLM_ADDR` ==
    `host.microsandbox.internal:<effective>`; assert models.json renders
    `<effective>`; prime chat works through it.
-4. **Smoke update:** replace the four hardcoded `:4000` probes with the
+4. **Smoke update:** replace the six hardcoded `:4000` references with the
    effective port read from `workestrate ps --json` (or the registry
    record); the `models-json` assert becomes value-driven on the effective
    port.
