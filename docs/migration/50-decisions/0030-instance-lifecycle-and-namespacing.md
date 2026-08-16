@@ -3,7 +3,9 @@
 **Status:** DRAFT — proposal for adjudication (no code changes this round)
 **Date:** 2026-08-16
 **Addendum:** 2026-08-16 (user design threads — depends_on scoping, parallel deps,
-dynamic ports; refined phased plan; supersedes §6)
+dynamic ports; refined phased plan; supersedes §6); 2026-08-16b (strategy
+chains + port `on_occupied` options; supersedes the single-disposition model
+and the `on_occupied = "auto"|"fail"` surface; resolves Q2)
 **References:** ADR 0021 (instance lifecycle model), ADR 0026 (per-instance
 addressing + discovery-lite, incl. the 2026-08-16 on_conflict addendum),
 ADR 0019 (contexts + `<context>-<workload>` namespacing), ADR 0027 (verb-first
@@ -361,6 +363,10 @@ disagree about a slot again.
 9. Schema drift guard passes after the config-type change.
 10. Full `just verify` (fmt, clippy, tests, spec-examples, schema, lint-nix)
     green on the implementation commits.
+11. Conflict chains are attempted IN ORDER; a chain-exhausted failure reports
+    the attempt sequence (e.g. `reuse (probe failed), start (not
+    applicable)`). Port `on_occupied` chains likewise (preferred → increment
+    → auto → error). (Added by the 2026-08-16 strategy-chains addendum, U8.)
 
 ## 6. Phased plan with gates
 
@@ -649,6 +655,9 @@ port = 4000                                  # strict (current behavior): occupi
   declared port / `--port-auto`).
 - `port = { preferred = N, on_occupied = "auto" | "fail" }` (RECOMMENDED):
   try the preferred port; if occupied, auto-allocate (or fail).
+  **SUPERSEDED by the 2026-08-16 addendum (U5–U6):** `on_occupied` becomes a
+  chain over `{auto, increment, fail}` with `increment` (stepwise-adjacent)
+  added; the recommended default is `["increment", "auto"]`.
 - Schema/merge/validation: `instance.port` is a serde untagged union
   (integer | "auto" | table); merge = whole-field replace (consistent with
   the instance table); validation = `preferred` in 1..=65535, `on_occupied`
@@ -693,6 +702,10 @@ auto in case of failure" the user asked for.
 
 ### T4. Litellm dynamic-port TEST-FIRST sequence (user: "test that first")
 
+> **SUPERSEDED by the 2026-08-16 addendum (U7):** the capsule uses
+> `on_occupied = ["increment", "auto"]` and the sequence gains Test C
+> (increment skip) and Test D (bound exhaustion → auto fallback).
+
 Bounded validation sequence, run BEFORE the general dynamic-port policy
 lands (Phase 3 gate):
 
@@ -736,9 +749,10 @@ lands (Phase 3 gate):
 
 **Still open for the user:**
 
-- **Q2 (stopped-sandbox disposition under `reuse`):** START (preserves
-  state) vs REPLACE (cleaner, destructive). Not addressed by these threads;
-  recommendation unchanged (START for `reuse`, REPLACE for `replace`).
+- **Q2 (stopped-sandbox disposition under `reuse`):** **RESOLVED by the
+  2026-08-16 strategy-chains addendum (U3)** — the default chain
+  `["reuse", "start", "replace"]` starts a stopped sandbox and only replaces
+  if the start fails.
 - **Q5 (`instances` verb):** new verb vs extending `workloads`/`ps`.
   Recommendation unchanged (new verb, ADR 0027 style).
 - **Q6 (bare `workload up` batch):** adopt the reconcile step in Phase 0.2
@@ -750,6 +764,10 @@ lands (Phase 3 gate):
   you want namespace-aware merge (bigger change, out of scope here)?
 
 ### T6. Refined phased plan (SUPERSEDES §6)
+
+> **Partially SUPERSEDED by the 2026-08-16 addendum (U10):** the P0.3, P1,
+> and P3 rows change (chain default, chain schema + validation + extended
+> decision fn + U4 tests, port `on_occupied` chain + increment + U7 tests).
 
 | Phase | Scope | Gates | Sizing |
 |---|---|---|---|
@@ -784,3 +802,270 @@ lands (Phase 3 gate):
   exports at exec time) is added to the noted future work, not to scope.
 - The d452575 dep-path fix and its `on_conflict` knob are unchanged; the
   per-entry `instance` field is additive.
+
+---
+
+## Addendum (2026-08-16): strategy chains + port `on_occupied` options (user refinement)
+
+This addendum locks two design extensions from the user's 2026-08-16
+refinement: (A) conflict disposition becomes an ORDERED CHAIN of strategies
+attempted until one succeeds, and (B) the port `on_occupied` surface gains
+stepwise-adjacent allocation (`increment`) and chain symmetry. It SUPERSEDES
+the single-disposition model in §4.2/§4.3 and the `on_occupied = "auto"|"fail"`
+surface in the previous addendum's T3.2; it RESOLVES open question Q2.
+
+### U1. Strategy chains — surface
+
+`on_conflict` accepts a scalar (back-compat: d452575's `"reuse"` etc. becomes
+a one-element chain) OR an ordered list:
+
+```toml
+# scalar (back-compat, d452575): one-element chain
+on_conflict = "reuse"
+# ordered list: attempted in order until one succeeds
+on_conflict = ["reuse", "start", "replace"]
+```
+
+Element vocabulary (closed, schema-validated):
+
+| element | precondition | action |
+|---|---|---|
+| `reuse` | msb Running AND (healthy OR booting) | adopt the running instance (host-port probe; <30s record = booting, never killed) |
+| `start` | msb Stopped/Crashed (row exists, not Running) | start it (`handle.start()`); on failure, continue the chain |
+| `replace` | always applicable | down/remove + fresh create |
+| `fail` | always applicable (terminal) | error with the standard occupied-instance message |
+
+**Default chain: `["reuse", "start", "replace"]`.**
+
+### U2. Strategy chains — behavior matrix
+
+Facts: `msb_status ∈ {None, Running, Stopped, Crashed}`, `healthy ∈
+{Some(true), Some(false), None}`, `recently_started`, registry record,
+sandbox dir. The chain is iterated in order; the FIRST element whose
+precondition holds wins. When the slot is FREE (no row, no dir, no record)
+the plain Start path applies and the chain is irrelevant.
+
+| state | reuse | start | replace | default-chain result |
+|---|---|---|---|---|
+| running + healthy | ✓ | n/a (running) | — | **reuse** |
+| running + dead port + old (zombie) | ✗ probe fails | n/a (running) | ✓ | **replace** |
+| running + dead port + booting (<30s) | ✓ booting | n/a | — | **reuse** |
+| stopped | ✗ not running | ✓ | — | **start** |
+| stopped + start fails | ✗ | ✗ errored | ✓ | **replace** |
+| crashed | ✗ | ✓ | — | **start** |
+| record present, msb gone (stale) | ✗ | ✗ no row | ✓ | **replace** |
+| msb gone + dir exists | ✗ | ✗ | ✓ | **replace** |
+| nothing exists | — | — | — | plain **start** (chain irrelevant) |
+
+**Chain exhaustion without success → error listing the attempts in order**
+(e.g. `conflict chain exhausted for 'litellm': reuse (probe failed), start
+(not applicable) — no strategy succeeded; use --replace or down first`).
+
+### U3. Strategy chains — validation, merge, orthogonality
+
+**Validation (schema):**
+
+- non-empty (a chain must have ≥ 1 element);
+- duplicates rejected (`["reuse", "reuse"]` → error);
+- unknown elements rejected (deny-unknown posture — serde closed vocabulary);
+- elements AFTER `fail` rejected. **Justification:** `fail` is terminal by
+  definition — it always errors when reached, so anything after it is dead
+  config that can never execute. Rejecting it makes the config honest and
+  matches the house deny-unknown/closed-vocabulary posture (same reasoning
+  as `deny_unknown_fields` on config structs).
+- scalar normalizes to a singleton chain at parse (back-compat).
+
+**Merge:** whole-field last-layer-wins (consistent with the existing
+`depends_on` merge — the whole spec including `on_conflict` is replaced per
+dep, last layer wins). Scalar vs list forms normalize at parse, so a higher
+layer re-declaring `on_conflict = "reuse"` RESETS the chain to `["reuse"]`
+(never appends).
+
+**Orthogonality:** `instance = shared|scoped|fresh` (SELECTION) stays
+orthogonal; the chain is DISPOSITION on the selected slot. They compose:
+`scoped` + `["reuse","start","replace"]` = reuse my scoped litellm if
+healthy, start it if stopped, replace if zombie.
+
+**Q2 RESOLVED:** the stopped-sandbox disposition question (START vs REPLACE)
+is answered by the default chain — start-then-replace. A stopped sandbox is
+STARTED (state preserved); only if the start fails does the chain fall
+through to replace.
+
+### U4. d452575 impact — `decide_dep_disposition` changes + new tests
+
+- `DepConflict` (config/types.rs:525) becomes a chain type: the enum variants
+  map to one-element chains; a new `ConflictChain` (Vec of steps) with scalar
+  deserialization to a singleton. `DepConflict::Reuse/Replace/Fail` remain as
+  the scalar sugar.
+- `decide_dep_disposition` (deps.rs:165) changes from a single match to a
+  chain iteration: return the FIRST disposition whose precondition holds.
+  The fact set GROWS: `msb_running: bool` → `msb_status: Option<SandboxStatus>`
+  (to distinguish Stopped/Crashed for `start`). The executor additionally
+  handles a FAILED start (the `start` element was attempted, errored →
+  continue to the next element).
+- **New pure-decision test cases** (the d452575 decision-table tests grow):
+  1. default chain, running+healthy → Reuse;
+  2. default chain, stopped → Start;
+  3. default chain, stopped + start-fails → Replace (executor retry);
+  4. default chain, zombie (running, dead port, old) → Replace;
+  5. default chain, stale record (record present, msb gone) → Replace;
+  6. default chain, booting (running, dead port, <30s) → Reuse;
+  7. `["replace"]` (scalar) → always Replace;
+  8. `["fail"]` (scalar) → Fail when occupied, Start when free;
+  9. `["reuse", "fail"]` → Reuse when healthy, Fail when zombie (no replace);
+  10. `["start", "replace"]` → Start when stopped, Replace when running-zombie;
+  11. `["reuse"]` on a zombie → chain-exhausted error listing attempts;
+  12. validation: empty / duplicate / unknown / after-fail all rejected;
+  13. scalar normalization round-trip (`"reuse"` ⇄ `["reuse"]`);
+  14. merge last-layer-wins (scalar resets a list chain).
+
+### U5. Port `on_occupied` — auto semantics from code (verified)
+
+- `probe_free_ports` (store.rs:431): `TcpListener::bind((bind, 0))` — the OS
+  assigns ANY free port in the EPHEMERAL range (Linux default 32768–60999).
+  It skips registry-recorded ports on the same bind (defense-in-depth) and is
+  NOT a reservation (the post-create atomic check+register closes the TOCTOU).
+- `apply_auto_ports` (run.rs:322): per `host = 0` port, probe 1 free port,
+  reject candidates colliding with already-concrete hosts in the plan,
+  bounded retries (16), fail-closed.
+- **So `auto` today = OS-assigned ANY-free ephemeral port** — NOT adjacent to
+  the preferred port, NOT stable across restarts (the ephemeral range
+  changes). That is correct for "I don't care about the port", but it is the
+  wrong default for litellm-style workloads where adjacency is valuable.
+
+### U6. Port `on_occupied` — `increment` + chain symmetry
+
+**New element `increment`:** try `preferred+1`, `preferred+2`, … up to a
+bound. Each candidate is probed before bind (occupied → next). Adjacent
+ports are predictable, discoverable, and stable across restarts (main
+litellm on 4000, dev on 4001).
+
+**Naming rationale:** `increment` (RECOMMENDED) vs `next_available` vs
+`next`. `next_available` is ambiguous — it could mean "the next free port
+after preferred" (stepwise) or "any free port" (which is what `auto` does);
+`next` is too terse and equally ambiguous. `increment` is precise:
+stepwise-adjacent increments from the preferred port.
+
+**Bound:** default `+100` (preferred+1 .. preferred+100); optional explicit
+`limit` field; validate `preferred + limit ≤ 65535`.
+
+**Chain symmetry — YES.** `on_occupied` accepts a scalar OR an ordered list
+from the closed vocabulary `{auto, increment, fail}`, with the SAME rule as
+`on_conflict` (scalar = singleton chain; `fail` terminal — elements after it
+rejected; non-empty; no duplicates; unknown rejected). Rationale: the user's
+chain idea is general — conflict disposition is a chain, and port fallback is
+the same shape (try preferred, then stepwise, then any-free, then error).
+Uniformity keeps ONE mental model and ONE validation rule. The validation
+stays simple because the vocabulary is small and closed.
+
+**Updated surface:**
+
+```toml
+[workloads.litellm.instance]
+port = { preferred = 4000, on_occupied = ["increment", "auto"] }  # RECOMMENDED default
+# on_occupied = "auto"        # scalar = ["auto"]: any-free ephemeral
+# on_occupied = "fail"        # scalar = ["fail"]: strict (occupied → error)
+# on_occupied = "increment"   # scalar = ["increment"]: stepwise only
+# on_occupied = ["increment", "auto"]  # stepwise, then any-free, then error
+```
+
+**Default `on_occupied`** (when the table form is used without it):
+`["increment", "auto"]` — SUPERSEDES the earlier `"auto"` recommendation
+(adjacency is more predictable and stable).
+
+**Behavior matrix** (facts: preferred occupied? increment candidates free?):
+
+| preferred | increment candidates | auto | result |
+|---|---|---|---|
+| free | — | — | **preferred** |
+| occupied | preferred+1 free | — | **preferred+1** |
+| occupied | +1..+limit all occupied | any-free available | **any-free ephemeral** |
+| occupied | +1..+limit all occupied | none (exhausted) | **error listing attempts** |
+
+**Validation:** same rules as `on_conflict` (non-empty, no duplicates, no
+unknown, no after-`fail`); `preferred` in 1..=65535; `preferred + limit ≤
+65535`.
+
+### U7. Updated litellm test-first sequence (SUPERSEDES T4)
+
+1. **Capsule change:** litellm workload.toml gains
+   `[workloads.litellm.instance] port = { preferred = 4000, on_occupied = ["increment", "auto"] }`
+   (requires Phase 1 schema; the sequence runs at Phase 3).
+2. **Test A — preferred path (free host):** `workload up litellm` → binds
+   4000; assert `workestrate ps --json` port_pairs host == 4000; assert
+   prime's `LITELLM_ADDR` == `host.microsandbox.internal:4000`; assert
+   models.json baseUrl renders `:4000`; prime chat works through it.
+3. **Test B — increment path (4000 occupied):** occupy 4000 (dev litellm or
+   a dummy listener on 127.0.0.1:4000) → `workload up litellm` → lands 4001;
+   assert the record carries 4001; assert `LITELLM_ADDR` + models.json render
+   `:4001`; prime chat works through it.
+4. **Test C — increment skip (4000 AND 4001 occupied):** occupy both → lands
+   4002; assert the record carries 4002; exports render `:4002`.
+5. **Test D — auto fallback (4000..4100 occupied, bound +100 exhausted):**
+   → any-free ephemeral; assert the record carries the effective port;
+   exports render it.
+6. **Smoke update:** replace the six hardcoded `:4000` references with the
+   effective port read from `workestrate ps --json` (or the registry record);
+   the `models-json` assert becomes value-driven on the effective port.
+7. **Regression:** re-run the full prime-smoke on ALL paths (A–D);
+   `just verify` green.
+
+### U8. Acceptance criteria addition
+
+Add to §5:
+
+> 11. Conflict chains are attempted IN ORDER; a chain-exhausted failure
+>     reports the attempt sequence (e.g. `reuse (probe failed), start (not
+>     applicable)`). Port `on_occupied` chains likewise (preferred →
+>     increment → auto → error).
+
+### U9. Open questions update (SUPERSEDES T5)
+
+**Resolved by this addendum:**
+
+- **Q2 (stopped-sandbox disposition):** RESOLVED by the default chain
+  `["reuse", "start", "replace"]` — start-then-replace (U3).
+
+**Still open for the user:**
+
+- **Q5 (`instances` verb):** new verb vs extending `workloads`/`ps`.
+  Recommendation unchanged (new verb, ADR 0027 style).
+- **Q6 (bare `workload up` batch):** adopt the reconcile step in Phase 0.2
+  vs stay conservative until Phase 2. Recommendation unchanged (adopt in
+  Phase 0.2).
+- **Namespace merge collision:** two repos declaring the same workload name
+  still collide in the merged config (last layer wins). Acceptable (coexist
+  via parallel instances / distinct names), or namespace-aware merge (bigger
+  change, out of scope)?
+- **Q3 sub-question (declared default id vs auto-slug for the workload's own
+  parallel starts):** auto-slug recommended; a declared default id remains
+  possible.
+- **Q4 sub-question (stronger validated `version` field vs `label`):**
+  `label` recommended; a validated `version` field remains possible.
+
+### U10. Phased plan updates (SUPERSEDES the T6 rows where they conflict)
+
+| Phase | Updated scope | Gates |
+|---|---|---|
+| **0 — Immediate small fixes** | 0.1 status-aware + dir-aware occupancy; 0.2 extract the shared reconcile step from d452575 + wire into named `up`/`exec`, `down`, bare `workload up`; 0.3 default conflict CHAIN `["reuse","start","replace"]` for named verbs (code-level default; d452575 scalar `on_conflict` still accepted). | AC 1–5 host (KVM); `just verify`; no schema change. |
+| **1 — Instance policy schema** | `[workloads.<name>.instance]` (`strategy`, `on_conflict` CHAIN scalar-or-list, `port` union, optional `label`); chain validation (non-empty, no dup, no unknown, no after-`fail`, scalar normalization); merge (whole-field last-layer-wins, scalar resets list); extended `decide_dep_disposition` (iterate chain, `msb_status` fact) + the U4 test matrix; `generate-schema` + drift guard. | schema parse/deny/round-trip incl. chain cases; merge tests; drift guard; `plan` renders the chain disposition. |
+| **2 — depends_on scoping + parallel semantics** | unchanged (T1 namespace scoping; T2 `depends_on.<dep>.instance = shared\|scoped\|fresh`); the chain composes with selection. | unchanged. |
+| **3 — Dynamic port policy + litellm migration** | `instance.port` union gains `on_occupied` CHAIN (`{auto, increment, fail}`, scalar-or-list) + `increment` bound (`limit`, default +100); `apply_auto_ports` extension (preferred → increment → auto); the U7 test sequence (Tests A–D); smoke update. | U7 steps 2–7 all pass; AC 7 + 11; `just verify`. |
+| **4 — Observability surface** | unchanged. | unchanged. |
+
+**Dependencies / seams:** unchanged from T6 — nothing hard-blocks on the
+pending msb v2/develop work; the chain's `start` element uses the existing
+`handle.start()` surface (0.6.8); re-verify the reconcile step's msb
+mutations after the v2 move.
+
+### U11. What this addendum does NOT change
+
+- §4.1 (policy surface) stands except `on_conflict` becomes a chain;
+- §4.2/§4.3 (reconcile algorithm, per-dep on_conflict) are SUPERSEDED by U1–U4
+  (the reconcile step iterates the chain; per-dep `on_conflict` is a chain
+  too, with the same precedence: `depends_on.<dep>.on_conflict` >
+  `workloads.<dep>.instance.on_conflict` > default `["reuse","start","replace"]`);
+- T1–T3 (namespace scoping, parallel deps, dynamic-port downstream
+  implications) stand; T3.2's `on_occupied = "auto"|"fail"` surface is
+  SUPERSEDED by U5–U6;
+- §7 (out of scope) stands.
