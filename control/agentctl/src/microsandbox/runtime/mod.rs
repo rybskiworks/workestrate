@@ -26,6 +26,9 @@ pub use network::network_plan_to_policy;
 pub use ps::probe_liveness;
 pub use ps::PsKind;
 pub use ps::{format_refuse_message, occupancy_from_state, ps, Occupancy, PsEntry};
+pub use reconcile::{
+    decide_chain, default_chain, gather_facts, sandbox_dir, ChainStep, ReconcileFacts,
+};
 pub use run::{exec_agent_with_spec, up_service_with_spec};
 // Crate-visible so the seed-file env-view builder (env.rs) reuses the ONE
 // resolution algorithm/order the runtime applies to the guest env.
@@ -131,11 +134,16 @@ pub enum DownStatus {
     Error,
 }
 
-/// Occupancy gate for `up`/`exec`. When `spec.replace` is true, the existing
-/// sandbox at `spec.instance` is torn down (best-effort) and stale state is
-/// cleared. When false, the function REFUSES (returns Err) if any of:
+/// Occupancy teardown for the `--replace` flag path ONLY. When `spec.replace`
+/// is true, the existing sandbox at `spec.instance` is torn down
+/// (best-effort) and stale state is cleared. When false, the function REFUSES
+/// (returns Err) if any of:
 ///   - msb reports the sandbox running, OR
 ///   - a state record exists AND msb is unavailable (fail-closed).
+///
+/// NOTE: the conflict-chain decision (reuse/start/replace/fail) lives in
+/// [`reconcile`]; this function now handles ONLY the explicit `--replace`
+/// teardown (ADR 0030 Phase 0).
 ///
 /// Returns Ok(()) when the slot is free (or has been cleared by --replace).
 pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) -> Result<()> {
@@ -198,6 +206,31 @@ pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) ->
             Ok(())
         }
     }
+}
+
+/// Idempotent three-store teardown for the conflict chain's `replace`
+/// disposition (ADR 0030 Phase 0): stop+remove the msb sandbox when present,
+/// then clear the port-registry record and the policy dir — all best-effort.
+/// Unlike the `--replace` branch of [`check_occupied_or_replace`], this never
+/// refuses and never hard-errors on a missing sandbox: the caller proceeds to
+/// a fresh create either way.
+pub(crate) async fn teardown_for_replace(state_dir: &Path, instance: &str) -> Result<()> {
+    match Sandbox::get(instance).await {
+        Ok(handle) => {
+            stop_and_remove(handle).await?;
+        }
+        Err(MicrosandboxError::SandboxNotFound(_)) => {}
+        Err(e) => {
+            eprintln!(
+                "warning: could not verify sandbox '{}' via msb ({}); \
+                 proceeding with replace and clearing any stale state",
+                instance, e
+            );
+        }
+    }
+    let _ = super::port_registry::unregister_sandbox(state_dir, instance);
+    let _ = super::policy_file::remove_policy_dir(state_dir, instance);
+    Ok(())
 }
 
 /// Generic lifecycle: stop and remove any sandbox by name.

@@ -354,12 +354,23 @@ fn apply_auto_ports(state_dir: &Path, bind: IpAddr, ports: &mut [PortMapping]) -
     Ok(())
 }
 
+/// Outcome of [`build_sandbox`] (ADR 0030 Phase 0): the caller either gets a
+/// live sandbox + foreground config to exec the workload into, or learns the
+/// slot was REUSED (already running healthy/booting) and has nothing to do.
+///
+/// `Sandbox` is boxed so the enum is small (the `Reused` variant carries no
+/// data; an unboxed `Sandbox` would make the whole enum ~1.4KB).
+pub(crate) enum BuildOutcome {
+    Ready(Box<Sandbox>, ForegroundConfig),
+    Reused,
+}
+
 /// Prepare, resolve, and create the sandbox plus the foreground config used
 /// to run the workload's real command.
 pub(crate) async fn build_sandbox<W: Workload>(
     workload: &W,
     spec: &InstanceSpec,
-) -> Result<(Sandbox, ForegroundConfig)> {
+) -> Result<BuildOutcome> {
     // Load secrets from .env.enc across the resolved layers. FN-9: the
     // merged map is threaded into env/secret resolution below — it is NOT
     // written into process-global env (parallel build_sandbox calls would
@@ -440,7 +451,63 @@ pub(crate) async fn build_sandbox<W: Workload>(
         apply_auto_ports(&state_dir, bind_ip, &mut plan.ports)?;
     }
 
-    check_occupied_or_replace(spec, &state_dir).await?;
+    // Host ports from the (possibly --port-auto-mutated) plan: single source
+    // of truth for the collision check and the legacy `ports` field in the
+    // lifecycle state record, so the record always carries the EFFECTIVE
+    // (probed) ports — `ps`/`down` recover them. Hoisted BEFORE the
+    // occupancy gate so the chain's `start` element (StartExisting) and the
+    // create path share the same values.
+    let host_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
+
+    // Register with full lifecycle metadata so `ps` and `down --all` work.
+    // Each pair carries the slot's bind IP (ADR 0026): the record feeds `ps`
+    // and the (bind_ip, port)-keyed collision model.
+    let port_pairs: Vec<PortMapping> = plan
+        .ports
+        .iter()
+        .map(|p| PortMapping {
+            bind_ip,
+            ..p.clone()
+        })
+        .collect();
+
+    // ADR 0030 Phase 0: status+dir-aware occupancy routed through the default
+    // conflict chain (reuse → start → replace) instead of the status-blind
+    // refuse gate.
+    let declared_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
+    let facts = super::reconcile::gather_facts(&state_dir, &spec.instance, &declared_ports).await?;
+    let step =
+        super::reconcile::decide_chain(&super::reconcile::default_chain(), &facts, &spec.instance)?;
+    match step {
+        super::reconcile::ChainStep::Reuse => {
+            return Ok(BuildOutcome::Reused);
+        }
+        super::reconcile::ChainStep::Fail => {
+            anyhow::bail!(
+                "{}",
+                super::format_refuse_message(&spec.workload, &spec.instance)
+            );
+        }
+        super::reconcile::ChainStep::StartExisting => {
+            let (sandbox, config) = start_existing_sandbox(
+                &state_dir,
+                spec,
+                workload,
+                bind_ip,
+                &host_ports,
+                &port_pairs,
+            )
+            .await?;
+            return Ok(BuildOutcome::Ready(Box::new(sandbox), config));
+        }
+        super::reconcile::ChainStep::Replace => {
+            super::teardown_for_replace(&state_dir, &spec.instance).await?;
+        }
+        super::reconcile::ChainStep::Start => {}
+    }
+    if spec.replace {
+        check_occupied_or_replace(spec, &state_dir).await?;
+    }
 
     ensure_mount_sources(&mount_roots, &plan)?;
 
@@ -485,23 +552,6 @@ pub(crate) async fn build_sandbox<W: Workload>(
     };
     let sandbox = builder.create().await?;
 
-    // Host ports from the (possibly --port-auto-mutated) plan: single source
-    // of truth for the collision check and the legacy `ports` field in the
-    // lifecycle state record, so the record always carries the EFFECTIVE
-    // (probed) ports — `ps`/`down` recover them.
-    let host_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
-
-    // Register with full lifecycle metadata so `ps` and `down --all` work.
-    // Each pair carries the slot's bind IP (ADR 0026): the record feeds `ps`
-    // and the (bind_ip, port)-keyed collision model.
-    let port_pairs: Vec<PortMapping> = plan
-        .ports
-        .iter()
-        .map(|p| PortMapping {
-            bind_ip,
-            ..p.clone()
-        })
-        .collect();
     let created_at = super::time::current_rfc3339_utc();
     // FN-6: atomic check + register under ONE registry-lock hold. The
     // collision check must not run as a separate pre-create call: it
@@ -531,6 +581,42 @@ pub(crate) async fn build_sandbox<W: Workload>(
         command: workload.exec(),
         log_stop_errors: workload.log_stop_errors(),
     };
+    Ok(BuildOutcome::Ready(Box::new(sandbox), config))
+}
+
+/// ADR 0030 Phase 0 `start` element: start a stopped/crashed sandbox via
+/// msb `handle.start()` (the capability the CLI never used), register the
+/// lifecycle record (the stopped sandbox may have no record), and return the
+/// live sandbox + foreground config so the caller execs the workload command
+/// into it. Preserves the sandbox state (filesystem/config); the service
+/// process is re-run by the caller.
+async fn start_existing_sandbox<W: Workload>(
+    state_dir: &Path,
+    spec: &InstanceSpec,
+    workload: &W,
+    bind_ip: IpAddr,
+    host_ports: &[u16],
+    port_pairs: &[PortMapping],
+) -> Result<(Sandbox, ForegroundConfig)> {
+    let handle = Sandbox::get(&spec.instance).await?;
+    let sandbox = handle.start().await?;
+    let created_at = super::time::current_rfc3339_utc();
+    super::super::port_registry::check_and_register_sandbox_lifecycle(
+        state_dir,
+        &spec.instance,
+        spec.context.as_deref(),
+        workload.name(),
+        bind_ip,
+        host_ports,
+        port_pairs,
+        &created_at,
+    )?;
+    let config = ForegroundConfig {
+        sandbox_name: sandbox.name().to_string(),
+        service_label: workload.name().to_string(),
+        command: workload.exec(),
+        log_stop_errors: workload.log_stop_errors(),
+    };
     Ok((sandbox, config))
 }
 
@@ -540,6 +626,31 @@ pub async fn up_service_with_spec<W: Workload>(
     foreground: bool,
 ) -> Result<()> {
     if !foreground {
+        // ADR 0030 Phase 0: short-circuit reuse/fail in the PARENT — a child
+        // that reconciles to reuse would exit within the FS-8 grace window
+        // and be misreported as an immediate failure.
+        let state_dir = crate::config::resolve_state_dir();
+        let declared_ports: Vec<u16> = workload.plan().ports.iter().map(|p| p.host).collect();
+        let facts =
+            super::reconcile::gather_facts(&state_dir, &spec.instance, &declared_ports).await?;
+        let step = super::reconcile::decide_chain(
+            &super::reconcile::default_chain(),
+            &facts,
+            &spec.instance,
+        )?;
+        match step {
+            super::reconcile::ChainStep::Reuse => {
+                println!("instance '{}' is already running — reusing", spec.instance);
+                return Ok(());
+            }
+            super::reconcile::ChainStep::Fail => {
+                anyhow::bail!(
+                    "{}",
+                    super::format_refuse_message(&spec.workload, &spec.instance)
+                );
+            }
+            _ => {} // Start / StartExisting / Replace → spawn the child (it re-reconciles and executes)
+        }
         let instance = spec.instance.clone();
         let child = super::spawn_detached_service(&instance, &workload.detach_args(spec))?;
         println!(
@@ -548,13 +659,23 @@ pub async fn up_service_with_spec<W: Workload>(
         );
         return Ok(());
     }
-    let (sandbox, config) = build_sandbox(workload, spec).await?;
-    run_service_foreground(&sandbox, config).await
+    match build_sandbox(workload, spec).await? {
+        BuildOutcome::Ready(sandbox, config) => run_service_foreground(&sandbox, config).await,
+        BuildOutcome::Reused => {
+            println!("instance '{}' is already running — reusing", spec.instance);
+            Ok(())
+        }
+    }
 }
 
 pub async fn exec_agent_with_spec<W: Workload>(workload: &W, spec: &InstanceSpec) -> Result<()> {
-    let (sandbox, config) = build_sandbox(workload, spec).await?;
-    run_service_interactive(&sandbox, config).await
+    match build_sandbox(workload, spec).await? {
+        BuildOutcome::Ready(sandbox, config) => run_service_interactive(&sandbox, config).await,
+        BuildOutcome::Reused => {
+            println!("instance '{}' is already running — reusing", spec.instance);
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
