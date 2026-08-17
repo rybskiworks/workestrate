@@ -1,8 +1,9 @@
 # ADR 0030 (DRAFT): Workload instance lifecycle + conflict management + namespacing
 
-**Status:** DRAFT — design accepted; **Phase 0 IMPLEMENTED** (conflict
-chains + shared reconcile + status/dir-aware occupancy; 2026-08-16 addendum
-below). Phases 1–4 remain proposal.
+**Status:** DRAFT — design accepted; **Phase 0 + Phase 1 IMPLEMENTED**
+(conflict chains + shared reconcile + status/dir-aware occupancy; the
+per-workload `instance` policy schema; 2026-08-16 addenda below). Phases 2–4
+remain proposal.
 **Date:** 2026-08-16
 **Addendum:** 2026-08-16 (user design threads — depends_on scoping, parallel deps,
 dynamic ports; refined phased plan; supersedes §6); 2026-08-16b (strategy
@@ -1174,3 +1175,55 @@ decision suite + the reconcile behavior-matrix tests), `just lint-nix`,
 schema drift guards (committed + subschema) green. `schema-sync-check`
 reports ONLY the container-local consumer copies stale (tool home + personal
 store clone) — the documented host-side follow-up.
+
+---
+
+## Addendum (2026-08-16): Phase 1 IMPLEMENTED — per-workload `instance` policy schema (parse/validate/merge/wire)
+
+**Status update:** Phase 1 (U10 P1 row) is IMPLEMENTED on `migration/tool-model`
+(NO push). Phases 2–4 stay as designed.
+
+### P1.1 — What landed (commit refs)
+
+| commit | scope |
+|---|---|
+| `c84f4bb` | The `[workloads.<name>.instance]` policy block: `strategy` (singleton\|parallel\|replace\|reuse, closed enum), `on_conflict` (REUSES the P0 chain type — scalar\|list, default `["reuse","start","replace"]`), `port` union (strict integer \| `"auto"` \| `{ preferred, on_occupied }` with on_occupied chains over {auto, increment, fail} and parameterized increment `{ limit = N }` \| `{ range = [S,E] }` per U6), optional `label`. Validation (port bounds: strict/preferred 1..=65535, limit ≥ 1, preferred+limit ≤ 65535, range START ≤ END + nonzero, START==END legal; the addendum invalid cases reject — [0,100]/[5000,4999]/limit=0 at validate, [65536,70000] at parse via u16). Merge: WHOLE-BLOCK last-layer-wins. Wiring: `Workload::instance_conflict_chain()` (declared > built-in default) drives the named up/exec reconcile; `dep_conflict` precedence (U11) `depends_on.<dep>.on_conflict` > the dep's own `instance.on_conflict` > default; plan Display + `--source` render the policy when declared (config.reference declares none — golden plans byte-identical). |
+| `b7fab45` | Schema regen: `WorkloadConfig.instance` + the port/chain definitions in both artifacts; template synced. |
+
+### P1.2 — Decisions recorded
+
+- **Merge granularity: WHOLE-BLOCK replace.** The instance table is ONE unit
+  (a `WorkloadConfig` field, like `depends_on`'s per-dep spec): a higher layer
+  re-declaring `[workloads.<name>.instance]` replaces strategy/on_conflict/
+  port/label wholesale, last layer wins; a higher layer declaring only `port`
+  RESETS the rest to defaults (the same whole-spec reset semantics depends_on
+  already applies per dep). The addendum's "whole-field for port" is automatic
+  under this (the port FIELD is replaced wholesale, never piecewise). Per-field
+  merging across layers is NOT implemented; if wanted it is an additive change.
+- **Namespace record field: DEFERRED to Phase 2.** The registry record's
+  `namespace` field (T1) is only meaningful with the provenance-driven
+  resolution machinery; adding an always-default field now would be dead
+  weight. The P2 schema change stays serde-default back-compatible.
+- **Per-strategy on_conflict derivation: DEFERRED to Phase 2.** §4.1's
+  per-strategy defaults (parallel→fail, replace→replace, reuse→reuse) are
+  superseded by the addendum 2 single default chain
+  `["reuse","start","replace"]`; deriving strategy-specific chains matters
+  only when strategies drive selection (P2), so P1 applies the simple U11
+  precedence (declared chain > built-in default).
+- **Naming:** the config block is `InstancePolicy` (not "InstanceSpec") to
+  avoid colliding with the runtime `InstanceSpec`.
+- **`InstancePort`/`PortOccupiedStep` use manual Serialize/Deserialize**: the
+  derived untagged shape renders the `"auto"` unit variant as null and
+  swallows nested chain-validation errors; the manual visitors preserve the
+  exact wire forms and error messages.
+
+### P1.3 — Gates
+
+`cargo fmt --check`, `cargo clippy --all-targets -D warnings`, FULL
+`cargo test` (993 baseline → **1029 total, 0 failures**, incl. the 36 new
+parse/validate/merge/wiring tests), `just lint-nix`, schema drift (committed +
+subschema) green, golden plans + spec-examples + scaffold green.
+`schema-sync-check` reports only the container-local consumer copies stale
+(tool home + personal store clone) — the documented host-side
+`workestrate schemas update` follow-up. Config semantics (selection,
+dynamic-port behavior, parallel strategy) land in Phases 2–3.
