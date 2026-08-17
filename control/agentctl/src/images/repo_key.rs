@@ -64,11 +64,24 @@ fn match_registered(
 /// pairs. Registered (contained) → the repo NAME; unregistered → the
 /// canonical declaring-dir path (spec §4.3).
 pub fn repo_key_for(declaring_dir: &Path, registered: &[(String, PathBuf)]) -> String {
+    repo_key_for_optional(declaring_dir, registered).unwrap_or_else(|| {
+        canonicalize_or_self(declaring_dir)
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
+/// Like [`repo_key_for`] but returns `None` when the declaring dir is NOT
+/// contained in a registered config-repo checkout (i.e. it is a synthetic /
+/// single-file / test layer with no repo identity). Used by the ADR 0030
+/// namespace resolution: a non-repo layer has no namespace and falls back to
+/// "default".
+pub fn repo_key_for_optional(
+    declaring_dir: &Path,
+    registered: &[(String, PathBuf)],
+) -> Option<String> {
     let declaring_canon = canonicalize_or_self(declaring_dir);
-    match match_registered(&declaring_canon, registered) {
-        Some((name, _)) => name,
-        None => declaring_canon.to_string_lossy().into_owned(),
-    }
+    match_registered(&declaring_canon, registered).map(|(name, _)| name)
 }
 
 /// The (name, checkout-path) pairs for every registered config repo, resolved

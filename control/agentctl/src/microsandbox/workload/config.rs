@@ -457,6 +457,10 @@ impl Workload for ConfigWorkload {
         self.workload.instance.strategy
     }
 
+    fn instance_port(&self) -> Option<crate::config::InstancePort> {
+        self.workload.instance.port.clone()
+    }
+
     fn exec(&self) -> SandboxCommand {
         match self.workload.command.split_first() {
             Some((binary, args)) => {

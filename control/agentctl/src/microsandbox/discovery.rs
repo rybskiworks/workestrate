@@ -1712,4 +1712,29 @@ default_deny = true
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
+
+    // ---- ADR 0030 Phase 3: a preferred/increment-chosen effective port
+    // flows through exports ----
+
+    /// A singleton litellm record whose EFFECTIVE port is 4001 (simulating a
+    /// preferred+increment choice: preferred 4000 was occupied, the chain
+    /// chose 4001). The registry record carries the effective port, so
+    /// `resolve_depends_on` must inject `host.microsandbox.internal:4001`
+    /// into the dependent's env/export — proving the Phase 3 selection flows
+    /// through named-port exports automatically.
+    #[test]
+    fn preferred_chosen_port_flows_through_exports() -> Result<()> {
+        let state_dir = unique_state_dir("disc-preferred-port");
+        register_singleton(&state_dir, "litellm", loopback(1), 4001, 4000)?;
+        let config = depends_config();
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
+        assert_eq!(resolved.len(), 1);
+        let r = &resolved[0];
+        assert_eq!(r.env_var, "LITELLM_URL");
+        assert_eq!(r.address, "host.microsandbox.internal:4001");
+        assert_eq!(r.host_port, 4001);
+        assert_eq!(r.source, ResolutionSource::RunningInstance);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
 }

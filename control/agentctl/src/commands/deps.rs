@@ -148,8 +148,12 @@ pub(crate) fn namespace_for(
     let Some(dir) = layer_dirs.get(layer) else {
         return crate::microsandbox::port_registry::default_namespace();
     };
+    // The namespace is the declaring REPO identity. A layer whose declaring
+    // dir is NOT a registered config-repo checkout (synthetic / single-file /
+    // test temp dir) has no repo identity -> the legacy "default" namespace.
     let registered = crate::images::repo_key::registered_repo_checkouts();
-    crate::images::repo_key::repo_key_for(dir, &registered)
+    crate::images::repo_key::repo_key_for_optional(dir, &registered)
+        .unwrap_or_else(crate::microsandbox::port_registry::default_namespace)
 }
 
 /// The `depends_on.<dep>.instance` mode for a dependency (ADR 0030 §4.1 T2):
@@ -2024,16 +2028,29 @@ command = []
         );
 
         // The registry must resolve the checkout dir to the registered name.
-        // registered_repo_checkouts reads the live registry — set one via the
-        // config-registry test helper if available, else assert the canonical
-        // PATH form (repo_key_for falls back to the canonical path when the
-        // dir is not registered). The path fallback is the truthful
-        // unregistered posture.
-        let ns = namespace_for(Some(&provenance), &dirs, "pi");
-        assert!(
-            !ns.is_empty() && ns != "default",
-            "namespace must resolve to a repo identity (got '{ns}')"
+        // registered_repo_checkouts reads the LIVE registry (which is
+        // read-only in this container), so we cannot register a repo here.
+        // Instead, assert the corrected P3 semantics directly via the pure
+        // repo_key_for_optional: a REGISTERED checkout resolves to its repo
+        // name; an UNREGISTERED dir has no repo identity -> "default".
+        let registered = vec![("personal".to_string(), checkout.clone())];
+        assert_eq!(
+            crate::images::repo_key::repo_key_for_optional(
+                &checkout.join("workestrate").join("workloads"),
+                &registered,
+            ),
+            Some("personal".to_string()),
+            "a registered checkout must resolve to its repo name"
         );
+        assert_eq!(
+            crate::images::repo_key::repo_key_for_optional(&tmp.join("not-a-repo"), &registered,),
+            None,
+            "an unregistered dir has no repo identity"
+        );
+        // namespace_for reads the LIVE registry (read-only in this container),
+        // so the registered-name end-to-end path is covered by the pure
+        // repo_key_for_optional assertions above; here we assert the
+        // "default" fallbacks that do not depend on the live registry.
         // No provenance → "default" (legacy/synthetic).
         assert_eq!(
             namespace_for(None, &dirs, "pi"),
@@ -2045,6 +2062,18 @@ command = []
         assert_eq!(
             namespace_for(Some(&stray), &dirs, "pi"),
             crate::microsandbox::port_registry::default_namespace()
+        );
+        // An UNREGISTERED declaring dir (not a config-repo checkout) has no
+        // repo identity → "default" (the corrected P3 semantics: a non-repo /
+        // synthetic / test layer is not a namespace).
+        let mut unreg = crate::merge::Provenance::new();
+        unreg.insert("workloads.pi.kind".to_string(), "synthetic".to_string());
+        let mut unreg_dirs = std::collections::HashMap::new();
+        unreg_dirs.insert("synthetic".to_string(), tmp.join("not-a-repo"));
+        assert_eq!(
+            namespace_for(Some(&unreg), &unreg_dirs, "pi"),
+            crate::microsandbox::port_registry::default_namespace(),
+            "an unregistered declaring dir must fall back to the default namespace"
         );
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())

@@ -354,6 +354,176 @@ fn apply_auto_ports(state_dir: &Path, bind: IpAddr, ports: &mut [PortMapping]) -
     Ok(())
 }
 
+/// Apply the workload's declared `instance.port` policy to the plan's ports
+/// (ADR 0030 Phase 3 / addendum 2 U6):
+///   - Strict(n): current behavior — the declared host ports stand; an
+///     occupied fixed port errors at create (check_port_collisions_locked).
+///   - Auto: every declared port behaves as host=0 (auto-allocate at boot).
+///   - Preferred { preferred, on_occupied }: try preferred; if occupied, walk
+///     the on_occupied chain (increment band / auto / fail).
+///
+/// The effective ports land in the plan (and thus the registry record).
+fn apply_instance_port_policy<W: Workload>(
+    state_dir: &Path,
+    workload: &W,
+    bind: IpAddr,
+    ports: &mut [PortMapping],
+) -> Result<()> {
+    let Some(port) = workload.instance_port() else {
+        return Ok(());
+    };
+    match port {
+        crate::config::InstancePort::Strict(_) => {
+            // Current behavior: declared hosts stand; occupied -> hard error
+            // at create (check_port_collisions_locked). No-op here.
+        }
+        crate::config::InstancePort::Auto => {
+            // Every declared port auto-allocates (host=0 semantics).
+            for p in ports.iter_mut() {
+                p.host = 0;
+            }
+            apply_auto_ports(state_dir, bind, ports)?;
+        }
+        crate::config::InstancePort::Preferred(pref) => {
+            let chain = pref
+                .on_occupied
+                .clone()
+                .map(|c| c.0)
+                .unwrap_or_else(|| crate::config::PortOccupiedChain::default_on_occupied().0);
+            // The occupied predicate: a registry record on the same bind, OR
+            // an OS bind, OR a declared host in the plan.
+            let is_occupied = |candidate: u16| port_is_occupied(state_dir, bind, candidate, ports);
+            let auto_allocate = || {
+                super::super::port_registry::probe_free_ports(state_dir, bind, 1)
+                    .ok()
+                    .and_then(|v| v.into_iter().next())
+            };
+            // Only apply to the port(s) the policy governs. The policy is
+            // per-workload; apply to the FIRST declared port (the primary)
+            // and leave named/other ports as declared. For a single-port
+            // workload (litellm) this is the api port.
+            let chosen =
+                match select_preferred_port(pref.preferred, &chain, &is_occupied, &auto_allocate) {
+                    PortSelection::Chosen(chosen) => chosen,
+                    PortSelection::Exhausted(msg) => anyhow::bail!("{msg}"),
+                };
+            if let Some(p) = ports.first_mut() {
+                p.host = chosen;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `candidate` is occupied on `bind`: a registry record on the same
+/// bind holds it, an OS bind succeeds, or a declared host in `ports` equals it.
+fn port_is_occupied(state_dir: &Path, bind: IpAddr, candidate: u16, ports: &[PortMapping]) -> bool {
+    if ports.iter().any(|p| p.host == candidate) {
+        return true;
+    }
+    // Registry-recorded ports on the same bind (defense-in-depth).
+    if let Ok(records) = super::super::port_registry::list_records(state_dir) {
+        if records
+            .iter()
+            .any(|r| r.bind_ip == bind && r.ports.contains(&candidate))
+        {
+            return true;
+        }
+    }
+    // OS bind probe (SO_REUSEADDR off — a plain TcpListener::bind).
+    std::net::TcpListener::bind((bind, candidate)).is_err()
+}
+
+/// The outcome of a preferred-port selection walk (ADR 0030 addendum 2 U6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PortSelection {
+    /// A concrete port was chosen (preferred, an increment candidate, or an
+    /// auto-allocated ephemeral).
+    Chosen(u16),
+    /// The chain exhausted without a free port; the error lists the attempts.
+    Exhausted(String),
+}
+
+/// Decide the port for a preferred-port workload given an OCCUPIED predicate
+/// (ADR 0030 addendum 2 U6 behavior matrix). PURE — the caller supplies the
+/// occupancy check so the decision logic is unit-testable without real binds.
+///
+/// `preferred` is the port to try first. `chain` is the on_occupied chain
+/// (default ["increment", "auto"] when None). `is_occupied(port)` returns
+/// true when the port is taken (by a registry record on the same bind, an
+/// OS bind, or a declared host in the plan). `auto_allocate()` returns a
+/// fresh ephemeral port (or None if none available).
+///
+/// Walk: try `preferred`; if free -> Chosen(preferred). Else iterate the
+/// chain in order:
+///   - increment: probe the band in order (bare = preferred+1..preferred+100;
+///     {limit=N} = preferred+1..preferred+N; {range=[S,E]} = S..=E), each
+///     candidate probe-before-bind (skip occupied); the first free wins.
+///   - auto: auto_allocate() -> Chosen.
+///   - fail: terminal — the chain ends here (nothing after it, validated).
+///
+/// If the chain ends without a choice -> Exhausted(error listing the attempts
+/// in order, e.g. "increment (band exhausted), auto (none available)").
+pub(crate) fn select_preferred_port(
+    preferred: u16,
+    chain: &[crate::config::PortOccupiedStep],
+    is_occupied: &dyn Fn(u16) -> bool,
+    auto_allocate: &dyn Fn() -> Option<u16>,
+) -> PortSelection {
+    if !is_occupied(preferred) {
+        return PortSelection::Chosen(preferred);
+    }
+    let mut attempts: Vec<String> = Vec::new();
+    for step in chain {
+        match step {
+            crate::config::PortOccupiedStep::Bare(crate::config::PortOccupiedBare::Increment) => {
+                let band = preferred.saturating_add(1)..=preferred.saturating_add(100);
+                if let Some(p) = first_free_in_band(band, is_occupied) {
+                    return PortSelection::Chosen(p);
+                }
+                attempts.push("increment (band exhausted)".to_string());
+            }
+            crate::config::PortOccupiedStep::Increment(
+                crate::config::types::ParameterizedIncrement { increment },
+            ) => {
+                let band: Vec<u16> = match (&increment.limit, &increment.range) {
+                    (Some(limit), None) => {
+                        (preferred.saturating_add(1)..=preferred.saturating_add(*limit)).collect()
+                    }
+                    (None, Some((start, end))) => (*start..=*end).collect(),
+                    _ => Vec::new(), // validated elsewhere; treat as empty
+                };
+                if let Some(p) = first_free_in_band(band.into_iter(), is_occupied) {
+                    return PortSelection::Chosen(p);
+                }
+                attempts.push("increment (band exhausted)".to_string());
+            }
+            crate::config::PortOccupiedStep::Bare(crate::config::PortOccupiedBare::Auto) => {
+                if let Some(p) = auto_allocate() {
+                    return PortSelection::Chosen(p);
+                }
+                attempts.push("auto (none available)".to_string());
+            }
+            crate::config::PortOccupiedStep::Bare(crate::config::PortOccupiedBare::Fail) => {
+                attempts.push("fail".to_string());
+                break;
+            }
+        }
+    }
+    PortSelection::Exhausted(format!(
+        "port selection exhausted for preferred {}: {} — no free port found",
+        preferred,
+        attempts.join(", ")
+    ))
+}
+
+fn first_free_in_band<I: Iterator<Item = u16>>(
+    band: I,
+    is_occupied: &dyn Fn(u16) -> bool,
+) -> Option<u16> {
+    band.into_iter().find(|p| !is_occupied(*p))
+}
+
 /// Outcome of [`build_sandbox`] (ADR 0030 Phase 0): the caller either gets a
 /// live sandbox + foreground config to exec the workload into, or learns the
 /// slot was REUSED (already running healthy/booting) and has nothing to do.
@@ -437,6 +607,12 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // and the chosen ports are recorded in the instance record. Composes
     // with per-instance binds: a parallel slot probes on its 127.0.0.N, the
     // singleton probes on the shared 127.0.0.1.
+    //
+    // ADR 0030 Phase 3: the workload's declared instance.port drives
+    // selection. --port-auto (all ports) still wins when both are used.
+    if !spec.port_auto {
+        apply_instance_port_policy(&state_dir, workload, bind_ip, &mut plan.ports)?;
+    }
     if spec.port_auto && !plan.ports.is_empty() {
         let probed =
             super::super::port_registry::probe_free_ports(&state_dir, bind_ip, plan.ports.len())?;
@@ -1166,6 +1342,210 @@ mod tests {
             record.ports.contains(&ports[1].host),
             "the auto-assigned host must be recorded (not 0)"
         );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0030 Phase 3: pure preferred-port selection (closure-based
+    // occupied sets — NO real binds) ----
+
+    use crate::config::types::{IncrementSpec, ParameterizedIncrement};
+    use crate::config::{PortOccupiedBare, PortOccupiedStep};
+
+    /// Build an `is_occupied` predicate from a set of occupied ports.
+    fn occupied_set(ports: &[u16]) -> impl Fn(u16) -> bool + '_ {
+        let set: std::collections::HashSet<u16> = ports.iter().copied().collect();
+        move |p| set.contains(&p)
+    }
+
+    #[test]
+    fn select_preferred_port_preferred_free_chooses_preferred() {
+        let chain = vec![PortOccupiedStep::Bare(PortOccupiedBare::Increment)];
+        let is_occupied = occupied_set(&[]);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| None);
+        assert_eq!(result, PortSelection::Chosen(4000));
+    }
+
+    #[test]
+    fn select_preferred_port_preferred_occupied_increments() {
+        let chain = vec![PortOccupiedStep::Bare(PortOccupiedBare::Increment)];
+        let is_occupied = occupied_set(&[4000]);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| None);
+        assert_eq!(result, PortSelection::Chosen(4001));
+    }
+
+    #[test]
+    fn select_preferred_port_increment_skips_occupied() {
+        let chain = vec![PortOccupiedStep::Bare(PortOccupiedBare::Increment)];
+        let is_occupied = occupied_set(&[4000, 4001]);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| None);
+        assert_eq!(result, PortSelection::Chosen(4002));
+    }
+
+    #[test]
+    fn select_preferred_port_range_scans_in_order() {
+        let chain = vec![PortOccupiedStep::Increment(ParameterizedIncrement {
+            increment: IncrementSpec {
+                limit: None,
+                range: Some((5000, 5100)),
+            },
+        })];
+        let is_occupied = occupied_set(&[4000, 5000]);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| None);
+        assert_eq!(result, PortSelection::Chosen(5001));
+    }
+
+    #[test]
+    fn select_preferred_port_range_disjoint_band() {
+        let chain = vec![PortOccupiedStep::Increment(ParameterizedIncrement {
+            increment: IncrementSpec {
+                limit: None,
+                range: Some((5000, 5100)),
+            },
+        })];
+        let is_occupied = occupied_set(&[4000]);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| None);
+        assert_eq!(result, PortSelection::Chosen(5000));
+    }
+
+    #[test]
+    fn select_preferred_port_range_exhausted_then_auto() {
+        let chain = vec![
+            PortOccupiedStep::Increment(ParameterizedIncrement {
+                increment: IncrementSpec {
+                    limit: None,
+                    range: Some((5000, 5001)),
+                },
+            }),
+            PortOccupiedStep::Bare(PortOccupiedBare::Auto),
+        ];
+        let is_occupied = occupied_set(&[4000, 5000, 5001]);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| Some(7000));
+        assert_eq!(result, PortSelection::Chosen(7000));
+    }
+
+    #[test]
+    fn select_preferred_port_chain_exhausted_lists_attempts() {
+        let chain = vec![PortOccupiedStep::Bare(PortOccupiedBare::Increment)];
+        // Occupy preferred AND the entire bare band (preferred+1 .. preferred+100).
+        let occupied: Vec<u16> = (4000..=4100).collect();
+        let is_occupied = occupied_set(&occupied);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| None);
+        match result {
+            PortSelection::Exhausted(msg) => {
+                assert!(
+                    msg.contains("increment (band exhausted)"),
+                    "message must list the increment attempt: {msg}"
+                );
+            }
+            other => panic!("expected Exhausted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_preferred_port_fail_terminal() {
+        let chain = vec![PortOccupiedStep::Bare(PortOccupiedBare::Fail)];
+        let is_occupied = occupied_set(&[4000]);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| Some(7000));
+        match result {
+            PortSelection::Exhausted(msg) => {
+                assert!(
+                    msg.contains("fail"),
+                    "message must list the fail attempt: {msg}"
+                );
+            }
+            other => panic!("expected Exhausted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_preferred_port_limit_form() {
+        let chain = vec![PortOccupiedStep::Increment(ParameterizedIncrement {
+            increment: IncrementSpec {
+                limit: Some(3),
+                range: None,
+            },
+        })];
+        // Occupy preferred AND preferred+1 .. preferred+3 (the whole limit band).
+        let occupied: Vec<u16> = (4000..=4003).collect();
+        let is_occupied = occupied_set(&occupied);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| None);
+        match result {
+            PortSelection::Exhausted(msg) => {
+                assert!(
+                    msg.contains("increment (band exhausted)"),
+                    "message must list the increment attempt: {msg}"
+                );
+            }
+            other => panic!("expected Exhausted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_preferred_port_auto_direct() {
+        let chain = vec![PortOccupiedStep::Bare(PortOccupiedBare::Auto)];
+        let is_occupied = occupied_set(&[4000]);
+        let result = select_preferred_port(4000, &chain, &is_occupied, &|| Some(7000));
+        assert_eq!(result, PortSelection::Chosen(7000));
+    }
+
+    // ---- ADR 0030 Phase 3: apply_instance_port_policy (Auto) ----
+
+    /// A minimal Workload whose `instance_port()` returns the given policy.
+    #[derive(Debug)]
+    struct PolicyWorkload {
+        port: Option<crate::config::InstancePort>,
+    }
+
+    impl Workload for PolicyWorkload {
+        fn name(&self) -> &str {
+            "policy-test"
+        }
+        fn plan(&self) -> SandboxPlan {
+            empty_plan_with_env(Vec::new())
+        }
+        fn exec(&self) -> SandboxCommand {
+            SandboxCommand::with_args("", &[])
+        }
+        fn instance_port(&self) -> Option<crate::config::InstancePort> {
+            self.port.clone()
+        }
+    }
+
+    #[test]
+    fn apply_instance_port_policy_auto_sets_all_hosts_to_auto() -> Result<()> {
+        let state_dir = unique_state_dir("policy-auto");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let workload = PolicyWorkload {
+            port: Some(crate::config::InstancePort::Auto),
+        };
+        let original = vec![
+            PortMapping::new(4000, 4000),
+            PortMapping::new(3000, 3000),
+            PortMapping::new(0, 8080),
+        ];
+        let mut ports = original.clone();
+        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports)?;
+        // Every declared port must now be a probed non-zero host.
+        assert!(
+            ports.iter().all(|p| p.host != 0),
+            "all hosts must be auto-assigned (non-zero): {:?}",
+            ports.iter().map(|p| p.host).collect::<Vec<_>>()
+        );
+        // Distinct from each other and bindable right now (the
+        // assert_auto_ports_assign invariants).
+        let assigned: Vec<u16> = ports.iter().map(|p| p.host).collect();
+        let distinct: std::collections::HashSet<u16> = assigned.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            assigned.len(),
+            "auto hosts must be mutually distinct: {assigned:?}"
+        );
+        let mut held = Vec::new();
+        for p in &assigned {
+            held.push(std::net::TcpListener::bind((bind, *p))?);
+        }
+        drop(held);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

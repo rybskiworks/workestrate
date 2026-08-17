@@ -93,6 +93,13 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         crate::config::InstanceStrategy::Singleton
     }
 
+    /// The workload's declared `instance.port` policy (ADR 0030 Phase 3 /
+    /// addendum 2 U6): strict | auto | preferred-with-on_occupied-chain.
+    /// Default None (current behavior — declared host ports as-is).
+    fn instance_port(&self) -> Option<crate::config::InstancePort> {
+        None
+    }
+
     /// Format the plan with a `[source]` annotation for each field.
     fn show_source(&self) -> String {
         self.plan().to_string()
