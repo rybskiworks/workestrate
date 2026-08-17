@@ -254,8 +254,10 @@ pub async fn dispatch_service<W: Workload>(
             let target = instance_name(&slot, instance.as_deref());
             crate::microsandbox::logs(&target).await
         }
-        ServiceAction::Plan { instance, use_ } => {
-            cmd_plan(workload, show_source, json, instance.as_deref(), &use_)
+        // `--use` was already applied by the caller's workload construction
+        // (main.rs); cmd_plan renders THAT workload (no second resolution).
+        ServiceAction::Plan { instance, use_: _ } => {
+            cmd_plan(workload, show_source, json, instance.as_deref())
         }
     }
 }
@@ -320,8 +322,10 @@ pub async fn dispatch_agent<W: Workload>(
             instance,
             all_instances,
         } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
-        AgentAction::Plan { instance, use_ } => {
-            cmd_plan(workload, show_source, json, instance.as_deref(), &use_)
+        // Same as ServiceAction::Plan: the caller-constructed workload
+        // already carries the --use resolution.
+        AgentAction::Plan { instance, use_: _ } => {
+            cmd_plan(workload, show_source, json, instance.as_deref())
         }
     }
 }

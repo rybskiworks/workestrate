@@ -16,39 +16,18 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     show_source: bool,
     json: bool,
     instance: Option<&str>,
-    use_values: &[String],
 ) -> Result<()> {
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
 
-    // ADR 0026(d): depends_on resolution happens INSIDE the workload's
-    // construction (every up/exec/plan path), so `workload.plan()` already
-    // reflects the overrides the caller constructed it with. This parser
-    // entry point (the workload catch-all) takes the RAW `--use` values and
-    // applies the selection here instead — the plan render itself is
-    // unchanged: the overrides only change WHICH record resolution selected.
-    // The explicit `--instance <id>` is threaded into the re-construction
-    // too (ADR 0030 P2.1 scoped preview parity).
-    let plan_holder = if use_values.is_empty() {
-        None
-    } else {
-        let overrides = crate::microsandbox::discovery::parse_use_overrides(use_values)?;
-        Some(
-            // ADR 0030 P2.1: thread the explicit `--instance <id>` through
-            // the override re-construction so `plan --instance X --use
-            // dep@id` resolves the SAME scoped dep view as the caller's
-            // already-constructed workload (main.rs passes the id into
-            // ConfigWorkload::new_with_use_overrides_and_instance).
-            crate::microsandbox::workload::ConfigWorkload::new_with_use_overrides_and_instance(
-                workload.name(),
-                &overrides,
-                instance,
-            )?,
-        )
-    };
-    let effective: &dyn crate::microsandbox::workload::Workload = match plan_holder.as_ref() {
-        Some(w) => w,
-        None => workload,
-    };
+    // ADR 0026(d)/ADR 0030 P2.1: depends_on resolution happens INSIDE the
+    // caller's workload construction — main.rs builds the plan workload via
+    // `ConfigWorkload::new_with_use_overrides_and_instance` with the parsed
+    // `--use` overrides and the explicit `--instance <id>` passthrough, so
+    // `workload.plan()` ALREADY reflects them. cmd_plan deliberately does
+    // NOT re-construct: an earlier `plan_holder` re-construction resolved
+    // depends_on a SECOND time per invocation, double-printing every
+    // resolution warning (e.g. the per-IP bind warning on `plan --use`).
+    let effective: &dyn crate::microsandbox::workload::Workload = workload;
 
     // ADR 0026/C2: `--instance <id>` renders the plan as the parallel slot
     // `<slot>@<id>` would see it — the instance name plus the prospective
