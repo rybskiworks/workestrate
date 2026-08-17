@@ -1,6 +1,8 @@
 # ADR 0030 (DRAFT): Workload instance lifecycle + conflict management + namespacing
 
-**Status:** DRAFT — proposal for adjudication (no code changes this round)
+**Status:** DRAFT — design accepted; **Phase 0 IMPLEMENTED** (conflict
+chains + shared reconcile + status/dir-aware occupancy; 2026-08-16 addendum
+below). Phases 1–4 remain proposal.
 **Date:** 2026-08-16
 **Addendum:** 2026-08-16 (user design threads — depends_on scoping, parallel deps,
 dynamic ports; refined phased plan; supersedes §6); 2026-08-16b (strategy
@@ -1113,3 +1115,61 @@ mutations after the v2 move.
   implications) stand; T3.2's `on_occupied = "auto"|"fail"` surface is
   SUPERSEDED by U5–U6;
 - §7 (out of scope) stands.
+
+---
+
+## Addendum (2026-08-16): Phase 0 IMPLEMENTED — conflict chains + shared reconcile + status/dir-aware occupancy
+
+**Status update:** Phase 0 (U10 P0 rows 0.1–0.3) is IMPLEMENTED on
+`migration/tool-model` (NO push). The remaining phases (1–4) stay as designed.
+
+### P0.1 — What landed (commit refs)
+
+| commit | scope |
+|---|---|
+| `05fd648` | **Conflict chains** (U1–U4): `DepConflict` (config/types.rs) becomes a chain type — `Vec<ConflictStep>` over `{reuse, start, replace, fail}` with scalar deserialization to a singleton (back-compat: d452575's `"reuse"` = `["reuse"]`); validation (non-empty, no dup, no after-`fail`, unknown rejected); default chain `["reuse","start","replace"]`. `decide_dep_disposition` (deps.rs) iterates the chain via the shared `decide_chain`; `DepDisposition::StartExisting` added; the executor starts a stopped/crashed dep sandbox via the detached child and ADVANCES the chain past a failed `start`. Merge: whole-value last-layer-wins (a higher-layer scalar RESETS a lower-layer list). |
+| `bf9f9d4` | **Status+dir-aware occupancy + shared reconcile on the NAMED path** (U2, P0.1/P0.2): new `reconcile` module (facts from all three stores + `decide_chain`); `build_sandbox` routes through the default chain — Reuse (healthy/booting → no-op success), StartExisting (`msb handle.start()` on Stopped/Crashed + record registration + service re-run), Replace (zombie/stale/lingering-dir → idempotent teardown + fresh create), Fail (canonical refuse), chain-exhaustion error listing attempts. Detached `up` short-circuits Reuse/Fail in the PARENT (FS-8 grace). `--replace` flag behavior unchanged. |
+| `d9df203` | **Schema regen**: `on_conflict` renders scalar-or-list; `ConflictStep` gains `start`. In-repo artifacts regenerated + template synced. |
+
+**Behavior matrix (U2) verified by unit tests for BOTH paths** (the dep path
+and the named path share `reconcile::decide_chain`): running+healthy →
+reuse; zombie (running + dead port + old) → replace; booting → reuse;
+stopped/crashed → start (StartExisting); stale record → replace; msb gone +
+dir exists → replace; nothing exists → plain start; msb unavailable +
+record → fail (fail-closed). Chain exhaustion → error listing attempts
+(`conflict chain exhausted for '<instance>': reuse (probe failed), start
+(not applicable) — …`).
+
+### P0.2 — Assessed and DELIBERATELY DEFERRED (note in the ADR)
+
+- **Bare `workload up` batch (Q6):** the recommendation was adopt the
+  reconcile step in P0.2. The batch's per-start correctness IS covered in
+  this phase — each planned start spawns a detached child whose
+  `build_sandbox` reconciles through the chain (a record-missing-but-msb-
+  occupied slot is reused/started, never blind-created). What is NOT yet
+  wired is the EXPLICIT parent-side reconcile in `cmd_workload_up_all`
+  (plan_bare_up's record-as-authoritative AlreadyRunning skip does not yet
+  re-probe a record-present-but-zombie slot, and the "started" message does
+  not distinguish a reused slot). That stays a P0.2 follow-up — small,
+  contained, and orthogonal to the correctness the child-side reconcile
+  already provides.
+- **`down` (where applicable):** assessed — `down_one` is already idempotent
+  across the record + msb row + zombie (stop_and_remove / unregister /
+  policy-dir cleanup). The lingering-DIR cleanup happens via the replace
+  disposition on the up side (P0.1), not on `down` (down must not destroy
+  the sandbox dir's logs while the operator may still want them). No change
+  needed this phase.
+- **Consumer schema copies:** the on_conflict schema changed. In-repo
+  artifacts (schemas/ + templates/) are regenerated + drift-green. The
+  PERSONAL-REPO consumer copies (registered config repos carrying a
+  `schemas/` dir) need a host-side `workestrate schemas update` after the
+  push — not touched from this phase.
+
+### P0.3 — Gates
+
+`cargo fmt --check`, `cargo clippy --all-targets -D warnings`, FULL
+`cargo test` (957 baseline → 992 total, 0 failures, incl. the U4 14-case
+decision suite + the reconcile behavior-matrix tests), `just lint-nix`,
+schema drift guards (committed + subschema) green. `schema-sync-check`
+reports ONLY the container-local consumer copies stale (tool home + personal
+store clone) — the documented host-side follow-up.
