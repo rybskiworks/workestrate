@@ -1147,17 +1147,26 @@ record → fail (fail-closed). Chain exhaustion → error listing attempts
 
 ### P0.2 — Assessed and DELIBERATELY DEFERRED (note in the ADR)
 
-- **Bare `workload up` batch (Q6):** the recommendation was adopt the
-  reconcile step in P0.2. The batch's per-start correctness IS covered in
-  this phase — each planned start spawns a detached child whose
-  `build_sandbox` reconciles through the chain (a record-missing-but-msb-
-  occupied slot is reused/started, never blind-created). What is NOT yet
-  wired is the EXPLICIT parent-side reconcile in `cmd_workload_up_all`
-  (plan_bare_up's record-as-authoritative AlreadyRunning skip does not yet
-  re-probe a record-present-but-zombie slot, and the "started" message does
-  not distinguish a reused slot). That stays a P0.2 follow-up — small,
-  contained, and orthogonal to the correctness the child-side reconcile
-  already provides.
+- **Bare `workload up` batch (Q6):** IMPLEMENTED (commit `bb576ec`).
+  `cmd_workload_up_all` now runs an explicit PARENT-side reconcile pass via
+  the pure `decide_bare_up_disposition` over BOTH lists of `plan_bare_up`:
+  `AlreadyRunning` skips are re-probed (facts from the registry record + msb
+  status + sandbox dir + host-port liveness, routed through the workload's
+  `instance.on_conflict` chain or the built-in default) — Reuse keeps the
+  skip (the message says "— reusing"), StartExisting/Replace move the
+  workload into the start set (Replace downs the slot first; a down ERROR
+  aborts the batch naming the workload), Fail keeps the skip with a
+  chain-specific message (NOT batch-fatal). Planned starts are re-probed
+  too: a record-less-but-running slot (msb Running + healthy, no registry
+  record) short-circuits to a reuse skip without spawning. A record-present
+  ZOMBIE therefore converges instead of being skipped forever, and the
+  "started" output distinguishes reused / `[replaced]` /
+  `[started stopped sandbox]` slots. JSON back-compat is preserved:
+  reused-via-reconcile names land in `already_running`; replaced and
+  started-stopped names land in `started`; chain-fail skips appear in text
+  output only. (Original deferral rationale, superseded: the child-side
+  reconcile in `build_sandbox` covered per-start correctness; the
+  parent-side pass was the missing piece.)
 - **`down` (where applicable):** assessed — `down_one` is already idempotent
   across the record + msb row + zombie (stop_and_remove / unregister /
   policy-dir cleanup). The lingering-DIR cleanup happens via the replace
@@ -1260,18 +1269,48 @@ One sub-piece (scoped/fresh dep AUTO-START) is a documented P2.1 follow-up.
   Coexistence of same-name variants uses the parallel-instance mechanism
   (`litellm@dev`) or distinct names. Namespace-aware config merge is NOT
   built (out of scope).
-- **P2.1 follow-up — scoped/fresh dep AUTO-START:** the SELECTION side is
-  implemented (the `instance` field parses, the mode computes, `--use
-  <dep>@<id>` selects a parallel record within the namespace, exports resolve
-  from a parallel record). The CREATION side — auto-starting a scoped/fresh
-  dep as a PARALLEL instance through the detached child — is NOT wired: the
-  dependent's instance id is not available at the `auto_start_dependencies`
-  call depth and the creation machinery builds singleton specs only. An
-  EXPLICIT scoped/fresh entry is an honest plan-time error naming the
-  follow-up + the `--use` workaround; a DERIVED fresh (dep strategy parallel,
-  no explicit instance) warns + falls back to shared (non-breaking). The
-  mode-aware DEFAULT exports selection (auto-picking `litellm@prime-1`
-  without `--use`) is likewise P2.1.
+- **P2.1 follow-up — scoped/fresh dep AUTO-START:** IMPLEMENTED (commits
+   `bb576ec` + `89ee36b` — the plan `--use` re-construction preview threading). The CREATION side is now wired end-to-end: main.rs
+   resolves the DEPENDENT's own parallel instance id BEFORE dep auto-start
+   (`resolve_dependent_instance_id` — explicit `--instance` passthrough,
+   else `--new` / the parallel-strategy default auto-allocates the slug
+   ONCE) and REWRITES the action (`instance = Some(id)`, `new = false`) so
+   `dispatch_service`/`dispatch_agent` reuse the SAME id (their
+   `no_instance` allocation guard skips) and `detach_args` forwards
+   `--instance <id>` to the detached child. `plan_dep_starts` takes the id:
+   a SCOPED dep targets `<dep-slot>@<dependent>-<id>` (validated via
+   `validate_instance_id`), a FRESH dep always plans a start whose concrete
+   auto-allocated slug is filled by the executor
+   (`auto_start_dependencies`), and SHARED keeps the singleton. Every fresh
+   `(dep, slug)` selection the executor started is RETURNED and INJECTED as
+   `--use <dep>@<slug>` into BOTH the construction overrides and the
+   action's forwarded `use_` list — the detached child's own planner marks
+   the fresh dep Satisfied (no second allocation); scoped needs no
+   injection (the child re-derives `<dependent>-<id>` from its forwarded
+   `--instance`). Scoped/fresh dep starts run through
+   `start_service_detached_instance` on the parallel target with the LOCKED
+   ports precedence (`dep_port_auto`): a parallel target port-autos UNLESS
+   the dep declares its own `instance.port` policy. The mode-aware DEFAULT
+   exports selection is likewise implemented: `resolve_depends_on_full`
+   (new seam; `resolve_depends_on` is a None wrapper) picks the
+   `<dep>@<workload>-<id>` record for a scoped dep of a parallel dependent
+   — absent+required refuses naming `workestrate workload up <dep>
+   --instance <scoped_id>`, absent+optional falls back to the declared port
+   with a scoped-aware reason; Fresh without `--use` keeps singleton
+   selection (the fresh record is only knowable via the injected `--use`).
+   The constructor threading lands via
+   `ConfigWorkload::new_with_use_overrides_and_instance` (the detached
+   child re-parses its own CLI, so its `--instance <id>` reaches its
+    construction identically). `workload plan <dependent> --instance <id>`
+    threads the id the same way (EXPLICIT passthrough ONLY — plan is
+    read-only and never allocates a slug, so `resolve_dependent_instance_id`
+    is not called for it; the pure `plan_preview_instance_id` seam), so plan
+    renders the SCOPED dep view of the running dependent it previews;
+    cmd_plan's `--use` re-construction (`plan_holder`) threads the id too,
+    keeping `plan --instance X --use dep@id` consistent. The P2 stopgap
+    error and the derived-fresh warn+fallback are GONE — real behavior.
+    (Original P2.2 text, superseded: the SELECTION side only was
+    implemented; the CREATION side was not wired.)
 
 ### P2.3 — Gates
 
