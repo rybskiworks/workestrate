@@ -1,10 +1,12 @@
 # ADR 0030 (DRAFT): Workload instance lifecycle + conflict management + namespacing
 
-**Status:** DRAFT — design accepted; **Phase 0 + Phase 1 + Phase 2 IMPLEMENTED**
-(conflict chains + shared reconcile + status/dir-aware occupancy; the
-per-workload `instance` policy schema; namespace scoping + DepInstanceMode +
-parallel strategy; 2026-08-16 addenda below). Phases 3–4 remain proposal;
-scoped/fresh dep auto-start is a P2.1 follow-up.
+**Status:** DRAFT — design accepted; **Phase 0 + Phase 1 + Phase 2 + Phase 3
+IMPLEMENTED** (conflict chains + shared reconcile + status/dir-aware
+occupancy; the per-workload `instance` policy schema; namespace scoping +
+DepInstanceMode + parallel strategy; dynamic port selection + litellm
+migration prep; 2026-08-16 addenda below). Phase 4 remains proposal;
+scoped/fresh dep auto-start is a P2.1 follow-up; the U7 A–D host e2e is
+deferred to the host batch.
 **Date:** 2026-08-16
 **Addendum:** 2026-08-16 (user design threads — depends_on scoping, parallel deps,
 dynamic ports; refined phased plan; supersedes §6); 2026-08-16b (strategy
@@ -1281,3 +1283,74 @@ green. `schema-sync-check` reports only the container-local consumer copies
 stale (tool home + personal store clone) — the documented host-side
 `workestrate schemas update` follow-up. Dynamic-port selection behavior
 (`instance.port`) lands in Phase 3.
+
+---
+
+## Addendum (2026-08-16): Phase 3 IMPLEMENTED — dynamic port selection + litellm migration prep
+
+**Status update:** Phase 3 (U10 P3 row) is IMPLEMENTED on `migration/tool-model`
+(NO push) + the personal config repo. The A–D host e2e sequence (U7) is
+DEFERRED to the host batch per user directive.
+
+### P3.1 — What landed (commit refs)
+
+| commit | scope |
+|---|---|
+| `bed9eeb` (tool) | **Dynamic port selection** (addendum 2 U6 behavior matrix): pure `select_preferred_port(preferred, chain, is_occupied, auto_allocate)` — try preferred; if occupied walk the on_occupied chain (increment bare +1..+100 \| {limit=N} \| {range=[S,E]}, in-order probe-before-bind, occupied → next; auto any-free ephemeral; fail terminal) — and Exhausted lists the attempts on chain exhaustion. `apply_instance_port_policy` wired into build_sandbox (Strict = current behavior; Auto = all ports auto-allocate; Preferred = select on the primary port). `Workload::instance_port()` default + ConfigWorkload override. The registry record carries the EFFECTIVE port (host_ports from the mutated plan), so named-port exports render the chosen port (verified by a discovery test). Also fixes a P2 namespace-resolution bug (non-repo declaring layers now resolve to the legacy "default" namespace via `repo_key_for_optional`). |
+| `1675bb1` (personal) | **litellm migration prep**: capsule `instance.port = { preferred = 4000, on_occupied = ["increment", "auto"] }`; the prime smoke reads litellm's EFFECTIVE api port from `workestrate ps --json` (new litellm-port check) and replaces all SIX hardcoded :4000 probe references (models-json baseUrl, litellm-guest, litellm-subst, litellm-host, litellm-host-auth) with the effective port; the justfile litellm-health recipe likewise. |
+
+### P3.2 — Port selection semantics (as implemented)
+
+- **Strict(n)** → current behavior: declared host ports stand; an occupied
+  fixed port errors at create (check_port_collisions_locked).
+- **"auto"** → every declared port auto-allocates (host=0 semantics, OS
+  ephemeral any-free).
+- **{ preferred = N, on_occupied = [...] }** → try N; if occupied walk the
+  chain: increment (bare preferred+1..+100 | {limit=N} | {range=[S,E]},
+  in-order probe-before-bind, occupied → next; registry-recorded ports on the
+  same bind skipped) → auto (any-free ephemeral) → fail (terminal). Chain
+  exhaustion → error listing the attempts in order.
+- The registry record carries the EFFECTIVE port (host_ports from the mutated
+  plan — already true for host=0, now true for the preferred path), so
+  named-port exports (depends_on → LITELLM_ADDR) render the chosen port
+  automatically (verified by a discovery test).
+- The occupied-check correctness: the preferred path probes-and-advances
+  INSTEAD of erroring when on_occupied ≠ ["fail"] (the strict path keeps the
+  hard error).
+
+### P3.3 — Decisions / deviations
+
+- **Port selection is a PURE function** over an (occupied-set) predicate,
+  fully unit-tested with closure-based occupied sets (no real binds). The
+  OS-bind probe path (`port_is_occupied`) is exercised only via the
+  integration path (host-deferred for real binds).
+- **The preferred policy applies to the PRIMARY (first declared) port** of a
+  single-port workload (litellm's api port). Multi-port workloads with a
+  preferred policy are not specially handled this phase (the policy is
+  per-workload; a multi-port workload would need per-port policy — out of
+  scope, noted).
+- **P2 namespace fix folded in**: `namespace_for` now uses
+  `repo_key_for_optional`, so a NON-repo declaring layer (synthetic /
+  single-file / test temp dir) resolves to the legacy "default" namespace
+  instead of a canonical path — which broke `--use` selection and the
+  collision-visibility path for non-repo configs (surfaced by P3's tests).
+
+### P3.4 — Gates
+
+Tool repo: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`,
+FULL `cargo test` (1045 baseline → **1058 total, 0 failures**, incl. the 12
+new port-selection/exports tests), `just lint-nix`, schema drift (committed +
+subschema) green, golden plans byte-identical, spec-examples + scaffold
+green. Personal repo: `nix flake check --no-build` PASS (all derivations
+evaluate), smoke `bash -n` PASS, litellm capsule TOML valid + schema-shape
+verified. `schema-sync-check` reports only the container-local consumer
+copies stale (tool home + personal store clone) — the documented host-side
+`workestrate schemas update` follow-up.
+
+### P3.5 — Deferred host batch (U7 A–D e2e)
+
+The A–D e2e sequence (preferred path → increment path → increment skip +
+explicit range → auto fallback) is the HOST batch, deferred per user
+directive. The checklist lives in the prime handover §5x. The port-selection
+DECISION logic is fully unit-tested; the real-bind e2e (occupying 4000/4001,
+observing the effective port in ps + exports + models.json) runs on the host.
