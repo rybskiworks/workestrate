@@ -1,12 +1,13 @@
 # ADR 0030 (DRAFT): Workload instance lifecycle + conflict management + namespacing
 
 **Status:** DRAFT — design accepted; **Phase 0 + Phase 1 + Phase 2 + Phase 3
-IMPLEMENTED** (conflict chains + shared reconcile + status/dir-aware
-occupancy; the per-workload `instance` policy schema; namespace scoping +
-DepInstanceMode + parallel strategy; dynamic port selection + litellm
-migration prep; 2026-08-16 addenda below). Phase 4 remains proposal;
-scoped/fresh dep auto-start is a P2.1 follow-up; the U7 A–D host e2e is
-deferred to the host batch.
++ Phase 4 (§4.4 observability surface) IMPLEMENTED** (conflict chains +
+shared reconcile + status/dir-aware occupancy; the per-workload `instance`
+policy schema; namespace scoping + DepInstanceMode + parallel strategy;
+dynamic port selection + litellm migration prep; the `instances` verb +
+`ps` 5-state status + `workloads` policy columns; 2026-08-16/17 addenda
+below). §4.5 versions/config variants remains design; the U7 A–D host e2e
+is deferred to the host batch.
 **Date:** 2026-08-16
 **Addendum:** 2026-08-16 (user design threads — depends_on scoping, parallel deps,
 dynamic ports; refined phased plan; supersedes §6); 2026-08-16b (strategy
@@ -1393,3 +1394,48 @@ explicit range → auto fallback) is the HOST batch, deferred per user
 directive. The checklist lives in the prime handover §5x. The port-selection
 DECISION logic is fully unit-tested; the real-bind e2e (occupying 4000/4001,
 observing the effective port in ps + exports + models.json) runs on the host.
+
+---
+
+## Addendum (2026-08-17): Phase 4 IMPLEMENTED — the §4.4 observability surface
+
+**Status update:** Phase 4 (the T6/U10 P4 row — §4.4 CLI / observability
+surface) is IMPLEMENTED on `migration/tool-model` (NO push). This resolves
+Q5 per its recommendation (new verb, ADR 0027 style). §4.5 (versions /
+config variants) stays as designed — the `label` display columns are in;
+semantic version grouping is not a P4 deliverable.
+
+### P4.1 — What landed (commit refs)
+
+| commit | scope |
+|---|---|
+| `1db3b02` | **`workestrate instances [<workload>]`** (new verb, ADR 0027 style — resolves Q5): lists every registry record with the reconciled 5-state status (pure `classify_status` over the shared `gather_facts` reconcile facts — `running-healthy` / `running-unhealthy` (the keep-alive zombie) / `stopped` / `crashed` / `stale-record` / `unknown`), text grouped by workload with slot/kind/ports/policy (`strategy`/`on_conflict`/`port`) + `label`, `--json` the extended record array (snake_case status). **`workestrate workloads`** gains the namespace + policy columns (`strategy`/`on_conflict`/`port`/`label`) in text and JSON (registry-based, unchanged liveness posture). **`workestrate ps`** gains the reconciled STATUS column in text (a zombie shows `running-unhealthy`, NOT `Running`; `-` when facts are unavailable) and an additive `status` field in JSON — `skip_serializing_if` on `None`, so legacy `ps --json` rows stay byte-identical; the `stale` flag and the ADR 0021 §4 stale-remediation footer remain for back-compat. |
+
+### P4.2 — Decisions / deviations
+
+- **Q5 resolved:** the new verb (ADR 0027 style), as recommended — `ps`
+  stays the live-sandbox view, `workloads` the configured-workload view,
+  `instances` the reconciled record view.
+- **The `ps` TEXT renderer carries the status too** (the §4.4 bullet says
+  `ps` "gains the reconciled status classification", not JSON-only): a
+  zombie shows `running-unhealthy` rather than a bare `Running`. The stale
+  footer (ADR 0021 §4) is unchanged.
+- **Legacy `ps --json` stays byte-identical:** `status` serializes only
+  when populated (the pure `ps()` leaves it `None`; `cmd_ps` fills it
+  best-effort — a fact-gathering error notes on stderr and omits the
+  field).
+- **§4.4's fourth bullet (`plan` renders the policy-driven disposition) is
+  NOT part of this P4 drop:** plan's Display already renders the declared
+  policy + chain (P1/P3); a what-`up`-would-do disposition preview remains
+  possible future work.
+
+### P4.3 — Gates
+
+Tool repo: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`,
+FULL `cargo test` (1078 passed baseline → **1094 total, 0 failures**,
+incl. the 8 `classify_status` classifier tests + the instances/ps/workloads
+render + JSON-shape tests), golden plans byte-identical (golden-check
+covers `plan` only), spec-examples + scaffold + schema drift checks green.
+`schema-sync-check` reports only the container-local consumer copies stale —
+the documented host-side `workestrate schemas update` follow-up
+(pre-existing, unchanged).
