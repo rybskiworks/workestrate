@@ -513,27 +513,155 @@ pub struct NetworkConfig {
     pub ingress: Vec<IngressRule>,
 }
 
-/// Auto-start conflict policy for a dependency (`depends_on.<dep>.on_conflict`;
-/// ADR 0026 addendum 2026-08-16). Decides what dependency auto-start does when
-/// the dep's singleton slot is already occupied at auto-start time (a
-/// port-registry record OR an msb-running sandbox).
-///
-/// TOML values: `on_conflict = "reuse"` / `"replace"` / `"fail"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+/// One step in a conflict chain (ADR 0030 addendum 2). A disposition a
+/// lifecycle verb tries against an occupied slot, in chain order, until one
+/// applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
-pub enum DepConflict {
-    /// Use the running instance when it is healthy (short host TCP port
-    /// probe); auto-replace (down + start fresh) when the exec'd process is
-    /// dead inside the keep-alive sandbox. A dep with no published ports
-    /// cannot be probed cheaply, so it is reused optimistically (use
-    /// `on_conflict = "replace"` to force a fresh start). The default.
+pub enum ConflictStep {
+    /// Use the running instance when healthy (500ms host TCP port probe) or
+    /// still booting (<30s record). Not applicable to a stopped/crashed row.
     Reuse,
-    /// Always down + start fresh, replacing any running instance.
+    /// Start a stopped/crashed sandbox (msb `handle.start()`); on failure the
+    /// executor continues the chain.
+    Start,
+    /// Always down/remove + fresh create.
     Replace,
-    /// Refuse with the standard occupied-instance error (the pre-fix failure
-    /// behavior) instead of reusing or replacing.
+    /// Refuse with the standard occupied-instance message (terminal; nothing
+    /// may follow it in a chain).
     Fail,
+}
+
+/// Schemars-boundary-only helper for the `on_conflict` field shape (ADR 0030
+/// addendum 2): the field accepts EITHER a scalar string (back-compat,
+/// d452575) OR an ordered list of strings. Never constructed/deserialized —
+/// `DepConflict`'s custom deserializer normalizes both forms at parse time.
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum ConflictChainShape {
+    Scalar(ConflictStep),
+    Chain(Vec<ConflictStep>),
+}
+
+/// Auto-start conflict policy for a dependency (`depends_on.<dep>.on_conflict`;
+/// ADR 0026 addendum 2026-08-16; ADR 0030 addendum 2). An ORDERED CHAIN of
+/// steps attempted until one succeeds. TOML accepts a scalar (back-compat:
+/// d452575's `"reuse"` parses as `["reuse"]`) or an ordered list over
+/// {reuse, start, replace, fail}.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DepConflict(pub Vec<ConflictStep>);
+
+impl schemars::JsonSchema for DepConflict {
+    fn schema_name() -> String {
+        "DepConflict".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        // The spec's `#[schemars(with = "ConflictChainShape")]` attribute only
+        // takes effect through the derive macro; with the manual Deserialize
+        // impl the struct cannot derive JsonSchema, so delegate to the
+        // boundary helper directly (same rendered shape: scalar | list).
+        ConflictChainShape::json_schema(gen)
+    }
+}
+
+/// Validate a conflict chain per ADR 0030 addendum 2 (U3): non-empty, no
+/// duplicates, no elements after `fail` (terminal). Unknown elements are
+/// rejected by serde's closed vocabulary before this runs.
+pub(crate) fn validate_conflict_chain(steps: &[ConflictStep]) -> Result<(), String> {
+    if steps.is_empty() {
+        return Err(
+            "conflict chain must not be empty (on_conflict needs at least one element)".to_string(),
+        );
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (i, step) in steps.iter().enumerate() {
+        if !seen.insert(*step) {
+            return Err(format!(
+                "conflict chain contains duplicate element '{}' at position {}",
+                step_name(*step),
+                i
+            ));
+        }
+        if *step == ConflictStep::Fail && i + 1 < steps.len() {
+            return Err(format!(
+                "conflict chain: 'fail' is terminal; no elements may follow it (element {} is after 'fail')",
+                step_name(steps[i + 1])
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn step_name(step: ConflictStep) -> &'static str {
+    match step {
+        ConflictStep::Reuse => "reuse",
+        ConflictStep::Start => "start",
+        ConflictStep::Replace => "replace",
+        ConflictStep::Fail => "fail",
+    }
+}
+
+impl DepConflict {
+    /// d452575 back-compat singleton: `on_conflict = "reuse"`.
+    pub fn reuse() -> Self {
+        Self(vec![ConflictStep::Reuse])
+    }
+    /// d452575 back-compat singleton: `on_conflict = "replace"`.
+    pub fn replace() -> Self {
+        Self(vec![ConflictStep::Replace])
+    }
+    /// d452575 back-compat singleton: `on_conflict = "fail"`.
+    pub fn fail() -> Self {
+        Self(vec![ConflictStep::Fail])
+    }
+    /// ADR 0030 default chain: reuse-if-healthy, start-if-stopped,
+    /// replace-if-zombie/stale.
+    pub fn default_chain() -> Self {
+        Self(vec![
+            ConflictStep::Reuse,
+            ConflictStep::Start,
+            ConflictStep::Replace,
+        ])
+    }
+}
+
+impl<'de> Deserialize<'de> for DepConflict {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct DepConflictVisitor;
+
+        impl<'de> de::Visitor<'de> for DepConflictVisitor {
+            type Value = DepConflict;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a conflict chain: a scalar \"reuse\"/\"start\"/\"replace\"/\"fail\" \
+                     or an ordered list of them",
+                )
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                // Scalar back-compat (d452575): normalize to a singleton chain.
+                let step = ConflictStep::deserialize(de::value::StrDeserializer::new(v))?;
+                Ok(DepConflict(vec![step]))
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut steps = Vec::new();
+                while let Some(step) = seq.next_element::<ConflictStep>()? {
+                    steps.push(step);
+                }
+                validate_conflict_chain(&steps).map_err(de::Error::custom)?;
+                Ok(DepConflict(steps))
+            }
+        }
+
+        deserializer.deserialize_any(DepConflictVisitor)
+    }
 }
 
 /// A single dependency declaration of a workload
@@ -559,12 +687,14 @@ pub struct DependsOnSpec {
     #[serde(default)]
     pub exports: HashMap<String, String>,
     /// Auto-start conflict policy when the dependency's singleton slot is
-    /// already occupied (ADR 0026 addendum 2026-08-16). `None` (default)
-    /// resolves to `"reuse"` at auto-start time. "reuse": reuse the running
-    /// instance when healthy (host port probe), auto-replace (down + start
-    /// fresh) when the exec'd process is dead inside the keep-alive sandbox;
-    /// "replace": always down + start fresh; "fail": refuse with the standard
-    /// occupied message.
+    /// already occupied (ADR 0026 addendum 2026-08-16; ADR 0030 addendum 2).
+    /// Accepts a scalar (back-compat: d452575's `"reuse"` parses as
+    /// `["reuse"]`) or an ordered list over {reuse, start, replace, fail}.
+    /// `None` (default) resolves to the default chain
+    /// `["reuse", "start", "replace"]` at decision time: reuse the running
+    /// instance when healthy (host port probe) or still booting, start a
+    /// stopped/crashed sandbox, then replace (down + start fresh) a
+    /// keep-alive zombie or stale record.
     #[serde(default)]
     pub on_conflict: Option<DepConflict>,
 }
@@ -1029,13 +1159,13 @@ evn = "X"
     }
 
     /// `depends_on.<dep>.on_conflict` accepts the three closed variants and
-    /// defaults to None (the "reuse" default is applied at auto-start time).
+    /// defaults to None (the default chain is applied at decision time).
     #[test]
     fn depends_on_on_conflict_variants_parse_and_default_none() {
         for (value, expected) in [
-            ("reuse", DepConflict::Reuse),
-            ("replace", DepConflict::Replace),
-            ("fail", DepConflict::Fail),
+            ("reuse", DepConflict::reuse()),
+            ("replace", DepConflict::replace()),
+            ("fail", DepConflict::fail()),
         ] {
             let raw = format!(
                 "schema_version = 1\n\n\
@@ -1118,7 +1248,213 @@ on_conflict = "replace"
         assert_eq!(reparsed, config);
         assert_eq!(
             reparsed.workloads["pi"].depends_on["litellm"].on_conflict,
-            Some(DepConflict::Replace)
+            Some(DepConflict::replace())
+        );
+    }
+
+    /// An ordered `on_conflict` LIST parses into the chain, preserving order.
+    #[test]
+    fn on_conflict_chain_list_parses_and_normalizes() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = ["reuse", "start", "replace"]
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].depends_on["litellm"].on_conflict,
+            Some(DepConflict(vec![
+                ConflictStep::Reuse,
+                ConflictStep::Start,
+                ConflictStep::Replace,
+            ])),
+            "an ordered list must parse into the chain in order"
+        );
+    }
+
+    /// A scalar `on_conflict` normalizes to a SINGLETON chain (back-compat).
+    #[test]
+    fn on_conflict_scalar_normalizes_to_singleton() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = "reuse"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let conflict = config.workloads["pi"].depends_on["litellm"]
+            .on_conflict
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            conflict.0.len(),
+            1,
+            "scalar must normalize to a singleton chain"
+        );
+        assert_eq!(conflict.0[0], ConflictStep::Reuse);
+    }
+
+    /// An empty `on_conflict` list is rejected (a chain needs at least one
+    /// element).
+    #[test]
+    fn on_conflict_empty_list_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = []
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must not be empty"),
+            "empty chain must be rejected: {msg}"
+        );
+    }
+
+    /// A duplicate element in the chain is rejected.
+    #[test]
+    fn on_conflict_duplicate_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = ["reuse", "reuse"]
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("duplicate"),
+            "duplicate chain element must be rejected: {msg}"
+        );
+    }
+
+    /// `fail` is terminal: nothing may follow it. A singleton `["fail"]`
+    /// chain parses fine.
+    #[test]
+    fn on_conflict_after_fail_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = ["reuse", "fail", "replace"]
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("terminal"),
+            "elements after 'fail' must be rejected: {msg}"
+        );
+
+        let ok = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = ["fail"]
+"#;
+        let config: ConfigFile = toml::from_str(ok).unwrap();
+        assert_eq!(
+            config.workloads["pi"].depends_on["litellm"].on_conflict,
+            Some(DepConflict::fail()),
+            "a singleton ['fail'] chain must parse"
+        );
+    }
+
+    /// An unknown chain element is rejected by serde's closed vocabulary.
+    #[test]
+    fn on_conflict_unknown_element_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = ["reuse", "nuke"]
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown variant"),
+            "unknown chain element must be rejected: {msg}"
+        );
+        assert!(msg.contains("nuke"), "error must name the value: {msg}");
+    }
+
+    /// Scalar and singleton-list forms parse to EQUAL chains (round-trip
+    /// equality — the merge last-layer-wins test depends on this).
+    #[test]
+    fn dep_conflict_scalar_list_round_trip_equality() {
+        let scalar = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = "reuse"
+"#;
+        let list = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = ["reuse"]
+"#;
+        let a: ConfigFile = toml::from_str(scalar).unwrap();
+        let b: ConfigFile = toml::from_str(list).unwrap();
+        assert_eq!(
+            a.workloads["pi"].depends_on["litellm"].on_conflict,
+            b.workloads["pi"].depends_on["litellm"].on_conflict,
+            "scalar and singleton-list forms must normalize to equal chains"
         );
     }
 

@@ -141,12 +141,14 @@ scope = "local"
 [workloads.example-service.depends_on.example-litellm]
 env = "LITELLM_ADDR"
 required = false
-# on_conflict (default "reuse"): what dependency auto-start does when the
-# dep's singleton slot is already occupied at auto-start time. "reuse":
-# reuse the running instance when healthy (short host port probe);
-# auto-replace (down + start fresh) when the exec'd process is dead inside
-# the keep-alive sandbox. "replace": always down + start fresh. "fail":
-# refuse with the standard occupied-instance error.
+# on_conflict (default chain ["reuse", "start", "replace"]; ADR 0030
+# addendum 2): what dependency auto-start does when the dep's singleton slot
+# is occupied at auto-start time. Accepts a scalar (back-compat: "reuse" =
+# ["reuse"]) or an ordered list tried until one succeeds: "reuse" the running
+# instance when healthy (short host port probe) or still booting; "start" a
+# stopped/crashed sandbox; "replace" (down + start fresh) a keep-alive zombie
+# or stale record; "fail" refuses with the standard occupied-instance error
+# (terminal). This reference config keeps the d452575 scalar form.
 on_conflict = "reuse"
 
 # Exports-only depends_on (P2 namespaced ports): resolves the DEPENDENCY's

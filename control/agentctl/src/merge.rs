@@ -1520,8 +1520,33 @@ mod tests {
         let (merged2, _) = merge_layers(&[base(), top2])?;
         assert_eq!(
             merged2.workloads["pi"].depends_on["litellm"].on_conflict,
-            Some(crate::config::DepConflict::Fail),
+            Some(crate::config::DepConflict::fail()),
             "a higher layer explicitly setting on_conflict wins"
+        );
+        Ok(())
+    }
+
+    /// ADR 0030 addendum 2 U4 #14: a higher layer re-declaring `on_conflict`
+    /// as a SCALAR RESETS a lower layer's LIST — the merge is whole-value
+    /// replacement per dep, never append. The scalar normalizes to a
+    /// singleton chain at parse time, so the merged chain is exactly
+    /// `["reuse"]`.
+    #[test]
+    fn depends_on_on_conflict_scalar_resets_list_last_layer_wins() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.pi.depends_on.litellm]\nenv = \"LITELLM_URL\"\non_conflict = [\"reuse\", \"start\", \"replace\"]",
+        )
+        .expect("base layer must parse");
+        let top = Layer::from_string(
+            "top",
+            "schema_version = 1\n\n[workloads.pi]\n\n[workloads.pi.depends_on.litellm]\nenv = \"LITELLM_URL\"\non_conflict = \"reuse\"",
+        )?;
+        let (merged, _) = merge_layers(&[base, top])?;
+        assert_eq!(
+            merged.workloads["pi"].depends_on["litellm"].on_conflict,
+            Some(crate::config::DepConflict::reuse()),
+            "a scalar on_conflict in the top layer must RESET the base list to a singleton chain"
         );
         Ok(())
     }

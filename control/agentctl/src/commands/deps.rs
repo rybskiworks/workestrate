@@ -30,30 +30,19 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::config::{ConfigFile, DepConflict};
+use crate::config::{ConfigFile, ConflictStep, DepConflict};
 use crate::microsandbox::depgraph::{dep_closure, singleton_record, topo_all};
 use crate::microsandbox::port_registry::{list_records, SandboxInstanceRecord};
-use crate::microsandbox::runtime::time::record_age_secs;
+use crate::microsandbox::runtime::reconcile::{ChainStep, ReconcileFacts};
 use crate::microsandbox::runtime::{
     down_instance, format_refuse_message, wait_for_port, DownStatus, DEFAULT_WAIT,
 };
 use crate::microsandbox::slots::slot_for;
-use microsandbox::{MicrosandboxError, Sandbox};
 
 /// How long to poll the registry for a freshly-started dep's singleton
 /// record before falling back to its DECLARED host ports (bounded within
 /// the overall [`DEFAULT_WAIT`] readiness budget).
 const RECORD_POLL_BUDGET: Duration = Duration::from_secs(5);
-
-/// Bounded budget for the reuse health probe (host TCP connect to each
-/// published port, shared deadline). Short by design: a healthy running dep
-/// answers in milliseconds; a dead-port zombie burns at most this budget.
-const REUSE_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// A slot whose record was created within this window is treated as BOOTING,
-/// not a keep-alive zombie: auto-start must never down a dep that is still
-/// coming up (a fresh `up`'s wait-for-port is 15s, so 30s covers a slow boot).
-const BOOT_GRACE: Duration = Duration::from_secs(30);
 
 /// Registry poll interval while waiting for the detached child's record.
 const RECORD_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -107,14 +96,25 @@ pub enum BareSkip {
 }
 
 /// The dep's auto-start conflict policy from the DEPENDENT's depends_on spec
-/// (ADR 0026 addendum 2026-08-16). `None` (omitted) resolves to "reuse".
+/// (ADR 0026 addendum 2026-08-16; ADR 0030 addendum 2). `None` (omitted)
+/// resolves to the default chain ["reuse", "start", "replace"].
 fn dep_conflict(config: &ConfigFile, dependent: &str, dep: &str) -> DepConflict {
     config
         .workloads
         .get(dependent)
         .and_then(|w| w.depends_on.get(dep))
-        .and_then(|s| s.on_conflict)
-        .unwrap_or(DepConflict::Reuse)
+        .and_then(|s| s.on_conflict.clone())
+        .unwrap_or(DepConflict::default_chain())
+}
+
+impl DepStartAction {
+    /// The dep's auto-start conflict chain (both variants carry it).
+    fn conflict(&self) -> &DepConflict {
+        match self {
+            DepStartAction::StartService { conflict, .. } => conflict,
+            DepStartAction::Satisfied { conflict, .. } => conflict,
+        }
+    }
 }
 
 /// Executor disposition for one planned dependency action after runtime
@@ -125,6 +125,9 @@ pub enum DepDisposition {
     /// Reuse the running instance (healthy, or no ports to probe, or still
     /// within the boot grace window).
     Reuse { dep: String, slot: String },
+    /// Start a stopped/crashed dep sandbox via msb `handle.start()` — the
+    /// detached child executes it (ADR 0030 addendum 2 `start` element).
+    StartExisting { dep: String, slot: String },
     /// Down the slot (idempotent — clears stale records) then start fresh.
     Replace {
         dep: String,
@@ -146,89 +149,39 @@ pub enum DepDisposition {
 }
 
 /// Decide the executor disposition for one planned action from the runtime
-/// facts:
-///
-/// - `msb_running`: `Sandbox::get(slot)` resolved Ok (the sandbox exists).
-/// - `healthy`: host port probe outcome (`Some(true)` any port connected,
-///   `Some(false)` none within budget, `None` the dep declares no ports).
-/// - `recently_started`: the slot's record exists and its `created_at` is
-///   within [`BOOT_GRACE`] — still booting, never replace under "reuse".
-///
-/// Rules (ADR 0026 addendum 2026-08-16):
-///
-/// - "reuse" (default): free slot → Start; msb-running + healthy (or no
-///   ports, or booting) → Reuse; msb-running + dead port + old record →
-///   Replace (keep-alive zombie); record present + msb NOT running → Replace
-///   (stale record — down clears it, then start fresh).
-/// - "replace": always Replace (idempotent down + start fresh).
-/// - "fail": free slot → Start; occupied → Fail (the pre-fix failure mode).
+/// facts by iterating the action's conflict CHAIN in order (ADR 0030
+/// addendum 2): the first element whose precondition holds wins. Returns
+/// Err (chain exhausted) when no element applies.
 pub fn decide_dep_disposition(
+    chain: &[ConflictStep],
     action: &DepStartAction,
     workload_name: &str,
-    msb_running: bool,
-    healthy: Option<bool>,
-    recently_started: bool,
-) -> DepDisposition {
-    let reuse_ok = healthy != Some(false) || recently_started;
-    match action {
+    facts: &ReconcileFacts,
+) -> Result<DepDisposition> {
+    let step = crate::microsandbox::runtime::reconcile::decide_chain(
+        chain,
+        facts,
+        slot_of_action(action),
+    )?;
+    let (dep, slot, ports) = match action {
         DepStartAction::StartService {
-            dep,
-            slot,
-            ports,
-            conflict,
-        } => {
-            let (dep, slot, ports) = (dep.clone(), slot.clone(), ports.clone());
-            match conflict {
-                DepConflict::Reuse => {
-                    if !msb_running {
-                        DepDisposition::Start { dep, slot, ports }
-                    } else if reuse_ok {
-                        DepDisposition::Reuse { dep, slot }
-                    } else {
-                        DepDisposition::Replace { dep, slot, ports }
-                    }
-                }
-                DepConflict::Replace => DepDisposition::Replace { dep, slot, ports },
-                DepConflict::Fail => {
-                    if msb_running {
-                        DepDisposition::Fail {
-                            dep,
-                            slot,
-                            workload: workload_name.to_string(),
-                        }
-                    } else {
-                        DepDisposition::Start { dep, slot, ports }
-                    }
-                }
-            }
-        }
+            dep, slot, ports, ..
+        } => (dep.clone(), slot.clone(), ports.clone()),
         DepStartAction::Satisfied {
+            dep, slot, ports, ..
+        } => (dep.clone(), slot.clone(), ports.clone()),
+    };
+    Ok(match step {
+        ChainStep::Start => DepDisposition::Start { dep, slot, ports },
+        ChainStep::Reuse => DepDisposition::Reuse { dep, slot },
+        ChainStep::StartExisting => DepDisposition::StartExisting { dep, slot },
+        ChainStep::Replace => DepDisposition::Replace { dep, slot, ports },
+        ChainStep::Fail => DepDisposition::Fail {
             dep,
             slot,
-            ports,
-            conflict,
-        } => {
-            let (dep, slot, ports) = (dep.clone(), slot.clone(), ports.clone());
-            match conflict {
-                DepConflict::Reuse => {
-                    if !msb_running {
-                        // Record exists but the sandbox is gone: stale record.
-                        DepDisposition::Replace { dep, slot, ports }
-                    } else if reuse_ok {
-                        DepDisposition::Reuse { dep, slot }
-                    } else {
-                        DepDisposition::Replace { dep, slot, ports }
-                    }
-                }
-                DepConflict::Replace => DepDisposition::Replace { dep, slot, ports },
-                DepConflict::Fail => DepDisposition::Fail {
-                    dep,
-                    slot,
-                    workload: workload_name.to_string(),
-                },
-            }
-        }
-    }
+            workload: workload_name.to_string(),
+        },
+    })
 }
 
 /// Plan the dependency starts for `name` (PURE — no KVM, no spawn).
@@ -390,35 +343,61 @@ pub async fn auto_start_dependencies(
         use_overrides,
     )?;
     for action in actions {
-        // ADR 0026 addendum 2026-08-16: reconcile the planner's record view
-        // with the msb runtime BEFORE starting — a slot msb reports Running is
-        // never blind-started into the occupancy gate. The record-as-
-        // authoritative planner can miss a running sandbox when the registry
-        // record is absent/stale in the active state dir.
-        let msb_running = match &action {
-            DepStartAction::StartService { slot, .. } => sandbox_running(slot).await?,
-            DepStartAction::Satisfied { slot, .. } => sandbox_running(slot).await?,
+        // ADR 0030 Phase 0: reconcile the planner's record view with the msb
+        // runtime + sandbox dir + host-port liveness BEFORE starting, then
+        // route the disposition through the dep's conflict CHAIN (default
+        // ["reuse", "start", "replace"]). The record-as-authoritative planner
+        // can miss a running sandbox when the registry record is
+        // absent/stale in the active state dir.
+        let facts = crate::microsandbox::runtime::reconcile::gather_facts(
+            &state_dir,
+            slot_of_action(&action),
+            declared_ports_of(&action),
+        )
+        .await?;
+        let mut chain = action.conflict().0.clone();
+        let disposition = loop {
+            match decide_dep_disposition(&chain, &action, workload_name, &facts)? {
+                DepDisposition::StartExisting { dep, slot } => {
+                    // The detached child re-reconciles and executes
+                    // handle.start(); if that fails the child errors and we
+                    // fall through here — advance the chain past `start`.
+                    match start_service_detached(&dep, EnsurePreflight::Run { force: false }).await
+                    {
+                        Ok(()) => break DepDisposition::StartExisting { dep, slot },
+                        Err(e) => {
+                            match crate::microsandbox::runtime::reconcile::chain_after(
+                                &chain,
+                                ConflictStep::Start,
+                            ) {
+                                Some(rest) => {
+                                    chain = rest.to_vec();
+                                    continue;
+                                }
+                                None => anyhow::bail!(
+                                    "conflict chain exhausted for '{}' after a failed start: {}",
+                                    slot,
+                                    e
+                                ),
+                            }
+                        }
+                    }
+                }
+                d => break d,
+            }
         };
-        let healthy = if msb_running {
-            probe_dep_health(
-                &state_dir,
-                slot_of_action(&action),
-                declared_ports_of(&action),
-            )?
-        } else {
-            None
-        };
-        let recently_started = recently_started(&state_dir, slot_of_action(&action))?;
-        let disposition = decide_dep_disposition(
-            &action,
-            workload_name,
-            msb_running,
-            healthy,
-            recently_started,
-        );
         match disposition {
             DepDisposition::Reuse { dep, slot } => {
                 println!("dependency '{dep}' already running (slot '{slot}') — reusing");
+            }
+            DepDisposition::StartExisting { dep, slot } => {
+                println!("started dependency '{dep}' (slot '{slot}') [started stopped sandbox]");
+                wait_until_ready(
+                    &state_dir,
+                    &format!("dependency '{dep}' of '{workload_name}'"),
+                    &slot,
+                    declared_ports_of(&action),
+                )?;
             }
             DepDisposition::Replace { dep, slot, ports } => {
                 let down = down_instance(&state_dir, &slot).await;
@@ -585,78 +564,6 @@ async fn start_service_detached(name: &str, preflight: EnsurePreflight) -> Resul
     crate::microsandbox::runtime::up_service_with_spec(&workload, &spec, false).await
 }
 
-/// msb occupancy probe for a slot: true iff `Sandbox::get(instance)` resolves
-/// Ok (the sandbox exists). Only a positive Ok counts as running — NotFound
-/// → false; any other SDK error → false (the record-based plan stands; the
-/// child's occupancy gate fail-closes when it matters).
-async fn sandbox_running(instance: &str) -> Result<bool> {
-    match Sandbox::get(instance).await {
-        Ok(_) => Ok(true),
-        Err(MicrosandboxError::SandboxNotFound(_)) => Ok(false),
-        Err(_) => Ok(false),
-    }
-}
-
-/// Short host-port health probe for an already-occupied dep slot: healthy iff
-/// ANY published host port accepts a TCP connect within [`REUSE_PROBE_TIMEOUT`]
-/// (shared deadline across ports). Targets come from the slot's registry
-/// record (port_pairs/ports) when one exists, else the dep's DECLARED host
-/// ports on the shared 127.0.0.1 bind. Returns Ok(None) when there are no
-/// ports to probe (a no-port dep cannot be verified cheaply — reuse is then
-/// decided optimistically; use `on_conflict = "replace"` to force a fresh
-/// start).
-fn probe_dep_health(state_dir: &Path, slot: &str, declared_ports: &[u16]) -> Result<Option<bool>> {
-    let targets = probe_targets(state_dir, slot, declared_ports);
-    if targets.is_empty() {
-        return Ok(None);
-    }
-    let deadline = Instant::now() + REUSE_PROBE_TIMEOUT;
-    for (ip, port) in targets {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        if wait_for_port(ip, port, remaining).is_ok() {
-            return Ok(Some(true));
-        }
-    }
-    Ok(Some(false))
-}
-
-/// Single-shot probe targets for a slot: the registry record's published
-/// pairs/ports when a record exists, else the DECLARED host ports on the
-/// shared 127.0.0.1 bind (mirrors [`readiness_targets`]' fallback, without
-/// polling — the caller already knows the record view).
-fn probe_targets(state_dir: &Path, slot: &str, declared_ports: &[u16]) -> Vec<(IpAddr, u16)> {
-    if let Ok(records) = list_records(state_dir) {
-        if let Some(rec) = singleton_record(&records, slot) {
-            if !rec.port_pairs.is_empty() {
-                return rec.port_pairs.iter().map(|p| (p.bind_ip, p.host)).collect();
-            }
-            if !rec.ports.is_empty() {
-                return rec.ports.iter().map(|&p| (rec.bind_ip, p)).collect();
-            }
-        }
-    }
-    declared_ports
-        .iter()
-        .map(|&p| (IpAddr::V4(Ipv4Addr::LOCALHOST), p))
-        .collect()
-}
-
-/// Whether the slot's record was created within [`BOOT_GRACE`] — the dep is
-/// still booting and must never be replaced under "reuse".
-fn recently_started(state_dir: &Path, slot: &str) -> Result<bool> {
-    let records = list_records(state_dir)?;
-    let Some(rec) = singleton_record(&records, slot) else {
-        return Ok(false);
-    };
-    match record_age_secs(&rec.created_at) {
-        Some(age) => Ok(age < BOOT_GRACE.as_secs()),
-        None => Ok(false), // legacy/empty created_at — probe decides
-    }
-}
-
 /// The slot of a planned action (both variants carry it).
 fn slot_of_action(action: &DepStartAction) -> &str {
     match action {
@@ -736,6 +643,7 @@ mod tests {
     use crate::config::test_support::{unique_state_dir, TestConfigGuard};
     use crate::microsandbox::plan::PortMapping;
     use crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle;
+    use microsandbox::sandbox::SandboxStatus;
 
     /// Chain fixture: a (agent) → b (service, 4001) → c (service, 4002).
     fn chain_config() -> ConfigFile {
@@ -826,7 +734,8 @@ guest = 4003
     }
 
     // (i) Chain a→b→c, all slots free: both deps start, deepest first, with
-    // their declared ports.
+    // their declared ports. Omitted on_conflict resolves to the ADR 0030
+    // default chain at plan time.
     #[test]
     fn plan_dep_starts_chain_all_absent_starts_in_topo_order() -> Result<()> {
         let config = chain_config();
@@ -838,13 +747,13 @@ guest = 4003
                     dep: "c".to_string(),
                     slot: "personal-c".to_string(),
                     ports: vec![4002],
-                    conflict: DepConflict::Reuse,
+                    conflict: DepConflict::default_chain(),
                 },
                 DepStartAction::StartService {
                     dep: "b".to_string(),
                     slot: "personal-b".to_string(),
                     ports: vec![4001],
-                    conflict: DepConflict::Reuse,
+                    conflict: DepConflict::default_chain(),
                 },
             ]
         );
@@ -868,13 +777,13 @@ guest = 4003
                     dep: "c".to_string(),
                     slot: "personal-c".to_string(),
                     ports: vec![4002],
-                    conflict: DepConflict::Reuse,
+                    conflict: DepConflict::default_chain(),
                 },
                 DepStartAction::Satisfied {
                     dep: "b".to_string(),
                     slot: "personal-b".to_string(),
                     ports: vec![4001],
-                    conflict: DepConflict::Reuse,
+                    conflict: DepConflict::default_chain(),
                 },
             ]
         );
@@ -928,7 +837,7 @@ command = []
                 dep: "c".to_string(),
                 slot: "personal-c".to_string(),
                 ports: vec![4002],
-                conflict: DepConflict::Reuse,
+                conflict: DepConflict::default_chain(),
             }],
             "only the non-overridden dep may appear: {actions:?}"
         );
@@ -936,7 +845,7 @@ command = []
     }
 
     /// A dep with an explicit `on_conflict` carries it into the planned
-    /// action; deps without one default to "reuse".
+    /// action; deps without one default to the ADR 0030 default chain.
     #[test]
     fn plan_dep_starts_carries_explicit_on_conflict() -> Result<()> {
         let toml = r#"
@@ -968,7 +877,7 @@ guest = 4001
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
                 ports: vec![4001],
-                conflict: DepConflict::Replace,
+                conflict: DepConflict::replace(),
             }],
             "explicit on_conflict must flow into the planned action"
         );
@@ -1049,7 +958,8 @@ guest = 4001
         Ok(())
     }
 
-    // ---- ADR 0026 addendum 2026-08-16: decide_dep_disposition ----
+    // ---- ADR 0026 addendum 2026-08-16 / ADR 0030 addendum 2:
+    // decide_dep_disposition (chain-iterating over ReconcileFacts) ----
 
     fn start_action(dep: &str, conflict: DepConflict) -> DepStartAction {
         DepStartAction::StartService {
@@ -1069,16 +979,63 @@ guest = 4001
         }
     }
 
+    /// A minimal registry record for fact fixtures (only the fields the
+    /// decision reads).
+    fn record() -> SandboxInstanceRecord {
+        SandboxInstanceRecord {
+            instance: "personal-b".to_string(),
+            context: Some("personal".to_string()),
+            workload: "b".to_string(),
+            ports: vec![4000],
+            port_pairs: vec![PortMapping::new(4000, 4000)],
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            bind_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        }
+    }
+
+    /// Build facts for a pure decision test. `msb_status` None + no record +
+    /// no dir → free slot.
+    fn facts(
+        record: Option<SandboxInstanceRecord>,
+        msb_status: Option<SandboxStatus>,
+        healthy: Option<bool>,
+        recently_started: bool,
+    ) -> ReconcileFacts {
+        ReconcileFacts {
+            record,
+            msb_status,
+            msb_unavailable: false,
+            dir_exists: false,
+            healthy,
+            recently_started,
+        }
+    }
+
+    /// msb-running facts (record present, old).
+    fn running(healthy: Option<bool>, recently_started: bool) -> ReconcileFacts {
+        facts(
+            Some(record()),
+            Some(SandboxStatus::Running),
+            healthy,
+            recently_started,
+        )
+    }
+
+    /// Free-slot facts (no row, no dir, no record).
+    fn free() -> ReconcileFacts {
+        facts(None, None, None, false)
+    }
+
     #[test]
     fn disposition_start_service_reuse_free_slot_starts() {
         assert_eq!(
             decide_dep_disposition(
-                &start_action("b", DepConflict::Reuse),
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::reuse()),
                 "a",
-                false,
-                None,
-                false
-            ),
+                &free()
+            )
+            .unwrap(),
             DepDisposition::Start {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
@@ -1091,12 +1048,12 @@ guest = 4001
     fn disposition_start_service_reuse_running_healthy_reuses() {
         assert_eq!(
             decide_dep_disposition(
-                &start_action("b", DepConflict::Reuse),
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::reuse()),
                 "a",
-                true,
-                Some(true),
-                false
-            ),
+                &running(Some(true), false)
+            )
+            .unwrap(),
             DepDisposition::Reuse {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string()
@@ -1109,12 +1066,12 @@ guest = 4001
         // msb-running + dead port + old record → keep-alive zombie → replace.
         assert_eq!(
             decide_dep_disposition(
-                &start_action("b", DepConflict::Reuse),
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::reuse()),
                 "a",
-                true,
-                Some(false),
-                false
-            ),
+                &running(Some(false), false)
+            )
+            .unwrap(),
             DepDisposition::Replace {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
@@ -1129,12 +1086,12 @@ guest = 4001
         // kill a freshly-started dep).
         assert_eq!(
             decide_dep_disposition(
-                &start_action("b", DepConflict::Reuse),
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::reuse()),
                 "a",
-                true,
-                Some(false),
-                true
-            ),
+                &running(Some(false), true)
+            )
+            .unwrap(),
             DepDisposition::Reuse {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string()
@@ -1145,12 +1102,18 @@ guest = 4001
     #[test]
     fn disposition_start_service_reuse_running_no_ports_reuses() {
         // No ports to probe → cannot verify cheaply → reuse optimistically.
-        let mut action = start_action("b", DepConflict::Reuse);
+        let mut action = start_action("b", DepConflict::reuse());
         if let DepStartAction::StartService { ports, .. } = &mut action {
             ports.clear();
         }
         assert_eq!(
-            decide_dep_disposition(&action, "a", true, None, false),
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &action,
+                "a",
+                &running(None, false)
+            )
+            .unwrap(),
             DepDisposition::Reuse {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string()
@@ -1160,29 +1123,49 @@ guest = 4001
 
     #[test]
     fn disposition_start_service_replace_always_replaces() {
+        // Occupied (msb running) → Replace.
         assert_eq!(
             decide_dep_disposition(
-                &start_action("b", DepConflict::Replace),
+                &[ConflictStep::Replace],
+                &start_action("b", DepConflict::replace()),
                 "a",
-                true,
-                Some(true),
-                false
-            ),
+                &running(Some(true), false)
+            )
+            .unwrap(),
             DepDisposition::Replace {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
                 ports: vec![4000]
             }
         );
+        // Stale record (msb gone) → Replace too: `down` clears the stale
+        // record, then start fresh.
         assert_eq!(
             decide_dep_disposition(
-                &start_action("b", DepConflict::Replace),
+                &[ConflictStep::Replace],
+                &start_action("b", DepConflict::replace()),
                 "a",
-                false,
-                None,
-                false
-            ),
+                &facts(Some(record()), None, None, false)
+            )
+            .unwrap(),
             DepDisposition::Replace {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+        // A GENUINELY free slot (no row, no record, no dir) is a plain Start
+        // regardless of chain — there is nothing to replace (the ADR 0030
+        // free-slot shortcut).
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Replace],
+                &start_action("b", DepConflict::replace()),
+                "a",
+                &free()
+            )
+            .unwrap(),
+            DepDisposition::Start {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
                 ports: vec![4000]
@@ -1194,12 +1177,12 @@ guest = 4001
     fn disposition_start_service_fail_refuses_when_running_starts_when_free() {
         assert_eq!(
             decide_dep_disposition(
-                &start_action("b", DepConflict::Fail),
+                &[ConflictStep::Fail],
+                &start_action("b", DepConflict::fail()),
                 "a",
-                true,
-                None,
-                false
-            ),
+                &running(None, false)
+            )
+            .unwrap(),
             DepDisposition::Fail {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
@@ -1208,12 +1191,12 @@ guest = 4001
         );
         assert_eq!(
             decide_dep_disposition(
-                &start_action("b", DepConflict::Fail),
+                &[ConflictStep::Fail],
+                &start_action("b", DepConflict::fail()),
                 "a",
-                false,
-                None,
-                false
-            ),
+                &free()
+            )
+            .unwrap(),
             DepDisposition::Start {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
@@ -1226,12 +1209,12 @@ guest = 4001
     fn disposition_satisfied_reuse_healthy_reuses() {
         assert_eq!(
             decide_dep_disposition(
-                &satisfied_action("b", DepConflict::Reuse),
+                &DepConflict::default_chain().0,
+                &satisfied_action("b", DepConflict::reuse()),
                 "a",
-                true,
-                Some(true),
-                false
-            ),
+                &running(Some(true), false)
+            )
+            .unwrap(),
             DepDisposition::Reuse {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string()
@@ -1244,12 +1227,12 @@ guest = 4001
         // Record present + msb-running + dead port + old record → zombie.
         assert_eq!(
             decide_dep_disposition(
-                &satisfied_action("b", DepConflict::Reuse),
+                &DepConflict::default_chain().0,
+                &satisfied_action("b", DepConflict::reuse()),
                 "a",
-                true,
-                Some(false),
-                false
-            ),
+                &running(Some(false), false)
+            )
+            .unwrap(),
             DepDisposition::Replace {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
@@ -1264,12 +1247,12 @@ guest = 4001
         // down clears it, then start fresh.
         assert_eq!(
             decide_dep_disposition(
-                &satisfied_action("b", DepConflict::Reuse),
+                &DepConflict::default_chain().0,
+                &satisfied_action("b", DepConflict::reuse()),
                 "a",
-                false,
-                None,
-                false
-            ),
+                &facts(Some(record()), None, None, false)
+            )
+            .unwrap(),
             DepDisposition::Replace {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
@@ -1282,12 +1265,12 @@ guest = 4001
     fn disposition_satisfied_replace_and_fail() {
         assert_eq!(
             decide_dep_disposition(
-                &satisfied_action("b", DepConflict::Replace),
+                &[ConflictStep::Replace],
+                &satisfied_action("b", DepConflict::replace()),
                 "a",
-                true,
-                Some(true),
-                false
-            ),
+                &running(Some(true), false)
+            )
+            .unwrap(),
             DepDisposition::Replace {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
@@ -1296,12 +1279,12 @@ guest = 4001
         );
         assert_eq!(
             decide_dep_disposition(
-                &satisfied_action("b", DepConflict::Fail),
+                &[ConflictStep::Fail],
+                &satisfied_action("b", DepConflict::fail()),
                 "a",
-                true,
-                None,
-                false
-            ),
+                &running(None, false)
+            )
+            .unwrap(),
             DepDisposition::Fail {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
@@ -1315,12 +1298,12 @@ guest = 4001
     #[test]
     fn disposition_fail_message_matches_canonical_refuse() {
         let d = decide_dep_disposition(
-            &satisfied_action("litellm", DepConflict::Fail),
+            &[ConflictStep::Fail],
+            &satisfied_action("litellm", DepConflict::fail()),
             "prime",
-            true,
-            None,
-            false,
-        );
+            &running(None, false),
+        )
+        .unwrap();
         let DepDisposition::Fail { workload, slot, .. } = d else {
             panic!("expected Fail disposition");
         };
@@ -1328,6 +1311,322 @@ guest = 4001
         assert!(
             msg.contains("is already running"),
             "Fail disposition must carry the occupied message: {msg}"
+        );
+    }
+
+    // ---- ADR 0030 addendum 2 U4: conflict-chain decision matrix ----
+
+    #[test]
+    fn chain_default_running_healthy_reuses() {
+        assert_eq!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::default_chain()),
+                "a",
+                &running(Some(true), false)
+            )
+            .unwrap(),
+            DepDisposition::Reuse {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn chain_default_stopped_starts_existing() {
+        // Stopped → StartExisting (the `start` element).
+        let stopped = facts(Some(record()), Some(SandboxStatus::Stopped), None, false);
+        assert_eq!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::default_chain()),
+                "a",
+                &stopped
+            )
+            .unwrap(),
+            DepDisposition::StartExisting {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string()
+            }
+        );
+        // Crashed → StartExisting too.
+        let crashed = facts(Some(record()), Some(SandboxStatus::Crashed), None, false);
+        assert_eq!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::default_chain()),
+                "a",
+                &crashed
+            )
+            .unwrap(),
+            DepDisposition::StartExisting {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn chain_default_stopped_start_fails_falls_to_replace() {
+        // The executor retry: the default chain first yields StartExisting;
+        // after a failed start the executor advances past `start` and the
+        // remainder (["replace"]) yields Replace.
+        let stopped = facts(Some(record()), Some(SandboxStatus::Stopped), None, false);
+        let chain = DepConflict::default_chain().0;
+        assert_eq!(
+            decide_dep_disposition(
+                &chain,
+                &start_action("b", DepConflict::default_chain()),
+                "a",
+                &stopped
+            )
+            .unwrap(),
+            DepDisposition::StartExisting {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string()
+            }
+        );
+        let rest =
+            crate::microsandbox::runtime::reconcile::chain_after(&chain, ConflictStep::Start)
+                .expect("default chain contains start");
+        assert_eq!(
+            decide_dep_disposition(
+                rest,
+                &start_action("b", DepConflict::default_chain()),
+                "a",
+                &stopped
+            )
+            .unwrap(),
+            DepDisposition::Replace {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+    }
+
+    #[test]
+    fn chain_default_zombie_replaces() {
+        assert_eq!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::default_chain()),
+                "a",
+                &running(Some(false), false)
+            )
+            .unwrap(),
+            DepDisposition::Replace {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+    }
+
+    #[test]
+    fn chain_default_stale_record_replaces() {
+        assert_eq!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &satisfied_action("b", DepConflict::default_chain()),
+                "a",
+                &facts(Some(record()), None, None, false)
+            )
+            .unwrap(),
+            DepDisposition::Replace {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+    }
+
+    #[test]
+    fn chain_default_booting_reuses() {
+        assert_eq!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::default_chain()),
+                "a",
+                &running(Some(false), true)
+            )
+            .unwrap(),
+            DepDisposition::Reuse {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn chain_scalar_replace_always_replaces() {
+        // Occupied (msb running) → Replace.
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Replace],
+                &start_action("b", DepConflict::replace()),
+                "a",
+                &running(Some(true), false)
+            )
+            .unwrap(),
+            DepDisposition::Replace {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+        // Stale record (msb gone) → Replace too.
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Replace],
+                &start_action("b", DepConflict::replace()),
+                "a",
+                &facts(Some(record()), None, None, false)
+            )
+            .unwrap(),
+            DepDisposition::Replace {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+        // A genuinely free slot is a plain Start regardless of chain (the
+        // ADR 0030 free-slot shortcut — nothing to replace).
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Replace],
+                &start_action("b", DepConflict::replace()),
+                "a",
+                &free()
+            )
+            .unwrap(),
+            DepDisposition::Start {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+    }
+
+    #[test]
+    fn chain_scalar_fail_fails_when_occupied_starts_when_free() {
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Fail],
+                &start_action("b", DepConflict::fail()),
+                "a",
+                &running(None, false)
+            )
+            .unwrap(),
+            DepDisposition::Fail {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                workload: "a".to_string()
+            }
+        );
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Fail],
+                &start_action("b", DepConflict::fail()),
+                "a",
+                &free()
+            )
+            .unwrap(),
+            DepDisposition::Start {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+    }
+
+    #[test]
+    fn chain_reuse_fail_reuses_when_healthy_fails_when_zombie() {
+        // ["reuse","fail"]: healthy → Reuse; zombie → Fail (NOT Replace —
+        // there is no replace element in the chain).
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Reuse, ConflictStep::Fail],
+                &start_action("b", DepConflict::reuse()),
+                "a",
+                &running(Some(true), false)
+            )
+            .unwrap(),
+            DepDisposition::Reuse {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string()
+            }
+        );
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Reuse, ConflictStep::Fail],
+                &start_action("b", DepConflict::reuse()),
+                "a",
+                &running(Some(false), false)
+            )
+            .unwrap(),
+            DepDisposition::Fail {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                workload: "a".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn chain_start_replace_starts_when_stopped_replaces_when_zombie() {
+        // ["start","replace"]: Stopped → StartExisting; zombie → Replace.
+        let stopped = facts(Some(record()), Some(SandboxStatus::Stopped), None, false);
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Start, ConflictStep::Replace],
+                &start_action("b", DepConflict::reuse()),
+                "a",
+                &stopped
+            )
+            .unwrap(),
+            DepDisposition::StartExisting {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string()
+            }
+        );
+        assert_eq!(
+            decide_dep_disposition(
+                &[ConflictStep::Start, ConflictStep::Replace],
+                &start_action("b", DepConflict::reuse()),
+                "a",
+                &running(Some(false), false)
+            )
+            .unwrap(),
+            DepDisposition::Replace {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            }
+        );
+    }
+
+    #[test]
+    fn chain_reuse_only_zombie_exhausted_error_lists_attempts() {
+        // ["reuse"] on a zombie: no element applies → chain-exhausted error
+        // listing the attempt.
+        let err = decide_dep_disposition(
+            &[ConflictStep::Reuse],
+            &start_action("b", DepConflict::reuse()),
+            "a",
+            &running(Some(false), false),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("conflict chain exhausted"),
+            "exhausted chain must error: {msg}"
+        );
+        assert!(msg.contains("reuse"), "error must list the attempt: {msg}");
+        assert!(
+            msg.contains("probe failed"),
+            "error must name the failure mode: {msg}"
         );
     }
 }

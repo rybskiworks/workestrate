@@ -11,6 +11,10 @@
 
 mod network;
 mod ps;
+// `reconcile` is crate-visible so the dep executor (commands/deps.rs) shares
+// the ONE fact-gathering + conflict-chain decision with the named up/exec
+// occupancy gate (ADR 0030 Phase 0).
+pub(crate) mod reconcile;
 mod run;
 mod spawn;
 // `time` is crate-visible so `images::state` (spec 21 §8) reuses the ONE
