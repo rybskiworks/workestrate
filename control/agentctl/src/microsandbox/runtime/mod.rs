@@ -211,6 +211,10 @@ pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) ->
 /// Idempotent three-store teardown for the conflict chain's `replace`
 /// disposition (ADR 0030 Phase 0): stop+remove the msb sandbox when present,
 /// then clear the port-registry record and the policy dir — all best-effort.
+/// Also removes the lingering sandbox DIRECTORY when the msb DB row is gone
+/// (ADR 0030 §2.2 / disposition table row "msb gone + dir exists → replace"):
+/// without that, the subsequent fresh create would hit the msb create gate
+/// and surface the opaque `SandboxAlreadyExists` error the ADR forbids.
 /// Unlike the `--replace` branch of [`check_occupied_or_replace`], this never
 /// refuses and never hard-errors on a missing sandbox: the caller proceeds to
 /// a fresh create either way.
@@ -230,6 +234,10 @@ pub(crate) async fn teardown_for_replace(state_dir: &Path, instance: &str) -> Re
     }
     let _ = super::port_registry::unregister_sandbox(state_dir, instance);
     let _ = super::policy_file::remove_policy_dir(state_dir, instance);
+    // Best-effort removal of the lingering sandbox dir (create-gate cleanup).
+    // `remove_dir_all` on a non-existent dir returns Err(NotFound), swallowed
+    // by the `let _ =`.
+    let _ = std::fs::remove_dir_all(self::reconcile::sandbox_dir(instance));
     Ok(())
 }
 
@@ -335,7 +343,7 @@ pub async fn down_all(state_dir: &Path) -> Result<Vec<DownResult>> {
     clippy::unwrap_in_result
 )]
 mod tests {
-    use super::{down_all_instances, DownStatus};
+    use super::{down_all_instances, sandbox_dir, DownStatus};
     use crate::config::test_support::unique_state_dir_runtime;
 
     /// RAII guard: point `MSB_HOME` at `path` for the duration of a test and
@@ -471,6 +479,74 @@ mod tests {
             "expected NotFound when msb db is openable but empty; got {:?} ({:?})",
             results[0].status,
             results[0].message,
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// `teardown_for_replace` must clear the port-registry record AND remove
+    /// the lingering sandbox DIRECTORY when the msb DB is unreachable (ADR
+    /// 0030 §2.2 / disposition table row "msb gone + dir exists → replace"):
+    /// the disposition owns the dir cleanup, so the subsequent fresh create
+    /// never hits the msb create gate's opaque `SandboxAlreadyExists` error.
+    /// Returns Ok even though the msb side cannot be verified.
+    ///
+    /// The msb DB is made unreachable by pointing MSB_HOME at a tmp dir whose
+    /// `db` path is a regular FILE, so the SDK's `create_dir_all(<MSB_HOME>/db)`
+    /// fails (ENOTDIR) and `Sandbox::get` returns a hard error — never
+    /// SandboxNotFound, and never a successful init (so the process-global DB
+    /// pool is not pinned for the shared `cargo test` run). Unlike the
+    /// `#[ignore]`'d empty-db test, this one is deterministic in any ordering.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see Error test
+    async fn teardown_for_replace_clears_record_and_dir_when_msb_db_unreachable(
+    ) -> anyhow::Result<()> {
+        // Serialize with ALL env-mutating tests (see the Error test note).
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-replace-db-blocked-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        // `<MSB_HOME>/db` is a regular FILE, so `<MSB_HOME>/db` cannot be
+        // created as a directory → `Sandbox::get` errors (never NotFound) and
+        // the DB pool is never successfully initialized (nothing to pin).
+        std::fs::write(tmp.join("db"), b"x")?;
+        let _msb = MsbHomeGuard::set(&tmp);
+
+        let dir = unique_state_dir_runtime("teardown-for-replace");
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        // The lingering sandbox directory the msb create gate would refuse on
+        // (store 2b): `<MSB_HOME>/sandboxes/<instance>`.
+        let lingering = sandbox_dir("personal-litellm");
+        std::fs::create_dir_all(&lingering)?;
+
+        // Err branch of `Sandbox::get` (warn + continue) → still unregister +
+        // remove dir, and return Ok.
+        super::teardown_for_replace(&dir, "personal-litellm").await?;
+
+        assert!(
+            !lingering.exists(),
+            "teardown_for_replace must remove the lingering sandbox dir so the \
+             fresh create does not hit the msb create gate"
+        );
+        assert!(
+            !dir.join("var")
+                .join("run")
+                .join("personal-litellm.json")
+                .exists(),
+            "teardown_for_replace must unregister the port-registry record"
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&tmp);
