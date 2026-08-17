@@ -26,14 +26,22 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     // entry point (the workload catch-all) takes the RAW `--use` values and
     // applies the selection here instead — the plan render itself is
     // unchanged: the overrides only change WHICH record resolution selected.
+    // The explicit `--instance <id>` is threaded into the re-construction
+    // too (ADR 0030 P2.1 scoped preview parity).
     let plan_holder = if use_values.is_empty() {
         None
     } else {
         let overrides = crate::microsandbox::discovery::parse_use_overrides(use_values)?;
         Some(
-            crate::microsandbox::workload::ConfigWorkload::new_with_use_overrides(
+            // ADR 0030 P2.1: thread the explicit `--instance <id>` through
+            // the override re-construction so `plan --instance X --use
+            // dep@id` resolves the SAME scoped dep view as the caller's
+            // already-constructed workload (main.rs passes the id into
+            // ConfigWorkload::new_with_use_overrides_and_instance).
+            crate::microsandbox::workload::ConfigWorkload::new_with_use_overrides_and_instance(
                 workload.name(),
                 &overrides,
+                instance,
             )?,
         )
     };
