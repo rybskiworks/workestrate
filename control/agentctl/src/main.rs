@@ -13,8 +13,8 @@ use workestrate::commands::config_cmd::{
 };
 use workestrate::commands::deps::{auto_start_dependencies, cmd_workload_up_all};
 use workestrate::commands::diagnostics::{
-    cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_ps, cmd_run, cmd_validate_config,
-    cmd_workloads,
+    cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_instances, cmd_ps, cmd_run,
+    cmd_validate_config, cmd_workloads,
 };
 use workestrate::commands::doctor::cmd_doctor;
 use workestrate::commands::home::cmd_home;
@@ -196,6 +196,13 @@ enum Commands {
     },
     /// List configured workloads (name, kind, image, running status).
     Workloads,
+    /// List instances across the registry + msb with the reconciled 5-state
+    /// status (ADR 0030 §4.4). Optional <workload> filter. Use --json for
+    /// machine-readable output.
+    Instances {
+        /// Optional workload name to filter to.
+        workload: Option<String>,
+    },
     /// Diagnose mount masking policy (spec 22 §13).
     Policy {
         #[command(subcommand)]
@@ -809,6 +816,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             }
         }
         Commands::Workloads => cmd_workloads(cli.json),
+        Commands::Instances { workload } => cmd_instances(workload.as_deref(), cli.json).await,
         Commands::Policy { action } => {
             workestrate::commands::policy::cmd_policy(action, cli.json).await
         }

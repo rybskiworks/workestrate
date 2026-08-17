@@ -94,14 +94,28 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
 }
 
 /// One row of the `workestrate workloads` listing (ADR 0027): the configured
-/// workload name, its kind, a short image summary, and the instance names
-/// currently registered in the port registry (empty = not running).
+/// workload name, its kind, a short image summary, the instance names
+/// currently registered in the port registry (empty = not running), and the
+/// declared instance policy / namespace columns (ADR 0030 §4.4).
 #[derive(Debug, Clone)]
 pub struct WorkloadListEntry {
     pub name: String,
     pub kind: String,
     pub image: String,
     pub instances: Vec<String>,
+    /// The workload's declaring config-repo namespace (ADR 0030 Phase 2 T1).
+    pub namespace: String,
+    /// The workload's declared instance strategy (from config; "singleton"
+    /// default).
+    pub strategy: String,
+    /// The workload's declared on_conflict chain (from config; default
+    /// ["reuse","start","replace"]).
+    pub on_conflict: String,
+    /// The workload's declared instance.port policy (from config; "fixed"
+    /// default).
+    pub port: String,
+    /// The workload's declared instance.label (from config; None default).
+    pub label: Option<String>,
 }
 
 /// Short image summary for the listing: `<recipe>:<ref>`, falling back to
@@ -122,6 +136,33 @@ fn image_summary(image: &crate::config::ImageSpec) -> String {
     }
 }
 
+/// Derive the display strings for a workload's instance policy (ADR 0030
+/// §4.4): `(strategy, on_conflict, port, label)`. Defaults mirror the
+/// reconcile chain / plan display: strategy "singleton", on_conflict
+/// "reuse,start,replace", port "fixed", label None.
+fn policy_strings(
+    policy: &crate::config::InstancePolicy,
+) -> (String, String, String, Option<String>) {
+    let strategy = policy.strategy.to_string();
+    let on_conflict = policy
+        .on_conflict
+        .as_ref()
+        .map(|c| {
+            c.0.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_else(|| "reuse,start,replace".to_string());
+    let port = policy
+        .port
+        .as_ref()
+        .map(crate::microsandbox::plan::render_instance_port)
+        .unwrap_or_else(|| "fixed".to_string());
+    let label = policy.label.clone();
+    (strategy, on_conflict, port, label)
+}
+
 /// `workestrate workloads` (ADR 0027): list every configured workload with
 /// its kind, image summary, and running status (instances registered in the
 /// port registry). Deterministic order: sorted by workload name (the config
@@ -134,6 +175,8 @@ pub fn cmd_workloads(json: bool) -> Result<()> {
 
     let mut names: Vec<&String> = cfg.workloads.keys().collect();
     names.sort();
+    let provenance = crate::merge::get_provenance();
+    let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
     let entries: Vec<WorkloadListEntry> = names
         .into_iter()
         .map(|name| {
@@ -144,11 +187,21 @@ pub fn cmd_workloads(json: bool) -> Result<()> {
                 .map(|r| r.instance.clone())
                 .collect();
             instances.sort();
+            let (strategy, on_conflict, port, label) = policy_strings(&wl.instance);
             WorkloadListEntry {
                 name: name.clone(),
                 kind: wl.kind.clone(),
                 image: image_summary(&wl.image),
                 instances,
+                namespace: crate::commands::deps::namespace_for(
+                    provenance.as_ref(),
+                    &layer_dirs,
+                    name,
+                ),
+                strategy,
+                on_conflict,
+                port,
+                label,
             }
         })
         .collect();
@@ -180,13 +233,22 @@ pub fn print_workloads_text_to<W: std::io::Write>(
         } else {
             format!("running: {}", e.instances.join(", "))
         };
-        writeln!(out, "{}\t{}\t{}\t{}", e.name, e.kind, e.image, running)?;
+        let label = e
+            .label
+            .as_deref()
+            .map(|l| format!(" label={l}"))
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}{}",
+            e.name, e.kind, e.image, running, e.namespace, e.strategy, e.on_conflict, e.port, label,
+        )?;
     }
     Ok(())
 }
 
 pub async fn cmd_ps(json: bool) -> Result<()> {
-    use crate::microsandbox::runtime::{probe_liveness, ps};
+    use crate::microsandbox::runtime::{classify_status, gather_facts, probe_liveness, ps};
     let state_dir = crate::config::resolve_state_dir();
     let mut entries = ps(&state_dir)?;
     // Best-effort liveness probe (ADR 0021 §4). ps() stays pure; this is the
@@ -208,6 +270,21 @@ pub async fn cmd_ps(json: bool) -> Result<()> {
             "warning: liveness probe returned an unexpected error for {n} instance(s) (see notes above); stale flags left unchanged",
             n = unknown,
         );
+    }
+    // ADR 0030 §4.4: populate the reconciled 5-state status per entry from the
+    // shared reconcile facts (registry record + msb status + host-port
+    // liveness). Best-effort: a fact-gathering error leaves status None.
+    for e in entries.iter_mut() {
+        let declared_ports: Vec<u16> = e.ports.iter().map(|p| p.host).collect();
+        match gather_facts(&state_dir, &e.instance, &declared_ports).await {
+            Ok(facts) => e.status = Some(classify_status(&facts)),
+            Err(err) => {
+                eprintln!(
+                    "note: could not gather reconcile facts for '{}' ({}); status omitted",
+                    e.instance, err
+                );
+            }
+        }
     }
     if json {
         println!(
@@ -238,12 +315,14 @@ pub fn print_ps_text_to<W: std::io::Write>(
         writeln!(out, "(no running workestrate instances)")?;
         return Ok(());
     }
-    // Stable column layout: INSTANCE | WORKLOAD | CONTEXT | PORTS | STARTED
-    // (renamed from CREATED to match the ADR 0021 §7 `started_at` field).
+    // Stable column layout: INSTANCE | WORKLOAD | CONTEXT | PORTS | STATUS |
+    // STARTED (CREATED was renamed to STARTED to match the ADR 0021 §7
+    // `started_at` field; STATUS is the ADR 0030 §4.4 reconciled 5-state
+    // status — a zombie shows `running-unhealthy`, not `Running`).
     writeln!(
         out,
-        "{:<32} {:<16} {:<12} {:<24} STARTED",
-        "INSTANCE", "WORKLOAD", "CONTEXT", "PORTS"
+        "{:<32} {:<16} {:<12} {:<24} {:<18} STARTED",
+        "INSTANCE", "WORKLOAD", "CONTEXT", "PORTS", "STATUS"
     )?;
     let mut sorted: Vec<_> = entries.iter().collect();
     sorted.sort_by(|a, b| a.instance.cmp(&b.instance));
@@ -278,13 +357,17 @@ pub fn print_ps_text_to<W: std::io::Write>(
         } else {
             e.started_at.clone()
         };
+        // ADR 0030 §4.4: reconciled 5-state status; `-` when the async caller
+        // could not gather facts (or from the pure `ps()` path).
+        let status_display = e.status.map(|s| s.as_str()).unwrap_or("-");
         writeln!(
             out,
-            "{:<32} {:<16} {:<12} {:<24} {}",
+            "{:<32} {:<16} {:<12} {:<24} {:<18} {}",
             e.instance,
             e.workload,
             e.context.clone().unwrap_or_else(|| "-".into()),
             ports_str,
+            status_display,
             started_display,
         )?;
     }
@@ -317,6 +400,175 @@ pub fn print_ps_text_to<W: std::io::Write>(
             }
         }
         writeln!(out, "Remove every instance with: workestrate down-all")?;
+    }
+    Ok(())
+}
+
+/// One row of `workestrate instances` (ADR 0030 §4.4): the reconciled
+/// instance view across the registry + msb.
+#[derive(Debug, Clone)]
+pub struct InstanceEntry {
+    pub instance: String,
+    pub workload: String,
+    pub namespace: String,
+    pub context: Option<String>,
+    pub slot: String,
+    pub kind: crate::microsandbox::runtime::PsKind,
+    pub status: crate::microsandbox::runtime::InstanceStatus,
+    pub ports: Vec<crate::microsandbox::plan::PortMapping>,
+    pub started_at: String,
+    /// The workload's declared instance strategy (from config; "singleton"
+    /// default).
+    pub strategy: String,
+    /// The workload's declared on_conflict chain (from config; default
+    /// ["reuse","start","replace"]).
+    pub on_conflict: String,
+    /// The workload's declared instance.port policy (from config; "fixed"
+    /// default).
+    pub port: String,
+    /// The workload's declared instance.label (from config; None default).
+    pub label: Option<String>,
+}
+
+impl InstanceEntry {
+    /// The human-readable status string for the text renderer (ADR 0030 §4.4).
+    pub fn status_str(&self) -> &'static str {
+        self.status.as_str()
+    }
+}
+
+/// `workestrate instances` (ADR 0030 §4.4): list every registry record with
+/// its reconciled 5-state status (registry record + msb status + host-port
+/// liveness), grouped by workload in text mode or as an extended record array
+/// in JSON mode. Optional `<workload>` filter. Deterministic order: sorted by
+/// workload, then instance.
+pub async fn cmd_instances(workload_filter: Option<&str>, json: bool) -> Result<()> {
+    let cfg = config::load_config()?;
+    let state_dir = config::resolve_state_dir();
+    let records = crate::microsandbox::port_registry::list_records(&state_dir)?;
+    let mut entries = Vec::new();
+    for r in records {
+        if let Some(filter) = workload_filter {
+            if r.workload != filter {
+                continue;
+            }
+        }
+        let declared_ports: Vec<u16> = r.ports.clone();
+        let facts = crate::microsandbox::runtime::reconcile::gather_facts(
+            &state_dir,
+            &r.instance,
+            &declared_ports,
+        )
+        .await?;
+        let status = crate::microsandbox::runtime::classify_status(&facts);
+        let wl = cfg.workloads.get(&r.workload);
+        let policy = wl.map(|w| &w.instance);
+        let strategy = policy
+            .map(|p| p.strategy.to_string())
+            .unwrap_or_else(|| "singleton".to_string());
+        let on_conflict = policy
+            .and_then(|p| p.on_conflict.as_ref())
+            .map(|c| {
+                c.0.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_else(|| "reuse,start,replace".to_string());
+        let port = policy
+            .and_then(|p| p.port.as_ref())
+            .map(crate::microsandbox::plan::render_instance_port)
+            .unwrap_or_else(|| "fixed".to_string());
+        let label = policy.and_then(|p| p.label.clone());
+        let kind = if crate::microsandbox::slots::instance_id_of(&r.instance).is_some() {
+            crate::microsandbox::runtime::PsKind::Parallel
+        } else {
+            crate::microsandbox::runtime::PsKind::Singleton
+        };
+        let slot = crate::microsandbox::slots::slot_of_instance(&r.instance).to_string();
+        let ports = if r.port_pairs.is_empty() {
+            r.ports
+                .iter()
+                .map(|&h| crate::microsandbox::plan::PortMapping::new(h, h))
+                .collect()
+        } else {
+            r.port_pairs.clone()
+        };
+        entries.push(InstanceEntry {
+            instance: r.instance.clone(),
+            workload: r.workload.clone(),
+            namespace: r.namespace.clone(),
+            context: r.context.clone(),
+            slot,
+            kind,
+            status,
+            ports,
+            started_at: r.created_at.clone(),
+            strategy,
+            on_conflict,
+            port,
+            label,
+        });
+    }
+    entries.sort_by(|a, b| {
+        a.workload
+            .cmp(&b.workload)
+            .then(a.instance.cmp(&b.instance))
+    });
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&crate::json_out::instances_json(&entries))?
+        );
+    } else {
+        print_instances_text_to(&entries, &mut std::io::stdout())?;
+    }
+    Ok(())
+}
+
+/// Render `instances` rows to `out`, grouped by workload (ADR 0030 §4.4).
+/// Pure I/O: no env, no registry. `cmd_instances` passes
+/// `&mut std::io::stdout()`; tests pass a `Vec<u8>`.
+pub fn print_instances_text_to<W: std::io::Write>(
+    entries: &[InstanceEntry],
+    out: &mut W,
+) -> std::io::Result<()> {
+    if entries.is_empty() {
+        writeln!(out, "(no instances)")?;
+        return Ok(());
+    }
+    let mut current_workload: Option<&str> = None;
+    for e in entries {
+        if current_workload != Some(e.workload.as_str()) {
+            if current_workload.is_some() {
+                writeln!(out)?;
+            }
+            writeln!(out, "{}:", e.workload)?;
+            current_workload = Some(e.workload.as_str());
+        }
+        let ports = e
+            .ports
+            .iter()
+            .map(|p| p.host.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let label = e
+            .label
+            .as_deref()
+            .map(|l| format!(" label={l}"))
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "  {}\t{}\t{}\tports=[{}]\tstrategy={}\ton_conflict=[{}]\tport={}{}",
+            e.instance,
+            e.status_str(),
+            e.namespace,
+            ports,
+            e.strategy,
+            e.on_conflict,
+            e.port,
+            label,
+        )?;
     }
     Ok(())
 }
@@ -864,6 +1116,7 @@ mod tests {
             ports: vec![PortMapping::new(4000, 4000)],
             started_at: "2026-07-20T14:03:11Z".to_string(),
             stale: false,
+            status: None,
         };
         let parallel = PsEntry {
             instance: "personal-litellm@canary".to_string(),
@@ -879,6 +1132,7 @@ mod tests {
             }],
             started_at: "2026-07-20T14:05:42Z".to_string(),
             stale: false,
+            status: None,
         };
 
         let json = serde_json::to_string_pretty(&ps_entries_json(&[singleton, parallel]))
@@ -946,6 +1200,7 @@ mod tests {
                 ports: vec![PortMapping::new(14000, 4000)],
                 started_at: "2026-07-20T14:05:42Z".to_string(),
                 stale: true,
+                status: None,
             },
             PsEntry {
                 instance: "personal-pi".to_string(),
@@ -956,6 +1211,7 @@ mod tests {
                 ports: vec![PortMapping::new(3000, 3000)],
                 started_at: "2026-07-20T14:06:00Z".to_string(),
                 stale: false,
+                status: None,
             },
         ];
 
@@ -1016,6 +1272,7 @@ mod tests {
                 ports: vec![PortMapping::new(4000, 4000)],
                 started_at: "2026-07-20T14:03:11Z".to_string(),
                 stale: false,
+                status: None,
             },
             PsEntry {
                 instance: "personal-litellm@canary".to_string(),
@@ -1031,6 +1288,7 @@ mod tests {
                 }],
                 started_at: "2026-07-20T14:05:42Z".to_string(),
                 stale: false,
+                status: None,
             },
         ];
 
@@ -1085,6 +1343,7 @@ mod tests {
                 }],
                 started_at: "2026-07-20T14:03:11Z".to_string(),
                 stale: false,
+                status: None,
             },
             PsEntry {
                 instance: "personal-litellm@canary".to_string(),
@@ -1100,6 +1359,7 @@ mod tests {
                 }],
                 started_at: "2026-07-20T14:05:42Z".to_string(),
                 stale: false,
+                status: None,
             },
             PsEntry {
                 instance: "personal-pi".to_string(),
@@ -1110,6 +1370,7 @@ mod tests {
                 ports: vec![PortMapping::new(3000, 3000)],
                 started_at: "2026-07-20T14:06:00Z".to_string(),
                 stale: false,
+                status: None,
             },
         ];
 
@@ -1154,6 +1415,7 @@ mod tests {
             ports: vec![PortMapping::new(4000, 4000)],
             started_at: "2026-07-20T14:03:11Z".to_string(),
             stale: false,
+            status: None,
         }];
         let mut buf: Vec<u8> = Vec::new();
         print_ps_text_to(&entries, &mut buf).expect("render ps text");
@@ -1282,5 +1544,286 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    // ---- ADR 0030 §4.4 instances verb (cmd_instances rendering + JSON) ----
+
+    use crate::microsandbox::runtime::{InstanceStatus, PsKind};
+
+    /// Build a minimal `InstanceEntry` for rendering tests.
+    fn instance_entry(workload: &str, instance: &str, status: InstanceStatus) -> InstanceEntry {
+        InstanceEntry {
+            instance: instance.to_string(),
+            workload: workload.to_string(),
+            namespace: "default".to_string(),
+            context: Some("personal".to_string()),
+            slot: instance.split('@').next().unwrap_or(instance).to_string(),
+            kind: if instance.contains('@') {
+                PsKind::Parallel
+            } else {
+                PsKind::Singleton
+            },
+            status,
+            ports: vec![crate::microsandbox::plan::PortMapping::new(4000, 4000)],
+            started_at: "2026-07-20T14:03:11Z".to_string(),
+            strategy: "singleton".to_string(),
+            on_conflict: "reuse,start,replace".to_string(),
+            port: "fixed".to_string(),
+            label: None,
+        }
+    }
+
+    /// `instances --json` must emit the reconciled 5-state status in
+    /// snake_case plus the policy/namespace columns (ADR 0030 §4.4).
+    #[test]
+    fn instances_json_shape() {
+        let entries = vec![
+            instance_entry(
+                "litellm",
+                "personal-litellm",
+                InstanceStatus::RunningHealthy,
+            ),
+            instance_entry(
+                "litellm",
+                "personal-litellm@canary",
+                InstanceStatus::RunningUnhealthy,
+            ),
+        ];
+        let json = serde_json::to_string_pretty(&crate::json_out::instances_json(&entries))
+            .expect("serialize instances");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert_eq!(
+            value[0]["status"], "running_healthy",
+            "status snake_case; got:\n{json}"
+        );
+        assert_eq!(
+            value[1]["status"], "running_unhealthy",
+            "status snake_case; got:\n{json}"
+        );
+        assert_eq!(value[0]["workload"], "litellm");
+        assert_eq!(value[0]["namespace"], "default");
+        assert_eq!(value[0]["strategy"], "singleton");
+        assert_eq!(value[0]["on_conflict"], "reuse,start,replace");
+        assert_eq!(value[0]["port"], "fixed");
+        assert_eq!(value[0]["kind"], "singleton");
+        assert_eq!(value[1]["kind"], "parallel");
+        // label is None → omitted.
+        assert!(
+            value[0].get("label").is_none(),
+            "label must be omitted; got:\n{json}"
+        );
+    }
+
+    /// `instances` text output groups rows by workload with a blank line
+    /// between groups (ADR 0030 §4.4).
+    #[test]
+    fn print_instances_text_groups_by_workload() {
+        let entries = vec![
+            instance_entry(
+                "litellm",
+                "personal-litellm",
+                InstanceStatus::RunningHealthy,
+            ),
+            instance_entry("pi", "personal-pi", InstanceStatus::Stopped),
+        ];
+        let mut buf: Vec<u8> = Vec::new();
+        print_instances_text_to(&entries, &mut buf).expect("render instances text");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert!(
+            out.contains("litellm:"),
+            "workload group header missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("pi:"),
+            "workload group header missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("running-healthy"),
+            "status string missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("stopped"),
+            "status string missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("ports=[4000]"),
+            "ports column missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("strategy=singleton"),
+            "strategy column missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("on_conflict=[reuse,start,replace]"),
+            "on_conflict column missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("port=fixed"),
+            "port column missing; got:\n{out}"
+        );
+    }
+
+    /// `instances` text output with no entries prints "(no instances)".
+    #[test]
+    fn print_instances_text_empty() {
+        let mut buf: Vec<u8> = Vec::new();
+        print_instances_text_to(&[], &mut buf).expect("render instances text");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert_eq!(out, "(no instances)\n", "empty instances text; got:\n{out}");
+    }
+
+    /// A `PsEntry` with `status: None` serializes WITHOUT the status field
+    /// (back-compat: legacy `ps --json` stays byte-identical).
+    #[test]
+    fn ps_entry_status_omitted_when_none() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::PsEntry;
+        let entry = PsEntry {
+            instance: "personal-litellm".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping::new(4000, 4000)],
+            started_at: "2026-07-20T14:03:11Z".to_string(),
+            stale: false,
+            status: None,
+        };
+        let json = serde_json::to_string_pretty(&crate::json_out::ps_entries_json(&[entry]))
+            .expect("serialize ps entry");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert!(
+            value[0].get("status").is_none(),
+            "status must be omitted when None; got:\n{json}"
+        );
+    }
+
+    /// `ps` text renders the reconciled 5-state STATUS column (ADR 0030
+    /// §4.4): a keep-alive zombie shows `running-unhealthy`, NOT `Running`;
+    /// an entry whose facts could not be gathered (`status: None`) renders
+    /// `-`. The stale footer (ADR 0021 §4) is unchanged.
+    #[test]
+    fn print_ps_text_renders_status_column() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::PsEntry;
+        let entries = vec![
+            PsEntry {
+                instance: "personal-litellm".to_string(),
+                workload: "litellm".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-litellm".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping::new(4000, 4000)],
+                started_at: "2026-07-20T14:03:11Z".to_string(),
+                stale: false,
+                status: Some(InstanceStatus::RunningUnhealthy),
+            },
+            PsEntry {
+                instance: "personal-pi".to_string(),
+                workload: "pi".to_string(),
+                context: Some("personal".to_string()),
+                slot: "personal-pi".to_string(),
+                kind: PsKind::Singleton,
+                ports: vec![PortMapping::new(3000, 3000)],
+                started_at: "2026-07-20T14:06:00Z".to_string(),
+                stale: false,
+                status: None,
+            },
+        ];
+        let mut buf: Vec<u8> = Vec::new();
+        print_ps_text_to(&entries, &mut buf).expect("render ps text");
+        let out = String::from_utf8(buf).expect("utf8");
+        // Header carries the STATUS column.
+        assert!(
+            out.contains("STATUS"),
+            "STATUS column header missing; got:\n{out}"
+        );
+        // The zombie row shows running-unhealthy, never the bare `Running`.
+        let litellm_line = out
+            .lines()
+            .find(|l| l.contains("personal-litellm"))
+            .expect("litellm row must exist");
+        assert!(
+            litellm_line.contains("running-unhealthy"),
+            "zombie must show running-unhealthy; got line: {litellm_line}"
+        );
+        assert!(
+            !litellm_line.contains("Running"),
+            "zombie must NOT render as Running; got line: {litellm_line}"
+        );
+        // A None status renders `-`.
+        let pi_line = out
+            .lines()
+            .find(|l| l.contains("personal-pi"))
+            .expect("pi row must exist");
+        assert!(
+            pi_line.contains(" - "),
+            "None status must render `-`; got line: {pi_line}"
+        );
+    }
+
+    /// `workloads --json` includes the policy + namespace columns (ADR 0030
+    /// §4.4) and omits the label when None.
+    #[test]
+    fn workloads_json_includes_policy_and_namespace() {
+        let entries = vec![WorkloadListEntry {
+            name: "litellm".to_string(),
+            kind: "service".to_string(),
+            image: "litellm:main".to_string(),
+            instances: vec!["personal-litellm".to_string()],
+            namespace: "default".to_string(),
+            strategy: "singleton".to_string(),
+            on_conflict: "reuse,start,replace".to_string(),
+            port: "fixed".to_string(),
+            label: None,
+        }];
+        let json = serde_json::to_string_pretty(&crate::json_out::workloads_json(&entries))
+            .expect("serialize workloads");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert_eq!(value[0]["namespace"], "default");
+        assert_eq!(value[0]["strategy"], "singleton");
+        assert_eq!(value[0]["on_conflict"], "reuse,start,replace");
+        assert_eq!(value[0]["port"], "fixed");
+        assert!(
+            value[0].get("label").is_none(),
+            "label must be omitted; got:\n{json}"
+        );
+    }
+
+    /// `workloads` text output includes the policy + namespace columns (ADR
+    /// 0030 §4.4).
+    #[test]
+    fn print_workloads_text_includes_policy_columns() {
+        let entries = vec![WorkloadListEntry {
+            name: "litellm".to_string(),
+            kind: "service".to_string(),
+            image: "litellm:main".to_string(),
+            instances: vec!["personal-litellm".to_string()],
+            namespace: "default".to_string(),
+            strategy: "singleton".to_string(),
+            on_conflict: "reuse,start,replace".to_string(),
+            port: "fixed".to_string(),
+            label: Some("v1".to_string()),
+        }];
+        let mut buf: Vec<u8> = Vec::new();
+        print_workloads_text_to(&entries, &mut buf).expect("render workloads text");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert!(
+            out.contains("default"),
+            "namespace column missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("singleton"),
+            "strategy column missing; got:\n{out}"
+        );
+        assert!(
+            out.contains("reuse,start,replace"),
+            "on_conflict column missing; got:\n{out}"
+        );
+        assert!(out.contains("fixed"), "port column missing; got:\n{out}");
+        assert!(
+            out.contains("label=v1"),
+            "label column missing; got:\n{out}"
+        );
     }
 }

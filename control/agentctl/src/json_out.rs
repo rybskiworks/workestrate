@@ -54,6 +54,11 @@ pub struct PsEntryJson {
     started_at: String,
     ports: Vec<PsPortJson>,
     stale: bool,
+    /// Reconciled 5-state status (ADR 0030 §4.4). Skipped when `None` so
+    /// legacy JSON stays byte-identical (the pure `ps()` leaves it `None`;
+    /// `cmd_ps` populates it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<crate::microsandbox::runtime::InstanceStatus>,
 }
 
 pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec<PsEntryJson> {
@@ -77,19 +82,27 @@ pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec
                 })
                 .collect(),
             stale: e.stale,
+            status: e.status,
         })
         .collect()
 }
 
 /// One row of `workestrate workloads --json` (ADR 0027): the configured
-/// workload name, kind, image summary, and the instance names currently
-/// registered in the port registry (empty = not running).
+/// workload name, kind, image summary, the instance names currently
+/// registered in the port registry (empty = not running), and the declared
+/// instance policy / namespace columns (ADR 0030 §4.4).
 #[derive(serde::Serialize)]
 pub struct WorkloadJson {
     name: String,
     kind: String,
     image: String,
     instances: Vec<String>,
+    namespace: String,
+    strategy: String,
+    on_conflict: String,
+    port: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
 }
 
 pub fn workloads_json(
@@ -102,6 +115,64 @@ pub fn workloads_json(
             kind: e.kind.clone(),
             image: e.image.clone(),
             instances: e.instances.clone(),
+            namespace: e.namespace.clone(),
+            strategy: e.strategy.clone(),
+            on_conflict: e.on_conflict.clone(),
+            port: e.port.clone(),
+            label: e.label.clone(),
+        })
+        .collect()
+}
+
+/// One row of `workestrate instances --json` (ADR 0030 §4.4): the reconciled
+/// instance view across the registry + msb, with the 5-state status and the
+/// workload's declared instance policy.
+#[derive(serde::Serialize)]
+pub struct InstanceJson {
+    instance: String,
+    workload: String,
+    namespace: String,
+    context: Option<String>,
+    slot: String,
+    kind: crate::microsandbox::runtime::PsKind,
+    status: crate::microsandbox::runtime::InstanceStatus,
+    started_at: String,
+    ports: Vec<PsPortJson>,
+    strategy: String,
+    on_conflict: String,
+    port: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+pub fn instances_json(
+    entries: &[crate::commands::diagnostics::InstanceEntry],
+) -> Vec<InstanceJson> {
+    entries
+        .iter()
+        .map(|e| InstanceJson {
+            instance: e.instance.clone(),
+            workload: e.workload.clone(),
+            namespace: e.namespace.clone(),
+            context: e.context.clone(),
+            slot: e.slot.clone(),
+            kind: e.kind,
+            status: e.status,
+            started_at: e.started_at.clone(),
+            ports: e
+                .ports
+                .iter()
+                .map(|p| PsPortJson {
+                    host: p.host,
+                    guest: p.guest,
+                    bind_ip: p.bind_ip,
+                    name: p.name.clone(),
+                })
+                .collect(),
+            strategy: e.strategy.clone(),
+            on_conflict: e.on_conflict.clone(),
+            port: e.port.clone(),
+            label: e.label.clone(),
         })
         .collect()
 }
@@ -179,6 +250,7 @@ mod tests {
                 }],
                 started_at: "2026-07-20T14:03:11Z".to_string(),
                 stale: false,
+                status: None,
             },
             PsEntry {
                 instance: "personal-pi".to_string(),
@@ -189,6 +261,7 @@ mod tests {
                 ports: vec![PortMapping::new(3000, 3000)],
                 started_at: "2026-07-20T14:06:00Z".to_string(),
                 stale: false,
+                status: None,
             },
         ];
 

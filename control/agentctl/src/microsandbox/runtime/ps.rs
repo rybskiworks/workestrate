@@ -1,6 +1,8 @@
 use super::super::plan::PortMapping;
 use super::super::slots;
+use super::reconcile::ReconcileFacts;
 use anyhow::Result;
+use microsandbox::sandbox::SandboxStatus;
 use microsandbox::{MicrosandboxError, Sandbox};
 use std::path::Path;
 
@@ -32,9 +34,75 @@ pub enum PsKind {
     Parallel,
 }
 
+/// The reconciled 5-state status of an instance (ADR 0030 §4.4): computed
+/// from the shared reconcile facts (registry record + msb status + host-port
+/// liveness). `stale` (ADR 0021) remains for back-compat in JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceStatus {
+    /// msb Running + healthy (or no ports to probe, or still booting).
+    RunningHealthy,
+    /// msb Running + dead port + old record — a keep-alive zombie.
+    RunningUnhealthy,
+    /// msb Stopped.
+    Stopped,
+    /// msb Crashed.
+    Crashed,
+    /// Registry record present + msb gone (no row, no dir) — stale record.
+    StaleRecord,
+    /// msb unavailable (fail-closed) — status unknown.
+    Unknown,
+}
+
+impl InstanceStatus {
+    /// The human-readable status string for the text renderers (ADR 0030
+    /// §4.4). Distinct from the snake_case serde form used in JSON.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            InstanceStatus::RunningHealthy => "running-healthy",
+            InstanceStatus::RunningUnhealthy => "running-unhealthy",
+            InstanceStatus::Stopped => "stopped",
+            InstanceStatus::Crashed => "crashed",
+            InstanceStatus::StaleRecord => "stale-record",
+            InstanceStatus::Unknown => "unknown",
+        }
+    }
+}
+
+/// Classify the 5-state status from reconcile facts (PURE — unit-testable).
+pub fn classify_status(facts: &ReconcileFacts) -> InstanceStatus {
+    if facts.msb_unavailable {
+        return InstanceStatus::Unknown;
+    }
+    match facts.msb_status {
+        Some(SandboxStatus::Running) => {
+            if facts.healthy == Some(false) && !facts.recently_started {
+                InstanceStatus::RunningUnhealthy
+            } else {
+                InstanceStatus::RunningHealthy
+            }
+        }
+        Some(SandboxStatus::Stopped) => InstanceStatus::Stopped,
+        Some(SandboxStatus::Crashed) => InstanceStatus::Crashed,
+        // Created/Starting/Draining/Paused → treat as running-ish (healthy
+        // unknown); map to RunningHealthy (the reconcile chain treats them
+        // as not-replaceable).
+        Some(_) => InstanceStatus::RunningHealthy,
+        None => {
+            if facts.record.is_some() {
+                InstanceStatus::StaleRecord
+            } else {
+                InstanceStatus::Unknown
+            }
+        }
+    }
+}
+
 /// One row of `workestrate ps` output. Pure: no msb calls. The `stale` flag
 /// is the exception — it is populated by the async caller via
-/// [`probe_liveness`]; [`ps`] itself leaves it `false`.
+/// [`probe_liveness`]; [`ps`] itself leaves it `false`. The `status` field is
+/// likewise populated by the async caller (via reconcile facts +
+/// [`classify_status`]); [`ps`] leaves it `None`.
 #[derive(Debug, Clone)]
 pub struct PsEntry {
     pub instance: String,
@@ -54,6 +122,9 @@ pub struct PsEntry {
     /// Best-effort staleness flag; set by [`probe_liveness`] (`false` from
     /// [`ps`]). Surfaced in both `ps --json` and the text footer (ADR 0021 §4).
     pub stale: bool,
+    /// Reconciled 5-state status (ADR 0030 §4.4); set by the async caller via
+    /// [`classify_status`] (`None` from [`ps`]).
+    pub status: Option<InstanceStatus>,
 }
 
 /// The canonical refuse message (text mode). Pinned by ADR 0021 §2.
@@ -118,6 +189,7 @@ pub fn ps(state_dir: &Path) -> Result<Vec<PsEntry>> {
                 ports,
                 started_at: r.created_at,
                 stale: false,
+                status: None,
             }
         })
         .collect())
@@ -228,8 +300,8 @@ pub async fn probe_liveness(entries: &mut [PsEntry]) -> (usize, usize) {
 )]
 mod tests {
     use super::{
-        apply_liveness_outcomes, format_refuse_message, occupancy_from_state, probe_liveness, ps,
-        Occupancy, ProbeOutcome, PsEntry, PsKind,
+        apply_liveness_outcomes, classify_status, format_refuse_message, occupancy_from_state,
+        probe_liveness, ps, InstanceStatus, Occupancy, ProbeOutcome, PsEntry, PsKind,
     };
     use crate::config::test_support::unique_state_dir_runtime;
     use crate::microsandbox::plan::PortMapping;
@@ -550,6 +622,7 @@ mod tests {
                 ports: vec![PortMapping::new(1, 1)],
                 started_at: String::new(),
                 stale: false,
+                status: None,
             },
             PsEntry {
                 instance: "b".into(),
@@ -560,6 +633,7 @@ mod tests {
                 ports: vec![],
                 started_at: String::new(),
                 stale: false,
+                status: None,
             },
             PsEntry {
                 instance: "c@y".into(),
@@ -570,6 +644,7 @@ mod tests {
                 ports: vec![],
                 started_at: String::new(),
                 stale: false,
+                status: None,
             },
         ];
         let outcomes = [
@@ -605,6 +680,7 @@ mod tests {
                 ports: vec![PortMapping::new(1, 1)],
                 started_at: String::new(),
                 stale: true, // pre-existing; Unknown must NOT overwrite it
+                status: None,
             },
             PsEntry {
                 instance: "b".into(),
@@ -615,6 +691,7 @@ mod tests {
                 ports: vec![],
                 started_at: String::new(),
                 stale: false,
+                status: None,
             },
         ];
         let outcomes = [ProbeOutcome::Unknown, ProbeOutcome::Unknown];
@@ -643,6 +720,7 @@ mod tests {
                 ports: vec![],
                 started_at: String::new(),
                 stale: true, // start stale; Alive must clear it
+                status: None,
             },
             PsEntry {
                 instance: "b".into(),
@@ -653,6 +731,7 @@ mod tests {
                 ports: vec![],
                 started_at: String::new(),
                 stale: true,
+                status: None,
             },
         ];
         let outcomes = [ProbeOutcome::Alive, ProbeOutcome::Alive];
@@ -667,5 +746,133 @@ mod tests {
             entries[1].stale,
             "Alive leaves a pre-existing stale flag unchanged (only NotFound writes stale)"
         );
+    }
+
+    // ---- ADR 0030 §4.4 5-state status classification (classify_status) ----
+
+    use crate::microsandbox::port_registry::SandboxInstanceRecord;
+    use crate::microsandbox::runtime::reconcile::ReconcileFacts;
+    use microsandbox::sandbox::SandboxStatus;
+
+    /// Minimal registry record for fact fixtures (only the fields the
+    /// classifier reads).
+    fn record() -> SandboxInstanceRecord {
+        SandboxInstanceRecord {
+            instance: "personal-b".to_string(),
+            context: Some("personal".to_string()),
+            workload: "b".to_string(),
+            ports: vec![4000],
+            port_pairs: vec![PortMapping::new(4000, 4000)],
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            bind_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+        }
+    }
+
+    fn facts(
+        record: Option<SandboxInstanceRecord>,
+        msb_status: Option<SandboxStatus>,
+        msb_unavailable: bool,
+        healthy: Option<bool>,
+        recently_started: bool,
+    ) -> ReconcileFacts {
+        ReconcileFacts {
+            record,
+            msb_status,
+            msb_unavailable,
+            dir_exists: false,
+            healthy,
+            recently_started,
+        }
+    }
+
+    #[test]
+    fn classify_status_running_healthy() {
+        let f = facts(
+            Some(record()),
+            Some(SandboxStatus::Running),
+            false,
+            Some(true),
+            false,
+        );
+        assert_eq!(classify_status(&f), InstanceStatus::RunningHealthy);
+    }
+
+    #[test]
+    fn classify_status_running_no_ports_healthy() {
+        let f = facts(
+            Some(record()),
+            Some(SandboxStatus::Running),
+            false,
+            None,
+            false,
+        );
+        assert_eq!(classify_status(&f), InstanceStatus::RunningHealthy);
+    }
+
+    #[test]
+    fn classify_status_running_booting_healthy() {
+        let f = facts(
+            Some(record()),
+            Some(SandboxStatus::Running),
+            false,
+            Some(false),
+            true,
+        );
+        assert_eq!(classify_status(&f), InstanceStatus::RunningHealthy);
+    }
+
+    #[test]
+    fn classify_status_running_zombie() {
+        let f = facts(
+            Some(record()),
+            Some(SandboxStatus::Running),
+            false,
+            Some(false),
+            false,
+        );
+        assert_eq!(classify_status(&f), InstanceStatus::RunningUnhealthy);
+    }
+
+    #[test]
+    fn classify_status_stopped() {
+        let f = facts(
+            Some(record()),
+            Some(SandboxStatus::Stopped),
+            false,
+            None,
+            false,
+        );
+        assert_eq!(classify_status(&f), InstanceStatus::Stopped);
+    }
+
+    #[test]
+    fn classify_status_crashed() {
+        let f = facts(
+            Some(record()),
+            Some(SandboxStatus::Crashed),
+            false,
+            None,
+            false,
+        );
+        assert_eq!(classify_status(&f), InstanceStatus::Crashed);
+    }
+
+    #[test]
+    fn classify_status_stale_record() {
+        let f = facts(Some(record()), None, false, None, false);
+        assert_eq!(classify_status(&f), InstanceStatus::StaleRecord);
+    }
+
+    #[test]
+    fn classify_status_msb_unavailable() {
+        let f = facts(Some(record()), None, true, None, false);
+        assert_eq!(classify_status(&f), InstanceStatus::Unknown);
+    }
+
+    #[test]
+    fn classify_status_no_record_no_msb() {
+        let f = facts(None, None, false, None, false);
+        assert_eq!(classify_status(&f), InstanceStatus::Unknown);
     }
 }

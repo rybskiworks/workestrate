@@ -25,7 +25,10 @@ mod wait;
 pub use network::network_plan_to_policy;
 pub use ps::probe_liveness;
 pub use ps::PsKind;
-pub use ps::{format_refuse_message, occupancy_from_state, ps, Occupancy, PsEntry};
+pub use ps::{
+    classify_status, format_refuse_message, occupancy_from_state, ps, InstanceStatus, Occupancy,
+    PsEntry,
+};
 pub use reconcile::{
     decide_chain, default_chain, gather_facts, sandbox_dir, ChainStep, ReconcileFacts,
 };
