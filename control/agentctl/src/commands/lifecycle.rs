@@ -32,6 +32,51 @@ fn parallel_strategy_defaults_new(
     new || (strategy == crate::config::InstanceStrategy::Parallel && !replace && no_instance)
 }
 
+/// Resolve the DEPENDENT workload's own parallel instance id BEFORE dep
+/// auto-start (ADR 0030 P2.1). main.rs calls this for the `up`/`exec` verbs
+/// so the dependent's id is known when `plan_dep_starts` composes scoped
+/// dep instance ids (`<dep>@<dependent>-<id>`) and when fresh dep
+/// selections are injected as `--use` overrides.
+///
+/// Semantics (mirrors [`parallel_strategy_defaults_new`]):
+///
+/// - explicit `--instance <id>` → `Some(id)` verbatim (passthrough);
+/// - else `--new`, OR `strategy = "parallel"` without `--replace` →
+///   `Some(auto_allocate_slug(state_dir, slot))` — the caller REWRITES the
+///   action (`instance = Some(id)`, `new = false`) so
+///   `dispatch_service`/`dispatch_agent` use the SAME id and never allocate
+///   a second slug (with `instance` now `Some`, the `no_instance` guard in
+///   the Up/Exec arms skips their allocation);
+/// - else (`--replace` with the parallel strategy, singleton strategy, …) →
+///   `None` (the singleton model; no allocation).
+pub fn resolve_dependent_instance_id(
+    name: &str,
+    instance: Option<&str>,
+    new: bool,
+    replace: bool,
+) -> Result<Option<String>> {
+    if let Some(id) = instance {
+        return Ok(Some(id.to_string()));
+    }
+    let config = crate::config::load_config()?;
+    let strategy = config
+        .workloads
+        .get(name)
+        .map(|w| w.instance.strategy)
+        .unwrap_or(crate::config::InstanceStrategy::Singleton);
+    if parallel_strategy_defaults_new(strategy, new, replace, true) {
+        let state_dir = crate::config::resolve_state_dir();
+        let slot = crate::microsandbox::slots::slot_for(
+            name,
+            crate::config::active_context_name().as_deref(),
+        );
+        return Ok(Some(
+            crate::microsandbox::port_registry::auto_allocate_slug(&state_dir, &slot)?,
+        ));
+    }
+    Ok(None)
+}
+
 pub fn build_instance_spec(
     workload_name: &str,
     replace: bool,
@@ -918,6 +963,96 @@ mod tests {
     fn workload_route_rejects_unknown_kind() {
         let err = workload_route("worker", "up", "foo").unwrap_err();
         assert_eq!(err.to_string(), "unknown workload kind 'worker' for 'foo'");
+    }
+
+    // ---- ADR 0030 P2.1: resolve_dependent_instance_id ----
+
+    /// An explicit `--instance <id>` passes through verbatim — no config
+    /// load, no allocation.
+    #[test]
+    fn resolve_dependent_instance_id_explicit_passthrough() {
+        assert_eq!(
+            resolve_dependent_instance_id("pi", Some("canary"), false, false).unwrap(),
+            Some("canary".to_string())
+        );
+        // Explicit id wins even alongside --new/--replace (clap validates
+        // the mutual exclusion downstream; the passthrough never allocates).
+        assert_eq!(
+            resolve_dependent_instance_id("pi", Some("canary"), true, false).unwrap(),
+            Some("canary".to_string())
+        );
+    }
+
+    /// A parallel-strategy workload with no flags allocates a fresh slug
+    /// from the registry view of a REAL temp state dir.
+    #[test]
+    fn resolve_dependent_instance_id_parallel_strategy_allocates() {
+        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _env = EnvGuard::capture(&["WORKESTRATE_CONFIG_DIR", "WORKESTRATE_STATE_DIR"]);
+        let cfg_dir = uniq_dir("depid-cfg");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("workestrate.toml"),
+            r#"schema_version = 1
+
+[workloads.par]
+kind = "service"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.par.instance]
+strategy = "parallel"
+"#,
+        )
+        .unwrap();
+        let state_dir = uniq_dir("depid-state");
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+
+        let id = resolve_dependent_instance_id("par", None, false, false).unwrap();
+        let slug = id.expect("parallel strategy with no flags must allocate a slug");
+        crate::microsandbox::slots::validate_instance_id(&slug)
+            .expect("the allocated slug must satisfy the instance-id rule");
+
+        // --replace with the parallel strategy does NOT allocate (replace
+        // targets the singleton — existing semantics).
+        assert_eq!(
+            resolve_dependent_instance_id("par", None, false, true).unwrap(),
+            None,
+            "replace + parallel must not allocate"
+        );
+        let _ = std::fs::remove_dir_all(&cfg_dir);
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// A singleton-strategy workload with no flags stays on the singleton
+    /// (None); `--new` allocates even then.
+    #[test]
+    fn resolve_dependent_instance_id_singleton_strategy_none_unless_new() {
+        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _env = EnvGuard::capture(&["WORKESTRATE_CONFIG_DIR", "WORKESTRATE_STATE_DIR"]);
+        let cfg_dir = uniq_dir("depid-cfg-single");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("workestrate.toml"),
+            crate::config::test_support::one_workload_toml("solo"),
+        )
+        .unwrap();
+        let state_dir = uniq_dir("depid-state-single");
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+
+        assert_eq!(
+            resolve_dependent_instance_id("solo", None, false, false).unwrap(),
+            None,
+            "singleton strategy with no flags must not allocate"
+        );
+        let id = resolve_dependent_instance_id("solo", None, true, false).unwrap();
+        assert!(id.is_some(), "--new must allocate even for singleton");
+        let _ = std::fs::remove_dir_all(&cfg_dir);
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 }
 

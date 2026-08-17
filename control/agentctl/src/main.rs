@@ -20,7 +20,8 @@ use workestrate::commands::doctor::cmd_doctor;
 use workestrate::commands::home::cmd_home;
 use workestrate::commands::init::{cmd_init, cmd_new};
 use workestrate::commands::lifecycle::{
-    cmd_clean, cmd_down_all, dispatch_agent, dispatch_service, workload_route, WorkloadRoute,
+    cmd_clean, cmd_down_all, dispatch_agent, dispatch_service, resolve_dependent_instance_id,
+    workload_route, WorkloadRoute,
 };
 use workestrate::commands::migrate::cmd_migrate_home;
 use workestrate::commands::schemas::cmd_schemas;
@@ -267,6 +268,68 @@ fn rewrite_legacy_workload_argv(
     rewritten.push(name.clone());
     rewritten.extend(args.iter().skip(3).cloned());
     (rewritten, Some(warning))
+}
+
+/// ADR 0030 P2.1: the dependent-instance id a `workload plan` previews — an
+/// EXPLICIT passthrough of `--instance <id>` ONLY. Plan is read-only and
+/// must NEVER allocate a slug, so [`resolve_dependent_instance_id`] (which
+/// auto-allocates for the parallel strategy) is deliberately NOT called on
+/// this path: plan with no `--instance` is `None` (the singleton view).
+/// Pure — unit-testable.
+fn plan_preview_instance_id(action: &WorkloadAction) -> Option<String> {
+    match action {
+        WorkloadAction::Plan { instance, .. } => instance.clone(),
+        _ => None,
+    }
+}
+
+/// ADR 0030 P2.1: after [`resolve_dependent_instance_id`] and
+/// [`auto_start_dependencies`], rewrite the clap-parsed `up`/`exec` action
+/// in place so the rest of the pipeline sees ONE consistent view:
+///
+/// - the resolved dependent id becomes an explicit `instance = Some(id)`
+///   with `new = false`, so `dispatch_service`/`dispatch_agent` reuse the
+///   SAME id (their `no_instance` auto-slug guard then skips — no second
+///   allocation) and `detach_args` forwards `--instance <id>` to the child;
+/// - every FRESH dep selection the auto-start executor started is appended
+///   as `--use <dep>@<slug>`, so `build_instance_spec` records it on the
+///   spec and `detach_args` forwards it — the detached child's own planner
+///   marks the fresh dep Satisfied (no second allocation). Clap's flag
+///   parsing already ran, so the rewrite cannot trip clap-level exclusion;
+///   `build_instance_spec`'s exclusive-group check sees `new = false`.
+///
+/// Other verbs (plan/down/logs) carry no fresh selections and no id to
+/// rewrite — left untouched.
+fn rewrite_action_for_resolved_instance(
+    action: &mut WorkloadAction,
+    dependent_instance_id: Option<&str>,
+    fresh_selections: &[(String, String)],
+) {
+    let injected: Vec<String> = fresh_selections
+        .iter()
+        .map(|(dep, slug)| format!("{dep}@{slug}"))
+        .collect();
+    match action {
+        WorkloadAction::Up {
+            instance,
+            new,
+            use_,
+            ..
+        }
+        | WorkloadAction::Exec {
+            instance,
+            new,
+            use_,
+            ..
+        } => {
+            if let Some(id) = dependent_instance_id {
+                *instance = Some(id.to_string());
+                *new = false;
+            }
+            use_.extend(injected);
+        }
+        _ => {}
+    }
 }
 
 /// Translate a clap-parsed verb-first [`WorkloadAction`] into the legacy
@@ -531,7 +594,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             dry_run,
             force,
         } => cmd_migrate_home(from.as_deref(), dry_run, cli.json, force),
-        Commands::Workload { action } => {
+        Commands::Workload { mut action } => {
             // `workload new` is a scaffold verb, not a lifecycle verb: it has
             // no --use/--no-deps flags and must not reach the name-verb match
             // below.
@@ -641,7 +704,43 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                     unreachable!("workload build is dispatched above")
                 }
             };
-            let overrides = workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
+            let mut overrides =
+                workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
+            // ADR 0030 P2.1: resolve the DEPENDENT's OWN parallel instance id
+            // BEFORE dependency auto-start — the planner composes scoped dep
+            // instance ids (`<dep>@<dependent>-<id>`) from it and fresh dep
+            // selections are injected as `--use` overrides keyed to it.
+            // Explicit --instance passes through verbatim; --new / the
+            // parallel-strategy default allocate the slug HERE (once). The
+            // action is REWRITTEN below so dispatch_service/dispatch_agent
+            // reuse the SAME id (their no_instance allocation guard skips).
+            // `plan` gets an EXPLICIT-passthrough id ONLY (the scoped dep
+            // preview of the running dependent) — it is read-only and must
+            // never allocate a slug, so resolve_dependent_instance_id is not
+            // called for it (see plan_preview_instance_id). down/logs carry
+            // no dependent id.
+            let dependent_instance_id: Option<String> = match verb {
+                "up" | "exec" => {
+                    let (instance, new, replace) = match &action {
+                        WorkloadAction::Up {
+                            instance,
+                            new,
+                            replace,
+                            ..
+                        }
+                        | WorkloadAction::Exec {
+                            instance,
+                            new,
+                            replace,
+                            ..
+                        } => (instance.as_deref(), *new, *replace),
+                        _ => unreachable!("verb up/exec only destructures from Up/Exec above"),
+                    };
+                    resolve_dependent_instance_id(&name, instance, new, replace)?
+                }
+                "plan" => plan_preview_instance_id(&action),
+                _ => None,
+            };
             // Spec 21 §2/§2.4 (phase E): the ensure-images pre-flight runs
             // on the NAMED workload BEFORE dependency auto-start — fail fast
             // on the workload the operator actually asked for before
@@ -659,8 +758,33 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // required-not-running dep, so the dep must already be up. Dep
             // auto-start inherits the ensure pre-flight per dependency (spec
             // 21 §2.1) inside auto_start_dependencies.
-            auto_start_dependencies(&name, verb, no_deps, &overrides).await?;
-            let workload = ConfigWorkload::new_with_use_overrides(&name, &overrides)?;
+            //
+            // ADR 0030 P2.1: the returned FRESH `(dep, slug)` selections are
+            // INJECTED as `--use <dep>@<slug>` overrides into BOTH the
+            // construction overrides below and the action's forwarded `use_`
+            // list — the detached child's own planner then marks the fresh
+            // dep Satisfied (no second allocation). Scoped deps need no
+            // injection: the child re-derives `<dependent>-<id>` from its
+            // forwarded `--instance`.
+            let fresh_selections = auto_start_dependencies(
+                &name,
+                verb,
+                no_deps,
+                &overrides,
+                dependent_instance_id.as_deref(),
+            )
+            .await?;
+            overrides.extend(fresh_selections.iter().cloned());
+            rewrite_action_for_resolved_instance(
+                &mut action,
+                dependent_instance_id.as_deref(),
+                &fresh_selections,
+            );
+            let workload = ConfigWorkload::new_with_use_overrides_and_instance(
+                &name,
+                &overrides,
+                dependent_instance_id.as_deref(),
+            )?;
             // Kind-check at dispatch (ADR 0027): wrong-kind usage names the
             // correct invocation; plan/down are universal.
             match workload_route(workload.kind(), verb, &name)? {
@@ -739,6 +863,153 @@ mod tests {
                 "typed subcommand must not exist: {removed}"
             );
         }
+    }
+
+    // ---- ADR 0030 P2.1: rewrite_action_for_resolved_instance ----
+
+    fn up_action() -> WorkloadAction {
+        WorkloadAction::Up {
+            name: Some("prime".to_string()),
+            foreground: false,
+            replace: false,
+            instance: None,
+            new: true,
+            port_auto: false,
+            use_: vec!["redis@blue-2".to_string()],
+            no_deps: false,
+            reload_images: false,
+            images_ready: false,
+        }
+    }
+
+    /// ADR 0030 P2.1: `plan --instance <id>` passes the id through for the
+    /// scoped dep preview; plan WITHOUT --instance is None and NEVER
+    /// allocates (the seam is pure — no resolve_dependent_instance_id call,
+    /// no state_dir access); non-Plan actions yield None.
+    #[test]
+    fn plan_preview_instance_id_is_explicit_passthrough_only() {
+        let plan_with = WorkloadAction::Plan {
+            name: "prime".to_string(),
+            instance: Some("x7".to_string()),
+            use_: Vec::new(),
+        };
+        assert_eq!(
+            plan_preview_instance_id(&plan_with),
+            Some("x7".to_string()),
+            "explicit --instance must pass through verbatim"
+        );
+        let plan_without = WorkloadAction::Plan {
+            name: "prime".to_string(),
+            instance: None,
+            use_: Vec::new(),
+        };
+        assert_eq!(
+            plan_preview_instance_id(&plan_without),
+            None,
+            "no --instance → None (singleton view; no slug allocation)"
+        );
+        assert_eq!(
+            plan_preview_instance_id(&up_action()),
+            None,
+            "non-Plan actions are not handled by the plan seam"
+        );
+    }
+
+    /// The resolved dependent id becomes an explicit `--instance` (with
+    /// `--new` cleared) so dispatch_service reuses the SAME id and the
+    /// detached child inherits it; fresh dep selections join the forwarded
+    /// --use list.
+    #[test]
+    fn rewrite_up_action_injects_instance_and_fresh_use() {
+        let mut action = up_action();
+        let fresh = vec![("litellm".to_string(), "ab2z".to_string())];
+        rewrite_action_for_resolved_instance(&mut action, Some("xy7"), &fresh);
+        let WorkloadAction::Up {
+            instance,
+            new,
+            use_,
+            ..
+        } = &action
+        else {
+            panic!("expected Up");
+        };
+        assert_eq!(instance.as_deref(), Some("xy7"));
+        assert!(!new, "--new must be cleared once the id is materialized");
+        assert_eq!(
+            use_,
+            &vec!["redis@blue-2".to_string(), "litellm@ab2z".to_string()],
+            "fresh selections must be appended AFTER user-supplied --use"
+        );
+        // The translated ServiceAction carries the same id/use list — this
+        // is what dispatch_service and detach_args consume.
+        match workload_action_as_service(action) {
+            ServiceAction::Up {
+                instance,
+                new,
+                use_,
+                ..
+            } => {
+                assert_eq!(instance.as_deref(), Some("xy7"));
+                assert!(!new);
+                assert!(use_.contains(&"litellm@ab2z".to_string()));
+            }
+            _ => panic!("expected ServiceAction::Up"),
+        }
+    }
+
+    /// No resolved id (singleton dependent): instance/new are untouched but
+    /// fresh selections are STILL injected (a singleton dependent can have
+    /// fresh-mode deps).
+    #[test]
+    fn rewrite_without_dependent_id_injects_only_fresh_use() {
+        let mut action = up_action();
+        let fresh = vec![("litellm".to_string(), "ab2z".to_string())];
+        rewrite_action_for_resolved_instance(&mut action, None, &fresh);
+        let WorkloadAction::Up {
+            instance,
+            new,
+            use_,
+            ..
+        } = &action
+        else {
+            panic!("expected Up");
+        };
+        assert_eq!(instance, &None);
+        assert!(*new, "--new stays when no id was resolved");
+        assert!(use_.contains(&"litellm@ab2z".to_string()));
+    }
+
+    /// Exec gets the same rewrite; plan/down/logs are untouched.
+    #[test]
+    fn rewrite_exec_action_and_other_verbs_untouched() {
+        let mut action = WorkloadAction::Exec {
+            name: "prime".to_string(),
+            foreground: false,
+            replace: false,
+            instance: None,
+            new: true,
+            port_auto: false,
+            use_: Vec::new(),
+            no_deps: false,
+            reload_images: false,
+        };
+        rewrite_action_for_resolved_instance(&mut action, Some("k9"), &[]);
+        let WorkloadAction::Exec { instance, new, .. } = &action else {
+            panic!("expected Exec");
+        };
+        assert_eq!(instance.as_deref(), Some("k9"));
+        assert!(!new);
+
+        let mut plan = WorkloadAction::Plan {
+            name: "prime".to_string(),
+            instance: None,
+            use_: Vec::new(),
+        };
+        rewrite_action_for_resolved_instance(&mut plan, Some("k9"), &[]);
+        let WorkloadAction::Plan { instance, .. } = &plan else {
+            panic!("expected Plan");
+        };
+        assert_eq!(instance, &None, "plan is not rewritten");
     }
 
     #[test]

@@ -14,7 +14,10 @@
 //!   = SATISFIED (record-as-authoritative, matching `depgraph`; never
 //!   restart a running dep). A dep named in `--use` is NEVER auto-started
 //!   (pure instance-selection override). An agent-kind dep that is not
-//!   running is a hard error BEFORE anything starts.
+//!   running is a hard error BEFORE anything starts. ADR 0030 P2.1:
+//!   `depends_on.<dep>.instance = "scoped"` targets the dep instance named
+//!   `<dependent>-<id>` of the dependent's own parallel instance id;
+//!   `"fresh"` always plans a start (the executor allocates the slug).
 //! - EXECUTORS ([`auto_start_dependencies`], [`cmd_workload_up_all`]): thin
 //!   KVM-dependent shells around the planning seam. Service-kind deps start
 //!   DETACHED with a bounded wait-for-port ([`DEFAULT_WAIT`]); a dep with no
@@ -22,7 +25,11 @@
 //!   executor also RECONCILES occupancy with the msb runtime: a slot that msb
 //!   reports Running is never blind-started (the record-as-authoritative
 //!   planner can miss a running sandbox when the port-registry record is
-//!   absent/stale in the active state dir).
+//!   absent/stale in the active state dir). ADR 0030 P0.2:
+//!   [`cmd_workload_up_all`] runs the same reconcile pass parent-side over
+//!   BOTH the already-running skips and the planned starts, so a zombie slot
+//!   converges (replace) and a record-less-but-running sandbox is reused
+//!   with an accurate message.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
@@ -32,12 +39,12 @@ use anyhow::Result;
 
 use crate::config::{ConfigFile, ConflictStep, DepConflict, DepInstanceMode};
 use crate::microsandbox::depgraph::{dep_closure, singleton_record, topo_all};
-use crate::microsandbox::port_registry::{list_records, SandboxInstanceRecord};
+use crate::microsandbox::port_registry::{auto_allocate_slug, list_records, SandboxInstanceRecord};
 use crate::microsandbox::runtime::reconcile::{ChainStep, ReconcileFacts};
 use crate::microsandbox::runtime::{
     down_instance, format_refuse_message, wait_for_port, DownStatus, DEFAULT_WAIT,
 };
-use crate::microsandbox::slots::slot_for;
+use crate::microsandbox::slots::{instance_id_of, instance_name, slot_for, validate_instance_id};
 
 /// How long to poll the registry for a freshly-started dep's singleton
 /// record before falling back to its DECLARED host ports (bounded within
@@ -49,25 +56,44 @@ const RECORD_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// One planned action for a dependency of a workload, in topological START
 /// order (every dep appears after all of its own deps).
+///
+/// Both variants carry the TARGET INSTANCE identity (`instance`): the full
+/// instance name (`<slot>` or `<slot>@<id>`) the executor reconciles,
+/// messages about, and waits on. `None` = the singleton slot (the shared
+/// model). A SCOPED dep of a parallel dependent carries
+/// `<dep-slot>@<dependent>-<dependent-id>`; a FRESH dep is planned with
+/// `instance: None` + `fresh: true` and the EXECUTOR allocates the concrete
+/// slug before reconciling (the planner stays pure — it has no state_dir).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DepStartAction {
-    /// The dep's singleton slot is free: start it detached, then wait for
+    /// The dep's target instance is free: start it detached, then wait for
     /// each published host port.
     StartService {
         dep: String,
         slot: String,
+        /// Full target instance name; `None` = the singleton slot. A FRESH
+        /// action is planned with `None` here — the executor fills it with
+        /// the auto-allocated slug before reconciling.
+        instance: Option<String>,
+        /// True for a FRESH-mode dep (`depends_on.<dep>.instance = "fresh"`
+        /// or derived from the dep's `strategy = "parallel"`): always a
+        /// start, never Satisfied.
+        fresh: bool,
         /// Declared host ports (fallback readiness targets when the
         /// registry record is not yet visible).
         ports: Vec<u16>,
         /// The dep's auto-start conflict policy (default "reuse").
         conflict: DepConflict,
     },
-    /// The dep's singleton slot is already occupied (record-as-authoritative)
-    /// — reuse, never restart a running dep; the executor may still probe
-    /// health and auto-replace a keep-alive zombie under "reuse".
+    /// The dep's target instance is already occupied
+    /// (record-as-authoritative) — reuse, never restart a running dep; the
+    /// executor may still probe health and auto-replace a keep-alive zombie
+    /// under "reuse".
     Satisfied {
         dep: String,
         slot: String,
+        /// Full target instance name; `None` = the singleton slot.
+        instance: Option<String>,
         /// Declared host ports (fallback readiness targets if the executor
         /// decides to replace the slot).
         ports: Vec<u16>,
@@ -158,8 +184,15 @@ pub(crate) fn namespace_for(
 
 /// The `depends_on.<dep>.instance` mode for a dependency (ADR 0030 §4.1 T2):
 /// the declared `instance` when set, else derived from the DEP's own
-/// `instance.strategy` (parallel → Fresh, else Shared).
-fn dep_instance_mode(config: &ConfigFile, dependent: &str, dep: &str) -> DepInstanceMode {
+/// `instance.strategy` (parallel → Fresh, else Shared). `pub(crate)` so
+/// discovery ([`crate::microsandbox::discovery::resolve_depends_on_full`])
+/// applies the SAME derivation for mode-aware default exports selection —
+/// never duplicate this logic.
+pub(crate) fn dep_instance_mode(
+    config: &ConfigFile,
+    dependent: &str,
+    dep: &str,
+) -> DepInstanceMode {
     config
         .workloads
         .get(dependent)
@@ -191,6 +224,12 @@ impl DepStartAction {
 /// Executor disposition for one planned dependency action after runtime
 /// reconciliation (msb occupancy + host port health + record age). PURE —
 /// unit-testable without KVM or the SDK.
+///
+/// The `slot` fields carry the TARGET INSTANCE NAME
+/// ([`target_of_action`]) — the singleton slot for a shared dep, the
+/// composed `<slot>@<dependent>-<id>` name for a scoped dep, the
+/// auto-slugged `<slot>@<slug>` for a fresh dep — so messages, teardown,
+/// and readiness waits all hit the parallel instance when there is one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DepDisposition {
     /// Reuse the running instance (healthy, or no ports to probe, or still
@@ -232,15 +271,27 @@ pub fn decide_dep_disposition(
     let step = crate::microsandbox::runtime::reconcile::decide_chain(
         chain,
         facts,
-        slot_of_action(action),
+        target_of_action(action),
     )?;
     let (dep, slot, ports) = match action {
         DepStartAction::StartService {
-            dep, slot, ports, ..
-        } => (dep.clone(), slot.clone(), ports.clone()),
-        DepStartAction::Satisfied {
-            dep, slot, ports, ..
-        } => (dep.clone(), slot.clone(), ports.clone()),
+            dep,
+            slot,
+            instance,
+            ports,
+            ..
+        }
+        | DepStartAction::Satisfied {
+            dep,
+            slot,
+            instance,
+            ports,
+            ..
+        } => (
+            dep.clone(),
+            instance.clone().unwrap_or_else(|| slot.clone()),
+            ports.clone(),
+        ),
     };
     Ok(match step {
         ChainStep::Start => DepDisposition::Start { dep, slot, ports },
@@ -262,12 +313,28 @@ pub fn decide_dep_disposition(
 /// - named in `use_overrides` → skipped ENTIRELY (no StartService, no
 ///   Satisfied): `--use` is a pure instance-selection override; resolution
 ///   at construction validates the selected instance;
-/// - singleton slot occupied (a record exists) → [`DepStartAction::Satisfied`];
+/// - target instance occupied (a record exists) → [`DepStartAction::Satisfied`];
 /// - free + service-kind → [`DepStartAction::StartService`] with the dep's
 ///   declared host ports;
 /// - free + agent-kind → hard error naming dep + dependent (agents are
 ///   interactive — planning fails BEFORE any start executes);
 /// - free + unknown kind → hard error naming the kind.
+///
+/// The TARGET INSTANCE is mode-aware (ADR 0030 §4.1 T2, P2.1):
+///
+/// - **Shared** (or **Scoped** with a SINGLETON dependent —
+///   `dependent_instance_id == None`): the dep's singleton slot. Scoped to
+///   a singleton dependent IS the shared singleton — there is no parallel
+///   dependent id to scope to.
+/// - **Scoped** with `Some(id)`: the dep instance `<dep-slot>@<name>-<id>`
+///   (e.g. dependent `prime` on instance `1` → dep `litellm` target
+///   `personal-litellm@prime-1`). The composed id is validated through
+///   [`validate_instance_id`]; an overlong/invalid composition is a clean
+///   plan-time error. A registry record with EXACTLY that instance name (in
+///   the dependent's namespace) yields Satisfied for the scoped instance.
+/// - **Fresh**: ALWAYS a StartService marked `fresh` (never Satisfied); the
+///   concrete slug is allocated by the EXECUTOR
+///   ([`auto_start_dependencies`]) — the planner has no state_dir.
 ///
 /// Each action carries the dep's `on_conflict` policy (default "reuse"; ADR
 /// 0026 addendum 2026-08-16): the executor reconciles the planned action with
@@ -279,6 +346,7 @@ pub fn plan_dep_starts(
     context: Option<&str>,
     use_overrides: &[(String, String)],
     namespace: &str,
+    dependent_instance_id: Option<&str>,
 ) -> Result<Vec<DepStartAction>> {
     let closure = dep_closure(config, name)?;
     // ADR 0030 Phase 2 T1: the planner's record view is namespace-scoped — a
@@ -296,55 +364,46 @@ pub fn plan_dep_starts(
             continue;
         }
         let slot = slot_for(&dep, context);
-        // Compute the ports + conflict BEFORE the singleton check (both borrow
-        // config; `dep` is moved into the action below).
+        // Compute the ports + conflict BEFORE the occupancy check (both
+        // borrow config; `dep` is moved into the action below).
         let ports = declared_host_ports(config, &dep);
         let conflict = dep_conflict(config, name, &dep);
-        // ADR 0030 T2: depends_on.<dep>.instance SELECTS the target slot.
-        // P2 implements shared (the singleton slot, today's model) +
-        // the strategy-derived default computation; scoped/fresh AUTO-START
-        // (creating a PARALLEL dep instance through the detached child) is a
-        // documented P2.1 follow-up — the dependent's instance id is not
-        // available at this call depth and the creation machinery builds
-        // singleton specs only.
+        // ADR 0030 T2 (P2.1): depends_on.<dep>.instance SELECTS the target
+        // instance. Scoped composes the dep instance id from the DEPENDENT's
+        // name + parallel id; fresh targets a not-yet-allocated slug (the
+        // executor allocates); shared is the singleton slot.
         let mode = dep_instance_mode(config, name, &dep);
-        match mode {
-            DepInstanceMode::Shared => {}
-            DepInstanceMode::Scoped | DepInstanceMode::Fresh
-                if config
-                    .workloads
-                    .get(name)
-                    .and_then(|w| w.depends_on.get(&dep))
-                    .and_then(|s| s.instance)
-                    .is_some() =>
-            {
-                // EXPLICIT scoped/fresh (opt-in): honest hard error — the
-                // parallel dep auto-start is not wired in this phase. Power
-                // users can still select a manually-started parallel dep via
-                // `--use <dep>@<id>` (which skips this dep in the planner).
-                anyhow::bail!(
-                    "dependency '{dep}' of '{name}' declares `instance = '{mode}'`: scoped/fresh \
-                     dep auto-start is a P2.1 follow-up (parallel dep creation is not wired). \
-                     Start the dep instance manually and select it with `--use {dep}@<id>`, or \
-                     omit `instance` for shared behavior."
-                );
-            }
-            DepInstanceMode::Scoped | DepInstanceMode::Fresh => {
-                // DERIVED fresh (the dep's own `strategy = "parallel"`): warn
-                // + fall back to the shared singleton (the pre-P2 behavior);
-                // non-breaking — a parallel-strategy dep does not force its
-                // dependents onto fresh in this phase.
-                eprintln!(
-                    "warning: dependency '{dep}' of '{name}': the dep's `instance.strategy = 'parallel'` \
-                     defaults this entry to `instance = 'fresh'` (ADR 0030 T2), but scoped/fresh dep \
-                     auto-start is a P2.1 follow-up — falling back to the shared singleton slot."
-                );
-            }
-        }
-        if singleton_record(&records, &slot).is_some() {
+        let target: Option<String> = match mode {
+            DepInstanceMode::Scoped => match dependent_instance_id {
+                Some(id) => {
+                    let dep_id = format!("{name}-{id}");
+                    validate_instance_id(&dep_id).map_err(|e| {
+                        anyhow::anyhow!(
+                            "dependency '{dep}' of '{name}' is scoped to dependent instance \
+                             '{id}', but the composed dep instance id '{dep_id}' is invalid: {e}"
+                        )
+                    })?;
+                    Some(instance_name(&slot, Some(&dep_id)))
+                }
+                // Scoped to a SINGLETON dependent IS the shared singleton:
+                // the dependent has no parallel id to scope to.
+                None => None,
+            },
+            DepInstanceMode::Shared | DepInstanceMode::Fresh => None,
+        };
+        let occupied = match (&target, mode) {
+            // Scoped: a record with EXACTLY the composed instance name in the
+            // dependent's namespace satisfies the dep.
+            (Some(t), _) => records.iter().any(|r| &r.instance == t),
+            // Fresh is NEVER satisfied: every start allocates a new instance.
+            (None, DepInstanceMode::Fresh) => false,
+            (None, _) => singleton_record(&records, &slot).is_some(),
+        };
+        if occupied {
             actions.push(DepStartAction::Satisfied {
                 dep,
                 slot,
+                instance: target,
                 ports,
                 conflict,
             });
@@ -357,7 +416,14 @@ pub fn plan_dep_starts(
             .unwrap_or("");
         match kind {
             "service" => {
-                actions.push(DepStartAction::StartService { dep, slot, ports, conflict });
+                actions.push(DepStartAction::StartService {
+                    dep,
+                    slot,
+                    instance: target,
+                    fresh: mode == DepInstanceMode::Fresh,
+                    ports,
+                    conflict,
+                });
             }
             "agent" => anyhow::bail!(
                 "dependency '{dep}' of '{name}' is an agent (interactive); start it yourself with `workestrate workload exec {dep}`"
@@ -428,31 +494,44 @@ fn declared_host_ports(config: &ConfigFile, dep: &str) -> Vec<u16> {
 /// Otherwise plans via [`plan_dep_starts`] and executes each
 /// [`DepStartAction::StartService`]: the dep's `ConfigWorkload` is
 /// constructed with NO `--use` overrides (its own deps are already
-/// started/satisfied by topo order), started DETACHED on its singleton
-/// slot, then awaited on its published host ports within [`DEFAULT_WAIT`].
+/// started/satisfied by topo order), started DETACHED on its target
+/// instance, then awaited on its published host ports within
+/// [`DEFAULT_WAIT`].
+///
+/// ADR 0030 P2.1: `dependent_instance_id` is the dependent's OWN resolved
+/// parallel instance id (main.rs resolves it BEFORE this call). A scoped
+/// dep targets `<dep-slot>@<dependent>-<id>`; a fresh dep gets a concrete
+/// auto-allocated slug here (the planner is pure). Every concrete FRESH
+/// `(dep, slug)` selection this call started is RETURNED so the caller can
+/// inject `<dep>@<slug>` as a `--use` override — the dependent's plan then
+/// resolves exports from the fresh record, and the forwarded `--use` makes
+/// the DETACHED CHILD skip the fresh dep in its own planner (no second
+/// allocation). Scoped needs no injection: the child re-derives
+/// `<dependent>-<id>` from its forwarded `--instance`.
 pub async fn auto_start_dependencies(
     workload_name: &str,
     verb: &str,
     no_deps: bool,
     use_overrides: &[(String, String)],
-) -> Result<()> {
+    dependent_instance_id: Option<&str>,
+) -> Result<Vec<(String, String)>> {
     if no_deps || !matches!(verb, "up" | "exec") {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let config = crate::config::load_config()?;
     let Some(workload) = config.workloads.get(workload_name) else {
         // Unknown workload: the ConfigWorkload constructor's own error
         // fires downstream; there is nothing to plan.
-        return Ok(());
+        return Ok(Vec::new());
     };
     if !matches!(
         (workload.kind.as_str(), verb),
         ("service", "up") | ("agent", "exec")
     ) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     if workload.depends_on.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let context = crate::config::active_context_name();
     let state_dir = crate::config::resolve_state_dir();
@@ -472,17 +551,38 @@ pub async fn auto_start_dependencies(
         context.as_deref(),
         use_overrides,
         &namespace,
+        dependent_instance_id,
     )?;
+    let mut fresh_selections: Vec<(String, String)> = Vec::new();
     for action in actions {
+        let mut action = action;
+        // ADR 0030 P2.1 FRESH: allocate the concrete slug HERE (the planner
+        // is pure — it has no state_dir), fill the target instance name, and
+        // remember the selection so the caller injects `<dep>@<slug>` as a
+        // --use override (exports resolution + detached-child dedup).
+        if let DepStartAction::StartService {
+            fresh: true,
+            dep,
+            slot,
+            instance,
+            ..
+        } = &mut action
+        {
+            let slug = auto_allocate_slug(&state_dir, slot)?;
+            *instance = Some(instance_name(slot, Some(&slug)));
+            fresh_selections.push((dep.clone(), slug));
+        }
         // ADR 0030 Phase 0: reconcile the planner's record view with the msb
         // runtime + sandbox dir + host-port liveness BEFORE starting, then
         // route the disposition through the dep's conflict CHAIN (default
         // ["reuse", "start", "replace"]). The record-as-authoritative planner
         // can miss a running sandbox when the registry record is
-        // absent/stale in the active state dir.
+        // absent/stale in the active state dir. The reconcile target is the
+        // TARGET INSTANCE NAME (scoped/fresh parallel instance or singleton
+        // slot), never the bare slot.
         let facts = crate::microsandbox::runtime::reconcile::gather_facts(
             &state_dir,
-            slot_of_action(&action),
+            target_of_action(&action),
             declared_ports_of(&action),
         )
         .await?;
@@ -493,7 +593,13 @@ pub async fn auto_start_dependencies(
                     // The detached child re-reconciles and executes
                     // handle.start(); if that fails the child errors and we
                     // fall through here — advance the chain past `start`.
-                    match start_service_detached(&dep, EnsurePreflight::Run { force: false }).await
+                    match start_service_detached_instance(
+                        &dep,
+                        instance_id_of(&slot),
+                        dep_port_auto(&config, &dep, &slot),
+                        EnsurePreflight::Run { force: false },
+                    )
+                    .await
                     {
                         Ok(()) => break DepDisposition::StartExisting { dep, slot },
                         Err(e) => {
@@ -542,7 +648,13 @@ pub async fn auto_start_dependencies(
                 // pre-flight per dependency. force=false — `--reload-images`
                 // is named-workload/batch scoped (USER DECISION D3); deps
                 // get the plain skew matrix.
-                start_service_detached(&dep, EnsurePreflight::Run { force: false }).await?;
+                start_service_detached_instance(
+                    &dep,
+                    instance_id_of(&slot),
+                    dep_port_auto(&config, &dep, &slot),
+                    EnsurePreflight::Run { force: false },
+                )
+                .await?;
                 println!("started dependency '{dep}' (slot '{slot}') [replaced]");
                 wait_until_ready(
                     &state_dir,
@@ -556,7 +668,13 @@ pub async fn auto_start_dependencies(
                 // pre-flight per dependency. force=false — `--reload-images`
                 // is named-workload/batch scoped (USER DECISION D3); deps
                 // get the plain skew matrix.
-                start_service_detached(&dep, EnsurePreflight::Run { force: false }).await?;
+                start_service_detached_instance(
+                    &dep,
+                    instance_id_of(&slot),
+                    dep_port_auto(&config, &dep, &slot),
+                    EnsurePreflight::Run { force: false },
+                )
+                .await?;
                 println!("started dependency '{dep}' (slot '{slot}')");
                 wait_until_ready(
                     &state_dir,
@@ -574,7 +692,27 @@ pub async fn auto_start_dependencies(
             }
         }
     }
-    Ok(())
+    Ok(fresh_selections)
+}
+
+/// PORTS precedence for a dep start (ADR 0030 P2.1, LOCKED): a scoped/fresh
+/// dep instance (a PARALLEL target — the instance name carries `@`) starts
+/// with `port_auto = true` (auto-allocate, host=0 machinery) UNLESS the dep
+/// declares its own `[workloads.<dep>.instance] port = ...` policy — then
+/// `port_auto = false` and `apply_instance_port_policy` in `build_sandbox`
+/// applies the dep's declared policy (the operator's explicit override).
+/// Auto-allocation by default keeps the dep's DECLARED fixed ports free for
+/// its singleton/shared use. A singleton target (no `@`) never port-autos
+/// here — the shared model keeps declared ports as-is.
+fn dep_port_auto(config: &ConfigFile, dep: &str, target_instance: &str) -> bool {
+    if instance_id_of(target_instance).is_none() {
+        return false;
+    }
+    config
+        .workloads
+        .get(dep)
+        .and_then(|w| w.instance.port.as_ref())
+        .is_none()
 }
 
 /// Bare `workestrate workload up` (EXECUTOR — KVM-dependent at runtime):
@@ -582,15 +720,38 @@ pub async fn auto_start_dependencies(
 /// detached, singleton slots. Agent-kind workloads are printed as SKIPPED;
 /// an occupied slot is already running (skip, NOT an error).
 ///
+/// ADR 0030 P0.2 (Q6): after the pure [`plan_bare_up`], the parent runs an
+/// explicit RECONCILE pass over both lists via [`decide_bare_up_disposition`]
+/// (facts from the registry record + msb status + sandbox dir + host-port
+/// liveness, routed through the workload's `instance.on_conflict` chain or
+/// the built-in default):
+///
+/// - `AlreadyRunning` skips are re-probed: Reuse keeps the skip (message
+///   says "— reusing"); StartExisting/Replace move the workload into the
+///   start set (Replace downs the slot first; a down ERROR aborts the batch
+///   naming the workload); Fail keeps the skip with a chain-specific
+///   message (NOT a batch-fatal error). A record-present ZOMBIE therefore
+///   converges instead of being skipped forever.
+/// - Planned starts are re-probed too: Reuse (msb Running + healthy but NO
+///   registry record — the registry was lost) short-circuits to a
+///   skip-with-reuse message without spawning (mirrors the
+///   `up_service_with_spec` parent short-circuit); Start/StartExisting/
+///   Replace proceed to spawn (the detached child re-reconciles and
+///   executes).
+///
 /// Output: text by default. With `json`, a single summary object
 /// (`{"started": [...], "already_running": [...], "skipped_agents": [...]}`)
-/// is printed INSTEAD of the per-workload text lines.
+/// is printed INSTEAD of the per-workload text lines. Back-compat (P0.2):
+/// reused-via-reconcile names land in `already_running`; replaced and
+/// started-stopped names land in `started`; chain-fail skips appear in text
+/// output only.
 ///
 /// Spec 21 phase E: `reload_images` is the batch-scoped `--reload-images`
 /// force (USER DECISION D3). The ensure-images pre-flight runs for EVERY
-/// start BEFORE ANY spawn — a nix-layered workload whose declaring repo
-/// lacks a flake.nix is skipped with a note (spec §7 batch row) and a hard
-/// ensure failure aborts the batch before anything starts.
+/// start in the FINAL (post-reconcile) start set BEFORE ANY spawn — a
+/// nix-layered workload whose declaring repo lacks a flake.nix is skipped
+/// with a note (spec §7 batch row) and a hard ensure failure aborts the
+/// batch before anything starts.
 pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> {
     let config = crate::config::load_config()?;
     let context = crate::config::active_context_name();
@@ -598,14 +759,134 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
     let records = list_records(&state_dir)?;
     let (starts, skips) = plan_bare_up(&config, &records, context.as_deref())?;
 
-    if !json {
-        for skip in &skips {
-            match skip {
-                BareSkip::Agent { name } => println!(
-                    "{name}: skipped (agents are interactive; use `workestrate workload exec {name}`)"
-                ),
-                BareSkip::AlreadyRunning { name, slot } => {
-                    println!("{name}: already running (slot '{slot}')")
+    // ADR 0030 P0.2: parent-side reconcile pass (see the fn docs). All
+    // dispositions are computed BEFORE the ensure pass and ANY spawn.
+    let mut final_starts: Vec<PlannedStart> = Vec::new();
+    let mut reused: Vec<String> = Vec::new();
+    let mut skipped_agents: Vec<String> = Vec::new();
+    for skip in skips {
+        match skip {
+            BareSkip::Agent { name } => {
+                if !json {
+                    println!(
+                        "{name}: skipped (agents are interactive; use `workestrate workload exec {name}`)"
+                    );
+                }
+                skipped_agents.push(name);
+            }
+            BareSkip::AlreadyRunning { name, slot } => {
+                let ports = declared_host_ports(&config, &name);
+                let chain = workload_conflict_chain(&config, &name);
+                let facts = crate::microsandbox::runtime::reconcile::gather_facts(
+                    &state_dir, &slot, &ports,
+                )
+                .await?;
+                match decide_bare_up_disposition(&chain, &facts, &slot) {
+                    Ok(BareUpDisposition::Reuse) => {
+                        if !json {
+                            println!("{name}: already running (slot '{slot}') — reusing");
+                        }
+                        reused.push(name);
+                    }
+                    Ok(BareUpDisposition::StartExisting) => {
+                        final_starts.push(PlannedStart {
+                            name,
+                            slot,
+                            ports,
+                            note: Some("[started stopped sandbox]"),
+                        });
+                    }
+                    Ok(BareUpDisposition::Replace) => {
+                        // Zombie/stale record: down the slot first (a down
+                        // ERROR is batch-fatal, naming the workload), then
+                        // converge via a fresh start.
+                        let down = down_instance(&state_dir, &slot).await;
+                        if matches!(down.status, DownStatus::Error) {
+                            anyhow::bail!(
+                                "failed to replace workload '{name}' (slot '{slot}'): {}",
+                                down.message.unwrap_or_default()
+                            );
+                        }
+                        final_starts.push(PlannedStart {
+                            name,
+                            slot,
+                            ports,
+                            note: Some("[replaced]"),
+                        });
+                    }
+                    Ok(BareUpDisposition::Fail) => {
+                        // Not batch-fatal: the workload stays down, the rest
+                        // of the batch proceeds.
+                        if !json {
+                            println!(
+                                "{name}: slot '{slot}' occupied and on_conflict chain ends in fail — skipping"
+                            );
+                        }
+                    }
+                    Ok(BareUpDisposition::Start) => {
+                        // Record-present but the reconcile sees a FREE slot
+                        // (unreachable under decide_chain's free-slot
+                        // shortcut, which requires no record — kept for
+                        // exhaustiveness): plain start.
+                        final_starts.push(PlannedStart {
+                            name,
+                            slot,
+                            ports,
+                            note: None,
+                        });
+                    }
+                    Err(e) => {
+                        // Chain exhausted (e.g. ["reuse"] on a zombie): skip
+                        // with the reason, do not abort the batch.
+                        if !json {
+                            println!("{name}: skipping — {e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for s in starts {
+        let chain = workload_conflict_chain(&config, &s.name);
+        let facts =
+            crate::microsandbox::runtime::reconcile::gather_facts(&state_dir, &s.slot, &s.ports)
+                .await?;
+        match decide_bare_up_disposition(&chain, &facts, &s.slot) {
+            Ok(BareUpDisposition::Reuse) => {
+                // msb Running + healthy but NO registry record (the registry
+                // was lost): short-circuit reuse parent-side — the child
+                // would reuse anyway, but spawning it would misreport within
+                // the FS-8 grace window.
+                if !json {
+                    println!("{}: already running (slot '{}') — reusing", s.name, s.slot);
+                }
+                reused.push(s.name);
+            }
+            Ok(BareUpDisposition::Fail) => {
+                if !json {
+                    println!(
+                        "{}: slot '{}' occupied and on_conflict chain ends in fail — skipping",
+                        s.name, s.slot
+                    );
+                }
+            }
+            Ok(
+                BareUpDisposition::Start
+                | BareUpDisposition::StartExisting
+                | BareUpDisposition::Replace,
+            ) => {
+                // Spawn: the detached child re-reconciles and executes
+                // (start / handle.start() / teardown + create).
+                final_starts.push(PlannedStart {
+                    name: s.name,
+                    slot: s.slot,
+                    ports: s.ports,
+                    note: None,
+                });
+            }
+            Err(e) => {
+                if !json {
+                    println!("{}: skipping — {e}", s.name);
                 }
             }
         }
@@ -613,15 +894,19 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
 
     // Spec 21 §2.1/§5.2: the batch ensure pass, ALL starts BEFORE ANY
     // spawn, with the same force flag for every eligible service workload
-    // in the batch (USER DECISION D3).
-    let start_names: Vec<String> = starts.iter().map(|s| s.name.clone()).collect();
+    // in the batch (USER DECISION D3). P0.2: over the FINAL start set
+    // (post-reconcile moves).
+    let start_names: Vec<String> = final_starts.iter().map(|s| s.name.clone()).collect();
     crate::images::ensure::ensure_images_for_workloads(&start_names, reload_images).await?;
 
-    let mut started: Vec<String> = Vec::with_capacity(starts.len());
-    for s in &starts {
+    let mut started: Vec<String> = Vec::with_capacity(final_starts.len());
+    for s in &final_starts {
         start_service_detached(&s.name, EnsurePreflight::AlreadyDone).await?;
         if !json {
-            println!("started '{}' (slot '{}')", s.name, s.slot);
+            match s.note {
+                Some(note) => println!("started '{}' (slot '{}') {}", s.name, s.slot, note),
+                None => println!("started '{}' (slot '{}')", s.name, s.slot),
+            }
         }
         wait_until_ready(
             &state_dir,
@@ -633,28 +918,82 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
     }
 
     if json {
-        let already_running: Vec<&str> = skips
-            .iter()
-            .filter_map(|s| match s {
-                BareSkip::AlreadyRunning { name, .. } => Some(name.as_str()),
-                _ => None,
-            })
-            .collect();
-        let skipped_agents: Vec<&str> = skips
-            .iter()
-            .filter_map(|s| match s {
-                BareSkip::Agent { name } => Some(name.as_str()),
-                _ => None,
-            })
-            .collect();
         let body = serde_json::json!({
             "started": started,
-            "already_running": already_running,
+            "already_running": reused,
             "skipped_agents": skipped_agents,
         });
         println!("{}", serde_json::to_string_pretty(&body)?);
     }
     Ok(())
+}
+
+/// One workload in the FINAL bare-up start set (post-reconcile), with an
+/// optional message note marking a reconcile-driven start (`[replaced]`,
+/// `[started stopped sandbox]`).
+#[derive(Debug)]
+struct PlannedStart {
+    name: String,
+    slot: String,
+    ports: Vec<u16>,
+    note: Option<&'static str>,
+}
+
+/// The parent-side bare-up reconcile disposition (ADR 0030 P0.2): the
+/// conflict-chain step mapped to the batch action. PURE — unit-testable
+/// across the U2 behavior matrix without KVM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BareUpDisposition {
+    /// Adopt the running healthy/booting instance: keep/convert to an
+    /// already-running skip with a "— reusing" message.
+    Reuse,
+    /// Plain fresh start (slot free) — spawn the detached child.
+    Start,
+    /// Start the stopped/crashed sandbox — move into the start set with a
+    /// `[started stopped sandbox]` note.
+    StartExisting,
+    /// Down the slot, then start fresh — move into the start set with a
+    /// `[replaced]` note.
+    Replace,
+    /// The chain ends in fail — keep the skip with a chain-specific
+    /// message (NOT batch-fatal).
+    Fail,
+}
+
+/// Map (chain, facts) to the bare-up disposition — the pure decision seam
+/// of the P0.2 reconcile pass (a thin [`ChainStep`] → [`BareUpDisposition`]
+/// mapping over
+/// [`crate::microsandbox::runtime::reconcile::decide_chain`]; chain
+/// exhaustion propagates as Err).
+pub fn decide_bare_up_disposition(
+    chain: &[ConflictStep],
+    facts: &ReconcileFacts,
+    instance: &str,
+) -> Result<BareUpDisposition> {
+    Ok(
+        match crate::microsandbox::runtime::reconcile::decide_chain(chain, facts, instance)? {
+            ChainStep::Start => BareUpDisposition::Start,
+            ChainStep::Reuse => BareUpDisposition::Reuse,
+            ChainStep::StartExisting => BareUpDisposition::StartExisting,
+            ChainStep::Replace => BareUpDisposition::Replace,
+            ChainStep::Fail => BareUpDisposition::Fail,
+        },
+    )
+}
+
+/// The workload's conflict chain for the bare-up reconcile pass (ADR 0030
+/// U11 precedence, ConfigFile-level): `workloads.<name>.instance.on_conflict`
+/// when declared, else the built-in default ["reuse","start","replace"].
+/// Mirrors `Workload::instance_conflict_chain` for the batch path, which
+/// plans from the merged config directly (no `ConfigWorkload` is
+/// constructed per batch member).
+fn workload_conflict_chain(config: &ConfigFile, name: &str) -> Vec<ConflictStep> {
+    config
+        .workloads
+        .get(name)
+        .and_then(|w| w.instance.on_conflict.clone())
+        .map(|c| c.0)
+        .unwrap_or_else(crate::microsandbox::runtime::reconcile::default_chain)
 }
 
 /// Whether [`start_service_detached`] runs the ensure-images pre-flight
@@ -673,10 +1012,33 @@ pub enum EnsurePreflight {
 
 /// Start one service-kind workload DETACHED on its singleton slot with no
 /// `--use` overrides and no per-slot flags (its own deps are already
-/// started/satisfied by topo order). The spawned child is the ensured party
-/// (spec 21 §2.2): its spec carries `images_ready = true`, and `detach_args`
-/// appends `--images-ready` so the child skips the pre-flight.
+/// started/satisfied by topo order). Thin wrapper over
+/// [`start_service_detached_instance`] for the singleton model.
 async fn start_service_detached(name: &str, preflight: EnsurePreflight) -> Result<()> {
+    start_service_detached_instance(name, None, false, preflight).await
+}
+
+/// Start one service-kind workload DETACHED on the given parallel instance
+/// (`instance_id` = the bare `@`-suffix id; `None` = the singleton slot).
+/// The spawned child is the ensured party (spec 21 §2.2): its spec carries
+/// `images_ready = true`, and `detach_args` appends `--images-ready` so the
+/// child skips the pre-flight. `detach_args` likewise forwards `--instance
+/// <id>` for a parallel target, so the child re-derives the SAME instance
+/// name from its own context.
+///
+/// PORTS (ADR 0030 P2.1, LOCKED precedence): callers pass `port_auto =
+/// true` for scoped/fresh dep instances (auto-allocate via the host=0
+/// machinery, keeping the dep's DECLARED fixed ports free for its
+/// singleton/shared use) UNLESS the dep declares its own
+/// `[workloads.<dep>.instance] port = ...` policy — then `port_auto =
+/// false` and `apply_instance_port_policy` in `build_sandbox` applies the
+/// declared policy (the operator's explicit override).
+async fn start_service_detached_instance(
+    name: &str,
+    instance_id: Option<&str>,
+    port_auto: bool,
+    preflight: EnsurePreflight,
+) -> Result<()> {
     if let EnsurePreflight::Run { force } = preflight {
         crate::images::ensure::ensure_images_for_workload(name, force).await?;
     }
@@ -685,9 +1047,9 @@ async fn start_service_detached(name: &str, preflight: EnsurePreflight) -> Resul
     let mut spec = crate::commands::lifecycle::build_instance_spec(
         name,
         false,
+        instance_id,
         None,
-        None,
-        false,
+        port_auto,
         &[],
         false,
     )?;
@@ -695,11 +1057,15 @@ async fn start_service_detached(name: &str, preflight: EnsurePreflight) -> Resul
     crate::microsandbox::runtime::up_service_with_spec(&workload, &spec, false).await
 }
 
-/// The slot of a planned action (both variants carry it).
-fn slot_of_action(action: &DepStartAction) -> &str {
+/// The TARGET INSTANCE NAME of a planned action (both variants carry it):
+/// the full instance name when set (scoped/fresh parallel dep), else the
+/// singleton slot. Reconcile facts, messages, teardown, and readiness waits
+/// all address the target — a parallel record `<slot>@<id>` is found by its
+/// EXACT instance name, never by the bare slot.
+fn target_of_action(action: &DepStartAction) -> &str {
     match action {
-        DepStartAction::StartService { slot, .. } => slot,
-        DepStartAction::Satisfied { slot, .. } => slot,
+        DepStartAction::StartService { slot, instance, .. }
+        | DepStartAction::Satisfied { slot, instance, .. } => instance.as_deref().unwrap_or(slot),
     }
 }
 
@@ -714,20 +1080,21 @@ fn declared_ports_of(action: &DepStartAction) -> &[u16] {
 /// Wait for a freshly-started workload's published host ports within
 /// [`DEFAULT_WAIT`]. A workload with no ports skips the wait. On timeout
 /// the error names the subject (dep-of-dependent or workload), the address,
-/// and the detached child's log file.
+/// and the detached child's log file. `instance` is the TARGET INSTANCE
+/// NAME (singleton slot or `<slot>@<id>`).
 fn wait_until_ready(
     state_dir: &Path,
     subject: &str,
-    slot: &str,
+    instance: &str,
     declared_ports: &[u16],
 ) -> Result<()> {
     let deadline = Instant::now() + DEFAULT_WAIT;
-    let targets = readiness_targets(state_dir, slot, declared_ports);
+    let targets = readiness_targets(state_dir, instance, declared_ports);
     for (ip, port) in targets {
         let remaining = deadline.saturating_duration_since(Instant::now());
         wait_for_port(ip, port, remaining).map_err(|_| {
             anyhow::anyhow!(
-                "{subject} did not become ready on {ip}:{port} within {}s; see log: ~/.microsandbox/sandboxes/{slot}/workestrate.log",
+                "{subject} did not become ready on {ip}:{port} within {}s; see log: ~/.microsandbox/sandboxes/{instance}/workestrate.log",
                 DEFAULT_WAIT.as_secs()
             )
         })?;
@@ -736,16 +1103,23 @@ fn wait_until_ready(
 }
 
 /// Learn the published host addresses for a freshly-started workload: poll
-/// the registry for its singleton record (the detached child's registration
-/// lands shortly after its sandbox is created), falling back to the
-/// DECLARED host ports on the shared 127.0.0.1 bind when the record is not
-/// yet visible within [`RECORD_POLL_BUDGET`]. An empty result means no
-/// ports to wait on (the caller skips the wait).
-fn readiness_targets(state_dir: &Path, slot: &str, declared_ports: &[u16]) -> Vec<(IpAddr, u16)> {
+/// the registry for the record whose instance name matches `instance`
+/// EXACTLY (ADR 0030 P2.1: a parallel record `<slot>@<id>` must be found —
+/// a singleton-only matcher would never see a scoped/fresh dep instance and
+/// would fall through to the declared-ports fallback, which auto-allocated
+/// ports make WRONG), falling back to the DECLARED host ports on the shared
+/// 127.0.0.1 bind when the record is not yet visible within
+/// [`RECORD_POLL_BUDGET`]. An empty result means no ports to wait on (the
+/// caller skips the wait).
+fn readiness_targets(
+    state_dir: &Path,
+    instance: &str,
+    declared_ports: &[u16],
+) -> Vec<(IpAddr, u16)> {
     let poll_deadline = Instant::now() + RECORD_POLL_BUDGET;
     loop {
         if let Ok(records) = list_records(state_dir) {
-            if let Some(rec) = singleton_record(&records, slot) {
+            if let Some(rec) = records.iter().find(|r| r.instance == instance) {
                 if !rec.port_pairs.is_empty() {
                     return rec.port_pairs.iter().map(|p| (p.bind_ip, p.host)).collect();
                 }
@@ -871,19 +1245,23 @@ guest = 4003
     #[test]
     fn plan_dep_starts_chain_all_absent_starts_in_topo_order() -> Result<()> {
         let config = chain_config();
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default", None)?;
         assert_eq!(
             actions,
             vec![
                 DepStartAction::StartService {
                     dep: "c".to_string(),
                     slot: "personal-c".to_string(),
+                    instance: None,
+                    fresh: false,
                     ports: vec![4002],
                     conflict: DepConflict::default_chain(),
                 },
                 DepStartAction::StartService {
                     dep: "b".to_string(),
                     slot: "personal-b".to_string(),
+                    instance: None,
+                    fresh: false,
                     ports: vec![4001],
                     conflict: DepConflict::default_chain(),
                 },
@@ -901,19 +1279,30 @@ guest = 4003
         let records = list_records(&state_dir)?;
         let config = chain_config();
 
-        let actions = plan_dep_starts(&config, "a", &records, Some("personal"), &[], "default")?;
+        let actions = plan_dep_starts(
+            &config,
+            "a",
+            &records,
+            Some("personal"),
+            &[],
+            "default",
+            None,
+        )?;
         assert_eq!(
             actions,
             vec![
                 DepStartAction::StartService {
                     dep: "c".to_string(),
                     slot: "personal-c".to_string(),
+                    instance: None,
+                    fresh: false,
                     ports: vec![4002],
                     conflict: DepConflict::default_chain(),
                 },
                 DepStartAction::Satisfied {
                     dep: "b".to_string(),
                     slot: "personal-b".to_string(),
+                    instance: None,
                     ports: vec![4001],
                     conflict: DepConflict::default_chain(),
                 },
@@ -944,8 +1333,8 @@ image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("agent-dep fixture must parse");
-        let err =
-            plan_dep_starts(&config, "top", &[], Some("personal"), &[], "default").unwrap_err();
+        let err = plan_dep_starts(&config, "top", &[], Some("personal"), &[], "default", None)
+            .unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains(
@@ -963,12 +1352,22 @@ command = []
     fn plan_dep_starts_use_override_dep_is_absent_from_actions() -> Result<()> {
         let config = chain_config();
         let overrides = vec![("b".to_string(), "canary".to_string())];
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &overrides, "default")?;
+        let actions = plan_dep_starts(
+            &config,
+            "a",
+            &[],
+            Some("personal"),
+            &overrides,
+            "default",
+            None,
+        )?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
                 dep: "c".to_string(),
                 slot: "personal-c".to_string(),
+                instance: None,
+                fresh: false,
                 ports: vec![4002],
                 conflict: DepConflict::default_chain(),
             }],
@@ -1003,12 +1402,14 @@ host = 4001
 guest = 4001
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default", None)?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string(),
+                instance: None,
+                fresh: false,
                 ports: vec![4001],
                 conflict: DepConflict::replace(),
             }],
@@ -1046,12 +1447,14 @@ guest = 4000
 on_conflict = "fail"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default", None)?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
                 dep: "litellm".to_string(),
                 slot: "personal-litellm".to_string(),
+                instance: None,
+                fresh: false,
                 ports: vec![4000],
                 conflict: DepConflict::fail(),
             }],
@@ -1089,12 +1492,14 @@ guest = 4000
 on_conflict = "fail"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default", None)?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
                 dep: "litellm".to_string(),
                 slot: "personal-litellm".to_string(),
+                instance: None,
+                fresh: false,
                 ports: vec![4000],
                 conflict: DepConflict::replace(),
             }],
@@ -1151,10 +1556,10 @@ on_conflict = "fail"
     #[tokio::test]
     async fn auto_start_dependencies_no_deps_and_non_start_verbs_are_no_ops() -> Result<()> {
         // Returns before load_config: no config env needed at all.
-        auto_start_dependencies("pi", "exec", true, &[]).await?;
-        auto_start_dependencies("litellm", "up", true, &[]).await?;
+        auto_start_dependencies("pi", "exec", true, &[], None).await?;
+        auto_start_dependencies("litellm", "up", true, &[], None).await?;
         for verb in ["plan", "down", "logs"] {
-            auto_start_dependencies("pi", verb, false, &[]).await?;
+            auto_start_dependencies("pi", verb, false, &[], None).await?;
         }
         Ok(())
     }
@@ -1167,13 +1572,13 @@ on_conflict = "fail"
     async fn auto_start_dependencies_unknown_or_mismatch_or_depfree_is_a_no_op() -> Result<()> {
         let _guard = TestConfigGuard::new();
         // Unknown workload: the constructor's error fires downstream.
-        auto_start_dependencies("ghost", "up", false, &[]).await?;
+        auto_start_dependencies("ghost", "up", false, &[], None).await?;
         // Kind/verb mismatch per the CONFIG kind (pi is an agent): the
         // workload_route kind error fires downstream.
-        auto_start_dependencies("pi", "up", false, &[]).await?;
+        auto_start_dependencies("pi", "up", false, &[], None).await?;
         // The fixture config declares no depends_on: nothing to plan.
-        auto_start_dependencies("pi", "exec", false, &[]).await?;
-        auto_start_dependencies("litellm", "up", false, &[]).await?;
+        auto_start_dependencies("pi", "exec", false, &[], None).await?;
+        auto_start_dependencies("litellm", "up", false, &[], None).await?;
         Ok(())
     }
 
@@ -1184,6 +1589,8 @@ on_conflict = "fail"
         DepStartAction::StartService {
             dep: dep.to_string(),
             slot: format!("personal-{dep}"),
+            instance: None,
+            fresh: false,
             ports: vec![4000],
             conflict,
         }
@@ -1193,6 +1600,7 @@ on_conflict = "fail"
         DepStartAction::Satisfied {
             dep: dep.to_string(),
             slot: format!("personal-{dep}"),
+            instance: None,
             ports: vec![4000],
             conflict,
         }
@@ -1930,22 +2338,20 @@ strategy = "parallel"
         Ok(())
     }
 
-    /// An EXPLICIT scoped/fresh entry is an honest plan-time error: the
-    /// parallel dep auto-start is a P2.1 follow-up (the dependent's instance
-    /// id is not available at this call depth and the creation machinery
-    /// builds singleton specs only). The error names the follow-up and the
-    /// `--use` workaround.
-    #[test]
-    fn plan_dep_starts_explicit_scoped_fresh_is_a_clear_p21_error() -> Result<()> {
+    // ---- ADR 0030 P2.1: scoped/fresh dep auto-start planning ----
+
+    /// Scoped-mode fixture: dependent `prime` (agent) depends on `litellm`
+    /// (service, 4000) with `instance = "scoped"`.
+    fn scoped_config() -> ConfigFile {
         let toml = r#"
 schema_version = 1
 
-[workloads.a]
+[workloads.prime]
 kind = "agent"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.a.depends_on.litellm]
+[workloads.prime.depends_on.litellm]
 env = "LITELLM_URL"
 instance = "scoped"
 
@@ -1953,25 +2359,221 @@ instance = "scoped"
 kind = "service"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
+
+[[workloads.litellm.ports]]
+host = 4000
+guest = 4000
 "#;
-        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
-        let err = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default").unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("P2.1 follow-up"),
-            "scoped/fresh auto-start must name the follow-up: {msg}"
-        );
-        assert!(
-            msg.contains("--use litellm@<id>"),
-            "the error must offer the --use workaround: {msg}"
+        toml::from_str(toml).expect("scoped fixture must parse")
+    }
+
+    /// Register a PARALLEL lifecycle record `<context>-<workload>@<id>` in
+    /// the "default" namespace.
+    fn register_parallel(
+        state_dir: &Path,
+        workload: &str,
+        id: &str,
+        bind: IpAddr,
+        host: u16,
+        guest: u16,
+    ) -> Result<()> {
+        check_and_register_sandbox_lifecycle(
+            state_dir,
+            &format!("personal-{workload}@{id}"),
+            Some("personal"),
+            workload,
+            bind,
+            &[host],
+            &[PortMapping {
+                host,
+                guest,
+                bind_ip: bind,
+                name: None,
+            }],
+            "2026-08-01T00:00:00Z",
+            "default",
+        )
+    }
+
+    // P2.1: scoped + parallel dependent (`prime` on instance `1`) → the dep
+    // targets the COMPOSED instance `personal-litellm@prime-1`.
+    #[test]
+    fn plan_dep_starts_scoped_with_dependent_id_targets_composed_instance() -> Result<()> {
+        let config = scoped_config();
+        let actions = plan_dep_starts(
+            &config,
+            "prime",
+            &[],
+            Some("personal"),
+            &[],
+            "default",
+            Some("1"),
+        )?;
+        assert_eq!(
+            actions,
+            vec![DepStartAction::StartService {
+                dep: "litellm".to_string(),
+                slot: "personal-litellm".to_string(),
+                instance: Some("personal-litellm@prime-1".to_string()),
+                fresh: false,
+                ports: vec![4000],
+                conflict: DepConflict::default_chain(),
+            }],
+            "a scoped dep of prime@1 must target litellm@prime-1"
         );
         Ok(())
     }
 
-    /// A DERIVED fresh entry (the dep's own parallel strategy, no explicit
-    /// `instance`) warns + falls back to the shared singleton — non-breaking.
+    // P2.1: scoped + SINGLETON dependent (no parallel id) → the shared
+    // singleton (scoped to a singleton dependent IS the shared singleton).
     #[test]
-    fn plan_dep_starts_derived_fresh_warns_and_falls_back_to_shared() -> Result<()> {
+    fn plan_dep_starts_scoped_singleton_dependent_keeps_shared_singleton() -> Result<()> {
+        let config = scoped_config();
+        let actions = plan_dep_starts(
+            &config,
+            "prime",
+            &[],
+            Some("personal"),
+            &[],
+            "default",
+            None,
+        )?;
+        assert_eq!(
+            actions,
+            vec![DepStartAction::StartService {
+                dep: "litellm".to_string(),
+                slot: "personal-litellm".to_string(),
+                instance: None,
+                fresh: false,
+                ports: vec![4000],
+                conflict: DepConflict::default_chain(),
+            }],
+            "a scoped dep of a singleton dependent keeps the shared singleton target"
+        );
+        Ok(())
+    }
+
+    // P2.1: a scoped record with EXACTLY the composed instance name (in the
+    // dependent's namespace) → Satisfied for the scoped instance.
+    #[test]
+    fn plan_dep_starts_scoped_occupied_scoped_instance_is_satisfied() -> Result<()> {
+        let state_dir = unique_state_dir("deps-scoped-occupied");
+        register_parallel(
+            &state_dir,
+            "litellm",
+            "prime-1",
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+            14000,
+            4000,
+        )?;
+        let records = list_records(&state_dir)?;
+        let config = scoped_config();
+
+        let actions = plan_dep_starts(
+            &config,
+            "prime",
+            &records,
+            Some("personal"),
+            &[],
+            "default",
+            Some("1"),
+        )?;
+        assert_eq!(
+            actions,
+            vec![DepStartAction::Satisfied {
+                dep: "litellm".to_string(),
+                slot: "personal-litellm".to_string(),
+                instance: Some("personal-litellm@prime-1".to_string()),
+                ports: vec![4000],
+                conflict: DepConflict::default_chain(),
+            }],
+            "an existing litellm@prime-1 record must satisfy the scoped dep"
+        );
+        // A record for a DIFFERENT dependent (prime-2) does NOT satisfy it.
+        let state_dir2 = unique_state_dir("deps-scoped-other");
+        register_parallel(
+            &state_dir2,
+            "litellm",
+            "prime-2",
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)),
+            14001,
+            4000,
+        )?;
+        let records2 = list_records(&state_dir2)?;
+        let actions2 = plan_dep_starts(
+            &config,
+            "prime",
+            &records2,
+            Some("personal"),
+            &[],
+            "default",
+            Some("1"),
+        )?;
+        assert!(
+            matches!(actions2.as_slice(), [DepStartAction::StartService { .. }]),
+            "litellm@prime-2 must not satisfy the prime@1-scoped dep: {actions2:?}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let _ = std::fs::remove_dir_all(&state_dir2);
+        Ok(())
+    }
+
+    // P2.1: EXPLICIT fresh plans a fresh start (marked `fresh`, no concrete
+    // instance — the executor allocates) instead of the old P2.1-stopgap
+    // error.
+    #[test]
+    fn plan_dep_starts_explicit_fresh_plans_fresh_start() -> Result<()> {
+        let toml = r#"
+schema_version = 1
+
+[workloads.prime]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.prime.depends_on.litellm]
+env = "LITELLM_URL"
+instance = "fresh"
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[[workloads.litellm.ports]]
+host = 4000
+guest = 4000
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
+        let actions = plan_dep_starts(
+            &config,
+            "prime",
+            &[],
+            Some("personal"),
+            &[],
+            "default",
+            Some("1"),
+        )?;
+        assert_eq!(
+            actions,
+            vec![DepStartAction::StartService {
+                dep: "litellm".to_string(),
+                slot: "personal-litellm".to_string(),
+                instance: None,
+                fresh: true,
+                ports: vec![4000],
+                conflict: DepConflict::default_chain(),
+            }],
+            "explicit fresh must plan a fresh-marked start, not error"
+        );
+        Ok(())
+    }
+
+    // P2.1: DERIVED fresh (the dep's own `strategy = "parallel"`, no
+    // explicit `instance`) plans the same fresh-marked start — the old
+    // warn-and-fall-back-to-shared stopgap is gone.
+    #[test]
+    fn plan_dep_starts_derived_fresh_plans_fresh_start() -> Result<()> {
         let toml = r#"
 schema_version = 1
 
@@ -1987,20 +2589,191 @@ env = "LITELLM_URL"
 kind = "service"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
+
+[workloads.litellm.instance]
+strategy = "parallel"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default", None)?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
                 dep: "litellm".to_string(),
                 slot: "personal-litellm".to_string(),
+                instance: None,
+                fresh: true,
                 ports: vec![],
                 conflict: DepConflict::default_chain(),
             }],
-            "a singleton-strategy dep with no declared instance keeps the shared singleton target"
+            "a parallel-strategy dep derives a fresh-marked start (no warn/fallback)"
         );
         Ok(())
+    }
+
+    // P2.1: a scoped composition whose dep instance id is overlong is a
+    // clean plan-time error naming the composed id.
+    #[test]
+    fn plan_dep_starts_scoped_overlong_composed_id_is_a_clean_error() {
+        let config = scoped_config();
+        let long_id = "a".repeat(28); // "prime-" + 28 = 34 > 32
+        let err = plan_dep_starts(
+            &config,
+            "prime",
+            &[],
+            Some("personal"),
+            &[],
+            "default",
+            Some(&long_id),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("composed dep instance id"),
+            "the error must name the composed id: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("prime-{long_id}")),
+            "the error must carry the offending id: {msg}"
+        );
+    }
+
+    // P2.1: decide_dep_disposition on a scoped action carries the TARGET
+    // INSTANCE NAME (not the bare slot) into the disposition.
+    #[test]
+    fn disposition_scoped_action_carries_target_instance() {
+        let action = DepStartAction::StartService {
+            dep: "litellm".to_string(),
+            slot: "personal-litellm".to_string(),
+            instance: Some("personal-litellm@prime-1".to_string()),
+            fresh: false,
+            ports: vec![4000],
+            conflict: DepConflict::default_chain(),
+        };
+        assert_eq!(
+            decide_dep_disposition(&DepConflict::default_chain().0, &action, "prime", &free())
+                .unwrap(),
+            DepDisposition::Start {
+                dep: "litellm".to_string(),
+                slot: "personal-litellm@prime-1".to_string(),
+                ports: vec![4000]
+            },
+            "the disposition must address the scoped instance, not the singleton slot"
+        );
+    }
+
+    // P2.1: readiness_targets matches the EXACT instance name — a parallel
+    // record `<slot>@<id>` is found (the old singleton-only matcher missed
+    // it), and the singleton still matches.
+    #[test]
+    fn readiness_targets_matches_parallel_instance_exactly() -> Result<()> {
+        let state_dir = unique_state_dir("deps-readiness");
+        register_singleton(&state_dir, "litellm", 4000, 4000)?;
+        register_parallel(
+            &state_dir,
+            "litellm",
+            "prime-1",
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+            14000,
+            4000,
+        )?;
+        // The parallel record's published pair wins for the scoped instance.
+        let targets = readiness_targets(&state_dir, "personal-litellm@prime-1", &[4000]);
+        assert_eq!(
+            targets,
+            vec![(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 14000)],
+            "the scoped instance must resolve to its own record's ports"
+        );
+        // The singleton still resolves to its own record.
+        let targets = readiness_targets(&state_dir, "personal-litellm", &[4000]);
+        assert_eq!(
+            targets,
+            vec![(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000)],
+            "the singleton record still matches exactly"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0030 P0.2: bare-up parent-side reconcile (decision seam) ----
+
+    /// The U2 matrix on the bare-up disposition seam: running+healthy →
+    /// Reuse; zombie → Replace; stopped → StartExisting; stale record →
+    /// Replace; free → Start; a fail-chain on an occupied slot → Fail.
+    #[test]
+    fn bare_up_disposition_u2_matrix() {
+        let default = DepConflict::default_chain().0;
+        // running + healthy → reuse.
+        assert_eq!(
+            decide_bare_up_disposition(&default, &running(Some(true), false), "personal-b")
+                .unwrap(),
+            BareUpDisposition::Reuse
+        );
+        // zombie (running + dead port + old record) → replace.
+        assert_eq!(
+            decide_bare_up_disposition(&default, &running(Some(false), false), "personal-b")
+                .unwrap(),
+            BareUpDisposition::Replace
+        );
+        // stopped → start-existing.
+        let stopped = facts(Some(record()), Some(SandboxStatus::Stopped), None, false);
+        assert_eq!(
+            decide_bare_up_disposition(&default, &stopped, "personal-b").unwrap(),
+            BareUpDisposition::StartExisting
+        );
+        // stale record (msb gone) → replace.
+        assert_eq!(
+            decide_bare_up_disposition(
+                &default,
+                &facts(Some(record()), None, None, false),
+                "personal-b"
+            )
+            .unwrap(),
+            BareUpDisposition::Replace
+        );
+        // genuinely free → start.
+        assert_eq!(
+            decide_bare_up_disposition(&default, &free(), "personal-b").unwrap(),
+            BareUpDisposition::Start
+        );
+        // fail chain on an occupied slot → fail.
+        assert_eq!(
+            decide_bare_up_disposition(&[ConflictStep::Fail], &running(None, false), "personal-b")
+                .unwrap(),
+            BareUpDisposition::Fail
+        );
+    }
+
+    /// The batch chain helper mirrors `Workload::instance_conflict_chain`:
+    /// the declared `instance.on_conflict` wins, else the default chain.
+    #[test]
+    fn workload_conflict_chain_declared_beats_default() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.svc.instance]
+on_conflict = "fail"
+
+[workloads.plain]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
+        assert_eq!(
+            workload_conflict_chain(&config, "svc"),
+            vec![ConflictStep::Fail],
+            "the declared chain must win"
+        );
+        assert_eq!(
+            workload_conflict_chain(&config, "plain"),
+            crate::microsandbox::runtime::reconcile::default_chain(),
+            "an undeclared workload gets the built-in default chain"
+        );
     }
 
     // ---- ADR 0030 Phase 2: namespace_for (provenance → repo_key) ----

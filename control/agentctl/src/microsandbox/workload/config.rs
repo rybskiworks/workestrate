@@ -153,7 +153,30 @@ impl ConfigWorkload {
     /// workload's DECLARED depends_on map: an override naming an undeclared
     /// dep (or any override with no depends_on at all) is a hard error here,
     /// so every up/exec/plan path refuses identically.
+    ///
+    /// Thin wrapper over [`Self::new_with_use_overrides_and_instance`] with
+    /// NO dependent-instance threading (ADR 0030 P2.1: the singleton-
+    /// dependent view — scoped DEFAULT selection does not fire).
     pub fn new_with_use_overrides(name: &str, use_overrides: &[(String, String)]) -> Result<Self> {
+        Self::new_with_use_overrides_and_instance(name, use_overrides, None)
+    }
+
+    /// [`Self::new_with_use_overrides`] plus the DEPENDENT's own resolved
+    /// parallel instance id (ADR 0030 P2.1), threaded into
+    /// [`crate::microsandbox::discovery::resolve_depends_on_full`] so a
+    /// SCOPED dep's no-override DEFAULT exports selection picks the
+    /// `<dep>@<workload>-<id>` record instead of the singleton. main.rs
+    /// resolves the id BEFORE dependency auto-start
+    /// ([`crate::commands::lifecycle::resolve_dependent_instance_id`]) and
+    /// passes it here; the detached child re-derives the same id from its
+    /// forwarded `--instance`, so parent and child construct identical
+    /// workload views. `None` (plan/down/logs and singleton dependents)
+    /// keeps the singleton-selection behavior unchanged.
+    pub fn new_with_use_overrides_and_instance(
+        name: &str,
+        use_overrides: &[(String, String)],
+        dependent_instance_id: Option<&str>,
+    ) -> Result<Self> {
         let config = crate::config::load_config()?;
         let provenance = crate::merge::take_provenance();
         let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
@@ -220,13 +243,16 @@ impl ConfigWorkload {
         // ADR 0026(d): a declared depends_on map resolves EVERY declared dep
         // at plan time — no flag. A required-but-not-running dep refuses
         // here, on every up/exec/plan path (they all construct via `new`).
+        // ADR 0030 P2.1: `dependent_instance_id` drives the SCOPED mode's
+        // no-override DEFAULT selection (`<dep>@<name>-<id>`).
         let state_dir = crate::config::resolve_state_dir();
-        let depends_resolved = crate::microsandbox::discovery::resolve_depends_on(
+        let depends_resolved = crate::microsandbox::discovery::resolve_depends_on_full(
             &config,
             name,
             &state_dir,
             use_overrides,
             &namespace,
+            dependent_instance_id,
         )?;
 
         let secrets = build_secret_definitions(&config)?;

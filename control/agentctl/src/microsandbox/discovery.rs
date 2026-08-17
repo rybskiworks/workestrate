@@ -252,6 +252,40 @@ pub fn resolve_depends_on(
     use_overrides: &[(String, String)],
     namespace: &str,
 ) -> Result<Vec<ResolvedDependency>> {
+    resolve_depends_on_full(
+        config,
+        workload_name,
+        state_dir,
+        use_overrides,
+        namespace,
+        None,
+    )
+}
+
+/// The full resolution seam (ADR 0030 P2.1): [`resolve_depends_on`] plus
+/// the DEPENDENT's own parallel instance id for mode-aware DEFAULT exports
+/// selection.
+///
+/// When a dep's mode (the shared
+/// [`crate::commands::deps::dep_instance_mode`] derivation) is **Scoped**
+/// and `dependent_instance_id` is `Some(id)`, the no-override selection
+/// picks the record whose parallel id is `<workload_name>-<id>` (e.g.
+/// dependent `prime` on instance `1` → `litellm@prime-1`) within the
+/// namespace. When that scoped record is ABSENT: a required dep refuses
+/// with the start command naming the scoped instance; an optional dep falls
+/// back to the declared port (existing machinery). **Fresh** without an
+/// explicit `--use` keeps the singleton-selection behavior — the fresh
+/// record is only knowable via the injected `--use` the dep auto-start
+/// executor returns (this is the plan-time view for a not-yet-started
+/// dependent). **Shared** is unchanged (singleton).
+pub fn resolve_depends_on_full(
+    config: &ConfigFile,
+    workload_name: &str,
+    state_dir: &Path,
+    use_overrides: &[(String, String)],
+    namespace: &str,
+    dependent_instance_id: Option<&str>,
+) -> Result<Vec<ResolvedDependency>> {
     let Some(workload) = config.workloads.get(workload_name) else {
         anyhow::bail!("workload '{}' not found in config", workload_name);
     };
@@ -304,18 +338,26 @@ pub fn resolve_depends_on(
         }
 
         let records = list_records_for_workload(state_dir, dep, namespace)?;
-        // Selection (ADR 0026(d) + ADR 0030 Phase 2 T1): default = the
-        // dependency's SINGLETON slot record in the DEPENDENT's namespace (the
-        // one whose `instance` name contains no `@`); a `--use <dep>@<instance>`
-        // override selects the record whose parallel id matches instead — a
-        // PURE selection override with no declared-port fallback when the
-        // chosen instance is not running.
+        // Selection (ADR 0026(d) + ADR 0030 Phase 2 T1 + P2.1): default =
+        // the dependency's SINGLETON slot record in the DEPENDENT's
+        // namespace (the one whose `instance` name contains no `@`); a
+        // `--use <dep>@<instance>` override selects the record whose
+        // parallel id matches instead — a PURE selection override with no
+        // declared-port fallback when the chosen instance is not running.
+        //
+        // P2.1 mode-aware default: a SCOPED dep of a parallel dependent
+        // (`dependent_instance_id = Some(id)`) selects the record whose
+        // parallel id is `<workload_name>-<id>` (e.g. `litellm@prime-1`).
+        // FRESH without an explicit `--use` keeps singleton selection (the
+        // fresh record is only knowable via the injected --use the
+        // auto-start executor returns). SHARED is unchanged.
         //
         // Collision-visibility (ADR 0030 Phase 2): when the dependent's
         // namespace has NO record for this dep but ANOTHER namespace does, the
         // two repos declaring the same workload name collide in the merged
         // config (last layer wins). Make the collision VISIBLE: warn (or refuse
         // for required deps) naming the namespace that holds the record.
+        let mut absent_reason: Option<String> = None;
         let (selected, selector): (Option<&SandboxInstanceRecord>, String) = match use_overrides
             .iter()
             .find(|(d, _)| d == dep)
@@ -339,21 +381,56 @@ pub fn resolve_depends_on(
                 (Some(record), format!("--use {}@{}", dep, id))
             }
             None => {
-                let singleton = records
-                    .iter()
-                    .find(|r| crate::microsandbox::slots::instance_id_of(&r.instance).is_none());
-                if singleton.is_none() {
-                    // Collision-visibility: no record in THIS namespace, but
-                    // another namespace holds one for the same workload.
-                    let other = list_records_for_workload_any_namespace(state_dir, dep)?
-                        .into_iter()
-                        .filter(|r| r.namespace != namespace)
-                        .map(|r| r.namespace)
-                        .collect::<std::collections::BTreeSet<_>>();
-                    if !other.is_empty() {
-                        let namespaces = other.into_iter().collect::<Vec<_>>().join(", ");
-                        if spec.required {
-                            anyhow::bail!(
+                let scoped_id =
+                    match crate::commands::deps::dep_instance_mode(config, workload_name, dep) {
+                        crate::config::DepInstanceMode::Scoped => {
+                            dependent_instance_id.map(|id| format!("{workload_name}-{id}"))
+                        }
+                        crate::config::DepInstanceMode::Shared
+                        | crate::config::DepInstanceMode::Fresh => None,
+                    };
+                if let Some(scoped_id) = scoped_id {
+                    let scoped = records.iter().find(|r| {
+                        crate::microsandbox::slots::instance_id_of(&r.instance)
+                            == Some(scoped_id.as_str())
+                    });
+                    match scoped {
+                        Some(record) => (
+                            Some(record),
+                            format!("scoped instance '{}@{}'", dep, scoped_id),
+                        ),
+                        None => {
+                            if spec.required {
+                                anyhow::bail!(
+                                    "dependency '{dep}' of workload '{workload_name}' is required \
+                                     but its scoped instance '{dep}@{scoped_id}' is not running in \
+                                     namespace '{namespace}'; start it with `workestrate workload \
+                                     up {dep} --instance {scoped_id}`"
+                                );
+                            }
+                            // Optional dep: declared-port fallback (existing
+                            // machinery), with a scoped-aware reason.
+                            absent_reason =
+                                Some(format!("no scoped instance '{dep}@{scoped_id}' is running"));
+                            (None, format!("scoped instance '{}@{}'", dep, scoped_id))
+                        }
+                    }
+                } else {
+                    let singleton = records.iter().find(|r| {
+                        crate::microsandbox::slots::instance_id_of(&r.instance).is_none()
+                    });
+                    if singleton.is_none() {
+                        // Collision-visibility: no record in THIS namespace, but
+                        // another namespace holds one for the same workload.
+                        let other = list_records_for_workload_any_namespace(state_dir, dep)?
+                            .into_iter()
+                            .filter(|r| r.namespace != namespace)
+                            .map(|r| r.namespace)
+                            .collect::<std::collections::BTreeSet<_>>();
+                        if !other.is_empty() {
+                            let namespaces = other.into_iter().collect::<Vec<_>>().join(", ");
+                            if spec.required {
+                                anyhow::bail!(
                                     "dependency '{}' of workload '{}' is required but not running in \
                                      namespace '{}'; a record for it exists in namespace(s) [{}] — \
                                      the same workload name is declared by multiple config repos \
@@ -366,17 +443,18 @@ pub fn resolve_depends_on(
                                     namespaces,
                                     dep
                                 );
-                        }
-                        eprintln!(
+                            }
+                            eprintln!(
                                 "warning: depends_on '{}': no record in namespace '{}', but a record \
                                  exists in namespace(s) [{}] — the same workload name is declared by \
                                  multiple config repos (last layer wins in the merged config). Falling \
                                  back to the declared port.",
                                 dep, namespace, namespaces
                             );
+                        }
                     }
+                    (singleton, "singleton".to_string())
                 }
-                (singleton, "singleton".to_string())
             }
         };
 
@@ -463,8 +541,15 @@ pub fn resolve_depends_on(
                         );
                     }
                     let reason = match &port_name {
-                        None => "no singleton instance is running".to_string(),
-                        Some(name) => format!("no singleton instance is running (port '{name}')"),
+                        None => absent_reason
+                            .clone()
+                            .unwrap_or_else(|| "no singleton instance is running".to_string()),
+                        Some(name) => format!(
+                            "{} (port '{name}')",
+                            absent_reason
+                                .as_deref()
+                                .unwrap_or("no singleton instance is running")
+                        ),
                     };
                     declared_fallback(
                         config,
@@ -1734,6 +1819,127 @@ default_deny = true
         assert_eq!(r.address, "host.microsandbox.internal:4001");
         assert_eq!(r.host_port, 4001);
         assert_eq!(r.source, ResolutionSource::RunningInstance);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0030 P2.1: resolve_depends_on_full mode-aware DEFAULT
+    // selection (the dependent's own parallel instance id) ----
+
+    /// `depends_config()` variant: `pi.depends_on.litellm` carries an
+    /// EXPLICIT `instance = scoped|fresh` mode (and `required` per arg).
+    fn mode_config(mode: crate::config::DepInstanceMode, required: bool) -> ConfigFile {
+        let mut config = depends_config();
+        let spec = config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap();
+        spec.instance = Some(mode);
+        spec.required = required;
+        config
+    }
+
+    /// (a) Scoped + Some(id), scoped record present: the record whose
+    /// parallel id is `<workload>-<id>` (`litellm@pi-1` for dependent `pi`
+    /// on instance `1`) is selected over the singleton.
+    #[test]
+    fn scoped_record_present_is_selected_over_singleton() -> Result<()> {
+        let state_dir = unique_state_dir("disc-scoped-present");
+        register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
+        register_parallel(&state_dir, "litellm", "pi-1", loopback(2), 14000, 4000)?;
+        let config = mode_config(crate::config::DepInstanceMode::Scoped, false);
+
+        let resolved =
+            resolve_depends_on_full(&config, "pi", &state_dir, &[], "default", Some("1"))?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].dep, "litellm");
+        assert_eq!(resolved[0].host_port, 14000);
+        assert_eq!(resolved[0].address, "host.microsandbox.internal:14000");
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
+        assert_eq!(resolved[0].derived_egress_rule().port, 14000);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// (b) Scoped + Some(id), scoped record ABSENT, required: hard error
+    /// naming the scoped instance AND its start command (no singleton or
+    /// declared-port fallback for a required scoped dep).
+    #[test]
+    fn scoped_absent_required_refuses_naming_scoped_start_command() -> Result<()> {
+        let state_dir = unique_state_dir("disc-scoped-required");
+        // A singleton record EXISTS but must not satisfy the scoped request.
+        register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
+        let config = mode_config(crate::config::DepInstanceMode::Scoped, true);
+
+        let err = resolve_depends_on_full(&config, "pi", &state_dir, &[], "default", Some("1"))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("litellm@pi-1"),
+            "error must name the scoped instance: {msg}"
+        );
+        assert!(
+            msg.contains("workestrate workload up litellm --instance pi-1"),
+            "error must name the scoped start command: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// (c) Scoped + Some(id), scoped record ABSENT, optional: declared-port
+    /// fallback (ResolutionSource::DeclaredFallback on the declared 4000) —
+    /// the scoped-aware reason rides the stderr warning (not asserted).
+    #[test]
+    fn scoped_absent_optional_falls_back_to_declared_port() -> Result<()> {
+        let state_dir = unique_state_dir("disc-scoped-optional");
+        let config = mode_config(crate::config::DepInstanceMode::Scoped, false);
+
+        let resolved =
+            resolve_depends_on_full(&config, "pi", &state_dir, &[], "default", Some("1"))?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
+        assert_eq!(resolved[0].source, ResolutionSource::DeclaredFallback);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// (d) Scoped + None (singleton dependent): the scoped arm does NOT
+    /// fire — singleton selection is unchanged even when a `<dep>@<name>-*`
+    /// record exists.
+    #[test]
+    fn scoped_mode_without_dependent_id_keeps_singleton_selection() -> Result<()> {
+        let state_dir = unique_state_dir("disc-scoped-none");
+        register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
+        register_parallel(&state_dir, "litellm", "pi-1", loopback(2), 14000, 4000)?;
+        let config = mode_config(crate::config::DepInstanceMode::Scoped, false);
+
+        let resolved = resolve_depends_on_full(&config, "pi", &state_dir, &[], "default", None)?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// (e) Fresh WITHOUT --use: singleton selection unchanged even with a
+    /// dependent id (the fresh record is only knowable via the injected
+    /// --use the auto-start executor returns).
+    #[test]
+    fn fresh_mode_without_use_keeps_singleton_selection() -> Result<()> {
+        let state_dir = unique_state_dir("disc-fresh-no-use");
+        register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
+        register_parallel(&state_dir, "litellm", "ab2z", loopback(2), 14000, 4000)?;
+        let config = mode_config(crate::config::DepInstanceMode::Fresh, false);
+
+        let resolved =
+            resolve_depends_on_full(&config, "pi", &state_dir, &[], "default", Some("1"))?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
