@@ -161,6 +161,11 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         if spec.no_deps {
             args.push("--no-deps".to_string());
         }
+        // Forward --reseed so the detached child re-renders template seeds
+        // exactly as the parent was asked to.
+        if spec.reseed {
+            args.push("--reseed".to_string());
+        }
         for (dep, id) in &spec.use_overrides {
             args.push("--use".to_string());
             args.push(format!("{}@{}", dep, id));
@@ -177,12 +182,18 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
 
     /// Optional pre-start hook (e.g., seeding/writing config files to persistent data dir). Receives the workload's guest-visible env view so templated seed files can render against it.
     ///
+    /// `reseed` is the `--reseed` CLI flag: when true, `template = true`
+    /// seed files re-render over their EXISTING targets (bypassing
+    /// `only_if_missing` for those entries); static seeds and
+    /// `only_if_missing = false` behavior are unchanged.
+    ///
     /// `SeedEnvView` is crate-internal (`pub(crate)`, env.rs); the default
-    /// implementation ignores it, and callers inside this crate are the only
-    /// ones that ever construct or consume it.
+    /// implementation ignores both arguments, and callers inside this crate
+    /// are the only ones that ever construct or consume the view.
     #[allow(private_interfaces)] // SeedEnvView is crate-internal by design
-    fn prepare(&self, env_view: &SeedEnvView) -> Result<()> {
+    fn prepare(&self, env_view: &SeedEnvView, reseed: bool) -> Result<()> {
         let _ = env_view;
+        let _ = reseed;
         Ok(())
     }
 

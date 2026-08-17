@@ -118,6 +118,11 @@ only_if_missing = true
 [[workloads.example-service.seed_files]]
 source = "agents/example-service/config/rendered.json.tpl"
 target = "workspaces/example-service-state/rendered.json"
+# template = true renders ${VAR} against the guest-visible env view. Rendered
+# ONCE (only_if_missing defaults to true): editing the source template never
+# reaches an existing state copy unless you pass `--reseed` to up/exec, which
+# re-renders template seeds over their existing targets (static seeds above
+# are never overwritten).
 template = true
 
 [[workloads.example-service.seed_files]]

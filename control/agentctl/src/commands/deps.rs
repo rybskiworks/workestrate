@@ -1052,6 +1052,9 @@ async fn start_service_detached_instance(
         port_auto,
         &[],
         false,
+        // Dep auto-start children never reseed: --reseed is a named-up/exec
+        // affordance scoped to the workload the operator invoked.
+        false,
     )?;
     spec.images_ready = true;
     crate::microsandbox::runtime::up_service_with_spec(&workload, &spec, false).await

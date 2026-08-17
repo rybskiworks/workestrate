@@ -352,6 +352,7 @@ fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
             port_auto,
             use_,
             no_deps,
+            reseed,
             reload_images,
             images_ready,
             ..
@@ -363,6 +364,7 @@ fn workload_action_as_service(action: WorkloadAction) -> ServiceAction {
             port_auto,
             use_,
             no_deps,
+            reseed,
             reload_images,
             images_ready,
         },
@@ -400,6 +402,7 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
             port_auto,
             use_,
             no_deps,
+            reseed,
             reload_images,
             ..
         } => AgentAction::Exec {
@@ -409,6 +412,7 @@ fn workload_action_as_agent(action: WorkloadAction) -> AgentAction {
             port_auto,
             use_,
             no_deps,
+            reseed,
             reload_images,
         },
         WorkloadAction::Plan { instance, use_, .. } => AgentAction::Plan { instance, use_ },
@@ -447,6 +451,7 @@ fn bare_up_reject_table(action: &WorkloadAction) -> Vec<(bool, &'static str)> {
         port_auto,
         use_,
         no_deps,
+        reseed,
         images_ready,
         ..
     } = action
@@ -461,6 +466,7 @@ fn bare_up_reject_table(action: &WorkloadAction) -> Vec<(bool, &'static str)> {
         (*port_auto, "--port-auto"),
         (!use_.is_empty(), "--use"),
         (*no_deps, "--no-deps"),
+        (*reseed, "--reseed"),
         (*images_ready, "--images-ready"),
     ]
 }
@@ -885,6 +891,7 @@ mod tests {
             port_auto: false,
             use_: vec!["redis@blue-2".to_string()],
             no_deps: false,
+            reseed: false,
             reload_images: false,
             images_ready: false,
         }
@@ -999,6 +1006,7 @@ mod tests {
             port_auto: false,
             use_: Vec::new(),
             no_deps: false,
+            reseed: false,
             reload_images: false,
         };
         rewrite_action_for_resolved_instance(&mut action, Some("k9"), &[]);
@@ -1202,6 +1210,7 @@ mod tests {
             port_auto,
             use_overrides: Vec::new(),
             no_deps: false,
+            reseed: false,
             images_ready: false,
         }
     }
@@ -1413,6 +1422,39 @@ mod tests {
         Ok(())
     }
 
+    /// `--reseed` rides the spec into the detached-child argv so the child
+    /// re-renders template seeds exactly as the parent was asked to.
+    #[test]
+    fn detach_args_forwards_reseed() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        use workestrate::microsandbox::workload::Workload;
+        let example_litellm = ConfigWorkload::new("example-litellm")?;
+
+        let mut spec = spec_for_detach("example-litellm", false);
+        spec.reseed = true;
+        let args = example_litellm.detach_args(&spec);
+        assert!(
+            args.contains(&"--reseed".to_string()),
+            "--reseed must be forwarded to the detached child: {args:?}"
+        );
+
+        // And it round-trips through the raw-args parser the detached-child
+        // path uses.
+        let parsed = workestrate::commands::lifecycle::parse_service_action("up", &args[3..])?;
+        match parsed {
+            ServiceAction::Up { reseed, .. } => assert!(reseed),
+            _ => panic!("expected Up variant"),
+        }
+
+        // Unset → no --reseed token.
+        let args = example_litellm.detach_args(&spec_for_detach("example-litellm", false));
+        assert!(
+            !args.contains(&"--reseed".to_string()),
+            "--reseed must not appear when unset: {args:?}"
+        );
+        Ok(())
+    }
+
     // --- spec 21 phase E: the images_ready token + --reload-images -------
 
     /// §2.2 make-or-break token contract: `--images-ready` is ALWAYS in the
@@ -1572,6 +1614,10 @@ mod tests {
                 "--no-deps",
             ),
             (
+                vec!["workestrate", "workload", "up", "--reseed"],
+                "--reseed",
+            ),
+            (
                 vec!["workestrate", "workload", "up", "--images-ready"],
                 "--images-ready",
             ),
@@ -1637,7 +1683,16 @@ mod tests {
         assert_eq!(slug.len(), 4);
         validate_instance_id(&slug).expect("allocated slug must satisfy the slug rule");
 
-        let spec = build_instance_spec("litellm", false, None, Some(&slug), false, &[], false)?;
+        let spec = build_instance_spec(
+            "litellm",
+            false,
+            None,
+            Some(&slug),
+            false,
+            &[],
+            false,
+            false,
+        )?;
         assert_eq!(
             spec.instance,
             format!("litellm@{slug}"),

@@ -51,6 +51,13 @@ pub enum ServiceAction {
         #[arg(long)]
         no_deps: bool,
 
+        /// Re-render `template = true` seed_files over their EXISTING
+        /// targets (bypasses `only_if_missing` for those entries). Static
+        /// (non-template) seeds and `only_if_missing = false` behavior are
+        /// unchanged. Forwarded to the detached child via `detach_args`.
+        #[arg(long)]
+        reseed: bool,
+
         /// Force the ensure-images pre-flight to rebuild+load+record
         /// nix-layered images even when the skew matrix would skip or trust
         /// (spec 21 §5.2). Parent-side only — NEVER forwarded to the
@@ -133,6 +140,13 @@ pub enum AgentAction {
         /// time, optional deps fall back per convention + warn.
         #[arg(long)]
         no_deps: bool,
+
+        /// Re-render `template = true` seed_files over their EXISTING
+        /// targets (bypasses `only_if_missing` for those entries). Static
+        /// (non-template) seeds and `only_if_missing = false` behavior are
+        /// unchanged.
+        #[arg(long)]
+        reseed: bool,
 
         /// Force the ensure-images pre-flight to rebuild+load+record
         /// nix-layered images even when the skew matrix would skip or trust
@@ -218,6 +232,13 @@ pub enum WorkloadAction {
         #[arg(long)]
         no_deps: bool,
 
+        /// Re-render `template = true` seed_files over their EXISTING
+        /// targets (bypasses `only_if_missing` for those entries). Static
+        /// (non-template) seeds and `only_if_missing = false` behavior are
+        /// unchanged. Name-scoped only — rejected on bare `up`.
+        #[arg(long)]
+        reseed: bool,
+
         /// Force the ensure-images pre-flight to rebuild+load+record
         /// nix-layered images even when the skew matrix would skip or trust
         /// (spec 21 §5.2). Batch scope (USER DECISION D3): on bare `up` the
@@ -274,6 +295,13 @@ pub enum WorkloadAction {
         /// time, optional deps fall back per convention + warn.
         #[arg(long)]
         no_deps: bool,
+
+        /// Re-render `template = true` seed_files over their EXISTING
+        /// targets (bypasses `only_if_missing` for those entries). Static
+        /// (non-template) seeds and `only_if_missing = false` behavior are
+        /// unchanged.
+        #[arg(long)]
+        reseed: bool,
 
         /// Force the ensure-images pre-flight to rebuild+load+record
         /// nix-layered images even when the skew matrix would skip or trust

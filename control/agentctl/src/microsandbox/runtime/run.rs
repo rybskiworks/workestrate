@@ -571,7 +571,9 @@ pub(crate) async fn build_sandbox<W: Workload>(
         .collect();
     let env_view =
         crate::microsandbox::env::build_seed_env_view(&plan, &secrets, &defined_secrets)?;
-    workload.prepare(&env_view)?;
+    // `--reseed` rides the spec: template seeds re-render over existing
+    // targets; without it the seed step is byte-identical to before.
+    workload.prepare(&env_view, spec.reseed)?;
 
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.

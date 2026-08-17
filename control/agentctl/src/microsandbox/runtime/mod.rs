@@ -107,6 +107,13 @@ pub struct InstanceSpec {
     /// child must NOT re-run dependency auto-start (the parent was told to
     /// skip it); forwarded by `detach_args` as the `--no-deps` flag.
     pub no_deps: bool,
+    /// `--reseed`. When true, `build_sandbox`'s seed step re-renders
+    /// `template = true` seed_files over their EXISTING targets (bypassing
+    /// `only_if_missing` for those entries); static (non-template) seeds and
+    /// `only_if_missing = false` behavior are unchanged. Forwarded by
+    /// `detach_args` as the `--reseed` flag so the detached child reseeds
+    /// identically to the parent.
+    pub reseed: bool,
     /// `--images-ready` (spec 21 §2.2, phase E). The ensure-images token:
     /// when true, this spec describes a process whose nix-layered images the
     /// PARENT already ensured (the detached child), so the ensure pre-flight

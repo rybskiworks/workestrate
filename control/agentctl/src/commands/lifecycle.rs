@@ -77,6 +77,9 @@ pub fn resolve_dependent_instance_id(
     Ok(None)
 }
 
+// too_many_arguments: the spec constructor mirrors the up/exec flag set
+// positionally (one parameter per CLI flag); matches the pre-existing shape.
+#[allow(clippy::too_many_arguments)]
 pub fn build_instance_spec(
     workload_name: &str,
     replace: bool,
@@ -85,6 +88,7 @@ pub fn build_instance_spec(
     port_auto: bool,
     use_overrides: &[(String, String)],
     no_deps: bool,
+    reseed: bool,
 ) -> Result<crate::microsandbox::runtime::InstanceSpec> {
     use crate::microsandbox::runtime::InstanceSpec;
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
@@ -126,6 +130,7 @@ pub fn build_instance_spec(
         port_auto,
         use_overrides: use_overrides.to_vec(),
         no_deps,
+        reseed,
         // Spec 21 §2.2: the ensure-images token defaults OFF here — callers
         // set it (a detached up's spec describes the ensured child-to-be;
         // the detached child reconstitutes it from its clap parse).
@@ -187,6 +192,7 @@ pub async fn dispatch_service<W: Workload>(
             port_auto,
             use_,
             no_deps,
+            reseed,
             // --reload-images is consumed by the ensure-images pre-flight
             // in main.rs (before dispatch); it never reaches the spec.
             reload_images: _,
@@ -221,6 +227,7 @@ pub async fn dispatch_service<W: Workload>(
                 port_auto,
                 &crate::microsandbox::discovery::parse_use_overrides(&use_)?,
                 no_deps,
+                reseed,
             )?;
             // Spec 21 §2.2: the spec of a DETACHED up describes the ensured
             // child-to-be (the parent ensures before spawning it), and the
@@ -272,6 +279,7 @@ pub async fn dispatch_agent<W: Workload>(
             port_auto,
             use_,
             no_deps,
+            reseed,
             // Consumed by the ensure-images pre-flight in main.rs.
             reload_images: _,
         } => {
@@ -304,6 +312,7 @@ pub async fn dispatch_agent<W: Workload>(
                 port_auto,
                 &crate::microsandbox::discovery::parse_use_overrides(&use_)?,
                 no_deps,
+                reseed,
             )?;
             crate::microsandbox::runtime::exec_agent_with_spec(workload, &spec).await
         }
@@ -325,6 +334,7 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
             let new = args.iter().any(|a| a == "--new");
             let port_auto = args.iter().any(|a| a == "--port-auto");
             let no_deps = args.iter().any(|a| a == "--no-deps");
+            let reseed = args.iter().any(|a| a == "--reseed");
             let reload_images = args.iter().any(|a| a == "--reload-images");
             let images_ready = args.iter().any(|a| a == "--images-ready");
             let instance = parse_flag_value(args, "--instance");
@@ -337,6 +347,7 @@ pub fn parse_service_action(action: &str, args: &[String]) -> Result<ServiceActi
                 port_auto,
                 use_,
                 no_deps,
+                reseed,
                 reload_images,
                 images_ready,
             })
@@ -369,6 +380,7 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
             let new = args.iter().any(|a| a == "--new");
             let port_auto = args.iter().any(|a| a == "--port-auto");
             let no_deps = args.iter().any(|a| a == "--no-deps");
+            let reseed = args.iter().any(|a| a == "--reseed");
             let reload_images = args.iter().any(|a| a == "--reload-images");
             let instance = parse_flag_value(args, "--instance");
             let use_ = parse_flag_values(args, "--use");
@@ -379,6 +391,7 @@ pub fn parse_agent_action(action: &str, args: &[String]) -> Result<AgentAction> 
                 port_auto,
                 use_,
                 no_deps,
+                reseed,
                 reload_images,
             })
         }
@@ -831,6 +844,36 @@ mod tests {
         }
     }
 
+    // ---- --reseed raw-args parsing ----
+
+    #[test]
+    fn parse_service_action_up_reads_reseed() {
+        let args: Vec<String> = vec!["--reseed".into()];
+        match parse_service_action("up", &args).unwrap() {
+            ServiceAction::Up { reseed, .. } => assert!(reseed),
+            _ => panic!("expected Up variant"),
+        }
+        let args: Vec<String> = vec!["--foreground".into()];
+        match parse_service_action("up", &args).unwrap() {
+            ServiceAction::Up { reseed, .. } => assert!(!reseed),
+            _ => panic!("expected Up variant"),
+        }
+    }
+
+    #[test]
+    fn parse_agent_action_exec_reads_reseed() {
+        let args: Vec<String> = vec!["--reseed".into()];
+        match parse_agent_action("exec", &args).unwrap() {
+            AgentAction::Exec { reseed, .. } => assert!(reseed),
+            _ => panic!("expected Exec variant"),
+        }
+        let args: Vec<String> = vec!["--replace".into()];
+        match parse_agent_action("exec", &args).unwrap() {
+            AgentAction::Exec { reseed, .. } => assert!(!reseed),
+            _ => panic!("expected Exec variant"),
+        }
+    }
+
     /// build_instance_spec stores the typed overrides on the spec so
     /// detach_args can forward them to the detached child (ADR 0021/0026(d)).
     #[test]
@@ -839,10 +882,12 @@ mod tests {
             ("litellm".to_string(), "canary".to_string()),
             ("redis".to_string(), "blue".to_string()),
         ];
-        let spec = build_instance_spec("pi", false, None, None, false, &overrides, false).unwrap();
+        let spec =
+            build_instance_spec("pi", false, None, None, false, &overrides, false, false).unwrap();
         assert_eq!(spec.use_overrides, overrides);
         assert!(!spec.no_deps);
-        let spec = build_instance_spec("pi", false, None, None, false, &[], false).unwrap();
+        assert!(!spec.reseed);
+        let spec = build_instance_spec("pi", false, None, None, false, &[], false, false).unwrap();
         assert!(spec.use_overrides.is_empty());
     }
 
@@ -850,8 +895,16 @@ mod tests {
     /// forward it to the detached child (ADR 0026 addendum).
     #[test]
     fn build_instance_spec_stores_no_deps() {
-        let spec = build_instance_spec("pi", false, None, None, false, &[], true).unwrap();
+        let spec = build_instance_spec("pi", false, None, None, false, &[], true, false).unwrap();
         assert!(spec.no_deps);
+    }
+
+    /// build_instance_spec stores --reseed on the spec so detach_args can
+    /// forward it to the detached child.
+    #[test]
+    fn build_instance_spec_stores_reseed() {
+        let spec = build_instance_spec("pi", false, None, None, false, &[], false, true).unwrap();
+        assert!(spec.reseed);
     }
 
     // ---- ADR 0030 Phase 2: parallel strategy defaults to a NEW instance ----
