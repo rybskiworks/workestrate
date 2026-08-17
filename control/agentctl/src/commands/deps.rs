@@ -95,15 +95,22 @@ pub enum BareSkip {
     AlreadyRunning { name: String, slot: String },
 }
 
-/// The dep's auto-start conflict policy from the DEPENDENT's depends_on spec
-/// (ADR 0026 addendum 2026-08-16; ADR 0030 addendum 2). `None` (omitted)
-/// resolves to the default chain ["reuse", "start", "replace"].
+/// The dep's auto-start conflict chain (ADR 0030 U11 precedence):
+/// `depends_on.<dep>.on_conflict` > the DEP's own
+/// `workloads.<dep>.instance.on_conflict` > the built-in default
+/// ["reuse","start","replace"].
 fn dep_conflict(config: &ConfigFile, dependent: &str, dep: &str) -> DepConflict {
     config
         .workloads
         .get(dependent)
         .and_then(|w| w.depends_on.get(dep))
         .and_then(|s| s.on_conflict.clone())
+        .or_else(|| {
+            config
+                .workloads
+                .get(dep)
+                .and_then(|w| w.instance.on_conflict.clone())
+        })
         .unwrap_or(DepConflict::default_chain())
 }
 
@@ -880,6 +887,92 @@ guest = 4001
                 conflict: DepConflict::replace(),
             }],
             "explicit on_conflict must flow into the planned action"
+        );
+        Ok(())
+    }
+
+    /// ADR 0030 U11 precedence: when the DEPENDENT's depends_on spec has no
+    /// on_conflict, the DEP's own `workloads.<dep>.instance.on_conflict`
+    /// supplies the chain.
+    #[test]
+    fn dep_conflict_falls_back_to_dep_own_instance_policy() -> Result<()> {
+        let toml = r#"
+schema_version = 1
+
+[workloads.a]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.a.depends_on.litellm]
+env = "LITELLM_URL"
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[[workloads.litellm.ports]]
+host = 4000
+guest = 4000
+
+[workloads.litellm.instance]
+on_conflict = "fail"
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[])?;
+        assert_eq!(
+            actions,
+            vec![DepStartAction::StartService {
+                dep: "litellm".to_string(),
+                slot: "personal-litellm".to_string(),
+                ports: vec![4000],
+                conflict: DepConflict::fail(),
+            }],
+            "the dep's own instance.on_conflict must supply the chain when depends_on omits it"
+        );
+        Ok(())
+    }
+
+    /// ADR 0030 U11 precedence: `depends_on.<dep>.on_conflict` BEATS the
+    /// dep's own `workloads.<dep>.instance.on_conflict`.
+    #[test]
+    fn dep_conflict_depends_on_beats_dep_policy() -> Result<()> {
+        let toml = r#"
+schema_version = 1
+
+[workloads.a]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.a.depends_on.litellm]
+env = "LITELLM_URL"
+on_conflict = "replace"
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[[workloads.litellm.ports]]
+host = 4000
+guest = 4000
+
+[workloads.litellm.instance]
+on_conflict = "fail"
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[])?;
+        assert_eq!(
+            actions,
+            vec![DepStartAction::StartService {
+                dep: "litellm".to_string(),
+                slot: "personal-litellm".to_string(),
+                ports: vec![4000],
+                conflict: DepConflict::replace(),
+            }],
+            "depends_on.on_conflict must take precedence over the dep's own instance policy"
         );
         Ok(())
     }

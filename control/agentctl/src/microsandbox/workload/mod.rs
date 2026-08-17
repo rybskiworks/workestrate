@@ -69,6 +69,14 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         None
     }
 
+    /// The workload's declared conflict chain (ADR 0030 U11 precedence): the
+    /// per-workload `instance.on_conflict` default the named up/exec path
+    /// applies when no CLI flag overrides. Default: the built-in
+    /// ["reuse","start","replace"] chain.
+    fn instance_conflict_chain(&self) -> Vec<crate::config::ConflictStep> {
+        crate::config::DepConflict::default_chain().0
+    }
+
     /// Format the plan with a `[source]` annotation for each field.
     fn show_source(&self) -> String {
         self.plan().to_string()

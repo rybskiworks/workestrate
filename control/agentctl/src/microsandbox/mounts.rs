@@ -569,6 +569,7 @@ mod tests {
                 deny_rules: vec![],
                 ingress_rules: vec![],
             },
+            instance_policy: None,
         }
     }
 

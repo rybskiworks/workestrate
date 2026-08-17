@@ -47,6 +47,13 @@ memory_mib = 2048
 command = ["python", "-m", "http.server", "4000"]
 log_stop_errors = true
 
+# Instance policy (ADR 0030 Phase 1 schema; COMMENTED — the defaults below are
+# the current behavior, so no reference workload declares a block):
+# [workloads.example-litellm.instance]
+# strategy = "singleton"
+# on_conflict = ["reuse", "start", "replace"]
+# port = { preferred = 4000, on_occupied = ["increment", "auto"] }
+# label = "dev"
 [workloads.example-litellm.env]
 PORT = "4000"
 

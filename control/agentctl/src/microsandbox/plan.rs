@@ -84,6 +84,11 @@ pub struct SandboxPlan {
     pub ports: Vec<PortMapping>,
     pub mounts: Vec<MountPlan>,
     pub network: NetworkPlan,
+    /// The workload's instance policy (ADR 0030 §4.1), when declared.
+    /// `None` = current behavior (no policy block). Additive serde default so
+    /// legacy plan JSON parses cleanly and legacy output stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_policy: Option<crate::config::InstancePolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -323,7 +328,53 @@ impl fmt::Display for SandboxPlan {
         for rule in &self.network.deny_rules {
             writeln!(f, "  egress: deny domain suffix {}", rule.domain_suffix)?;
         }
+        if let Some(policy) = &self.instance_policy {
+            writeln!(f, "instance: strategy={}", policy.strategy)?;
+            if let Some(chain) = &policy.on_conflict {
+                let steps: Vec<String> = chain.0.iter().map(ToString::to_string).collect();
+                writeln!(f, "instance: on_conflict=[{}]", steps.join(", "))?;
+            }
+            if let Some(port) = &policy.port {
+                writeln!(f, "instance: port={}", render_instance_port(port))?;
+            }
+            if let Some(label) = &policy.label {
+                writeln!(f, "instance: label={label}")?;
+            }
+        }
         Ok(())
+    }
+}
+
+/// Render an instance port policy for the plan display (ADR 0030 addendum 2
+/// U6 forms; the on_occupied DEFAULT chain is not rendered — only declared
+/// values).
+pub(crate) fn render_instance_port(port: &crate::config::InstancePort) -> String {
+    match port {
+        crate::config::InstancePort::Strict(n) => n.to_string(),
+        crate::config::InstancePort::Auto => "auto".to_string(),
+        crate::config::InstancePort::Preferred(p) => {
+            let mut s = format!("preferred={}", p.preferred);
+            if let Some(chain) = &p.on_occupied {
+                let steps: Vec<String> = chain.0.iter().map(render_occupied_step).collect();
+                s.push_str(&format!(", on_occupied=[{}]", steps.join(", ")));
+            }
+            s
+        }
+    }
+}
+
+/// Render one port `on_occupied` chain step for the plan display (ADR 0030
+/// addendum 2 U6).
+pub(crate) fn render_occupied_step(step: &crate::config::PortOccupiedStep) -> String {
+    match step {
+        crate::config::PortOccupiedStep::Bare(b) => b.to_string(),
+        crate::config::PortOccupiedStep::Increment(p) => {
+            match (&p.increment.limit, &p.increment.range) {
+                (Some(l), None) => format!("increment(limit={l})"),
+                (None, Some((s, e))) => format!("increment(range={s}..{e})"),
+                _ => "increment".to_string(),
+            }
+        }
     }
 }
 
@@ -482,6 +533,7 @@ mod tests {
                     scope: Scope::Local,
                 }],
             },
+            instance_policy: None,
         };
         let expected = "\
 name: demo
@@ -527,6 +579,7 @@ network: default_deny=true
                 deny_rules: vec![],
                 ingress_rules: vec![],
             },
+            instance_policy: None,
         };
 
         // Non-default bind → three-field line with the bind IP.
@@ -577,6 +630,7 @@ network: default_deny=true
                 deny_rules: vec![],
                 ingress_rules: vec![],
             },
+            instance_policy: None,
         };
 
         // Named port on the default bind → `port: <name>:<host>:<guest>`.
@@ -662,6 +716,7 @@ network: default_deny=true
                 deny_rules: vec![],
                 ingress_rules: vec![],
             },
+            instance_policy: None,
         };
         assert_eq!(
             format!("{plan}"),
@@ -774,6 +829,7 @@ network: default_deny=true
                 deny_rules: vec![],
                 ingress_rules: vec![],
             },
+            instance_policy: None,
         };
         let rendered = format!(
             "{}",
@@ -847,5 +903,101 @@ network: default_deny=true
         assert_eq!(bound.allowed_hosts, vec!["example.com".to_string()]);
         assert!(bound.required);
         assert_eq!(bound.reject_placeholder, Some("CHANGEME".to_string()));
+    }
+
+    // ---- ADR 0030 Phase 1: instance policy rendering ----
+
+    /// A plan carrying a declared instance policy renders the four
+    /// `instance:` lines (strategy / on_conflict / port / label).
+    #[test]
+    fn plan_display_renders_instance_policy() {
+        let plan = SandboxPlan {
+            name: "demo".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports: vec![],
+            mounts: vec![],
+            network: NetworkPlan {
+                default_deny: false,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+            },
+            instance_policy: Some(crate::config::InstancePolicy {
+                strategy: crate::config::InstanceStrategy::Parallel,
+                on_conflict: Some(crate::config::DepConflict(vec![
+                    crate::config::ConflictStep::Reuse,
+                    crate::config::ConflictStep::Start,
+                    crate::config::ConflictStep::Replace,
+                ])),
+                port: Some(crate::config::InstancePort::Preferred(
+                    crate::config::types::PreferredPort {
+                        preferred: 4000,
+                        on_occupied: Some(crate::config::PortOccupiedChain(vec![
+                            crate::config::PortOccupiedStep::Bare(
+                                crate::config::PortOccupiedBare::Increment,
+                            ),
+                            crate::config::PortOccupiedStep::Bare(
+                                crate::config::PortOccupiedBare::Auto,
+                            ),
+                        ])),
+                    },
+                )),
+                label: Some("dev".to_string()),
+            }),
+        };
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains("instance: strategy=parallel\n"),
+            "strategy line: {rendered}"
+        );
+        assert!(
+            rendered.contains("instance: on_conflict=[reuse, start, replace]\n"),
+            "on_conflict line: {rendered}"
+        );
+        assert!(
+            rendered.contains("instance: port=preferred=4000, on_occupied=[increment, auto]\n"),
+            "port line: {rendered}"
+        );
+        assert!(
+            rendered.contains("instance: label=dev\n"),
+            "label line: {rendered}"
+        );
+    }
+
+    /// A plan with `instance_policy: None` renders NO `instance:` lines —
+    /// legacy output stays byte-identical (the existing golden plan).
+    #[test]
+    fn plan_display_omits_policy_when_none() {
+        let plan = SandboxPlan {
+            name: "bare".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports: vec![],
+            mounts: vec![],
+            network: NetworkPlan {
+                default_deny: false,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+            },
+            instance_policy: None,
+        };
+        let rendered = format!("{plan}");
+        assert_eq!(rendered, "name: bare\nnetwork: default_deny=false\n");
+        assert!(
+            !rendered.contains("instance:"),
+            "no policy must render no instance lines: {rendered}"
+        );
     }
 }

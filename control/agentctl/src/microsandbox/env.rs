@@ -251,6 +251,7 @@ mod tests {
                 deny_rules: Vec::new(),
                 ingress_rules: Vec::new(),
             },
+            instance_policy: None,
         }
     }
 

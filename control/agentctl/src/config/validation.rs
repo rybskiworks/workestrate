@@ -5,6 +5,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use crate::config::types::ConfigFile;
+use crate::config::types::{InstancePort, ParameterizedIncrement, PortOccupiedStep};
 use crate::policy;
 use crate::recipes::EgressRecipeRef;
 
@@ -220,6 +221,56 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                 | EgressRecipeRef::Github
                 | EgressRecipeRef::AgentBase
                 | EgressRecipeRef::Https { .. } => {}
+            }
+        }
+    }
+
+    // ADR 0030 Phase 1: per-workload instance policy port bounds (the closed
+    // vocabularies + on_conflict/on_occupied chain rules validate at parse).
+    for (workload_name, workload) in &config.workloads {
+        let Some(port) = &workload.instance.port else {
+            continue;
+        };
+        match port {
+            InstancePort::Strict(n) => {
+                if *n == 0 {
+                    anyhow::bail!("workload '{workload_name}' instance.port: strict port must be in 1..=65535 (got 0)");
+                }
+            }
+            InstancePort::Auto => {}
+            InstancePort::Preferred(p) => {
+                if p.preferred == 0 {
+                    anyhow::bail!("workload '{workload_name}' instance.port: preferred must be in 1..=65535 (got 0)");
+                }
+                let Some(chain) = &p.on_occupied else {
+                    continue;
+                };
+                for step in &chain.0 {
+                    let PortOccupiedStep::Increment(ParameterizedIncrement { increment }) = step
+                    else {
+                        continue;
+                    };
+                    match (&increment.limit, &increment.range) {
+                        (Some(_), Some(_)) => anyhow::bail!("workload '{workload_name}' instance.port: increment must set exactly one of limit or range"),
+                        (None, None) => anyhow::bail!("workload '{workload_name}' instance.port: increment must set exactly one of limit or range"),
+                        (Some(limit), None) => {
+                            if *limit == 0 {
+                                anyhow::bail!("workload '{workload_name}' instance.port: increment limit must be >= 1");
+                            }
+                            if u32::from(p.preferred) + u32::from(*limit) > 65535 {
+                                anyhow::bail!("workload '{workload_name}' instance.port: preferred {} + limit {} exceeds 65535", p.preferred, limit);
+                            }
+                        }
+                        (None, Some((start, end))) => {
+                            if *start == 0 || *end == 0 {
+                                anyhow::bail!("workload '{workload_name}' instance.port: increment range bounds must be in 1..=65535");
+                            }
+                            if start > end {
+                                anyhow::bail!("workload '{workload_name}' instance.port: increment range START {} must be <= END {}", start, end);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1671,5 +1722,260 @@ default_deny = true
         let config: ConfigFile = toml::from_str(toml).unwrap();
         validate_config(&config)
             .unwrap_or_else(|e| panic!("nested guests (spec 01 shadow) must validate clean: {e}"));
+    }
+
+    // ---- ADR 0030 Phase 1: instance policy port bounds ----
+
+    /// A strict port of 0 is rejected (ports are 1..=65535).
+    #[test]
+    fn instance_port_strict_zero_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = 0
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("strict port must be in 1..=65535"),
+            "strict 0 must be rejected with the bound message: {err}"
+        );
+    }
+
+    /// A preferred port of 0 is rejected.
+    #[test]
+    fn instance_port_preferred_zero_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 0 }
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("preferred must be in 1..=65535"),
+            "preferred 0 must be rejected: {err}"
+        );
+    }
+
+    /// A relative increment with `limit = 0` is rejected (>= 1).
+    #[test]
+    fn instance_port_increment_limit_zero_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = { limit = 0 } } }
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("increment limit must be >= 1"),
+            "limit 0 must be rejected: {err}"
+        );
+    }
+
+    /// `preferred + limit` overflowing 65535 is rejected (u32 math).
+    #[test]
+    fn instance_port_increment_preferred_plus_limit_exceeds_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 65530, on_occupied = { increment = { limit = 100 } } }
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("exceeds 65535"),
+            "preferred + limit overflow must be rejected: {err}"
+        );
+    }
+
+    /// An absolute range starting at 0 is rejected.
+    #[test]
+    fn instance_port_increment_range_start_zero_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = { range = [0, 100] } } }
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("range bounds must be in 1..=65535"),
+            "range start 0 must be rejected: {err}"
+        );
+    }
+
+    /// A range with START > END is rejected.
+    #[test]
+    fn instance_port_increment_range_start_gt_end_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = { range = [5000, 4999] } } }
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("START 5000 must be <= END 4999"),
+            "START > END must be rejected with the bound message: {err}"
+        );
+    }
+
+    /// Setting BOTH limit and range is rejected (exactly one).
+    #[test]
+    fn instance_port_increment_both_limit_and_range_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = { limit = 1, range = [1, 2] } } }
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("exactly one of limit or range"),
+            "both-fields increment must be rejected: {err}"
+        );
+    }
+
+    /// Setting NEITHER limit nor range is rejected (exactly one).
+    #[test]
+    fn instance_port_increment_neither_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = {} } }
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("exactly one of limit or range"),
+            "neither-fields increment must be rejected: {err}"
+        );
+    }
+
+    /// Every legal port form validates clean: strict, auto, preferred with a
+    /// chain, and a range whose START == END is legal.
+    #[test]
+    fn instance_port_valid_cases_pass() {
+        for toml in [
+            r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = 4000
+"#,
+            r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = "auto"
+"#,
+            r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = ["increment", "auto"] }
+"#,
+            r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = { range = [5000, 5000] } } }
+"#,
+        ] {
+            let config: ConfigFile = toml::from_str(toml).unwrap();
+            validate_config(&config)
+                .unwrap_or_else(|e| panic!("valid instance port form must pass: {e}"));
+        }
+    }
+
+    /// Values outside u16 fail at PARSE (the range fields are typed u16) —
+    /// the addendum's `[65536, 70000]` case never reaches validation.
+    #[test]
+    fn instance_port_range_65536_parse_rejected() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] } } }
+"#;
+        assert!(
+            toml::from_str::<ConfigFile>(toml).is_err(),
+            "out-of-u16 range bounds must be a parse error"
+        );
     }
 }

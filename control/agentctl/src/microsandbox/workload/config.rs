@@ -408,6 +408,8 @@ impl Workload for ConfigWorkload {
                 deny_rules: self.workload.network.deny.clone(),
                 ingress_rules: self.workload.network.ingress.clone(),
             },
+            instance_policy: (self.workload.instance != Default::default())
+                .then(|| self.workload.instance.clone()),
         }
     }
 
@@ -420,6 +422,15 @@ impl Workload for ConfigWorkload {
             .iter()
             .find(|(mount_guest, _)| mount_guest == guest)
             .map(|(_, policy)| policy)
+    }
+
+    fn instance_conflict_chain(&self) -> Vec<crate::config::ConflictStep> {
+        self.workload
+            .instance
+            .on_conflict
+            .clone()
+            .map(|c| c.0)
+            .unwrap_or_else(|| crate::config::DepConflict::default_chain().0)
     }
 
     fn exec(&self) -> SandboxCommand {

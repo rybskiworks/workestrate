@@ -471,13 +471,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
         })
         .collect();
 
-    // ADR 0030 Phase 0: status+dir-aware occupancy routed through the default
-    // conflict chain (reuse → start → replace) instead of the status-blind
-    // refuse gate.
+    // ADR 0030 Phase 0: status+dir-aware occupancy routed through the
+    // workload's conflict chain — the per-workload
+    // `instance.on_conflict` default when declared (ADR 0030 U11
+    // precedence), otherwise the built-in reuse → start → replace chain —
+    // instead of the status-blind refuse gate.
     let declared_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
     let facts = super::reconcile::gather_facts(&state_dir, &spec.instance, &declared_ports).await?;
-    let step =
-        super::reconcile::decide_chain(&super::reconcile::default_chain(), &facts, &spec.instance)?;
+    let chain = workload.instance_conflict_chain();
+    let step = super::reconcile::decide_chain(&chain, &facts, &spec.instance)?;
     match step {
         super::reconcile::ChainStep::Reuse => {
             return Ok(BuildOutcome::Reused);
@@ -633,11 +635,8 @@ pub async fn up_service_with_spec<W: Workload>(
         let declared_ports: Vec<u16> = workload.plan().ports.iter().map(|p| p.host).collect();
         let facts =
             super::reconcile::gather_facts(&state_dir, &spec.instance, &declared_ports).await?;
-        let step = super::reconcile::decide_chain(
-            &super::reconcile::default_chain(),
-            &facts,
-            &spec.instance,
-        )?;
+        let chain = workload.instance_conflict_chain();
+        let step = super::reconcile::decide_chain(&chain, &facts, &spec.instance)?;
         match step {
             super::reconcile::ChainStep::Reuse => {
                 println!("instance '{}' is already running — reusing", spec.instance);
@@ -708,6 +707,7 @@ mod tests {
                 deny_rules: Vec::new(),
                 ingress_rules: Vec::new(),
             },
+            instance_policy: None,
         }
     }
 
@@ -736,6 +736,7 @@ mod tests {
                 deny_rules: Vec::new(),
                 ingress_rules: Vec::new(),
             },
+            instance_policy: None,
         }
     }
 

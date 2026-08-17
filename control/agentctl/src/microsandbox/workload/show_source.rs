@@ -189,6 +189,45 @@ impl ConfigWorkload {
                 )),
             );
         }
+        // ADR 0030 Phase 1: the instance policy block renders with the whole-
+        // block provenance (merge is whole-block-last-layer-wins).
+        if let Some(policy) = &plan.instance_policy {
+            let instance_source = source_of(&format!("workloads.{}.instance", self.name));
+            write_line(
+                &mut out,
+                "",
+                &format!("instance: strategy={}", policy.strategy),
+                instance_source,
+            );
+            if let Some(chain) = &policy.on_conflict {
+                let steps: Vec<String> = chain.0.iter().map(ToString::to_string).collect();
+                write_line(
+                    &mut out,
+                    "",
+                    &format!("instance: on_conflict=[{}]", steps.join(", ")),
+                    instance_source,
+                );
+            }
+            if let Some(port) = &policy.port {
+                write_line(
+                    &mut out,
+                    "",
+                    &format!(
+                        "instance: port={}",
+                        crate::microsandbox::plan::render_instance_port(port)
+                    ),
+                    instance_source,
+                );
+            }
+            if let Some(label) = &policy.label {
+                write_line(
+                    &mut out,
+                    "",
+                    &format!("instance: label={label}"),
+                    instance_source,
+                );
+            }
+        }
 
         out
     }

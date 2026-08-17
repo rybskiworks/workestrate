@@ -1640,6 +1640,35 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    /// ADR 0030 Phase 1: a capsule `workload.toml` carrying an `[instance]`
+    /// table loads via the directory-mode loader and the policy lands on the
+    /// implied workload.
+    #[test]
+    fn capsule_workload_toml_instance_block_parses() -> Result<()> {
+        let repo = uniq_dir("spec30-capsule-instance");
+        write_repo_file(&repo, "workestrate/default.toml", "schema_version = 1\n");
+        write_repo_file(
+            &repo,
+            "workestrate/workloads/pi/workload.toml",
+            "kind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\ncpus = 4\n\n[network]\ndefault_deny = true\n\n[instance]\nstrategy = \"reuse\"\nlabel = \"capsule\"\n",
+        );
+        let layers = load_config_repo_layers("personal", &repo)?;
+        assert_eq!(layers.len(), 2);
+        assert_eq!(
+            layers[1].name,
+            "personal#workestrate/workloads/pi/workload.toml"
+        );
+        let wl = layers[1]
+            .config
+            .workloads
+            .get("pi")
+            .expect("bare table loads under the dirname-implied name");
+        assert_eq!(wl.instance.strategy, crate::config::InstanceStrategy::Reuse);
+        assert_eq!(wl.instance.label.as_deref(), Some("capsule"));
+        let _ = std::fs::remove_dir_all(&repo);
+        Ok(())
+    }
+
     #[test]
     fn dir_mode_full_table_form_loads() -> Result<()> {
         let repo = uniq_dir("spec17-full-form");

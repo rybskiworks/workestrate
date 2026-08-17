@@ -603,6 +603,18 @@ fn step_name(step: ConflictStep) -> &'static str {
     }
 }
 
+impl fmt::Display for ConflictStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Reuse => "reuse",
+            Self::Start => "start",
+            Self::Replace => "replace",
+            Self::Fail => "fail",
+        };
+        f.write_str(s)
+    }
+}
+
 impl DepConflict {
     /// d452575 back-compat singleton: `on_conflict = "reuse"`.
     pub fn reuse() -> Self {
@@ -662,6 +674,421 @@ impl<'de> Deserialize<'de> for DepConflict {
 
         deserializer.deserialize_any(DepConflictVisitor)
     }
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0030 §4.1 + addendum 2 U6: the per-workload instance policy
+// ---------------------------------------------------------------------------
+
+/// `[workloads.<name>.instance]` — the per-workload instance policy (ADR 0030
+/// §4.1): the instance model the workload defaults to, the conflict chain when
+/// the target slot is occupied, the port strategy, and an optional display
+/// label. Absent = current behavior. NOTE: named `InstancePolicy` (not
+/// "InstanceSpec") to avoid colliding with the runtime `InstanceSpec`.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InstancePolicy {
+    /// Instance model the workload defaults to (default "singleton" — current
+    /// behavior). `parallel`/`replace`/`reuse` SEMANTICS land with Phase 2
+    /// (selection/disposition wiring); Phase 1 parses + validates the closed
+    /// vocabulary.
+    #[serde(default)]
+    pub strategy: InstanceStrategy,
+    /// Conflict chain when the target slot is occupied (scalar-or-list over
+    /// reuse|start|replace|fail; `None` → the built-in default
+    /// ["reuse","start","replace"] at decision time; ADR 0030 U11 precedence:
+    /// CLI flag > this declared chain > built-in default).
+    #[serde(default)]
+    pub on_conflict: Option<DepConflict>,
+    /// Port strategy: strict integer | "auto" | { preferred, on_occupied }
+    /// (ADR 0030 addendum 2 U6). Selection behavior is Phase 3; Phase 1
+    /// parses + validates.
+    #[serde(default)]
+    pub port: Option<InstancePort>,
+    /// Optional display/version identity label (ADR 0030 §4.5 / Q4 lighter
+    /// option). Free-form string.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// The instance model a workload defaults to (ADR 0030 §4.1 `strategy`).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceStrategy {
+    #[default]
+    Singleton,
+    Parallel,
+    Replace,
+    Reuse,
+}
+
+impl fmt::Display for InstanceStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Singleton => "singleton",
+            Self::Parallel => "parallel",
+            Self::Replace => "replace",
+            Self::Reuse => "reuse",
+        };
+        f.write_str(s)
+    }
+}
+
+/// `workloads.<name>.instance.port` — the workload's port strategy (ADR 0030
+/// addendum 2 U6). Untagged union: strict integer | "auto" | { preferred,
+/// on_occupied }. Manual Serialize/Deserialize (the spec's derived untagged
+/// shape cannot parse the UNIT variant `Auto` from the string "auto", and
+/// untagged enums swallow the nested `on_occupied` chain's helpful validation
+/// errors into a generic "did not match any variant" message).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstancePort {
+    /// `port = N`: strict — declared ports as-is; an occupied preferred port
+    /// fails (the ADR's "current behavior"; semantically
+    /// `{ preferred = N, on_occupied = "fail" }`).
+    Strict(u16),
+    /// `port = "auto"`: every declared port auto-allocates at boot.
+    Auto,
+    /// `port = { preferred = N, on_occupied = ... }`.
+    Preferred(PreferredPort),
+}
+
+/// Schemars-boundary-only helper for the `instance.port` field shape (ADR
+/// 0030 addendum 2 U6): strict integer | "auto" | { preferred, on_occupied }.
+/// The `auto` form is a newtype over a string enum so it renders as the
+/// string `"auto"` (a unit variant in an untagged enum renders as `null`).
+/// Never constructed/deserialized.
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum InstancePortShape {
+    Strict(u16),
+    Auto(PortAuto),
+    Preferred(PreferredPort),
+}
+
+/// The `"auto"` string form of `instance.port` (schema-rendering only).
+#[derive(schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+enum PortAuto {
+    Auto,
+}
+
+impl schemars::JsonSchema for InstancePort {
+    fn schema_name() -> String {
+        "InstancePort".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        InstancePortShape::json_schema(gen)
+    }
+}
+
+impl Serialize for InstancePort {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Manual: the derived untagged impl would serialize the unit variant
+        // `Auto` as a null/unit — the wire form is the string "auto".
+        match self {
+            InstancePort::Strict(n) => serializer.serialize_u16(*n),
+            InstancePort::Auto => serializer.serialize_str("auto"),
+            InstancePort::Preferred(p) => p.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InstancePort {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct InstancePortVisitor;
+
+        impl<'de> de::Visitor<'de> for InstancePortVisitor {
+            type Value = InstancePort;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a strict integer port, \"auto\", or a { preferred, on_occupied } table",
+                )
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                u16::try_from(v)
+                    .map(InstancePort::Strict)
+                    .map_err(de::Error::custom)
+            }
+
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                u16::try_from(v)
+                    .map(InstancePort::Strict)
+                    .map_err(de::Error::custom)
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                if v == "auto" {
+                    Ok(InstancePort::Auto)
+                } else {
+                    Err(de::Error::custom(format!(
+                        "unknown instance port strategy '{v}' (expected \"auto\")"
+                    )))
+                }
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                PreferredPort::deserialize(de::value::MapAccessDeserializer::new(map))
+                    .map(InstancePort::Preferred)
+            }
+        }
+
+        deserializer.deserialize_any(InstancePortVisitor)
+    }
+}
+
+/// The preferred-port form of `instance.port` (ADR 0030 addendum 2 U6).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreferredPort {
+    /// The port to try first.
+    pub preferred: u16,
+    /// What to do when `preferred` is occupied: scalar-or-list chain over
+    /// auto|increment|fail. `None` → the default chain ["increment", "auto"]
+    /// at decision time (Phase 3).
+    #[serde(default)]
+    pub on_occupied: Option<PortOccupiedChain>,
+}
+
+/// A port `on_occupied` chain: scalar-or-list over {auto, increment, fail}
+/// (ADR 0030 addendum 2 U6). Scalar normalizes to a singleton; validation:
+/// non-empty, no duplicates (by KIND), no elements after the terminal 'fail'.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PortOccupiedChain(pub Vec<PortOccupiedStep>);
+
+/// Schemars-boundary-only helper for the `on_occupied` field shape (ADR 0030
+/// addendum 2 U6): scalar or ordered list. Never constructed/deserialized.
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum PortOccupiedChainShape {
+    Scalar(PortOccupiedStep),
+    Chain(Vec<PortOccupiedStep>),
+}
+
+impl schemars::JsonSchema for PortOccupiedChain {
+    fn schema_name() -> String {
+        "PortOccupiedChain".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        // Same boundary-helper pattern as `DepConflict`: the manual
+        // Deserialize impl prevents the struct from deriving JsonSchema, so
+        // delegate to the shape helper (scalar | list).
+        PortOccupiedChainShape::json_schema(gen)
+    }
+}
+
+impl PortOccupiedChain {
+    /// Singleton `"auto"` chain.
+    pub fn auto() -> Self {
+        Self(vec![PortOccupiedStep::Bare(PortOccupiedBare::Auto)])
+    }
+    /// Singleton `"increment"` chain.
+    pub fn increment() -> Self {
+        Self(vec![PortOccupiedStep::Bare(PortOccupiedBare::Increment)])
+    }
+    /// Singleton `"fail"` chain.
+    pub fn fail() -> Self {
+        Self(vec![PortOccupiedStep::Bare(PortOccupiedBare::Fail)])
+    }
+    /// The U6 recommended default when `preferred` is occupied:
+    /// `["increment", "auto"]`.
+    pub fn default_on_occupied() -> Self {
+        Self(vec![
+            PortOccupiedStep::Bare(PortOccupiedBare::Increment),
+            PortOccupiedStep::Bare(PortOccupiedBare::Auto),
+        ])
+    }
+}
+
+impl<'de> Deserialize<'de> for PortOccupiedChain {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PortOccupiedChainVisitor;
+
+        impl<'de> de::Visitor<'de> for PortOccupiedChainVisitor {
+            type Value = PortOccupiedChain;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a port on_occupied chain: a scalar \"auto\"/\"increment\"/\"fail\" \
+                     or { increment = ... }, or an ordered list of them",
+                )
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                // Scalar string form: normalize to a singleton chain.
+                let step = PortOccupiedStep::deserialize(de::value::StrDeserializer::new(v))?;
+                let steps = vec![step];
+                validate_port_occupied_chain(&steps).map_err(de::Error::custom)?;
+                Ok(PortOccupiedChain(steps))
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                // Scalar table form: `{ increment = { limit|range = ... } }`.
+                let step =
+                    PortOccupiedStep::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                let steps = vec![step];
+                validate_port_occupied_chain(&steps).map_err(de::Error::custom)?;
+                Ok(PortOccupiedChain(steps))
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut steps = Vec::new();
+                while let Some(step) = seq.next_element::<PortOccupiedStep>()? {
+                    steps.push(step);
+                }
+                validate_port_occupied_chain(&steps).map_err(de::Error::custom)?;
+                Ok(PortOccupiedChain(steps))
+            }
+        }
+
+        deserializer.deserialize_any(PortOccupiedChainVisitor)
+    }
+}
+
+/// One step in a port `on_occupied` chain (ADR 0030 addendum 2 U6): a bare
+/// string auto|increment|fail, or a parameterized increment table. Manual
+/// Deserialize (the untagged derive swallows an unknown element's "unknown
+/// variant" error into a generic "did not match any variant" message).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum PortOccupiedStep {
+    /// `"auto"` / `"increment"` / `"fail"` (bare).
+    Bare(PortOccupiedBare),
+    /// `{ increment = { limit = N } }` or `{ increment = { range = [S, E] } }`.
+    Increment(ParameterizedIncrement),
+}
+
+impl<'de> Deserialize<'de> for PortOccupiedStep {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PortOccupiedStepVisitor;
+
+        impl<'de> de::Visitor<'de> for PortOccupiedStepVisitor {
+            type Value = PortOccupiedStep;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a bare \"auto\"/\"increment\"/\"fail\" string or a { increment = ... } table",
+                )
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                PortOccupiedBare::deserialize(de::value::StrDeserializer::new(v))
+                    .map(PortOccupiedStep::Bare)
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                ParameterizedIncrement::deserialize(de::value::MapAccessDeserializer::new(map))
+                    .map(PortOccupiedStep::Increment)
+            }
+        }
+
+        deserializer.deserialize_any(PortOccupiedStepVisitor)
+    }
+}
+
+/// Bare `on_occupied` elements (ADR 0030 addendum 2 U6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PortOccupiedBare {
+    Auto,
+    Increment,
+    Fail,
+}
+
+impl fmt::Display for PortOccupiedBare {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Auto => "auto",
+            Self::Increment => "increment",
+            Self::Fail => "fail",
+        };
+        f.write_str(s)
+    }
+}
+
+/// The parameterized `increment` element: `on_occupied = { increment = ... }`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParameterizedIncrement {
+    pub increment: IncrementSpec,
+}
+
+/// The increment band: either `{ limit = N }` (count-bound, relative:
+/// preferred+1 .. preferred+N) or `{ range = [START, END] }` (absolute band,
+/// scanned in order). Exactly ONE of the two must be present (validated in
+/// config/validation.rs).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IncrementSpec {
+    /// Count-bound relative form: candidates `preferred+1 .. preferred+N`.
+    pub limit: Option<u16>,
+    /// Absolute band form: candidates `START..=END`.
+    pub range: Option<(u16, u16)>,
+}
+
+/// The semantic kind of an `on_occupied` step (dup check is by KIND: bare
+/// "increment" and `{ increment = {...} }` are the same kind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PortOccupiedKind {
+    Auto,
+    Increment,
+    Fail,
+}
+
+pub(crate) fn port_occupied_kind(step: &PortOccupiedStep) -> PortOccupiedKind {
+    match step {
+        PortOccupiedStep::Bare(b) => match b {
+            PortOccupiedBare::Auto => PortOccupiedKind::Auto,
+            PortOccupiedBare::Increment => PortOccupiedKind::Increment,
+            PortOccupiedBare::Fail => PortOccupiedKind::Fail,
+        },
+        PortOccupiedStep::Increment(_) => PortOccupiedKind::Increment,
+    }
+}
+
+/// Validate a port `on_occupied` chain (ADR 0030 addendum 2 U6, same rules as
+/// on_conflict): non-empty, no duplicates (by kind), nothing after 'fail'.
+pub(crate) fn validate_port_occupied_chain(steps: &[PortOccupiedStep]) -> Result<(), String> {
+    if steps.is_empty() {
+        return Err("on_occupied chain must not be empty (needs at least one element)".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (i, step) in steps.iter().enumerate() {
+        let kind = port_occupied_kind(step);
+        if !seen.insert(kind) {
+            return Err(format!(
+                "on_occupied chain contains duplicate element at position {}",
+                i
+            ));
+        }
+        if kind == PortOccupiedKind::Fail && i + 1 < steps.len() {
+            return Err(format!(
+                "on_occupied chain: 'fail' is terminal; no elements may follow it (position {})",
+                i + 1
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A single dependency declaration of a workload
@@ -733,6 +1160,11 @@ pub struct WorkloadConfig {
     pub network: NetworkConfig,
     #[serde(default)]
     pub policy: PolicyConfig,
+    /// Per-workload instance policy (`[workloads.<name>.instance]`; ADR 0030
+    /// §4.1). Absent = current behavior; Phase 1 parses + validates, the
+    /// semantics land in Phases 2–3.
+    #[serde(default)]
+    pub instance: InstancePolicy,
     /// Config-declared entitlements (`workloads.<name>.entitlements`). The
     /// closed vocabulary core understands lives in `config::validation`
     /// (currently only `"default_deny_false"`, which permits
@@ -926,6 +1358,7 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
 )]
 mod tests {
     use super::*;
+    use crate::config::test_support::MINIMAL_VALID_TOML;
 
     // ---- FS-4: registry structs reject unknown fields (fail loudly on typos) ----
 
@@ -1476,6 +1909,550 @@ dependsOn = {}
             err.to_string().contains("unknown field"),
             "workload-level 'dependsOn' must fail: {err}"
         );
+    }
+
+    // ---- ADR 0030 Phase 1: the per-workload instance policy ----
+
+    /// A workload with NO instance table parses to the default policy
+    /// (strategy Singleton, on_conflict None, port None, label None) — the
+    /// "absent = current behavior" invariant.
+    #[test]
+    fn instance_policy_defaults_are_current_behavior() {
+        let config: ConfigFile = toml::from_str(MINIMAL_VALID_TOML).unwrap();
+        let policy = &config.workloads["pi"].instance;
+        assert_eq!(policy, &InstancePolicy::default());
+        assert_eq!(policy.strategy, InstanceStrategy::Singleton);
+        assert_eq!(policy.on_conflict, None);
+        assert_eq!(policy.port, None);
+        assert_eq!(policy.label, None);
+    }
+
+    /// A full `[workloads.<name>.instance]` block parses into the typed
+    /// fields.
+    #[test]
+    fn instance_policy_full_block_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+strategy = "parallel"
+on_conflict = ["reuse", "fail"]
+label = "dev"
+
+[workloads.pi.instance.port]
+preferred = 4000
+on_occupied = ["increment", "auto"]
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let policy = &config.workloads["pi"].instance;
+        assert_eq!(policy.strategy, InstanceStrategy::Parallel);
+        assert_eq!(
+            policy.on_conflict,
+            Some(DepConflict(vec![ConflictStep::Reuse, ConflictStep::Fail]))
+        );
+        match &policy.port {
+            Some(InstancePort::Preferred(p)) => {
+                assert_eq!(p.preferred, 4000);
+                assert_eq!(
+                    p.on_occupied,
+                    Some(PortOccupiedChain(vec![
+                        PortOccupiedStep::Bare(PortOccupiedBare::Increment),
+                        PortOccupiedStep::Bare(PortOccupiedBare::Auto),
+                    ]))
+                );
+            }
+            other => panic!("expected Preferred port, got {other:?}"),
+        }
+        assert_eq!(policy.label.as_deref(), Some("dev"));
+    }
+
+    /// The strategy vocabulary is closed: an unknown strategy is a parse
+    /// error (unknown variant).
+    #[test]
+    fn instance_policy_strategy_closed_vocabulary() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+strategy = "bogus"
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown variant"),
+            "unknown strategy must be rejected: {msg}"
+        );
+        assert!(msg.contains("bogus"), "error must name the value: {msg}");
+    }
+
+    /// Unknown instance-policy fields are rejected by deny_unknown_fields.
+    #[test]
+    fn instance_policy_unknown_field_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+bogus = 1
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "instance block must reject unknown fields: {err}"
+        );
+    }
+
+    /// `port = N` (integer) parses as the strict form.
+    #[test]
+    fn instance_port_strict_integer_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = 4000
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].instance.port,
+            Some(InstancePort::Strict(4000))
+        );
+    }
+
+    /// `port = "auto"` parses as the auto form.
+    #[test]
+    fn instance_port_auto_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = "auto"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].instance.port,
+            Some(InstancePort::Auto)
+        );
+    }
+
+    /// `port = { preferred = N }` (no on_occupied) parses to Preferred with a
+    /// None chain.
+    #[test]
+    fn instance_port_preferred_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000 }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].instance.port,
+            Some(InstancePort::Preferred(PreferredPort {
+                preferred: 4000,
+                on_occupied: None,
+            }))
+        );
+    }
+
+    /// `port = { preferred = N, on_occupied = [...] }` parses the chain.
+    #[test]
+    fn instance_port_preferred_with_chain_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = ["increment", "auto"] }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        match &config.workloads["pi"].instance.port {
+            Some(InstancePort::Preferred(p)) => {
+                assert_eq!(p.preferred, 4000);
+                assert_eq!(
+                    p.on_occupied,
+                    Some(PortOccupiedChain(vec![
+                        PortOccupiedStep::Bare(PortOccupiedBare::Increment),
+                        PortOccupiedStep::Bare(PortOccupiedBare::Auto),
+                    ]))
+                );
+            }
+            other => panic!("expected Preferred port, got {other:?}"),
+        }
+    }
+
+    /// A scalar TABLE form `on_occupied = { increment = { limit = N } }`
+    /// parses as a singleton parameterized increment.
+    #[test]
+    fn instance_port_preferred_parameterized_increment_limit() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = { limit = 100 } } }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        match &config.workloads["pi"].instance.port {
+            Some(InstancePort::Preferred(p)) => {
+                assert_eq!(
+                    p.on_occupied,
+                    Some(PortOccupiedChain(vec![PortOccupiedStep::Increment(
+                        ParameterizedIncrement {
+                            increment: IncrementSpec {
+                                limit: Some(100),
+                                range: None,
+                            },
+                        }
+                    )]))
+                );
+            }
+            other => panic!("expected Preferred port, got {other:?}"),
+        }
+    }
+
+    /// The scalar TABLE form supports the absolute `range` band.
+    #[test]
+    fn instance_port_preferred_parameterized_increment_range() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = { range = [5000, 5100] } } }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        match &config.workloads["pi"].instance.port {
+            Some(InstancePort::Preferred(p)) => {
+                assert_eq!(
+                    p.on_occupied,
+                    Some(PortOccupiedChain(vec![PortOccupiedStep::Increment(
+                        ParameterizedIncrement {
+                            increment: IncrementSpec {
+                                limit: None,
+                                range: Some((5000, 5100)),
+                            },
+                        }
+                    )]))
+                );
+            }
+            other => panic!("expected Preferred port, got {other:?}"),
+        }
+    }
+
+    /// A chain may mix the bare and parameterized increment forms.
+    #[test]
+    fn instance_port_preferred_chain_mixes_bare_and_parameterized() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = [{ increment = { range = [5000, 5100] } }, "auto"] }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        match &config.workloads["pi"].instance.port {
+            Some(InstancePort::Preferred(p)) => {
+                assert_eq!(
+                    p.on_occupied,
+                    Some(PortOccupiedChain(vec![
+                        PortOccupiedStep::Increment(ParameterizedIncrement {
+                            increment: IncrementSpec {
+                                limit: None,
+                                range: Some((5000, 5100)),
+                            },
+                        }),
+                        PortOccupiedStep::Bare(PortOccupiedBare::Auto),
+                    ]))
+                );
+            }
+            other => panic!("expected Preferred port, got {other:?}"),
+        }
+    }
+
+    /// A scalar string `on_occupied = "auto"` normalizes to a singleton chain.
+    #[test]
+    fn on_occupied_scalar_normalizes_to_singleton() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = "auto" }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        match &config.workloads["pi"].instance.port {
+            Some(InstancePort::Preferred(p)) => {
+                assert_eq!(
+                    p.on_occupied,
+                    Some(PortOccupiedChain::auto()),
+                    "scalar must normalize to a singleton chain"
+                );
+            }
+            other => panic!("expected Preferred port, got {other:?}"),
+        }
+
+        // The U6 chain constructors (used by the Phase 3 decision path):
+        // singletons + the recommended default chain.
+        assert_eq!(
+            PortOccupiedChain::increment().0,
+            vec![PortOccupiedStep::Bare(PortOccupiedBare::Increment)]
+        );
+        assert_eq!(
+            PortOccupiedChain::fail().0,
+            vec![PortOccupiedStep::Bare(PortOccupiedBare::Fail)]
+        );
+        assert_eq!(
+            PortOccupiedChain::default_on_occupied().0,
+            vec![
+                PortOccupiedStep::Bare(PortOccupiedBare::Increment),
+                PortOccupiedStep::Bare(PortOccupiedBare::Auto),
+            ]
+        );
+    }
+
+    /// An empty `on_occupied` list is rejected (a chain needs at least one
+    /// element).
+    #[test]
+    fn on_occupied_empty_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = [] }
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must not be empty"),
+            "empty chain must be rejected: {msg}"
+        );
+    }
+
+    /// Duplicate elements (by KIND) in the chain are rejected — a bare
+    /// "increment" and a parameterized `{ increment = ... }` are the same
+    /// kind.
+    #[test]
+    fn on_occupied_duplicate_kind_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = ["increment", "auto", "increment"] }
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("duplicate"),
+            "duplicate chain element must be rejected: {msg}"
+        );
+    }
+
+    /// `fail` is terminal: nothing may follow it. A singleton `["fail"]`
+    /// chain parses fine.
+    #[test]
+    fn on_occupied_after_fail_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = ["auto", "fail", "auto"] }
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("terminal"),
+            "elements after 'fail' must be rejected: {msg}"
+        );
+
+        let ok = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = ["fail"] }
+"#;
+        let config: ConfigFile = toml::from_str(ok).unwrap();
+        match &config.workloads["pi"].instance.port {
+            Some(InstancePort::Preferred(p)) => {
+                assert_eq!(p.on_occupied, Some(PortOccupiedChain::fail()));
+            }
+            other => panic!("expected Preferred port, got {other:?}"),
+        }
+    }
+
+    /// An unknown chain element is rejected by serde's closed vocabulary.
+    #[test]
+    fn on_occupied_unknown_rejected() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = ["auto", "nuke"] }
+"#;
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown variant"),
+            "unknown chain element must be rejected: {msg}"
+        );
+        assert!(msg.contains("nuke"), "error must name the value: {msg}");
+    }
+
+    /// An instance policy block survives a serialize/deserialize round-trip
+    /// (ConfigFile equality).
+    #[test]
+    fn instance_policy_round_trip() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+strategy = "parallel"
+on_conflict = ["reuse", "fail"]
+label = "dev"
+
+[workloads.pi.instance.port]
+preferred = 4000
+on_occupied = ["increment", "auto"]
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let serialized = toml::to_string(&config).unwrap();
+        let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, config);
+        assert_eq!(
+            reparsed.workloads["pi"].instance.port,
+            Some(InstancePort::Preferred(PreferredPort {
+                preferred: 4000,
+                on_occupied: Some(PortOccupiedChain(vec![
+                    PortOccupiedStep::Bare(PortOccupiedBare::Increment),
+                    PortOccupiedStep::Bare(PortOccupiedBare::Auto),
+                ])),
+            }))
+        );
+    }
+
+    /// `{ increment = {} }` (neither limit nor range) PARSES — the struct
+    /// fields are both optional; the exactly-one rejection is
+    /// validation-level (config/validation.rs tests).
+    #[test]
+    fn increment_spec_exactly_one_of_limit_range() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+port = { preferred = 4000, on_occupied = { increment = {} } }
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        match &config.workloads["pi"].instance.port {
+            Some(InstancePort::Preferred(p)) => {
+                let steps = p.on_occupied.as_ref().unwrap();
+                let PortOccupiedStep::Increment(ParameterizedIncrement { increment }) = &steps.0[0]
+                else {
+                    panic!("expected a parameterized increment");
+                };
+                assert_eq!(increment.limit, None);
+                assert_eq!(increment.range, None);
+            }
+            other => panic!("expected Preferred port, got {other:?}"),
+        }
+    }
+
+    /// The strategy Display strings match the config vocabulary.
+    #[test]
+    fn instance_strategy_display() {
+        assert_eq!(InstanceStrategy::Singleton.to_string(), "singleton");
+        assert_eq!(InstanceStrategy::Parallel.to_string(), "parallel");
+        assert_eq!(InstanceStrategy::Replace.to_string(), "replace");
+        assert_eq!(InstanceStrategy::Reuse.to_string(), "reuse");
+        assert_eq!(ConflictStep::Reuse.to_string(), "reuse");
+        assert_eq!(ConflictStep::Start.to_string(), "start");
+        assert_eq!(ConflictStep::Replace.to_string(), "replace");
+        assert_eq!(ConflictStep::Fail.to_string(), "fail");
+        assert_eq!(PortOccupiedBare::Auto.to_string(), "auto");
+        assert_eq!(PortOccupiedBare::Increment.to_string(), "increment");
+        assert_eq!(PortOccupiedBare::Fail.to_string(), "fail");
     }
 
     // ---- P0: seed_files source|glob + template/glob fields ----

@@ -519,6 +519,18 @@ fn merge_workload(
         );
     }
 
+    if table.contains_key("instance") {
+        // ADR 0030 Phase 1: the instance policy block is ONE unit — a higher
+        // layer re-declaring [workloads.<name>.instance] replaces the WHOLE
+        // block (strategy/on_conflict/port/label), last layer wins — the
+        // same whole-spec reset semantics depends_on applies per dep. A
+        // higher layer declaring only `port` resets the other fields to
+        // defaults. Within one layer's declaration the fields are
+        // independent; across layers there is NO per-field merge.
+        merged.instance = layer.instance.clone();
+        provenance.insert(format!("workloads.{name}.instance"), layer_ctx.name.clone());
+    }
+
     if table.contains_key("entitlements") {
         // Entitlements merge union-style with dedup (mirroring the egress
         // union semantics): once any layer grants an entitlement it cannot
@@ -1548,6 +1560,66 @@ mod tests {
             Some(crate::config::DepConflict::reuse()),
             "a scalar on_conflict in the top layer must RESET the base list to a singleton chain"
         );
+        Ok(())
+    }
+
+    // ---- ADR 0030 Phase 1: the instance policy block merges as ONE unit ----
+
+    /// A higher layer re-declaring `[workloads.pi.instance]` replaces the
+    /// WHOLE block (strategy/on_conflict/port/label reset to defaults),
+    /// last layer wins — a higher layer declaring only `port` resets the
+    /// base layer's `strategy`.
+    #[test]
+    fn instance_block_whole_replaces_last_layer_wins() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.pi.instance]\nstrategy = \"parallel\"\non_conflict = \"fail\"\nlabel = \"dev\"",
+        )?;
+        let top = Layer::from_string(
+            "top",
+            "schema_version = 1\n\n[workloads.pi]\n\n[workloads.pi.instance]\nport = 4000",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, top])?;
+        let instance = &merged.workloads["pi"].instance;
+        assert_eq!(
+            instance.port,
+            Some(crate::config::InstancePort::Strict(4000)),
+            "the top layer's port wins"
+        );
+        assert_eq!(
+            instance.strategy,
+            crate::config::InstanceStrategy::Singleton,
+            "a higher layer declaring only port RESETS the other fields to defaults"
+        );
+        assert_eq!(instance.on_conflict, None, "on_conflict resets to default");
+        assert_eq!(instance.label, None, "label resets to default");
+        assert_eq!(
+            provenance.get("workloads.pi.instance"),
+            Some(&"top".to_string()),
+            "whole-block provenance names the last declaring layer"
+        );
+        Ok(())
+    }
+
+    /// A higher layer that does NOT re-declare the instance block leaves the
+    /// lower layer's block untouched.
+    #[test]
+    fn instance_block_absent_preserves_lower_layer() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.pi.instance]\nstrategy = \"parallel\"\nlabel = \"dev\"",
+        )?;
+        let top = Layer::from_string("top", "schema_version = 1\n\n[workloads.pi]\ncommand = []")?;
+
+        let (merged, _) = merge_layers(&[base, top])?;
+        let instance = &merged.workloads["pi"].instance;
+        assert_eq!(
+            instance.strategy,
+            crate::config::InstanceStrategy::Parallel,
+            "an absent instance block must preserve the lower layer's policy"
+        );
+        assert_eq!(instance.label.as_deref(), Some("dev"));
         Ok(())
     }
 }
