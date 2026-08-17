@@ -201,6 +201,39 @@
         "guest"
       ]
     },
+    "ConflictStep": {
+      "description": "One step in a conflict chain (ADR 0030 addendum 2). A disposition a lifecycle verb tries against an occupied slot, in chain order, until one applies.",
+      "oneOf": [
+        {
+          "description": "Use the running instance when healthy (500ms host TCP port probe) or still booting (<30s record). Not applicable to a stopped/crashed row.",
+          "type": "string",
+          "enum": [
+            "reuse"
+          ]
+        },
+        {
+          "description": "Start a stopped/crashed sandbox (msb `handle.start()`); on failure the executor continues the chain.",
+          "type": "string",
+          "enum": [
+            "start"
+          ]
+        },
+        {
+          "description": "Always down/remove + fresh create.",
+          "type": "string",
+          "enum": [
+            "replace"
+          ]
+        },
+        {
+          "description": "Refuse with the standard occupied-instance message (terminal; nothing may follow it in a chain).",
+          "type": "string",
+          "enum": [
+            "fail"
+          ]
+        }
+      ]
+    },
     "DenyDomainRule": {
       "type": "object",
       "required": [
@@ -213,28 +246,16 @@
       }
     },
     "DepConflict": {
-      "description": "Auto-start conflict policy for a dependency (`depends_on.<dep>.on_conflict`; ADR 0026 addendum 2026-08-16). Decides what dependency auto-start does when the dep's singleton slot is already occupied at auto-start time (a port-registry record OR an msb-running sandbox).\n\nTOML values: `on_conflict = \"reuse\"` / `\"replace\"` / `\"fail\"`.",
-      "oneOf": [
+      "description": "Schemars-boundary-only helper for the `on_conflict` field shape (ADR 0030 addendum 2): the field accepts EITHER a scalar string (back-compat, d452575) OR an ordered list of strings. Never constructed/deserialized — `DepConflict`'s custom deserializer normalizes both forms at parse time.",
+      "anyOf": [
         {
-          "description": "Use the running instance when it is healthy (short host TCP port probe); auto-replace (down + start fresh) when the exec'd process is dead inside the keep-alive sandbox. A dep with no published ports cannot be probed cheaply, so it is reused optimistically (use `on_conflict = \"replace\"` to force a fresh start). The default.",
-          "type": "string",
-          "enum": [
-            "reuse"
-          ]
+          "$ref": "#/definitions/ConflictStep"
         },
         {
-          "description": "Always down + start fresh, replacing any running instance.",
-          "type": "string",
-          "enum": [
-            "replace"
-          ]
-        },
-        {
-          "description": "Refuse with the standard occupied-instance error (the pre-fix failure behavior) instead of reusing or replacing.",
-          "type": "string",
-          "enum": [
-            "fail"
-          ]
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConflictStep"
+          }
         }
       ]
     },
@@ -258,7 +279,7 @@
           }
         },
         "on_conflict": {
-          "description": "Auto-start conflict policy when the dependency's singleton slot is already occupied (ADR 0026 addendum 2026-08-16). `None` (default) resolves to `\"reuse\"` at auto-start time. \"reuse\": reuse the running instance when healthy (host port probe), auto-replace (down + start fresh) when the exec'd process is dead inside the keep-alive sandbox; \"replace\": always down + start fresh; \"fail\": refuse with the standard occupied message.",
+          "description": "Auto-start conflict policy when the dependency's singleton slot is already occupied (ADR 0026 addendum 2026-08-16; ADR 0030 addendum 2). Accepts a scalar (back-compat: d452575's `\"reuse\"` parses as `[\"reuse\"]`) or an ordered list over {reuse, start, replace, fail}. `None` (default) resolves to the default chain `[\"reuse\", \"start\", \"replace\"]` at decision time: reuse the running instance when healthy (host port probe) or still booting, start a stopped/crashed sandbox, then replace (down + start fresh) a keep-alive zombie or stale record.",
           "default": null,
           "anyOf": [
             {
