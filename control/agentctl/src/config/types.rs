@@ -1091,6 +1091,37 @@ pub(crate) fn validate_port_occupied_chain(steps: &[PortOccupiedStep]) -> Result
     Ok(())
 }
 
+/// The instance model a `depends_on.<dep>` entry selects for its dependency
+/// (ADR 0030 §4.1 T2). `Shared` (default) = the dependency's singleton slot in
+/// the dependent's namespace (today's model); `Scoped` = a dep instance named
+/// after the DEPENDENT's instance id (`litellm@<dependent-id>` for dependent
+/// `prime@<id>`); `Fresh` = a fresh auto-slugged dep instance per start.
+///
+/// When unset, the mode derives from the DEP's own `instance.strategy`:
+/// singleton/replace/reuse → [`DepInstanceMode::Shared`]; parallel →
+/// [`DepInstanceMode::Fresh`] (see `commands::deps::dep_instance_mode`).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum DepInstanceMode {
+    #[default]
+    Shared,
+    Scoped,
+    Fresh,
+}
+
+impl fmt::Display for DepInstanceMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Shared => "shared",
+            Self::Scoped => "scoped",
+            Self::Fresh => "fresh",
+        };
+        f.write_str(s)
+    }
+}
+
 /// A single dependency declaration of a workload
 /// (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d)
 /// discovery-lite). `env` (optional) names the environment variable the
@@ -1124,6 +1155,11 @@ pub struct DependsOnSpec {
     /// keep-alive zombie or stale record.
     #[serde(default)]
     pub on_conflict: Option<DepConflict>,
+    /// The instance model this dependency entry selects (ADR 0030 §4.1 T2).
+    /// `None` (default) derives from the DEP's own `instance.strategy` at
+    /// decision time (parallel → fresh, else shared).
+    #[serde(default)]
+    pub instance: Option<DepInstanceMode>,
 }
 
 /// A single workload definition (`workloads.<name>` in workestrate.toml).
@@ -3126,5 +3162,82 @@ env = { FOO = 42 }
         let empty = EnvBindings::default();
         assert!(empty.is_empty());
         assert_eq!(empty.len(), 0);
+    }
+
+    // ---- ADR 0030 Phase 2: depends_on.<dep>.instance (DepInstanceMode) ----
+
+    /// The closed vocabulary parses: shared/scoped/fresh each map to their
+    /// enum variant, and the default is Shared.
+    #[test]
+    fn depends_on_instance_mode_parses() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+instance = "shared"
+
+[workloads.pi.depends_on.redis]
+env = "REDIS_URL"
+instance = "scoped"
+
+[workloads.pi.depends_on.pg]
+env = "PG_URL"
+instance = "fresh"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let deps = &config.workloads["pi"].depends_on;
+        assert_eq!(deps["litellm"].instance, Some(DepInstanceMode::Shared));
+        assert_eq!(deps["redis"].instance, Some(DepInstanceMode::Scoped));
+        assert_eq!(deps["pg"].instance, Some(DepInstanceMode::Fresh));
+        // Display strings match the config vocabulary.
+        assert_eq!(DepInstanceMode::Shared.to_string(), "shared");
+        assert_eq!(DepInstanceMode::Scoped.to_string(), "scoped");
+        assert_eq!(DepInstanceMode::Fresh.to_string(), "fresh");
+    }
+
+    /// An unknown instance value is a parse error (closed vocabulary).
+    #[test]
+    fn depends_on_instance_mode_closed_vocabulary() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+instance = "ephemeral"
+"#;
+        assert!(
+            toml::from_str::<ConfigFile>(raw).is_err(),
+            "an unknown instance mode must be a parse error"
+        );
+    }
+
+    /// Omitting `instance` leaves it None (the strategy-derived default
+    /// applies at decision time).
+    #[test]
+    fn depends_on_instance_mode_defaults_none() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.depends_on.litellm]
+env = "LITELLM_URL"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(config.workloads["pi"].depends_on["litellm"].instance, None);
     }
 }

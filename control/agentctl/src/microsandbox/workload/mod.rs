@@ -77,6 +77,22 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         crate::config::DepConflict::default_chain().0
     }
 
+    /// The workload's declaring config-repo namespace (ADR 0030 Phase 2 T1):
+    /// the registry-record namespace its instances register under. A
+    /// RESOLUTION filter for depends_on, not a slot prefix. Default "default"
+    /// (legacy/synthetic); ConfigWorkload overrides from provenance.
+    fn namespace(&self) -> String {
+        crate::microsandbox::port_registry::default_namespace()
+    }
+
+    /// The workload's default instance strategy (ADR 0030 §4.1): the
+    /// instance model `up`/`exec` default to when no CLI flag overrides.
+    /// Default Singleton (current behavior); ConfigWorkload overrides from
+    /// the `[workloads.<name>.instance]` policy block.
+    fn instance_strategy(&self) -> crate::config::InstanceStrategy {
+        crate::config::InstanceStrategy::Singleton
+    }
+
     /// Format the plan with a `[source]` annotation for each field.
     fn show_source(&self) -> String {
         self.plan().to_string()

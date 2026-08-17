@@ -316,8 +316,13 @@ async fn down_one(state_dir: &Path, instance: &str) -> Result<DownOutcome> {
 
 /// Stop every instance whose workload matches `workload`. Used by
 /// `workestrate <wl> down --all-instances`.
+///
+/// Teardown is namespace-agnostic: `down --all-instances` stops every
+/// instance of the workload regardless of its declaring-repo namespace (the
+/// namespace is a RESOLUTION filter, not a teardown scope).
 pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<DownResult>> {
-    let records = super::port_registry::list_records_for_workload(state_dir, workload)?;
+    let records =
+        super::port_registry::list_records_for_workload_any_namespace(state_dir, workload)?;
     let mut results = Vec::with_capacity(records.len());
     for r in records {
         results.push(down_instance(state_dir, &r.instance).await);

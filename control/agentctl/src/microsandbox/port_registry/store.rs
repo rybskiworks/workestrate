@@ -142,6 +142,7 @@ pub fn check_and_register_sandbox_lifecycle(
     host_ports: &[u16],
     port_pairs: &[PortMapping],
     created_at: &str,
+    namespace: &str,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     let pairs: Vec<(IpAddr, u16)> = host_ports.iter().map(|p| (bind_ip, *p)).collect();
@@ -155,6 +156,7 @@ pub fn check_and_register_sandbox_lifecycle(
         host_ports,
         port_pairs,
         created_at,
+        namespace,
     )
 }
 
@@ -192,6 +194,7 @@ pub fn register_sandbox(
         port_pairs: Vec::new(),
         created_at: String::new(),
         bind_ip: crate::microsandbox::plan::default_bind_ip(),
+        namespace: super::default_namespace(),
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -220,6 +223,7 @@ pub fn register_sandbox_lifecycle(
     host_ports: &[u16],
     port_pairs: &[PortMapping],
     created_at: &str,
+    namespace: &str,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     register_sandbox_lifecycle_locked(
@@ -231,6 +235,7 @@ pub fn register_sandbox_lifecycle(
         host_ports,
         port_pairs,
         created_at,
+        namespace,
     )
 }
 
@@ -247,6 +252,7 @@ fn register_sandbox_lifecycle_locked(
     host_ports: &[u16],
     port_pairs: &[PortMapping],
     created_at: &str,
+    namespace: &str,
 ) -> Result<()> {
     let run_dir = state_dir.join("var").join("run");
     std::fs::create_dir_all(&run_dir)?;
@@ -258,6 +264,7 @@ fn register_sandbox_lifecycle_locked(
         port_pairs: port_pairs.to_vec(),
         created_at: created_at.to_string(),
         bind_ip,
+        namespace: namespace.to_string(),
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -323,8 +330,26 @@ pub fn list_records(state_dir: &Path) -> Result<Vec<SandboxInstanceRecord>> {
     Ok(out)
 }
 
-/// List all records whose `workload` field equals `workload`.
+/// List all records whose `workload` field equals `workload` AND whose
+/// `namespace` field equals `namespace` (ADR 0030 Phase 2 T1 namespace
+/// scoping). The namespace is a RESOLUTION FILTER: two repos declaring the
+/// same workload name are isolated by their declaring-repo namespace.
 pub fn list_records_for_workload(
+    state_dir: &Path,
+    workload: &str,
+    namespace: &str,
+) -> Result<Vec<SandboxInstanceRecord>> {
+    Ok(list_records(state_dir)?
+        .into_iter()
+        .filter(|r| r.workload == workload && r.namespace == namespace)
+        .collect())
+}
+
+/// List all records whose `workload` field equals `workload`, regardless of
+/// namespace. Used by the collision-visibility check (ADR 0030 Phase 2): when
+/// the dependent's namespace has no record but another namespace does, the
+/// resolution can name the colliding namespace as remediation.
+pub fn list_records_for_workload_any_namespace(
     state_dir: &Path,
     workload: &str,
 ) -> Result<Vec<SandboxInstanceRecord>> {
@@ -519,6 +544,7 @@ mod tests {
             &[port],
             &[crate::microsandbox::plan::PortMapping::new(port, port)],
             "2026-07-23T00:00:00Z",
+            "default",
         )
     }
 
@@ -747,6 +773,7 @@ mod tests {
             &[14000, 14001],
             &pairs,
             "2026-07-20T14:05:42Z",
+            "default",
         )?;
         let record = find_record(&state_dir, "personal-litellm@canary")?
             .expect("record should exist after register_lifecycle");
@@ -838,6 +865,7 @@ mod tests {
             &[14000],
             &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
             "2026-07-20T14:05:42Z",
+            "default",
         )?;
         let records = list_records(&state_dir)?;
         assert_eq!(
@@ -868,7 +896,7 @@ mod tests {
             "litellm",
             &[14000],
         )?;
-        let litellm_records = list_records_for_workload(&state_dir, "litellm")?;
+        let litellm_records = list_records_for_workload(&state_dir, "litellm", "default")?;
         assert_eq!(
             litellm_records.len(),
             2,
@@ -877,7 +905,7 @@ mod tests {
         for r in &litellm_records {
             assert_eq!(r.workload, "litellm");
         }
-        let pi_records = list_records_for_workload(&state_dir, "pi")?;
+        let pi_records = list_records_for_workload(&state_dir, "pi", "default")?;
         assert_eq!(pi_records.len(), 1);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
@@ -1033,6 +1061,7 @@ mod tests {
             port_pairs: vec![],
             created_at: String::new(),
             bind_ip: ip,
+            namespace: crate::microsandbox::port_registry::default_namespace(),
         }
     }
 
@@ -1099,6 +1128,7 @@ mod tests {
             &[4000],
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         // Next allocation skips .2 → .3.
         assert_eq!(allocate_loopback_ip(&state_dir)?, loopback(3));
@@ -1291,6 +1321,7 @@ mod tests {
             &[4000],
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         assert_eq!(prospective_loopback_ip(&state_dir)?, loopback(3));
         assert_eq!(
@@ -1358,6 +1389,7 @@ mod tests {
             &[4000],
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         // A second registration for the same (127.0.0.2, 4000) must refuse,
         // naming the bind:port.
@@ -1409,6 +1441,88 @@ mod tests {
             check_port_collisions(&state_dir, "new-sandbox", &[(loopback(2), 4000)]).is_ok(),
             "legacy record must NOT collide on a different bind IP"
         );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0030 Phase 2: namespace field + filter ----
+
+    /// A legacy record file WITHOUT a `namespace` field parses as "default"
+    /// (back-compat: the field is `#[serde(default = "default_namespace")]`).
+    #[test]
+    fn record_namespace_defaults_to_default() -> Result<()> {
+        let state_dir = unique_state_dir("ns-legacy");
+        let run_dir = state_dir.join("var").join("run");
+        std::fs::create_dir_all(&run_dir)?;
+        std::fs::write(
+            run_dir.join("legacy-litellm.json"),
+            r#"{
+  "instance": "legacy-litellm",
+  "context": null,
+  "workload": "litellm",
+  "ports": [4000]
+}"#,
+        )?;
+        let record = find_record(&state_dir, "legacy-litellm")?.expect("legacy record must parse");
+        assert_eq!(
+            record.namespace, "default",
+            "a record without a namespace field must parse as 'default'"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// Two namespaces, same workload name: `list_records_for_workload` with a
+    /// namespace isolates them; `list_records_for_workload_any_namespace`
+    /// sees both.
+    #[test]
+    fn list_records_for_workload_filters_by_namespace() -> Result<()> {
+        let state_dir = unique_state_dir("ns-filter");
+        // The same workload `litellm` registered by two namespaces. The
+        // registry is keyed by INSTANCE NAME (one `<instance>.json` per
+        // record), so two namespaces cannot hold the same singleton slot —
+        // the namespace distinguishes which repo registered a record, it
+        // does NOT partition the key space (ADR 0030 T1 documented
+        // limitation: same-name workloads still collide; the namespace makes
+        // the collision VISIBLE). Use a singleton from repo-a and a PARALLEL
+        // instance from repo-b — distinct instance names, both workload
+        // "litellm".
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            singleton_bind(),
+            &[4000],
+            &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
+            "2026-07-30T00:00:00Z",
+            "repo-a",
+        )?;
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm@canary",
+            Some("personal"),
+            "litellm",
+            singleton_bind(),
+            &[5000],
+            &[crate::microsandbox::plan::PortMapping::new(5000, 5000)],
+            "2026-07-30T00:00:00Z",
+            "repo-b",
+        )?;
+        // Namespace-scoped isolation.
+        let a = list_records_for_workload(&state_dir, "litellm", "repo-a")?;
+        assert_eq!(a.len(), 1, "repo-a sees only its own record");
+        assert_eq!(a[0].ports, vec![4000]);
+        let b = list_records_for_workload(&state_dir, "litellm", "repo-b")?;
+        assert_eq!(b.len(), 1, "repo-b sees only its own record");
+        assert_eq!(b[0].ports, vec![5000]);
+        assert_eq!(
+            b[0].instance, "personal-litellm@canary",
+            "repo-b's record is its parallel instance"
+        );
+        // Any-namespace view sees both.
+        let all = list_records_for_workload_any_namespace(&state_dir, "litellm")?;
+        assert_eq!(all.len(), 2, "any-namespace view sees both records");
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

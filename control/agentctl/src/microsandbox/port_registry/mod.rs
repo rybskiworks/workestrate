@@ -21,7 +21,8 @@ pub use store::*;
 ///
 /// **Backward-compat:** `ports` (host-only u16 list) and the original four
 /// fields are always present. Newer fields (`port_pairs`, `created_at`,
-/// `bind_ip`) are `#[serde(default)]` so older state files parse cleanly.
+/// `bind_ip`, `namespace`) are `#[serde(default)]` so older state files parse
+/// cleanly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxInstanceRecord {
     pub instance: String,
@@ -43,4 +44,17 @@ pub struct SandboxInstanceRecord {
     /// parse as 127.0.0.1.
     #[serde(default = "crate::microsandbox::plan::default_bind_ip")]
     pub bind_ip: IpAddr,
+    /// The declaring config repo of the DEPENDENT workload (ADR 0030 Phase 2
+    /// T1 namespace scoping). A RESOLUTION FILTER, not a slot prefix: the
+    /// singleton slot stays `<context>-<workload>` and `instance` is
+    /// unchanged. Legacy records without the field parse as "default".
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
+}
+
+/// The default namespace for a registry record: the declaring config repo of
+/// the dependent workload, defaulting to "default" when no repo identity is
+/// resolvable (legacy records, synthetic layers).
+pub fn default_namespace() -> String {
+    "default".to_string()
 }

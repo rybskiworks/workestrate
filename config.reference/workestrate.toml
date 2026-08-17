@@ -157,6 +157,14 @@ required = false
 # or stale record; "fail" refuses with the standard occupied-instance error
 # (terminal). This reference config keeps the d452575 scalar form.
 on_conflict = "reuse"
+# depends_on.<dep>.instance (ADR 0030 Phase 2; COMMENTED — the default below
+# is the current behavior, so no reference entry declares it): which instance
+# of the dep the dependent selects. "shared" (default) = the dep's singleton
+# slot in the dependent's config-repo NAMESPACE; "scoped" = a dep instance
+# named after the dependent's instance id; "fresh" = a fresh auto-slugged dep
+# instance per start (scoped/fresh dep AUTO-START is a P2.1 follow-up; the
+# `--use <dep>@<id>` selection path works today):
+# instance = "shared"
 
 # Exports-only depends_on (P2 namespaced ports): resolves the DEPENDENCY's
 # NAMED ports and injects each resolved address as its own env var. `env` is

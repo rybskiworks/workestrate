@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::config::{ConfigFile, ConflictStep, DepConflict};
+use crate::config::{ConfigFile, ConflictStep, DepConflict, DepInstanceMode};
 use crate::microsandbox::depgraph::{dep_closure, singleton_record, topo_all};
 use crate::microsandbox::port_registry::{list_records, SandboxInstanceRecord};
 use crate::microsandbox::runtime::reconcile::{ChainStep, ReconcileFacts};
@@ -112,6 +112,66 @@ fn dep_conflict(config: &ConfigFile, dependent: &str, dep: &str) -> DepConflict 
                 .and_then(|w| w.instance.on_conflict.clone())
         })
         .unwrap_or(DepConflict::default_chain())
+}
+
+/// The declaring config-repo namespace of `workload` (ADR 0030 Phase 2 T1):
+/// resolved from the merge provenance (`workloads.<name>.<field>` → layer →
+/// layer dir → repo_key), defaulting to "default" when no repo identity is
+/// resolvable (legacy/synthetic layers, single-file mode).
+/// The declaring config-repo namespace of `workload` (ADR 0030 Phase 2 T1):
+/// resolved from the merge provenance (`workloads.<name>.<field>` → layer →
+/// layer dir → repo_key), defaulting to "default" when no repo identity is
+/// resolvable (legacy/synthetic layers, single-file mode).
+///
+/// The caller passes the provenance EXPLICITLY (it is a one-shot slot —
+/// [`crate::merge::take_provenance`] drains it, so a second read returns
+/// None); `ConfigWorkload::new_with_use_overrides` takes it once and threads
+/// it here and into `resolve_depends_on`.
+pub(crate) fn namespace_for(
+    provenance: Option<&crate::merge::Provenance>,
+    layer_dirs: &std::collections::HashMap<String, std::path::PathBuf>,
+    workload: &str,
+) -> String {
+    let Some(provenance) = provenance else {
+        return crate::microsandbox::port_registry::default_namespace();
+    };
+    // The workload's declaring layer: any field's provenance names the layer
+    // that declared the workload (kind/image/depends_on all resolve to the
+    // same declaring repo for a single-repo workload).
+    let layer = provenance
+        .get(&format!("workloads.{workload}.depends_on"))
+        .or_else(|| provenance.get(&format!("workloads.{workload}.kind")))
+        .or_else(|| provenance.get(&format!("workloads.{workload}.image")));
+    let Some(layer) = layer else {
+        return crate::microsandbox::port_registry::default_namespace();
+    };
+    let Some(dir) = layer_dirs.get(layer) else {
+        return crate::microsandbox::port_registry::default_namespace();
+    };
+    let registered = crate::images::repo_key::registered_repo_checkouts();
+    crate::images::repo_key::repo_key_for(dir, &registered)
+}
+
+/// The `depends_on.<dep>.instance` mode for a dependency (ADR 0030 §4.1 T2):
+/// the declared `instance` when set, else derived from the DEP's own
+/// `instance.strategy` (parallel → Fresh, else Shared).
+fn dep_instance_mode(config: &ConfigFile, dependent: &str, dep: &str) -> DepInstanceMode {
+    config
+        .workloads
+        .get(dependent)
+        .and_then(|w| w.depends_on.get(dep))
+        .and_then(|s| s.instance)
+        .unwrap_or_else(|| {
+            match config
+                .workloads
+                .get(dep)
+                .map(|w| w.instance.strategy)
+                .unwrap_or(crate::config::InstanceStrategy::Singleton)
+            {
+                crate::config::InstanceStrategy::Parallel => DepInstanceMode::Fresh,
+                _ => DepInstanceMode::Shared,
+            }
+        })
 }
 
 impl DepStartAction {
@@ -214,8 +274,18 @@ pub fn plan_dep_starts(
     records: &[SandboxInstanceRecord],
     context: Option<&str>,
     use_overrides: &[(String, String)],
+    namespace: &str,
 ) -> Result<Vec<DepStartAction>> {
     let closure = dep_closure(config, name)?;
+    // ADR 0030 Phase 2 T1: the planner's record view is namespace-scoped — a
+    // dependency's singleton slot is only "occupied" by a record in the
+    // DEPENDENT's namespace (two repos declaring the same workload name are
+    // isolated by their declaring-repo namespace).
+    let records: Vec<SandboxInstanceRecord> = records
+        .iter()
+        .filter(|r| r.namespace == namespace)
+        .cloned()
+        .collect();
     let mut actions = Vec::with_capacity(closure.len());
     for dep in closure {
         if use_overrides.iter().any(|(d, _)| d == &dep) {
@@ -226,7 +296,48 @@ pub fn plan_dep_starts(
         // config; `dep` is moved into the action below).
         let ports = declared_host_ports(config, &dep);
         let conflict = dep_conflict(config, name, &dep);
-        if singleton_record(records, &slot).is_some() {
+        // ADR 0030 T2: depends_on.<dep>.instance SELECTS the target slot.
+        // P2 implements shared (the singleton slot, today's model) +
+        // the strategy-derived default computation; scoped/fresh AUTO-START
+        // (creating a PARALLEL dep instance through the detached child) is a
+        // documented P2.1 follow-up — the dependent's instance id is not
+        // available at this call depth and the creation machinery builds
+        // singleton specs only.
+        let mode = dep_instance_mode(config, name, &dep);
+        match mode {
+            DepInstanceMode::Shared => {}
+            DepInstanceMode::Scoped | DepInstanceMode::Fresh
+                if config
+                    .workloads
+                    .get(name)
+                    .and_then(|w| w.depends_on.get(&dep))
+                    .and_then(|s| s.instance)
+                    .is_some() =>
+            {
+                // EXPLICIT scoped/fresh (opt-in): honest hard error — the
+                // parallel dep auto-start is not wired in this phase. Power
+                // users can still select a manually-started parallel dep via
+                // `--use <dep>@<id>` (which skips this dep in the planner).
+                anyhow::bail!(
+                    "dependency '{dep}' of '{name}' declares `instance = '{mode}'`: scoped/fresh \
+                     dep auto-start is a P2.1 follow-up (parallel dep creation is not wired). \
+                     Start the dep instance manually and select it with `--use {dep}@<id>`, or \
+                     omit `instance` for shared behavior."
+                );
+            }
+            DepInstanceMode::Scoped | DepInstanceMode::Fresh => {
+                // DERIVED fresh (the dep's own `strategy = "parallel"`): warn
+                // + fall back to the shared singleton (the pre-P2 behavior);
+                // non-breaking — a parallel-strategy dep does not force its
+                // dependents onto fresh in this phase.
+                eprintln!(
+                    "warning: dependency '{dep}' of '{name}': the dep's `instance.strategy = 'parallel'` \
+                     defaults this entry to `instance = 'fresh'` (ADR 0030 T2), but scoped/fresh dep \
+                     auto-start is a P2.1 follow-up — falling back to the shared singleton slot."
+                );
+            }
+        }
+        if singleton_record(&records, &slot).is_some() {
             actions.push(DepStartAction::Satisfied {
                 dep,
                 slot,
@@ -342,12 +453,21 @@ pub async fn auto_start_dependencies(
     let context = crate::config::active_context_name();
     let state_dir = crate::config::resolve_state_dir();
     let records = list_records(&state_dir)?;
+    // ADR 0030 Phase 2 T1: the dependent's declaring-repo namespace scopes
+    // which dep records are visible to auto-start. auto_start_dependencies
+    // runs BEFORE the dependent's ConfigWorkload is constructed, so the
+    // provenance slot is still full here — take it (and the layer dirs) and
+    // pass them explicitly.
+    let provenance = crate::merge::take_provenance();
+    let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
+    let namespace = namespace_for(provenance.as_ref(), &layer_dirs, workload_name);
     let actions = plan_dep_starts(
         &config,
         workload_name,
         &records,
         context.as_deref(),
         use_overrides,
+        &namespace,
     )?;
     for action in actions {
         // ADR 0030 Phase 0: reconcile the planner's record view with the msb
@@ -737,6 +857,7 @@ guest = 4003
                 name: None,
             }],
             "2026-08-01T00:00:00Z",
+            "default",
         )
     }
 
@@ -746,7 +867,7 @@ guest = 4003
     #[test]
     fn plan_dep_starts_chain_all_absent_starts_in_topo_order() -> Result<()> {
         let config = chain_config();
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[])?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
         assert_eq!(
             actions,
             vec![
@@ -776,7 +897,7 @@ guest = 4003
         let records = list_records(&state_dir)?;
         let config = chain_config();
 
-        let actions = plan_dep_starts(&config, "a", &records, Some("personal"), &[])?;
+        let actions = plan_dep_starts(&config, "a", &records, Some("personal"), &[], "default")?;
         assert_eq!(
             actions,
             vec![
@@ -819,7 +940,8 @@ image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("agent-dep fixture must parse");
-        let err = plan_dep_starts(&config, "top", &[], Some("personal"), &[]).unwrap_err();
+        let err =
+            plan_dep_starts(&config, "top", &[], Some("personal"), &[], "default").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains(
@@ -837,7 +959,7 @@ command = []
     fn plan_dep_starts_use_override_dep_is_absent_from_actions() -> Result<()> {
         let config = chain_config();
         let overrides = vec![("b".to_string(), "canary".to_string())];
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &overrides)?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &overrides, "default")?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
@@ -877,7 +999,7 @@ host = 4001
 guest = 4001
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[])?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
@@ -920,7 +1042,7 @@ guest = 4000
 on_conflict = "fail"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[])?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
@@ -963,7 +1085,7 @@ guest = 4000
 on_conflict = "fail"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
-        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[])?;
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
         assert_eq!(
             actions,
             vec![DepStartAction::StartService {
@@ -1083,6 +1205,7 @@ on_conflict = "fail"
             port_pairs: vec![PortMapping::new(4000, 4000)],
             created_at: "2026-01-01T00:00:00Z".to_string(),
             bind_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            namespace: crate::microsandbox::port_registry::default_namespace(),
         }
     }
 
@@ -1721,5 +1844,209 @@ on_conflict = "fail"
             msg.contains("probe failed"),
             "error must name the failure mode: {msg}"
         );
+    }
+
+    // ---- ADR 0030 Phase 2: depends_on.<dep>.instance (DepInstanceMode) ----
+
+    /// The strategy-derived default: a dep whose own `instance.strategy` is
+    /// "parallel" defaults the entry to Fresh; singleton/replace/reuse default
+    /// to Shared.
+    #[test]
+    fn dep_instance_mode_strategy_derived_default() -> Result<()> {
+        let toml = r#"
+schema_version = 1
+
+[workloads.a]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.a.depends_on.litellm]
+env = "LITELLM_URL"
+
+[workloads.a.depends_on.redis]
+env = "REDIS_URL"
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.litellm.instance]
+strategy = "parallel"
+
+[workloads.redis]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
+        assert_eq!(
+            dep_instance_mode(&config, "a", "litellm"),
+            DepInstanceMode::Fresh,
+            "a parallel-strategy dep defaults the entry to fresh"
+        );
+        assert_eq!(
+            dep_instance_mode(&config, "a", "redis"),
+            DepInstanceMode::Shared,
+            "a singleton-strategy dep defaults the entry to shared"
+        );
+        Ok(())
+    }
+
+    /// A declared `instance` beats the strategy-derived default.
+    #[test]
+    fn dep_instance_mode_declared_beats_strategy() -> Result<()> {
+        let toml = r#"
+schema_version = 1
+
+[workloads.a]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.a.depends_on.litellm]
+env = "LITELLM_URL"
+instance = "scoped"
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.litellm.instance]
+strategy = "parallel"
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
+        assert_eq!(
+            dep_instance_mode(&config, "a", "litellm"),
+            DepInstanceMode::Scoped,
+            "a declared instance mode beats the dep's parallel strategy"
+        );
+        Ok(())
+    }
+
+    /// An EXPLICIT scoped/fresh entry is an honest plan-time error: the
+    /// parallel dep auto-start is a P2.1 follow-up (the dependent's instance
+    /// id is not available at this call depth and the creation machinery
+    /// builds singleton specs only). The error names the follow-up and the
+    /// `--use` workaround.
+    #[test]
+    fn plan_dep_starts_explicit_scoped_fresh_is_a_clear_p21_error() -> Result<()> {
+        let toml = r#"
+schema_version = 1
+
+[workloads.a]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.a.depends_on.litellm]
+env = "LITELLM_URL"
+instance = "scoped"
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
+        let err = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("P2.1 follow-up"),
+            "scoped/fresh auto-start must name the follow-up: {msg}"
+        );
+        assert!(
+            msg.contains("--use litellm@<id>"),
+            "the error must offer the --use workaround: {msg}"
+        );
+        Ok(())
+    }
+
+    /// A DERIVED fresh entry (the dep's own parallel strategy, no explicit
+    /// `instance`) warns + falls back to the shared singleton — non-breaking.
+    #[test]
+    fn plan_dep_starts_derived_fresh_warns_and_falls_back_to_shared() -> Result<()> {
+        let toml = r#"
+schema_version = 1
+
+[workloads.a]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.a.depends_on.litellm]
+env = "LITELLM_URL"
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("fixture must parse");
+        let actions = plan_dep_starts(&config, "a", &[], Some("personal"), &[], "default")?;
+        assert_eq!(
+            actions,
+            vec![DepStartAction::StartService {
+                dep: "litellm".to_string(),
+                slot: "personal-litellm".to_string(),
+                ports: vec![],
+                conflict: DepConflict::default_chain(),
+            }],
+            "a singleton-strategy dep with no declared instance keeps the shared singleton target"
+        );
+        Ok(())
+    }
+
+    // ---- ADR 0030 Phase 2: namespace_for (provenance → repo_key) ----
+
+    /// `namespace_for` resolves the declaring layer from provenance, maps it
+    /// through the layer dirs, and keys it by the registered repo name.
+    #[test]
+    fn namespace_for_resolves_declaring_repo_from_provenance() -> Result<()> {
+        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS};
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let tmp = uniq_dir("ns-for");
+        let checkout = tmp.join("checkout");
+        std::fs::create_dir_all(checkout.join("workestrate").join("workloads"))?;
+
+        let mut provenance = crate::merge::Provenance::new();
+        provenance.insert(
+            "workloads.pi.depends_on".to_string(),
+            "personal".to_string(),
+        );
+        let mut dirs = std::collections::HashMap::new();
+        dirs.insert(
+            "personal".to_string(),
+            checkout.join("workestrate").join("workloads"),
+        );
+
+        // The registry must resolve the checkout dir to the registered name.
+        // registered_repo_checkouts reads the live registry — set one via the
+        // config-registry test helper if available, else assert the canonical
+        // PATH form (repo_key_for falls back to the canonical path when the
+        // dir is not registered). The path fallback is the truthful
+        // unregistered posture.
+        let ns = namespace_for(Some(&provenance), &dirs, "pi");
+        assert!(
+            !ns.is_empty() && ns != "default",
+            "namespace must resolve to a repo identity (got '{ns}')"
+        );
+        // No provenance → "default" (legacy/synthetic).
+        assert_eq!(
+            namespace_for(None, &dirs, "pi"),
+            crate::microsandbox::port_registry::default_namespace()
+        );
+        // Provenance names an unknown layer → "default".
+        let mut stray = crate::merge::Provenance::new();
+        stray.insert("workloads.pi.kind".to_string(), "ghost".to_string());
+        assert_eq!(
+            namespace_for(Some(&stray), &dirs, "pi"),
+            crate::microsandbox::port_registry::default_namespace()
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
     }
 }

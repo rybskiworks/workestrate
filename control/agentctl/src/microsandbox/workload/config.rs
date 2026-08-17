@@ -53,6 +53,11 @@ pub struct ConfigWorkload {
     /// the program for the relevant guest mount when per-mount transmission is
     /// wired.
     pub(super) mount_policies: Vec<(String, crate::mount_policy::MountPolicyProgram)>,
+    /// The declaring config-repo namespace (ADR 0030 Phase 2 T1): resolved
+    /// from provenance at construction; the registry-record namespace this
+    /// workload's instances register under and depends_on resolution filters
+    /// by.
+    pub(super) namespace: String,
 }
 
 impl ConfigWorkload {
@@ -203,6 +208,15 @@ impl ConfigWorkload {
         let seed_content_root =
             field_content_root(provenance.as_ref(), &layer_dirs, name, "seed_files");
 
+        // ADR 0030 Phase 2 T1: the workload's declaring config-repo namespace
+        // (from provenance) — the registry-record namespace its instances
+        // register under and depends_on resolution filters by. The provenance
+        // is passed explicitly (take_provenance drained it above; a second
+        // read would return None).
+        let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
+        let namespace =
+            crate::commands::deps::namespace_for(provenance.as_ref(), &layer_dirs, name);
+
         // ADR 0026(d): a declared depends_on map resolves EVERY declared dep
         // at plan time — no flag. A required-but-not-running dep refuses
         // here, on every up/exec/plan path (they all construct via `new`).
@@ -212,6 +226,7 @@ impl ConfigWorkload {
             name,
             &state_dir,
             use_overrides,
+            &namespace,
         )?;
 
         let secrets = build_secret_definitions(&config)?;
@@ -227,6 +242,7 @@ impl ConfigWorkload {
             seed_content_root,
             depends_resolved,
             mount_policies,
+            namespace,
         })
     }
 
@@ -431,6 +447,14 @@ impl Workload for ConfigWorkload {
             .clone()
             .map(|c| c.0)
             .unwrap_or_else(|| crate::config::DepConflict::default_chain().0)
+    }
+
+    fn namespace(&self) -> String {
+        self.namespace.clone()
+    }
+
+    fn instance_strategy(&self) -> crate::config::InstanceStrategy {
+        self.workload.instance.strategy
     }
 
     fn exec(&self) -> SandboxCommand {
@@ -770,6 +794,7 @@ default_deny = true
             &[4000],
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
+            "default",
         )
     }
 
@@ -896,6 +921,7 @@ default_deny = true
             &[14000],
             &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
 
         let pi = ConfigWorkload::new("pi")?;
@@ -1664,6 +1690,7 @@ default_deny = true
             seed_content_root: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
+            namespace: crate::microsandbox::port_registry::default_namespace(),
         }
     }
 
@@ -1794,6 +1821,7 @@ default_deny = true
             seed_content_root: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
+            namespace: crate::microsandbox::port_registry::default_namespace(),
         };
         (repo, wl)
     }
@@ -2003,6 +2031,7 @@ default_deny = true
             seed_content_root: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
+            namespace: crate::microsandbox::port_registry::default_namespace(),
         };
         let plan = wl.plan(); // emits the warning to stderr; assert via the helper
                               // The substituted mounts: ${CWD} = nested (absolute), workspaces/... = state join.

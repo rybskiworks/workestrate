@@ -279,6 +279,7 @@ mod tests {
             port_pairs: vec![PortMapping::new(4000, 4000)],
             created_at: created_at.to_string(),
             bind_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            namespace: crate::microsandbox::port_registry::default_namespace(),
         }
     }
 

@@ -174,6 +174,7 @@ mod tests {
             &[port],
             &[crate::microsandbox::plan::PortMapping::new(port, port)],
             "2026-07-23T00:00:00Z",
+            "default",
         )
     }
 

@@ -576,6 +576,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
         &host_ports,
         &port_pairs,
         &created_at,
+        &workload.namespace(),
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -612,6 +613,7 @@ async fn start_existing_sandbox<W: Workload>(
         host_ports,
         port_pairs,
         &created_at,
+        &workload.namespace(),
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -990,6 +992,7 @@ mod tests {
             &[4000],
             &[PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         // … makes the next parallel slot draw 127.0.0.3.
         let ip = slot_bind_ip("personal-litellm@blue", &state_dir)?;
@@ -1146,6 +1149,7 @@ mod tests {
             &host_ports,
             &port_pairs,
             "2026-08-10T00:00:00Z",
+            "default",
         )?;
         let record = super::super::super::port_registry::find_record(&state_dir, "personal-test")?
             .expect("record must exist after registration");

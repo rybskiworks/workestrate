@@ -338,6 +338,7 @@ mod tests {
             &[14000, 14001],
             &pairs,
             "2026-07-20T14:05:42Z",
+            "default",
         )?;
         let entries = ps(&dir)?;
         assert_eq!(entries.len(), 1);
@@ -379,6 +380,7 @@ mod tests {
             &[14000, 14001],
             &pairs,
             "2026-07-20T14:05:42Z",
+            "default",
         )?;
         let entries = ps(&dir)?;
         assert_eq!(entries.len(), 1);

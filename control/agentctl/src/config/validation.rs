@@ -1214,6 +1214,7 @@ default_deny = true
                 required: false,
                 exports: Default::default(),
                 on_conflict: None,
+                instance: None,
             },
         );
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1233,6 +1234,7 @@ default_deny = true
                 required: false,
                 exports: Default::default(),
                 on_conflict: None,
+                instance: None,
             },
         );
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1452,6 +1454,7 @@ default_deny = true
                 required: false,
                 exports: Default::default(),
                 on_conflict: None,
+                instance: None,
             },
         );
         config

@@ -19,6 +19,19 @@ use crate::microsandbox::workload::Workload;
 /// skipped the slug rule.
 ///
 /// Mutually-exclusive flag groups (replace/instance/new) are validated here.
+/// Whether `up`/`exec` should default to a NEW parallel instance (auto-slug)
+/// for a workload with the given strategy and flags (ADR 0030 §4.1): true
+/// when `--new` was given, OR the strategy is `parallel` AND no explicit
+/// `--instance <id>` / `--replace` overrides. Pure — unit-testable.
+fn parallel_strategy_defaults_new(
+    strategy: crate::config::InstanceStrategy,
+    new: bool,
+    replace: bool,
+    no_instance: bool,
+) -> bool {
+    new || (strategy == crate::config::InstanceStrategy::Parallel && !replace && no_instance)
+}
+
 pub fn build_instance_spec(
     workload_name: &str,
     replace: bool,
@@ -134,7 +147,16 @@ pub async fn dispatch_service<W: Workload>(
             reload_images: _,
             images_ready,
         } => {
-            let new_id: Option<String> = if new {
+            let new_id: Option<String> = if parallel_strategy_defaults_new(
+                workload.instance_strategy(),
+                new,
+                replace,
+                instance.is_none(),
+            ) {
+                // ADR 0030 §4.1: `strategy = "parallel"` defaults up/exec to a
+                // FRESH parallel instance (auto-slug) unless an explicit
+                // `--instance <id>` / `--new` / `--replace` overrides (Q3:
+                // auto-slug recommended).
                 let state_dir = crate::config::resolve_state_dir();
                 Some(crate::microsandbox::port_registry::auto_allocate_slug(
                     &state_dir,
@@ -208,7 +230,16 @@ pub async fn dispatch_agent<W: Workload>(
             // Consumed by the ensure-images pre-flight in main.rs.
             reload_images: _,
         } => {
-            let new_id: Option<String> = if new {
+            let new_id: Option<String> = if parallel_strategy_defaults_new(
+                workload.instance_strategy(),
+                new,
+                replace,
+                instance.is_none(),
+            ) {
+                // ADR 0030 §4.1: `strategy = "parallel"` defaults up/exec to a
+                // FRESH parallel instance (auto-slug) unless an explicit
+                // `--instance <id>` / `--new` / `--replace` overrides (Q3:
+                // auto-slug recommended).
                 let state_dir = crate::config::resolve_state_dir();
                 Some(crate::microsandbox::port_registry::auto_allocate_slug(
                     &state_dir,
@@ -776,6 +807,65 @@ mod tests {
     fn build_instance_spec_stores_no_deps() {
         let spec = build_instance_spec("pi", false, None, None, false, &[], true).unwrap();
         assert!(spec.no_deps);
+    }
+
+    // ---- ADR 0030 Phase 2: parallel strategy defaults to a NEW instance ----
+
+    /// `strategy = "parallel"` + no explicit flags → up/exec defaults to a
+    /// NEW parallel instance (auto-slug).
+    #[test]
+    fn parallel_strategy_allocates_new_instance_by_default() {
+        assert!(parallel_strategy_defaults_new(
+            crate::config::InstanceStrategy::Parallel,
+            false,
+            false,
+            true,
+        ));
+    }
+
+    /// `strategy = "singleton"` + no explicit flags keeps the singleton slot.
+    #[test]
+    fn singleton_strategy_keeps_singleton() {
+        assert!(!parallel_strategy_defaults_new(
+            crate::config::InstanceStrategy::Singleton,
+            false,
+            false,
+            true,
+        ));
+    }
+
+    /// An explicit `--instance <id>` beats the parallel strategy (the
+    /// targeted instance wins).
+    #[test]
+    fn explicit_instance_beats_parallel_strategy() {
+        assert!(!parallel_strategy_defaults_new(
+            crate::config::InstanceStrategy::Parallel,
+            false,
+            false,
+            false, // --instance given
+        ));
+    }
+
+    /// `--replace` beats the parallel strategy (replace the singleton).
+    #[test]
+    fn replace_beats_parallel_strategy() {
+        assert!(!parallel_strategy_defaults_new(
+            crate::config::InstanceStrategy::Parallel,
+            false,
+            true,
+            true,
+        ));
+    }
+
+    /// `--new` always allocates, regardless of strategy.
+    #[test]
+    fn explicit_new_allocates_even_for_singleton_strategy() {
+        assert!(parallel_strategy_defaults_new(
+            crate::config::InstanceStrategy::Singleton,
+            true,
+            false,
+            true,
+        ));
     }
 
     // ---- ADR 0027: verb-first kind-check routing ----

@@ -51,7 +51,9 @@ use anyhow::Result;
 
 use crate::config::ConfigFile;
 use crate::microsandbox::plan::{EgressRule, EgressTarget, Protocol};
-use crate::microsandbox::port_registry::{list_records_for_workload, SandboxInstanceRecord};
+use crate::microsandbox::port_registry::{
+    list_records_for_workload, list_records_for_workload_any_namespace, SandboxInstanceRecord,
+};
 
 /// Guest-visible host alias: guests reach services published on the host via
 /// this gateway alias, NOT via `127.0.0.1` (which is host-only). Injected
@@ -248,6 +250,7 @@ pub fn resolve_depends_on(
     workload_name: &str,
     state_dir: &Path,
     use_overrides: &[(String, String)],
+    namespace: &str,
 ) -> Result<Vec<ResolvedDependency>> {
     let Some(workload) = config.workloads.get(workload_name) else {
         anyhow::bail!("workload '{}' not found in config", workload_name);
@@ -300,38 +303,82 @@ pub fn resolve_depends_on(
             requests.push((env_var.clone(), Some(name.clone())));
         }
 
-        let records = list_records_for_workload(state_dir, dep)?;
-        // Selection (ADR 0026(d)): default = the dependency's SINGLETON slot
-        // record (the one whose `instance` name contains no `@`); a `--use
-        // <dep>@<instance>` override selects the record whose parallel id
-        // matches instead — a PURE selection override with no declared-port
-        // fallback when the chosen instance is not running.
-        let (selected, selector): (Option<&SandboxInstanceRecord>, String) =
-            match use_overrides.iter().find(|(d, _)| d == dep) {
-                Some((_, id)) => {
-                    let Some(record) = records.iter().find(|r| {
-                        crate::microsandbox::slots::instance_id_of(&r.instance) == Some(id.as_str())
-                    }) else {
-                        anyhow::bail!(
+        let records = list_records_for_workload(state_dir, dep, namespace)?;
+        // Selection (ADR 0026(d) + ADR 0030 Phase 2 T1): default = the
+        // dependency's SINGLETON slot record in the DEPENDENT's namespace (the
+        // one whose `instance` name contains no `@`); a `--use <dep>@<instance>`
+        // override selects the record whose parallel id matches instead — a
+        // PURE selection override with no declared-port fallback when the
+        // chosen instance is not running.
+        //
+        // Collision-visibility (ADR 0030 Phase 2): when the dependent's
+        // namespace has NO record for this dep but ANOTHER namespace does, the
+        // two repos declaring the same workload name collide in the merged
+        // config (last layer wins). Make the collision VISIBLE: warn (or refuse
+        // for required deps) naming the namespace that holds the record.
+        let (selected, selector): (Option<&SandboxInstanceRecord>, String) = match use_overrides
+            .iter()
+            .find(|(d, _)| d == dep)
+        {
+            Some((_, id)) => {
+                let Some(record) = records.iter().find(|r| {
+                    crate::microsandbox::slots::instance_id_of(&r.instance) == Some(id.as_str())
+                }) else {
+                    anyhow::bail!(
                         "--use {}@{}: no running instance '{}' of dependency '{}' is registered \
-                             (start it with `workestrate workload up {} --instance {}`)",
+                             in namespace '{}' (start it with `workestrate workload up {} --instance {}`)",
                         dep,
                         id,
                         id,
                         dep,
+                        namespace,
                         dep,
                         id
                     );
-                    };
-                    (Some(record), format!("--use {}@{}", dep, id))
+                };
+                (Some(record), format!("--use {}@{}", dep, id))
+            }
+            None => {
+                let singleton = records
+                    .iter()
+                    .find(|r| crate::microsandbox::slots::instance_id_of(&r.instance).is_none());
+                if singleton.is_none() {
+                    // Collision-visibility: no record in THIS namespace, but
+                    // another namespace holds one for the same workload.
+                    let other = list_records_for_workload_any_namespace(state_dir, dep)?
+                        .into_iter()
+                        .filter(|r| r.namespace != namespace)
+                        .map(|r| r.namespace)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if !other.is_empty() {
+                        let namespaces = other.into_iter().collect::<Vec<_>>().join(", ");
+                        if spec.required {
+                            anyhow::bail!(
+                                    "dependency '{}' of workload '{}' is required but not running in \
+                                     namespace '{}'; a record for it exists in namespace(s) [{}] — \
+                                     the same workload name is declared by multiple config repos \
+                                     (last layer wins in the merged config). Start it in this \
+                                     namespace, or use `--use {}@<instance>` to select a record from \
+                                     another namespace.",
+                                    dep,
+                                    workload_name,
+                                    namespace,
+                                    namespaces,
+                                    dep
+                                );
+                        }
+                        eprintln!(
+                                "warning: depends_on '{}': no record in namespace '{}', but a record \
+                                 exists in namespace(s) [{}] — the same workload name is declared by \
+                                 multiple config repos (last layer wins in the merged config). Falling \
+                                 back to the declared port.",
+                                dep, namespace, namespaces
+                            );
+                    }
                 }
-                None => (
-                    records.iter().find(|r| {
-                        crate::microsandbox::slots::instance_id_of(&r.instance).is_none()
-                    }),
-                    "singleton".to_string(),
-                ),
-            };
+                (singleton, "singleton".to_string())
+            }
+        };
 
         for (env_var, port_name) in requests {
             let resolved_one = match (selected, &port_name) {
@@ -648,6 +695,7 @@ default_deny = true
                 name: None,
             }],
             "2026-07-30T00:00:00Z",
+            "default",
         )
     }
 
@@ -675,6 +723,7 @@ default_deny = true
                 name: Some(name.to_string()),
             }],
             "2026-07-30T00:00:00Z",
+            "default",
         )
     }
 
@@ -706,7 +755,7 @@ default_deny = true
         register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
         let config = depends_config();
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved.len(), 1);
         let r = &resolved[0];
         assert_eq!(r.dep, "litellm");
@@ -732,7 +781,7 @@ default_deny = true
             .unwrap()
             .required = true;
 
-        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[], "default").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("is required but not running; start it with"),
@@ -753,7 +802,7 @@ default_deny = true
         let state_dir = unique_state_dir("disc-optional");
         let config = depends_config();
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved.len(), 1);
         let r = &resolved[0];
         assert_eq!(r.address, "host.microsandbox.internal:4000");
@@ -782,10 +831,11 @@ default_deny = true
                 required: false,
                 exports: Default::default(),
                 on_conflict: None,
+                instance: None,
             },
         );
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved.len(), 2);
         for r in &resolved {
             assert!(
@@ -810,7 +860,7 @@ default_deny = true
         let state_dir = unique_state_dir("disc-env-conflict");
         register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
         let config = depends_config();
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
 
         let declared = vec![EnvVar::literal("LITELLM_URL", "http://custom:1")];
         let (injected, _) = apply_resolution(&resolved, &declared, &[]);
@@ -829,7 +879,7 @@ default_deny = true
         let state_dir = unique_state_dir("disc-egress-dedup");
         register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
         let config = depends_config();
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
 
         let declared_expanded = vec![EgressRule::litellm_proxy()];
         let (_, derived) = apply_resolution(&resolved, &[], &declared_expanded);
@@ -858,7 +908,7 @@ default_deny = true
         register_singleton(&state_dir, "litellm", loopback(2), 4000, 4000)?;
         let config = depends_config();
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
         assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
@@ -880,6 +930,7 @@ default_deny = true
                 required: false,
                 exports: Default::default(),
                 on_conflict: None,
+                instance: None,
             },
         );
         // Give the `litellm` workload an alias `aaa` with its own declared
@@ -888,7 +939,7 @@ default_deny = true
         config.workloads.insert("aaa".to_string(), litellm);
 
         for _ in 0..8 {
-            let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+            let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
             let order: Vec<&str> = resolved.iter().map(|r| r.dep.as_str()).collect();
             assert_eq!(
                 order,
@@ -915,10 +966,11 @@ default_deny = true
                 required: false,
                 exports: Default::default(),
                 on_conflict: None,
+                instance: None,
             },
         );
 
-        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[], "default").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("declares no ports"),
@@ -951,10 +1003,11 @@ default_deny = true
                 required: false,
                 exports: Default::default(),
                 on_conflict: None,
+                instance: None,
             },
         );
         // `noports` declares no ports either → the fallback itself errors.
-        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[], "default").unwrap_err();
         assert!(err.to_string().contains("declares no ports"));
 
         // Now give `noports` a declared port: the port-less RECORD falls
@@ -965,7 +1018,7 @@ default_deny = true
             .unwrap()
             .ports
             .push(PortMapping::new(9100, 9100));
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         let r = resolved
             .iter()
             .find(|r| r.dep == "noports")
@@ -996,12 +1049,13 @@ default_deny = true
                 name: None,
             }],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         let config = depends_config();
 
         // No singleton → optional dep falls back to the DECLARED port (not
         // the parallel record's 14000).
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].host_port, 4000);
         assert_eq!(resolved[0].source, ResolutionSource::DeclaredFallback);
@@ -1022,7 +1076,7 @@ default_deny = true
             &[4000],
         )?;
         let config = depends_config();
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
         assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -1054,6 +1108,7 @@ default_deny = true
                 name: None,
             }],
             "2026-07-30T00:00:00Z",
+            "default",
         )
     }
 
@@ -1120,7 +1175,7 @@ default_deny = true
         let config = depends_config();
 
         // Default: the singleton record wins (port 4000).
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved[0].host_port, 4000);
         assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
         assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
@@ -1129,7 +1184,7 @@ default_deny = true
         // injected — the bind is per-IP, so this ALSO exercises the
         // DEFERRED-PENDING-E1 warning arm (stderr; not asserted here).
         let overrides = vec![("litellm".to_string(), "canary".to_string())];
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &overrides)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &overrides, "default")?;
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].dep, "litellm");
         assert_eq!(resolved[0].host_port, 14000);
@@ -1150,7 +1205,7 @@ default_deny = true
         let config = depends_config();
 
         let overrides = vec![("litellm".to_string(), "ghost".to_string())];
-        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides, "default").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("litellm"), "error must name the dep: {msg}");
         assert!(msg.contains("ghost"), "error must name the instance: {msg}");
@@ -1170,7 +1225,7 @@ default_deny = true
         let state_dir = unique_state_dir("disc-use-undeclared");
         let config = depends_config();
         let overrides = vec![("redis".to_string(), "canary".to_string())];
-        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides, "default").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("redis"), "error must name the dep: {msg}");
         assert!(
@@ -1188,7 +1243,7 @@ default_deny = true
         let mut config = depends_config();
         config.workloads.get_mut("pi").unwrap().depends_on.clear();
         let overrides = vec![("litellm".to_string(), "canary".to_string())];
-        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &overrides, "default").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("declares no depends_on entries"),
@@ -1220,7 +1275,7 @@ default_deny = true
         spec.exports
             .insert("api".to_string(), "LITELLM_API_URL".to_string());
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved.len(), 1);
         let r = &resolved[0];
         assert_eq!(r.dep, "litellm");
@@ -1263,10 +1318,11 @@ default_deny = true
                 },
             ],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         let config = depends_config();
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
         assert_eq!(resolved[0].host_port, 4000);
@@ -1303,10 +1359,11 @@ default_deny = true
                 },
             ],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         let config = depends_config();
 
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].address, "host.microsandbox.internal:14000");
         assert_eq!(resolved[0].host_port, 14000);
@@ -1342,6 +1399,7 @@ default_deny = true
                 },
             ],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         let mut config = named_config();
         let spec = config
@@ -1358,7 +1416,7 @@ default_deny = true
             .insert("api".to_string(), "LITELLM_API_URL".to_string());
 
         for _ in 0..8 {
-            let resolved = resolve_depends_on(&config, "pi", &state_dir, &[])?;
+            let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
             assert_eq!(resolved.len(), 2);
             let env_order: Vec<&str> = resolved.iter().map(|r| r.env_var.as_str()).collect();
             assert_eq!(env_order, vec!["LITELLM_ADMIN_URL", "LITELLM_API_URL"]);
@@ -1401,7 +1459,7 @@ default_deny = true
         spec.exports
             .insert("api".to_string(), "LITELLM_API_URL".to_string());
 
-        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[], "default").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("auto-allocated"),
@@ -1435,7 +1493,7 @@ default_deny = true
             .ports
             .push(PortMapping::new(0, 4000));
 
-        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[], "default").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("auto-allocated"),
@@ -1479,7 +1537,7 @@ default_deny = true
         spec.exports
             .insert("api".to_string(), "LITELLM_API_URL".to_string());
 
-        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[], "default").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("'api'"), "error must name the port: {msg}");
         assert!(
@@ -1513,7 +1571,7 @@ default_deny = true
         spec.exports
             .insert("admin".to_string(), "LITELLM_ADMIN_URL".to_string());
 
-        let err = resolve_depends_on(&config, "pi", &state_dir, &[]).unwrap_err();
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[], "default").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("'admin'"), "error must name the port: {msg}");
         assert!(
@@ -1549,6 +1607,7 @@ default_deny = true
                 name: Some("api".to_string()),
             }],
             "2026-07-30T00:00:00Z",
+            "default",
         )?;
         let mut config = named_config();
         let spec = config
@@ -1563,7 +1622,7 @@ default_deny = true
             .insert("api".to_string(), "LITELLM_API_URL".to_string());
 
         let overrides = vec![("litellm".to_string(), "canary".to_string())];
-        let resolved = resolve_depends_on(&config, "pi", &state_dir, &overrides)?;
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &overrides, "default")?;
         assert_eq!(resolved.len(), 1);
         let r = &resolved[0];
         assert_eq!(r.env_var, "LITELLM_API_URL");
@@ -1571,6 +1630,85 @@ default_deny = true
         assert_eq!(r.host_port, 14000);
         assert_eq!(r.port_name.as_deref(), Some("api"));
         assert_eq!(r.source, ResolutionSource::RunningInstance);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0030 Phase 2: namespace-scoped resolution ----
+
+    /// Two namespaces, same dep name `litellm` with DIFFERENT ports: the
+    /// dependent's namespace selects ITS OWN record (isolation), not the
+    /// other namespace's.
+    #[test]
+    fn resolve_depends_on_filters_by_namespace() -> Result<()> {
+        let state_dir = unique_state_dir("disc-ns-isolation");
+        // A singleton `litellm` registered by repo-a (port 4000). The
+        // registry is keyed by INSTANCE NAME, so two namespaces cannot hold
+        // the same singleton slot — the namespace distinguishes which repo
+        // registered a record, it does NOT partition the key space (ADR 0030
+        // T1 documented limitation; the namespace makes the collision
+        // VISIBLE).
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            loopback(1),
+            &[4000],
+            &[PortMapping {
+                host: 4000,
+                guest: 4000,
+                bind_ip: loopback(1),
+                name: None,
+            }],
+            "2026-07-30T00:00:00Z",
+            "repo-a",
+        )?;
+        let config = depends_config();
+
+        // Dependent in namespace repo-a resolves ITS record (port 4000).
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "repo-a")?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
+
+        // Dependent in namespace repo-b sees NO record in its own namespace —
+        // the collision-visibility path: an optional dep warns (stderr) and
+        // falls back to the declared port (4000, the convention address).
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "repo-b")?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].source, ResolutionSource::DeclaredFallback);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// A legacy record with NO namespace field resolves under "default" (the
+    /// `#[serde(default = "default_namespace")]` back-compat).
+    #[test]
+    fn resolve_depends_on_legacy_record_default_namespace() -> Result<()> {
+        let state_dir = unique_state_dir("disc-ns-legacy");
+        // register_sandbox (the legacy minimal form) writes namespace "default".
+        register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        let config = depends_config();
+
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
+
+        // A DIFFERENT namespace sees no record → optional dep falls back to
+        // the declared port (with the collision-visibility warning).
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "other-repo")?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].source, ResolutionSource::DeclaredFallback);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
