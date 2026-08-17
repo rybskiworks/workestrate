@@ -1,9 +1,10 @@
 # ADR 0030 (DRAFT): Workload instance lifecycle + conflict management + namespacing
 
-**Status:** DRAFT — design accepted; **Phase 0 + Phase 1 IMPLEMENTED**
+**Status:** DRAFT — design accepted; **Phase 0 + Phase 1 + Phase 2 IMPLEMENTED**
 (conflict chains + shared reconcile + status/dir-aware occupancy; the
-per-workload `instance` policy schema; 2026-08-16 addenda below). Phases 2–4
-remain proposal.
+per-workload `instance` policy schema; namespace scoping + DepInstanceMode +
+parallel strategy; 2026-08-16 addenda below). Phases 3–4 remain proposal;
+scoped/fresh dep auto-start is a P2.1 follow-up.
 **Date:** 2026-08-16
 **Addendum:** 2026-08-16 (user design threads — depends_on scoping, parallel deps,
 dynamic ports; refined phased plan; supersedes §6); 2026-08-16b (strategy
@@ -1227,3 +1228,56 @@ subschema) green, golden plans + spec-examples + scaffold green.
 (tool home + personal store clone) — the documented host-side
 `workestrate schemas update` follow-up. Config semantics (selection,
 dynamic-port behavior, parallel strategy) land in Phases 2–3.
+
+---
+
+## Addendum (2026-08-16): Phase 2 IMPLEMENTED — namespace scoping + DepInstanceMode + parallel strategy (core)
+
+**Status update:** Phase 2 (U10 P2 row) is IMPLEMENTED on `migration/tool-model`
+(NO push) — the namespace + depends_on-instance + parallel-strategy CORE.
+One sub-piece (scoped/fresh dep AUTO-START) is a documented P2.1 follow-up.
+
+### P2.1 — What landed (commit refs)
+
+| commit | scope |
+|---|---|
+| `57719aa` | **Namespace scoping (T1) + DepInstanceMode (T2) + parallel strategy (§4.1):** the registry record gains a `namespace` field (serde-default `"default"` for legacy records); `resolve_depends_on` + `plan_dep_starts` filter records by `(namespace, workload)`; the namespace is the DEPENDENT's declaring config repo (provenance → layer → repo_key). `depends_on.<dep>.instance = shared\|scoped\|fresh` parses; the strategy-derived default (dep strategy parallel → fresh, else shared) computes; `shared` keeps today's singleton model. `instance.strategy = "parallel"` defaults the workload's own up/exec to a NEW auto-slugged instance (unless `--instance`/`--new`/`--replace`). Collision-visibility: no record in the dependent's namespace but another namespace holds one → warn (optional) / refuse (required) naming the namespace. |
+| `f4b7de1` | Schema regen: `DependsOnSpec.instance` + the record `namespace` field; template synced. |
+
+### P2.2 — Decisions + the documented limitation
+
+- **Namespace is a RESOLUTION filter, not a slot prefix.** The singleton slot
+  stays `<context>-<workload>`; `ps`/`down`/`workloads` surfaces unchanged.
+  `down --all-instances` is namespace-agnostic (teardown is not a resolution
+  scope).
+- **Documented limitation (the ADR's open question, NOT reopened):** the
+  registry is keyed by INSTANCE NAME, so two repos declaring the same
+  workload name still collide in the merged config (last layer wins) AND
+  cannot hold the same singleton slot in one registry. The namespace field
+  makes the collision VISIBLE (the collision-visibility warn/refuse path).
+  Coexistence of same-name variants uses the parallel-instance mechanism
+  (`litellm@dev`) or distinct names. Namespace-aware config merge is NOT
+  built (out of scope).
+- **P2.1 follow-up — scoped/fresh dep AUTO-START:** the SELECTION side is
+  implemented (the `instance` field parses, the mode computes, `--use
+  <dep>@<id>` selects a parallel record within the namespace, exports resolve
+  from a parallel record). The CREATION side — auto-starting a scoped/fresh
+  dep as a PARALLEL instance through the detached child — is NOT wired: the
+  dependent's instance id is not available at the `auto_start_dependencies`
+  call depth and the creation machinery builds singleton specs only. An
+  EXPLICIT scoped/fresh entry is an honest plan-time error naming the
+  follow-up + the `--use` workaround; a DERIVED fresh (dep strategy parallel,
+  no explicit instance) warns + falls back to shared (non-breaking). The
+  mode-aware DEFAULT exports selection (auto-picking `litellm@prime-1`
+  without `--use`) is likewise P2.1.
+
+### P2.3 — Gates
+
+`cargo fmt --check`, `cargo clippy --all-targets -D warnings`, FULL
+`cargo test` (1029 baseline → **1045 total, 0 failures**, incl. the 17 new
+namespace/mode/strategy tests), `just lint-nix`, schema drift (committed +
+subschema) green, golden plans byte-identical, spec-examples + scaffold
+green. `schema-sync-check` reports only the container-local consumer copies
+stale (tool home + personal store clone) — the documented host-side
+`workestrate schemas update` follow-up. Dynamic-port selection behavior
+(`instance.port`) lands in Phase 3.
