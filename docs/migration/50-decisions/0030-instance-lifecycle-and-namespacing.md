@@ -946,8 +946,34 @@ after preferred" (stepwise) or "any free port" (which is what `auto` does);
 `next` is too terse and equally ambiguous. `increment` is precise:
 stepwise-adjacent increments from the preferred port.
 
-**Bound:** default `+100` (preferred+1 .. preferred+100); optional explicit
-`limit` field; validate `preferred + limit ≤ 65535`.
+**Forms (refined 2026-08-16 — explicit RANGE property):**
+
+```toml
+# bare: default band preferred+1 .. preferred+100 (adjacent)
+on_occupied = "increment"
+# count-bound, relative — the simple parameterized form (kept)
+on_occupied = { increment = { limit = 100 } }
+# explicit absolute band — the recommended parameterized form (user's ask)
+on_occupied = { increment = { range = [5000, 5100] } }
+```
+
+- **Bare `"increment"`** — default band `preferred+1 .. preferred+100`.
+- **`{ increment = { limit = N } }`** — count-bound, relative: candidates
+  `preferred+1 .. preferred+N`. Kept as the simple parameterized form.
+- **`{ increment = { range = [START, END] } }`** — explicit ABSOLUTE band:
+  candidates `START..=END` probed in order. The band MAY start at
+  `preferred+1` (adjacent band) or be FULLY DISJOINT from preferred
+  (dedicated band elsewhere — e.g. try 4000, else scan 5000–5100); both are
+  legal and deliberate.
+
+**Why `range` is the recommended parameterized form (over `limit`):**
+`range` is self-documenting — `[5000, 5100]` states the exact band an
+operator is reserving, with no arithmetic against `preferred`; it decouples
+the band from the preferred port (a disjoint band is expressible directly,
+whereas `limit` can only express adjacency); and `limit` is a DERIVED special
+case of `range` (`limit = N` ⇔ `range = [preferred+1, preferred+N]`). Keeping
+`limit` as the simple relative form is harmless (one derived case), but
+`range` is the form to reach for when the band matters.
 
 **Chain symmetry — YES.** `on_occupied` accepts a scalar OR an ordered list
 from the closed vocabulary `{auto, increment, fail}`, with the SAME rule as
@@ -967,6 +993,9 @@ port = { preferred = 4000, on_occupied = ["increment", "auto"] }  # RECOMMENDED 
 # on_occupied = "fail"        # scalar = ["fail"]: strict (occupied → error)
 # on_occupied = "increment"   # scalar = ["increment"]: stepwise only
 # on_occupied = ["increment", "auto"]  # stepwise, then any-free, then error
+# on_occupied = { increment = { limit = 100 } }          # count-bound, relative
+# on_occupied = { increment = { range = [5000, 5100] } } # explicit absolute band
+# on_occupied = [{ increment = { range = [5000, 5100] } }, "auto"]  # band, then any-free
 ```
 
 **Default `on_occupied`** (when the table form is used without it):
@@ -981,10 +1010,18 @@ port = { preferred = 4000, on_occupied = ["increment", "auto"] }  # RECOMMENDED 
 | occupied | preferred+1 free | — | **preferred+1** |
 | occupied | +1..+limit all occupied | any-free available | **any-free ephemeral** |
 | occupied | +1..+limit all occupied | none (exhausted) | **error listing attempts** |
+| occupied | disjoint band [5000,5100]: 5000 free | — | **5000** (band scanned in order) |
+| occupied | disjoint band exhausted | any-free available | **any-free ephemeral** |
 
 **Validation:** same rules as `on_conflict` (non-empty, no duplicates, no
-unknown, no after-`fail`); `preferred` in 1..=65535; `preferred + limit ≤
-65535`.
+unknown, no after-`fail`); `preferred` in 1..=65535; `limit ≥ 1` and
+`preferred + limit ≤ 65535`; `range`: `START ≤ END`, both in 1..=65535;
+`START == END` is legal (single candidate) and is equivalent to `limit = 1`;
+an empty/degenerate range (`START > END`) is rejected.
+
+**Chain interplay:** a range exhausted (every candidate occupied) advances to
+the next `on_occupied` element (e.g. `"auto"`) or, at chain end, produces the
+attempts-listed error (U2 pattern).
 
 ### U7. Updated litellm test-first sequence (SUPERSEDES T4)
 
@@ -999,15 +1036,21 @@ unknown, no after-`fail`); `preferred` in 1..=65535; `preferred + limit ≤
    a dummy listener on 127.0.0.1:4000) → `workload up litellm` → lands 4001;
    assert the record carries 4001; assert `LITELLM_ADDR` + models.json render
    `:4001`; prime chat works through it.
-4. **Test C — increment skip (4000 AND 4001 occupied):** occupy both → lands
-   4002; assert the record carries 4002; exports render `:4002`.
-5. **Test D — auto fallback (4000..4100 occupied, bound +100 exhausted):**
-   → any-free ephemeral; assert the record carries the effective port;
-   exports render it.
-6. **Smoke update:** replace the six hardcoded `:4000` references with the
+4. **Test C — increment skip + explicit range (4000 AND 4001 occupied):**
+   occupy both → lands 4002; assert the record carries 4002; exports render
+   `:4002`. Then pin an explicit DISJOINT band —
+   `on_occupied = { increment = { range = [5000, 5002] } }` — with 4000
+   occupied → lands 5000 (band scanned in order); occupy 5000 → lands 5001.
+5. **Test C2 — validation-failure cases:** `range = [0, 100]` and
+   `range = [65536, 70000]` rejected (outside 1..=65535); `range = [5000,
+   4999]` rejected (`START > END`); `limit = 0` rejected.
+6. **Test D — auto fallback (4000..4100 occupied, default +100 band
+   exhausted):** → any-free ephemeral; assert the record carries the
+   effective port; exports render it.
+7. **Smoke update:** replace the six hardcoded `:4000` references with the
    effective port read from `workestrate ps --json` (or the registry record);
    the `models-json` assert becomes value-driven on the effective port.
-7. **Regression:** re-run the full prime-smoke on ALL paths (A–D);
+8. **Regression:** re-run the full prime-smoke on ALL paths (A–D + C2);
    `just verify` green.
 
 ### U8. Acceptance criteria addition
@@ -1017,7 +1060,8 @@ Add to §5:
 > 11. Conflict chains are attempted IN ORDER; a chain-exhausted failure
 >     reports the attempt sequence (e.g. `reuse (probe failed), start (not
 >     applicable)`). Port `on_occupied` chains likewise (preferred →
->     increment → auto → error).
+>     increment → auto → error). Increment RANGES are respected (adjacent or
+>     disjoint band, scanned in order); a range exhausted advances the chain.
 
 ### U9. Open questions update (SUPERSEDES T5)
 
@@ -1048,9 +1092,9 @@ Add to §5:
 | Phase | Updated scope | Gates |
 |---|---|---|
 | **0 — Immediate small fixes** | 0.1 status-aware + dir-aware occupancy; 0.2 extract the shared reconcile step from d452575 + wire into named `up`/`exec`, `down`, bare `workload up`; 0.3 default conflict CHAIN `["reuse","start","replace"]` for named verbs (code-level default; d452575 scalar `on_conflict` still accepted). | AC 1–5 host (KVM); `just verify`; no schema change. |
-| **1 — Instance policy schema** | `[workloads.<name>.instance]` (`strategy`, `on_conflict` CHAIN scalar-or-list, `port` union, optional `label`); chain validation (non-empty, no dup, no unknown, no after-`fail`, scalar normalization); merge (whole-field last-layer-wins, scalar resets list); extended `decide_dep_disposition` (iterate chain, `msb_status` fact) + the U4 test matrix; `generate-schema` + drift guard. | schema parse/deny/round-trip incl. chain cases; merge tests; drift guard; `plan` renders the chain disposition. |
+| **1 — Instance policy schema** | `[workloads.<name>.instance]` (`strategy`, `on_conflict` CHAIN scalar-or-list, `port` union, optional `label`); chain validation (non-empty, no dup, no unknown, no after-`fail`, scalar normalization); `port` union shape: scalar `"auto"`/`"fail"`/`"increment"` OR parameterized `{ increment = { limit = N } }` / `{ increment = { range = [START, END] } }` (untagged serde union; range validation START ≤ END, 1..=65535); merge (whole-field last-layer-wins, scalar resets list); extended `decide_dep_disposition` (iterate chain, `msb_status` fact) + the U4 test matrix; `generate-schema` + drift guard. | schema parse/deny/round-trip incl. chain + range cases; merge tests; drift guard; `plan` renders the chain disposition. |
 | **2 — depends_on scoping + parallel semantics** | unchanged (T1 namespace scoping; T2 `depends_on.<dep>.instance = shared\|scoped\|fresh`); the chain composes with selection. | unchanged. |
-| **3 — Dynamic port policy + litellm migration** | `instance.port` union gains `on_occupied` CHAIN (`{auto, increment, fail}`, scalar-or-list) + `increment` bound (`limit`, default +100); `apply_auto_ports` extension (preferred → increment → auto); the U7 test sequence (Tests A–D); smoke update. | U7 steps 2–7 all pass; AC 7 + 11; `just verify`. |
+| **3 — Dynamic port policy + litellm migration** | `instance.port` union gains `on_occupied` CHAIN (`{auto, increment, fail}`, scalar-or-list) + parameterized `increment` (`limit` count-bound, default +100; `range` absolute band); `apply_auto_ports` extension (preferred → increment [limit|range] → auto, each candidate probed before bind); the U7 test sequence (Tests A–D + range-pinned Test C + C2 validation-failure cases); smoke update. | U7 steps 2–8 all pass; AC 7 + 11; `just verify`. |
 | **4 — Observability surface** | unchanged. | unchanged. |
 
 **Dependencies / seams:** unchanged from T6 — nothing hard-blocks on the
