@@ -1130,6 +1130,7 @@ mutations after the v2 move.
 | `05fd648` | **Conflict chains** (U1–U4): `DepConflict` (config/types.rs) becomes a chain type — `Vec<ConflictStep>` over `{reuse, start, replace, fail}` with scalar deserialization to a singleton (back-compat: d452575's `"reuse"` = `["reuse"]`); validation (non-empty, no dup, no after-`fail`, unknown rejected); default chain `["reuse","start","replace"]`. `decide_dep_disposition` (deps.rs) iterates the chain via the shared `decide_chain`; `DepDisposition::StartExisting` added; the executor starts a stopped/crashed dep sandbox via the detached child and ADVANCES the chain past a failed `start`. Merge: whole-value last-layer-wins (a higher-layer scalar RESETS a lower-layer list). |
 | `bf9f9d4` | **Status+dir-aware occupancy + shared reconcile on the NAMED path** (U2, P0.1/P0.2): new `reconcile` module (facts from all three stores + `decide_chain`); `build_sandbox` routes through the default chain — Reuse (healthy/booting → no-op success), StartExisting (`msb handle.start()` on Stopped/Crashed + record registration + service re-run), Replace (zombie/stale/lingering-dir → idempotent teardown + fresh create), Fail (canonical refuse), chain-exhaustion error listing attempts. Detached `up` short-circuits Reuse/Fail in the PARENT (FS-8 grace). `--replace` flag behavior unchanged. |
 | `d9df203` | **Schema regen**: `on_conflict` renders scalar-or-list; `ConflictStep` gains `start`. In-repo artifacts regenerated + template synced. |
+| `c440acb` | **Fix (review)**: the chain's `replace` teardown now also removes the lingering sandbox DIRECTORY when the msb DB row is gone — without it the fresh create hit the msb create gate's opaque `SandboxAlreadyExists` (the ADR's "msb gone + dir exists" row). |
 
 **Behavior matrix (U2) verified by unit tests for BOTH paths** (the dep path
 and the named path share `reconcile::decide_chain`): running+healthy →
@@ -1168,7 +1169,7 @@ record → fail (fail-closed). Chain exhaustion → error listing attempts
 ### P0.3 — Gates
 
 `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, FULL
-`cargo test` (957 baseline → 992 total, 0 failures, incl. the U4 14-case
+`cargo test` (957 baseline → 993 total, 0 failures, incl. the U4 14-case
 decision suite + the reconcile behavior-matrix tests), `just lint-nix`,
 schema drift guards (committed + subschema) green. `schema-sync-check`
 reports ONLY the container-local consumer copies stale (tool home + personal
