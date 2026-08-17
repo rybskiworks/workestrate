@@ -60,6 +60,20 @@
         }
       ]
     },
+    "instance": {
+      "description": "Per-workload instance policy (`[workloads.<name>.instance]`; ADR 0030 §4.1). Absent = current behavior; Phase 1 parses + validates, the semantics land in Phases 2–3.",
+      "default": {
+        "label": null,
+        "on_conflict": null,
+        "port": null,
+        "strategy": "singleton"
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/InstancePolicy"
+        }
+      ]
+    },
     "kind": {
       "default": "",
       "type": "string"
@@ -527,6 +541,43 @@
       },
       "additionalProperties": false
     },
+    "IncrementSpec": {
+      "description": "The increment band: either `{ limit = N }` (count-bound, relative: preferred+1 .. preferred+N) or `{ range = [START, END] }` (absolute band, scanned in order). Exactly ONE of the two must be present (validated in config/validation.rs).",
+      "type": "object",
+      "properties": {
+        "limit": {
+          "description": "Count-bound relative form: candidates `preferred+1 .. preferred+N`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "range": {
+          "description": "Absolute band form: candidates `START..=END`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": [
+            {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          ],
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
     "IngressRule": {
       "type": "object",
       "required": [
@@ -547,6 +598,80 @@
           "$ref": "#/definitions/Scope"
         }
       }
+    },
+    "InstancePolicy": {
+      "description": "`[workloads.<name>.instance]` — the per-workload instance policy (ADR 0030 §4.1): the instance model the workload defaults to, the conflict chain when the target slot is occupied, the port strategy, and an optional display label. Absent = current behavior. NOTE: named `InstancePolicy` (not \"InstanceSpec\") to avoid colliding with the runtime `InstanceSpec`.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Optional display/version identity label (ADR 0030 §4.5 / Q4 lighter option). Free-form string.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_conflict": {
+          "description": "Conflict chain when the target slot is occupied (scalar-or-list over reuse|start|replace|fail; `None` → the built-in default [\"reuse\",\"start\",\"replace\"] at decision time; ADR 0030 U11 precedence: CLI flag > this declared chain > built-in default).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DepConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "port": {
+          "description": "Port strategy: strict integer | \"auto\" | { preferred, on_occupied } (ADR 0030 addendum 2 U6). Selection behavior is Phase 3; Phase 1 parses + validates.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstancePort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strategy": {
+          "description": "Instance model the workload defaults to (default \"singleton\" — current behavior). `parallel`/`replace`/`reuse` SEMANTICS land with Phase 2 (selection/disposition wiring); Phase 1 parses + validates the closed vocabulary.",
+          "default": "singleton",
+          "allOf": [
+            {
+              "$ref": "#/definitions/InstanceStrategy"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "InstancePort": {
+      "description": "Schemars-boundary-only helper for the `instance.port` field shape (ADR 0030 addendum 2 U6): strict integer | \"auto\" | { preferred, on_occupied }. The `auto` form is a newtype over a string enum so it renders as the string `\"auto\"` (a unit variant in an untagged enum renders as `null`). Never constructed/deserialized.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        {
+          "$ref": "#/definitions/PortAuto"
+        },
+        {
+          "$ref": "#/definitions/PreferredPort"
+        }
+      ]
+    },
+    "InstanceStrategy": {
+      "description": "The instance model a workload defaults to (ADR 0030 §4.1 `strategy`).",
+      "type": "string",
+      "enum": [
+        "singleton",
+        "parallel",
+        "replace",
+        "reuse"
+      ]
     },
     "LocalBuildConfig": {
       "description": "Build the workload from a local source checkout instead of pulling an image (`workloads.<name>.local_build`). `recipe` selects the build strategy, `source` the checkout location; the optional fields drive incremental-build gating and fallback behaviour.",
@@ -716,6 +841,19 @@
       },
       "additionalProperties": false
     },
+    "ParameterizedIncrement": {
+      "description": "The parameterized `increment` element: `on_occupied = { increment = ... }`.",
+      "type": "object",
+      "required": [
+        "increment"
+      ],
+      "properties": {
+        "increment": {
+          "$ref": "#/definitions/IncrementSpec"
+        }
+      },
+      "additionalProperties": false
+    },
     "PolicyConfig": {
       "description": "A policy namespace. Keeping the `mounts` table nested makes the config surface match `[policy.mounts]` while leaving policy fragments outside the ordinary merge algebra.",
       "type": "object",
@@ -761,6 +899,13 @@
         }
       ]
     },
+    "PortAuto": {
+      "description": "The `\"auto\"` string form of `instance.port` (schema-rendering only).",
+      "type": "string",
+      "enum": [
+        "auto"
+      ]
+    },
     "PortMapping": {
       "type": "object",
       "required": [
@@ -793,6 +938,78 @@
           ]
         }
       }
+    },
+    "PortOccupiedBare": {
+      "description": "Bare `on_occupied` elements (ADR 0030 addendum 2 U6).",
+      "type": "string",
+      "enum": [
+        "auto",
+        "increment",
+        "fail"
+      ]
+    },
+    "PortOccupiedChain": {
+      "description": "Schemars-boundary-only helper for the `on_occupied` field shape (ADR 0030 addendum 2 U6): scalar or ordered list. Never constructed/deserialized.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PortOccupiedStep"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortOccupiedStep"
+          }
+        }
+      ]
+    },
+    "PortOccupiedStep": {
+      "description": "One step in a port `on_occupied` chain (ADR 0030 addendum 2 U6): a bare string auto|increment|fail, or a parameterized increment table. Manual Deserialize (the untagged derive swallows an unknown element's \"unknown variant\" error into a generic \"did not match any variant\" message).",
+      "anyOf": [
+        {
+          "description": "`\"auto\"` / `\"increment\"` / `\"fail\"` (bare).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortOccupiedBare"
+            }
+          ]
+        },
+        {
+          "description": "`{ increment = { limit = N } }` or `{ increment = { range = [S, E] } }`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ParameterizedIncrement"
+            }
+          ]
+        }
+      ]
+    },
+    "PreferredPort": {
+      "description": "The preferred-port form of `instance.port` (ADR 0030 addendum 2 U6).",
+      "type": "object",
+      "required": [
+        "preferred"
+      ],
+      "properties": {
+        "on_occupied": {
+          "description": "What to do when `preferred` is occupied: scalar-or-list chain over auto|increment|fail. `None` → the default chain [\"increment\", \"auto\"] at decision time (Phase 3).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PortOccupiedChain"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preferred": {
+          "description": "The port to try first.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "Protocol": {
       "description": "Network protocol for ingress/egress rules.",
