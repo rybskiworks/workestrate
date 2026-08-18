@@ -411,6 +411,10 @@ pub fn run_migrate_home(
                 }
                 let url_path = PathBuf::from(&entry.url);
                 let old_base = sources.repos_root.join(name);
+                // This site REWRITES urls from the old layout to the new one;
+                // it does not resolve a checkout for reading, so
+                // `local_entry_checkout_dir` (home-relative resolution) does
+                // not apply here.
                 // Prefer canonical comparison when both paths still resolve,
                 // else fall back to lexical (component-wise) matching. In a
                 // real run the old repo dir has already been moved, so both

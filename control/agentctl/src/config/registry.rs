@@ -126,6 +126,29 @@ pub fn entry_is_local_path(entry: &ConfigRepoEntry) -> bool {
     !looks_like_git_url(&entry.url) && entry.r#ref.is_none() && entry.rev.is_none()
 }
 
+/// Resolve the checkout directory of a LOCAL-PATH registry entry.
+///
+/// Returns `None` for git-URL entries (those resolve to the managed store
+/// clone via [`crate::config::paths::config_repo_dir`]). For local-path
+/// entries: tilde-expand the url, then — if the result is RELATIVE —
+/// resolve it against the tool home (`resolve_home_with_kind().0`).
+///
+/// Rationale: a shared home may be mounted at different roots (container
+/// `/home/node` vs host `/home/rybski`). An absolute url breaks on the
+/// other side; a relative url resolves against each side's own mount, so
+/// one registry entry works in both worlds permanently.
+pub fn local_entry_checkout_dir(entry: &ConfigRepoEntry) -> Option<std::path::PathBuf> {
+    if !entry_is_local_path(entry) {
+        return None;
+    }
+    let path = crate::config::paths::expand_tilde(&entry.url);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(crate::config::paths::resolve_home_with_kind().0.join(path))
+    }
+}
+
 /// Classifier: whether `url` names a GIT remote (http(s)/ssh/git protocol or
 /// a `.git`-suffixed path) as opposed to a plain local filesystem path.
 /// Extracted from [`entry_is_local_path`] (ADR 0025): `home clone`
@@ -732,6 +755,46 @@ pub(crate) mod tests {
         assert!(!tmp.exists(), "tmp file must not survive the rename");
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
+    }
+
+    // ---- local_entry_checkout_dir (shared-home duality) ----
+
+    #[test]
+    fn local_entry_checkout_dir_resolves_relative_against_home() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("local-entry-rel");
+        let e = entry("config-repos/personal", None, None);
+        assert_eq!(
+            local_entry_checkout_dir(&e),
+            Some(home.join("config-repos/personal"))
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn local_entry_checkout_dir_passes_absolute_and_tilde_through() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        // Absolute entries are returned unchanged.
+        let abs = entry("/home/user/my-config", None, None);
+        assert_eq!(
+            local_entry_checkout_dir(&abs),
+            Some(std::path::PathBuf::from("/home/user/my-config"))
+        );
+        // Tilde entries are expanded (against HOME) and unchanged beyond that.
+        let home_dir = std::env::var("HOME").expect("HOME set in test env");
+        let tilde = entry("~/my-config", None, None);
+        assert_eq!(
+            local_entry_checkout_dir(&tilde),
+            Some(std::path::PathBuf::from(home_dir).join("my-config"))
+        );
+    }
+
+    #[test]
+    fn local_entry_checkout_dir_returns_none_for_git_urls() {
+        let e = entry("https://example.invalid/repo.git", Some("main"), None);
+        assert_eq!(local_entry_checkout_dir(&e), None);
     }
 
     #[test]

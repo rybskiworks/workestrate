@@ -221,9 +221,10 @@ fn push_config_repo_target(
     targets: &mut Vec<SchemaTarget>,
     notes: &mut Vec<String>,
 ) {
-    let dir = if config::entry_is_local_path(entry) {
-        // Local-path entries (registered via `config new`): url IS the dir.
-        PathBuf::from(&entry.url)
+    let dir = if let Some(dir) = config::local_entry_checkout_dir(entry) {
+        // Local-path entries (registered via `config new`): url IS the dir,
+        // resolved home-relative when relative (shared-home duality).
+        dir
     } else {
         // Git-URL entries: the store clone path.
         config::config_repo_dir(name)

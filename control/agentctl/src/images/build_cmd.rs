@@ -278,8 +278,8 @@ fn targets_for_repo(
     entry: &ConfigRepoEntry,
     registered: &[(String, PathBuf)],
 ) -> Result<(Vec<BuildTarget>, Vec<SelectSkip>)> {
-    let checkout = if crate::config::entry_is_local_path(entry) {
-        crate::config::expand_tilde(&entry.url)
+    let checkout = if let Some(dir) = crate::config::local_entry_checkout_dir(entry) {
+        dir
     } else {
         crate::config::config_repo_dir(name)
     };

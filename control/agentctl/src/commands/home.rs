@@ -451,6 +451,9 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
                 // The registered url points into the src home's tree (e.g.
                 // <src>/config-repos/<name>); copy the working copy including
                 // its .git, then wire origin to the src-side path.
+                // NOTE: relative urls resolve against the SRC home here, not
+                // the current tool home — `local_entry_checkout_dir`
+                // (home-relative) does NOT apply to a cross-home clone.
                 let url_path = config::expand_tilde(&entry.url);
                 let url_path = if url_path.is_absolute() {
                     url_path

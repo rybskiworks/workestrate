@@ -105,9 +105,10 @@ pub fn registered_repo_checkouts() -> Vec<(String, PathBuf)> {
         .configs
         .iter()
         .map(|(name, entry)| {
-            let checkout = if crate::config::entry_is_local_path(entry) {
-                // Local-path repo (`config new`): the url IS the checkout.
-                crate::config::expand_tilde(&entry.url)
+            let checkout = if let Some(dir) = crate::config::local_entry_checkout_dir(entry) {
+                // Local-path repo (`config new`): the url IS the checkout,
+                // resolved home-relative when relative (shared-home duality).
+                dir
             } else {
                 // Managed clone (`config add <url>`): the store checkout, the
                 // same resolution config_cmd/git.rs use.
