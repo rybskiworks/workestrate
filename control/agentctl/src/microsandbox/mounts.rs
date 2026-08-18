@@ -172,6 +172,8 @@ pub(crate) fn apply_plan_mounts(
             // per-mount policy file (written by the runtime from the
             // hierarchical [policy.mounts] scopes), hand it to the SDK so the
             // passthrough mount enforces hide/protect/writes.deny in-guest.
+            // `policy_file` is the loader-RELATIVE token; the fork loader
+            // resolves it beneath the MSB_HOME-anchored approved root.
             let v = match &m.policy_file {
                 Some(pf) => v.mount_policy(pf),
                 None => v,

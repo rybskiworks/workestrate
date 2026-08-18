@@ -581,13 +581,14 @@ pub(crate) async fn build_sandbox<W: Workload>(
     for m in &mut plan.mounts {
         if let Some(program) = workload.mount_policy_for(&m.guest) {
             let slug = crate::microsandbox::policy_file::mount_slug(&m.guest);
-            let path = crate::microsandbox::policy_file::write_policy_file(
-                &state_dir,
+            let (_abs, rel) = crate::microsandbox::policy_file::write_policy_file(
                 &spec.instance,
                 &slug,
                 program,
             )?;
-            m.policy_file = Some(path);
+            // The plan carries the loader-RELATIVE token; the fork loader
+            // resolves it beneath the MSB_HOME-anchored approved root.
+            m.policy_file = Some(rel);
         }
     }
 

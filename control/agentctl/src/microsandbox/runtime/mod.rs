@@ -243,7 +243,7 @@ pub(crate) async fn teardown_for_replace(state_dir: &Path, instance: &str) -> Re
         }
     }
     let _ = super::port_registry::unregister_sandbox(state_dir, instance);
-    let _ = super::policy_file::remove_policy_dir(state_dir, instance);
+    let _ = super::policy_file::remove_policy_dir(instance);
     // Best-effort removal of the lingering sandbox dir (create-gate cleanup).
     // `remove_dir_all` on a non-existent dir returns Err(NotFound), swallowed
     // by the `let _ =`.
@@ -312,12 +312,12 @@ async fn down_one(state_dir: &Path, instance: &str) -> Result<DownOutcome> {
         Ok(handle) => {
             stop_and_remove(handle).await?;
             let _ = super::port_registry::unregister_sandbox(state_dir, instance);
-            let _ = super::policy_file::remove_policy_dir(state_dir, instance);
+            let _ = super::policy_file::remove_policy_dir(instance);
             Ok(DownOutcome::Stopped)
         }
         Err(MicrosandboxError::SandboxNotFound(_)) => {
             let _ = super::port_registry::unregister_sandbox(state_dir, instance);
-            let _ = super::policy_file::remove_policy_dir(state_dir, instance);
+            let _ = super::policy_file::remove_policy_dir(instance);
             Ok(DownOutcome::NotFound)
         }
         Err(e) => Err(e.into()),
