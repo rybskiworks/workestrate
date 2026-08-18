@@ -35,7 +35,17 @@
 #       npm_deps_hash  = "sha256-...";  # npm-build FOD hash
 #       assets         = [ { from = "..."; to = "..."; } ];  # runtime asset mirror
 #       dont_npm_build = true; build_phase = "..."; install_phase = "...";  # overrides
+#       strip_src_references = false;  # bun-compile stripSrcReferences (default
+#         true): strip src-tree store refs from the compiled binary; set false
+#         when externalized native addons bake npm-build store paths into it
 #     }; }; };
+#
+# `extra_contents` attaches one level up, on `image` (not `image.binary`) —
+# the nix-layered extraContents arg (default []): a list of derivations
+# appended to the image contents. Post-parse only: the TOML `contents`
+# vocabulary is the primary path; use extra_contents for derivations that
+# aren't vocabulary entries (e.g. an npm-build tree consumed by an
+# externalized native addon).
 #
 # ============================================================================
 # HOST-GATE — FOD hashes
