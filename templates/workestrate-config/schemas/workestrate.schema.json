@@ -632,7 +632,7 @@
       ]
     },
     "MountPlan": {
-      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized).",
+      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `mask`/`unmask`/`protect`/`writes_deny` are parse-time mount-policy sugar in the `[policy.mounts]` entry shapes, normalized into the row's `policy` fragment (never serialized).",
       "type": "object",
       "required": [
         "guest",
@@ -644,6 +644,14 @@
         },
         "host": {
           "type": "string"
+        },
+        "mask": {
+          "description": "Mount-policy sugar: `mask` entries directly on the mount row, in the same shapes `[policy.mounts].mask` accepts (compact string or `{ pattern = \"...\", overridable = ... }`). Parse-time-only: normalized INTO `policy` by `TryFrom<MountPlanWire>`, never serialized.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
         },
         "mode": {
           "description": "Mount access mode: \"ro\" (read-only) or \"rw\" (read-write, the default).",
@@ -671,10 +679,34 @@
             "null"
           ]
         },
+        "protect": {
+          "description": "Mount-policy sugar: `protect` entries directly on the mount row (same shapes as `mask`). Parse-time-only, normalized into `policy.protect`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
         "read_only": {
           "description": "DEPRECATED alias for `mode` (`true` ≡ \"ro\", `false` ≡ \"rw\"); accepted at parse time with a deprecation warning, never serialized.",
           "deprecated": true,
           "type": "boolean"
+        },
+        "unmask": {
+          "description": "Mount-policy sugar: `unmask` entries directly on the mount row (same shapes as `mask`). Parse-time-only, normalized into `policy.unmask`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "writes_deny": {
+          "description": "Mount-policy sugar: write-deny entries directly on the mount row (same shapes as `mask`); sugar for `policy.writes.deny` (the mount-entry scope supports the full `writes` fragment). Parse-time only, normalized into `policy.writes.deny`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
         }
       }
     },

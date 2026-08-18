@@ -1864,6 +1864,181 @@ default_deny = true
         assert_eq!(reparsed, mount);
     }
 
+    // ---- Mount-policy sugar (mask/unmask/protect/writes_deny on [[mounts]]) ----
+
+    /// Parse a one-workload config and return the normalized `policy`
+    /// fragment of its first mount (sugar + policy table combined).
+    fn parsed_mount_policy(toml: &str) -> crate::mount_policy::MountsFragment {
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        config.workloads["pi"].mounts[0]
+            .policy
+            .clone()
+            .expect("sugar/policy table must normalize into Some(policy)")
+    }
+
+    /// Sugar-only form: mask/unmask/protect/writes_deny directly on the
+    /// mount row normalize into the row's `policy` fragment; bare strings
+    /// are overridable (the compact-form default).
+    #[test]
+    fn mount_policy_sugar_only_parse_normalizes_into_policy() {
+        let fragment = parsed_mount_policy(&mount_mode_config(
+            "mask = [\".env\", { pattern = \".git/\", overridable = false }]\n\
+             unmask = [\".env.example\"]\n\
+             protect = [\".workestrate/\"]\n\
+             writes_deny = [\"*.key\"]",
+        ));
+        assert_eq!(fragment.mask.len(), 2);
+        assert_eq!(fragment.mask[0].value, ".env");
+        assert!(fragment.mask[0].overridable, "bare string = overridable");
+        assert_eq!(fragment.mask[1].value, ".git/");
+        assert!(!fragment.mask[1].overridable);
+        assert_eq!(fragment.unmask.len(), 1);
+        assert_eq!(fragment.unmask[0].value, ".env.example");
+        assert_eq!(fragment.protect.len(), 1);
+        assert_eq!(fragment.protect[0].value, ".workestrate/");
+        let writes = fragment
+            .writes
+            .expect("writes_deny sugar must build the writes fragment");
+        assert!(writes.allow.is_empty());
+        assert_eq!(writes.deny.len(), 1);
+        assert_eq!(writes.deny[0].value, "*.key");
+        assert!(writes.deny[0].overridable);
+    }
+
+    /// Policy-table-only form: no sugar → the fragment parses exactly as
+    /// before (byte-compat posture: sugar absent = nothing changes).
+    #[test]
+    fn mount_policy_table_only_parse_unchanged() {
+        let fragment = parsed_mount_policy(&mount_mode_config(
+            "policy.mask = [\".env\"]\npolicy.protect = [{ pattern = \".secret\", overridable = false }]",
+        ));
+        assert_eq!(fragment.mask.len(), 1);
+        assert_eq!(fragment.mask[0].value, ".env");
+        assert_eq!(fragment.protect.len(), 1);
+        assert!(!fragment.protect[0].overridable);
+        assert!(fragment.unmask.is_empty());
+        assert!(fragment.writes.is_none());
+    }
+
+    /// A mount with NEITHER sugar nor a policy table keeps `policy: None`.
+    #[test]
+    fn mount_without_policy_or_sugar_keeps_policy_none() {
+        let config: ConfigFile = toml::from_str(&mount_mode_config("")).unwrap();
+        assert!(config.workloads["pi"].mounts[0].policy.is_none());
+    }
+
+    /// Mixed form: sugar concatenates with an explicitly-declared `policy`
+    /// table on the same mount — both forms land in the normalized fragment
+    /// (policy-table entries first, sugar appended; per-scope compile groups
+    /// mask-before-unmask, so the order is semantics-free).
+    #[test]
+    fn mount_policy_sugar_concatenates_with_policy_table() {
+        let fragment = parsed_mount_policy(&mount_mode_config(
+            "policy.mask = [\"table-mask\"]\n\
+             policy.writes.deny = [\"table-deny\"]\n\
+             mask = [\"sugar-mask\"]\n\
+             writes_deny = [\"sugar-deny\"]",
+        ));
+        let masks: Vec<&str> = fragment.mask.iter().map(|e| e.value.as_str()).collect();
+        assert_eq!(masks, ["table-mask", "sugar-mask"]);
+        let denies: Vec<&str> = fragment
+            .writes
+            .as_ref()
+            .expect("writes fragment")
+            .deny
+            .iter()
+            .map(|e| e.value.as_str())
+            .collect();
+        assert_eq!(denies, ["table-deny", "sugar-deny"]);
+    }
+
+    /// The terminal flag rides the sugar's expanded form
+    /// (`{ pattern, overridable = false }`), same as the policy table.
+    #[test]
+    fn mount_policy_sugar_terminal_flag_via_expanded_form() {
+        let fragment = parsed_mount_policy(&mount_mode_config(
+            "mask = [{ pattern = \".env\", overridable = false }]",
+        ));
+        assert!(
+            !fragment.mask[0].overridable,
+            "expanded-form overridable = false must land as a terminal value"
+        );
+    }
+
+    /// Unknown fields inside a sugar entry's inline table are rejected
+    /// verbatim (the `deny_unknown_fields` posture of the policy-table form
+    /// is preserved).
+    #[test]
+    fn mount_policy_sugar_unknown_field_rejected() {
+        let err = toml::from_str::<ConfigFile>(&mount_mode_config(
+            "mask = [{ pattern = \".env\", bogus = 1 }]",
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("unknown field") && err.contains("bogus"),
+            "unknown-field error must surface verbatim: {err}"
+        );
+    }
+
+    /// Compile the normalized mount-entry policy of a parsed mount row,
+    /// matching how the loader collects MountEntry scopes.
+    fn compile_mount_entry_policy(
+        toml: &str,
+    ) -> Result<crate::mount_policy::MountPolicyProgram, crate::mount_policy::CompileError> {
+        let fragment = parsed_mount_policy(toml);
+        let scope = crate::mount_policy::PolicyScope::new(
+            crate::mount_policy::ScopeKind::MountEntry,
+            "test-layer",
+            std::path::PathBuf::from("test/workestrate.toml"),
+            fragment,
+        )
+        .for_mount("/data");
+        crate::mount_policy::compile(vec![scope])
+    }
+
+    /// Invalid patterns are rejected with the offending value named, at the
+    /// same point the policy-table form validates (compile time — fragments
+    /// hold raw strings so the compiler can name the declaring origin).
+    #[test]
+    fn mount_policy_sugar_invalid_pattern_rejected_at_compile() {
+        let err = compile_mount_entry_policy(&mount_mode_config("mask = [\"/etc/passwd\"]"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("/etc/passwd") && err.contains("absolute"),
+            "pattern rejection must name the value and reason: {err}"
+        );
+        assert!(
+            err.contains("test-layer"),
+            "pattern rejection must name the declaring origin: {err}"
+        );
+    }
+
+    /// Trust rules are unchanged for sugar: a terminal unmask or protect
+    /// from the (non-operator) mount-entry scope is rejected at compile.
+    #[test]
+    fn mount_policy_sugar_terminal_unmask_and_protect_rejected_for_non_operator() {
+        let err = compile_mount_entry_policy(&mount_mode_config(
+            "unmask = [{ pattern = \".env\", overridable = false }]",
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("terminal unmask") && err.contains(".env"),
+            "terminal unmask rejection must name the pattern: {err}"
+        );
+        let err = compile_mount_entry_policy(&mount_mode_config(
+            "protect = [{ pattern = \".secret\", overridable = false }]",
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("terminal protect") && err.contains(".secret"),
+            "terminal protect rejection must name the pattern: {err}"
+        );
+    }
+
     // ---- ADR 0030 Phase 1: instance policy port bounds ----
 
     /// A strict port of 0 is rejected (ports are 1..=65535).

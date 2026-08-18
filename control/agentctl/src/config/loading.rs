@@ -2268,6 +2268,56 @@ read_only = true
         Ok(())
     }
 
+    /// Mount-policy sugar normalizes BEFORE merge: a layer carrying sugar
+    /// merges as the canonical `policy` fragment, and the mounts array
+    /// still merges whole-array last-layer-wins (mode-work precedent).
+    #[test]
+    fn mounts_merge_last_layer_wins_with_sugar_normalized() -> Result<()> {
+        let lower = crate::merge::Layer::from_string(
+            "lower",
+            r#"
+schema_version = 1
+[workloads.pi]
+[[workloads.pi.mounts]]
+host = "old"
+guest = "/old"
+mask = ["lower-mask"]
+"#,
+        )?;
+        let higher = crate::merge::Layer::from_string(
+            "higher",
+            r#"
+schema_version = 1
+[workloads.pi]
+[[workloads.pi.mounts]]
+host = "new"
+guest = "/new"
+policy.mask = ["table-mask"]
+mask = ["sugar-mask"]
+writes_deny = ["sugar-deny"]
+"#,
+        )?;
+        let (merged, _) = crate::merge::merge_layers(&[lower, higher])?;
+        let mounts = &merged.workloads["pi"].mounts;
+        assert_eq!(
+            mounts.len(),
+            1,
+            "the higher layer's mounts array wins wholesale: {mounts:?}"
+        );
+        let policy = mounts[0]
+            .policy
+            .as_ref()
+            .expect("sugar must normalize into Some(policy) before merge");
+        let masks: Vec<&str> = policy.mask.iter().map(|e| e.value.as_str()).collect();
+        assert_eq!(masks, ["table-mask", "sugar-mask"]);
+        let writes = policy.writes.as_ref().expect("writes fragment");
+        assert_eq!(writes.deny.len(), 1);
+        assert_eq!(writes.deny[0].value, "sugar-deny");
+        // The lower layer's sugar-normalized policy is gone with its array.
+        assert!(!masks.contains(&"lower-mask"));
+        Ok(())
+    }
+
     #[test]
     fn policy_collection_preserves_directory_and_capsule_source_provenance() -> Result<()> {
         let repo = uniq_dir("policy-provenance");

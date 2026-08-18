@@ -112,12 +112,14 @@ pub struct WritesFragment {
 /// The public schema for a raw string policy value. Runtime deserialization
 /// also supports the historical `value` alias, but the config surface is the
 /// compact string or the documented `{ pattern, overridable }` table.
+// `pub` so the `[[mounts]]` sugar fields on `MountPlanWire`
+// (`microsandbox/plan.rs`) can project the same schema shape.
 #[cfg(feature = "schema")]
 #[derive(schemars::JsonSchema)]
 #[schemars(rename = "PolicyValue_for_String")]
 #[serde(untagged)]
 #[allow(dead_code)]
-enum PolicyValueStringSchema {
+pub enum PolicyValueStringSchema {
     Compact(String),
     Expanded(PolicyValueStringExpandedSchema),
 }
@@ -126,7 +128,7 @@ enum PolicyValueStringSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
-struct PolicyValueStringExpandedSchema {
+pub struct PolicyValueStringExpandedSchema {
     pattern: String,
     #[serde(default = "policy_value_overridable_default")]
     #[schemars(default = "policy_value_overridable_default")]

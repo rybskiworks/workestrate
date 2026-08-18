@@ -226,6 +226,13 @@ GITHUB_TOKEN = true
 host = "workspaces/example-agent-state"
 guest = "/data"
 mode = "rw"
+# Mount-policy sugar (spec 22 §8.3 mount-entry scope): mask/unmask/protect/
+# writes_deny lists directly on the mount row, in the same entry shapes as
+# [policy.mounts] (compact string or { pattern, overridable }). Parse-time
+# normalized into this mount's entry policy; mixing with an explicit
+# `policy.*` table on the same mount is allowed (they concatenate).
+mask = ["agent-scratch/**"]
+writes_deny = [".env", "*.key"]
 
 [workloads.example-agent.network]
 default_deny = true
