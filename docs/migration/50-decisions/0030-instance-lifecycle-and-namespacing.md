@@ -1451,10 +1451,10 @@ spec-22 extensibility — booleans don't grow; a future third mount state
 
 ---
 
-## Addendum (2026-08-18): `[[mounts]]` mount-policy sugar (THIS-ITERATION)
+## Addendum (2026-08-18): `[[mounts]]` mount-policy sugar (26c657e)
 
 `[[mounts]]` entries accept `mask`/`unmask`/`protect`/`writes_deny` lists
 directly (same entry shapes as `[policy.mounts]`), parse-time normalized
 INTO the mount's `policy` fragment (concatenating with an explicit policy
 table on the same mount); collection, compile, trust rules, and whole-array
-last-layer-wins merge are unchanged (THIS-ITERATION).
+last-layer-wins merge are unchanged (26c657e).
