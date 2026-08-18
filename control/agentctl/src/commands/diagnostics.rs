@@ -825,7 +825,7 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
         for m in &wl.mounts {
             if let Ok(path) = resolve_mount_host(&roots, &m.host) {
                 if !path.exists() {
-                    if m.read_only {
+                    if m.is_read_only() {
                         warnings.push(format!(
                             "workload '{name}': read-only mount source does not exist: {} (host = {:?})",
                             path.display(),

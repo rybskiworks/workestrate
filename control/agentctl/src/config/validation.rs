@@ -603,7 +603,7 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
             validate_mount_host(&m.host).map_err(|e| {
                 anyhow::anyhow!("workload '{workload_name}' mount host validation failed: {e}")
             })?;
-            validate_mount_guest(&m.guest, m.read_only).map_err(|e| {
+            validate_mount_guest(&m.guest, m.is_read_only()).map_err(|e| {
                 anyhow::anyhow!("workload '{workload_name}' mount guest validation failed: {e}")
             })?;
             if !seen_guests.insert(m.guest.clone()) {
@@ -913,14 +913,14 @@ pub(crate) mod tests {
             crate::microsandbox::plan::MountPlan {
                 host: "first".to_string(),
                 guest: "/data".to_string(),
-                read_only: false,
+                mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
                 policy_file: None,
             },
             crate::microsandbox::plan::MountPlan {
                 host: "second".to_string(),
                 guest: "/data".to_string(),
-                read_only: false,
+                mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
                 policy_file: None,
             },
@@ -937,7 +937,7 @@ pub(crate) mod tests {
         workload.mounts = vec![crate::microsandbox::plan::MountPlan {
             host: "state".to_string(),
             guest: "/data".to_string(),
-            read_only: false,
+            mode: crate::microsandbox::plan::MountMode::Rw,
             policy: None,
             policy_file: Some(std::path::PathBuf::from("/some/path")),
         }];
@@ -1725,6 +1725,143 @@ default_deny = true
         let config: ConfigFile = toml::from_str(toml).unwrap();
         validate_config(&config)
             .unwrap_or_else(|e| panic!("nested guests (spec 01 shadow) must validate clean: {e}"));
+    }
+
+    // ---- Mount `mode` field (read_only deprecated alias) ----
+
+    /// Minimal config wrapper for mount-mode parse tests.
+    fn mount_mode_config(mount_lines: &str) -> String {
+        format!(
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\n\
+             image = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n\
+             [[workloads.pi.mounts]]\nhost = \"state\"\nguest = \"/data\"\n{mount_lines}\n"
+        )
+    }
+
+    fn parsed_mount_mode(toml: &str) -> crate::microsandbox::plan::MountMode {
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        config.workloads["pi"].mounts[0].mode
+    }
+
+    /// `mode = "ro"` and `mode = "rw"` are the accepted canonical values.
+    #[test]
+    fn mount_mode_ro_and_rw_parse() {
+        use crate::microsandbox::plan::MountMode;
+        assert_eq!(
+            parsed_mount_mode(&mount_mode_config("mode = \"ro\"")),
+            MountMode::Ro
+        );
+        assert_eq!(
+            parsed_mount_mode(&mount_mode_config("mode = \"rw\"")),
+            MountMode::Rw
+        );
+    }
+
+    /// An omitted `mode` defaults to rw.
+    #[test]
+    fn mount_mode_omitted_defaults_to_rw() {
+        assert_eq!(
+            parsed_mount_mode(&mount_mode_config("")),
+            crate::microsandbox::plan::MountMode::Rw
+        );
+    }
+
+    /// The deprecated `read_only` alias normalizes into `mode`:
+    /// `read_only = true` ≡ "ro", `read_only = false` ≡ "rw".
+    #[test]
+    fn mount_read_only_alias_maps_to_mode() {
+        use crate::microsandbox::plan::MountMode;
+        assert_eq!(
+            parsed_mount_mode(&mount_mode_config("read_only = true")),
+            MountMode::Ro,
+            "read_only = true must normalize to mode ro"
+        );
+        assert_eq!(
+            parsed_mount_mode(&mount_mode_config("read_only = false")),
+            MountMode::Rw,
+            "read_only = false must normalize to mode rw"
+        );
+    }
+
+    /// Both fields set and AGREEING → accepted, resolving to that mode
+    /// (a single deprecation warning for `read_only` goes to stderr).
+    #[test]
+    fn mount_mode_and_agreeing_read_only_alias_accepted() {
+        use crate::microsandbox::plan::MountMode;
+        assert_eq!(
+            parsed_mount_mode(&mount_mode_config("mode = \"ro\"\nread_only = true")),
+            MountMode::Ro
+        );
+        assert_eq!(
+            parsed_mount_mode(&mount_mode_config("mode = \"rw\"\nread_only = false")),
+            MountMode::Rw
+        );
+    }
+
+    /// Both fields set and CONFLICTING → hard deserialization error naming
+    /// BOTH fields and both values.
+    #[test]
+    fn mount_mode_conflicting_read_only_alias_is_a_hard_error() {
+        for (toml, mode, read_only) in [
+            ("mode = \"rw\"\nread_only = true", "rw", "true"),
+            ("mode = \"ro\"\nread_only = false", "ro", "false"),
+        ] {
+            let err = toml::from_str::<ConfigFile>(&mount_mode_config(toml))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("read_only"),
+                "conflict error must name `read_only`: {err}"
+            );
+            assert!(
+                err.contains("mode"),
+                "conflict error must name `mode`: {err}"
+            );
+            assert!(
+                err.contains(&format!("read_only = {read_only}")),
+                "conflict error must name the read_only value: {err}"
+            );
+            assert!(
+                err.contains(&format!("mode = \"{mode}\"")),
+                "conflict error must name the mode value: {err}"
+            );
+        }
+    }
+
+    /// An unknown `mode` value is rejected with a useful error (closed
+    /// vocabulary: only "ro" / "rw").
+    #[test]
+    fn mount_mode_unknown_value_rejected() {
+        let err = toml::from_str::<ConfigFile>(&mount_mode_config("mode = \"rx\""))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("rx") && err.contains("ro") && err.contains("rw"),
+            "unknown mode must be rejected naming the expected variants: {err}"
+        );
+    }
+
+    /// `mode` serializes as the canonical string form; the deprecated
+    /// `read_only` alias is NEVER serialized.
+    #[test]
+    fn mount_plan_serializes_mode_and_never_read_only() {
+        use crate::microsandbox::plan::{MountMode, MountPlan};
+        let mount = MountPlan {
+            host: "state".to_string(),
+            guest: "/data".to_string(),
+            mode: MountMode::Ro,
+            policy: None,
+            policy_file: None,
+        };
+        let json = serde_json::to_value(&mount).unwrap();
+        assert_eq!(json["mode"], serde_json::json!("ro"));
+        assert!(
+            json.get("read_only").is_none(),
+            "read_only must never be serialized: {json}"
+        );
+        // And the canonical JSON round-trips without a deprecation warning.
+        let reparsed: MountPlan = serde_json::from_value(json).unwrap();
+        assert_eq!(reparsed, mount);
     }
 
     // ---- ADR 0030 Phase 1: instance policy port bounds ----

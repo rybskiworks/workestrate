@@ -1439,3 +1439,12 @@ covers `plan` only), spec-examples + scaffold + schema drift checks green.
 `schema-sync-check` reports only the container-local consumer copies stale —
 the documented host-side `workestrate schemas update` follow-up
 (pre-existing, unchanged).
+
+---
+
+## Addendum (2026-08-18): mount `mode` field
+
+The mount `mode = "ro" | "rw"` field landed (`read_only = <bool>` kept as a
+deprecated parse-time alias, normalized into `mode`; never serialized). Why:
+spec-22 extensibility — booleans don't grow; a future third mount state
+(e.g. masked / append-only) fits a mode enum, not a bool.

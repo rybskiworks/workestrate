@@ -12,9 +12,11 @@
 //!      override-layer files / single-feature snippets).
 //!
 //! A block that declares `schema_version` and is NOT marked skip MUST parse
-//! cleanly into the real `ConfigFile`. The real `MountPlan.read_only` is a
-//! required `bool` (no `#[serde(default)]`), so any regression to the legacy
-//! `rw` field name fails deserialization with "missing field `read_only`".
+//! cleanly into the real `ConfigFile`. The real `MountPlan.mode` is the
+//! canonical mount access-mode field (`"ro"` / `"rw"`, default `"rw"`;
+//! `read_only = <bool>` remains only as a deprecated parse-time alias), so
+//! any regression to the legacy `rw` field name fails deserialization as an
+//! unknown field.
 //!
 //! NOTE: the crate has had a lib target (`workestrate`) since 45a42fb, so this
 //! test now imports the real `workestrate::config::ConfigFile`; the former
@@ -170,8 +172,7 @@ fn spec_mounts_never_use_legacy_rw_field() -> Result<(), Box<dyn std::error::Err
     }
     assert!(
         offenders.is_empty(),
-        "spec still uses legacy `rw` mount field (use `read_only` with flipped \
-         polarity): {offenders:?}"
+        "spec still uses legacy `rw` mount field (use `mode = \"ro\"` / `mode = \"rw\"`): {offenders:?}"
     );
     Ok(())
 }

@@ -150,7 +150,7 @@ pub fn validate_mount_guest(guest: &str, read_only: bool) -> Result<()> {
             if guest == *prefix || guest.starts_with(&format!("{prefix}/")) {
                 anyhow::bail!(
                     "mount guest '{guest}' cannot be mounted read-write (sensitive path); \
-                     set read_only = true if you truly need it"
+                     set mode = \"ro\" if you truly need it"
                 );
             }
         }
@@ -178,7 +178,7 @@ pub(crate) fn apply_plan_mounts(
                 Some(pf) => v.mount_policy(pf),
                 None => v,
             };
-            if m.read_only {
+            if m.is_read_only() {
                 v.readonly()
             } else {
                 v
@@ -192,7 +192,7 @@ pub(crate) fn ensure_mount_sources(roots: &MountRoots, plan: &SandboxPlan) -> Re
     for m in &plan.mounts {
         let path = resolve_mount_host(roots, &m.host)?;
         if !path.exists() {
-            if m.read_only {
+            if m.is_read_only() {
                 anyhow::bail!("mount source does not exist: {}", path.display());
             } else {
                 std::fs::create_dir_all(&path)?;
@@ -389,7 +389,7 @@ pub(crate) fn preflight_existence(
     for m in &plan.mounts {
         let path = resolve_mount_host(roots, &m.host)?;
         if !path.exists() {
-            if m.read_only {
+            if m.is_read_only() {
                 let msg = format!(
                     "workload '{}': read-only mount source does not exist: {} (host = {:?})",
                     workload_name,
@@ -526,7 +526,7 @@ mod tests {
     use super::{ensure_mount_sources, preflight_existence, resolve_mount_host, MountRoots};
     use super::{expand_seed_glob, literal_glob_root};
     use super::{validate_mount_guest, validate_mount_host};
-    use crate::microsandbox::plan::{MountPlan, NetworkPlan, SandboxPlan};
+    use crate::microsandbox::plan::{MountMode, MountPlan, NetworkPlan, SandboxPlan};
 
     fn unique_root(label: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -581,7 +581,7 @@ mod tests {
         let plan = minimal_plan(vec![MountPlan {
             host: "nested/state".into(),
             guest: "/data".into(),
-            read_only: false,
+            mode: MountMode::Rw,
             policy: None,
             policy_file: None,
         }]);
@@ -608,7 +608,7 @@ mod tests {
         let plan = minimal_plan(vec![MountPlan {
             host: "missing/config.json".into(),
             guest: "/app/config.json".into(),
-            read_only: true,
+            mode: MountMode::Ro,
             policy: None,
             policy_file: None,
         }]);
@@ -974,7 +974,7 @@ mod tests {
         let plan = minimal_plan(vec![MountPlan {
             host: "missing/config.json".into(),
             guest: "/app/config.json".into(),
-            read_only: true,
+            mode: MountMode::Ro,
             policy: None,
             policy_file: None,
         }]);
@@ -998,7 +998,7 @@ mod tests {
         let plan = minimal_plan(vec![MountPlan {
             host: "nested/state".into(),
             guest: "/data".into(),
-            read_only: false,
+            mode: MountMode::Rw,
             policy: None,
             policy_file: None,
         }]);
@@ -1077,7 +1077,7 @@ mod tests {
         let plan = minimal_plan(vec![MountPlan {
             host: "missing/cfg.yaml".into(),
             guest: "/app/cfg.yaml".into(),
-            read_only: true,
+            mode: MountMode::Ro,
             policy: None,
             policy_file: None,
         }]);
@@ -1104,7 +1104,7 @@ mod tests {
         let plan = minimal_plan(vec![MountPlan {
             host: "cfg/app.yaml".into(),
             guest: "/app/app.yaml".into(),
-            read_only: true,
+            mode: MountMode::Ro,
             policy: None,
             policy_file: None,
         }]);

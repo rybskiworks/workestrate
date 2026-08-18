@@ -741,12 +741,20 @@
       },
       "additionalProperties": false
     },
+    "MountMode": {
+      "description": "Mount access mode (spec §\"Mount `mode` field\"). Closed vocabulary: the only accepted wire values are `\"ro\"` (read-only) and `\"rw\"` (read-write, the default). This replaces the `read_only = <bool>` field, which remains a DEPRECATED parse-time alias (see [`MountPlan`]'s custom `Deserialize`). Rationale (ADR 0030 addendum): booleans don't grow — a future third state (e.g. masked / append-only) fits a mode enum, not a bool.",
+      "type": "string",
+      "enum": [
+        "ro",
+        "rw"
+      ]
+    },
     "MountPlan": {
+      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized).",
       "type": "object",
       "required": [
         "guest",
-        "host",
-        "read_only"
+        "host"
       ],
       "properties": {
         "guest": {
@@ -754,6 +762,15 @@
         },
         "host": {
           "type": "string"
+        },
+        "mode": {
+          "description": "Mount access mode: \"ro\" (read-only) or \"rw\" (read-write, the default).",
+          "default": "rw",
+          "type": "string",
+          "enum": [
+            "ro",
+            "rw"
+          ]
         },
         "policy": {
           "description": "Mount-entry policy is collected from the same declaring layer as this row; it is intentionally not part of mount-row merging.",
@@ -773,6 +790,8 @@
           ]
         },
         "read_only": {
+          "description": "DEPRECATED alias for `mode` (`true` ≡ \"ro\", `false` ≡ \"rw\"); accepted at parse time with a deprecation warning, never serialized.",
+          "deprecated": true,
           "type": "boolean"
         }
       }

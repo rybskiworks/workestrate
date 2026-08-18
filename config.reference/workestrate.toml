@@ -108,7 +108,7 @@ guest = 8080
 [[workloads.example-service.mounts]]
 host = "workspaces/example-service-state"
 guest = "/data"
-read_only = false
+mode = "rw"  # canonical access-mode field; `read_only = <bool>` is a deprecated alias
 
 [[workloads.example-service.seed_files]]
 source = "agents/example-service/config/settings.json"
@@ -225,7 +225,7 @@ GITHUB_TOKEN = true
 [[workloads.example-agent.mounts]]
 host = "workspaces/example-agent-state"
 guest = "/data"
-read_only = false
+mode = "rw"
 
 [workloads.example-agent.network]
 default_deny = true
@@ -275,7 +275,7 @@ OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
 [[workloads.example-offensive.mounts]]
 host = "workspaces/example-offensive-state"
 guest = "/data"
-read_only = false
+mode = "rw"
 
 [workloads.example-offensive.network]
 default_deny = false

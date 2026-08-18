@@ -136,7 +136,7 @@ impl ConfigWorkload {
         }
         let mounts_source = source_of(&format!("workloads.{}.mounts", self.name));
         for m in &plan.mounts {
-            let ro = if m.read_only { " (ro)" } else { "" };
+            let ro = if m.is_read_only() { " (ro)" } else { "" };
             write_line(
                 &mut out,
                 "",

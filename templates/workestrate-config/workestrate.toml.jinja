@@ -65,7 +65,7 @@ required = false
 # [[workloads.my-agent.mounts]]
 # host = "${CWD}"
 # guest = "/work"
-# read_only = false
+# mode = "rw"    # "ro" for read-only; `read_only = <bool>` is a deprecated alias
 #
 # [workloads.my-agent.network]
 # default_deny = true

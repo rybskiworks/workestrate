@@ -158,7 +158,7 @@ pub fn cmd_new(name: &str, kind: &str) -> Result<()> {
         [[workloads.{}.mounts]]\n\
         host = \"${{CWD}}\"\n\
         guest = \"/work\"\n\
-        read_only = false\n\n\
+        mode = \"rw\"\n\n\
         [workloads.{}.network]\n\
         default_deny = true\n\n\
         [[workloads.{}.network.egress]]\n\

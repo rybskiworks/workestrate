@@ -2209,6 +2209,65 @@ mounts = []
         Ok(())
     }
 
+    /// Mounts merge WHOLE-ARRAY, last layer wins — and since the deprecated
+    /// `read_only` alias normalizes into `mode` at parse time, merged layers
+    /// only ever carry the canonical `mode` field.
+    #[test]
+    fn mounts_merge_last_layer_wins_with_mode_across_layers() -> Result<()> {
+        use crate::microsandbox::plan::MountMode;
+        let lower = crate::merge::Layer::from_string(
+            "lower",
+            r#"
+schema_version = 1
+[workloads.pi]
+[[workloads.pi.mounts]]
+host = "old"
+guest = "/old"
+read_only = true
+"#,
+        )?;
+        let higher = crate::merge::Layer::from_string(
+            "higher",
+            r#"
+schema_version = 1
+[workloads.pi]
+[[workloads.pi.mounts]]
+host = "new"
+guest = "/new"
+mode = "rw"
+"#,
+        )?;
+        let (merged, provenance) = crate::merge::merge_layers(&[lower, higher])?;
+        let mounts = &merged.workloads["pi"].mounts;
+        assert_eq!(
+            mounts.len(),
+            1,
+            "the higher layer's mounts array wins wholesale: {mounts:?}"
+        );
+        assert_eq!(mounts[0].host, "new");
+        assert_eq!(mounts[0].mode, MountMode::Rw);
+        assert_eq!(
+            provenance.get("workloads.pi.mounts"),
+            Some(&"higher".to_string())
+        );
+        // And the alias form normalizes before merge: a lower layer using
+        // `read_only` carries the same MountMode a `mode` layer would.
+        let alias_only = crate::merge::Layer::from_string(
+            "alias",
+            r#"
+schema_version = 1
+[workloads.pi]
+[[workloads.pi.mounts]]
+host = "cfg"
+guest = "/cfg"
+read_only = true
+"#,
+        )?;
+        let (merged, _) = crate::merge::merge_layers(&[alias_only])?;
+        assert_eq!(merged.workloads["pi"].mounts[0].mode, MountMode::Ro);
+        Ok(())
+    }
+
     #[test]
     fn policy_collection_preserves_directory_and_capsule_source_provenance() -> Result<()> {
         let repo = uniq_dir("policy-provenance");

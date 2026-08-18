@@ -124,19 +124,252 @@ impl PortMapping {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+/// Mount access mode (spec §"Mount `mode` field"). Closed vocabulary: the
+/// only accepted wire values are `"ro"` (read-only) and `"rw"` (read-write,
+/// the default). This replaces the `read_only = <bool>` field, which remains
+/// a DEPRECATED parse-time alias (see [`MountPlan`]'s custom `Deserialize`).
+/// Rationale (ADR 0030 addendum): booleans don't grow — a future third state
+/// (e.g. masked / append-only) fits a mode enum, not a bool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum MountMode {
+    Ro,
+    #[default]
+    Rw,
+}
+
+impl fmt::Display for MountMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MountMode::Ro => write!(f, "ro"),
+            MountMode::Rw => write!(f, "rw"),
+        }
+    }
+}
+
+/// A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`), BOTH the
+/// config shape AND the plan-JSON wire shape. The canonical field is `mode`
+/// ("ro" | "rw", default "rw"); `read_only = <bool>` is accepted as a
+/// DEPRECATED alias at parse time only — it is normalized into `mode` by the
+/// custom `Deserialize` below and is NEVER serialized. Alias semantics:
+///   - only `mode` set            → use it;
+///   - only `read_only` set       → `true` ≡ "ro", `false` ≡ "rw", plus one
+///     deprecation warning per process (stderr, matching the repo's other
+///     deprecation notices; plan-JSON re-parses never carry `read_only`, so
+///     they stay quiet);
+///   - both set and AGREE         → accept, same single deprecation warning;
+///   - both set and CONFLICT      → hard deserialization error naming both
+///     fields and both values.
+///
+/// Because the alias normalizes at parse time, merged config layers only
+/// ever carry `mode` (mounts merge whole-array, last layer wins).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountPlan {
     pub host: String,
     pub guest: String,
-    pub read_only: bool,
+    pub mode: MountMode,
+    /// Mount-entry policy is collected from the same declaring layer as this
+    /// row; it is intentionally not part of mount-row merging.
+    pub policy: Option<MountsFragment>,
+    pub policy_file: Option<std::path::PathBuf>,
+}
+
+impl MountPlan {
+    /// Canonical internal accessor: `true` iff `mode == "ro"`. Replaces the
+    /// removed `read_only: bool` field at all internal call sites.
+    pub fn is_read_only(&self) -> bool {
+        self.mode == MountMode::Ro
+    }
+}
+
+/// Serde wire shape for [`MountPlan`]: both `mode` and the deprecated
+/// `read_only` alias are optional on the wire so the reconciliation logic in
+/// `TryFrom<MountPlanWire>` can distinguish "unset" from the default. Also
+/// the schemars source: the generated JSON Schema for `MountPlan` is derived
+/// from this struct (see the manual `JsonSchema` impl below), so the schema
+/// matches exactly what the parser accepts.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct MountPlanWire {
+    host: String,
+    guest: String,
+    /// Mount access mode: "ro" (read-only) or "rw" (read-write, the default).
+    #[serde(default)]
+    mode: Option<MountMode>,
+    /// DEPRECATED alias for `mode` (`true` ≡ "ro", `false` ≡ "rw"); accepted
+    /// at parse time with a deprecation warning, never serialized.
+    #[serde(default)]
+    read_only: Option<bool>,
     /// Mount-entry policy is collected from the same declaring layer as this
     /// row; it is intentionally not part of mount-row merging.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<MountsFragment>"))]
-    pub policy: Option<MountsFragment>,
+    policy: Option<MountsFragment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy_file: Option<std::path::PathBuf>,
+    policy_file: Option<std::path::PathBuf>,
+}
+
+/// One deprecation warning per process is enough (a config may declare many
+/// legacy rows); the CLI's other deprecation notices are likewise
+/// once-per-invocation, which this reduces to.
+static READ_ONLY_ALIAS_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn warn_read_only_alias() {
+    if !READ_ONLY_ALIAS_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!(
+            "warning: mount field `read_only` is deprecated; use `mode = \"ro\"` / \
+             `mode = \"rw\"` instead (`read_only = true` ≡ `mode = \"ro\"`)"
+        );
+    }
+}
+
+impl TryFrom<MountPlanWire> for MountPlan {
+    type Error = String;
+
+    fn try_from(wire: MountPlanWire) -> Result<Self, Self::Error> {
+        let mode = match (wire.mode, wire.read_only) {
+            (Some(mode), None) => mode,
+            (None, Some(read_only)) => {
+                warn_read_only_alias();
+                if read_only {
+                    MountMode::Ro
+                } else {
+                    MountMode::Rw
+                }
+            }
+            (Some(mode), Some(read_only)) => {
+                let alias_mode = if read_only {
+                    MountMode::Ro
+                } else {
+                    MountMode::Rw
+                };
+                if mode != alias_mode {
+                    return Err(format!(
+                        "conflicting mount fields: read_only = {read_only} (≡ mode = \
+                         \"{alias_mode}\") but mode = \"{mode}\"; remove the deprecated \
+                         `read_only` field (or make the two agree)"
+                    ));
+                }
+                warn_read_only_alias();
+                mode
+            }
+            (None, None) => MountMode::default(),
+        };
+        Ok(Self {
+            host: wire.host,
+            guest: wire.guest,
+            mode,
+            policy: wire.policy,
+            policy_file: wire.policy_file,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for MountPlan {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = MountPlanWire::deserialize(deserializer)?;
+        MountPlan::try_from(wire).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for MountPlan {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        // Canonical form only: `mode` is always emitted; `read_only` is NEVER
+        // serialized. `policy`/`policy_file` stay skip-when-None so plan JSON
+        // without them is byte-identical to the legacy form.
+        let mut n = 3;
+        if self.policy.is_some() {
+            n += 1;
+        }
+        if self.policy_file.is_some() {
+            n += 1;
+        }
+        let mut s = serializer.serialize_struct("MountPlan", n)?;
+        s.serialize_field("host", &self.host)?;
+        s.serialize_field("guest", &self.guest)?;
+        s.serialize_field("mode", &self.mode)?;
+        if let Some(policy) = &self.policy {
+            s.serialize_field("policy", policy)?;
+        }
+        if let Some(policy_file) = &self.policy_file {
+            s.serialize_field("policy_file", policy_file)?;
+        }
+        s.end()
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for MountPlan {
+    fn schema_name() -> String {
+        "MountPlan".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        // Start from the wire shape (both fields optional, read_only present
+        // but deprecated) so the schema matches exactly what the parser
+        // accepts, then pin `mode` to its canonical closed-vocabulary form.
+        let mut schema = MountPlanWire::json_schema(gen).into_object();
+        schema.metadata = Some(Box::new(schemars::schema::Metadata {
+            description: Some(
+                "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical \
+                 field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` \
+                 is a deprecated parse-time alias (normalized into `mode`, never \
+                 serialized)."
+                    .to_string(),
+            ),
+            ..Default::default()
+        }));
+        if let Some(object) = schema.object.as_mut() {
+            object.properties.insert(
+                "mode".to_string(),
+                schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+                    metadata: Some(Box::new(schemars::schema::Metadata {
+                        description: Some(
+                            "Mount access mode: \"ro\" (read-only) or \"rw\" \
+                             (read-write, the default)."
+                                .to_string(),
+                        ),
+                        default: Some(serde_json::json!("rw")),
+                        ..Default::default()
+                    })),
+                    instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                        schemars::schema::InstanceType::String,
+                    ))),
+                    enum_values: Some(vec![serde_json::json!("ro"), serde_json::json!("rw")]),
+                    ..Default::default()
+                }),
+            );
+            object.properties.insert(
+                "read_only".to_string(),
+                schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+                    metadata: Some(Box::new(schemars::schema::Metadata {
+                        description: Some(
+                            "DEPRECATED alias for `mode` (`true` ≡ \"ro\", `false` ≡ \
+                             \"rw\"); accepted at parse time with a deprecation \
+                             warning, never serialized."
+                                .to_string(),
+                        ),
+                        deprecated: true,
+                        ..Default::default()
+                    })),
+                    instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                        schemars::schema::InstanceType::Boolean,
+                    ))),
+                    ..Default::default()
+                }),
+            );
+        }
+        schemars::schema::Schema::Object(schema)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -293,7 +526,7 @@ impl fmt::Display for SandboxPlan {
             }
         }
         for m in &self.mounts {
-            let ro = if m.read_only { " (ro)" } else { "" };
+            let ro = if m.is_read_only() { " (ro)" } else { "" };
             writeln!(f, "mount: {}:{}{}", m.host, m.guest, ro)?;
             if let Some(pf) = &m.policy_file {
                 writeln!(f, "  policy_file: {}", pf.display())?;
@@ -506,14 +739,14 @@ mod tests {
                 MountPlan {
                     host: "/data".to_string(),
                     guest: "/mnt".to_string(),
-                    read_only: false,
+                    mode: MountMode::Rw,
                     policy: None,
                     policy_file: None,
                 },
                 MountPlan {
                     host: "/cfg".to_string(),
                     guest: "/etc/cfg".to_string(),
-                    read_only: true,
+                    mode: MountMode::Ro,
                     policy: None,
                     policy_file: None,
                 },

@@ -155,13 +155,13 @@ mod tests {
         assert!(data_mount.is_some(), "odysseus must have a /data mount");
         if let Some(m) = data_mount {
             assert_eq!(m.host, "workspaces/odysseus-state");
-            assert!(!m.read_only, "/data mount must be readwrite");
+            assert!(!m.is_read_only(), "/data mount must be readwrite");
         }
         let app_mount = plan.mounts.iter().find(|m| m.guest == "/app");
         assert!(app_mount.is_some(), "odysseus must have a /app mount");
         if let Some(m) = app_mount {
             assert_eq!(m.host, "agents/odysseus/build");
-            assert!(m.read_only, "/app mount must be readonly");
+            assert!(m.is_read_only(), "/app mount must be readonly");
         }
         assert!(
             plan.mounts.iter().all(|m| m.guest != "/app/data"),
@@ -302,7 +302,7 @@ mod tests {
         );
         if let Some(m) = data_mount {
             assert_eq!(m.host, "workspaces/pi-state");
-            assert!(!m.read_only, "/data mount must be readwrite");
+            assert!(!m.is_read_only(), "/data mount must be readwrite");
         }
         let work_mount = plan.mounts.iter().find(|m| m.guest == "/work");
         assert!(
@@ -310,7 +310,7 @@ mod tests {
             "pi must have a /work mount (user project)"
         );
         if let Some(m) = work_mount {
-            assert!(!m.read_only, "/work mount must be readwrite");
+            assert!(!m.is_read_only(), "/work mount must be readwrite");
         }
         assert!(
             plan.mounts.iter().all(|m| m.guest != "/workspace"),

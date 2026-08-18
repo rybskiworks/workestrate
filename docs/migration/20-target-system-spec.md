@@ -332,12 +332,12 @@ guest = 9090
 [[workloads.litellm.mounts]]
 host = "${MSB_HOME}/sandboxes/litellm/logs"
 guest = "/var/log/litellm"
-read_only = false
+mode = "rw"
 
 [[workloads.litellm.mounts]]
 host = "infra/litellm"           # config-relative path
 guest = "/app/config"
-read_only = true
+read_only = true                 # DEPRECATED alias for mode = "ro" (kept here to exercise back-compat)
 
 [workloads.litellm.network]
 default_deny = true
@@ -374,12 +374,12 @@ GITHUB_TOKEN = true                                         # placeholder (bound
 [[workloads.pi.mounts]]
 host = "workspaces/pi-state"     # state_dir-relative
 guest = "/data"
-read_only = false
+mode = "rw"
 
 [[workloads.pi.mounts]]
 host = "${CWD}"                  # resolved at runtime to current working directory
 guest = "/work"
-read_only = false
+mode = "rw"
 
 [workloads.pi.network]
 default_deny = true
@@ -432,12 +432,12 @@ guest = 7000
 [[workloads.odysseus.mounts]]
 host = "${WORKESTRATE_ODYSSEUS_BUILD}"  # resolved from env or local_build.fallback
 guest = "/app"
-read_only = true
+mode = "ro"
 
 [[workloads.odysseus.mounts]]
 host = "workspaces/odysseus-state"
 guest = "/data"
-read_only = false
+mode = "rw"
 
 [workloads.odysseus.network]
 default_deny = true
@@ -505,22 +505,22 @@ guest = 3000
 [[workloads.opencode.mounts]]
 host = "${WORKESTRATE_OPENCODE_BUILD}"
 guest = "/app"
-read_only = true
+mode = "ro"
 
 [[workloads.opencode.mounts]]
 host = "${CWD}"
 guest = "/workspace"
-read_only = false
+mode = "rw"
 
 [[workloads.opencode.mounts]]
 host = "agents/opencode/config/opencode.jsonc"  # config-relative
 guest = "/home/node/.config/opencode/opencode.jsonc"
-read_only = true
+mode = "ro"
 
 [[workloads.opencode.mounts]]
 host = "${MSB_HOME}/sandboxes/opencode/state"
 guest = "/home/node/.local/share/opencode"
-read_only = false
+mode = "rw"
 
 [workloads.opencode.network]
 default_deny = true
@@ -560,12 +560,12 @@ T3MP3ST_HOST = "127.0.0.1"
 [[workloads.tempest.mounts]]
 host = "workspaces/tempest-state"
 guest = "/data"
-read_only = false
+mode = "rw"
 
 [[workloads.tempest.mounts]]
 host = "${CWD}"
 guest = "/work"
-read_only = false
+mode = "rw"
 
 [workloads.tempest.network]
 default_deny = false   # broad egress for offensive tool (core entitlement required)
@@ -605,13 +605,31 @@ rule above and `repo_identity_for` in the image-build path
 tool-relative fixtures (reference config) and synthetic layers. Acceptance
 criteria: ADR 0028.
 
-### Mount `read_only` field
+### Mount `mode` field
 
 Each `[[workloads.<name>.mounts]]` entry declares its access mode with the
-`read_only` boolean field (the schema field name; matches `MountPlan` in
-`plan.rs`). Polarity: `read_only = true` mounts the guest path read-only;
-`read_only = false` mounts it read-write. The legacy `rw` field name is NOT
-accepted by the deserializer.
+`mode` field (the schema field name; matches `MountPlan` in `plan.rs`). The
+vocabulary is closed: `mode = "ro"` mounts the guest path read-only;
+`mode = "rw"` mounts it read-write. Omitted `mode` defaults to `"rw"`. Any
+other value (e.g. `mode = "rx"`) is a hard deserialization error naming the
+expected variants. Rationale for an enum over the former boolean: booleans
+don't grow — a future third state (e.g. masked / append-only) fits a mode
+enum, not a bool.
+
+**Deprecated alias:** `read_only = <bool>` is still accepted at parse time
+and normalizes into `mode` (`read_only = true` ≡ `mode = "ro"`,
+`read_only = false` ≡ `mode = "rw"`). Using the alias emits a deprecation
+warning (stderr, once per process). Setting BOTH fields is allowed only when
+they agree (`read_only = false` + `mode = "rw"`, or `read_only = true` +
+`mode = "ro"`; accepted with the same single deprecation warning) — a
+conflict (`read_only = true` + `mode = "rw"` or `read_only = false` +
+`mode = "ro"`) is a hard deserialization error naming both fields and both
+values. `read_only` is never serialized: plan JSON always carries the
+canonical `mode` string.
+
+**Merge semantics:** mounts merge whole-array, last layer wins (a layer that
+declares `mounts` replaces the lower layer's array wholesale). Because the
+alias normalizes at parse time, merged layers only ever carry `mode`.
 
 ### Spec-example CI guard (`# spec-test: skip`)
 
