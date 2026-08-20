@@ -151,7 +151,6 @@ pub(crate) mod tests {
     /// would bail with "no config found" before the assertion could observe
     /// the gated marker's absence.
     #[test]
-    #[ignore = "S4 migrates config.reference/workestrate.toml to the read/write mount-policy vocabulary"]
     fn local_toml_requires_trust_gate() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
 

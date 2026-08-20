@@ -762,7 +762,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "S4 migrates config.reference/workestrate.toml to the read/write mount-policy vocabulary"]
     fn validate_accepts_reference_config() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")

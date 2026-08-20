@@ -78,7 +78,7 @@ impl Layer {
         let raw: toml::Value = toml::from_str(content)
             .with_context(|| format!("failed to parse raw TOML for layer '{}'", name))?;
         let config: ConfigFile = toml::from_str(content)
-            .with_context(|| format!("failed to parse typed config for layer '{}'", name))?;
+            .map_err(|e| anyhow::anyhow!("failed to parse typed config for layer '{name}': {e}"))?;
         Ok(Self {
             name: name.to_string(),
             config,

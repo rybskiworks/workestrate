@@ -14,11 +14,15 @@ schema_version = 1
 
 # Sensitive-path defaults (spec 22 §9). These are the lowest-scope reference
 # defaults: every workload under config.reference inherits them, and any
-# config-repo / workload layer may relax them via `unmask`. They are all
-# `overridable = true` (the default) — `protect` is operator-only and is
-# intentionally NOT declared here (the reference config is not operator scope).
-[policy.mounts]
-mask = [
+# later scope (config-repo / workload layer) may relax them via `read.allow`
+# carve-outs. Every entry is non-final (the default) — `final = true` would
+# freeze an entry against ALL later scopes, and an OPERATOR scope's final
+# read.deny entry compiles to the protect wire bucket (invisible AND
+# untouchable); the reference config is not an operator scope, so nothing
+# here is final. The former `mask`/`protect` keywords and the `overridable`
+# entry key no longer exist on the config surface.
+[policy.mounts.read]
+deny = [
   "**/.env",
   "**/.env.*",
   "**/.ssh/**",
@@ -226,13 +230,13 @@ GITHUB_TOKEN = true
 host = "workspaces/example-agent-state"
 guest = "/data"
 mode = "rw"
-# Mount-policy sugar (spec 22 §8.3 mount-entry scope): mask/unmask/protect/
-# writes_deny lists directly on the mount row, in the same entry shapes as
-# [policy.mounts] (compact string or { pattern, overridable }). Parse-time
-# normalized into this mount's entry policy; mixing with an explicit
-# `policy.*` table on the same mount is allowed (they concatenate).
-mask = ["agent-scratch/**"]
-writes_deny = [".env", "*.key"]
+# Mount-policy sugar (spec 22 §8.3 mount-entry scope): read.deny/read.allow/
+# write.deny/write.allow dotted keys directly on the mount row, in the same
+# entry shapes as [policy.mounts] (compact string or { pattern, final }).
+# Parse-time normalized into this mount's entry policy; mixing with an
+# explicit `policy` table on the same mount is allowed (they concatenate).
+read.deny = ["agent-scratch/**"]
+write.deny = [".env", "*.key"]
 
 [workloads.example-agent.network]
 default_deny = true
