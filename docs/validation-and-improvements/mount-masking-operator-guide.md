@@ -19,44 +19,49 @@ guest writes the real file, tagged with an alias).
 
 ## v1 status (important)
 
-The **compiler, config wiring, validation, and diagnostics CLI work today**.
-The **runtime SDK seam is dormant**: `apply_mount_policy` is a no-op pending
-the microsandbox fork dependency switch (spec 23, DESIGN/DEFERRED). That means
-you can author, compile, validate, and inspect policies now, but end-to-end
-guest enforcement is not exercised until the dep switch lands. There is no KVM
+The **compiler, config wiring, validation, and diagnostics CLI work today**,
+and the runtime enforcement channel is wired through the pinned microsandbox
+fork (see `flake.nix`: fork rev `3bd051bf`). One caveat: the pinned evaluator
+treats `write.allow` as **inert** — write admission at this pin is
+write.deny-only (see "The write axis" below). There is no KVM
 in this container, so runtime enforcement is also unverified here.
 
 ## Configuring `[policy.mounts]`
 
 A fragment is a TOML table named `[policy.mounts]` (or
 `[workloads.<name>.policy.mounts]` at the workload scope, or an inline `policy`
-table on a `[[workloads.<name>.mounts]]` entry). It has these fields:
+table on a `[[workloads.<name>.mounts]]` entry). It has two axis sub-tables —
+`read` (visibility) and `write` (write admission) — plus one program flag:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `mask` | list of patterns | `[]` | Hide matching paths (fail-closed direction). |
-| `unmask` | list of patterns | `[]` | Re-expose paths a lower scope masked. |
-| `protect` | list of patterns | `[]` | Hide AND forbid writes; operator-only terminal tier. |
-| `writes.allow` | list of patterns | `[]` | Allow writes at matching paths. |
-| `writes.deny` | list of patterns | `[]` | Deny writes at matching paths (beats `allow`). |
+| `read.deny` | list of patterns | `[]` | Hide matching paths (fail-closed direction). |
+| `read.allow` | list of patterns | `[]` | Re-expose paths a lower scope denied. |
+| `write.allow` | list of patterns | `[]` | Allow writes at matching paths. |
+| `write.deny` | list of patterns | `[]` | Deny writes at matching paths (beats `allow`). |
 | `case_sensitivity` | `"sensitive"` | `"sensitive"` | v1 accepts only `"sensitive"`; `"insensitive"` is reserved for a future version. |
 
 Each list entry is either a **compact string** or an **expanded table**:
 
 ```toml
-# compact
-mask = ["**/.env", "**/*.pem"]
+# compact (final defaults to false)
+[policy.mounts.read]
+deny = ["**/.env", "**/*.pem"]
+```
 
-# expanded (overridable defaults to true)
-mask = [
+```toml
+# expanded: the final flag freezes the entry against later scopes
+[policy.mounts.read]
+deny = [
   "**/.env",
-  { pattern = "**/secrets/**", overridable = false },
+  { pattern = "**/secrets/**", final = true },
 ]
 ```
 
-`overridable = false` makes the rule **terminal**: its match freezes the
-decision for that path — a later scope cannot change it. Terminal `unmask` and
-terminal `protect` are operator-only (see Trust model below).
+`final = true` makes the entry **final**: its match freezes the
+decision for that path — a later scope cannot change it. Final ALLOWS
+(`read.allow` / `write.allow`) are operator-only (see Trust model below);
+final denies are accepted from any scope.
 
 ### Pattern dialect
 
@@ -71,7 +76,8 @@ terminal `protect` are operator-only (see Trust model below).
 ## Scope hierarchy
 
 Scopes are compiled in authority order (operator scopes outrank repo/workload
-scopes). Within a scope, `mask` is applied before `unmask`.
+scopes). Within a scope, `deny` entries are applied before `allow` entries on
+each axis.
 
 | # | Scope | Where it lives | Operator? |
 |---|---|---|---|
@@ -80,21 +86,24 @@ scopes). Within a scope, `mask` is applied before `unmask`.
 | 3 | Reference config | `config.reference/workestrate.toml` `[policy.mounts]` | no (ships defaults) |
 | 4 | Config-repo layer | a repo layer's `[policy.mounts]` | no |
 | 5 | Workload | `[workloads.<name>.policy.mounts]` | no |
-| 6 | Mount entry | `[[workloads.<name>.mounts]]` `policy = { ... }` (declaring layer only, v1) | no |
+| 6 | Mount entry | `[[workloads.<name>.mounts]]` `policy = { ... }` or the `read.*`/`write.*` row sugar (declaring layer only, v1) | no |
 
-**Trust model:** only operator scopes (1–2) may declare terminal `unmask` or
-`protect`. Any scope may declare a terminal `mask` (masking is the fail-closed
-direction). This preserves the monotonic-deny posture: an untrusted repo cannot
-permanently reopen a path an operator expects maskable.
+**Trust model:** only operator scopes (1–2) may declare final ALLOWS
+(`read.allow` / `write.allow`). Any scope may declare a final DENY (denying is
+the fail-closed direction). An operator scope's final `read.deny` additionally
+routes to the protect tier (see below). This preserves the monotonic-deny
+posture: an untrusted repo cannot permanently reopen a path an operator
+expects closable.
 
 ## Sensitive defaults (shipped)
 
-The reference config ships these lowest-scope masks, all `overridable = true`
-so any config-repo or workload layer can carve out exceptions with `unmask`:
+The reference config ships these lowest-scope read denies, all non-final
+(the default) so any config-repo or workload layer can carve out exceptions
+with `read.allow`:
 
 ```toml
-[policy.mounts]
-mask = [
+[policy.mounts.read]
+deny = [
   "**/.env",
   "**/.env.*",
   "**/.ssh/**",
@@ -106,18 +115,22 @@ mask = [
 ]
 ```
 
-`protect` is intentionally NOT in the reference config — it is an operator-only
-tier declared in the home registry or user-global overrides.
+The reference config intentionally declares nothing final and nothing
+protected — protection is an operator-only tier declared in the home registry
+or user-global overrides (a final `read.deny` there compiles to the protect
+wire bucket).
 
 ## Semantics operators need to know
 
 - **Allow+tag default writes:** when no write rule matches, the guest may write
   the real file (there is one filesystem, no copy); the write is tagged with an
-  alias so the host can identify it. `writes.deny` forbids writes; `writes.allow`
+  alias so the host can identify it. `write.deny` forbids writes; `write.allow`
   re-permits them. Deny beats allow on overlap.
-- **Protect tier:** `protect` is independent of `overridable`. A protected path
-  is hidden and cannot be written, regardless of write rules. Only operator
-  scopes may declare it.
+- **Protect tier:** protection is independent of the finality axis. A protected
+  path is hidden and cannot be written, regardless of write rules. It is
+  declared as a final `read.deny` from an operator scope (home registry or
+  user-global overrides) — only those entries compile to the protect wire
+  bucket.
 - **Traversal-only:** a masked directory that contains an unmasked descendant
   is shown in directory listings (so the guest can reach the descendant) but
   its own masked contents are filtered out.
@@ -127,6 +140,27 @@ tier declared in the home registry or user-global overrides.
   Policy is path-based; two paths sharing an inode are analyzed independently.
   The `preview` command warns when a masked path shares an inode with a visible
   path.
+
+### The write axis
+
+`write.deny` / `write.allow` are pattern-keyed write-admission rules. All
+scopes' write rules are UNIONED into one program and evaluated in
+authority-ascending order (operator scopes first); within a scope deny is
+applied before allow; the last non-final matching rule wins; and when nothing
+matches the default is allow (allow+tag). A final `write.deny` freezes the
+denial against every later scope; a final `write.allow` is operator-only
+(same trust gate as `read.allow`).
+
+**Activation caveat:** the pinned runtime (microsandbox fork rev `3bd051bf`)
+treats `write.allow` as INERT — at this pin, write admission enforces
+`write.deny` (and protect) only. `write.allow` activates when the fork pin is
+bumped after the fork's `feat/write-allow-semantics` branch lands on the
+pinned rev. Authoring `write.allow` rules today is safe: they compile,
+validate, and show up in `explain`/`preview`. The workestrate-side mirror
+evaluator (`control/agentctl/src/mount_policy/program.rs` `decide_write`)
+intentionally keeps the PINNED runtime's semantics and must be ported to the
+union semantics at re-pin time (see the `microsandbox-fork` input comment in
+`flake.nix`).
 
 ## CLI: `workestrate policy mounts`
 
@@ -183,18 +217,18 @@ layer's content root.
 schema_version = 1
 
 # Sensitive defaults inherited by every workload (reference scope).
-[policy.mounts]
-mask = ["**/.env", "**/*.pem", "**/.git/**"]
+[policy.mounts.read]
+deny = ["**/.env", "**/*.pem", "**/.git/**"]
 
 [workloads.api]
 kind = "service"
 image = { recipe = "registry", ref = "python:3.12-slim" }
 command = ["python", "-m", "http.server", "8080"]
 
-# Workload-scope policy: mask secrets, unmask a public cert.
-[workloads.api.policy.mounts]
-mask = ["secrets/**"]
-unmask = ["secrets/public.pem"]
+# Workload-scope policy: deny the secrets tree, carve out a public cert.
+[workloads.api.policy.mounts.read]
+deny = ["secrets/**"]
+allow = ["secrets/public.pem"]
 
 [[workloads.api.mounts]]
 host = "workspaces/api-state"
@@ -205,24 +239,26 @@ read_only = false
 host = "config"
 guest = "/config"
 read_only = true
-# Mount-entry policy (declaring layer only, v1): mask everything except the
+# Mount-entry policy (declaring layer only, v1): deny everything except the
 # public template.
-policy = { mask = ["**"], unmask = ["template.toml"] }
+policy = { read.deny = ["**"], read.allow = ["template.toml"] }
 ```
 
 ### Protect + writes (operator scope, home registry)
 
 ```toml
 # In the home registry config.toml — operator scope.
-[policy.mounts]
-# Protect is operator-only: hidden AND untouchable.
-protect = ["**/admin/**"]
+[policy.mounts.read]
+# Protection is operator-only: a final read.deny here compiles to the protect
+# wire bucket — hidden AND untouchable.
+deny = [{ pattern = "**/admin/**", final = true }]
 
-[policy.mounts.writes]
+[policy.mounts.write]
 # Deny writes to config; allow writes to the data dir.
 deny = ["config/**"]
 allow = ["data/**"]
 ```
 
-A config-repo layer can then `unmask` a specific config file (overridable
-default), but cannot unprotect it or override the operator's terminal deny.
+A config-repo layer can then carve out a specific config file with
+`read.allow` (non-final default), but cannot lift the protection or override
+the operator's final deny.

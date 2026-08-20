@@ -121,3 +121,45 @@ fails closed and refuses startup.
 Reference spec 22 (as amended) is the primary source for the consolidated read
 boundary, write admission, tag lifecycle, cascade, rename, hardlink, and
 symlink semantics.
+
+---
+
+## Addendum (2026-08-20): unified `[policy.mounts.read]`/`[policy.mounts.write]` config surface
+
+The config surface is UNIFIED on two axis sub-tables with a single entry
+shape; the split-vocabulary surface (`mask`/`unmask`/`protect` lists, the
+`[policy.mounts.writes]` table, the `writes_deny` mount-row sugar, and the
+entry key `overridable`) is REMOVED. Old words are hard unknown-field errors
+(no aliases — pre-release churn, no migration debt). The mapping:
+
+- `mask = [...]` → `[policy.mounts.read] deny = [...]`
+- `unmask = [...]` → `[policy.mounts.read] allow = [...]`
+- `protect = [...]` → an OPERATOR scope's `[policy.mounts.read] deny = [...]`
+  with `final = true` (the only protect-bucket route — see below)
+- `[policy.mounts.writes] { allow, deny }` → `[policy.mounts.write] { allow, deny }`
+- entry `{ pattern, overridable = false }` → `{ pattern, final = true }`;
+  compact strings / `overridable = true` → non-final (`final` defaults false)
+- mount-row sugar `mask`/`unmask`/`protect`/`writes_deny` → `read.deny` /
+  `read.allow` / `write.deny` / `write.allow` dotted keys directly on the
+  `[[mounts]]` row (parse-time normalized into the row's `policy` fragment)
+
+The **compiled-program wire format is unchanged** (`PathPolicyRule { effect,
+pattern, overridable, origin }`, the `protect` bucket, `writes`
+CompiledRuleSet, `"version": 1`): config `final = true` inverts onto the wire
+rule's `overridable = false`.
+
+**Trust-gate rule (compile time):** a final ALLOW on either axis
+(`read.allow` or `write.allow`) is rejected from non-operator scopes
+(`FinalAllowFromNonOperator`, naming pattern, origin, and axis). Final DENIES
+are accepted from ANY scope — denying is the fail-closed direction.
+
+**Protect-bucket routing rule:** an OPERATOR scope's final `read.deny`
+compiles to the `protect` wire bucket; a non-operator scope's final
+`read.deny` compiles to an ordinary terminal Mask rule (visibility only).
+The old surface's non-terminal `protect` from a repo/workload scope has no
+equivalent — protection is now operator-final by construction.
+
+**Duplicate check mirrors onto the write axis:** the exact-duplicate
+same-scope deny+allow conflict (at least one entry final, both origins named)
+now applies to `write.deny` × `write.allow` as well, and the read-axis check
+covers final read.deny entries routed to the protect bucket.

@@ -75,11 +75,12 @@ required = false
 
 # ─── Mount policy (spec 22) ────────────────────────────────────────────────
 # Optional [policy.mounts] block (global) and per-mount `policy = { ... }`
-# entries. See spec 22 for the full mask/unmask/protect/writes vocabulary.
-# [policy.mounts]
-# mask = ["**/.env", "**/.ssh/**"]
-# unmask = ["**/.env.example"]
-# protect = ["**/.secret"]            # operator-only; not valid in config repos
-# [policy.mounts.writes]
+# entries. See spec 22 for the full read/write deny/allow + final vocabulary.
+# [policy.mounts.read]
+# deny = ["**/.env", "**/.ssh/**"]
+# allow = ["**/.env.example"]
+# # protection = operator scopes only: a final read.deny in the home registry
+# # or overrides.toml compiles to the protect bucket (hidden AND untouchable)
+# [policy.mounts.write]
 # allow = ["**/.tmp/**"]
 # deny = ["**/.secret/**"]

@@ -62,29 +62,36 @@ operator terminal decision cannot be reversed later (§4).
 
 ## 3. PolicyValue: compact and expanded forms
 
-Every mask, unmask, protect, allow, and deny item is a
-`Vec<PolicyValue<Pattern>>` with the same compact/expanded, overridable, and
-provenance machinery. Compact strings are overridable by default; expanded
-tables use `{ pattern = "...", overridable = false }`. Parsing uses the
+Every `read.deny`, `read.allow`, `write.deny`, and `write.allow` item is a
+`Vec<PolicyValue<Pattern>>` with the same compact/expanded, finality, and
+provenance machinery. Compact strings are non-final by default; expanded
+tables use `{ pattern = "...", final = true }` (`final` defaults to `false`
+and must be explicit to be `true`). A config-surface `final = true` compiles
+to the wire rule's `overridable = false` — the compiled-program JSON wire
+format (§12, §15) is unchanged. Parsing uses the
 `deserialize_any` visitor idiom and `#[serde(deny_unknown_fields)]`, following
 the `RawBindingVisitor` precedent in `control/agentctl/src/config/types.rs:188-256`.
 
-## 4. Overridable / freeze semantics (LOCKED)
+## 4. Final / freeze semantics (LOCKED)
 
-Within a scope, mask then unmask ordering is retained. An overridable match is
-provisional; a match with `overridable = false` freezes its decision for that
-path. Later scopes cannot change a frozen decision. Exact duplicate same-scope
-mask+unmask is a compile error naming both origins; overlapping non-identical
-globs are legal and surfaced by `explain` (§13). This overridable axis is
-separate from the protect axis (§10.2): `overridable = false` does not mean
-protected.
+Within a scope, deny rules are applied before allow rules on each axis
+(per-scope deny-before-allow). A non-final match is provisional; a match with
+`final = true` freezes its decision for that path. Later scopes cannot change
+a frozen decision. An exact duplicate same-scope deny+allow pair for the same
+raw pattern where at least one entry is final is a compile error naming both
+origins — on BOTH axes (read and write); overlapping non-identical globs are
+legal and surfaced by `explain` (§13). Finality is separate from the protect
+bucket (§10.2): a final read.deny from a non-operator scope is an ordinary
+terminal deny, NOT protection.
 
 ## 5. Trust model
 
-Authority order is compile order. Terminal unmask is rejected from
-non-operator scopes at compile time. Terminal protection is subject to the
-same operator-only trust rule (§10.2). Terminal masks are allowed from any
-scope. This is the ADR 0005 monotonic-deny posture for collected policy.
+Authority order is compile order. A final allow — on EITHER axis
+(`read.allow` or `write.allow`) — is rejected from non-operator scopes at
+compile time. Final denies (`read.deny` / `write.deny`) are allowed from any
+scope: denying is the fail-closed direction. An OPERATOR scope's final
+read.deny routes to the protect wire bucket (§10.2). This is the ADR 0005
+monotonic-deny posture for collected policy.
 
 ## 6. Pattern dialect
 
@@ -121,15 +128,21 @@ Only policy fragments are collected.
 
 Mount-entry policy comes only from the layer declaring the mount row. A policy
 attached in another layer has no row after wholesale replacement. Scopes 1–5
-are unaffected.
+are unaffected. The mount row also accepts the axis sub-tables as sugar
+directly on the entry (`read.deny = [...]`, `read.allow = [...]`,
+`write.deny = [...]`, `write.allow = [...]`); the sugar is parse-time
+normalized into the row's `policy` fragment and concatenates with an explicit
+`policy` table on the same row.
 
 ## 9. Sensitive defaults (LOCKED)
 
 The reference config ships `.workestrate/`, `.env`, `.env.*`, `.git/`, `*.pem`,
 `*.key`, `.sops.yaml`, and `node_modules/.npmrc`-style entries as lowest-scope,
-overridable masks. They remain read boundaries: the new write-rule default of
-no matching rule is allow+tag. `protect` is a separate operator-only tier, not
-the default for sensitive entries.
+non-final `read.deny` entries, relaxable via `read.allow` carve-outs from
+later scopes. They remain read boundaries: the write-axis default when no
+write rule matches is allow+tag. Protection (an operator scope's final
+read.deny, §10.2) is a separate operator-only tier, not the default for
+sensitive entries.
 
 ## 10. Write rules, protect tier, and tagging
 
@@ -147,24 +160,30 @@ write risk, and blind-write-clobber is accepted.
 
 ### 10.2 Pattern-keyed write rules and protect
 
-`[policy.mounts]` gains `protect = [...]` and nested write families:
+`[policy.mounts]` carries two axis sub-tables — `[policy.mounts.read]`
+(visibility) and `[policy.mounts.write]` (write admission), each with `deny`
+and `allow` lists:
 
 ```toml
 # spec-test: skip
-[policy.mounts.writes]
+[policy.mounts.write]
 allow = ["generated/**"]
 deny = [".env", ".git/**"]
 ```
 
 All lists are `Vec<PolicyValue<Pattern>>`, with compact/expanded forms,
-overridable flags, and provenance. If no write rule matches, allow+tag is the
-default. Deny beats allow on overlap; terminal deny freezes; protect beats
-everything. Rules compound across scopes in the same authority order as mask
+final flags, and provenance. If no write rule matches, allow+tag is the
+default. Deny beats allow on overlap; final deny freezes; protect beats
+everything. Rules compound across scopes in the same authority order as read
 rules. Protected entries are fully untouchable: reads return ENOENT,
 readdir omits, create/write is denied (never tagged), unlink/rmdir and
 rename-source return ENOENT, rename-destination returns ENOENT, and cascade is
-blocked. Terminal protection is allowed only from OPERATOR scopes and otherwise
-is a compile error. Protection and overridability are independent axes.
+blocked. The protect tier is declared as a final read.deny from an OPERATOR
+scope: only those entries route to the protect wire bucket. A final read.deny
+from any other scope is legal but compiles to an ordinary terminal deny
+(visibility only); a final allow on either axis from a non-operator scope is
+a compile error (§5). Protection and finality are independent concepts:
+finality freezes precedence; protection removes the path entirely.
 
 ### 10.3 Consolidated semantics table
 
@@ -211,10 +230,10 @@ not leak names.
 
 ## 11. Provenance: `RuleOrigin`
 
-Every compiled mask, unmask, protect, allow, and deny rule carries
-`RuleOrigin { layer, file, scope_kind }`. Diagnostics name origins, duplicate
-errors name both origins, and explain traces include all matches and the
-`frozen_by` rule.
+Every compiled rule (read-axis deny/allow, protect-bucket, write-axis
+allow/deny) carries `RuleOrigin { layer, file, scope_kind }`. Diagnostics name
+origins, duplicate errors name both origins, and explain traces include all
+matches and the `frozen_by` rule.
 
 ## 12. Runtime program transmission v1 (LOCKED)
 
@@ -238,7 +257,7 @@ The prior guest-file + `MSB_MOUNT_POLICY` environment channel is **INVALIDATED**
 ## 13. Diagnostics: `explain` and `preview`
 
 Both CLI surfaces use the runtime compiler. `workestrate policy mounts explain
-<path>` shows every matching rule, effect, overridability, origin, frozen-by
+<path>` shows every matching rule, effect, terminal flag, origin, frozen-by
 decision, and final state. `preview <dir>` annotates Visible/Masked/
 TraversalOnly and warns on hardlink aliases using `(dev, ino)` detection.
 The current workestrate CLI uses explicit flags (`--workload`, `--mount`, and
@@ -278,51 +297,52 @@ never dereferences symlinks. Contract verified at microsandbox `d9b4d12e`.
 All examples are fragments (no `schema_version`) and retain `# spec-test: skip`
 for defense-in-depth and `spec_examples_parse` discipline.
 
-### 15.1 Operator scope: mask, protect, and write families
+### 15.1 Operator scope: read denies, protection, and write rules
 
 ```toml
 # spec-test: skip
-[policy.mounts]
-mask = [".env", ".env.*", "*.pem", "*.key", ".git/"]
-protect = [{ pattern = ".workestrate/", overridable = false }]
+[policy.mounts.read]
+# The final entry is operator-scope, so it routes to the protect wire bucket
+# (§5, §10.2); the compact entries stay ordinary relaxable denies.
+deny = [".env", ".env.*", "*.pem", "*.key", ".git/", { pattern = ".workestrate/", final = true }]
 
-[policy.mounts.writes]
+[policy.mounts.write]
 allow = ["generated/**"]
 deny = [".env", ".git/**"]
 ```
 
-### 15.2 Expanded rules and terminal operator protection
+### 15.2 Expanded rules and the `final` flag
 
 ```toml
 # spec-test: skip
-[policy.mounts]
-mask = [{ pattern = ".sops.yaml", overridable = false }]
-protect = [
-  { pattern = ".workestrate/", overridable = false },
-]
+[policy.mounts.read]
+# final = true freezes the entry against later scopes (§4). From an OPERATOR
+# scope it also routes to the protect wire bucket; from any other scope it is
+# an ordinary terminal deny (§5).
+deny = [{ pattern = ".sops.yaml", final = true }]
 
-[policy.mounts.writes]
-allow = [{ pattern = "reports/**", overridable = true }]
-deny = [{ pattern = "reports/private/**", overridable = false }]
+[policy.mounts.write]
+allow = ["reports/**"]
+deny = [{ pattern = "reports/private/**", final = true }]
 ```
 
 ### 15.3 Reference-config sensitive defaults
 
 ```toml
 # spec-test: skip
-[policy.mounts]
-mask = [".workestrate/", ".env", ".env.*", ".git/", "*.pem", "*.key", ".sops.yaml", "node_modules/.npmrc"]
+[policy.mounts.read]
+deny = [".workestrate/", ".env", ".env.*", ".git/", "*.pem", "*.key", ".sops.yaml", "node_modules/.npmrc"]
 ```
 
-### 15.4 Repo scope: mask and carve out an exception
+### 15.4 Repo scope: deny and carve out an exception
 
 ```toml
 # spec-test: skip
-[policy.mounts]
-mask = ["docs/secrets/**"]
-unmask = ["docs/secrets/README.md"]
+[policy.mounts.read]
+deny = ["docs/secrets/**"]
+allow = ["docs/secrets/README.md"]
 
-[policy.mounts.writes]
+[policy.mounts.write]
 allow = ["docs/secrets/generated/**"]
 deny = ["docs/secrets/**"]
 ```
@@ -331,13 +351,14 @@ deny = ["docs/secrets/**"]
 
 ```toml
 # spec-test: skip
-[workloads.example.policy.mounts]
-mask = ["fixtures/prod-data/"]
-protect = ["fixtures/prod-data/locked/"]
+# Workload scopes may NOT protect (protection is an operator scope's final
+# read.deny, §5); a workload can still freeze its own denies on both axes.
+[workloads.example.policy.mounts.read]
+deny = ["fixtures/prod-data/", { pattern = "fixtures/prod-data/locked/", final = true }]
 
-[workloads.example.policy.mounts.writes]
+[workloads.example.policy.mounts.write]
 allow = ["fixtures/prod-data/output/**"]
-deny = ["fixtures/prod-data/locked/**"]
+deny = [{ pattern = "fixtures/prod-data/locked/**", final = true }]
 ```
 
 ### 15.6 Mount-entry scope (declaring layer only, §8.3)
@@ -348,10 +369,9 @@ deny = ["fixtures/prod-data/locked/**"]
 host = "${CWD}"
 guest = "/work"
 read_only = false
-policy.mask = ["node_modules/"]
-policy.protect = [".workestrate/"]
-policy.writes.allow = ["build/**"]
-policy.writes.deny = [".env"]
+read.deny = ["node_modules/"]
+write.allow = ["build/**"]
+write.deny = [".env"]
 ```
 
 ## 16. Known design trade-offs
@@ -402,14 +422,16 @@ handling together; they are not a write-denial-only slice.
       come first.
 - [ ] Compact/expanded `PolicyValue` uses the `deserialize_any` visitor; no
       `#[serde(untagged)]`.
-- [ ] Mask/unmask freeze, duplicate errors, overlapping-glob diagnostics,
-      provenance, and terminal-unmask trust rules work as specified.
+- [ ] Read-axis deny/allow freeze, duplicate errors on both axes,
+      overlapping-glob diagnostics, provenance, and the final-allow trust
+      gates work as specified.
 - [ ] Pattern validation, non-UTF-8 fail-closed behavior, case sensitivity,
       and TraversalOnly analysis are implemented.
-- [ ] Write-rule allow/deny/default/overlap/terminal behavior is implemented;
+- [ ] Write-rule allow/deny/default/overlap/final behavior is implemented;
       no-match defaults to allow+tag and deny beats allow.
-- [ ] Protect is fully untouchable, beats all rules, and terminal protect is
-      rejected outside operator scopes; it is distinct from overridable.
+- [ ] Protect is fully untouchable and beats all rules; the protect bucket is
+      reached only by an operator scope's final read.deny; protection is
+      distinct from finality.
 - [ ] Tags validate identity, evict fail-safe, enforce bounds/counters, and
       follow unlink, rename, overwrite, forget, destroy, and restart lifecycle.
 - [ ] Cascade, anti-laundering rename, and symlink contract are enforced.

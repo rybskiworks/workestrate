@@ -1458,3 +1458,14 @@ directly (same entry shapes as `[policy.mounts]`), parse-time normalized
 INTO the mount's `policy` fragment (concatenating with an explicit policy
 table on the same mount); collection, compile, trust rules, and whole-array
 last-layer-wins merge are unchanged (26c657e).
+
+---
+
+## Addendum (2026-08-20)
+
+- **Mount-policy config surface unified:** `[policy.mounts.read]` /
+  `[policy.mounts.write]` `deny`/`allow` lists + the `final` entry flag
+  (`mask`/`unmask`/`protect`/`overridable` removed from the config surface —
+  hard unknown-field errors; the compiled-program wire format is unchanged);
+  the mount-row sugar is now `read.deny`/`read.allow`/`write.deny`/
+  `write.allow`. See the ADR 0029 addendum (2026-08-20) and spec 22.

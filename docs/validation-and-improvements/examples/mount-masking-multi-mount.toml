@@ -10,10 +10,11 @@ schema_version = 1
 
 # ---------------------------------------------------------------------------
 # Scope 3: reference config — sensitive defaults inherited by every workload.
-# All overridable = true (the default) so lower scopes can carve out exceptions.
+# All non-final (the default) so lower scopes can carve out exceptions with
+# read.allow.
 # ---------------------------------------------------------------------------
-[policy.mounts]
-mask = [
+[policy.mounts.read]
+deny = [
   "**/.env",
   "**/.env.*",
   "**/.ssh/**",
@@ -35,11 +36,11 @@ cpus = 2
 memory_mib = 1024
 command = ["python", "-m", "http.server", "8080"]
 
-# Scope 5: workload-level policy. Masks the secrets tree, then unmasks one
-# public certificate so the service can read it.
-[workloads.api.policy.mounts]
-mask = ["secrets/**"]
-unmask = ["secrets/public.pem"]
+# Scope 5: workload-level policy. Denies the secrets tree, then carves out
+# one public certificate so the service can read it.
+[workloads.api.policy.mounts.read]
+deny = ["secrets/**"]
+allow = ["secrets/public.pem"]
 
 # Mount 1: read-write data mount. No mount-entry policy; inherits the
 # workload + reference scopes.
@@ -49,13 +50,13 @@ guest = "/data"
 read_only = false
 
 # Mount 2: read-only config mount with a mount-entry policy (scope 6).
-# The mount-entry policy masks everything except the public template.
+# The mount-entry policy denies everything except the public template.
 # v1 limitation: mount-entry policy is collected from the declaring layer only.
 [[workloads.api.mounts]]
 host = "config"
 guest = "/config"
 read_only = true
-policy = { mask = ["**"], unmask = ["template.toml"] }
+policy = { read.deny = ["**"], read.allow = ["template.toml"] }
 
 # ---------------------------------------------------------------------------
 # Workload: an agent with a protected config and explicit write rules.
@@ -67,10 +68,10 @@ command = ["node", "index.js"]
 
 # Scope 5: workload policy with write rules. Default writes are allow+tag;
 # here we deny writes to config and allow writes to the workspace.
-[workloads.agent.policy.mounts]
-mask = ["config/**"]
+[workloads.agent.policy.mounts.read]
+deny = ["config/**"]
 
-[workloads.agent.policy.mounts.writes]
+[workloads.agent.policy.mounts.write]
 deny = ["config/**"]
 allow = ["workspace/**"]
 
