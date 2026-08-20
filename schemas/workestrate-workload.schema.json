@@ -155,6 +155,27 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "AxisFragment": {
+      "description": "One policy axis (read or write) for one scope: `deny`/`allow` entry lists. Entries are relaxable by default; `{ pattern = \"...\", final = true }` freezes an entry against later scopes (terminal at compile time, spec 22 §4).",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "deny": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "BakedFileSpec": {
       "description": "A single file baked into the image at build time (`image.baked_files`). `path` is the in-image destination and `content` is the verbatim file body.",
       "type": "object",
@@ -750,7 +771,7 @@
       ]
     },
     "MountPlan": {
-      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `mask`/`unmask`/`protect`/`writes_deny` are parse-time mount-policy sugar in the `[policy.mounts]` entry shapes, normalized into the row's `policy` fragment (never serialized).",
+      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `read`/`write` are parse-time mount-policy sugar in the `[policy.mounts]` axis shapes, normalized into the row's `policy` fragment (never serialized).",
       "type": "object",
       "required": [
         "guest",
@@ -762,14 +783,6 @@
         },
         "host": {
           "type": "string"
-        },
-        "mask": {
-          "description": "Mount-policy sugar: `mask` entries directly on the mount row, in the same shapes `[policy.mounts].mask` accepts (compact string or `{ pattern = \"...\", overridable = ... }`). Parse-time-only: normalized INTO `policy` by `TryFrom<MountPlanWire>`, never serialized.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
         },
         "mode": {
           "description": "Mount access mode: \"ro\" (read-only) or \"rw\" (read-write, the default).",
@@ -797,39 +810,40 @@
             "null"
           ]
         },
-        "protect": {
-          "description": "Mount-policy sugar: `protect` entries directly on the mount row (same shapes as `mask`). Parse-time-only, normalized into `policy.protect`.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
+        "read": {
+          "description": "Mount-policy sugar: the read axis (visibility) directly on the mount row, in the same shape `[policy.mounts.read]` accepts (TOML dotted-key form: `read.deny = [...]` / `read.allow = [...]`). Parse-time-only: normalized INTO `policy.read` by `TryFrom<MountPlanWire>`, never serialized.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "read_only": {
           "description": "DEPRECATED alias for `mode` (`true` ≡ \"ro\", `false` ≡ \"rw\"); accepted at parse time with a deprecation warning, never serialized.",
           "deprecated": true,
           "type": "boolean"
         },
-        "unmask": {
-          "description": "Mount-policy sugar: `unmask` entries directly on the mount row (same shapes as `mask`). Parse-time-only, normalized into `policy.unmask`.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
-        },
-        "writes_deny": {
-          "description": "Mount-policy sugar: write-deny entries directly on the mount row (same shapes as `mask`); sugar for `policy.writes.deny` (the mount-entry scope supports the full `writes` fragment). Parse-time only, normalized into `policy.writes.deny`.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
+        "write": {
+          "description": "Mount-policy sugar: the write axis (write admission) directly on the mount row (same shape as `read`; `write.deny = [...]` / `write.allow = [...]`). Parse-time-only, normalized into `policy.write`.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "MountsFragment": {
-      "description": "The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).\n\nMask/unmask entries hold RAW pattern strings: the compiler validates and compiles them against the declaring origin (spec 22 §6 pattern rejections name the origin), so fragments must not pre-compile patterns. `case_sensitivity` is likewise raw so the compiler can name the offending value and origin in a `CompileError` (spec 22 §6). The former scalar `masked_writes` field is intentionally gone: this pre-release surface now rejects it as an unknown field rather than silently accepting old policy.",
+      "description": "The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).\n\nEntries hold RAW pattern strings: the compiler validates and compiles them against the declaring origin (spec 22 §6 pattern rejections name the origin), so fragments must not pre-compile patterns. `case_sensitivity` is likewise raw so the compiler can name the offending value and origin in a `CompileError` (spec 22 §6). The former vocabulary (`mask`, `unmask`, `protect`, `writes`, `masked_writes`, entry key `overridable`) is intentionally gone: this pre-release surface rejects those keys as unknown fields rather than silently accepting old policy.",
       "type": "object",
       "properties": {
         "case_sensitivity": {
@@ -840,36 +854,24 @@
             "null"
           ]
         },
-        "mask": {
-          "description": "Mask entries, applied before this scope's `unmask` entries (spec 22 §4: per-scope mask-then-unmask).",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
-        },
-        "protect": {
-          "description": "Protected paths are hidden and untouchable, independently of overridability.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
-        },
-        "unmask": {
-          "description": "Unmask entries: carve-outs to this scope's (or a lower-authority scope's provisional) masks.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
-        },
-        "writes": {
-          "description": "Pattern-keyed write policy.",
+        "read": {
+          "description": "Read axis (visibility): `deny` hides paths, `allow` carves out exceptions; applied deny-then-allow within the scope (spec 22 §4: per-scope mask-then-unmask emission order).",
           "default": null,
           "anyOf": [
             {
-              "$ref": "#/definitions/WritesFragment"
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "write": {
+          "description": "Write axis (write admission): pattern-keyed `allow`/`deny`.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
             },
             {
               "type": "null"
@@ -950,8 +952,8 @@
         "pattern"
       ],
       "properties": {
-        "overridable": {
-          "default": true,
+        "final": {
+          "default": false,
           "type": "boolean"
         },
         "pattern": {
@@ -961,7 +963,7 @@
       "additionalProperties": false
     },
     "PolicyValue_for_String": {
-      "description": "The public schema for a raw string policy value. Runtime deserialization also supports the historical `value` alias, but the config surface is the compact string or the documented `{ pattern, overridable }` table.",
+      "description": "The public schema for a raw string policy value. Runtime deserialization also supports the historical `value` alias, but the config surface is the compact string or the documented `{ pattern, final }` table.",
       "anyOf": [
         {
           "type": "string"
@@ -1143,27 +1145,6 @@
           "description": "When true, render the source TEXT as a `${VAR}` template against the workload's guest-visible env view at seed time (`$$` emits a literal `$`; a missing var is a hard error).",
           "default": false,
           "type": "boolean"
-        }
-      },
-      "additionalProperties": false
-    },
-    "WritesFragment": {
-      "description": "Pattern-keyed write policy for one scope.",
-      "type": "object",
-      "properties": {
-        "allow": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
-        },
-        "deny": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PolicyValue_for_String"
-          }
         }
       },
       "additionalProperties": false
