@@ -78,7 +78,7 @@ impl ScopeKind {
 pub struct MountsFragment {
     /// Read axis (visibility): `deny` hides paths, `allow` carves out
     /// exceptions; applied deny-then-allow within the scope (spec 22 §4:
-    /// per-scope mask-then-unmask emission order).
+    /// per-scope deny-then-allow emission order).
     #[serde(default)]
     pub read: Option<AxisFragment>,
     /// Write axis (write admission): pattern-keyed `allow`/`deny`.
