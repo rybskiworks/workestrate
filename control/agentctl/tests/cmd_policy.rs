@@ -16,12 +16,11 @@ use std::path::PathBuf;
 const WORKESTRATE_TOML: &str = r#"
 schema_version = 1
 
-[policy.mounts]
-mask = [{ pattern = ".env", overridable = false }, "docs/secrets/**"]
-unmask = ["docs/secrets/README.md"]
-protect = [".workestrate/"]
+[policy.mounts.read]
+deny = [{ pattern = ".env", final = true }, "docs/secrets/**"]
+allow = ["docs/secrets/README.md"]
 
-[policy.mounts.writes]
+[policy.mounts.write]
 allow = ["docs/secrets/generated/**"]
 deny = ["docs/secrets/**"]
 
@@ -37,6 +36,24 @@ read_only = false
 
 [workloads.svc.network]
 default_deny = true
+"#;
+
+/// Operator-scope policy for the main fixture. The old fixture's
+/// `protect = [".workestrate/"]` carried protect-bucket ROUTING intent;
+/// under the unified surface the protect wire bucket is reached ONLY by an
+/// operator scope's final read.deny (spec 22 §5), so the entry moves to the
+/// isolated home registry (HomeRegistry scope) and the workload config
+/// loads as a config-repo layer through the real registry chain (the
+/// WORKESTRATE_CONFIG_DIR bypass collects no operator scope).
+const OPERATOR_REGISTRY_TOML: &str = r#"
+layers = ["cmd-policy"]
+
+[policy.mounts.read]
+deny = [{ pattern = ".workestrate/", final = true }]
+
+[configs.cmd-policy]
+url = "file:///unused/cmd-policy"
+ref = "main"
 "#;
 
 const NO_POLICY_TOML: &str = r#"
@@ -56,8 +73,8 @@ read_only = false
 const TWO_MOUNT_POLICY_TOML: &str = r#"
 schema_version = 1
 
-[policy.mounts]
-mask = ["shared-secret"]
+[policy.mounts.read]
+deny = ["shared-secret"]
 
 [workloads.svc]
 kind = "service"
@@ -68,13 +85,13 @@ command = ["true"]
 host = "."
 guest = "/workspace"
 read_only = false
-policy = { mask = ["node_modules/"] }
+policy = { read.deny = ["node_modules/"] }
 
 [[workloads.svc.mounts]]
 host = "."
 guest = "/data"
 read_only = false
-policy = { mask = ["secrets/"] }
+policy = { read.deny = ["secrets/"] }
 
 [workloads.svc.network]
 default_deny = true
@@ -116,8 +133,50 @@ fn two_mount_fixture() -> (TempDir, PathBuf) {
     (tmp, dir)
 }
 
-fn explain(config_dir: &PathBuf, path: &str, json: bool) -> std::process::Output {
-    explain_mount(config_dir, "/work", path, json)
+/// Isolated home whose registry registers the fixture's workestrate.toml as
+/// the `cmd-policy` config-repo layer and declares the operator-scope
+/// protect policy (OPERATOR_REGISTRY_TOML). The main fixture exercises
+/// protect routing, so it must load through the real registry chain.
+fn operator_home(fixture_dir: &std::path::Path) -> IsolatedHome {
+    let home = IsolatedHome::new("cmd-policy");
+    home.write_registry(OPERATOR_REGISTRY_TOML);
+    let repo = home.create_repo_dir("cmd-policy");
+    std::fs::copy(
+        fixture_dir.join("workestrate.toml"),
+        repo.join("workestrate.toml"),
+    )
+    .expect("copy fixture config into the config-repo layer");
+    home
+}
+
+/// Command against the registry flow: no CONFIG_DIR bypass, no project
+/// layer, and no reference base layer (the old bypass-mode fixtures never
+/// saw the reference layer either — keep the fixture hermetic).
+fn registry_cmd(home: &IsolatedHome) -> std::process::Command {
+    let mut cmd = home.cmd();
+    cmd.env_remove("WORKESTRATE_REFERENCE_CONFIG");
+    cmd.env("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+    cmd
+}
+
+fn explain(config_dir: &std::path::Path, path: &str, json: bool) -> std::process::Output {
+    let home = operator_home(config_dir);
+    let mut cmd = registry_cmd(&home);
+    cmd.args([
+        "policy",
+        "mounts",
+        "explain",
+        "--workload",
+        "svc",
+        "--mount",
+        "/work",
+        "--path",
+        path,
+    ]);
+    if json {
+        cmd.arg("--json");
+    }
+    cmd.output().expect("invoke policy mounts explain")
 }
 
 fn explain_mount(
@@ -145,8 +204,24 @@ fn explain_mount(
     cmd.output().expect("invoke policy mounts explain")
 }
 
-fn preview(config_dir: &PathBuf, json: bool) -> std::process::Output {
-    preview_mount(config_dir, "/work", json)
+fn preview(config_dir: &std::path::Path, json: bool) -> std::process::Output {
+    let home = operator_home(config_dir);
+    let mut cmd = registry_cmd(&home);
+    cmd.args([
+        "policy",
+        "mounts",
+        "preview",
+        "--workload",
+        "svc",
+        "--mount",
+        "/work",
+        "--root",
+    ])
+    .arg(config_dir);
+    if json {
+        cmd.arg("--json");
+    }
+    cmd.output().expect("invoke policy mounts preview")
 }
 
 fn preview_mount(config_dir: &PathBuf, mount: &str, json: bool) -> std::process::Output {
@@ -431,4 +506,193 @@ fn reference_config_ships_sensitive_mount_defaults() {
     let matches = doc["matches"].as_array().unwrap();
     assert!(!matches.is_empty());
     assert!(matches.iter().any(|m| m["pattern"] == "**/.env"));
+}
+
+// ---- Unified mount-policy surface (S4) ----
+
+/// Mount-row sugar fixture (spec 22 §8.3): `read.deny` / `write.deny`
+/// dotted keys directly on the `[[mounts]]` row, parse-time normalized into
+/// the row's policy fragment.
+const SUGAR_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "alpine:latest" }
+command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "."
+guest = "/work"
+mode = "rw"
+read.deny = ["scratch/**"]
+write.deny = [".env", "*.key"]
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
+/// Workload-scope policy with a FINAL ALLOW: rejected by the compile-time
+/// trust gate (spec 22 §5) on whichever axis declares it.
+fn final_allow_toml(axis: &str) -> String {
+    format!(
+        r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = {{ recipe = "registry", ref = "alpine:latest" }}
+command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "."
+guest = "/work"
+mode = "rw"
+
+[workloads.svc.policy.mounts.{axis}]
+allow = [{{ pattern = "generated/**", final = true }}]
+
+[workloads.svc.network]
+default_deny = true
+"#
+    )
+}
+
+/// Workload-scope FINAL DENY: the fail-closed direction, accepted from any
+/// scope (spec 22 §5).
+const FINAL_READ_DENY_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "alpine:latest" }
+command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "."
+guest = "/work"
+mode = "rw"
+
+[workloads.svc.policy.mounts.read]
+deny = [{ pattern = ".env", final = true }]
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
+/// Old-surface vocabulary (`mask`) must be a hard unknown-field error.
+const OLD_VOCAB_TOML: &str = r#"
+schema_version = 1
+
+[policy.mounts]
+mask = ["secrets/**"]
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "alpine:latest" }
+command = ["true"]
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
+#[test]
+fn mount_row_sugar_compiles_and_surfaces_in_explain_and_preview() {
+    let tmp = TempDir::new("cmd-policy-sugar-fixture");
+    let dir = tmp.path().to_path_buf();
+    std::fs::write(dir.join("workestrate.toml"), SUGAR_TOML).unwrap();
+    std::fs::create_dir_all(dir.join("scratch")).unwrap();
+    std::fs::write(dir.join("scratch/tmp.txt"), "tmp").unwrap();
+    std::fs::write(dir.join(".env"), "SECRET=1").unwrap();
+    std::fs::write(dir.join("visible.txt"), "v").unwrap();
+
+    // read.deny sugar: scratch/** is masked.
+    let out = explain_mount(&dir, "/work", "scratch/tmp.txt", false);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("decision: Masked"));
+
+    // write.deny sugar: .env stays visible but is write-denied; unmatched
+    // paths keep the default write-allow.
+    let out = explain_mount(&dir, "/work", ".env", false);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("decision: Visible"));
+    assert!(stdout(&out).contains("write: Deny"));
+
+    let out = explain_mount(&dir, "/work", "visible.txt", false);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("decision: Visible"));
+    assert!(stdout(&out).contains("write: Allow"));
+
+    // preview reflects the sugar-derived program too.
+    let out = preview_mount(&dir, "/work", false);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("scratch [masked]"));
+}
+
+#[test]
+fn workload_scope_final_allow_fails_the_trust_gate_on_both_axes() {
+    for (axis, surface) in [("read", "final read.allow"), ("write", "final write.allow")] {
+        let (_tmp, dir) = fixture_with(&final_allow_toml(axis));
+        let out = explain_mount(&dir, "/work", "generated/out.txt", false);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "workload-scope {surface} must fail: {}",
+            stdout(&out)
+        );
+        let err = stderr(&out);
+        assert!(
+            err.contains(surface),
+            "error must name the axis surface key ({surface}): {err}"
+        );
+        assert!(
+            err.contains("generated/**"),
+            "error must name the offending pattern: {err}"
+        );
+        assert!(
+            err.contains("workload scope"),
+            "error must name the declaring origin: {err}"
+        );
+    }
+}
+
+#[test]
+fn workload_scope_final_read_deny_is_accepted() {
+    let (_tmp, dir) = fixture_with(FINAL_READ_DENY_TOML);
+    let out = explain_mount(&dir, "/work", ".env", true);
+    assert!(
+        out.status.success(),
+        "workload-scope final read.deny must compile: {}",
+        stderr(&out)
+    );
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["decision"], "masked");
+    // The final deny freezes the decision at the workload scope.
+    assert_eq!(doc["frozen_by"]["scope_kind"], "workload");
+}
+
+#[test]
+fn old_vocabulary_is_a_hard_unknown_field_error_end_to_end() {
+    let (_tmp, dir) = fixture_with(OLD_VOCAB_TOML);
+    let home = IsolatedHome::new("cmd-policy-old-vocab");
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_CONFIG_DIR", &dir)
+        .args(["validate-config"])
+        .output()
+        .expect("invoke validate-config");
+    assert!(
+        !out.status.success(),
+        "old-surface `mask` must be rejected: {}",
+        stdout(&out)
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("unknown field"),
+        "error must be the unknown-field rejection: {err}"
+    );
+    assert!(
+        err.contains("mask"),
+        "error must name the removed key: {err}"
+    );
 }
