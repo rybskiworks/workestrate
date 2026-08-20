@@ -1,10 +1,10 @@
 //! `PolicyValue`: the compact / expanded entry forms (spec 22 §3).
 //!
-//! Each entry in a scope's mask/unmask list is a [`PolicyValue`]: either the
-//! compact string form (the pattern itself, overridable by default) or the
-//! expanded table form `{ pattern = "...", overridable = false }`;
-//! `overridable` defaults to `true` in both forms and must be explicit to be
-//! `false`.
+//! Each entry in a scope's read/write deny/allow list is a [`PolicyValue`]:
+//! either the compact string form (the pattern itself, `final = false` by
+//! default) or the expanded table form `{ pattern = "...", final = true }`;
+//! `final` defaults to `false` in both forms and must be explicit to be
+//! `true`.
 //!
 //! Parsing follows the `deserialize_any` visitor idiom — the precedent is
 //! the `RawBinding` / `RawBindingVisitor` pair in `config/types.rs` (spec 16):
@@ -20,33 +20,36 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
 
-/// A policy value carrying its overridability (spec 22 §3): `overridable`
-/// defaults to `true` in both the compact and expanded forms and must be
-/// explicit in expanded form to be `false`. A non-overridable value becomes
-/// a terminal rule at compile time (spec 22 §4).
+/// A policy value carrying its finality (spec 22 §3): `final` defaults to
+/// `false` in both the compact and expanded forms and must be explicit in
+/// expanded form to be `true`. A final value becomes a terminal rule at
+/// compile time (spec 22 §4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct PolicyValue<T> {
     /// The scalar payload (a raw pattern string, or a compiled [`Pattern`]).
     pub value: T,
-    /// Whether a later scope's matching rule may supersede this one (spec 22
-    /// §4). Defaults to `true`; `false` makes the compiled rule terminal.
-    pub overridable: bool,
+    /// Whether this entry is final: frozen, so a later scope's matching rule
+    /// may NOT supersede it (spec 22 §4). Defaults to `false`; `true` makes
+    /// the compiled rule terminal. Serialized under the config-surface name
+    /// `final`.
+    #[serde(rename = "final")]
+    pub terminal: bool,
 }
 
 impl<T> PolicyValue<T> {
-    /// An overridable value (the compact-form default).
-    pub fn overridable(value: T) -> Self {
+    /// A relaxable (non-final) value (the compact-form default).
+    pub fn relaxable(value: T) -> Self {
         Self {
             value,
-            overridable: true,
+            terminal: false,
         }
     }
 
-    /// A non-overridable (terminal) value (spec 22 §4).
+    /// A final (terminal) value (spec 22 §4).
     pub fn terminal(value: T) -> Self {
         Self {
             value,
-            overridable: false,
+            terminal: true,
         }
     }
 }
@@ -84,16 +87,18 @@ impl PolicyScalar for Pattern {
 }
 
 /// Parse-time intermediate for the expanded table form (spec 22 §3).
-/// `deny_unknown_fields` hard-rejects stray keys inside the inline table;
-/// the `pattern` alias keeps the mount-policy surface (`{ pattern = ... }`)
-/// working for every scalar type, including the raw-string fragment entries
-/// the compiler later validates against the declaring origin.
+/// `deny_unknown_fields` hard-rejects stray keys inside the inline table
+/// (including the removed `overridable` key); the `pattern` alias keeps the
+/// mount-policy surface (`{ pattern = ... }`) working for every scalar type,
+/// including the raw-string fragment entries the compiler later validates
+/// against the declaring origin.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawExpanded<T> {
     #[serde(alias = "pattern")]
     value: T,
-    overridable: Option<bool>,
+    #[serde(rename = "final")]
+    r#final: Option<bool>,
 }
 
 /// Parse-time visitor for the compact/expanded forms (spec 22 §3), following
@@ -111,7 +116,7 @@ where
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{} (compact form) or an inline table like {{ {} = ..., overridable = ... }} \
+            "{} (compact form) or an inline table like {{ {} = ..., final = ... }} \
              (expanded form)",
             T::DESCRIBE,
             T::EXPANDED_KEY
@@ -123,7 +128,7 @@ where
         E: de::Error,
     {
         T::from_compact(v.to_string())
-            .map(PolicyValue::overridable)
+            .map(PolicyValue::relaxable)
             .map_err(de::Error::custom)
     }
 
@@ -132,7 +137,7 @@ where
         E: de::Error,
     {
         T::from_compact(v)
-            .map(PolicyValue::overridable)
+            .map(PolicyValue::relaxable)
             .map_err(de::Error::custom)
     }
 
@@ -145,7 +150,7 @@ where
         let raw = RawExpanded::<T>::deserialize(de::value::MapAccessDeserializer::new(map))?;
         Ok(PolicyValue {
             value: raw.value,
-            overridable: raw.overridable.unwrap_or(true),
+            terminal: raw.r#final.unwrap_or(false),
         })
     }
 }
@@ -180,47 +185,59 @@ mod tests {
     }
 
     #[test]
-    fn compact_string_form_defaults_to_overridable() {
+    fn compact_string_form_defaults_to_relaxable() {
         let parsed: StringWrapper = toml::from_str(r#"entry = ".env""#).unwrap();
         assert_eq!(
             parsed.entry,
             PolicyValue {
                 value: ".env".to_string(),
-                overridable: true,
+                terminal: false,
             }
         );
     }
 
     #[test]
-    fn expanded_form_defaults_overridable_to_true() {
+    fn expanded_form_defaults_final_to_false() {
         let parsed: StringWrapper = toml::from_str(r#"entry = { value = ".env" }"#).unwrap();
         assert_eq!(
             parsed.entry,
             PolicyValue {
                 value: ".env".to_string(),
-                overridable: true,
+                terminal: false,
             }
         );
     }
 
     #[test]
-    fn expanded_form_accepts_explicit_non_overridable() {
+    fn expanded_form_accepts_explicit_final() {
         let parsed: StringWrapper =
-            toml::from_str(r#"entry = { value = ".env", overridable = false }"#).unwrap();
+            toml::from_str(r#"entry = { value = ".env", final = true }"#).unwrap();
         assert_eq!(
             parsed.entry,
             PolicyValue {
                 value: ".env".to_string(),
-                overridable: false,
+                terminal: true,
             }
+        );
+    }
+
+    #[test]
+    fn removed_overridable_key_is_rejected_as_an_unknown_field() {
+        let err =
+            toml::from_str::<StringWrapper>(r#"entry = { value = ".env", overridable = false }"#)
+                .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("unknown field") && text.contains("overridable"),
+            "the removed `overridable` key must be a hard unknown-field error: {text}"
         );
     }
 
     #[test]
     fn pattern_scalar_uses_the_pattern_key_in_expanded_form() {
         let parsed: PatternWrapper =
-            toml::from_str(r#"entry = { pattern = ".git/", overridable = false }"#).unwrap();
-        assert!(!parsed.entry.overridable);
+            toml::from_str(r#"entry = { pattern = ".git/", final = true }"#).unwrap();
+        assert!(parsed.entry.terminal);
         assert_eq!(parsed.entry.value.raw(), ".git/");
         assert!(parsed.entry.value.is_dir_only());
     }
@@ -228,7 +245,7 @@ mod tests {
     #[test]
     fn pattern_scalar_accepts_the_compact_string_form() {
         let parsed: PatternWrapper = toml::from_str(r#"entry = ".env""#).unwrap();
-        assert!(parsed.entry.overridable);
+        assert!(!parsed.entry.terminal);
         assert_eq!(parsed.entry.value.raw(), ".env");
     }
 
@@ -238,7 +255,7 @@ mod tests {
         // collected fragments hold raw strings for the compiler to validate.
         let parsed: StringWrapper = toml::from_str(r#"entry = { pattern = ".env" }"#).unwrap();
         assert_eq!(parsed.entry.value, ".env");
-        assert!(parsed.entry.overridable);
+        assert!(!parsed.entry.terminal);
     }
 
     #[test]
@@ -250,6 +267,14 @@ mod tests {
             text.contains("unknown field") && text.contains("bogus"),
             "unknown-field error must be preserved verbatim: {text}"
         );
+    }
+
+    #[test]
+    fn serialized_form_uses_the_final_key() {
+        // `PolicyValue` is reachable via `MountsFragment: Serialize` (plan
+        // JSON `policy` field); the wire name is the config-surface `final`.
+        let json = serde_json::to_value(PolicyValue::terminal(".env".to_string())).unwrap();
+        assert_eq!(json, serde_json::json!({"value": ".env", "final": true}));
     }
 
     #[test]

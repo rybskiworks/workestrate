@@ -3,7 +3,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 
 use crate::microsandbox::secrets::SecretDefinition;
-use crate::mount_policy::{MountsFragment, PolicyValue, WritesFragment};
+use crate::mount_policy::{AxisFragment, MountsFragment};
 
 /// Default host bind address for published ports (ADR 0026): `127.0.0.1`,
 /// the shared singleton bind. Parallel slots bind per-instance loopbacks
@@ -164,10 +164,10 @@ impl fmt::Display for MountMode {
 ///
 /// Because the alias normalizes at parse time, merged config layers only
 /// ever carry `mode` (mounts merge whole-array, last layer wins). The same
-/// parse-time normalization applies to the mount-policy sugar fields
-/// (`mask`/`unmask`/`protect`/`writes_deny` directly on the row): they are
-/// concatenated INTO `policy` by the custom `Deserialize` below, so merged
-/// layers only ever carry the canonical `policy` fragment.
+/// parse-time normalization applies to the mount-policy sugar sub-tables
+/// (`read`/`write` directly on the row, in the `[policy.mounts]` axis
+/// shape): they are concatenated INTO `policy` by the custom `Deserialize`
+/// below, so merged layers only ever carry the canonical `policy` fragment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountPlan {
     pub host: String,
@@ -192,9 +192,12 @@ impl MountPlan {
 /// `TryFrom<MountPlanWire>` can distinguish "unset" from the default. Also
 /// the schemars source: the generated JSON Schema for `MountPlan` is derived
 /// from this struct (see the manual `JsonSchema` impl below), so the schema
-/// matches exactly what the parser accepts.
+/// matches exactly what the parser accepts. `deny_unknown_fields` keeps the
+/// removed sugar words (`mask`/`unmask`/`protect`/`writes_deny`) hard parse
+/// errors rather than silently ignored keys.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 struct MountPlanWire {
     host: String,
     guest: String,
@@ -212,42 +215,21 @@ struct MountPlanWire {
     policy: Option<MountsFragment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     policy_file: Option<std::path::PathBuf>,
-    /// Mount-policy sugar: `mask` entries directly on the mount row, in the
-    /// same shapes `[policy.mounts].mask` accepts (compact string or
-    /// `{ pattern = "...", overridable = ... }`). Parse-time-only: normalized
-    /// INTO `policy` by `TryFrom<MountPlanWire>`, never serialized.
+    /// Mount-policy sugar: the read axis (visibility) directly on the mount
+    /// row, in the same shape `[policy.mounts.read]` accepts (TOML
+    /// dotted-key form: `read.deny = [...]` / `read.allow = [...]`).
+    /// Parse-time-only: normalized INTO `policy.read` by
+    /// `TryFrom<MountPlanWire>`, never serialized.
     #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Vec<crate::mount_policy::scope::PolicyValueStringSchema>")
-    )]
-    mask: Vec<PolicyValue<String>>,
-    /// Mount-policy sugar: `unmask` entries directly on the mount row (same
-    /// shapes as `mask`). Parse-time-only, normalized into `policy.unmask`.
+    #[cfg_attr(feature = "schema", schemars(with = "Option<AxisFragment>"))]
+    read: Option<AxisFragment>,
+    /// Mount-policy sugar: the write axis (write admission) directly on the
+    /// mount row (same shape as `read`; `write.deny = [...]` /
+    /// `write.allow = [...]`). Parse-time-only, normalized into
+    /// `policy.write`.
     #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Vec<crate::mount_policy::scope::PolicyValueStringSchema>")
-    )]
-    unmask: Vec<PolicyValue<String>>,
-    /// Mount-policy sugar: `protect` entries directly on the mount row (same
-    /// shapes as `mask`). Parse-time-only, normalized into `policy.protect`.
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Vec<crate::mount_policy::scope::PolicyValueStringSchema>")
-    )]
-    protect: Vec<PolicyValue<String>>,
-    /// Mount-policy sugar: write-deny entries directly on the mount row
-    /// (same shapes as `mask`); sugar for `policy.writes.deny` (the
-    /// mount-entry scope supports the full `writes` fragment). Parse-time
-    /// only, normalized into `policy.writes.deny`.
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Vec<crate::mount_policy::scope::PolicyValueStringSchema>")
-    )]
-    writes_deny: Vec<PolicyValue<String>>,
+    #[cfg_attr(feature = "schema", schemars(with = "Option<AxisFragment>"))]
+    write: Option<AxisFragment>,
 }
 
 /// One deprecation warning per process is enough (a config may declare many
@@ -297,30 +279,26 @@ impl TryFrom<MountPlanWire> for MountPlan {
             }
             (None, None) => MountMode::default(),
         };
-        // Mount-policy sugar normalization: `mask`/`unmask`/`protect`/
-        // `writes_deny` on the row concatenate INTO the mount's `policy`
-        // fragment (AFTER any explicitly-declared `policy` table entries;
-        // both forms may mix). Per-scope compile groups mask-before-unmask
-        // and handles protect/writes as separate lists (spec 22 §4), so the
-        // concatenation order is semantics-free. Entries stay raw
-        // `PolicyValue<String>` — pattern validation happens at compile time
-        // with the declaring origin named, exactly as the policy-table form.
+        // Mount-policy sugar normalization: `read`/`write` sub-tables on the
+        // row concatenate INTO the mount's `policy` fragment (AFTER any
+        // explicitly-declared `policy` table entries; both forms may mix).
+        // Per-scope compile groups read.deny-before-read.allow and keeps the
+        // write axis a separate rule set (spec 22 §4), so the concatenation
+        // order is semantics-free. Entries stay raw `PolicyValue<String>` —
+        // pattern validation happens at compile time with the declaring
+        // origin named, exactly as the policy-table form.
         let mut policy = wire.policy;
-        if !wire.mask.is_empty()
-            || !wire.unmask.is_empty()
-            || !wire.protect.is_empty()
-            || !wire.writes_deny.is_empty()
-        {
+        if wire.read.is_some() || wire.write.is_some() {
             let fragment = policy.get_or_insert_with(MountsFragment::default);
-            fragment.mask.extend(wire.mask);
-            fragment.unmask.extend(wire.unmask);
-            fragment.protect.extend(wire.protect);
-            if !wire.writes_deny.is_empty() {
-                fragment
-                    .writes
-                    .get_or_insert_with(WritesFragment::default)
-                    .deny
-                    .extend(wire.writes_deny);
+            if let Some(read) = wire.read {
+                let target = fragment.read.get_or_insert_with(AxisFragment::default);
+                target.deny.extend(read.deny);
+                target.allow.extend(read.allow);
+            }
+            if let Some(write) = wire.write {
+                let target = fragment.write.get_or_insert_with(AxisFragment::default);
+                target.deny.extend(write.deny);
+                target.allow.extend(write.allow);
             }
         }
         Ok(Self {
@@ -389,9 +367,9 @@ impl schemars::JsonSchema for MountPlan {
                 "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical \
                  field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` \
                  is a deprecated parse-time alias (normalized into `mode`, never \
-                 serialized). `mask`/`unmask`/`protect`/`writes_deny` are parse-time \
-                 mount-policy sugar in the `[policy.mounts]` entry shapes, normalized \
-                 into the row's `policy` fragment (never serialized)."
+                 serialized). `read`/`write` are parse-time mount-policy sugar in the \
+                 `[policy.mounts]` axis shapes, normalized into the row's `policy` \
+                 fragment (never serialized)."
                     .to_string(),
             ),
             ..Default::default()

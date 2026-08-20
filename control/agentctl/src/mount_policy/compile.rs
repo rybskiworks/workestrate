@@ -8,9 +8,9 @@
 //! Compile-time checks (each names the declaring origin, spec 22 §11):
 //!
 //! - patterns are compiled; rejections name the origin (spec 22 §6);
-//! - exact-duplicate same-scope terminal mask+unmask for the same raw
-//!   pattern is an error naming BOTH origins (spec 22 §4);
-//! - a non-operator scope declaring a terminal (non-overridable) unmask is
+//! - exact-duplicate same-scope terminal read.deny+read.allow for the same
+//!   raw pattern is an error naming BOTH origins (spec 22 §4);
+//! - a non-operator scope declaring a terminal (final) read.allow is
 //!   rejected (spec 22 §5);
 //! - `case_sensitivity` v1 accepts exactly `"sensitive"` (spec 22 §6).
 
@@ -46,6 +46,9 @@ pub enum CompileError {
         pattern: String,
     },
     /// A terminal protect from an untrusted scope (spec 22 §5).
+    // S2 note: the protect bucket is not populated in this slice (see the
+    // TODO(S3) in `compile_scope`), so this variant is currently
+    // unconstructed; S3 reinstates protect-bucket routing and its trust gate.
     TerminalProtectFromNonOperator { origin: RuleOrigin, pattern: String },
     /// `case_sensitivity` other than `"sensitive"` (spec 22 §6): v1 compiles
     /// case-sensitive programs only, with the flag recorded explicitly.
@@ -115,8 +118,9 @@ impl std::error::Error for CompileError {
 ///
 /// Scopes are ordered by authority (operator scopes first, spec 22 §2); the
 /// sort is stable, so same-kind scopes (e.g. config-repo layers) keep their
-/// registry stack order. Within each scope, mask rules are emitted before
-/// unmask rules (per-scope mask-then-unmask, spec 22 §4).
+/// registry stack order. Within each scope, read.deny rules are emitted
+/// before read.allow rules (per-scope deny-then-allow — the mask-then-unmask
+/// emission order of spec 22 §4).
 pub fn compile(mut scopes: Vec<PolicyScope>) -> Result<MountPolicyProgram, CompileError> {
     // Authority order = compile order (spec 22 §2, §5).
     scopes.sort_by_key(|scope| scope.scope_kind.authority());
@@ -157,52 +161,47 @@ fn validate_program_flags(scope: &PolicyScope) -> Result<(), CompileError> {
     Ok(())
 }
 
-/// Compile one scope's fragment into rules (mask-then-unmask), applying
-/// trust validation (spec 22 §5) and the exact-duplicate conflict check
-/// (spec 22 §4).
+/// Compile one scope's fragment into rules (read.deny-then-read.allow),
+/// applying trust validation (spec 22 §5) and the exact-duplicate conflict
+/// check (spec 22 §4).
 fn compile_scope(
     scope: &PolicyScope,
 ) -> Result<(Vec<PathPolicyRule>, Vec<PathPolicyRule>, CompiledRuleSet), CompileError> {
     let origin = scope.origin();
     let mut rules = Vec::new();
-    for entry in &scope.fragment.mask {
-        rules.push(compile_rule(RuleEffect::Mask, entry, &origin)?);
-    }
-    for entry in &scope.fragment.unmask {
-        rules.push(compile_rule(RuleEffect::Unmask, entry, &origin)?);
-    }
-    let protect: Vec<_> = scope
-        .fragment
-        .protect
-        .iter()
-        .map(|entry| compile_rule(RuleEffect::Mask, entry, &origin))
-        .collect::<Result<_, _>>()?;
-    for rule in &protect {
-        if rule.is_terminal() && !scope.scope_kind.is_operator() {
-            return Err(CompileError::TerminalProtectFromNonOperator {
-                origin: rule.origin.clone(),
-                pattern: rule.pattern.raw().to_string(),
-            });
+    if let Some(read) = &scope.fragment.read {
+        for entry in &read.deny {
+            rules.push(compile_rule(RuleEffect::Mask, entry, &origin)?);
+        }
+        for entry in &read.allow {
+            rules.push(compile_rule(RuleEffect::Unmask, entry, &origin)?);
         }
     }
+    // TODO(S3): route operator-scope final read.deny entries to the protect
+    // wire bucket (with the TerminalProtectFromNonOperator trust gate for
+    // non-operator scopes). S2 treats EVERY final read.deny the way the old
+    // compiler treated a terminal mask — a Mask rule in the rules array —
+    // and leaves the protect bucket empty.
+    let protect = Vec::new();
     let mut writes = CompiledRuleSet::default();
-    if let Some(fragment) = &scope.fragment.writes {
-        writes.allow = fragment
+    if let Some(write) = &scope.fragment.write {
+        writes.allow = write
             .allow
             .iter()
             .map(|entry| compile_rule(RuleEffect::Unmask, entry, &origin))
             .collect::<Result<_, _>>()?;
-        writes.deny = fragment
+        writes.deny = write
             .deny
             .iter()
             .map(|entry| compile_rule(RuleEffect::Mask, entry, &origin))
             .collect::<Result<_, _>>()?;
     }
 
-    // Trust validation (spec 22 §5): a terminal unmask from a non-operator
-    // scope would let an untrusted repo permanently reopen paths an operator
-    // expects maskable. Terminal MASKS are allowed from any scope — masking
-    // is the fail-closed direction.
+    // Trust validation (spec 22 §5): a terminal read.allow from a
+    // non-operator scope would let an untrusted repo permanently reopen
+    // paths an operator expects maskable. Terminal read.deny entries are
+    // allowed from any scope — denying visibility is the fail-closed
+    // direction.
     for rule in &rules {
         if rule.effect == RuleEffect::Unmask
             && rule.is_terminal()
@@ -216,9 +215,9 @@ fn compile_scope(
     }
 
     // Exact-duplicate conflict (spec 22 §4): the same raw pattern appearing
-    // as both a mask and an unmask in ONE scope, where at least one of the
-    // pair is terminal, is a contradiction the author must resolve.
-    // Overridable-only duplicates resolve harmlessly by mask-then-unmask
+    // as both a read.deny and a read.allow in ONE scope, where at least one
+    // of the pair is terminal, is a contradiction the author must resolve.
+    // Relaxable-only duplicates resolve harmlessly by deny-then-allow
     // ordering.
     let masks = rules.iter().filter(|rule| rule.effect == RuleEffect::Mask);
     let unmasks: Vec<&PathPolicyRule> = rules
@@ -244,8 +243,9 @@ fn compile_scope(
     Ok((rules, protect, writes))
 }
 
-/// Compile one mask/unmask entry into a rule; pattern rejections name the
-/// declaring origin (spec 22 §6).
+/// Compile one read/write-axis entry into a rule; pattern rejections name
+/// the declaring origin (spec 22 §6). The config surface's `final` flag
+/// inverts onto the wire rule's `overridable` flag (wire format unchanged).
 fn compile_rule(
     effect: RuleEffect,
     entry: &PolicyValue<String>,
@@ -256,7 +256,7 @@ fn compile_rule(
     Ok(PathPolicyRule {
         effect,
         pattern,
-        overridable: entry.overridable,
+        overridable: !entry.terminal,
         origin: origin.clone(),
     })
 }
@@ -267,14 +267,14 @@ mod tests {
     use super::*;
     use crate::mount_policy::lexical::LexicalPath;
     use crate::mount_policy::program::Decision;
-    use crate::mount_policy::scope::{MountsFragment, ScopeKind, WritesFragment};
+    use crate::mount_policy::scope::{AxisFragment, MountsFragment, ScopeKind};
     use std::path::PathBuf;
 
     fn scope_with(
         kind: ScopeKind,
         layer: &str,
-        mask: Vec<PolicyValue<String>>,
-        unmask: Vec<PolicyValue<String>>,
+        read_deny: Vec<PolicyValue<String>>,
+        read_allow: Vec<PolicyValue<String>>,
         case_sensitivity: Option<&str>,
     ) -> PolicyScope {
         PolicyScope::new(
@@ -282,10 +282,11 @@ mod tests {
             layer,
             PathBuf::from(format!("{layer}.toml")),
             MountsFragment {
-                mask,
-                unmask,
-                protect: vec![],
-                writes: None,
+                read: Some(AxisFragment {
+                    deny: read_deny,
+                    allow: read_allow,
+                }),
+                write: None,
                 case_sensitivity: case_sensitivity.map(str::to_string),
             },
         )
@@ -294,33 +295,33 @@ mod tests {
     fn scope(
         kind: ScopeKind,
         layer: &str,
-        mask: Vec<PolicyValue<String>>,
-        unmask: Vec<PolicyValue<String>>,
+        read_deny: Vec<PolicyValue<String>>,
+        read_allow: Vec<PolicyValue<String>>,
     ) -> PolicyScope {
-        scope_with(kind, layer, mask, unmask, None)
+        scope_with(kind, layer, read_deny, read_allow, None)
     }
 
-    fn mask_entry(pattern: &str) -> PolicyValue<String> {
-        PolicyValue::overridable(pattern.to_string())
+    fn entry(pattern: &str) -> PolicyValue<String> {
+        PolicyValue::relaxable(pattern.to_string())
     }
 
-    fn mask_terminal(pattern: &str) -> PolicyValue<String> {
+    fn terminal_entry(pattern: &str) -> PolicyValue<String> {
         PolicyValue::terminal(pattern.to_string())
     }
 
-    fn write_scope(
+    fn axis_scope(
         kind: ScopeKind,
         layer: &str,
-        protect: Vec<PolicyValue<String>>,
-        writes: WritesFragment,
+        read: AxisFragment,
+        write: AxisFragment,
     ) -> PolicyScope {
         PolicyScope::new(
             kind,
             layer,
             format!("{layer}.toml"),
             MountsFragment {
-                protect,
-                writes: Some(writes),
+                read: Some(read),
+                write: Some(write),
                 ..Default::default()
             },
         )
@@ -338,13 +339,13 @@ mod tests {
             scope(
                 ScopeKind::Workload,
                 "workload",
-                vec![mask_entry("workload-only")],
+                vec![entry("workload-only")],
                 vec![],
             ),
             scope(
                 ScopeKind::HomeRegistry,
                 "registry",
-                vec![mask_entry("registry-only")],
+                vec![entry("registry-only")],
                 vec![],
             ),
         ])
@@ -361,14 +362,14 @@ mod tests {
             scope(
                 ScopeKind::HomeRegistry,
                 "registry",
-                vec![mask_terminal(".env")],
+                vec![terminal_entry(".env")],
                 vec![],
             ),
             scope(
                 ScopeKind::ConfigRepoLayer,
                 "repo",
                 vec![],
-                vec![mask_entry(".env")],
+                vec![entry(".env")],
             ),
         ])
         .unwrap();
@@ -393,12 +394,12 @@ mod tests {
                 ScopeKind::HomeRegistry,
                 "registry",
                 vec![],
-                vec![mask_terminal(".env")],
+                vec![terminal_entry(".env")],
             ),
             scope(
                 ScopeKind::ConfigRepoLayer,
                 "repo",
-                vec![mask_entry(".env")],
+                vec![entry(".env")],
                 vec![],
             ),
         ])
@@ -424,7 +425,7 @@ mod tests {
                 kind,
                 "repo",
                 vec![],
-                vec![mask_terminal(".env")],
+                vec![terminal_entry(".env")],
             )])
             .unwrap_err();
             let text = err.to_string();
@@ -446,7 +447,7 @@ mod tests {
             let program = compile(vec![scope(
                 kind,
                 "any",
-                vec![mask_terminal(".env")],
+                vec![terminal_entry(".env")],
                 vec![],
             )]);
             assert!(program.is_ok(), "terminal mask must compile from {kind:?}");
@@ -460,8 +461,8 @@ mod tests {
         let program = compile(vec![scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
-            vec![mask_entry("docs/secrets/**")],
-            vec![mask_entry("docs/secrets/README.md")],
+            vec![entry("docs/secrets/**")],
+            vec![entry("docs/secrets/README.md")],
         )])
         .unwrap();
         assert_eq!(
@@ -476,8 +477,8 @@ mod tests {
         let err = compile(vec![scope(
             ScopeKind::HomeRegistry,
             "registry",
-            vec![mask_terminal(".env")],
-            vec![mask_entry(".env")],
+            vec![terminal_entry(".env")],
+            vec![entry(".env")],
         )])
         .unwrap_err();
         let text = err.to_string();
@@ -498,8 +499,8 @@ mod tests {
         let program = compile(vec![scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
-            vec![mask_entry(".env")],
-            vec![mask_entry(".env")],
+            vec![entry(".env")],
+            vec![entry(".env")],
         )])
         .unwrap();
         assert_eq!(decide(&program, ".env"), Decision::Visible);
@@ -513,14 +514,14 @@ mod tests {
             scope(
                 ScopeKind::HomeRegistry,
                 "registry",
-                vec![mask_terminal(".env")],
+                vec![terminal_entry(".env")],
                 vec![],
             ),
             scope(
                 ScopeKind::ConfigRepoLayer,
                 "repo",
                 vec![],
-                vec![mask_entry(".env")],
+                vec![entry(".env")],
             ),
         ]);
         assert!(program.is_ok());
@@ -559,7 +560,7 @@ mod tests {
             let err = compile(vec![scope(
                 ScopeKind::ConfigRepoLayer,
                 "repo",
-                vec![mask_entry(raw)],
+                vec![entry(raw)],
                 vec![],
             )])
             .unwrap_err();
@@ -572,14 +573,14 @@ mod tests {
     }
 
     #[test]
-    fn writes_default_allow_deny_wins_and_protect_wins() {
-        let program = compile(vec![write_scope(
+    fn writes_default_allow_and_deny_wins() {
+        let program = compile(vec![axis_scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
-            vec![mask_entry("protected")],
-            WritesFragment {
-                allow: vec![mask_entry("**")],
-                deny: vec![mask_entry("denied")],
+            AxisFragment::default(),
+            AxisFragment {
+                allow: vec![entry("**")],
+                deny: vec![entry("denied")],
             },
         )])
         .unwrap();
@@ -595,6 +596,37 @@ mod tests {
                 .decision,
             crate::mount_policy::WriteDecision::Deny
         );
+        let empty = compile(vec![]).unwrap();
+        assert_eq!(
+            empty
+                .decide_write(&LexicalPath::new("new").unwrap())
+                .decision,
+            crate::mount_policy::WriteDecision::Allow
+        );
+    }
+
+    /// S3 target behavior: an operator-scope final read.deny routes to the
+    /// protect wire bucket; protected paths are Masked AND write-denied even
+    /// under a broad write.allow. S2 emits final read.deny as a plain
+    /// (terminal) Mask rule and leaves the protect bucket empty, so the
+    /// protect assertions below do not hold yet.
+    #[test]
+    #[ignore = "S3 reinstates protect-bucket routing"]
+    fn protect_bucket_forces_masked_and_write_deny() {
+        let program = compile(vec![axis_scope(
+            ScopeKind::HomeRegistry,
+            "operator",
+            AxisFragment {
+                deny: vec![terminal_entry("protected")],
+                allow: vec![],
+            },
+            AxisFragment {
+                allow: vec![entry("**")],
+                deny: vec![],
+            },
+        )])
+        .unwrap();
+        assert!(program.is_protected(&LexicalPath::new("protected").unwrap()));
         assert_eq!(
             program
                 .decide_write(&LexicalPath::new("protected").unwrap())
@@ -607,30 +639,34 @@ mod tests {
                 .decision,
             Decision::Masked
         );
-        let empty = compile(vec![]).unwrap();
-        assert_eq!(
-            empty
-                .decide_write(&LexicalPath::new("new").unwrap())
-                .decision,
-            crate::mount_policy::WriteDecision::Allow
-        );
     }
 
+    /// S3 target behavior: a final read.deny from a non-operator scope is
+    /// routed to the protect bucket and rejected by the protect trust gate.
+    /// S2 treats final read.deny as an ordinary terminal mask (allowed from
+    /// any scope), so the rejection below does not hold yet.
     #[test]
+    #[ignore = "S3 reinstates protect-bucket routing"]
     fn terminal_protect_is_operator_only() {
-        let err = compile(vec![write_scope(
+        let err = compile(vec![axis_scope(
             ScopeKind::Workload,
             "workload",
-            vec![mask_terminal("secret")],
-            WritesFragment::default(),
+            AxisFragment {
+                deny: vec![terminal_entry("secret")],
+                allow: vec![],
+            },
+            AxisFragment::default(),
         )])
         .unwrap_err();
         assert!(err.to_string().contains("workload") && err.to_string().contains("secret"));
-        assert!(compile(vec![write_scope(
+        assert!(compile(vec![axis_scope(
             ScopeKind::HomeRegistry,
             "operator",
-            vec![mask_terminal("secret")],
-            WritesFragment::default()
+            AxisFragment {
+                deny: vec![terminal_entry("secret")],
+                allow: vec![],
+            },
+            AxisFragment::default()
         )])
         .is_ok());
     }

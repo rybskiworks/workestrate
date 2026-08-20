@@ -473,18 +473,19 @@ mod tests {
     fn scope(
         kind: ScopeKind,
         layer: &str,
-        mask: Vec<PolicyValue<String>>,
-        unmask: Vec<PolicyValue<String>>,
+        read_deny: Vec<PolicyValue<String>>,
+        read_allow: Vec<PolicyValue<String>>,
     ) -> PolicyScope {
         PolicyScope::new(
             kind,
             layer,
             format!("{layer}.toml"),
             MountsFragment {
-                mask,
-                unmask,
-                protect: vec![],
-                writes: None,
+                read: Some(crate::mount_policy::scope::AxisFragment {
+                    deny: read_deny,
+                    allow: read_allow,
+                }),
+                write: None,
                 case_sensitivity: None,
             },
         )
@@ -498,8 +499,8 @@ mod tests {
         compile(vec![scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
-            vec![PolicyValue::overridable("private/**".to_string())],
-            vec![PolicyValue::overridable("private/public/**".to_string())],
+            vec![PolicyValue::relaxable("private/**".to_string())],
+            vec![PolicyValue::relaxable("private/public/**".to_string())],
         )])
         .unwrap()
     }
@@ -542,8 +543,8 @@ mod tests {
         let program = compile(vec![scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
-            vec![PolicyValue::overridable("a/**".to_string())],
-            vec![PolicyValue::overridable("**/x".to_string())],
+            vec![PolicyValue::relaxable("a/**".to_string())],
+            vec![PolicyValue::relaxable("**/x".to_string())],
         )])
         .unwrap();
         let anywhere = LexicalPath::new("any/dir").unwrap();
@@ -573,14 +574,14 @@ mod tests {
             scope(
                 ScopeKind::HomeRegistry,
                 "registry",
-                vec![PolicyValue::overridable(".env".to_string())],
+                vec![PolicyValue::relaxable(".env".to_string())],
                 vec![],
             ),
             scope(
                 ScopeKind::ConfigRepoLayer,
                 "repo",
                 vec![],
-                vec![PolicyValue::overridable(".env".to_string())],
+                vec![PolicyValue::relaxable(".env".to_string())],
             ),
         ])
         .unwrap();

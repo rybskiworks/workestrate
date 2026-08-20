@@ -63,55 +63,49 @@ impl ScopeKind {
 
 /// The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).
 ///
-/// Mask/unmask entries hold RAW pattern strings: the compiler validates and
-/// compiles them against the declaring origin (spec 22 §6 pattern rejections
-/// name the origin), so fragments must not pre-compile patterns.
-/// `case_sensitivity` is likewise raw so the compiler can name the offending
-/// value and origin in a `CompileError` (spec 22 §6). The former scalar
-/// `masked_writes` field is intentionally gone: this pre-release surface now
-/// rejects it as an unknown field rather than silently accepting old policy.
+/// Entries hold RAW pattern strings: the compiler validates and compiles
+/// them against the declaring origin (spec 22 §6 pattern rejections name the
+/// origin), so fragments must not pre-compile patterns. `case_sensitivity`
+/// is likewise raw so the compiler can name the offending value and origin
+/// in a `CompileError` (spec 22 §6). The former vocabulary (`mask`,
+/// `unmask`, `protect`, `writes`, `masked_writes`, entry key `overridable`)
+/// is intentionally gone: this pre-release surface rejects those keys as
+/// unknown fields rather than silently accepting old policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MountsFragment {
-    /// Mask entries, applied before this scope's `unmask` entries (spec 22
-    /// §4: per-scope mask-then-unmask).
+    /// Read axis (visibility): `deny` hides paths, `allow` carves out
+    /// exceptions; applied deny-then-allow within the scope (spec 22 §4:
+    /// per-scope mask-then-unmask emission order).
     #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
-    pub mask: Vec<PolicyValue<String>>,
-    /// Unmask entries: carve-outs to this scope's (or a lower-authority
-    /// scope's provisional) masks.
+    pub read: Option<AxisFragment>,
+    /// Write axis (write admission): pattern-keyed `allow`/`deny`.
     #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
-    pub unmask: Vec<PolicyValue<String>>,
-    /// Protected paths are hidden and untouchable, independently of
-    /// overridability.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
-    pub protect: Vec<PolicyValue<String>>,
-    /// Pattern-keyed write policy.
-    #[serde(default)]
-    pub writes: Option<WritesFragment>,
+    pub write: Option<AxisFragment>,
     /// Raw `case_sensitivity` setting; v1 accepts exactly `"sensitive"`
     /// (spec 22 §6).
     #[serde(default)]
     pub case_sensitivity: Option<String>,
 }
 
-/// Pattern-keyed write policy for one scope.
+/// One policy axis (read or write) for one scope: `deny`/`allow` entry
+/// lists. Entries are relaxable by default; `{ pattern = "...", final =
+/// true }` freezes an entry against later scopes (terminal at compile time,
+/// spec 22 §4).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WritesFragment {
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
-    pub allow: Vec<PolicyValue<String>>,
+pub struct AxisFragment {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
     pub deny: Vec<PolicyValue<String>>,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<PolicyValueStringSchema>"))]
+    pub allow: Vec<PolicyValue<String>>,
 }
 
 /// The public schema for a raw string policy value. Runtime deserialization
 /// also supports the historical `value` alias, but the config surface is the
-/// compact string or the documented `{ pattern, overridable }` table.
+/// compact string or the documented `{ pattern, final }` table.
 // `pub` so the `[[mounts]]` sugar fields on `MountPlanWire`
 // (`microsandbox/plan.rs`) can project the same schema shape.
 #[cfg(feature = "schema")]
@@ -130,14 +124,14 @@ pub enum PolicyValueStringSchema {
 #[allow(dead_code)]
 pub struct PolicyValueStringExpandedSchema {
     pattern: String,
-    #[serde(default = "policy_value_overridable_default")]
-    #[schemars(default = "policy_value_overridable_default")]
-    overridable: bool,
+    #[serde(default = "policy_value_final_default")]
+    #[schemars(default = "policy_value_final_default")]
+    r#final: bool,
 }
 
 #[cfg(feature = "schema")]
-fn policy_value_overridable_default() -> bool {
-    true
+fn policy_value_final_default() -> bool {
+    false
 }
 
 /// One collected scope: a policy fragment plus the provenance of where it
@@ -257,31 +251,31 @@ mod tests {
     fn fragment_parses_the_spec_15_surface() {
         let fragment: MountsFragment = toml::from_str(
             r#"
-            mask = [".env", { pattern = ".workestrate/", overridable = false }]
-            unmask = [".env.example"]
-            protect = [{ pattern = ".secret", overridable = false }]
+            [read]
+            deny = [".env", { pattern = ".workestrate/", final = true }]
+            allow = [".env.example"]
 
-            [writes]
+            [write]
             allow = [".tmp/**"]
-            deny = [{ pattern = ".secret/**", overridable = false }]
+            deny = [{ pattern = ".secret/**", final = true }]
             "#,
         )
         .unwrap();
-        assert_eq!(fragment.mask.len(), 2);
-        assert!(fragment.mask[0].overridable);
-        assert!(!fragment.mask[1].overridable);
-        assert_eq!(fragment.mask[1].value, ".workestrate/");
-        assert_eq!(fragment.unmask.len(), 1);
-        assert_eq!(fragment.protect[0].value, ".secret");
-        let writes = fragment.writes.unwrap();
-        assert_eq!(writes.allow[0].value, ".tmp/**");
-        assert!(!writes.deny[0].overridable);
+        let read = fragment.read.unwrap();
+        assert_eq!(read.deny.len(), 2);
+        assert!(!read.deny[0].terminal);
+        assert!(read.deny[1].terminal);
+        assert_eq!(read.deny[1].value, ".workestrate/");
+        assert_eq!(read.allow.len(), 1);
+        let write = fragment.write.unwrap();
+        assert_eq!(write.allow[0].value, ".tmp/**");
+        assert!(write.deny[0].terminal);
         assert_eq!(fragment.case_sensitivity, None);
     }
 
     #[test]
     fn fragment_rejects_unknown_fields() {
-        let err = toml::from_str::<MountsFragment>(r#"masks = [".env"]"#).unwrap_err();
+        let err = toml::from_str::<MountsFragment>(r#"reads = [".env"]"#).unwrap_err();
         assert!(
             err.to_string().contains("unknown field"),
             "unknown-field error must surface: {err}"
@@ -289,8 +283,32 @@ mod tests {
     }
 
     #[test]
-    fn former_masked_writes_scalar_is_rejected_intentionally() {
-        let err = toml::from_str::<MountsFragment>(r#"masked_writes = "deny""#).unwrap_err();
-        assert!(err.to_string().contains("unknown field"), "{err}");
+    fn former_vocabulary_is_rejected_intentionally() {
+        // The old surface words are REMOVED (no aliases): each must be a
+        // hard unknown-field error.
+        for doc in [
+            r#"mask = [".env"]"#,
+            r#"unmask = [".env"]"#,
+            r#"protect = [".env"]"#,
+            r#"masked_writes = "deny""#,
+            r#"[writes]
+               deny = [".env"]"#,
+        ] {
+            let err = toml::from_str::<MountsFragment>(doc).unwrap_err();
+            assert!(
+                err.to_string().contains("unknown field"),
+                "{doc:?} must be rejected as an unknown field: {err}"
+            );
+        }
+        // And the removed entry key inside an expanded form.
+        let err = toml::from_str::<MountsFragment>(
+            r#"[read]
+               deny = [{ pattern = ".env", overridable = false }]"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field") && err.to_string().contains("overridable"),
+            "removed `overridable` entry key must be a hard unknown-field error: {err}"
+        );
     }
 }

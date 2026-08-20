@@ -2087,22 +2087,23 @@ pub(crate) mod tests {
             r#"
 schema_version = 1
 
-[policy.mounts]
-mask = ["compact", { pattern = "expanded", overridable = false }]
-unmask = [{ pattern = "carve-out" }]
+[policy.mounts.read]
+deny = ["compact", { pattern = "expanded", final = true }]
+allow = [{ pattern = "carve-out" }]
 "#,
         )?;
         let fragment = layer.config.policy.mounts.unwrap();
-        assert_eq!(fragment.mask[0].value, "compact");
-        assert!(fragment.mask[0].overridable);
-        assert_eq!(fragment.mask[1].value, "expanded");
-        assert!(!fragment.mask[1].overridable);
-        assert_eq!(fragment.unmask[0].value, "carve-out");
-        assert!(fragment.unmask[0].overridable);
+        let read = fragment.read.expect("read axis");
+        assert_eq!(read.deny[0].value, "compact");
+        assert!(!read.deny[0].terminal);
+        assert_eq!(read.deny[1].value, "expanded");
+        assert!(read.deny[1].terminal);
+        assert_eq!(read.allow[0].value, "carve-out");
+        assert!(!read.allow[0].terminal);
 
         let err = match crate::merge::Layer::from_string(
             "bad-policy",
-            "schema_version = 1\n[policy.mounts]\nmask = [{ pattern = \"x\", typo = true }]\n",
+            "schema_version = 1\n[policy.mounts.read]\ndeny = [{ pattern = \"x\", typo = true }]\n",
         ) {
             Ok(_) => panic!("unknown policy field must be rejected"),
             Err(err) => format!("{err:#}"),
@@ -2120,7 +2121,10 @@ unmask = [{ pattern = "carve-out" }]
         let registry = crate::config::Registry {
             policy: crate::config::PolicyConfig {
                 mounts: Some(crate::mount_policy::MountsFragment {
-                    mask: vec![crate::mount_policy::PolicyValue::overridable("home".into())],
+                    read: Some(crate::mount_policy::AxisFragment {
+                        deny: vec![crate::mount_policy::PolicyValue::relaxable("home".into())],
+                        allow: vec![],
+                    }),
                     ..Default::default()
                 }),
             },
@@ -2132,31 +2136,36 @@ unmask = [{ pattern = "carve-out" }]
             r#"
 schema_version = 1
 
-[policy.mounts]
-mask = ["config"]
+[policy.mounts.read]
+deny = ["config"]
 
 [workloads.pi]
 kind = "agent"
 image = { recipe = "registry", ref = "node:24" }
 command = []
 
-[workloads.pi.policy.mounts]
-mask = ["workload"]
+[workloads.pi.policy.mounts.read]
+deny = ["workload"]
 
 [[workloads.pi.mounts]]
 host = "config"
 guest = "/config"
 read_only = true
 
-[workloads.pi.mounts.policy]
-mask = ["mount"]
+[workloads.pi.mounts.policy.read]
+deny = ["mount"]
 "#,
         );
+        fn read_deny(fragment: &crate::mount_policy::MountsFragment) -> &str {
+            fragment.read.as_ref().expect("read axis").deny[0]
+                .value
+                .as_str()
+        }
         let collected = collect_policy_scopes(Some(&registry), &[layer])?;
         let global = collected
             .global
             .iter()
-            .map(|scope| (scope.scope_kind, scope.fragment.mask[0].value.as_str()))
+            .map(|scope| (scope.scope_kind, read_deny(&scope.fragment)))
             .collect::<Vec<_>>();
         assert_eq!(global.len(), 2);
         assert_eq!(global[0].0, crate::mount_policy::ScopeKind::HomeRegistry);
@@ -2170,12 +2179,12 @@ mask = ["mount"]
             workload[0].scope_kind,
             crate::mount_policy::ScopeKind::Workload
         );
-        assert_eq!(workload[0].fragment.mask[0].value, "workload");
+        assert_eq!(read_deny(&workload[0].fragment), "workload");
         assert_eq!(
             workload[1].scope_kind,
             crate::mount_policy::ScopeKind::MountEntry
         );
-        assert_eq!(workload[1].fragment.mask[0].value, "mount");
+        assert_eq!(read_deny(&workload[1].fragment), "mount");
         Ok(())
     }
 
@@ -2191,8 +2200,8 @@ schema_version = 1
 host = "old"
 guest = "/old"
 read_only = true
-[workloads.pi.mounts.policy]
-mask = ["old-policy"]
+[workloads.pi.mounts.policy.read]
+deny = ["old-policy"]
 "#,
         );
         let higher = policy_layer(
@@ -2281,7 +2290,7 @@ schema_version = 1
 [[workloads.pi.mounts]]
 host = "old"
 guest = "/old"
-mask = ["lower-mask"]
+read.deny = ["lower-deny"]
 "#,
         )?;
         let higher = crate::merge::Layer::from_string(
@@ -2292,9 +2301,9 @@ schema_version = 1
 [[workloads.pi.mounts]]
 host = "new"
 guest = "/new"
-policy.mask = ["table-mask"]
-mask = ["sugar-mask"]
-writes_deny = ["sugar-deny"]
+policy.read.deny = ["table-deny"]
+read.deny = ["sugar-deny"]
+write.deny = ["sugar-write-deny"]
 "#,
         )?;
         let (merged, _) = crate::merge::merge_layers(&[lower, higher])?;
@@ -2308,13 +2317,20 @@ writes_deny = ["sugar-deny"]
             .policy
             .as_ref()
             .expect("sugar must normalize into Some(policy) before merge");
-        let masks: Vec<&str> = policy.mask.iter().map(|e| e.value.as_str()).collect();
-        assert_eq!(masks, ["table-mask", "sugar-mask"]);
-        let writes = policy.writes.as_ref().expect("writes fragment");
-        assert_eq!(writes.deny.len(), 1);
-        assert_eq!(writes.deny[0].value, "sugar-deny");
+        let denies: Vec<&str> = policy
+            .read
+            .as_ref()
+            .expect("read axis")
+            .deny
+            .iter()
+            .map(|e| e.value.as_str())
+            .collect();
+        assert_eq!(denies, ["table-deny", "sugar-deny"]);
+        let write = policy.write.as_ref().expect("write axis");
+        assert_eq!(write.deny.len(), 1);
+        assert_eq!(write.deny[0].value, "sugar-write-deny");
         // The lower layer's sugar-normalized policy is gone with its array.
-        assert!(!masks.contains(&"lower-mask"));
+        assert!(!denies.contains(&"lower-deny"));
         Ok(())
     }
 
@@ -2325,7 +2341,7 @@ writes_deny = ["sugar-deny"]
         write_repo_file(
             &repo,
             "workestrate/workloads/capsule/workload.toml",
-            "kind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n[policy.mounts]\nmask = [\"capsule\"]\n",
+            "kind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n[policy.mounts.read]\ndeny = [\"capsule\"]\n",
         );
         let layers = load_config_repo_layers("personal", &repo)?;
         let collected = collect_policy_scopes(None, &layers)?;
@@ -2347,7 +2363,7 @@ writes_deny = ["sugar-deny"]
         let layer = policy_layer(
             "repo",
             Path::new("/tmp/repo.toml"),
-            "schema_version = 1\n[policy.mounts]\nunmask = [{ pattern = \".env\", overridable = false }]\n",
+            "schema_version = 1\n[policy.mounts.read]\nallow = [{ pattern = \".env\", final = true }]\n",
         );
         let collected = collect_policy_scopes(None, &[layer])?;
         let err = crate::mount_policy::compile(collected.global).unwrap_err();

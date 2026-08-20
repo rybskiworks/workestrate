@@ -25,7 +25,7 @@
 //!   filesystem access; non-UTF-8 paths fail closed (masked).
 //! - [`rule`]: [`PathPolicyRule`] + [`RuleOrigin`] provenance (spec 22 §11).
 //! - [`compile`]: the compiler — precedence, freeze semantics, trust
-//!   validation (terminal unmask/protect rejected from non-operator scopes),
+//!   validation (final read.allow rejected from non-operator scopes),
 //!   exact-duplicate conflict detection, write-rule precedence, and explicit
 //!   versioned fail-closed transmission.
 //! - [`program`]: the compiled program and pure evaluator — the three
@@ -49,7 +49,7 @@ pub use program::{
     WriteDecision, WritePolicy, WriteRuleEffect, WriteRuleMatch,
 };
 pub use rule::{PathPolicyRule, RuleEffect, RuleOrigin};
-pub use scope::{CollectedPolicy, MountsFragment, PolicyScope, ScopeKind, WritesFragment};
+pub use scope::{AxisFragment, CollectedPolicy, MountsFragment, PolicyScope, ScopeKind};
 pub use value::{PolicyScalar, PolicyValue};
 
 static COLLECTED: std::sync::Mutex<Option<CollectedPolicy>> = std::sync::Mutex::new(None);

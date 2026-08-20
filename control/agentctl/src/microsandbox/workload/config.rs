@@ -1282,13 +1282,13 @@ command = ["true"]
 host = "."
 guest = "/workspace"
 read_only = false
-policy = { mask = ["node_modules/"] }
+policy = { read = { deny = ["node_modules/"] } }
 
 [[workloads.svc.mounts]]
 host = "."
 guest = "/data"
 read_only = false
-policy = { mask = ["secrets/"] }
+policy = { read = { deny = ["secrets/"] } }
 
 [workloads.svc.network]
 default_deny = true
