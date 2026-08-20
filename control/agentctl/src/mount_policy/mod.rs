@@ -25,9 +25,11 @@
 //!   filesystem access; non-UTF-8 paths fail closed (masked).
 //! - [`rule`]: [`PathPolicyRule`] + [`RuleOrigin`] provenance (spec 22 §11).
 //! - [`compile`]: the compiler — precedence, freeze semantics, trust
-//!   validation (final read.allow rejected from non-operator scopes),
-//!   exact-duplicate conflict detection, write-rule precedence, and explicit
-//!   versioned fail-closed transmission.
+//!   validation (final allows on either axis are operator-only; final denies
+//!   are allowed from any scope, and an operator scope's final read.deny
+//!   routes to the protect wire bucket), exact-duplicate conflict detection
+//!   on both axes, write-rule precedence, and explicit versioned fail-closed
+//!   transmission.
 //! - [`program`]: the compiled program and pure evaluator — the three
 //!   decision states Visible / Masked / TraversalOnly (spec 22 §7),
 //!   `may_unmask_descendant` literal-prefix analysis, and full explain
@@ -41,7 +43,7 @@ pub mod rule;
 pub mod scope;
 pub mod value;
 
-pub use compile::{compile, CompileError, DuplicateConflict};
+pub use compile::{compile, CompileError, DuplicateConflict, PolicyAxis};
 pub use lexical::{LexicalPath, LexicalPathError};
 pub use pattern::{Pattern, PatternError, PatternErrorKind};
 pub use program::{

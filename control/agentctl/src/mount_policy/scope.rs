@@ -40,7 +40,9 @@ impl ScopeKind {
     }
 
     /// Operator scopes (home registry, user-global overrides) may declare
-    /// terminal unmasks; non-operator scopes may not (spec 22 §5).
+    /// final allows, and their final read.deny entries route to the protect
+    /// wire bucket; non-operator scopes may not declare final allows
+    /// (spec 22 §5).
     pub fn is_operator(self) -> bool {
         matches!(
             self,

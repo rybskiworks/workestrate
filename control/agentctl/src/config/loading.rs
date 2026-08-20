@@ -2359,7 +2359,7 @@ write.deny = ["sugar-write-deny"]
     }
 
     #[test]
-    fn non_operator_terminal_unmask_is_rejected_after_collection() -> Result<()> {
+    fn non_operator_final_read_allow_is_rejected_after_collection() -> Result<()> {
         let layer = policy_layer(
             "repo",
             Path::new("/tmp/repo.toml"),
@@ -2367,7 +2367,7 @@ write.deny = ["sugar-write-deny"]
         );
         let collected = collect_policy_scopes(None, &[layer])?;
         let err = crate::mount_policy::compile(collected.global).unwrap_err();
-        assert!(err.to_string().contains("terminal unmask") && err.to_string().contains(".env"));
+        assert!(err.to_string().contains("final read.allow") && err.to_string().contains(".env"));
         Ok(())
     }
 

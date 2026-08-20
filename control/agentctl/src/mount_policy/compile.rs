@@ -8,10 +8,14 @@
 //! Compile-time checks (each names the declaring origin, spec 22 §11):
 //!
 //! - patterns are compiled; rejections name the origin (spec 22 §6);
-//! - exact-duplicate same-scope terminal read.deny+read.allow for the same
-//!   raw pattern is an error naming BOTH origins (spec 22 §4);
-//! - a non-operator scope declaring a terminal (final) read.allow is
-//!   rejected (spec 22 §5);
+//! - exact-duplicate same-scope deny+allow pairs for the same raw pattern
+//!   where at least one entry is final are an error naming BOTH origins —
+//!   on the read axis (deny entries routed to the protect bucket included)
+//!   AND mirrored on the write axis (spec 22 §4);
+//! - a non-operator scope declaring a final allow (read.allow or
+//!   write.allow) is rejected; final denies are allowed from ANY scope
+//!   (denying is the fail-closed direction) (spec 22 §5);
+//! - an OPERATOR scope's final read.deny routes to the protect wire bucket;
 //! - `case_sensitivity` v1 accepts exactly `"sensitive"` (spec 22 §6).
 
 use crate::mount_policy::pattern::{Pattern, PatternError};
@@ -32,24 +36,24 @@ pub enum CompileError {
         /// The rejection, with the declaring origin attached.
         source: PatternError,
     },
-    /// Exact-duplicate same-scope terminal mask+unmask for the same raw
-    /// pattern (spec 22 §4): a contradiction the author must resolve, not a
-    /// precedence question. Boxed to keep the error type small.
+    /// Exact-duplicate same-scope deny+allow for the same raw pattern with
+    /// at least one final entry (spec 22 §4): a contradiction the author
+    /// must resolve, not a precedence question. Applies to BOTH axes (read
+    /// and write). Boxed to keep the error type small.
     DuplicateTerminalConflict(Box<DuplicateConflict>),
-    /// A non-operator scope declared a terminal unmask (spec 22 §5): a repo
-    /// or project layer may not permanently reopen paths an operator expects
-    /// maskable.
-    TerminalUnmaskFromNonOperator {
-        /// Where the terminal unmask was declared.
+    /// A non-operator scope declared a final allow — on the read axis
+    /// (`read.allow`) or the write axis (`write.allow`) (spec 22 §5): an
+    /// untrusted layer may not permanently reopen paths an operator expects
+    /// closable. Final DENIES are allowed from any scope (the fail-closed
+    /// direction) and never reach this variant.
+    FinalAllowFromNonOperator {
+        /// Where the final allow was declared.
         origin: RuleOrigin,
         /// The offending raw pattern string.
         pattern: String,
+        /// Which axis (`read` or `write`) carried the final allow.
+        axis: PolicyAxis,
     },
-    /// A terminal protect from an untrusted scope (spec 22 §5).
-    // S2 note: the protect bucket is not populated in this slice (see the
-    // TODO(S3) in `compile_scope`), so this variant is currently
-    // unconstructed; S3 reinstates protect-bucket routing and its trust gate.
-    TerminalProtectFromNonOperator { origin: RuleOrigin, pattern: String },
     /// `case_sensitivity` other than `"sensitive"` (spec 22 §6): v1 compiles
     /// case-sensitive programs only, with the flag recorded explicitly.
     UnsupportedCaseSensitivity {
@@ -66,10 +70,30 @@ pub enum CompileError {
 pub struct DuplicateConflict {
     /// The duplicated raw pattern string.
     pub pattern: String,
-    /// Where the mask entry was declared.
-    pub mask_origin: RuleOrigin,
-    /// Where the unmask entry was declared.
-    pub unmask_origin: RuleOrigin,
+    /// Where the deny entry was declared.
+    pub deny_origin: RuleOrigin,
+    /// Where the allow entry was declared.
+    pub allow_origin: RuleOrigin,
+}
+
+/// The policy axis a compile-time diagnostic applies to: `read` (visibility)
+/// or `write` (write admission) — the `[policy.mounts.read]` /
+/// `[policy.mounts.write]` sub-tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyAxis {
+    /// The read (visibility) axis.
+    Read,
+    /// The write (write-admission) axis.
+    Write,
+}
+
+impl fmt::Display for PolicyAxis {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PolicyAxis::Read => f.write_str("read"),
+            PolicyAxis::Write => f.write_str("write"),
+        }
+    }
 }
 
 impl fmt::Display for CompileError {
@@ -80,21 +104,20 @@ impl fmt::Display for CompileError {
             }
             CompileError::DuplicateTerminalConflict(conflict) => write!(
                 f,
-                "conflicting mount policy rules for pattern '{}': mask declared at \
-                 {} and unmask declared at {} are exact duplicates in \
-                 the same scope with a terminal rule; a same-scope terminal mask+unmask pair \
+                "conflicting mount policy rules for pattern '{}': deny declared at \
+                 {} and allow declared at {} are exact duplicates in \
+                 the same scope with a final rule; a same-scope final deny+allow pair \
                  for the same pattern is a contradiction the author must resolve (spec 22 \u{a7}4)",
-                conflict.pattern, conflict.mask_origin, conflict.unmask_origin
+                conflict.pattern, conflict.deny_origin, conflict.allow_origin
             ),
-            CompileError::TerminalUnmaskFromNonOperator { origin, pattern } => write!(
+            CompileError::FinalAllowFromNonOperator {
+                origin,
+                pattern,
+                axis,
+            } => write!(
                 f,
-                "terminal unmask '{pattern}' declared at {origin} is not allowed: non-operator \
-                 scopes may not declare non-overridable unmasks (spec 22 \u{a7}5)"
-            ),
-            CompileError::TerminalProtectFromNonOperator { origin, pattern } => write!(
-                f,
-                "terminal protect '{pattern}' declared at {origin} is not allowed: non-operator \
-                 scopes may not declare non-overridable protection (spec 22 \u{a7}5)"
+                "final {axis}.allow '{pattern}' declared at {origin} is not allowed: \
+                 non-operator scopes may not declare final allows (spec 22 \u{a7}5)"
             ),
             CompileError::UnsupportedCaseSensitivity { origin, value } => write!(
                 f,
@@ -119,8 +142,8 @@ impl std::error::Error for CompileError {
 /// Scopes are ordered by authority (operator scopes first, spec 22 §2); the
 /// sort is stable, so same-kind scopes (e.g. config-repo layers) keep their
 /// registry stack order. Within each scope, read.deny rules are emitted
-/// before read.allow rules (per-scope deny-then-allow — the mask-then-unmask
-/// emission order of spec 22 §4).
+/// before read.allow rules (per-scope deny-then-allow, spec 22 §4), and
+/// protect-bucket entries land in the same scope/authority order.
 pub fn compile(mut scopes: Vec<PolicyScope>) -> Result<MountPolicyProgram, CompileError> {
     // Authority order = compile order (spec 22 §2, §5).
     scopes.sort_by_key(|scope| scope.scope_kind.authority());
@@ -162,27 +185,36 @@ fn validate_program_flags(scope: &PolicyScope) -> Result<(), CompileError> {
 }
 
 /// Compile one scope's fragment into rules (read.deny-then-read.allow),
-/// applying trust validation (spec 22 §5) and the exact-duplicate conflict
-/// check (spec 22 §4).
+/// protect-bucket entries, and write rules — applying trust validation
+/// (spec 22 §5) and the exact-duplicate conflict check (spec 22 §4).
+///
+/// Protect-bucket routing: an OPERATOR scope's final read.deny compiles to
+/// the protect wire bucket (wire effect Mask, terminal, origin attached);
+/// the evaluator short-circuits protected paths to Masked before any rule
+/// runs. A NON-operator scope's final read.deny is legal (denying
+/// visibility is the fail-closed direction) and compiles to a terminal Mask
+/// rule in the rules array. All other read entries compile to ordinary
+/// Mask (deny) / Unmask (allow) rules, per-scope deny-before-allow.
 fn compile_scope(
     scope: &PolicyScope,
 ) -> Result<(Vec<PathPolicyRule>, Vec<PathPolicyRule>, CompiledRuleSet), CompileError> {
     let origin = scope.origin();
+    let operator = scope.scope_kind.is_operator();
     let mut rules = Vec::new();
+    let mut protect = Vec::new();
     if let Some(read) = &scope.fragment.read {
         for entry in &read.deny {
-            rules.push(compile_rule(RuleEffect::Mask, entry, &origin)?);
+            let rule = compile_rule(RuleEffect::Mask, entry, &origin)?;
+            if entry.terminal && operator {
+                protect.push(rule);
+            } else {
+                rules.push(rule);
+            }
         }
         for entry in &read.allow {
             rules.push(compile_rule(RuleEffect::Unmask, entry, &origin)?);
         }
     }
-    // TODO(S3): route operator-scope final read.deny entries to the protect
-    // wire bucket (with the TerminalProtectFromNonOperator trust gate for
-    // non-operator scopes). S2 treats EVERY final read.deny the way the old
-    // compiler treated a terminal mask — a Mask rule in the rules array —
-    // and leaves the protect bucket empty.
-    let protect = Vec::new();
     let mut writes = CompiledRuleSet::default();
     if let Some(write) = &scope.fragment.write {
         writes.allow = write
@@ -197,50 +229,72 @@ fn compile_scope(
             .collect::<Result<_, _>>()?;
     }
 
-    // Trust validation (spec 22 §5): a terminal read.allow from a
-    // non-operator scope would let an untrusted repo permanently reopen
-    // paths an operator expects maskable. Terminal read.deny entries are
-    // allowed from any scope — denying visibility is the fail-closed
+    // Trust validation (spec 22 §5): a FINAL ALLOW on either axis from a
+    // non-operator scope would let an untrusted layer permanently reopen
+    // paths an operator expects closable. Final denies (read.deny /
+    // write.deny) are allowed from ANY scope — denying is the fail-closed
     // direction.
-    for rule in &rules {
-        if rule.effect == RuleEffect::Unmask
-            && rule.is_terminal()
-            && !scope.scope_kind.is_operator()
-        {
-            return Err(CompileError::TerminalUnmaskFromNonOperator {
+    for (axis, rule) in rules
+        .iter()
+        .filter(|rule| rule.effect == RuleEffect::Unmask)
+        .map(|rule| (PolicyAxis::Read, rule))
+        .chain(writes.allow.iter().map(|rule| (PolicyAxis::Write, rule)))
+    {
+        if rule.is_terminal() && !operator {
+            return Err(CompileError::FinalAllowFromNonOperator {
                 origin: rule.origin.clone(),
                 pattern: rule.pattern.raw().to_string(),
+                axis,
             });
         }
     }
 
-    // Exact-duplicate conflict (spec 22 §4): the same raw pattern appearing
-    // as both a read.deny and a read.allow in ONE scope, where at least one
-    // of the pair is terminal, is a contradiction the author must resolve.
+    // Exact-duplicate conflict (spec 22 §4), BOTH axes. Read axis: the deny
+    // set is EVERY read.deny rule of the scope — INCLUDING operator-final
+    // ones routed to the protect bucket (a same-scope final read.deny +
+    // read.allow of the same pattern is a contradiction regardless of
+    // routing). Write axis mirrors the check on writes.deny × writes.allow.
     // Relaxable-only duplicates resolve harmlessly by deny-then-allow
     // ordering.
-    let masks = rules.iter().filter(|rule| rule.effect == RuleEffect::Mask);
-    let unmasks: Vec<&PathPolicyRule> = rules
+    let read_denies = rules
+        .iter()
+        .chain(&protect)
+        .filter(|rule| rule.effect == RuleEffect::Mask);
+    let read_allows: Vec<&PathPolicyRule> = rules
         .iter()
         .filter(|rule| rule.effect == RuleEffect::Unmask)
         .collect();
-    for mask in masks {
-        for unmask in &unmasks {
-            if mask.pattern.raw() == unmask.pattern.raw()
-                && (mask.is_terminal() || unmask.is_terminal())
+    check_duplicate_conflicts(read_denies, &read_allows)?;
+    let write_allows: Vec<&PathPolicyRule> = writes.allow.iter().collect();
+    check_duplicate_conflicts(writes.deny.iter(), &write_allows)?;
+
+    Ok((rules, protect, writes))
+}
+
+/// The exact-duplicate conflict check for one axis (spec 22 §4): the same
+/// raw pattern appearing as both a deny and an allow in ONE scope, where at
+/// least one of the pair is terminal, is a contradiction the author must
+/// resolve.
+fn check_duplicate_conflicts<'a>(
+    denies: impl Iterator<Item = &'a PathPolicyRule>,
+    allows: &[&PathPolicyRule],
+) -> Result<(), CompileError> {
+    for deny in denies {
+        for allow in allows {
+            if deny.pattern.raw() == allow.pattern.raw()
+                && (deny.is_terminal() || allow.is_terminal())
             {
                 return Err(CompileError::DuplicateTerminalConflict(Box::new(
                     DuplicateConflict {
-                        pattern: mask.pattern.raw().to_string(),
-                        mask_origin: mask.origin.clone(),
-                        unmask_origin: unmask.origin.clone(),
+                        pattern: deny.pattern.raw().to_string(),
+                        deny_origin: deny.origin.clone(),
+                        allow_origin: allow.origin.clone(),
                     },
                 )));
             }
         }
     }
-
-    Ok((rules, protect, writes))
+    Ok(())
 }
 
 /// Compile one read/write-axis entry into a rule; pattern rejections name
@@ -356,12 +410,13 @@ mod tests {
 
     #[test]
     fn later_scopes_respect_earlier_terminal_freezes() {
-        // Operator terminal mask freezes `.env`; the repo scope's matching
-        // unmask is recorded but frozen out.
+        // A final read.deny from the (non-operator) reference-config scope
+        // compiles to a terminal Mask rule that freezes `.env`; the repo
+        // scope's matching allow is recorded but frozen out.
         let program = compile(vec![
             scope(
-                ScopeKind::HomeRegistry,
-                "registry",
+                ScopeKind::ReferenceConfig,
+                "reference",
                 vec![terminal_entry(".env")],
                 vec![],
             ),
@@ -377,7 +432,7 @@ mod tests {
         assert_eq!(explained.decision, Decision::Masked);
         assert_eq!(
             explained.frozen_by.map(|origin| origin.layer),
-            Some("registry".to_string())
+            Some("reference".to_string())
         );
         assert_eq!(explained.matches.len(), 2);
         assert!(!explained.matches[0].frozen_out);
@@ -386,9 +441,9 @@ mod tests {
     }
 
     #[test]
-    fn terminal_unmask_from_an_operator_scope_sticks() {
-        // Operator terminal unmask freezes `.env` visible; a later scope's
-        // overridable mask cannot re-mask it.
+    fn final_read_allow_from_an_operator_scope_sticks() {
+        // Operator final read.allow freezes `.env` visible; a later scope's
+        // relaxable deny cannot re-mask it.
         let program = compile(vec![
             scope(
                 ScopeKind::HomeRegistry,
@@ -414,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_unmask_from_a_non_operator_scope_is_a_compile_error() {
+    fn final_read_allow_from_a_non_operator_scope_is_a_compile_error() {
         for kind in [
             ScopeKind::ReferenceConfig,
             ScopeKind::ConfigRepoLayer,
@@ -428,19 +483,39 @@ mod tests {
                 vec![terminal_entry(".env")],
             )])
             .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    CompileError::FinalAllowFromNonOperator {
+                        axis: PolicyAxis::Read,
+                        ..
+                    }
+                ),
+                "expected FinalAllowFromNonOperator on the read axis: {err}"
+            );
             let text = err.to_string();
             assert!(
                 text.contains("repo") && text.contains(".env"),
                 "error must name the origin and pattern: {text}"
             );
+            assert!(
+                text.contains("final read.allow"),
+                "error must name the axis and surface key: {text}"
+            );
         }
     }
 
     #[test]
-    fn terminal_mask_is_allowed_from_any_scope() {
+    fn final_read_deny_is_allowed_from_any_scope() {
+        // Final DENIES are the fail-closed direction: allowed from every
+        // scope. Operator scopes route to the protect bucket; non-operator
+        // scopes compile to a terminal Mask rule (routing is asserted by
+        // `final_read_deny_protect_routing_is_operator_only`).
         for kind in [
             ScopeKind::HomeRegistry,
+            ScopeKind::UserGlobalOverrides,
             ScopeKind::ReferenceConfig,
+            ScopeKind::ConfigRepoLayer,
             ScopeKind::Workload,
             ScopeKind::MountEntry,
         ] {
@@ -450,14 +525,17 @@ mod tests {
                 vec![terminal_entry(".env")],
                 vec![],
             )]);
-            assert!(program.is_ok(), "terminal mask must compile from {kind:?}");
+            assert!(
+                program.is_ok(),
+                "final read.deny must compile from {kind:?}"
+            );
         }
     }
 
     #[test]
-    fn same_scope_mask_then_unmask_carves_out_an_exception() {
-        // Within one scope, unmask entries evaluate after mask entries
-        // (spec 22 §4): the scope carves an exception to its own mask.
+    fn same_scope_deny_then_allow_carves_out_an_exception() {
+        // Within one scope, allow entries evaluate after deny entries
+        // (spec 22 §4): the scope carves an exception to its own deny.
         let program = compile(vec![scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
@@ -473,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_duplicate_same_scope_terminal_mask_unmask_is_a_compile_error() {
+    fn exact_duplicate_same_scope_final_deny_allow_is_a_compile_error() {
         let err = compile(vec![scope(
             ScopeKind::HomeRegistry,
             "registry",
@@ -492,10 +570,10 @@ mod tests {
     }
 
     #[test]
-    fn overridable_only_same_scope_duplicates_resolve_by_ordering() {
-        // Design resolution (spec 22 §4 / ADR 0028): only TERMINAL
-        // duplicates are contradictions; an overridable mask+unmask pair for
-        // the same pattern resolves by mask-then-unmask ordering.
+    fn relaxable_only_same_scope_read_duplicates_resolve_by_ordering() {
+        // Design resolution (spec 22 §4 / ADR 0028): only FINAL duplicates
+        // are contradictions; a relaxable deny+allow pair for the same
+        // pattern resolves by deny-then-allow ordering.
         let program = compile(vec![scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
@@ -508,7 +586,7 @@ mod tests {
 
     #[test]
     fn duplicates_in_different_scopes_are_not_conflicts() {
-        // The same pattern as mask in one scope and unmask in another is
+        // The same pattern as deny in one scope and allow in another is
         // normal precedence, not a compile error.
         let program = compile(vec![
             scope(
@@ -605,13 +683,10 @@ mod tests {
         );
     }
 
-    /// S3 target behavior: an operator-scope final read.deny routes to the
-    /// protect wire bucket; protected paths are Masked AND write-denied even
-    /// under a broad write.allow. S2 emits final read.deny as a plain
-    /// (terminal) Mask rule and leaves the protect bucket empty, so the
-    /// protect assertions below do not hold yet.
+    /// An operator-scope final read.deny routes to the protect wire bucket;
+    /// protected paths are Masked AND write-denied even under a broad
+    /// write.allow (the protect bucket short-circuits both evaluators).
     #[test]
-    #[ignore = "S3 reinstates protect-bucket routing"]
     fn protect_bucket_forces_masked_and_write_deny() {
         let program = compile(vec![axis_scope(
             ScopeKind::HomeRegistry,
@@ -626,6 +701,13 @@ mod tests {
             },
         )])
         .unwrap();
+        assert_eq!(program.protect.len(), 1);
+        assert!(program.protect[0].is_terminal());
+        assert_eq!(program.protect[0].origin.layer, "operator");
+        assert!(
+            program.rules.is_empty(),
+            "a protect-routed final read.deny must not also land in the rules array"
+        );
         assert!(program.is_protected(&LexicalPath::new("protected").unwrap()));
         assert_eq!(
             program
@@ -641,33 +723,207 @@ mod tests {
         );
     }
 
-    /// S3 target behavior: a final read.deny from a non-operator scope is
-    /// routed to the protect bucket and rejected by the protect trust gate.
-    /// S2 treats final read.deny as an ordinary terminal mask (allowed from
-    /// any scope), so the rejection below does not hold yet.
+    /// Protect-bucket routing is OPERATOR-ONLY: an operator scope's final
+    /// read.deny compiles to the protect wire bucket; a non-operator
+    /// scope's final read.deny is legal (fail-closed direction) and compiles
+    /// to a terminal Mask rule in the rules array (spec 22 §5).
     #[test]
-    #[ignore = "S3 reinstates protect-bucket routing"]
-    fn terminal_protect_is_operator_only() {
-        let err = compile(vec![axis_scope(
-            ScopeKind::Workload,
-            "workload",
-            AxisFragment {
-                deny: vec![terminal_entry("secret")],
-                allow: vec![],
-            },
-            AxisFragment::default(),
-        )])
-        .unwrap_err();
-        assert!(err.to_string().contains("workload") && err.to_string().contains("secret"));
-        assert!(compile(vec![axis_scope(
+    fn final_read_deny_protect_routing_is_operator_only() {
+        let operator_program = compile(vec![axis_scope(
             ScopeKind::HomeRegistry,
             "operator",
             AxisFragment {
                 deny: vec![terminal_entry("secret")],
                 allow: vec![],
             },
-            AxisFragment::default()
+            AxisFragment::default(),
         )])
-        .is_ok());
+        .unwrap();
+        assert_eq!(operator_program.protect.len(), 1);
+        assert!(operator_program.protect[0].is_terminal());
+        assert!(operator_program.rules.is_empty());
+
+        for kind in [
+            ScopeKind::ReferenceConfig,
+            ScopeKind::ConfigRepoLayer,
+            ScopeKind::Workload,
+            ScopeKind::MountEntry,
+        ] {
+            let program = compile(vec![axis_scope(
+                kind,
+                "layer",
+                AxisFragment {
+                    deny: vec![terminal_entry("secret")],
+                    allow: vec![],
+                },
+                AxisFragment::default(),
+            )])
+            .unwrap();
+            assert!(
+                program.protect.is_empty(),
+                "non-operator final read.deny must not route to protect ({kind:?})"
+            );
+            assert_eq!(program.rules.len(), 1);
+            assert_eq!(program.rules[0].effect, RuleEffect::Mask);
+            assert!(program.rules[0].is_terminal());
+            assert_eq!(decide(&program, "secret"), Decision::Masked);
+        }
+    }
+
+    #[test]
+    fn final_write_allow_from_a_non_operator_scope_is_a_compile_error() {
+        for kind in [
+            ScopeKind::ReferenceConfig,
+            ScopeKind::ConfigRepoLayer,
+            ScopeKind::Workload,
+            ScopeKind::MountEntry,
+        ] {
+            let err = compile(vec![axis_scope(
+                kind,
+                "repo",
+                AxisFragment::default(),
+                AxisFragment {
+                    allow: vec![terminal_entry(".env")],
+                    deny: vec![],
+                },
+            )])
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    CompileError::FinalAllowFromNonOperator {
+                        axis: PolicyAxis::Write,
+                        ..
+                    }
+                ),
+                "expected FinalAllowFromNonOperator on the write axis: {err}"
+            );
+            let text = err.to_string();
+            assert!(
+                text.contains("repo") && text.contains(".env"),
+                "error must name the origin and pattern: {text}"
+            );
+            assert!(
+                text.contains("final write.allow"),
+                "error must name the axis and surface key: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn final_write_allow_from_an_operator_scope_compiles() {
+        for kind in [ScopeKind::HomeRegistry, ScopeKind::UserGlobalOverrides] {
+            let program = compile(vec![axis_scope(
+                kind,
+                "operator",
+                AxisFragment::default(),
+                AxisFragment {
+                    allow: vec![terminal_entry("gen/**")],
+                    deny: vec![],
+                },
+            )])
+            .unwrap();
+            assert_eq!(program.writes.allow.len(), 1);
+            assert!(program.writes.allow[0].is_terminal());
+        }
+    }
+
+    #[test]
+    fn final_write_deny_is_allowed_from_any_scope() {
+        for kind in [
+            ScopeKind::HomeRegistry,
+            ScopeKind::UserGlobalOverrides,
+            ScopeKind::ReferenceConfig,
+            ScopeKind::ConfigRepoLayer,
+            ScopeKind::Workload,
+            ScopeKind::MountEntry,
+        ] {
+            let program = compile(vec![axis_scope(
+                kind,
+                "any",
+                AxisFragment::default(),
+                AxisFragment {
+                    allow: vec![],
+                    deny: vec![terminal_entry(".env")],
+                },
+            )]);
+            assert!(
+                program.is_ok(),
+                "final write.deny must compile from {kind:?}"
+            );
+        }
+    }
+
+    /// The duplicate-conflict check covers read.deny entries routed to the
+    /// protect bucket: a same-scope final read.deny + read.allow of the same
+    /// raw pattern is a contradiction regardless of routing (spec 22 §4).
+    #[test]
+    fn same_scope_final_read_deny_allow_duplicate_is_a_conflict_even_when_protect_routed() {
+        let err = compile(vec![axis_scope(
+            ScopeKind::HomeRegistry,
+            "operator",
+            AxisFragment {
+                deny: vec![terminal_entry(".env")],
+                allow: vec![entry(".env")],
+            },
+            AxisFragment::default(),
+        )])
+        .unwrap_err();
+        assert!(matches!(err, CompileError::DuplicateTerminalConflict(_)));
+        let text = err.to_string();
+        assert!(
+            text.contains("operator"),
+            "error must name the origin: {text}"
+        );
+        assert!(text.contains(".env"), "error must name the pattern: {text}");
+    }
+
+    /// The write axis mirrors the read axis's duplicate-conflict check: a
+    /// same-scope write.deny + write.allow of the same raw pattern with at
+    /// least one final entry is a contradiction (spec 22 §4). (The final
+    /// entry is the DENY here: a final write.allow from this non-operator
+    /// scope would trip the trust gate first.)
+    #[test]
+    fn same_scope_write_deny_allow_duplicate_with_a_final_is_a_conflict() {
+        let err = compile(vec![axis_scope(
+            ScopeKind::ConfigRepoLayer,
+            "repo",
+            AxisFragment::default(),
+            AxisFragment {
+                allow: vec![entry("gen/output.bin")],
+                deny: vec![terminal_entry("gen/output.bin")],
+            },
+        )])
+        .unwrap_err();
+        assert!(matches!(err, CompileError::DuplicateTerminalConflict(_)));
+        let text = err.to_string();
+        assert!(text.contains("repo"), "error must name the origin: {text}");
+        assert!(
+            text.contains("gen/output.bin"),
+            "error must name the pattern: {text}"
+        );
+    }
+
+    #[test]
+    fn relaxable_only_same_scope_write_duplicates_resolve_by_ordering() {
+        // Write-axis mirror of the read-axis rule: relaxable-only duplicates
+        // are NOT conflicts; the evaluator's per-scope deny-after-allow
+        // ordering resolves them (deny wins).
+        let program = compile(vec![axis_scope(
+            ScopeKind::ConfigRepoLayer,
+            "repo",
+            AxisFragment::default(),
+            AxisFragment {
+                allow: vec![entry("gen/output.bin")],
+                deny: vec![entry("gen/output.bin")],
+            },
+        )])
+        .unwrap();
+        assert_eq!(
+            program
+                .decide_write(&LexicalPath::new("gen/output.bin").unwrap())
+                .decision,
+            crate::mount_policy::WriteDecision::Deny
+        );
     }
 }

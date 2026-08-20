@@ -2046,7 +2046,7 @@ default_deny = true
         );
     }
 
-    /// Trust rules are unchanged for sugar: a terminal read.allow from the
+    /// Trust rules are unchanged for sugar: a final read.allow from the
     /// (non-operator) mount-entry scope is rejected at compile.
     #[test]
     fn mount_policy_sugar_terminal_read_allow_rejected_for_non_operator() {
@@ -2056,27 +2056,33 @@ default_deny = true
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("terminal unmask") && err.contains(".env"),
-            "terminal read.allow rejection must name the pattern: {err}"
+            err.contains("final read.allow") && err.contains(".env"),
+            "final read.allow rejection must name the axis and pattern: {err}"
         );
     }
 
-    /// S3 target behavior: a final read.deny from the (non-operator)
-    /// mount-entry scope routes to the protect bucket and is rejected by the
-    /// protect trust gate. S2 treats final read.deny as an ordinary terminal
-    /// mask (allowed from any scope), so this rejection does not hold yet.
+    /// A final read.deny from the (non-operator) mount-entry scope is
+    /// ACCEPTED: denying visibility is the fail-closed direction (spec 22
+    /// §5), so it compiles to a terminal Mask rule in the rules array — NOT
+    /// the protect bucket (protect routing is operator-only).
     #[test]
-    #[ignore = "S3 reinstates protect-bucket routing"]
-    fn mount_policy_sugar_terminal_read_deny_protect_rejected_for_non_operator() {
-        let err = compile_mount_entry_policy(&mount_mode_config(
+    fn mount_policy_sugar_terminal_read_deny_accepted_for_non_operator() {
+        let program = compile_mount_entry_policy(&mount_mode_config(
             "read.deny = [{ pattern = \".secret\", final = true }]",
         ))
-        .unwrap_err()
-        .to_string();
+        .unwrap_or_else(|err| {
+            panic!("final read.deny from a non-operator scope must compile: {err}")
+        });
         assert!(
-            err.contains("terminal protect") && err.contains(".secret"),
-            "terminal protect rejection must name the pattern: {err}"
+            program.protect.is_empty(),
+            "protect routing is operator-only"
         );
+        assert_eq!(program.rules.len(), 1);
+        assert_eq!(
+            program.rules[0].effect,
+            crate::mount_policy::RuleEffect::Mask
+        );
+        assert!(program.rules[0].is_terminal());
     }
 
     // ---- ADR 0030 Phase 1: instance policy port bounds ----
