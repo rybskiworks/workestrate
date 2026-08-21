@@ -300,6 +300,21 @@ impl MountPolicyProgram {
     /// Decide a write. Successful writes are tagged by the msb enforcement
     /// layer; cascade, rename, hardlink, and symlink contracts are outside
     /// this pure policy library.
+    ///
+    /// Union semantics (pinned runtime at fork rev 205a7b95): protected paths
+    /// short-circuit to [`WriteDecision::Deny`] first — matching protect rules
+    /// are recorded in the explain trace, but write rules cannot change the
+    /// decision. Otherwise the union of `writes.allow` and `writes.deny` is
+    /// evaluated in authority-ascending order (home-registry first,
+    /// mount-entry last — mirroring the read axis), with deny rules before
+    /// allow rules within the same scope, then by index within the rule's own
+    /// bucket. The last non-frozen match wins, in both directions: a later
+    /// (lower-authority) scope relaxes an earlier scope's rule unless a
+    /// terminal rule (`overridable == false`) froze the decision, and within
+    /// one scope an allow rule carves an exception out of a broader deny. A
+    /// frozen deny cannot be allowed over AND a frozen allow cannot be denied
+    /// over. No match defaults to [`WriteDecision::Allow`]. Non-UTF-8 paths
+    /// deny fail-closed.
     pub fn decide_write(&self, path: &LexicalPath) -> Explained<WriteDecision, WriteRuleMatch> {
         let Some(text) = path.as_str() else {
             return Explained {
@@ -337,9 +352,13 @@ impl MountPolicyProgram {
         } else {
             WriteDecision::Allow
         };
-        // Reconstitute authority order after the public allow/deny split.
-        // Deny is evaluated after allow within a scope, while a terminal deny
-        // freezes all lower-authority rules (including later allows).
+        // Reconstitute authority order after the public allow/deny split:
+        // the union of both buckets is evaluated authority-ascending
+        // (mirroring the read axis), deny before allow within the same scope,
+        // then by index within the rule's own bucket. The last non-frozen
+        // match wins; a terminal match freezes the decision in BOTH
+        // directions (a frozen deny cannot be allowed over, a frozen allow
+        // cannot be denied over).
         let mut ordered = Vec::new();
         for (bucket, rules) in [
             (WriteRuleEffect::Allow, &self.writes.allow),
@@ -352,7 +371,7 @@ impl MountPolicyProgram {
         ordered.sort_by_key(|(authority, bucket, index, _)| {
             (
                 *authority,
-                if *bucket == WriteRuleEffect::Allow {
+                if *bucket == WriteRuleEffect::Deny {
                     0
                 } else {
                     1
@@ -365,6 +384,10 @@ impl MountPolicyProgram {
                 continue;
             }
             let frozen_out = frozen_by.is_some();
+            // rule_index reflects the rule's position within its original
+            // allow/deny bucket (pre-authority-sort), offset past the protect
+            // bucket; it identifies the rule for explanation, not the
+            // evaluation order.
             let rule_index = self.protect.len()
                 + if bucket == WriteRuleEffect::Deny {
                     self.writes.allow.len() + index
@@ -382,13 +405,13 @@ impl MountPolicyProgram {
             if frozen_out || protected {
                 continue;
             }
-            if bucket == WriteRuleEffect::Deny {
-                decision = WriteDecision::Deny;
-                if rule.is_terminal() {
-                    frozen_by = Some(rule.origin.clone());
-                }
-            } else if decision != WriteDecision::Deny {
-                decision = WriteDecision::Allow;
+            decision = if bucket == WriteRuleEffect::Allow {
+                WriteDecision::Allow
+            } else {
+                WriteDecision::Deny
+            };
+            if rule.is_terminal() {
+                frozen_by = Some(rule.origin.clone());
             }
         }
         Explained {
@@ -680,5 +703,182 @@ mod tests {
         );
         let sensitive: MountPolicyProgram = serde_json::from_str(&sensitive_json).unwrap();
         assert_eq!(decide(&sensitive, ".env"), Decision::Visible);
+    }
+
+    // ---- Write-axis union semantics (ported from the fork's
+    // crates/filesystem/lib/backends/passthroughfs/unix/tests/
+    // test_mount_policy.rs at rev 205a7b95; programs constructed directly,
+    // no compile()) ----
+
+    use crate::mount_policy::pattern::Pattern;
+    use std::path::PathBuf;
+
+    fn write_rule(pattern: &str, scope_kind: ScopeKind, overridable: bool) -> PathPolicyRule {
+        PathPolicyRule {
+            effect: RuleEffect::Mask,
+            pattern: Pattern::parse(pattern).unwrap(),
+            overridable,
+            origin: RuleOrigin {
+                layer: "test".to_string(),
+                file: PathBuf::from("test.json"),
+                scope_kind,
+            },
+        }
+    }
+
+    fn write_program(
+        protect: &[&str],
+        allow: &[(&str, ScopeKind, bool)],
+        deny: &[(&str, ScopeKind, bool)],
+    ) -> MountPolicyProgram {
+        MountPolicyProgram {
+            version: 1,
+            rules: Vec::new(),
+            protect: protect
+                .iter()
+                .map(|pattern| write_rule(pattern, ScopeKind::Workload, true))
+                .collect(),
+            writes: CompiledRuleSet {
+                allow: allow
+                    .iter()
+                    .map(|(pattern, scope_kind, overridable)| {
+                        write_rule(pattern, *scope_kind, *overridable)
+                    })
+                    .collect(),
+                deny: deny
+                    .iter()
+                    .map(|(pattern, scope_kind, overridable)| {
+                        write_rule(pattern, *scope_kind, *overridable)
+                    })
+                    .collect(),
+            },
+            case_sensitivity: CaseSensitivity::Sensitive,
+        }
+    }
+
+    fn decide_write(program: &MountPolicyProgram, path: &str) -> WriteDecision {
+        program
+            .decide_write(&LexicalPath::new(path).unwrap())
+            .decision
+    }
+
+    #[test]
+    fn write_allow_carves_exception_within_same_scope() {
+        let program = write_program(
+            &[],
+            &[("secrets/public.txt", ScopeKind::Workload, true)],
+            &[("secrets/**", ScopeKind::Workload, true)],
+        );
+        assert_eq!(
+            decide_write(&program, "secrets/public.txt"),
+            WriteDecision::Allow
+        );
+        assert_eq!(
+            decide_write(&program, "secrets/key.pem"),
+            WriteDecision::Deny
+        );
+    }
+
+    #[test]
+    fn write_allow_rule_is_active_and_recorded() {
+        let program = write_program(&[], &[("docs/**", ScopeKind::Workload, true)], &[]);
+        let explained = program.decide_write(&LexicalPath::new("docs/a.txt").unwrap());
+        assert_eq!(explained.decision, WriteDecision::Allow);
+        assert_eq!(explained.matches.len(), 1);
+        assert_eq!(explained.matches[0].effect, WriteRuleEffect::Allow);
+        assert!(!explained.matches[0].frozen_out);
+    }
+
+    #[test]
+    fn later_scope_write_rule_wins_unless_frozen() {
+        let allow_wins = write_program(
+            &[],
+            &[("f.txt", ScopeKind::Workload, true)],
+            &[("f.txt", ScopeKind::HomeRegistry, true)],
+        );
+        assert_eq!(decide_write(&allow_wins, "f.txt"), WriteDecision::Allow);
+
+        let deny_wins = write_program(
+            &[],
+            &[("f.txt", ScopeKind::HomeRegistry, true)],
+            &[("f.txt", ScopeKind::Workload, true)],
+        );
+        assert_eq!(decide_write(&deny_wins, "f.txt"), WriteDecision::Deny);
+    }
+
+    #[test]
+    fn terminal_write_deny_cannot_be_allowed_over() {
+        let program = write_program(
+            &[],
+            &[("f.txt", ScopeKind::Workload, true)],
+            &[("f.txt", ScopeKind::HomeRegistry, false)],
+        );
+        let explained = program.decide_write(&LexicalPath::new("f.txt").unwrap());
+        assert_eq!(explained.decision, WriteDecision::Deny);
+        assert_eq!(
+            explained.frozen_by,
+            Some(RuleOrigin {
+                layer: "test".to_string(),
+                file: PathBuf::from("test.json"),
+                scope_kind: ScopeKind::HomeRegistry,
+            })
+        );
+        let allow_match = explained
+            .matches
+            .iter()
+            .find(|m| m.effect == WriteRuleEffect::Allow)
+            .unwrap();
+        assert!(allow_match.frozen_out);
+    }
+
+    #[test]
+    fn terminal_write_allow_cannot_be_denied_over() {
+        let program = write_program(
+            &[],
+            &[("f.txt", ScopeKind::HomeRegistry, false)],
+            &[("f.txt", ScopeKind::Workload, true)],
+        );
+        let explained = program.decide_write(&LexicalPath::new("f.txt").unwrap());
+        assert_eq!(explained.decision, WriteDecision::Allow);
+        let deny_match = explained
+            .matches
+            .iter()
+            .find(|m| m.effect == WriteRuleEffect::Deny)
+            .unwrap();
+        assert!(deny_match.frozen_out);
+    }
+
+    #[test]
+    fn protect_short_circuits_write_allow() {
+        let program = write_program(
+            &[".secret"],
+            &[
+                (".secret", ScopeKind::HomeRegistry, true),
+                (".secret", ScopeKind::Workload, false),
+            ],
+            &[],
+        );
+        let explained = program.decide_write(&LexicalPath::new(".secret").unwrap());
+        assert_eq!(explained.decision, WriteDecision::Deny);
+        assert_eq!(explained.matches[0].effect, WriteRuleEffect::Protect);
+        assert_eq!(
+            explained
+                .matches
+                .iter()
+                .filter(|m| m.effect == WriteRuleEffect::Allow)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn write_default_allow_and_non_utf8_fail_closed() {
+        let program = write_program(&[], &[], &[("blocked.txt", ScopeKind::Workload, true)]);
+        assert_eq!(decide_write(&program, "other.txt"), WriteDecision::Allow);
+
+        let path = LexicalPath::from_bytes(b"\xff").unwrap();
+        let result = program.decide_write(&path);
+        assert_eq!(result.decision, WriteDecision::Deny);
+        assert!(result.fail_closed_non_utf8);
     }
 }

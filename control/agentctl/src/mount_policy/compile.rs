@@ -651,7 +651,10 @@ mod tests {
     }
 
     #[test]
-    fn writes_default_allow_and_deny_wins() {
+    fn writes_default_allow_and_allow_carves_exception_within_scope() {
+        // Union semantics (fork rev 205a7b95): within one scope deny sorts
+        // before allow, so the relaxable allow "**" matches after the deny
+        // "denied" and wins — the allow carves an exception out of the deny.
         let program = compile(vec![axis_scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
@@ -672,7 +675,7 @@ mod tests {
             program
                 .decide_write(&LexicalPath::new("denied").unwrap())
                 .decision,
-            crate::mount_policy::WriteDecision::Deny
+            crate::mount_policy::WriteDecision::Allow
         );
         let empty = compile(vec![]).unwrap();
         assert_eq!(
@@ -907,8 +910,9 @@ mod tests {
     #[test]
     fn relaxable_only_same_scope_write_duplicates_resolve_by_ordering() {
         // Write-axis mirror of the read-axis rule: relaxable-only duplicates
-        // are NOT conflicts; the evaluator's per-scope deny-after-allow
-        // ordering resolves them (deny wins).
+        // are NOT conflicts; the evaluator's per-scope deny-before-allow
+        // ordering resolves them — the allow, evaluated last, wins (union
+        // semantics, fork rev 205a7b95).
         let program = compile(vec![axis_scope(
             ScopeKind::ConfigRepoLayer,
             "repo",
@@ -923,7 +927,7 @@ mod tests {
             program
                 .decide_write(&LexicalPath::new("gen/output.bin").unwrap())
                 .decision,
-            crate::mount_policy::WriteDecision::Deny
+            crate::mount_policy::WriteDecision::Allow
         );
     }
 }
