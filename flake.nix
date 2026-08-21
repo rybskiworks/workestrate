@@ -10,23 +10,22 @@
     };
 
     microsandbox-fork = {
-      # Transient local pin replaced by the pinned fork rev (v2 merge
-      # 3bd051bf62b1c53a57853ba3c6bdd98f3535578c — verified pushed to origin;
-      # origin is HTTPS-reachable from the container). Moves to `develop`
-      # tracking or a signed rev later per the merge runbook (signing
-      # currently deferred by user).
+      # Pinned fork rev 205a7b95347c272c30e581422d38f8c1bb9e6f89 — the merge
+      # of fix/mount-policy-approved-root onto develop, verified pushed to
+      # origin (origin is HTTPS-reachable from the container). Moves to
+      # `develop` tracking or a signed rev later per the merge runbook
+      # (signing currently deferred by user).
       #
-      # write.allow caveat: the write-allow evaluator arm landed on the
-      # fork's develop (branch feat/write-allow-semantics, unsigned) but is
-      # INACTIVE at this pin — the pinned runtime enforces write.deny (and
-      # the protect bucket) only. Activation = user pushes the fork, then
-      # re-pin (or track develop) + relock; in-container verification used
-      # `--override-input` only (this pin was never moved). NOTE: the
+      # This rev carries BOTH the F1 approved-root fix AND the write.allow
+      # evaluator arm with union semantics (allow∪deny authority-ascending,
+      # deny-before-allow within scope, last non-frozen match wins, default
+      # Allow, terminal freeze both directions, protect short-circuit) — now
+      # ACTIVE at this pin. The transient build-time patch
+      # (nix/patches/mount-policy-approved-root.patch) is dropped. The
       # workestrate mirror evaluator (control/agentctl/src/mount_policy/
-      # program.rs decide_write) intentionally keeps the PINNED runtime's
-      # semantics and must be ported to the new union semantics at re-pin
-      # time.
-      url = "github:georgrybski/microsandbox/3bd051bf62b1c53a57853ba3c6bdd98f3535578c";
+      # program.rs decide_write) was ported to the new union semantics in
+      # the same commit.
+      url = "github:georgrybski/microsandbox/205a7b95347c272c30e581422d38f8c1bb9e6f89";
       flake = false;
     };
   };

@@ -50,14 +50,6 @@ rustPlatform.buildRustPackage rec {
 
   src = microsandbox-fork;
 
-  # TRANSIENT: mount-policy approved root relocated to MSB_HOME/mount-policy
-  # (fix branch fix/mount-policy-approved-root, commits 9040f2c4 + 66b3d146)
-  # applied at build time because the flake input stays github-pinned and
-  # cannot track a local-only fix (cross-ref: handover 2026-08-11 §5aa;
-  # supersedes — once the fork is pushed and the input re-pinned, drop this
-  # patch and bump the pin).
-  patches = [ ../patches/mount-policy-approved-root.patch ]; # allow: patch lives inside the flake source tree (committed to git), so the flake copy into the store stays hermetic; TRANSIENT until the fork is pushed and re-pinned
-
   # The flake input unpacks to source/; the whole workspace is needed for cargo to
   # resolve the cli crate's workspace siblings.
   sourceRoot = "source";
