@@ -931,6 +931,129 @@ default_deny = true
         Ok(())
     }
 
+    // ---- ADR 0030 Phase 2 T1 regression: namespace-matched resolution ----
+
+    /// RAII guard: a temp `WORKESTRATE_HOME` holding a REGISTERED
+    /// directory-mode config repo "personal" (declaring `litellm` + `prime`,
+    /// the required-dep pair). Unlike `DependsEnvGuard` (a single synthetic
+    /// "local" layer whose namespace is always "default"), this exercises the
+    /// provenance → layer → repo-key namespace resolution end to end.
+    // Field order matters: fields drop in declaration order, so `_env`
+    // restores WORKESTRATE_HOME (EnvGuard::drop) BEFORE `_lock` releases
+    // ENV_TEST_LOCK — no window for a racing lock holder to observe the
+    // mutated env.
+    struct RegisteredHomeGuard {
+        _env: crate::config::test_support::EnvGuard,
+        _lock: std::sync::MutexGuard<'static, ()>,
+        home: std::path::PathBuf,
+    }
+
+    impl RegisteredHomeGuard {
+        fn new(label: &str) -> Result<Self> {
+            use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS};
+            let lock = ENV_TEST_LOCK.lock().unwrap();
+            let env = EnvGuard::capture(HOME_ENV_KEYS);
+            let home = uniq_dir(label);
+            std::fs::create_dir_all(&home).expect("create temp home");
+            std::env::set_var("WORKESTRATE_HOME", &home);
+            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+            let repo = home.join("config-repos").join("personal");
+            let workloads = repo.join("workestrate").join("workloads");
+            std::fs::create_dir_all(&workloads)?;
+            std::fs::write(
+                repo.join("workestrate").join("default.toml"),
+                "schema_version = 1\n",
+            )?;
+            std::fs::write(workloads.join("litellm.toml"), DIR_MODE_LITELLM_TOML)?;
+            std::fs::write(workloads.join("prime.toml"), DIR_MODE_PRIME_TOML)?;
+            let canonical = repo.canonicalize()?;
+            crate::config::register_config("personal", &canonical.to_string_lossy(), None, None)?;
+            Ok(Self {
+                _env: env,
+                _lock: lock,
+                home,
+            })
+        }
+
+        /// The state dir the runtime resolves under this home
+        /// (`<home>/state`, HomeKind::Env).
+        fn state_dir(&self) -> std::path::PathBuf {
+            self.home.join("state")
+        }
+    }
+
+    impl Drop for RegisteredHomeGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.home);
+        }
+    }
+
+    /// Directory-mode `workloads/litellm.toml` (full form; schema_version is
+    /// default.toml-only in directory mode).
+    const DIR_MODE_LITELLM_TOML: &str = "[workloads.litellm]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[[workloads.litellm.ports]]\nhost = 4000\nguest = 4000\n\n[workloads.litellm.network]\ndefault_deny = true\n";
+
+    /// Directory-mode `workloads/prime.toml`: an agent with a REQUIRED dep on
+    /// litellm.
+    const DIR_MODE_PRIME_TOML: &str = "[workloads.prime]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.prime.depends_on.litellm]\nenv = \"LITELLM_URL\"\nrequired = true\n\n[workloads.prime.network]\ndefault_deny = true\n";
+
+    /// Write the standalone-started `litellm` record the way `build_sandbox`
+    /// does (slot instance name, the given namespace).
+    fn register_litellm_record(state_dir: &std::path::Path, namespace: &str) -> Result<()> {
+        crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
+            state_dir,
+            "litellm",
+            None,
+            "litellm",
+            crate::microsandbox::plan::default_bind_ip(),
+            &[4000],
+            &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
+            "2026-07-30T00:00:00Z",
+            namespace,
+        )
+    }
+
+    /// A standalone-started service's record (namespace = its declaring repo
+    /// key) is FOUND by a same-repo dependent's namespace-filtered resolution:
+    /// construction succeeds and the plan carries the injected env.
+    #[test]
+    fn dep_resolution_matches_standalone_record_in_declaring_namespace() -> Result<()> {
+        let guard = RegisteredHomeGuard::new("cw-ns-match")?;
+        register_litellm_record(&guard.state_dir(), "personal")?;
+
+        let prime = ConfigWorkload::new("prime")?;
+        assert_eq!(prime.namespace(), "personal");
+        let plan = prime.plan();
+        let injected = plan
+            .env
+            .iter()
+            .find(|e| e.name == "LITELLM_URL")
+            .expect("the running record's injection lands in the plan");
+        assert_eq!(injected.value, "host.microsandbox.internal:4000");
+        Ok(())
+    }
+
+    /// The negative twin: a record in a FOREIGN namespace ("default" — e.g. a
+    /// legacy pre-namespace record) is NOT usable by the dependent; resolution
+    /// refuses with the collision message naming the required namespace and
+    /// the namespace(s) where records exist.
+    #[test]
+    fn new_refuses_foreign_namespace_record_naming_namespaces() -> Result<()> {
+        let guard = RegisteredHomeGuard::new("cw-ns-refuse")?;
+        register_litellm_record(&guard.state_dir(), "default")?;
+
+        let err = ConfigWorkload::new("prime").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("namespace 'personal'"),
+            "refusal must name the dependent's required namespace: {msg}"
+        );
+        assert!(
+            msg.contains("[default]"),
+            "refusal must name the namespace(s) holding the record: {msg}"
+        );
+        Ok(())
+    }
+
     /// The reference/test fixtures declare NO depends_on → construction is
     /// unaffected and the plan carries no injected/derived markers.
     #[test]

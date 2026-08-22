@@ -256,6 +256,20 @@ pub fn chain_after(chain: &[ConflictStep], step: ConflictStep) -> Option<&[Confl
     Some(&chain[pos + 1..])
 }
 
+/// ADR 0030 Phase 2 T1: the registry record in `facts` claims the slot for a
+/// FOREIGN namespace (its `namespace` differs from the caller's required
+/// `namespace`). Returns the record's namespace when so; `None` when there is
+/// no record or the namespaces match. A foreign record must never be
+/// reused/adopted by a dependent in another namespace (the dep auto-start
+/// executor refuses via [`crate::commands::deps::decide_dep_disposition`]); a
+/// record-less running sandbox is unaffected.
+pub fn foreign_namespace_record<'a>(facts: &'a ReconcileFacts, namespace: &str) -> Option<&'a str> {
+    match &facts.record {
+        Some(rec) if rec.namespace != namespace => Some(rec.namespace.as_str()),
+        _ => None,
+    }
+}
+
 /// The up/exec chain step with the operator's explicit `--replace` flag
 /// applied (ADR 0030 U11 precedence, locked): the flag PREEMPTS the chain —
 /// an explicit `--replace` always forces teardown + fresh create

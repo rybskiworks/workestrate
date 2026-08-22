@@ -262,17 +262,47 @@ pub enum DepDisposition {
 /// facts by iterating the action's conflict CHAIN in order (ADR 0030
 /// addendum 2): the first element whose precondition holds wins. Returns
 /// Err (chain exhausted) when no element applies.
+///
+/// ADR 0030 Phase 2 T1: `namespace` is the DEPENDENT's declaring-repo
+/// namespace. A registry record in a FOREIGN namespace never satisfies the
+/// dependent — the Reuse/StartExisting dispositions must NOT adopt it (the
+/// namespace-blind reuse previously printed "already running — reusing" for
+/// a record the dependent's namespace-filtered resolution then refused).
+/// The refusal is collision-style (mirrors discovery.rs), naming the dep,
+/// the dependent, the required namespace, and the namespace holding the
+/// record. A zombie/stale foreign record still converges through the chain's
+/// replace element; a record-less running sandbox is unchanged.
 pub fn decide_dep_disposition(
     chain: &[ConflictStep],
     action: &DepStartAction,
     workload_name: &str,
     facts: &ReconcileFacts,
+    namespace: &str,
 ) -> Result<DepDisposition> {
     let step = crate::microsandbox::runtime::reconcile::decide_chain(
         chain,
         facts,
         target_of_action(action),
     )?;
+    if matches!(step, ChainStep::Reuse | ChainStep::StartExisting) {
+        if let Some(found) =
+            crate::microsandbox::runtime::reconcile::foreign_namespace_record(facts, namespace)
+        {
+            let dep = match action {
+                DepStartAction::StartService { dep, .. }
+                | DepStartAction::Satisfied { dep, .. } => dep,
+            };
+            anyhow::bail!(
+                "dependency '{dep}' of workload '{workload_name}' cannot reuse instance '{}': \
+                 its registry record is in namespace '{found}' but the dependent requires \
+                 namespace '{namespace}' — the same workload name is declared by multiple \
+                 config repos (last layer wins in the merged config). Start it in this \
+                 namespace with `workestrate workload up {dep} --replace`, or remove the \
+                 foreign record.",
+                target_of_action(action),
+            );
+        }
+    }
     let (dep, slot, ports) = match action {
         DepStartAction::StartService {
             dep,
@@ -579,7 +609,9 @@ pub async fn auto_start_dependencies(
         // can miss a running sandbox when the registry record is
         // absent/stale in the active state dir. The reconcile target is the
         // TARGET INSTANCE NAME (scoped/fresh parallel instance or singleton
-        // slot), never the bare slot.
+        // slot), never the bare slot. ADR 0030 Phase 2 T1: the disposition is
+        // namespace-aware — a record in a FOREIGN namespace is never
+        // reused/adopted (decide_dep_disposition refuses collision-style).
         let facts = crate::microsandbox::runtime::reconcile::gather_facts(
             &state_dir,
             target_of_action(&action),
@@ -588,7 +620,7 @@ pub async fn auto_start_dependencies(
         .await?;
         let mut chain = action.conflict().0.clone();
         let disposition = loop {
-            match decide_dep_disposition(&chain, &action, workload_name, &facts)? {
+            match decide_dep_disposition(&chain, &action, workload_name, &facts, &namespace)? {
                 DepDisposition::StartExisting { dep, slot } => {
                     // The detached child re-reconciles and executes
                     // handle.start(); if that fails the child errors and we
@@ -1664,7 +1696,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::reuse()),
                 "a",
-                &free()
+                &free(),
+                "default",
             )
             .unwrap(),
             DepDisposition::Start {
@@ -1682,13 +1715,101 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::reuse()),
                 "a",
-                &running(Some(true), false)
+                &running(Some(true), false),
+                "default"
             )
             .unwrap(),
             DepDisposition::Reuse {
                 dep: "b".to_string(),
                 slot: "personal-b".to_string()
             }
+        );
+    }
+
+    /// ADR 0030 Phase 2 T1: a record in a FOREIGN namespace never satisfies
+    /// the dependent — the Reuse/StartExisting dispositions must NOT adopt it
+    /// (the namespace-blind reuse previously printed "already running —
+    /// reusing" for a record the dependent's namespace-filtered resolution
+    /// then refused). The refusal names the dep, the dependent, the required
+    /// namespace, and the namespace holding the record. A same-namespace
+    /// record still reuses.
+    #[test]
+    fn dep_reuse_refuses_foreign_namespace_record() {
+        // The record() fixture registers "personal-b" in the "default"
+        // namespace; the dependent requires "personal".
+        let err = decide_dep_disposition(
+            &DepConflict::default_chain().0,
+            &start_action("b", DepConflict::reuse()),
+            "a",
+            &running(Some(true), false),
+            "personal",
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("'b'"), "refusal must name the dep: {msg}");
+        assert!(
+            msg.contains("'a'"),
+            "refusal must name the dependent: {msg}"
+        );
+        assert!(
+            msg.contains("namespace 'personal'"),
+            "refusal must name the required namespace: {msg}"
+        );
+        assert!(
+            msg.contains("namespace 'default'"),
+            "refusal must name the namespace holding the record: {msg}"
+        );
+
+        // StartExisting is an adoption too: a stopped sandbox whose record is
+        // foreign must not be started under the dependent.
+        let stopped = facts(Some(record()), Some(SandboxStatus::Stopped), None, false);
+        assert!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::reuse()),
+                "a",
+                &stopped,
+                "personal",
+            )
+            .is_err(),
+            "StartExisting on a foreign-namespace record must refuse"
+        );
+
+        // Same-namespace record: Reuse is unchanged.
+        assert_eq!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::reuse()),
+                "a",
+                &running(Some(true), false),
+                "default",
+            )
+            .unwrap(),
+            DepDisposition::Reuse {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string()
+            },
+            "a record in the dependent's namespace still reuses"
+        );
+
+        // A zombie (running + dead port + old record) with a foreign record
+        // still converges through the chain's replace element — only
+        // adoption (Reuse/StartExisting) is namespace-gated.
+        assert_eq!(
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &start_action("b", DepConflict::reuse()),
+                "a",
+                &running(Some(false), false),
+                "personal",
+            )
+            .unwrap(),
+            DepDisposition::Replace {
+                dep: "b".to_string(),
+                slot: "personal-b".to_string(),
+                ports: vec![4000]
+            },
+            "a zombie foreign record still converges via replace"
         );
     }
 
@@ -1700,7 +1821,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::reuse()),
                 "a",
-                &running(Some(false), false)
+                &running(Some(false), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -1720,7 +1842,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::reuse()),
                 "a",
-                &running(Some(false), true)
+                &running(Some(false), true),
+                "default",
             )
             .unwrap(),
             DepDisposition::Reuse {
@@ -1742,7 +1865,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &action,
                 "a",
-                &running(None, false)
+                &running(None, false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Reuse {
@@ -1760,7 +1884,8 @@ on_conflict = "fail"
                 &[ConflictStep::Replace],
                 &start_action("b", DepConflict::replace()),
                 "a",
-                &running(Some(true), false)
+                &running(Some(true), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -1776,7 +1901,8 @@ on_conflict = "fail"
                 &[ConflictStep::Replace],
                 &start_action("b", DepConflict::replace()),
                 "a",
-                &facts(Some(record()), None, None, false)
+                &facts(Some(record()), None, None, false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -1793,7 +1919,8 @@ on_conflict = "fail"
                 &[ConflictStep::Replace],
                 &start_action("b", DepConflict::replace()),
                 "a",
-                &free()
+                &free(),
+                "default",
             )
             .unwrap(),
             DepDisposition::Start {
@@ -1811,7 +1938,8 @@ on_conflict = "fail"
                 &[ConflictStep::Fail],
                 &start_action("b", DepConflict::fail()),
                 "a",
-                &running(None, false)
+                &running(None, false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Fail {
@@ -1825,7 +1953,8 @@ on_conflict = "fail"
                 &[ConflictStep::Fail],
                 &start_action("b", DepConflict::fail()),
                 "a",
-                &free()
+                &free(),
+                "default",
             )
             .unwrap(),
             DepDisposition::Start {
@@ -1843,7 +1972,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &satisfied_action("b", DepConflict::reuse()),
                 "a",
-                &running(Some(true), false)
+                &running(Some(true), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Reuse {
@@ -1861,7 +1991,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &satisfied_action("b", DepConflict::reuse()),
                 "a",
-                &running(Some(false), false)
+                &running(Some(false), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -1881,7 +2012,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &satisfied_action("b", DepConflict::reuse()),
                 "a",
-                &facts(Some(record()), None, None, false)
+                &facts(Some(record()), None, None, false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -1899,7 +2031,8 @@ on_conflict = "fail"
                 &[ConflictStep::Replace],
                 &satisfied_action("b", DepConflict::replace()),
                 "a",
-                &running(Some(true), false)
+                &running(Some(true), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -1913,7 +2046,8 @@ on_conflict = "fail"
                 &[ConflictStep::Fail],
                 &satisfied_action("b", DepConflict::fail()),
                 "a",
-                &running(None, false)
+                &running(None, false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Fail {
@@ -1933,6 +2067,7 @@ on_conflict = "fail"
             &satisfied_action("litellm", DepConflict::fail()),
             "prime",
             &running(None, false),
+            "default",
         )
         .unwrap();
         let DepDisposition::Fail { workload, slot, .. } = d else {
@@ -1954,7 +2089,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::default_chain()),
                 "a",
-                &running(Some(true), false)
+                &running(Some(true), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Reuse {
@@ -1973,7 +2109,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::default_chain()),
                 "a",
-                &stopped
+                &stopped,
+                "default",
             )
             .unwrap(),
             DepDisposition::StartExisting {
@@ -1988,7 +2125,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::default_chain()),
                 "a",
-                &crashed
+                &crashed,
+                "default",
             )
             .unwrap(),
             DepDisposition::StartExisting {
@@ -2010,7 +2148,8 @@ on_conflict = "fail"
                 &chain,
                 &start_action("b", DepConflict::default_chain()),
                 "a",
-                &stopped
+                &stopped,
+                "default",
             )
             .unwrap(),
             DepDisposition::StartExisting {
@@ -2026,7 +2165,8 @@ on_conflict = "fail"
                 rest,
                 &start_action("b", DepConflict::default_chain()),
                 "a",
-                &stopped
+                &stopped,
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -2044,7 +2184,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::default_chain()),
                 "a",
-                &running(Some(false), false)
+                &running(Some(false), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -2062,7 +2203,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &satisfied_action("b", DepConflict::default_chain()),
                 "a",
-                &facts(Some(record()), None, None, false)
+                &facts(Some(record()), None, None, false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -2080,7 +2222,8 @@ on_conflict = "fail"
                 &DepConflict::default_chain().0,
                 &start_action("b", DepConflict::default_chain()),
                 "a",
-                &running(Some(false), true)
+                &running(Some(false), true),
+                "default",
             )
             .unwrap(),
             DepDisposition::Reuse {
@@ -2098,7 +2241,8 @@ on_conflict = "fail"
                 &[ConflictStep::Replace],
                 &start_action("b", DepConflict::replace()),
                 "a",
-                &running(Some(true), false)
+                &running(Some(true), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -2113,7 +2257,8 @@ on_conflict = "fail"
                 &[ConflictStep::Replace],
                 &start_action("b", DepConflict::replace()),
                 "a",
-                &facts(Some(record()), None, None, false)
+                &facts(Some(record()), None, None, false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -2129,7 +2274,8 @@ on_conflict = "fail"
                 &[ConflictStep::Replace],
                 &start_action("b", DepConflict::replace()),
                 "a",
-                &free()
+                &free(),
+                "default",
             )
             .unwrap(),
             DepDisposition::Start {
@@ -2147,7 +2293,8 @@ on_conflict = "fail"
                 &[ConflictStep::Fail],
                 &start_action("b", DepConflict::fail()),
                 "a",
-                &running(None, false)
+                &running(None, false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Fail {
@@ -2161,7 +2308,8 @@ on_conflict = "fail"
                 &[ConflictStep::Fail],
                 &start_action("b", DepConflict::fail()),
                 "a",
-                &free()
+                &free(),
+                "default",
             )
             .unwrap(),
             DepDisposition::Start {
@@ -2181,7 +2329,8 @@ on_conflict = "fail"
                 &[ConflictStep::Reuse, ConflictStep::Fail],
                 &start_action("b", DepConflict::reuse()),
                 "a",
-                &running(Some(true), false)
+                &running(Some(true), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Reuse {
@@ -2194,7 +2343,8 @@ on_conflict = "fail"
                 &[ConflictStep::Reuse, ConflictStep::Fail],
                 &start_action("b", DepConflict::reuse()),
                 "a",
-                &running(Some(false), false)
+                &running(Some(false), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Fail {
@@ -2214,7 +2364,8 @@ on_conflict = "fail"
                 &[ConflictStep::Start, ConflictStep::Replace],
                 &start_action("b", DepConflict::reuse()),
                 "a",
-                &stopped
+                &stopped,
+                "default",
             )
             .unwrap(),
             DepDisposition::StartExisting {
@@ -2227,7 +2378,8 @@ on_conflict = "fail"
                 &[ConflictStep::Start, ConflictStep::Replace],
                 &start_action("b", DepConflict::reuse()),
                 "a",
-                &running(Some(false), false)
+                &running(Some(false), false),
+                "default",
             )
             .unwrap(),
             DepDisposition::Replace {
@@ -2247,6 +2399,7 @@ on_conflict = "fail"
             &start_action("b", DepConflict::reuse()),
             "a",
             &running(Some(false), false),
+            "default",
         )
         .unwrap_err();
         let msg = err.to_string();
@@ -2653,8 +2806,14 @@ strategy = "parallel"
             conflict: DepConflict::default_chain(),
         };
         assert_eq!(
-            decide_dep_disposition(&DepConflict::default_chain().0, &action, "prime", &free())
-                .unwrap(),
+            decide_dep_disposition(
+                &DepConflict::default_chain().0,
+                &action,
+                "prime",
+                &free(),
+                "default",
+            )
+            .unwrap(),
             DepDisposition::Start {
                 dep: "litellm".to_string(),
                 slot: "personal-litellm@prime-1".to_string(),
@@ -2852,6 +3011,63 @@ command = []
             "an unregistered declaring dir must fall back to the default namespace"
         );
         let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// ADR 0030 Phase 2 T1 regression pin: a STANDALONE construction under a
+    /// registered directory-mode config repo resolves the record namespace to
+    /// the declaring repo key — including right after the provenance slot is
+    /// drained. `take_provenance` is one-shot, but every construction re-loads
+    /// the config first (workload/config.rs `load_config` → `set_provenance`),
+    /// re-filling the slot before the take.
+    #[test]
+    fn standalone_construction_namespace_is_declaring_repo_key() -> Result<()> {
+        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS};
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = uniq_dir("ns-standalone");
+        std::fs::create_dir_all(&home)?;
+        std::env::set_var("WORKESTRATE_HOME", &home);
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // Directory-mode repo at <store>/config-repos/personal (store = the
+        // home in the single-home layout).
+        let repo = home.join("config-repos").join("personal");
+        let workloads = repo.join("workestrate").join("workloads");
+        std::fs::create_dir_all(&workloads)?;
+        std::fs::write(
+            repo.join("workestrate").join("default.toml"),
+            "schema_version = 1\n",
+        )?;
+        std::fs::write(
+            workloads.join("litellm.toml"),
+            "[workloads.litellm]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.litellm.network]\ndefault_deny = true\n",
+        )?;
+        let canonical = repo.canonicalize()?;
+        crate::config::register_config("personal", &canonical.to_string_lossy(), None, None)?;
+
+        let wl = crate::microsandbox::workload::ConfigWorkload::new("litellm")?;
+        assert_eq!(
+            crate::microsandbox::workload::Workload::namespace(&wl),
+            "personal",
+            "a standalone construction's record namespace is the declaring repo key"
+        );
+
+        // The drain pin: take_provenance empties the slot (one-shot); the
+        // NEXT construction re-loads the config first and STILL resolves the
+        // repo key (the slot is re-filled before every take).
+        let _cfg = crate::config::load_config()?;
+        assert!(
+            crate::merge::take_provenance().is_some(),
+            "load_config must re-fill the provenance slot"
+        );
+        let wl = crate::microsandbox::workload::ConfigWorkload::new("litellm")?;
+        assert_eq!(
+            crate::microsandbox::workload::Workload::namespace(&wl),
+            "personal",
+            "construction after a drained slot still resolves the declaring repo key"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }
 }
