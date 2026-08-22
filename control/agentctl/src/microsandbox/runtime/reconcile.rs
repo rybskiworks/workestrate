@@ -313,8 +313,7 @@ fn prune_by_verdicts(
             "pruning stale registry record for '{}' (msb reports no such sandbox)",
             r.instance
         );
-        if crate::microsandbox::port_registry::unregister_sandbox(state_dir, &r.instance).is_ok()
-        {
+        if crate::microsandbox::port_registry::unregister_sandbox(state_dir, &r.instance).is_ok() {
             pruned += 1;
         }
     }
@@ -758,10 +757,7 @@ mod tests {
         let dir = crate::config::test_support::unique_state_dir_runtime("prune-msb-unreachable");
         register(&dir, "personal-litellm", &[4000])?;
         let pruned = prune_stale_records(&dir).await?;
-        assert_eq!(
-            pruned, 0,
-            "fail-closed: unreachable msb must prune nothing"
-        );
+        assert_eq!(pruned, 0, "fail-closed: unreachable msb must prune nothing");
         assert!(
             crate::microsandbox::port_registry::find_record(&dir, "personal-litellm")?.is_some(),
             "the record must survive when liveness cannot be determined"
