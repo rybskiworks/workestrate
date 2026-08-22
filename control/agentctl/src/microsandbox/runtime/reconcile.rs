@@ -256,6 +256,71 @@ pub fn chain_after(chain: &[ConflictStep], step: ConflictStep) -> Option<&[Confl
     Some(&chain[pos + 1..])
 }
 
+/// Liveness verdict for one registry record's backing sandbox (stale-record
+/// GC). Mirrors the `ps` liveness vocabulary (runtime/ps.rs): only a positive
+/// `SandboxNotFound` marks a record stale; every other outcome keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordLiveness {
+    /// msb resolved the sandbox (any status) — the record is authoritative.
+    Live,
+    /// msb definitively reports no such sandbox — the record is STALE.
+    Gone,
+    /// msb itself errored — fail-closed: the record is kept.
+    Unknown,
+}
+
+/// Prune stale registry records: a record whose backing sandbox msb
+/// definitively reports as gone (`SandboxNotFound`) is unregistered so its
+/// ports (and parallel-slot loopback IP) stop blocking future `up`s. Records
+/// whose sandbox exists (any status) or whose liveness cannot be determined
+/// (msb unreachable) are KEPT — fail-closed, matching the `ps` stale flag
+/// and the `down_one` NotFound branch.
+///
+/// Called from `build_sandbox` (runtime/run.rs) BEFORE any registry-reading
+/// selection so a record orphaned by a crash, a killed detached child, or an
+/// out-of-band `msb rm` cannot wedge its ports until a manual `down`. The
+/// OS-bind probe in `port_is_occupied` remains the backstop for ports held
+/// by processes outside the registry.
+pub async fn prune_stale_records(state_dir: &Path) -> Result<usize> {
+    let records = crate::microsandbox::port_registry::list_records(state_dir)?;
+    let mut verdicts = Vec::with_capacity(records.len());
+    for r in &records {
+        verdicts.push(match Sandbox::get(&r.instance).await {
+            Ok(_) => RecordLiveness::Live,
+            Err(MicrosandboxError::SandboxNotFound(_)) => RecordLiveness::Gone,
+            Err(_) => RecordLiveness::Unknown,
+        });
+    }
+    prune_by_verdicts(state_dir, &records, &verdicts)
+}
+
+/// The sync core of [`prune_stale_records`], split out so the prune decision
+/// is unit-testable without an msb instance: unregister exactly the records
+/// whose verdict is [`RecordLiveness::Gone`]. Unregister failures are
+/// best-effort (the `let _ =` teardown idiom) and not counted.
+fn prune_by_verdicts(
+    state_dir: &Path,
+    records: &[SandboxInstanceRecord],
+    verdicts: &[RecordLiveness],
+) -> Result<usize> {
+    debug_assert_eq!(records.len(), verdicts.len());
+    let mut pruned = 0usize;
+    for (r, v) in records.iter().zip(verdicts) {
+        if *v != RecordLiveness::Gone {
+            continue;
+        }
+        eprintln!(
+            "pruning stale registry record for '{}' (msb reports no such sandbox)",
+            r.instance
+        );
+        if crate::microsandbox::port_registry::unregister_sandbox(state_dir, &r.instance).is_ok()
+        {
+            pruned += 1;
+        }
+    }
+    Ok(pruned)
+}
+
 /// ADR 0030 Phase 2 T1: the registry record in `facts` claims the slot for a
 /// FOREIGN namespace (its `namespace` differs from the caller's required
 /// `namespace`). Returns the record's namespace when so; `None` when there is
@@ -621,5 +686,88 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ---- stale-record GC (prune_stale_records / prune_by_verdicts) ----
+
+    fn register(dir: &std::path::Path, instance: &str, ports: &[u16]) -> Result<()> {
+        crate::microsandbox::port_registry::register_sandbox(dir, instance, None, "wl", ports)
+    }
+
+    /// The prune decision core: exactly the records whose verdict is `Gone`
+    /// are unregistered; `Live` stays authoritative and `Unknown` (msb
+    /// unreachable) is kept — fail-closed, matching the `ps` stale flag.
+    #[test]
+    fn prune_by_verdicts_removes_only_gone_records() -> Result<()> {
+        let dir = crate::config::test_support::unique_state_dir_runtime("prune-verdicts");
+        register(&dir, "gone-1", &[4000])?;
+        register(&dir, "live-1", &[4001])?;
+        register(&dir, "unknown-1", &[4002])?;
+        let records = crate::microsandbox::port_registry::list_records(&dir)?;
+        assert_eq!(records.len(), 3, "fixture must register three records");
+        let verdicts: Vec<RecordLiveness> = records
+            .iter()
+            .map(|r| match r.instance.as_str() {
+                "gone-1" => RecordLiveness::Gone,
+                "live-1" => RecordLiveness::Live,
+                _ => RecordLiveness::Unknown,
+            })
+            .collect();
+        let pruned = prune_by_verdicts(&dir, &records, &verdicts)?;
+        assert_eq!(pruned, 1, "exactly the Gone record is pruned");
+        assert!(
+            crate::microsandbox::port_registry::find_record(&dir, "gone-1")?.is_none(),
+            "the Gone record must be unregistered"
+        );
+        assert!(
+            crate::microsandbox::port_registry::find_record(&dir, "live-1")?.is_some(),
+            "a Live record stays authoritative"
+        );
+        assert!(
+            crate::microsandbox::port_registry::find_record(&dir, "unknown-1")?.is_some(),
+            "an Unknown (msb-unreachable) record is kept — fail-closed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// Fail-closed end-to-end: with an UNREACHABLE msb db every verdict is
+    /// `Unknown`, so `prune_stale_records` removes nothing. The msb DB is
+    /// made unreachable by pointing MSB_HOME at a path under a regular file,
+    /// so the SDK's `create_dir_all(<MSB_HOME>/db)` fails with ENOTDIR and
+    /// `Sandbox::get` errors out (never NotFound). Mirrors the
+    /// `down_all_instances_returns_error_when_msb_db_unreachable` pattern.
+    #[tokio::test]
+    // ENV_TEST_LOCK held across `.await`: single-threaded test runtime, no
+    // spawned tasks — see the runtime/mod.rs Error test for the full note.
+    #[allow(clippy::await_holding_lock)]
+    async fn prune_stale_records_keeps_records_when_msb_db_unreachable() -> Result<()> {
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-prune-msb-unreachable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("blocker"), b"x")?;
+        let _msb = MsbHomeGuard::set(&tmp.join("blocker"));
+
+        let dir = crate::config::test_support::unique_state_dir_runtime("prune-msb-unreachable");
+        register(&dir, "personal-litellm", &[4000])?;
+        let pruned = prune_stale_records(&dir).await?;
+        assert_eq!(
+            pruned, 0,
+            "fail-closed: unreachable msb must prune nothing"
+        );
+        assert!(
+            crate::microsandbox::port_registry::find_record(&dir, "personal-litellm")?.is_some(),
+            "the record must survive when liveness cannot be determined"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
     }
 }

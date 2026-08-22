@@ -161,6 +161,9 @@ pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) ->
         match Sandbox::get(&spec.instance).await {
             Ok(handle) => {
                 stop_and_remove(handle).await?;
+                // The sandbox is gone — its registry record must go with it;
+                // a lingering record would block its ports for future ups.
+                let _ = super::port_registry::unregister_sandbox(state_dir, &spec.instance);
             }
             Err(MicrosandboxError::SandboxNotFound(_)) => {
                 let _ = super::port_registry::unregister_sandbox(state_dir, &spec.instance);

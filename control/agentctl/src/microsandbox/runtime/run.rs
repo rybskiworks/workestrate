@@ -391,8 +391,16 @@ fn apply_instance_port_policy<W: Workload>(
                 .map(|c| c.0)
                 .unwrap_or_else(|| crate::config::PortOccupiedChain::default_on_occupied().0);
             // The occupied predicate: a registry record on the same bind, OR
-            // an OS bind, OR a declared host in the plan.
-            let is_occupied = |candidate: u16| port_is_occupied(state_dir, bind, candidate, ports);
+            // an OS bind, OR a declared host in the plan — EXCLUDING the
+            // primary port being selected: its declared host is typically
+            // `preferred` itself (the canonical `host == preferred` config
+            // shape, e.g. litellm's `host = 4000` + `preferred = 4000`), so
+            // counting it would permanently self-occupy the preferred port.
+            // Sibling declared hosts still count, so the increment band can
+            // never steal another port the workload declares.
+            let siblings = ports.get(1..).unwrap_or(&[]);
+            let is_occupied =
+                |candidate: u16| port_is_occupied(state_dir, bind, candidate, siblings);
             let auto_allocate = || {
                 super::super::port_registry::probe_free_ports(state_dir, bind, 1)
                     .ok()
@@ -578,6 +586,18 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.
     let state_dir = crate::config::resolve_state_dir();
+
+    // ADR 0030 stale-record GC: drop registry records whose backing msb
+    // sandbox is definitively gone BEFORE any registry-reading selection
+    // below (bind-IP allocation, instance.port occupancy, --port-auto/auto
+    // probing). A record left behind by a crash or an out-of-band `msb rm`
+    // would otherwise block its ports/loopback IP forever — occupancy checks
+    // treat every record as authoritative with no liveness reconciliation.
+    // Fail-closed: when msb is unreachable nothing is pruned, and a prune
+    // failure never blocks the up.
+    if let Err(e) = super::reconcile::prune_stale_records(&state_dir).await {
+        eprintln!("warning: stale registry record prune failed: {e}");
+    }
     for m in &mut plan.mounts {
         if let Some(program) = workload.mount_policy_for(&m.guest) {
             let slug = crate::microsandbox::policy_file::mount_slug(&m.guest);
@@ -1556,6 +1576,80 @@ mod tests {
             held.push(std::net::TcpListener::bind((bind, *p))?);
         }
         drop(held);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- ADR 0030 Phase 3: apply_instance_port_policy (Preferred) — the
+    // REAL occupied predicate (registry + OS bind + plan-declared hosts) ----
+
+    /// Regression: the PRIMARY port's own declared host must not self-occupy
+    /// the preferred port. The canonical config shape declares
+    /// `host == preferred` (litellm: `host = 4000` +
+    /// `port = { preferred = 4000 }`); counting the primary in the
+    /// plan-declared check made `Preferred(n)` permanently skip n and walk
+    /// the on_occupied chain on every up. With a free preferred port the
+    /// selection must land on it.
+    #[test]
+    fn apply_instance_port_policy_preferred_free_selects_preferred() -> Result<()> {
+        let state_dir = unique_state_dir("policy-preferred-free");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        // Probe-and-release a free port so the OS-bind occupancy check passes.
+        let preferred = std::net::TcpListener::bind((bind, 0))?.local_addr()?.port();
+        let workload = PolicyWorkload {
+            port: Some(crate::config::InstancePort::Preferred(
+                crate::config::types::PreferredPort {
+                    preferred,
+                    on_occupied: None,
+                },
+            )),
+        };
+        // The canonical shape: the plan declares host == preferred.
+        let mut ports = vec![PortMapping::new(preferred, 4000)];
+        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports)?;
+        assert_eq!(
+            ports[0].host, preferred,
+            "a free preferred port must be selected even when the plan declares host == preferred"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// With the preferred port OS-occupied (a live listener held for the
+    /// duration), the increment chain must walk — and must SKIP the plan's
+    /// SIBLING declared host (a multi-port workload's other port), landing on
+    /// the next free candidate. The sibling itself is left untouched.
+    #[test]
+    fn apply_instance_port_policy_preferred_occupied_increments_skipping_siblings() -> Result<()> {
+        let state_dir = unique_state_dir("policy-preferred-occupied");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        // Probe-and-release to pick a preferred whose +1/+2 are very likely
+        // free, then HOLD preferred so the OS-bind probe judges it occupied.
+        let preferred = std::net::TcpListener::bind((bind, 0))?.local_addr()?.port();
+        let _held = std::net::TcpListener::bind((bind, preferred))?;
+        let workload = PolicyWorkload {
+            port: Some(crate::config::InstancePort::Preferred(
+                crate::config::types::PreferredPort {
+                    preferred,
+                    on_occupied: None,
+                },
+            )),
+        };
+        let sibling = preferred.saturating_add(1);
+        let expected = preferred.saturating_add(2);
+        let mut ports = vec![
+            PortMapping::new(preferred, 4000),
+            PortMapping::new(sibling, 4001),
+        ];
+        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports)?;
+        assert_eq!(
+            ports[0].host, expected,
+            "increment must skip the sibling declared host {sibling} and land on {expected}"
+        );
+        assert_eq!(
+            ports[1].host, sibling,
+            "the policy governs only the primary port; siblings stay as declared"
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
