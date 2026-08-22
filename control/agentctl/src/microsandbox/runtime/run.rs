@@ -567,6 +567,40 @@ fn first_free_in_band<I: Iterator<Item = u16>>(
     band.into_iter().find(|p| !is_occupied(*p))
 }
 
+/// Write every per-mount policy file beneath the loader-approved root and
+/// record the loader-RELATIVE token on each plan mount.
+///
+/// ORDERING INVARIANT (cross-link: [`super::teardown_for_replace`] /
+/// `policy_file::remove_policy_dir`): this write must be the LAST writer of
+/// the instance's policy dir before `builder.create()` / `handle.start()`.
+/// The replace teardowns wipe the policy dir, so this helper is only ever
+/// called (a) in the `StartExisting` branch — an earlier `down` may have
+/// removed the dir while the sandbox was stopped, and `handle.start()`
+/// re-loads the policy — and (b) AFTER the conflict-chain match and the
+/// `--replace` teardown, immediately before builder assembly. Running it
+/// earlier (before teardown) makes the fork loader fail closed with
+/// "mount policy file not found" on every replace boot.
+fn write_mount_policy_files<W: Workload>(
+    spec: &InstanceSpec,
+    workload: &W,
+    plan: &mut SandboxPlan,
+) -> Result<()> {
+    for m in &mut plan.mounts {
+        if let Some(program) = workload.mount_policy_for(&m.guest) {
+            let slug = crate::microsandbox::policy_file::mount_slug(&m.guest);
+            let (_abs, rel) = crate::microsandbox::policy_file::write_policy_file(
+                &spec.instance,
+                &slug,
+                program,
+            )?;
+            // The plan carries the loader-RELATIVE token; the fork loader
+            // resolves it beneath the MSB_HOME-anchored approved root.
+            m.policy_file = Some(rel);
+        }
+    }
+    Ok(())
+}
+
 /// Outcome of [`build_sandbox`] (ADR 0030 Phase 0): the caller either gets a
 /// live sandbox + foreground config to exec the workload into, or learns the
 /// slot was REUSED (already running healthy/booting) and has nothing to do.
@@ -633,19 +667,11 @@ pub(crate) async fn build_sandbox<W: Workload>(
     if let Err(e) = super::reconcile::prune_stale_records(&state_dir).await {
         eprintln!("warning: stale registry record prune failed: {e}");
     }
-    for m in &mut plan.mounts {
-        if let Some(program) = workload.mount_policy_for(&m.guest) {
-            let slug = crate::microsandbox::policy_file::mount_slug(&m.guest);
-            let (_abs, rel) = crate::microsandbox::policy_file::write_policy_file(
-                &spec.instance,
-                &slug,
-                program,
-            )?;
-            // The plan carries the loader-RELATIVE token; the fork loader
-            // resolves it beneath the MSB_HOME-anchored approved root.
-            m.policy_file = Some(rel);
-        }
-    }
+
+    // NOTE: the per-mount policy-file write does NOT live here. It runs after
+    // the conflict-chain decision and any replace teardown, immediately before
+    // builder assembly — see [`write_mount_policy_files`] for the ordering
+    // invariant.
 
     // ADR 0026(a)/C2: resolve the slot's bind IP BEFORE the builder port
     // loop. Parallel slots draw a per-instance loopback from the locked
@@ -745,6 +771,11 @@ pub(crate) async fn build_sandbox<W: Workload>(
             );
         }
         super::reconcile::ChainStep::StartExisting => {
+            // The policy dir may be gone (an earlier `down` removed it while
+            // the sandbox was stopped); `handle.start()` re-loads the policy,
+            // so the write must cover this path too (ordering invariant: see
+            // [`write_mount_policy_files`]).
+            write_mount_policy_files(spec, workload, &mut plan)?;
             let (sandbox, config) = start_existing_sandbox(
                 &state_dir,
                 spec,
@@ -764,6 +795,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
     if spec.replace {
         check_occupied_or_replace(spec, &state_dir).await?;
     }
+
+    // ORDERING INVARIANT: write the per-mount policy files ONLY here — after
+    // the chain decision + any replace teardown (`teardown_for_replace` wipes
+    // the policy dir via `remove_policy_dir`), immediately before builder
+    // assembly / `create()`. The write must be the last writer before create;
+    // writing earlier lets the replace teardown delete the freshly written
+    // file and the fork loader then fails closed with "mount policy file not
+    // found". See [`write_mount_policy_files`].
+    write_mount_policy_files(spec, workload, &mut plan)?;
 
     ensure_mount_sources(&mount_roots, &plan)?;
 

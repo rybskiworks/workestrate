@@ -246,6 +246,14 @@ pub(crate) async fn teardown_for_replace(state_dir: &Path, instance: &str) -> Re
         }
     }
     let _ = super::port_registry::unregister_sandbox(state_dir, instance);
+    // ORDERING INVARIANT (cross-link: `runtime/run.rs`
+    // `write_mount_policy_files`): within one build flow this wipe must NEVER
+    // run after the per-mount policy write — `build_sandbox` writes the policy
+    // files only AFTER this teardown (and the `--replace` teardown in
+    // `check_occupied_or_replace`), immediately before builder assembly, so
+    // the write is the last writer before create/start. Reversing that order
+    // makes the fork loader fail closed with "mount policy file not found"
+    // (host-verified 2026-08-22 on the `prime` workload).
     let _ = super::policy_file::remove_policy_dir(instance);
     // Best-effort removal of the lingering sandbox dir (create-gate cleanup).
     // `remove_dir_all` on a non-existent dir returns Err(NotFound), swallowed
@@ -566,6 +574,69 @@ mod tests {
                 .exists(),
             "teardown_for_replace must unregister the port-registry record"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// ORDERING INVARIANT regression pin (host-verified 2026-08-22 on the
+    /// `prime` workload): `teardown_for_replace` wipes the instance's policy
+    /// dir via `remove_policy_dir`, so within one build flow the per-mount
+    /// policy write must run AFTER the teardown (`build_sandbox` calls
+    /// `write_mount_policy_files` post-teardown, immediately before builder
+    /// assembly — see the cross-linking comments at both sites). The OLD
+    /// ordering (write → teardown → create) lost the freshly written file and
+    /// the fork loader failed closed with "mount policy file not found:
+    /// prime/data.json" on every `--replace` / chain-Replace boot.
+    ///
+    /// `build_sandbox` itself cannot run under unit tests (msb SDK create),
+    /// so this pins the invariant at the helper level: write → teardown
+    /// leaves NO policy file (the defect), teardown → write (the fixed
+    /// order) leaves the file the loader needs.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see Error test
+    async fn policy_write_after_teardown_for_replace_leaves_policy_file() -> anyhow::Result<()> {
+        // Serialize with ALL env-mutating tests (see the Error test note).
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-policy-write-order-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        // `<MSB_HOME>/db` is a regular FILE → `Sandbox::get` errors (warning
+        // path, DB pool never pinned) while the policy root
+        // `<MSB_HOME>/mount-policy` stays writable.
+        std::fs::write(tmp.join("db"), b"x")?;
+        let _msb = MsbHomeGuard::set(&tmp);
+
+        let instance = "policy-write-order-slot";
+        let program = crate::mount_policy::compile(Vec::new())?;
+        let slug = crate::microsandbox::policy_file::mount_slug("/data");
+        let policy_path = crate::microsandbox::policy_file::policy_file_path(instance, &slug);
+
+        // OLD ordering: the write runs BEFORE the replace teardown.
+        crate::microsandbox::policy_file::write_policy_file(instance, &slug, &program)?;
+        assert!(policy_path.exists(), "policy file written pre-teardown");
+        let dir = unique_state_dir_runtime("policy-write-order");
+        super::teardown_for_replace(&dir, instance).await?;
+        assert!(
+            !policy_path.exists(),
+            "teardown_for_replace must wipe the policy dir — a write ordered \
+             BEFORE teardown is lost (the 2026-08-22 replace-boot failure)"
+        );
+
+        // FIXED ordering: the write runs AFTER the teardown, immediately
+        // before builder create — the file the loader needs survives.
+        crate::microsandbox::policy_file::write_policy_file(instance, &slug, &program)?;
+        assert!(
+            policy_path.exists(),
+            "policy file must exist when the write is ordered after teardown"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())

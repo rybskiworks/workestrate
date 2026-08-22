@@ -239,6 +239,46 @@ Praise: exemplary unsafe hygiene (every block has SAFETY comment); strong fail-c
 - macOS no-op (Linux-first; spec 22 §14bis).
 - Quota byte accounting still counts masked bytes (masking is not space control). (T16)
 
+### 2026-08-22 — Replace-boot policy-file ordering bug (FIXED, host-verified)
+
+- **Symptom** (host-verified 2026-08-22): `prime` workload fails to start on
+  the replace path with `mount policy file not found: prime/data.json`.
+- **Root cause — ORDERING, not cleanup**: `build_sandbox`
+  (`control/agentctl/src/microsandbox/runtime/run.rs`, previously ~636-648)
+  wrote the compiled per-mount policy file via `write_policy_file` BEFORE the
+  conflict-chain decision; `ChainStep::Replace` then ran
+  `teardown_for_replace` (`runtime/mod.rs:234`), whose `remove_policy_dir`
+  (mod.rs:249) wiped the freshly written file; `builder.create()`'s fork
+  loader then failed closed with file-not-found. Every `--replace` /
+  chain-Replace boot with a policy mount hit this; Reuse/StartExisting were
+  unaffected (no teardown).
+- **Fix**: extracted `write_mount_policy_files(spec, workload, &mut plan)`
+  (run.rs) and moved the write to AFTER the chain match + the `spec.replace`
+  `check_occupied_or_replace` block, immediately before
+  `ensure_mount_sources`/builder assembly, plus a call in the `StartExisting`
+  branch before `start_existing_sandbox` (an earlier `down` may have removed
+  the policy dir; the write must cover every path that loads the policy).
+  `teardown_for_replace`/`remove_policy_dir` kept as-is; cross-linking
+  ordering-invariant warnings added at both the write site (run.rs) and the
+  teardown site (mod.rs): teardown must never run after the write within one
+  build flow; the write is the last writer before create/start.
+- **Regression test**:
+  `microsandbox::runtime::tests::policy_write_after_teardown_for_replace_leaves_policy_file`
+  (runtime/mod.rs tests) — pins the helper-level ordering (write→teardown
+  loses the file; teardown→write preserves it); fails-before confirmed by
+  mutation (removing the post-teardown write fails the final assertion).
+  `build_sandbox` itself cannot run under unit tests (msb SDK create), so the
+  helper-level pin + cross-linking comments are the honest form.
+- **Sibling scan**: the other `remove_policy_dir` call sites (mod.rs `down_one`,
+  ~318/:323) are teardown-only `down` flows never followed by a recreate-write
+  in the same flow — clean, unchanged.
+- **Gates**: cargo fmt --check PASS; cargo clippy --all-targets -D warnings
+  PASS; cargo test PASS 1161/1161 (baseline 1160 + 1 new, 0 failed, 4
+  ignored); scripts/check-nix-paths.sh PASS.
+- **Commit**: recorded in git history on `migration/tool-model` immediately
+  above the commit that added this entry's parent (single commit; hash
+  intentionally not duplicated here — see `git log -1` at the entry's commit).
+
 ## 10. Environment (capabilities table)
 | capability | this container | how | gates runnable |
 |---|---|---|---|
