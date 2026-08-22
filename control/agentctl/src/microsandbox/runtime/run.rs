@@ -363,11 +363,20 @@ fn apply_auto_ports(state_dir: &Path, bind: IpAddr, ports: &mut [PortMapping]) -
 ///     the on_occupied chain (increment band / auto / fail).
 ///
 /// The effective ports land in the plan (and thus the registry record).
+///
+/// `exclude_instance` is the `--replace` target, when one is in play: the
+/// instance being replaced never blocks its OWN preferred port. Selection
+/// here runs BEFORE the replace teardown (`teardown_for_replace` /
+/// `check_occupied_or_replace`, below in `build_sandbox`), so without the
+/// exclusion the predecessor's registry record and OS listener would make
+/// its own preferred port look occupied and force an increment on every
+/// `up --replace` cycle (4000 → 4001 → 4002).
 fn apply_instance_port_policy<W: Workload>(
     state_dir: &Path,
     workload: &W,
     bind: IpAddr,
     ports: &mut [PortMapping],
+    exclude_instance: Option<&str>,
 ) -> Result<()> {
     let Some(port) = workload.instance_port() else {
         return Ok(());
@@ -399,8 +408,9 @@ fn apply_instance_port_policy<W: Workload>(
             // Sibling declared hosts still count, so the increment band can
             // never steal another port the workload declares.
             let siblings = ports.get(1..).unwrap_or(&[]);
-            let is_occupied =
-                |candidate: u16| port_is_occupied(state_dir, bind, candidate, siblings);
+            let is_occupied = |candidate: u16| {
+                port_is_occupied(state_dir, bind, candidate, siblings, exclude_instance)
+            };
             let auto_allocate = || {
                 super::super::port_registry::probe_free_ports(state_dir, bind, 1)
                     .ok()
@@ -425,17 +435,42 @@ fn apply_instance_port_policy<W: Workload>(
 
 /// Whether `candidate` is occupied on `bind`: a registry record on the same
 /// bind holds it, an OS bind succeeds, or a declared host in `ports` equals it.
-fn port_is_occupied(state_dir: &Path, bind: IpAddr, candidate: u16, ports: &[PortMapping]) -> bool {
+///
+/// `exclude_instance` (the `--replace` target): records belonging to the
+/// instance being replaced are skipped — its teardown releases them. When the
+/// candidate is registered ONLY to the excluded instance the OS-bind probe is
+/// bypassed too: the listener is the predecessor's own, which the pending
+/// teardown releases. A failed OS bind with NO matching excluded-instance
+/// record is a FOREIGN live listener and still counts as occupied —
+/// fail-closed, unchanged.
+fn port_is_occupied(
+    state_dir: &Path,
+    bind: IpAddr,
+    candidate: u16,
+    ports: &[PortMapping],
+    exclude_instance: Option<&str>,
+) -> bool {
     if ports.iter().any(|p| p.host == candidate) {
         return true;
     }
     // Registry-recorded ports on the same bind (defense-in-depth).
     if let Ok(records) = super::super::port_registry::list_records(state_dir) {
-        if records
-            .iter()
-            .any(|r| r.bind_ip == bind && r.ports.contains(&candidate))
-        {
-            return true;
+        let mut self_hold = false;
+        for r in &records {
+            if r.bind_ip != bind || !r.ports.contains(&candidate) {
+                continue;
+            }
+            if Some(r.instance.as_str()) == exclude_instance {
+                self_hold = true;
+                continue;
+            }
+            return true; // a FOREIGN record holds the candidate
+        }
+        if self_hold {
+            // Only the replace target's own record lists the candidate; its
+            // OS listener (if any) is the predecessor's own and the pending
+            // teardown releases it. Skip the OS-bind probe.
+            return false;
         }
     }
     // OS bind probe (SO_REUSEADDR off — a plain TcpListener::bind).
@@ -634,7 +669,23 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // ADR 0030 Phase 3: the workload's declared instance.port drives
     // selection. --port-auto (all ports) still wins when both are used.
     if !spec.port_auto {
-        apply_instance_port_policy(&state_dir, workload, bind_ip, &mut plan.ports)?;
+        // --replace: the instance being replaced never blocks its own
+        // preferred port. Selection runs BEFORE the replace teardown
+        // (ChainStep::Replace / check_occupied_or_replace below), so the
+        // predecessor's registry record and OS listener would otherwise
+        // force an increment on every `up --replace` cycle. Foreign holders
+        // still block (fail-closed). NOTE: keyed on the EXPLICIT
+        // `spec.replace`; the conflict chain's Replace disposition is only
+        // known after `decide_step` below, so a chain-driven replace of a
+        // zombie/stale predecessor still increments (documented limitation).
+        let replace_target = spec.replace.then_some(spec.instance.as_str());
+        apply_instance_port_policy(
+            &state_dir,
+            workload,
+            bind_ip,
+            &mut plan.ports,
+            replace_target,
+        )?;
     }
     if spec.port_auto && !plan.ports.is_empty() {
         let probed =
@@ -1555,7 +1606,7 @@ mod tests {
             PortMapping::new(0, 8080),
         ];
         let mut ports = original.clone();
-        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports)?;
+        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports, None)?;
         // Every declared port must now be a probed non-zero host.
         assert!(
             ports.iter().all(|p| p.host != 0),
@@ -1606,7 +1657,7 @@ mod tests {
         };
         // The canonical shape: the plan declares host == preferred.
         let mut ports = vec![PortMapping::new(preferred, 4000)];
-        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports)?;
+        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports, None)?;
         assert_eq!(
             ports[0].host, preferred,
             "a free preferred port must be selected even when the plan declares host == preferred"
@@ -1641,7 +1692,7 @@ mod tests {
             PortMapping::new(preferred, 4000),
             PortMapping::new(sibling, 4001),
         ];
-        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports)?;
+        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports, None)?;
         assert_eq!(
             ports[0].host, expected,
             "increment must skip the sibling declared host {sibling} and land on {expected}"
@@ -1649,6 +1700,158 @@ mod tests {
         assert_eq!(
             ports[1].host, sibling,
             "the policy governs only the primary port; siblings stay as declared"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- --replace target exclusion: the instance being replaced never
+    // blocks its OWN preferred port (selection runs BEFORE teardown) ----
+
+    fn register(dir: &std::path::Path, instance: &str, ports: &[u16]) -> Result<()> {
+        crate::microsandbox::port_registry::register_sandbox(dir, instance, None, "wl", ports)
+    }
+
+    /// Regression: with --replace in play, the preferred port occupied ONLY
+    /// by the replaced instance's OWN registry record AND its live OS
+    /// listener (the predecessor still runs at selection time — teardown is
+    /// later) must be RECLAIMED, not incremented. Successive
+    /// `up litellm --replace` cycles hold 4000 steady instead of walking
+    /// 4000 → 4001 → 4002.
+    #[test]
+    fn apply_instance_port_policy_replace_reclaims_own_preferred() -> Result<()> {
+        let state_dir = unique_state_dir("policy-replace-reclaim");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        // Probe-and-release a free preferred port, then stand in for the
+        // LIVE PREDECESSOR: its registry record plus its held OS listener.
+        let preferred = std::net::TcpListener::bind((bind, 0))?.local_addr()?.port();
+        let _predecessor_listener = std::net::TcpListener::bind((bind, preferred))?;
+        register(&state_dir, "personal-litellm", &[preferred])?;
+        let workload = PolicyWorkload {
+            port: Some(crate::config::InstancePort::Preferred(
+                crate::config::types::PreferredPort {
+                    preferred,
+                    on_occupied: None,
+                },
+            )),
+        };
+        let mut ports = vec![PortMapping::new(preferred, 4000)];
+        apply_instance_port_policy(
+            &state_dir,
+            &workload,
+            bind,
+            &mut ports,
+            Some("personal-litellm"),
+        )?;
+        assert_eq!(
+            ports[0].host, preferred,
+            "the replace target's own record+listener must not block its preferred port"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// Fail-closed: with --replace in play, a preferred port held by a
+    /// FOREIGN instance's registry record (+ its live listener) still blocks
+    /// — the exclusion covers only the replace target's own holdings, so the
+    /// increment chain walks.
+    #[test]
+    fn apply_instance_port_policy_replace_increments_past_foreign_holder() -> Result<()> {
+        let state_dir = unique_state_dir("policy-replace-foreign");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let preferred = std::net::TcpListener::bind((bind, 0))?.local_addr()?.port();
+        let _foreign_listener = std::net::TcpListener::bind((bind, preferred))?;
+        register(&state_dir, "personal-other", &[preferred])?;
+        let workload = PolicyWorkload {
+            port: Some(crate::config::InstancePort::Preferred(
+                crate::config::types::PreferredPort {
+                    preferred,
+                    on_occupied: None,
+                },
+            )),
+        };
+        let expected = preferred.saturating_add(1);
+        let mut ports = vec![PortMapping::new(preferred, 4000)];
+        apply_instance_port_policy(
+            &state_dir,
+            &workload,
+            bind,
+            &mut ports,
+            Some("personal-litellm"),
+        )?;
+        assert_eq!(
+            ports[0].host, expected,
+            "a foreign holder still blocks the preferred port — increment to {expected}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// Fail-closed on the OS probe: with --replace in play, a live listener
+    /// with NO registry record at all (a process outside the registry) still
+    /// blocks the preferred port — the exclusion bypasses the OS-bind probe
+    /// ONLY when the candidate is registered to the replace target itself.
+    #[test]
+    fn apply_instance_port_policy_replace_foreign_listener_without_record_increments() -> Result<()>
+    {
+        let state_dir = unique_state_dir("policy-replace-foreign-listener");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let preferred = std::net::TcpListener::bind((bind, 0))?.local_addr()?.port();
+        let _foreign_listener = std::net::TcpListener::bind((bind, preferred))?;
+        let workload = PolicyWorkload {
+            port: Some(crate::config::InstancePort::Preferred(
+                crate::config::types::PreferredPort {
+                    preferred,
+                    on_occupied: None,
+                },
+            )),
+        };
+        let expected = preferred.saturating_add(1);
+        let mut ports = vec![PortMapping::new(preferred, 4000)];
+        apply_instance_port_policy(
+            &state_dir,
+            &workload,
+            bind,
+            &mut ports,
+            Some("personal-litellm"),
+        )?;
+        assert_eq!(
+            ports[0].host, expected,
+            "a record-less foreign listener still blocks — fail-closed, increment to {expected}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// Ordering: a STALE record for the replaced instance (msb reports Gone)
+    /// is pruned by `prune_stale_records` BEFORE selection (build_sandbox:
+    /// prune first, then apply_instance_port_policy), so the preferred port
+    /// is reclaimed via the PRUNE path — the replace exclusion is not even
+    /// needed (exclude_instance is None here). The unregister below is
+    /// exactly what `prune_by_verdicts` does for a Gone verdict (covered by
+    /// reconcile.rs's prune tests).
+    #[test]
+    fn apply_instance_port_policy_pruned_predecessor_record_reclaims_preferred() -> Result<()> {
+        let state_dir = unique_state_dir("policy-prune-reclaim");
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let preferred = std::net::TcpListener::bind((bind, 0))?.local_addr()?.port();
+        register(&state_dir, "personal-litellm", &[preferred])?;
+        // prune_stale_records' Gone verdict unregisters the stale record
+        // BEFORE selection runs (no listener: the sandbox is gone).
+        crate::microsandbox::port_registry::unregister_sandbox(&state_dir, "personal-litellm")?;
+        let workload = PolicyWorkload {
+            port: Some(crate::config::InstancePort::Preferred(
+                crate::config::types::PreferredPort {
+                    preferred,
+                    on_occupied: None,
+                },
+            )),
+        };
+        let mut ports = vec![PortMapping::new(preferred, 4000)];
+        apply_instance_port_policy(&state_dir, &workload, bind, &mut ports, None)?;
+        assert_eq!(
+            ports[0].host, preferred,
+            "a pruned (Gone) predecessor record frees the preferred port before selection"
         );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
