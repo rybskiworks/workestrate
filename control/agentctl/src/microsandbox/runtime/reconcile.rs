@@ -256,6 +256,24 @@ pub fn chain_after(chain: &[ConflictStep], step: ConflictStep) -> Option<&[Confl
     Some(&chain[pos + 1..])
 }
 
+/// The up/exec chain step with the operator's explicit `--replace` flag
+/// applied (ADR 0030 U11 precedence, locked): the flag PREEMPTS the chain —
+/// an explicit `--replace` always forces teardown + fresh create
+/// ([`ChainStep::Replace`]) on every path (the detached parent's
+/// short-circuit and the child's build gate alike), even when the chain would
+/// reuse or fail. Without the flag the chain decides unchanged.
+pub fn decide_step(
+    chain: &[ConflictStep],
+    facts: &ReconcileFacts,
+    instance: &str,
+    replace: bool,
+) -> Result<ChainStep> {
+    if replace {
+        return Ok(ChainStep::Replace);
+    }
+    decide_chain(chain, facts, instance)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -465,6 +483,36 @@ mod tests {
     }
 
     // ---- chain_after ----
+
+    /// The explicit `--replace` flag preempts the conflict chain on every
+    /// path (ADR 0030 U11 precedence, locked): an occupied HEALTHY slot that
+    /// the chain would reuse is torn down + recreated; a free slot still goes
+    /// through the Replace step (the teardown is idempotent). Without the
+    /// flag the chain decides unchanged.
+    #[test]
+    fn replace_flag_preempts_chain_reuse() {
+        let occupied_healthy = running(Some(true), false);
+        assert_eq!(
+            decide_step(&default_chain(), &occupied_healthy, "b", true).unwrap(),
+            ChainStep::Replace,
+            "--replace must force Replace on an occupied healthy slot, never Reuse"
+        );
+        assert_eq!(
+            decide_step(&default_chain(), &occupied_healthy, "b", false).unwrap(),
+            ChainStep::Reuse,
+            "without --replace the chain still reuses an occupied healthy slot"
+        );
+        assert_eq!(
+            decide_step(&default_chain(), &free(), "b", true).unwrap(),
+            ChainStep::Replace,
+            "--replace on a free slot still selects Replace (teardown is idempotent)"
+        );
+        assert_eq!(
+            decide_step(&default_chain(), &free(), "b", false).unwrap(),
+            ChainStep::Start,
+            "without --replace a free slot is a plain start"
+        );
+    }
 
     #[test]
     fn chain_after_absent_returns_none() {
