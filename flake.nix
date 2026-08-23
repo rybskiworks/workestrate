@@ -10,22 +10,24 @@
     };
 
     microsandbox-fork = {
-      # Pinned fork rev 205a7b95347c272c30e581422d38f8c1bb9e6f89 — the merge
-      # of fix/mount-policy-approved-root onto develop, verified pushed to
-      # origin (origin is HTTPS-reachable from the container). Moves to
-      # `develop` tracking or a signed rev later per the merge runbook
-      # (signing currently deferred by user).
+      # Pinned fork rev 158b06cf0e6d532541a6f4b4a512639c11393cf5 — the merge
+      # of fix/stop-process-exit-wait onto develop (0-conflict --no-ff merge
+      # on top of 205a7b95), verified pushed to origin via
+      # `git ls-remote origin develop`. Moves to `develop` tracking or a
+      # signed rev later per the merge runbook (signing currently deferred
+      # by user).
       #
-      # This rev carries BOTH the F1 approved-root fix AND the write.allow
-      # evaluator arm with union semantics (allow∪deny authority-ascending,
-      # deny-before-allow within scope, last non-frozen match wins, default
-      # Allow, terminal freeze both directions, protect short-circuit) — now
-      # ACTIVE at this pin. The transient build-time patch
-      # (nix/patches/mount-policy-approved-root.patch) is dropped. The
-      # workestrate mirror evaluator (control/agentctl/src/mount_policy/
-      # program.rs decide_write) was ported to the new union semantics in
-      # the same commit.
-      url = "github:georgrybski/microsandbox/205a7b95347c272c30e581422d38f8c1bb9e6f89";
+      # This rev carries ALL THREE: (1) the F1 approved-root fix, (2) the
+      # write.allow evaluator arm with union semantics (allow∪deny
+      # authority-ascending, deny-before-allow within scope, last non-frozen
+      # match wins, default Allow, terminal freeze both directions, protect
+      # short-circuit), and (3) the stop-exit-wait fix
+      # (stop_with_timeout/kill_with_timeout now await the recorded runtime
+      # process exit via reap.rs await_recorded_runtime_exit: bounded 30s
+      # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
+      # wait → hard MicrosandboxError::Runtime). The transient build-time
+      # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
+      url = "github:georgrybski/microsandbox/158b06cf0e6d532541a6f4b4a512639c11393cf5";
       flake = false;
     };
   };
