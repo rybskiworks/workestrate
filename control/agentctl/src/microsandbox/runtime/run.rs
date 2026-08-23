@@ -233,6 +233,9 @@ pub(crate) async fn run_service_foreground(
     });
 
     println!("Sandbox '{}' started (Ctrl-C to stop)", config.sandbox_name);
+    for (host, guest) in &config.mounts {
+        println!("mount: {} -> {}", host, guest);
+    }
     if let Err(e) = tokio::signal::ctrl_c().await {
         // Even if the signal handler fails, attempt to stop the sandbox
         // before propagating the error.
@@ -287,6 +290,7 @@ pub(crate) async fn run_service_interactive(
         service_label,
         command,
         log_stop_errors,
+        mounts,
     } = config;
     let SandboxCommand { binary, arguments } = command;
 
@@ -294,6 +298,9 @@ pub(crate) async fn run_service_interactive(
         "Sandbox '{}' started (interactive TUI; ctrl-] to detach)",
         sandbox_name
     );
+    for (host, guest) in &mounts {
+        println!("mount: {} -> {}", host, guest);
+    }
 
     let attach_result = sandbox
         .attach_with(binary.as_str(), |a| a.args(arguments))
@@ -813,7 +820,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
             // so the write must cover this path too (ordering invariant: see
             // [`write_mount_policy_files`]).
             write_mount_policy_files(spec, workload, &mut plan)?;
-            let (sandbox, config) = start_existing_sandbox(
+            let (sandbox, mut config) = start_existing_sandbox(
                 &state_dir,
                 spec,
                 workload,
@@ -822,6 +829,11 @@ pub(crate) async fn build_sandbox<W: Workload>(
                 &port_pairs,
             )
             .await?;
+            config.mounts = plan
+                .mounts
+                .iter()
+                .map(|m| (m.host.clone(), m.guest.clone()))
+                .collect();
             return Ok(BuildOutcome::Ready(Box::new(sandbox), config));
         }
         super::reconcile::ChainStep::Replace => {
@@ -914,6 +926,11 @@ pub(crate) async fn build_sandbox<W: Workload>(
         service_label: workload.name().to_string(),
         command: workload.exec(),
         log_stop_errors: workload.log_stop_errors(),
+        mounts: plan
+            .mounts
+            .iter()
+            .map(|m| (m.host.clone(), m.guest.clone()))
+            .collect(),
     };
     Ok(BuildOutcome::Ready(Box::new(sandbox), config))
 }
@@ -951,6 +968,7 @@ async fn start_existing_sandbox<W: Workload>(
         service_label: workload.name().to_string(),
         command: workload.exec(),
         log_stop_errors: workload.log_stop_errors(),
+        mounts: Vec::new(),
     };
     Ok((sandbox, config))
 }

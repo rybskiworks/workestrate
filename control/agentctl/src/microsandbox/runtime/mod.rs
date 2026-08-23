@@ -163,6 +163,10 @@ pub struct ForegroundConfig {
     pub service_label: String,
     pub command: super::workload::SandboxCommand,
     pub log_stop_errors: bool,
+    /// Resolved `(host, guest)` mount pairs, printed at startup so the host
+    /// dir mounted into the guest (e.g. a `${CWD}`-template host) is never
+    /// ambiguous to the operator.
+    pub mounts: Vec<(String, String)>,
 }
 
 /// Resolved identity + flags for a single `up`/`exec` invocation (ADR 0021).
