@@ -890,7 +890,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
     builder = apply_plan_mounts(builder, &mount_roots, &plan)?;
     builder = apply_plan_secrets(builder, &plan, &secrets)?;
 
-    let builder = if spec.replace {
+    // Chain-driven Replace (no explicit `--replace`) tore down state above,
+    // but `ensure_mount_sources` can re-create the sandbox dir for rw mounts
+    // self-mounted under it (e.g. `${MSB_HOME}/sandboxes/<name>/logs`); the
+    // fork's non-replace create gate (`prepare_create_target`) refuses any
+    // pre-existing dir with `SandboxAlreadyExists`, so the create must carry
+    // replace semantics whenever the build DECIDED Replace, not only on the
+    // explicit flag. An explicit `--replace` keeps working unchanged.
+    let create_with_replace = should_create_with_replace(spec.replace, step);
+    let builder = if create_with_replace {
         builder.replace()
     } else {
         builder
@@ -981,6 +989,24 @@ async fn start_existing_sandbox<W: Workload>(
 /// `up_service_with_spec` flow itself is not (it spawns processes).
 pub(crate) fn should_teardown_in_parent(step: super::reconcile::ChainStep) -> bool {
     matches!(step, super::reconcile::ChainStep::Replace)
+}
+
+/// Whether the sandbox create must run with replace semantics: true when the
+/// explicit `--replace` flag is set OR when the build DECIDED
+/// [`super::reconcile::ChainStep::Replace`] (chain-driven replace). The
+/// Replace arm tears down state (`teardown_for_replace`), but
+/// `ensure_mount_sources` can then RE-CREATE the sandbox dir for rw mounts
+/// self-mounted under it (e.g. `${MSB_HOME}/sandboxes/<name>/logs`); the
+/// fork's non-replace create gate (`prepare_create_target`) refuses any
+/// pre-existing dir with `SandboxAlreadyExists`, so the create must use
+/// replace semantics whenever the Replace teardown ran — otherwise a
+/// chain-driven replace fails at create. Pure decision so the contract is
+/// unit-testable (mirrors [`should_teardown_in_parent`]).
+pub(crate) fn should_create_with_replace(
+    spec_replace: bool,
+    step: super::reconcile::ChainStep,
+) -> bool {
+    spec_replace || matches!(step, super::reconcile::ChainStep::Replace)
 }
 
 pub async fn up_service_with_spec<W: Workload>(
@@ -1357,6 +1383,58 @@ mod tests {
             assert!(
                 !should_teardown_in_parent(step),
                 "{step:?} must not tear down in the parent"
+            );
+        }
+    }
+
+    // ---- create-with-replace decision (should_create_with_replace) ----
+    //
+    // The create must carry replace semantics whenever the build DECIDED
+    // Replace, not only on the explicit `--replace` flag: a chain-chosen
+    // Replace tears down state, but `ensure_mount_sources` can re-create the
+    // sandbox dir (self-mounted rw subdirs, e.g.
+    // `${MSB_HOME}/sandboxes/<name>/logs`), and the fork's non-replace create
+    // gate (`prepare_create_target`) refuses any pre-existing dir with
+    // `SandboxAlreadyExists`.
+
+    #[test]
+    fn should_create_with_replace_true_for_chain_driven_replace() {
+        use crate::microsandbox::runtime::ChainStep;
+        // THE regression: a chain-chosen Replace with no explicit flag must
+        // still create with replace semantics, or the fork's non-replace
+        // create gate refuses the dir `ensure_mount_sources` re-creates.
+        assert!(should_create_with_replace(false, ChainStep::Replace));
+    }
+
+    #[test]
+    fn should_create_with_replace_true_for_explicit_flag_any_step() {
+        use crate::microsandbox::runtime::ChainStep;
+        for step in [
+            ChainStep::Start,
+            ChainStep::Reuse,
+            ChainStep::StartExisting,
+            ChainStep::Replace,
+            ChainStep::Fail,
+        ] {
+            assert!(
+                should_create_with_replace(true, step),
+                "explicit --replace must force replace semantics for {step:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn should_create_with_replace_false_otherwise() {
+        use crate::microsandbox::runtime::ChainStep;
+        for step in [
+            ChainStep::Start,
+            ChainStep::StartExisting,
+            ChainStep::Reuse,
+            ChainStep::Fail,
+        ] {
+            assert!(
+                !should_create_with_replace(false, step),
+                "{step:?} without --replace must not create with replace semantics"
             );
         }
     }
