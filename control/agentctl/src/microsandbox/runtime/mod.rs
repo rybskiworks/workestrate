@@ -45,6 +45,52 @@ use microsandbox::sandbox::{SandboxHandle, SandboxStatus};
 use microsandbox::{MicrosandboxError, Sandbox};
 use std::path::Path;
 
+/// Poll interval for the post-stop remove-retry loop in [`stop_and_remove`].
+const REMOVE_RETRY_POLL: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Hard deadline for the remove-retry loop in [`stop_and_remove`]. Composes
+/// with the fork SDK's stop grace (fork @158b06cf: `stop()`/`kill()` await
+/// the recorded process for up to 30s before SIGKILL escalation): the
+/// workestrate-side deadline must comfortably exceed that grace so the two
+/// never deadlock each other, AND accommodate a slow multi-GB writeback
+/// flush from the new runtime rev (the OLD pinned SDK @205a7b95 returns Ok
+/// from `stop()` while the process is still exiting). 45s covers both;
+/// exceeding it is a hard error naming the instance.
+const REMOVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Escalation threshold for the remove-retry loop (~half the deadline): a
+/// runtime process still alive this long after stop is killed ONCE (a dying
+/// flush gets time; a wedged one does not).
+const REMOVE_KILL_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(22);
+
+/// What the remove-retry loop in [`stop_and_remove`] does next when
+/// `remove()` reports `SandboxStillRunning`. Pure decision over elapsed time
+/// and whether the kill escalation already fired — split out so the retry
+/// policy is unit-testable without a running msb (the SDK handle is a
+/// concrete type with no mock seam).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoveRetryDecision {
+    /// Runtime process still exiting — poll again after `REMOVE_RETRY_POLL`.
+    Retry,
+    /// The kill threshold elapsed without the process dying — kill once.
+    EscalateKill,
+    /// The full deadline elapsed — return a hard error naming the instance.
+    Fail,
+}
+
+pub(crate) fn decide_remove_retry(
+    elapsed: std::time::Duration,
+    already_killed: bool,
+) -> RemoveRetryDecision {
+    if elapsed >= REMOVE_DEADLINE {
+        RemoveRetryDecision::Fail
+    } else if elapsed >= REMOVE_KILL_THRESHOLD && !already_killed {
+        RemoveRetryDecision::EscalateKill
+    } else {
+        RemoveRetryDecision::Retry
+    }
+}
+
 pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
     // Microsandbox 0.6.8 SDK: `SandboxHandle::status()` was removed. `refresh()`
     // returns a fresh handle whose `status_snapshot()` reflects the current DB
@@ -63,8 +109,47 @@ pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
         }
         _ => {}
     }
-    handle.remove().await?;
-    Ok(())
+    // The SDK's `stop()` can return Ok while the runtime process is still
+    // exiting (the new runtime rev flushes guest writes on stop; the OLD
+    // pinned SDK @205a7b95 does not await recorded-process exit). `remove()`
+    // then races the dying process and fails with `SandboxStillRunning`.
+    // Wait for the process to actually die: poll-retry remove until
+    // `REMOVE_DEADLINE`, escalating to one `kill()` at `REMOVE_KILL_THRESHOLD`.
+    // Only after remove succeeds is the sandbox gone — callers' subsequent
+    // registry/policy wipes stay as-is. Non-StillRunning remove errors
+    // propagate immediately.
+    let instance = handle.name().to_string();
+    let started = std::time::Instant::now();
+    let mut killed = false;
+    loop {
+        match handle.remove().await {
+            Ok(()) => return Ok(()),
+            Err(MicrosandboxError::SandboxStillRunning(_)) => {
+                match decide_remove_retry(started.elapsed(), killed) {
+                    RemoveRetryDecision::Retry => {}
+                    RemoveRetryDecision::EscalateKill => {
+                        eprintln!(
+                            "warning: sandbox '{}' still running {:?} after stop; escalating to kill",
+                            instance,
+                            started.elapsed()
+                        );
+                        handle.kill().await?;
+                        killed = true;
+                    }
+                    RemoveRetryDecision::Fail => {
+                        anyhow::bail!(
+                            "timed out after {:?} waiting to remove sandbox '{}': \
+                             its runtime process is still alive",
+                            REMOVE_DEADLINE,
+                            instance
+                        );
+                    }
+                }
+                tokio::time::sleep(REMOVE_RETRY_POLL).await;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 /// Start `exec_program` with `exec_args` inside `sandbox`, stream its logs to
@@ -369,8 +454,90 @@ pub async fn down_all(state_dir: &Path) -> Result<Vec<DownResult>> {
     clippy::unwrap_in_result
 )]
 mod tests {
-    use super::{down_all_instances, sandbox_dir, DownStatus};
+    use super::{
+        decide_remove_retry, down_all_instances, sandbox_dir, DownStatus, RemoveRetryDecision,
+        REMOVE_DEADLINE, REMOVE_KILL_THRESHOLD, REMOVE_RETRY_POLL,
+    };
     use crate::config::test_support::unique_state_dir_runtime;
+    use std::time::Duration;
+
+    // ---- stop_and_remove remove-retry policy (decide_remove_retry) ----
+    //
+    // The SDK's `SandboxHandle` is a concrete type with no mock seam, so the
+    // retry LOOP in `stop_and_remove` cannot run under unit tests without a
+    // live msb. The retry POLICY is split into the pure `decide_remove_retry`
+    // (elapsed + whether kill already fired → Retry / EscalateKill / Fail)
+    // and pinned exhaustively here.
+
+    #[test]
+    fn decide_remove_retry_retries_before_kill_threshold() {
+        for (elapsed, killed) in [
+            (Duration::ZERO, false),
+            (Duration::from_millis(1), false),
+            (REMOVE_KILL_THRESHOLD - Duration::from_millis(1), false),
+            (REMOVE_KILL_THRESHOLD - Duration::from_millis(1), true),
+        ] {
+            assert_eq!(
+                decide_remove_retry(elapsed, killed),
+                RemoveRetryDecision::Retry,
+                "elapsed {elapsed:?} (killed={killed}) must keep polling"
+            );
+        }
+    }
+
+    #[test]
+    fn decide_remove_retry_escalates_once_past_threshold() {
+        // At/past the threshold but before the deadline, NOT yet killed →
+        // escalate to kill exactly once.
+        for elapsed in [
+            REMOVE_KILL_THRESHOLD,
+            REMOVE_KILL_THRESHOLD + Duration::from_secs(1),
+            REMOVE_DEADLINE - Duration::from_millis(1),
+        ] {
+            assert_eq!(
+                decide_remove_retry(elapsed, false),
+                RemoveRetryDecision::EscalateKill,
+                "elapsed {elapsed:?} before kill must escalate"
+            );
+            // After the escalation has fired, keep polling (no second kill).
+            assert_eq!(
+                decide_remove_retry(elapsed, true),
+                RemoveRetryDecision::Retry,
+                "elapsed {elapsed:?} after kill must keep polling, not re-kill"
+            );
+        }
+    }
+
+    #[test]
+    fn decide_remove_retry_fails_past_deadline() {
+        for (elapsed, killed) in [
+            (REMOVE_DEADLINE, false),
+            (REMOVE_DEADLINE, true),
+            (REMOVE_DEADLINE + Duration::from_secs(1), false),
+            (REMOVE_DEADLINE + Duration::from_secs(1), true),
+        ] {
+            assert_eq!(
+                decide_remove_retry(elapsed, killed),
+                RemoveRetryDecision::Fail,
+                "elapsed {elapsed:?} (killed={killed}) must be a hard error"
+            );
+        }
+    }
+
+    /// Composition invariant on the constants themselves: the kill threshold
+    /// must sit strictly between one poll and the deadline, and the deadline
+    /// must exceed the fork SDK's 30s stop grace (@158b06cf) so the
+    /// workestrate-side wait composes with the SDK-side await instead of
+    /// expiring first.
+    #[test]
+    fn remove_retry_constants_compose_with_sdk_stop_grace() {
+        assert!(REMOVE_RETRY_POLL < REMOVE_KILL_THRESHOLD);
+        assert!(REMOVE_KILL_THRESHOLD < REMOVE_DEADLINE);
+        assert!(
+            REMOVE_DEADLINE > Duration::from_secs(30),
+            "the remove deadline must outlast the fork SDK's 30s stop grace"
+        );
+    }
 
     /// RAII guard: point `MSB_HOME` at `path` for the duration of a test and
     /// restore the prior value (or unset it) on drop. The microsandbox SDK

@@ -240,20 +240,35 @@ pub(crate) async fn run_service_foreground(
         let _ = drain_handle.await;
         return Err(anyhow::anyhow!("signal handler error: {}", e));
     }
-    if config.log_stop_errors {
-        if let Err(e) = sandbox.stop().await {
-            eprintln!("failed to stop sandbox '{}': {}", config.sandbox_name, e);
+    // Post-session teardown is REQUIRED: a failed stop means a silently
+    // leaked sandbox, so it must fail the command (nonzero exit), not just
+    // eprintln. The `log_stop_errors` knob still controls the eprintln; the
+    // error propagates either way.
+    let stop_err = match sandbox.stop().await {
+        Ok(()) => None,
+        Err(e) => {
+            if config.log_stop_errors {
+                eprintln!("failed to stop sandbox '{}': {}", config.sandbox_name, e);
+            }
+            Some(e)
         }
-    } else {
-        let _ = sandbox.stop().await;
-    }
+    };
 
     // Drain any remaining buffered log events before returning.
     // Use a timeout so a hung exec channel doesn't block forever.
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain_handle).await;
 
-    println!("Sandbox '{}' stopped", config.sandbox_name);
-    Ok(())
+    match stop_err {
+        None => {
+            println!("Sandbox '{}' stopped", config.sandbox_name);
+            Ok(())
+        }
+        Some(e) => Err(anyhow::anyhow!(
+            "failed to stop sandbox '{}' after session end: {}",
+            config.sandbox_name,
+            e
+        )),
+    }
 }
 
 /// Start `exec_program` with `exec_args` inside `sandbox` via an interactive
@@ -296,16 +311,38 @@ pub(crate) async fn run_service_interactive(
         )),
     };
 
-    if log_stop_errors {
-        if let Err(e) = sandbox.stop().await {
-            eprintln!("failed to stop sandbox '{}': {}", sandbox_name, e);
+    // Post-session teardown is REQUIRED: a failed stop means a silently
+    // leaked sandbox, so it must fail the command (nonzero exit), not just
+    // eprintln. The `log_stop_errors` knob still controls the eprintln; the
+    // error propagates either way.
+    let stop_err = match sandbox.stop().await {
+        Ok(()) => None,
+        Err(e) => {
+            if log_stop_errors {
+                eprintln!("failed to stop sandbox '{}': {}", sandbox_name, e);
+            }
+            Some(e)
         }
-    } else {
-        let _ = sandbox.stop().await;
-    }
+    };
 
-    println!("Sandbox '{}' stopped", sandbox_name);
-    outcome
+    match (outcome, stop_err) {
+        (Ok(()), None) => {
+            println!("Sandbox '{}' stopped", sandbox_name);
+            Ok(())
+        }
+        (Ok(()), Some(e)) => Err(anyhow::anyhow!(
+            "failed to stop sandbox '{}' after session end: {}",
+            sandbox_name,
+            e
+        )),
+        // When BOTH fail, the session error is the primary failure and is
+        // kept; the stop failure rides along as context so it is not lost.
+        (Err(e), None) => Err(e),
+        (Err(e), Some(stop)) => Err(e.context(format!(
+            "also failed to stop sandbox '{}': {}",
+            sandbox_name, stop
+        ))),
+    }
 }
 
 /// Assign a probed free port to every mapping whose `host == 0` (auto).
@@ -918,6 +955,16 @@ async fn start_existing_sandbox<W: Workload>(
     Ok((sandbox, config))
 }
 
+/// Whether the detached-`up` PARENT must run the replace teardown itself
+/// before spawning the child: true ONLY for [`super::reconcile::ChainStep::Replace`].
+/// `Start` is a free slot and `StartExisting` starts the stopped/crashed
+/// sandbox in place via `handle.start()` (reconcile.rs `decide_step` docs) —
+/// neither tears down. Pure decision so the contract is unit-testable; the
+/// `up_service_with_spec` flow itself is not (it spawns processes).
+pub(crate) fn should_teardown_in_parent(step: super::reconcile::ChainStep) -> bool {
+    matches!(step, super::reconcile::ChainStep::Replace)
+}
+
 pub async fn up_service_with_spec<W: Workload>(
     workload: &W,
     spec: &InstanceSpec,
@@ -947,7 +994,24 @@ pub async fn up_service_with_spec<W: Workload>(
                     super::format_refuse_message(&spec.workload, &spec.instance)
                 );
             }
-            _ => {} // Start / StartExisting / Replace → spawn the child (it re-reconciles and executes)
+            step => {
+                if should_teardown_in_parent(step) {
+                    // The FS-8 grace (spawn.rs: 500ms) only catches an IMMEDIATE
+                    // child exit; a replace teardown takes seconds, so a
+                    // child-side teardown failure would be logged by the child
+                    // while the parent exited 0 (the dblab42 2026-08-23
+                    // swallow). Run the idempotent teardown HERE so its failure
+                    // is a nonzero parent exit; the child re-derives Replace
+                    // (`--replace` rides detach_args) and re-runs the now no-op
+                    // teardown (`teardown_for_replace`: Sandbox::get →
+                    // SandboxNotFound → Ok path).
+                    println!(
+                        "tearing down existing instance '{}' before replace",
+                        spec.instance
+                    );
+                    super::teardown_for_replace(&state_dir, &spec.instance).await?;
+                }
+            }
         }
         let instance = spec.instance.clone();
         let child = super::spawn_detached_service(&instance, &workload.detach_args(spec))?;
@@ -1251,6 +1315,32 @@ mod tests {
         assert!(secret_requires_tls_identity("openrouter.ai"));
         let _ = builder;
         Ok(())
+    }
+
+    // ---- detached-`up` parent teardown decision (should_teardown_in_parent) ----
+    //
+    // `up_service_with_spec` itself cannot run under unit tests (it spawns
+    // processes), so the decision-level contract is pinned at the pure seam:
+    // only ChainStep::Replace tears down in the parent — Start is a free
+    // slot, StartExisting starts the stopped/crashed sandbox in place, and
+    // Reuse/Fail return before the seam is consulted (reconcile.rs
+    // decide_step docs).
+
+    #[test]
+    fn should_teardown_in_parent_true_only_for_replace() {
+        use crate::microsandbox::runtime::ChainStep;
+        assert!(should_teardown_in_parent(ChainStep::Replace));
+        for step in [
+            ChainStep::Start,
+            ChainStep::StartExisting,
+            ChainStep::Reuse,
+            ChainStep::Fail,
+        ] {
+            assert!(
+                !should_teardown_in_parent(step),
+                "{step:?} must not tear down in the parent"
+            );
+        }
     }
 
     // ---- ADR 0026(a)/C2: slot_bind_ip ----
