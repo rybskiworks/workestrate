@@ -115,6 +115,64 @@ pub fn resolve_home() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// Invocation cwd capture (wrong-CWD `${CWD}` mount fix)
+// ---------------------------------------------------------------------------
+
+/// Env var holding the operator's invocation cwd, captured ONCE at CLI entry
+/// (`main()`) and inherited by re-exec'd / detached children.
+///
+/// Bug class: `${CWD}` mount-host resolution (and every other "caller's PWD"
+/// read — project-config discovery, content-root fallbacks) used to call
+/// `std::env::current_dir()` LAZILY at plan-materialization time. Any process
+/// in the chain whose cwd differed from the operator's invocation cwd (a
+/// re-exec'd or detached child, a wrapper that chdirs) silently retargeted
+/// `host = "${CWD}" → /work` at the WRONG directory — and because msb
+/// persists sandbox mounts, the wrong create was then re-served by
+/// `ChainStep::Reuse`/`StartExisting`.
+pub const INVOKE_CWD_ENV: &str = "WORKESTRATE_INVOKE_CWD";
+
+/// The operator's invocation working directory.
+///
+/// Returns the captured [`INVOKE_CWD_ENV`] value when it is set, non-empty,
+/// and absolute (the common case: `main()` captured it at entry, or a parent
+/// process passed it down). Otherwise falls back to
+/// `std::env::current_dir()` — preserving the pre-capture behavior for
+/// library and test callers that never ran `main()`.
+pub fn invoke_cwd() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var(INVOKE_CWD_ENV) {
+        let path = PathBuf::from(&value);
+        if !value.is_empty() && path.is_absolute() {
+            return Some(path);
+        }
+    }
+    std::env::current_dir().ok()
+}
+
+/// Hard-error variant of [`invoke_cwd`] for call sites that previously used
+/// `std::env::current_dir()?`: no resolvable cwd is an error, not a silent
+/// fallback.
+pub fn invoke_cwd_or_err() -> anyhow::Result<PathBuf> {
+    invoke_cwd()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve the invocation working directory"))
+}
+
+/// Capture the invocation cwd into [`INVOKE_CWD_ENV`] if not already set.
+///
+/// Called as the FIRST thing in `main()`, before argv handling, so every
+/// downstream "caller's PWD" read observes the operator's directory. An
+/// INHERITED value WINS: a re-exec'd or detached child keeps the ORIGINAL
+/// operator cwd rather than re-capturing its own. If `current_dir()` fails
+/// the var is left unset and readers fall back per [`invoke_cwd`].
+pub fn ensure_invoke_cwd_env() {
+    if std::env::var_os(INVOKE_CWD_ENV).is_some() {
+        return;
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        std::env::set_var(INVOKE_CWD_ENV, cwd);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // XDG path resolution
 // ---------------------------------------------------------------------------
 
@@ -405,10 +463,10 @@ pub fn resolve_active_config_dir() -> anyhow::Result<PathBuf> {
         }
     }
 
-    // 2. Trusted project (cwd)
+    // 2. Trusted project (the operator's invocation cwd)
     let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
     if !skip_project {
-        let cwd = std::env::current_dir()?;
+        let cwd = invoke_cwd_or_err()?;
         let project_path = cwd.join("workestrate.toml");
         if project_path.exists() {
             match crate::config::load_registry()? {
@@ -629,6 +687,100 @@ pub(crate) mod tests {
             expanded,
             PathBuf::from("~/some/state"),
             "HOME-unset must return the path unexpanded, never '.'"
+        );
+        Ok(())
+    }
+
+    // ---- Invocation cwd capture (wrong-CWD `${CWD}` mount fix) ----
+
+    /// The captured env value WINS over the live process cwd — the
+    /// re-exec'd / detached child case that motivated the fix.
+    #[test]
+    fn invoke_cwd_prefers_env_over_process_cwd() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[INVOKE_CWD_ENV]);
+
+        let invoke = uniq_dir("invoke-cwd-env");
+        let elsewhere = uniq_dir("invoke-cwd-elsewhere");
+        std::fs::create_dir_all(&invoke)?;
+        std::fs::create_dir_all(&elsewhere)?;
+        std::env::set_var(INVOKE_CWD_ENV, &invoke);
+        std::env::set_current_dir(&elsewhere)?;
+
+        assert_eq!(invoke_cwd(), Some(invoke.clone()));
+        assert_eq!(invoke_cwd_or_err()?, invoke);
+
+        let _ = std::fs::remove_dir_all(&invoke);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        Ok(())
+    }
+
+    /// Fallback preserved: var unset → the process cwd wins (pre-capture
+    /// behavior for library/test callers that never ran `main()`).
+    #[test]
+    fn invoke_cwd_falls_back_to_process_cwd_when_unset() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[INVOKE_CWD_ENV]);
+
+        std::env::remove_var(INVOKE_CWD_ENV);
+        assert_eq!(invoke_cwd(), Some(std::env::current_dir()?));
+        Ok(())
+    }
+
+    /// A non-absolute (or empty) captured value is ignored — it can never
+    /// pin a mount host to a relative path.
+    #[test]
+    fn invoke_cwd_ignores_non_absolute_env_value() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[INVOKE_CWD_ENV]);
+
+        for bad in ["", "relative/dir", "./dot"] {
+            std::env::set_var(INVOKE_CWD_ENV, bad);
+            assert_eq!(
+                invoke_cwd(),
+                Some(std::env::current_dir()?),
+                "non-absolute value '{bad}' must fall back to the process cwd"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_invoke_cwd_env_captures_cwd_when_unset() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[INVOKE_CWD_ENV]);
+
+        let dir = uniq_dir("invoke-cwd-ensure");
+        std::fs::create_dir_all(&dir)?;
+        std::env::set_current_dir(&dir)?;
+        std::env::remove_var(INVOKE_CWD_ENV);
+
+        ensure_invoke_cwd_env();
+
+        assert_eq!(
+            std::env::var(INVOKE_CWD_ENV).unwrap(),
+            std::env::current_dir()?.to_string_lossy(),
+            "unset var must be captured from the current process cwd"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_invoke_cwd_env_keeps_inherited_value() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[INVOKE_CWD_ENV]);
+
+        // Simulates a re-exec'd / detached child: the ORIGINAL operator cwd
+        // inherited from the parent must NOT be overwritten by the child's
+        // own cwd.
+        std::env::set_var(INVOKE_CWD_ENV, "/inherited/operator-cwd");
+        ensure_invoke_cwd_env();
+        assert_eq!(
+            std::env::var(INVOKE_CWD_ENV).unwrap(),
+            "/inherited/operator-cwd",
+            "an inherited value wins over the child's own cwd"
         );
         Ok(())
     }

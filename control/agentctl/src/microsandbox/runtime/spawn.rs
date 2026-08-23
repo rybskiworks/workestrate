@@ -39,6 +39,14 @@ pub fn spawn_detached_service(name: &str, args: &[String]) -> Result<std::proces
         .stdin(std::process::Stdio::null())
         .stdout(log_file.try_clone()?)
         .stderr(log_file);
+    // Explicit cwd contract for the detached child (wrong-CWD `${CWD}` mount
+    // fix): pin the ORIGINAL operator invocation cwd into the child's env so
+    // `${CWD}` mount hosts resolve to the operator's directory even if the
+    // parent's env was scrubbed. The child's own `ensure_invoke_cwd_env()`
+    // keeps this inherited value (inherited-wins).
+    if let Some(cwd) = crate::config::invoke_cwd() {
+        cmd.env(crate::config::INVOKE_CWD_ENV, cwd);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

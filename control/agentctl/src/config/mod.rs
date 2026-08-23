@@ -30,6 +30,8 @@ pub use paths::{
     xdg_data_dir, xdg_state_dir, HomeKind,
 };
 #[allow(unused_imports)]
+pub use paths::{ensure_invoke_cwd_env, invoke_cwd, invoke_cwd_or_err, INVOKE_CWD_ENV};
+#[allow(unused_imports)]
 pub(crate) use registry::looks_like_git_url;
 #[allow(unused_imports)]
 pub use registry::{
@@ -127,12 +129,13 @@ pub(crate) fn project_root_with_source() -> Result<(PathBuf, RootSource)> {
         if path.pop() && path.pop() {
             (path, RootSource::ManifestDir)
         } else {
-            (std::env::current_dir()?, RootSource::ManifestDir)
+            (paths::invoke_cwd_or_err()?, RootSource::ManifestDir)
         }
     }
-    // 3. Current working directory
+    // 3. Current working directory (the operator's INVOCATION cwd — see
+    //    paths::INVOKE_CWD_ENV; never re-read lazily).
     else {
-        (std::env::current_dir()?, RootSource::Cwd)
+        (paths::invoke_cwd_or_err()?, RootSource::Cwd)
     };
 
     // Validate: the root must contain flake.nix
@@ -184,8 +187,8 @@ pub fn project_root_optional() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    // 3. Current working directory + flake.nix check.
-    if let Ok(cwd) = std::env::current_dir() {
+    // 3. Invocation working directory + flake.nix check.
+    if let Some(cwd) = paths::invoke_cwd() {
         if cwd.join("flake.nix").exists() {
             return Some(cwd);
         }

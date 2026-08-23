@@ -337,7 +337,7 @@ pub fn load_config() -> Result<ConfigFile> {
     // 4. Trusted project layer.
     let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
     if !skip_project {
-        let cwd = std::env::current_dir()?;
+        let cwd = crate::config::invoke_cwd_or_err()?;
         let project_path = cwd.join("workestrate.toml");
         if project_path.exists() {
             match load_registry()? {
@@ -363,7 +363,7 @@ pub fn load_config() -> Result<ConfigFile> {
     //    without any explicit operator action.
     let skip_local = skip_project;
     if !skip_local {
-        let local_cwd = std::env::current_dir()?;
+        let local_cwd = crate::config::invoke_cwd_or_err()?;
         let local_path = local_cwd.join("workestrate.local.toml");
         if local_path.exists() {
             match load_registry()? {
@@ -839,7 +839,7 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
     // 5. Trusted project dir (cwd) — may have .env.enc.
     let skip_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").is_ok();
     if !skip_project {
-        let cwd = std::env::current_dir()?;
+        let cwd = crate::config::invoke_cwd_or_err()?;
         let project_path = cwd.join("workestrate.toml");
         if project_path.exists() {
             match load_registry()? {

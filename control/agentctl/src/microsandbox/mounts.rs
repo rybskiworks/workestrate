@@ -278,11 +278,12 @@ pub(crate) fn resolve_mount_roots_owned<W: crate::microsandbox::workload::Worklo
     // F1: repo-relative mount hosts resolve against the DECLARING config
     // layer's content root (spec 17). EXPLICIT FALLBACK: when no declaring
     // layer dir is knowable (synthetic layers), fall back to the flake project
-    // root when one resolved, else the process cwd.
+    // root when one resolved, else the operator's invocation cwd (captured
+    // at CLI entry — never re-read lazily; the wrong-CWD mount bug).
     let content_root: PathBuf = workload
         .mount_content_root()
         .or_else(|| project_root.clone())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        .unwrap_or_else(|| crate::config::invoke_cwd().unwrap_or_default());
 
     let build_path = workload.build_path();
     // Spec 21 §6.1: the UNDECLARED reserved default (`.workestrate-build/<name>`)

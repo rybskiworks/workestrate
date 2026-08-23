@@ -205,7 +205,7 @@ fn plan_moves(sources: &MigrateSources, dest: &Path) -> Vec<(PathBuf, PathBuf)> 
 /// Prefers "bundle" when a `.workestrate/config/workestrate/config.toml` exists
 /// in the cwd, otherwise treats the source as the legacy XDG layout.
 fn detect_layout() -> &'static str {
-    if let Ok(cwd) = std::env::current_dir() {
+    if let Some(cwd) = crate::config::invoke_cwd() {
         if cwd
             .join(".workestrate")
             .join("config")

@@ -80,6 +80,7 @@ pub const HOME_ENV_KEYS: &[&str] = &[
     "XDG_STATE_HOME",
     "WORKESTRATE_CONFIG_DIR",
     "WORKESTRATE_NO_PROJECT_CONFIG",
+    "WORKESTRATE_INVOKE_CWD",
     "HOME",
 ];
 

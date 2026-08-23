@@ -41,6 +41,7 @@ pub fn validate_env_override(name: &str) -> Result<()> {
         "WORKESTRATE_CONFIG_DIR",
         "WORKESTRATE_NO_PROJECT_CONFIG",
         "WORKESTRATE_CONTEXT",
+        "WORKESTRATE_INVOKE_CWD",
         "AGENTCTL_ROOT",
     ];
     if DENYLIST.contains(&name) {
@@ -176,7 +177,11 @@ pub fn validate_seed_target(target: &str) -> Result<()> {
 ///    that happens to equal the default convention still wins).
 /// 2. `${WORKESTRATE_<NAME>_BUILD}` — the default convention (NAME
 ///    uppercased, '-' → '_'), kept for backward compatibility.
-/// 3. `${CWD}` / `${CWD}/...` — current working directory (unchanged).
+/// 3. `${CWD}` / `${CWD}/...` — the operator's INVOCATION working directory
+///    (captured once at CLI entry into `WORKESTRATE_INVOKE_CWD`; falls back
+///    to the process cwd when uncaptured). Never re-read lazily: a child
+///    process whose cwd differs from the operator's must still mount the
+///    ORIGINAL invocation dir (the wrong-CWD mount bug).
 ///
 /// Anything else is returned unchanged (literal).
 pub(super) fn resolve_mount_host_template(
@@ -199,12 +204,12 @@ pub(super) fn resolve_mount_host_template(
         return build_path.to_string();
     }
     if host == "${CWD}" {
-        if let Ok(cwd) = std::env::current_dir() {
+        if let Some(cwd) = crate::config::invoke_cwd() {
             return cwd.to_string_lossy().into_owned();
         }
     }
     if let Some(rest) = host.strip_prefix("${CWD}/") {
-        if let Ok(cwd) = std::env::current_dir() {
+        if let Some(cwd) = crate::config::invoke_cwd() {
             return format!("{}/{}", cwd.to_string_lossy(), rest);
         }
     }
@@ -235,6 +240,7 @@ mod tests {
             "WORKESTRATE_CONFIG_DIR",
             "WORKESTRATE_NO_PROJECT_CONFIG",
             "WORKESTRATE_CONTEXT",
+            "WORKESTRATE_INVOKE_CWD",
             "AGENTCTL_ROOT",
             "XDG_CONFIG_HOME",
             "XDG_DATA_HOME",
@@ -403,12 +409,48 @@ mod tests {
 
     #[test]
     fn mount_template_cwd_unchanged() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(&[crate::config::INVOKE_CWD_ENV]);
+        // Pin the fallback path: with no captured invocation cwd, the
+        // process cwd wins (pre-capture behavior).
+        std::env::remove_var(crate::config::INVOKE_CWD_ENV);
+
         let got = resolve_mount_host_template("${CWD}", "pi", "/tmp/build-out", None);
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(got, cwd.to_string_lossy());
         let got =
             resolve_mount_host_template("${CWD}/sub", "pi", "/tmp/build-out", Some("X_BUILD"));
         assert_eq!(got, format!("{}/sub", cwd.to_string_lossy()));
+    }
+
+    // ---- Wrong-CWD `${CWD}` mount fix: the captured invocation cwd wins ----
+
+    /// With WORKESTRATE_INVOKE_CWD captured at CLI entry (dir A) and the
+    /// process cwd elsewhere (dir B — the re-exec'd / detached child case),
+    /// `${CWD}` resolves to A, never to the child's own cwd.
+    #[test]
+    fn mount_template_cwd_prefers_invoke_cwd_capture() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(&[crate::config::INVOKE_CWD_ENV]);
+
+        let invoke = crate::config::test_support::uniq_dir("invoke-cwd-a");
+        let elsewhere = crate::config::test_support::uniq_dir("invoke-cwd-b");
+        std::fs::create_dir_all(&invoke).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::env::set_var(crate::config::INVOKE_CWD_ENV, &invoke);
+        std::env::set_current_dir(&elsewhere).unwrap();
+
+        let got = resolve_mount_host_template("${CWD}", "pi", "/tmp/build-out", None);
+        assert_eq!(
+            got,
+            invoke.to_string_lossy(),
+            "${{CWD}} must resolve to the captured invocation cwd, not the process cwd"
+        );
+        let got = resolve_mount_host_template("${CWD}/sub", "pi", "/tmp/build-out", None);
+        assert_eq!(got, format!("{}/sub", invoke.to_string_lossy()));
+
+        let _ = std::fs::remove_dir_all(&invoke);
+        let _ = std::fs::remove_dir_all(&elsewhere);
     }
 
     #[test]

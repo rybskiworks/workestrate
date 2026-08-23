@@ -248,7 +248,7 @@ fn resolve_root(
     mount: &crate::microsandbox::plan::MountPlan,
     override_root: Option<&str>,
 ) -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
+    let cwd = crate::config::invoke_cwd_or_err()?;
     let content = override_root
         .map(PathBuf::from)
         .or_else(|| wl.mount_content_root())

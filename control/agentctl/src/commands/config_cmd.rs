@@ -467,7 +467,7 @@ pub async fn cmd_config_new(
     // --from-reference overrides the workestrate.toml entry with the full
     // 5-workload reference fixture.
     if from_reference {
-        let cwd = std::env::current_dir()?;
+        let cwd = crate::config::invoke_cwd_or_err()?;
         let ref_path = find_reference_workestrate(&cwd)?;
         let ref_content = std::fs::read_to_string(&ref_path)?;
         let entry = files

@@ -112,7 +112,7 @@ pub fn cmd_migrate_home(from: Option<&str>, dry_run: bool, json: bool, force: bo
     let dest = if let Some(home) = wh {
         config::expand_tilde(&home)
     } else if from == Some("bundle") {
-        let cwd = std::env::current_dir()?;
+        let cwd = config::invoke_cwd_or_err()?;
         let candidate = cwd.join(".workestrate");
         if candidate.is_dir() {
             candidate

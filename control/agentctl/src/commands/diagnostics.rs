@@ -814,7 +814,7 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
         let content_root = mount_root
             .or(build_root)
             .cloned()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            .unwrap_or_else(|| crate::config::invoke_cwd().unwrap_or_default());
         let owned = MountRootsOwned {
             content_root,
             project_root: project_root.clone(),

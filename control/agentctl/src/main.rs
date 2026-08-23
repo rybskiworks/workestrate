@@ -472,6 +472,14 @@ fn bare_up_reject_table(action: &WorkloadAction) -> Vec<(bool, &'static str)> {
 }
 
 fn main() {
+    // Capture the operator's invocation cwd ONCE, before anything else can
+    // chdir or re-exec: every "caller's PWD" read downstream (`${CWD}` mount
+    // hosts, project-config discovery, content-root fallbacks) resolves
+    // against this value via workestrate::config::invoke_cwd(). An inherited
+    // value wins, so re-exec'd / detached children keep the ORIGINAL
+    // operator cwd (the wrong-CWD `${CWD}` → /work mount bug).
+    workestrate::config::ensure_invoke_cwd_env();
+
     // Pre-scan argv for --json so we can format ANY error (incl. clap parse
     // errors via Cli::parse()) as the JSON envelope when requested. The
     // global --json on Cli does not help here because Cli::parse() calls

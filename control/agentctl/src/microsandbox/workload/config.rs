@@ -2377,4 +2377,53 @@ default_deny = true
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }
+
+    /// Wrong-CWD `${CWD}` mount fix (plan level): with
+    /// WORKESTRATE_INVOKE_CWD captured at CLI entry (dir A) and the process
+    /// cwd elsewhere (dir B — the re-exec'd / detached child whose cwd
+    /// differs from the operator's), `ConfigWorkload::plan()` resolves a
+    /// `${CWD}` mount host to the captured A, so `host = "${CWD}" → /work`
+    /// pins the ORIGINAL operator invocation dir.
+    #[test]
+    fn plan_resolves_cwd_mount_host_to_captured_invoke_cwd() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _g = crate::config::test_support::EnvGuard::capture(
+            crate::config::test_support::HOME_ENV_KEYS,
+        );
+        let invoke = crate::config::test_support::uniq_dir("plan-invoke-cwd");
+        let foreign = crate::config::test_support::uniq_dir("plan-foreign-cwd");
+        std::fs::create_dir_all(&invoke).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::env::set_var(crate::config::INVOKE_CWD_ENV, &invoke);
+        std::env::set_current_dir(&foreign)?;
+
+        let toml = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.svc.mounts]]
+host = "${CWD}"
+guest = "/work"
+read_only = false
+
+[workloads.svc.network]
+default_deny = true
+"#;
+        let wl = synthetic_workload(toml, "svc");
+        let plan = wl.plan();
+        assert_eq!(
+            plan.mounts[0].host,
+            invoke.to_string_lossy(),
+            "${{CWD}} mount host must resolve to the captured invocation cwd, \
+             not the foreign process cwd"
+        );
+
+        let _ = std::fs::remove_dir_all(&invoke);
+        let _ = std::fs::remove_dir_all(&foreign);
+        Ok(())
+    }
 }

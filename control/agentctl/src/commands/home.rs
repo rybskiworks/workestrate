@@ -306,7 +306,7 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
         let path = if expanded.is_absolute() {
             expanded
         } else {
-            std::env::current_dir()?.join(expanded)
+            config::invoke_cwd_or_err()?.join(expanded)
         };
         (path, false)
     };
