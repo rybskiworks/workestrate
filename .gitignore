@@ -13,6 +13,7 @@ agents/*/repo
 agents/*/build
 agents/*/.build-hash
 
+# nix build byproducts; GC roots; build with --no-link
 result
 result-*
 
