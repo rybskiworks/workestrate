@@ -178,28 +178,58 @@ deferred.
 
 ## Open questions
 
-**RESOLVED (2026-08-24):**
+**RESOLVED (2026-08-24, design session):**
 
 - **Tag format** — DECIDED: `name:ctx:sha` immutable per build; the
   per-context mutable alias is replaced by the state-dir image record as the
   mutable current-pointer (§ Image identity, 2026-08-24 decision).
 
-**REMAINING:**
+**RESOLVED (2026-08-24, user decisions):**
 
-- **GC policy for hash tags** — keep-last-N per context (RECOMMENDED; the
-  2026-08-24 addendum records it as the working default) vs manual
-  `workestrate images gc` only. User decision.
-- **Prod config strategy** — a dedicated `prod` branch (RECOMMENDED) vs a
-  pinned clone of the config repo. User decision.
-- **`--from` flag name** — `--from` (RECOMMENDED) vs `--workload-ref`.
-  User decision.
-- **Per-dir default-for-agents** — opt-in first (RECOMMENDED) vs default
-  for agent workloads with cwd-templated mounts now (ADR 0030 V5).
-  User decision.
+- **Per-dir default-for-agents** — RESOLVED: **opt-in first**; the capsule
+  declares `strategy = "per-dir"`; default-for-agents-with-cwd-mounts is
+  reconsidered after the host batch proves it (ADR 0030 §V5).
+- **Per-workload config-branch override UX** — RESOLVED: **BOTH forms** —
+  the `--from <ref>` flag AND the inline colon syntax `prime:feat-x`
+  (`:` = config branch, consistent with the `name:ctx:sha` image tags;
+  `@` = instance id; the combined form `prime:feat-x@canary` is legal).
+  Default = the home's pinned ref.
+- **GC policy for hash tags** — RESOLVED: **schema-configurable cascade** —
+  built-in default N=5 < home settings < config repo < workload capsule (a
+  keep/retain-count setting; exact field name per repo conventions);
+  automatic prune-on-load of older sha tags per `name:ctx` beyond N;
+  `workestrate images gc` remains the manual sweep; running sandboxes are
+  never affected (a pruned tag = rebuild-from-store on recreate).
+- **Prod config strategy** — RESOLVED: **NO prod branch**; `main` is the
+  stable line (tidy discipline). Homes pin `ref = "main"` + the lockfile
+  rev; everything stays configurable per entry (`ref`/`rev`) and per
+  invocation (`--config-ref`). Default-ref order reaffirmed: explicit >
+  `origin/HEAD` (covers main/master/trunk) > checkout branch for local
+  working repos > hard error.
+- **Prod/dev secrets** — RESOLVED: **shared** `LITELLM_MASTER_KEY` across
+  all litellm instances; the egress `allowed_hosts` scoping is the control.
+  Reasoning: the blast radius is local/self-hosted — separate per-context
+  keys would buy ceremony, not isolation.
+- **auth.json hardening** — RESOLVED for now: **keep the passive mask**.
+  The harder-seal TEST PLAN is recorded in
+  `docs/mount-policy/06-testing.md` (§ Future hardening tests); the decision
+  to seal harder (`write.deny` / operator-final `read.deny`) is DEFERRED
+  until that test plan runs.
+- **migration/tool-model → main** — RESOLVED: promote when the current
+  line SETTLES (host batch green + pushes done), not mid-flight.
+- **Personal-repo remote target** — RESOLVED: **local-only FOR NOW**; the
+  user will push to origin eventually. NOTE: nothing in the personal config
+  repo is backed up off-host until then.
+
+**REMAINING (parked):**
+
 - **Promote command shape when un-deferred**: explicit `workload promote` vs
-  chain element promote-if-healthy.
+  chain element promote-if-healthy. Parked WITH the deferred blue-green /
+  promote design (§ Deferred: blue-green / promote) — resolves when that
+  work is un-deferred.
 - **Whether models.json seed content belongs in the config hash** or stays a
-  `--reseed` concern.
+  `--reseed` concern. Parked; tied to the provenance-stamp implementation
+  round.
 
 ---
 
@@ -239,6 +269,11 @@ Registry entries are `{ url, ref, rev }` with a SINGLE `url` field,
   (`git archive --format=zip`). **No new dependencies.**
 
 ### Selection ladder
+
+> **UX decision (2026-08-24):** the per-workload override has BOTH forms —
+> the `--from <ref>` flag AND inline colon syntax `prime:feat-x` (`:` =
+> config branch, consistent with image tags; `@` = instance id; combined
+> `prime:feat-x@canary` legal). Default = the home's pinned ref.
 
 Precedence, highest first:
 
@@ -299,13 +334,19 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
   replaced: the **state-dir image record is the mutable current-pointer**
   for the context — no mutable registry tags at all, so a dev build cannot
   even transiently move what prod resolves.
-- **GC:** keep-last-N per context (RECOMMENDED working default — user
-  confirmation pending, § Open questions) with a manual
-  `workestrate images gc` as the fallback.
+- **GC (RESOLVED 2026-08-24):** keep-last-N per context as a
+  schema-configurable cascade — built-in default N=5 < home settings <
+  config repo < workload capsule — with automatic prune-on-load of older
+  sha tags per `name:ctx` beyond N; `workestrate images gc` remains the
+  manual sweep; running sandboxes are never affected (a pruned tag =
+  rebuild-from-store on recreate).
 
 ### Operating model (A6 preview)
 
 - **prod** = pinned rev (config-repos.lock) + pinned profile binary.
+  **No `prod` branch (RESOLVED 2026-08-24):** `main` IS the stable line
+  (tidy discipline); homes pin `ref = "main"` + the lockfile rev; per-entry
+  `ref`/`rev` and per-invocation `--config-ref` remain the overrides.
 - **dev** = any branch BY NAME via refs (`--config-ref` / `--from`) —
   freshness without moving pins.
 - **Nothing is checked out unless it is being edited** — consumption reads

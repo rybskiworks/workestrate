@@ -62,6 +62,45 @@ to the unified vocabulary (workload-scope FINAL `write.deny` expresses
 | 7 | `ls $MSB_HOME/mount-policy/` | per-mount `<slug>.json` present (MSB_HOME-anchored approved root, not the workestrate state dir) |
 | 8 | `workload down mount-policy-e2e` | exits 0; instance removed |
 
+## Future hardening tests (auth.json seal levels)
+
+The prime capsule currently ships the PASSIVE mask on `agent/auth.json`
+(non-final `read.deny`; user decision 2026-08-24 — see the smoke's
+tag-fragility caveat above for what a passive seal does NOT prove). Whether
+to seal harder (`write.deny`, or an operator-scope final `read.deny`) is
+DEFERRED until this test plan runs. The runtime's canonical behavior source
+is the fork's `test_mutation_policy.rs` (§ Unit gates) — these tests prove
+the semantics end-to-end against real capsules; the unit table already
+defines the expected errnos per state.
+
+- **(a) `write.deny` tolerance boot.** Add a non-final `write.deny` on the
+  auth.json entry and boot prime: does prime / the prime agent TOLERATE
+  `EACCES` on an auth.json write (start cleanly, stay usable), and does it
+  PERSIST auth state across sessions without that write path? The seal
+  level is only adoptable if both answers are yes.
+- **(b) Adoption-clobber probe.** With the passive mask: a guest
+  write-open of the masked host file adopts + tags it and can clobber —
+  prove the clobber is VISIBLE host-side (host file content/mtime after a
+  guest write-open + write), so the failure mode of the current posture is
+  documented, not theoretical.
+- **(c) Final-seal non-overridability.** An operator-scope FINAL `read.deny`
+  on the entry: verify a config-level (repo/workload) `read.allow` naming
+  the same pattern is REJECTED at compile time (the trust gate — final
+  allows are operator-only, see
+  [03-hierarchy-and-precedence.md](./03-hierarchy-and-precedence.md)).
+- **(d) Anti-laundering rename-out.** Renaming the masked path away (or
+  into it) stays `ENOENT` — the name stays sealed, not just the content;
+  a rename cannot launder the mask into visibility.
+- **(e) Guest-initiated probe matrix.** An agent probing from INSIDE the
+  sandbox against the masked path: create-over, write-open, rename-out,
+  unlink, setattr, fallocate — record the errno per op and check the table
+  against `test_mutation_policy.rs` expectations (§ Decoding errnos).
+- **(f) Traversal-only with carve-outs.** Mask a parent dir with an
+  unmasked carve-out beneath it: the parent lists without the name, the
+  ancestor walks as `TraversalOnly`, and the carve-out stays reachable —
+  the pattern a harder auth.json seal would use if a sibling path must
+  remain guest-visible.
+
 ## Reading failures
 
 ### Decoding errnos

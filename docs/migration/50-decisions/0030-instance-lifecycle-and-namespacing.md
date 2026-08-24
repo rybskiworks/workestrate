@@ -1569,14 +1569,24 @@ current build inputs and a RUNNING instance's provenance stamp (the
 scope); silent reuse hides real drift; auto-replace destroys instances the
 operator may want.
 
-### V5. Default-strategy question — per-dir is OPT-IN first
+### V5. Default-strategy question — RESOLVED (2026-08-24): opt-in first
 
-Whether `per-dir` should become the DEFAULT for agent workloads with
-cwd-templated mounts is an OPEN USER DECISION. Recommendation: **opt-in
-first** — ship `per-dir` as an explicit strategy, let the host batch (the
-U7 A–D e2e plus a per-dir smoke) prove the mechanics, then revisit
-default-for-agents-with-cwd-mounts. Recorded in the session's open-questions
-report.
+**USER DECISION (2026-08-24):** `per-dir` is **OPT-IN** — the capsule
+declares `strategy = "per-dir"` explicitly. Making it the default for agent
+workloads with cwd-templated mounts is RECONSIDERED only after the host
+batch proves the mechanics.
+
+Mechanics summary (as decided):
+
+- The invocation cwd is canonicalized at plan time (`fs::canonicalize`) and
+  keyed into the instance id as `<dirname-slug>-<shorthash>`.
+- Re-invoking from the SAME directory reuses the same instance id (the
+  standard conflict chain disposes); a DIFFERENT directory plans a new
+  instance.
+- State mounts are per-instance subdirs
+  (`workspaces/<name>-state/<instance-key>`, §V2).
+- Validation: `per-dir` REQUIRES a cwd-templated mount on the workload —
+  a validation error otherwise (§V1).
 
 ### V6. `mount_refresh` — evaluated and DROPPED
 
