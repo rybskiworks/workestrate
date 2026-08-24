@@ -657,6 +657,14 @@ pub async fn auto_start_dependencies(
         };
         match disposition {
             DepDisposition::Reuse { dep, slot } => {
+                // A1/P3: adopting a record registered under a different
+                // context than the active one is allowed but surfaced
+                // (warn-and-proceed).
+                crate::microsandbox::runtime::reconcile::warn_on_context_drift(
+                    &slot,
+                    facts.record.as_ref().and_then(|r| r.context.as_deref()),
+                    crate::config::active_context_name().as_deref(),
+                );
                 println!("dependency '{dep}' already running (slot '{slot}') — reusing");
             }
             DepDisposition::StartExisting { dep, slot } => {
@@ -815,6 +823,14 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
                 .await?;
                 match decide_bare_up_disposition(&chain, &facts, &slot) {
                     Ok(BareUpDisposition::Reuse) => {
+                        // A1/P3: adopting a record registered under a
+                        // different context than the active one is allowed
+                        // but surfaced (warn-and-proceed).
+                        crate::microsandbox::runtime::reconcile::warn_on_context_drift(
+                            &slot,
+                            facts.record.as_ref().and_then(|r| r.context.as_deref()),
+                            crate::config::active_context_name().as_deref(),
+                        );
                         if !json {
                             println!("{name}: already running (slot '{slot}') — reusing");
                         }
@@ -889,6 +905,14 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
                 // was lost): short-circuit reuse parent-side — the child
                 // would reuse anyway, but spawning it would misreport within
                 // the FS-8 grace window.
+                // A1/P3: adopting a record registered under a different
+                // context than the active one is allowed but surfaced
+                // (warn-and-proceed); with no record this is silent.
+                crate::microsandbox::runtime::reconcile::warn_on_context_drift(
+                    &s.slot,
+                    facts.record.as_ref().and_then(|r| r.context.as_deref()),
+                    crate::config::active_context_name().as_deref(),
+                );
                 if !json {
                     println!("{}: already running (slot '{}') — reusing", s.name, s.slot);
                 }

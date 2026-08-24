@@ -5,6 +5,36 @@ use anyhow::Result;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
+/// A1 context-at-create verification: refuse to write a registry record
+/// whose `(instance, workload, context)` triple is inconsistent — the
+/// instance name's slot must BE the workload's slot in the record's context
+/// ([`crate::microsandbox::slots::context_consistent_with_instance`]).
+///
+/// Pure string check; runs under the already-held registry lock; no I/O.
+fn refuse_context_mismatch(
+    instance_name: &str,
+    workload: &str,
+    context: Option<&str>,
+) -> Result<()> {
+    if !crate::microsandbox::slots::context_consistent_with_instance(
+        instance_name,
+        workload,
+        context,
+    ) {
+        anyhow::bail!(
+            "context-at-create verification failed (A1): instance '{}' for workload '{}' with \
+             context {} is inconsistent — the record's context must match the context prefix \
+             of the instance slot ('{}' != '{}')",
+            instance_name,
+            workload,
+            context.unwrap_or("(none)"),
+            crate::microsandbox::slots::slot_of_instance(instance_name),
+            crate::microsandbox::slots::slot_for(workload, context),
+        );
+    }
+    Ok(())
+}
+
 /// Read and parse a registry record file, warning loudly (WP10/A12) instead
 /// of silently skipping when the file exists but is unreadable or corrupt.
 ///
@@ -184,6 +214,8 @@ pub fn register_sandbox(
     // WP10/A17: lock the registry around the write so concurrent registrations
     // serialize instead of interleaving (each call is self-contained atomic).
     let _lock = PortRegistryLock::acquire(state_dir)?;
+    // A1: refuse BEFORE writing the record file (pure check, no I/O).
+    refuse_context_mismatch(instance_name, workload, context)?;
     let run_dir = state_dir.join("var").join("run");
     std::fs::create_dir_all(&run_dir)?;
     let record = SandboxInstanceRecord {
@@ -254,6 +286,9 @@ fn register_sandbox_lifecycle_locked(
     created_at: &str,
     namespace: &str,
 ) -> Result<()> {
+    // A1: refuse BEFORE writing the record file (pure check, no I/O; the
+    // caller already holds the registry lock).
+    refuse_context_mismatch(instance_name, workload, context)?;
     let run_dir = state_dir.join("var").join("run");
     std::fs::create_dir_all(&run_dir)?;
     let record = SandboxInstanceRecord {
@@ -538,7 +573,10 @@ mod tests {
         check_and_register_sandbox_lifecycle(
             state_dir,
             instance,
-            None,
+            // A1: the registry now refuses (instance, workload, context)
+            // triples whose slot doesn't match; derive the consistent
+            // context from the fixture's `<ctx>-<workload>` instance names.
+            consistent_context(instance, workload),
             workload,
             bind,
             &[port],
@@ -546,6 +584,20 @@ mod tests {
             "2026-07-23T00:00:00Z",
             "default",
         )
+    }
+
+    /// Derive the context that makes `(instance, workload, context)`
+    /// consistent for the A1 write-side check: `None` when the instance slot
+    /// IS the bare workload, `Some(prefix)` when the slot is
+    /// `<prefix>-<workload>`. Test-fixture helper.
+    fn consistent_context<'a>(instance: &'a str, workload: &str) -> Option<&'a str> {
+        let slot = crate::microsandbox::slots::slot_of_instance(instance);
+        if slot == workload {
+            None
+        } else {
+            slot.strip_suffix(workload)
+                .and_then(|prefix| prefix.strip_suffix('-'))
+        }
     }
 
     #[test]
@@ -699,13 +751,7 @@ mod tests {
     #[test]
     fn empty_ports_no_collision() -> Result<()> {
         let state_dir = unique_state_dir("empty-ports");
-        register_sandbox(
-            &state_dir,
-            "personal-agent",
-            Some("personal"),
-            "pi",
-            &[4000],
-        )?;
+        register_sandbox(&state_dir, "personal-pi", Some("personal"), "pi", &[4000])?;
         // A sandbox with no port mappings should never collide.
         let result = check_port_collisions(&state_dir, "personal-other", &[]);
         assert!(result.is_ok());
@@ -756,6 +802,101 @@ mod tests {
     }
 
     // ---- Instance lifecycle (ADR 0021) extensions ----
+
+    // ---- A1: context-at-create verification (write-side refuse) ----
+
+    #[test]
+    fn register_refuses_mismatched_context() -> Result<()> {
+        let state_dir = unique_state_dir("a1-mismatch");
+        let err = register_sandbox(
+            &state_dir,
+            "personal-litellm",
+            Some("work"),
+            "litellm",
+            &[4000],
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("personal-litellm"),
+            "error must name the instance: {msg}"
+        );
+        assert!(
+            msg.contains("litellm"),
+            "error must name the workload: {msg}"
+        );
+        assert!(msg.contains("work"), "error must name the context: {msg}");
+        assert!(
+            msg.contains("context-at-create verification"),
+            "error must name the A1 invariant: {msg}"
+        );
+        // Refusal is total: no record file was written.
+        assert!(
+            find_record(&state_dir, "personal-litellm")?.is_none(),
+            "a refused registration must leave no record"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn register_refuses_namespaced_instance_with_none_context() -> Result<()> {
+        let state_dir = unique_state_dir("a1-namespaced-none");
+        let err =
+            register_sandbox(&state_dir, "personal-litellm", None, "litellm", &[4000]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("personal-litellm"),
+            "error must name the instance: {msg}"
+        );
+        assert!(
+            msg.contains("(none)"),
+            "error must render a None context as (none): {msg}"
+        );
+        assert!(
+            find_record(&state_dir, "personal-litellm")?.is_none(),
+            "a refused registration must leave no record"
+        );
+        // The lifecycle entry point refuses identically.
+        let err = check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-litellm",
+            None,
+            "litellm",
+            singleton_bind(),
+            &[4000],
+            &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
+            "2026-07-30T00:00:00Z",
+            "default",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("context-at-create verification"),
+            "lifecycle path must enforce A1 too: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn register_accepts_consistent_triples() -> Result<()> {
+        let state_dir = unique_state_dir("a1-consistent");
+        // Bare instance + None context (backward compat).
+        register_sandbox(&state_dir, "litellm", None, "litellm", &[4000])?;
+        // Namespaced instance + matching context.
+        register_sandbox(&state_dir, "personal-pi", Some("personal"), "pi", &[3000])?;
+        // Parallel instance: the @-id is stripped before the slot check.
+        register_sandbox(
+            &state_dir,
+            "personal-litellm@canary",
+            Some("personal"),
+            "litellm",
+            &[5000],
+        )?;
+        assert_eq!(list_records(&state_dir)?.len(), 3);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
 
     #[test]
     fn register_lifecycle_round_trips_new_fields() -> Result<()> {
@@ -1011,7 +1152,10 @@ mod tests {
             let b = std::sync::Arc::clone(&barrier);
             handles.push(std::thread::spawn(move || {
                 b.wait(); // release both threads at once
-                combined_register(&dir, &format!("race-{i}"), "litellm", 4000)
+                          // A1: workload = instance name keeps (instance, workload,
+                          // None) consistent under context-at-create verification.
+                let instance = format!("race-{i}");
+                combined_register(&dir, &instance, &instance, 4000)
             }));
         }
         let results: Vec<Result<()>> = handles
@@ -1122,7 +1266,7 @@ mod tests {
         check_and_register_sandbox_lifecycle(
             &state_dir,
             "personal-litellm@a",
-            None,
+            Some("personal"),
             "litellm",
             loopback(2),
             &[4000],
@@ -1315,7 +1459,7 @@ mod tests {
         check_and_register_sandbox_lifecycle(
             &state_dir,
             "personal-litellm@canary",
-            None,
+            Some("personal"),
             "litellm",
             loopback(2),
             &[4000],

@@ -46,6 +46,24 @@ pub fn slot_of_instance(instance: &str) -> &str {
     }
 }
 
+/// true iff the instance name's slot (strip a trailing `@<id>` via
+/// [`slot_of_instance`]) equals [`slot_for`]`(workload, context)`.
+///
+/// This is the A1 context-at-create verification invariant: a registry
+/// record may only be written for an `(instance, workload, context)` triple
+/// whose instance slot IS the workload's slot in that context — e.g.
+/// `("personal-litellm", "litellm", Some("personal"))` is consistent, while
+/// `("personal-litellm", "litellm", None)` and
+/// `("personal-litellm", "litellm", Some("work"))` are not. Pure string
+/// check; no I/O.
+pub fn context_consistent_with_instance(
+    instance: &str,
+    workload: &str,
+    context: Option<&str>,
+) -> bool {
+    slot_of_instance(instance) == slot_for(workload, context)
+}
+
 /// Return the parallel-id portion of an instance name, if any.
 ///
 /// Inverse of [`instance_name`]; used by `ps` to classify a row as singleton
@@ -172,6 +190,64 @@ mod tests {
     #[test]
     fn instance_id_of_parallel() {
         assert_eq!(instance_id_of("personal-litellm@canary"), Some("canary"));
+    }
+
+    #[test]
+    fn context_consistent_some_matching() {
+        assert!(context_consistent_with_instance(
+            "personal-litellm",
+            "litellm",
+            Some("personal")
+        ));
+    }
+
+    #[test]
+    fn context_consistent_some_mismatching() {
+        assert!(!context_consistent_with_instance(
+            "personal-litellm",
+            "litellm",
+            Some("work")
+        ));
+    }
+
+    #[test]
+    fn context_consistent_none_with_bare_name() {
+        assert!(context_consistent_with_instance("litellm", "litellm", None));
+    }
+
+    #[test]
+    fn context_consistent_none_with_namespaced_name_is_false() {
+        assert!(!context_consistent_with_instance(
+            "personal-litellm",
+            "litellm",
+            None
+        ));
+    }
+
+    #[test]
+    fn context_consistent_strips_parallel_id() {
+        // "personal-litellm@canary": the @-id is stripped before comparing.
+        assert!(context_consistent_with_instance(
+            "personal-litellm@canary",
+            "litellm",
+            Some("personal")
+        ));
+    }
+
+    #[test]
+    fn context_consistent_id_only_difference_still_true() {
+        // Two parallel ids of the SAME slot are equally consistent — the
+        // check is slot-level, not instance-level.
+        assert!(context_consistent_with_instance(
+            "personal-litellm@blue",
+            "litellm",
+            Some("personal")
+        ));
+        assert!(context_consistent_with_instance(
+            "personal-litellm@green",
+            "litellm",
+            Some("personal")
+        ));
     }
 
     #[test]

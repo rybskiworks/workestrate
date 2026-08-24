@@ -84,6 +84,10 @@ pub struct WorkloadListEntry {
     pub instances: Vec<String>,
     /// The workload's declaring config-repo namespace (ADR 0030 Phase 2 T1).
     pub namespace: String,
+    /// The active context at listing time (G5): the same for every row —
+    /// the listing is the active context's config view. None under
+    /// bare-layers backward-compat.
+    pub context: Option<String>,
     /// The workload's declared instance strategy (from config; "singleton"
     /// default).
     pub strategy: String,
@@ -156,6 +160,9 @@ pub fn cmd_workloads(json: bool) -> Result<()> {
     names.sort();
     let provenance = crate::merge::get_provenance();
     let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
+    // G5: the listing is the active context's config view — one value for
+    // every row.
+    let active_context = crate::config::active_context_name();
     let entries: Vec<WorkloadListEntry> = names
         .into_iter()
         .map(|name| {
@@ -177,6 +184,7 @@ pub fn cmd_workloads(json: bool) -> Result<()> {
                     &layer_dirs,
                     name,
                 ),
+                context: active_context.clone(),
                 strategy,
                 on_conflict,
                 port,
@@ -217,10 +225,20 @@ pub fn print_workloads_text_to<W: std::io::Write>(
             .as_deref()
             .map(|l| format!(" label={l}"))
             .unwrap_or_default();
+        let context = e.context.as_deref().unwrap_or("-");
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}{}",
-            e.name, e.kind, e.image, running, e.namespace, e.strategy, e.on_conflict, e.port, label,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}{}",
+            e.name,
+            e.kind,
+            e.image,
+            running,
+            e.namespace,
+            context,
+            e.strategy,
+            e.on_conflict,
+            e.port,
+            label,
         )?;
     }
     Ok(())
@@ -536,12 +554,16 @@ pub fn print_instances_text_to<W: std::io::Write>(
             .as_deref()
             .map(|l| format!(" label={l}"))
             .unwrap_or_default();
+        // G5: the record's context column, `-` when None (legacy
+        // unknown-context records).
+        let context = e.context.as_deref().unwrap_or("-");
         writeln!(
             out,
-            "  {}\t{}\t{}\tports=[{}]\tstrategy={}\ton_conflict=[{}]\tport={}{}",
+            "  {}\t{}\t{}\t{}\tports=[{}]\tstrategy={}\ton_conflict=[{}]\tport={}{}",
             e.instance,
             e.status_str(),
             e.namespace,
+            context,
             ports,
             e.strategy,
             e.on_conflict,
@@ -1640,6 +1662,40 @@ mod tests {
             out.contains("port=fixed"),
             "port column missing; got:\n{out}"
         );
+        // G5: the context column sits after the namespace column.
+        let litellm_row = out
+            .lines()
+            .find(|l| l.contains("personal-litellm"))
+            .expect("litellm row must exist");
+        assert!(
+            litellm_row.contains("\tdefault\tpersonal\t"),
+            "context column (after namespace) missing; got row: {litellm_row}"
+        );
+    }
+
+    /// G5: an instance entry with `context: None` (legacy unknown-context
+    /// record) renders `-` in the context column.
+    #[test]
+    fn print_instances_text_renders_dash_for_none_context() {
+        let entries = vec![InstanceEntry {
+            context: None,
+            ..instance_entry(
+                "litellm",
+                "personal-litellm",
+                InstanceStatus::RunningHealthy,
+            )
+        }];
+        let mut buf: Vec<u8> = Vec::new();
+        print_instances_text_to(&entries, &mut buf).expect("render instances text");
+        let out = String::from_utf8(buf).expect("utf8");
+        let row = out
+            .lines()
+            .find(|l| l.contains("personal-litellm"))
+            .expect("litellm row must exist");
+        assert!(
+            row.contains("\tdefault\t-\t"),
+            "None context must render `-`; got row: {row}"
+        );
     }
 
     /// `instances` text output with no entries prints "(no instances)".
@@ -1742,7 +1798,9 @@ mod tests {
     }
 
     /// `workloads --json` includes the policy + namespace columns (ADR 0030
-    /// §4.4) and omits the label when None.
+    /// §4.4) and omits the label when None. G5: the context field is always
+    /// serialized (null when None), matching the PsEntryJson.context
+    /// convention.
     #[test]
     fn workloads_json_includes_policy_and_namespace() {
         let entries = vec![WorkloadListEntry {
@@ -1751,6 +1809,7 @@ mod tests {
             image: "litellm:main".to_string(),
             instances: vec!["personal-litellm".to_string()],
             namespace: "default".to_string(),
+            context: Some("personal".to_string()),
             strategy: "singleton".to_string(),
             on_conflict: "reuse,start,replace".to_string(),
             port: "fixed".to_string(),
@@ -1760,6 +1819,7 @@ mod tests {
             .expect("serialize workloads");
         let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
         assert_eq!(value[0]["namespace"], "default");
+        assert_eq!(value[0]["context"], "personal");
         assert_eq!(value[0]["strategy"], "singleton");
         assert_eq!(value[0]["on_conflict"], "reuse,start,replace");
         assert_eq!(value[0]["port"], "fixed");
@@ -1767,10 +1827,23 @@ mod tests {
             value[0].get("label").is_none(),
             "label must be omitted; got:\n{json}"
         );
+        // context is ALWAYS serialized (null when None) — never omitted.
+        let none_context = vec![WorkloadListEntry {
+            context: None,
+            ..entries[0].clone()
+        }];
+        let json = serde_json::to_string_pretty(&crate::json_out::workloads_json(&none_context))
+            .expect("serialize workloads");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert!(
+            value[0].get("context").is_some(),
+            "context must be present even when None; got:\n{json}"
+        );
+        assert_eq!(value[0]["context"], serde_json::Value::Null);
     }
 
     /// `workloads` text output includes the policy + namespace columns (ADR
-    /// 0030 §4.4).
+    /// 0030 §4.4) plus the G5 context column after namespace (`-` when None).
     #[test]
     fn print_workloads_text_includes_policy_columns() {
         let entries = vec![WorkloadListEntry {
@@ -1779,6 +1852,7 @@ mod tests {
             image: "litellm:main".to_string(),
             instances: vec!["personal-litellm".to_string()],
             namespace: "default".to_string(),
+            context: Some("personal".to_string()),
             strategy: "singleton".to_string(),
             on_conflict: "reuse,start,replace".to_string(),
             port: "fixed".to_string(),
@@ -1787,22 +1861,33 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         print_workloads_text_to(&entries, &mut buf).expect("render workloads text");
         let out = String::from_utf8(buf).expect("utf8");
-        assert!(
-            out.contains("default"),
-            "namespace column missing; got:\n{out}"
+        // Byte-exact row: name, kind, image, running, namespace, context,
+        // strategy, on_conflict, port, label.
+        assert_eq!(
+            out,
+            "litellm\tservice\tlitellm:main\trunning: personal-litellm\tdefault\tpersonal\tsingleton\treuse,start,replace\tfixed label=v1\n",
+            "workloads text row drifted; got:\n{out}"
         );
-        assert!(
-            out.contains("singleton"),
-            "strategy column missing; got:\n{out}"
-        );
-        assert!(
-            out.contains("reuse,start,replace"),
-            "on_conflict column missing; got:\n{out}"
-        );
-        assert!(out.contains("fixed"), "port column missing; got:\n{out}");
-        assert!(
-            out.contains("label=v1"),
-            "label column missing; got:\n{out}"
+        // None context renders `-`.
+        let none_context = vec![WorkloadListEntry {
+            name: "pi".to_string(),
+            kind: "service".to_string(),
+            image: "pi:main".to_string(),
+            instances: vec![],
+            namespace: "default".to_string(),
+            context: None,
+            strategy: "singleton".to_string(),
+            on_conflict: "reuse,start,replace".to_string(),
+            port: "fixed".to_string(),
+            label: None,
+        }];
+        let mut buf: Vec<u8> = Vec::new();
+        print_workloads_text_to(&none_context, &mut buf).expect("render workloads text");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert_eq!(
+            out,
+            "pi\tservice\tpi:main\t(none running)\tdefault\t-\tsingleton\treuse,start,replace\tfixed\n",
+            "None context must render `-`; got:\n{out}"
         );
     }
 }

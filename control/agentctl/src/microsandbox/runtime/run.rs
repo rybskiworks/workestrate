@@ -806,6 +806,13 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let step = super::reconcile::decide_step(&chain, &facts, &spec.instance, spec.replace)?;
     match step {
         super::reconcile::ChainStep::Reuse => {
+            // A1/P3: adopting a record registered under a different context
+            // than the active one is allowed but surfaced (warn-and-proceed).
+            super::reconcile::warn_on_context_drift(
+                &spec.instance,
+                facts.record.as_ref().and_then(|r| r.context.as_deref()),
+                crate::config::active_context_name().as_deref(),
+            );
             return Ok(BuildOutcome::Reused);
         }
         super::reconcile::ChainStep::Fail => {
@@ -815,6 +822,13 @@ pub(crate) async fn build_sandbox<W: Workload>(
             );
         }
         super::reconcile::ChainStep::StartExisting => {
+            // A1/P3: adopting a record registered under a different context
+            // than the active one is allowed but surfaced (warn-and-proceed).
+            super::reconcile::warn_on_context_drift(
+                &spec.instance,
+                facts.record.as_ref().and_then(|r| r.context.as_deref()),
+                crate::config::active_context_name().as_deref(),
+            );
             // The policy dir may be gone (an earlier `down` removed it while
             // the sandbox was stopped); `handle.start()` re-loads the policy,
             // so the write must cover this path too (ordering invariant: see
@@ -1029,6 +1043,14 @@ pub async fn up_service_with_spec<W: Workload>(
         let step = super::reconcile::decide_step(&chain, &facts, &spec.instance, spec.replace)?;
         match step {
             super::reconcile::ChainStep::Reuse => {
+                // A1/P3: adopting a record registered under a different
+                // context than the active one is allowed but surfaced
+                // (warn-and-proceed).
+                super::reconcile::warn_on_context_drift(
+                    &spec.instance,
+                    facts.record.as_ref().and_then(|r| r.context.as_deref()),
+                    crate::config::active_context_name().as_deref(),
+                );
                 println!("instance '{}' is already running — reusing", spec.instance);
                 return Ok(());
             }
@@ -1469,7 +1491,7 @@ mod tests {
         super::super::super::port_registry::check_and_register_sandbox_lifecycle(
             &state_dir,
             "personal-litellm@canary",
-            None,
+            Some("personal"),
             "litellm",
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
             &[4000],
@@ -1626,7 +1648,7 @@ mod tests {
         super::super::super::port_registry::check_and_register_sandbox_lifecycle(
             &state_dir,
             "personal-test",
-            None,
+            Some("personal"),
             "test",
             bind,
             &host_ports,
@@ -1935,7 +1957,22 @@ mod tests {
     // blocks its OWN preferred port (selection runs BEFORE teardown) ----
 
     fn register(dir: &std::path::Path, instance: &str, ports: &[u16]) -> Result<()> {
-        crate::microsandbox::port_registry::register_sandbox(dir, instance, None, "wl", ports)
+        // A1: keep (instance, workload, context) consistent — the fixtures
+        // below use `<ctx>-<wl>` instance names, so register under
+        // Some(<ctx>) with workload `<wl>`.
+        if let Some(wl) = instance.strip_prefix("personal-") {
+            crate::microsandbox::port_registry::register_sandbox(
+                dir,
+                instance,
+                Some("personal"),
+                wl,
+                ports,
+            )
+        } else {
+            crate::microsandbox::port_registry::register_sandbox(
+                dir, instance, None, instance, ports,
+            )
+        }
     }
 
     /// Regression: with --replace in play, the preferred port occupied ONLY

@@ -477,13 +477,20 @@ mod tests {
     #[test]
     fn ps_synthesizes_port_pairs_for_legacy_records() -> anyhow::Result<()> {
         let dir = unique_state_dir_runtime("ps-legacy");
-        // Legacy record: only the bare host-port list; no port_pairs.
-        crate::microsandbox::port_registry::register_sandbox(
-            &dir,
-            "legacy-litellm",
-            None,
-            "litellm",
-            &[4000, 4001],
+        // Legacy record: only the bare host-port list; no port_pairs. Written
+        // directly — a pre-A1 on-disk record could carry a namespaced-looking
+        // instance with context null (the A1 write-side refuse only gates NEW
+        // registrations; legacy records still load).
+        let run_dir = dir.join("var").join("run");
+        std::fs::create_dir_all(&run_dir)?;
+        std::fs::write(
+            run_dir.join("legacy-litellm.json"),
+            r#"{
+  "instance": "legacy-litellm",
+  "context": null,
+  "workload": "litellm",
+  "ports": [4000, 4001]
+}"#,
         )?;
         let entries = ps(&dir)?;
         assert_eq!(entries.len(), 1);

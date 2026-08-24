@@ -174,6 +174,43 @@ fn probe_targets(
         .collect()
 }
 
+/// A1/P3 pure decision: does an adopted record's context disagree with the
+/// invocation's active context? Returns `Some((recorded, active))` — the
+/// drift pair to surface — ONLY on a genuine mismatch. `recorded None`
+/// (legacy unknown-context record) → `None` (silent). Equal → `None`.
+/// `active None` against a recorded context counts as drift; it renders as
+/// `"(none)"` in the pair.
+pub(crate) fn context_drift(
+    record_context: Option<&str>,
+    active_context: Option<&str>,
+) -> Option<(String, String)> {
+    let recorded = record_context?;
+    if Some(recorded) == active_context {
+        return None;
+    }
+    Some((
+        recorded.to_string(),
+        active_context.unwrap_or("(none)").to_string(),
+    ))
+}
+
+/// A1/P3: warn (never fail) when an adopted record's context disagrees with
+/// the invocation's active context. Thin stderr wrapper over the pure
+/// [`context_drift`] decision; silent when there is no drift.
+pub(crate) fn warn_on_context_drift(
+    instance: &str,
+    record_context: Option<&str>,
+    active_context: Option<&str>,
+) {
+    if let Some((recorded, active)) = context_drift(record_context, active_context) {
+        eprintln!(
+            "warning: instance '{}' was registered in context '{}' but the active context is '{}'; \
+             proceeding (registry record context is informational only)",
+            instance, recorded, active
+        );
+    }
+}
+
 /// The chosen conflict-chain step for a slot (ADR 0030 addendum 2 U1/U2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChainStep {
@@ -412,6 +449,50 @@ mod tests {
 
     fn free() -> ReconcileFacts {
         facts(None, None, false, false, None, false)
+    }
+
+    // ---- A1/P3: context_drift (pure warn decision) ----
+
+    #[test]
+    fn context_drift_equal_is_silent() {
+        assert_eq!(context_drift(Some("personal"), Some("personal")), None);
+        assert_eq!(context_drift(None, None), None);
+    }
+
+    #[test]
+    fn context_drift_recorded_none_is_silent() {
+        // Legacy unknown-context records never warn, whatever is active.
+        assert_eq!(context_drift(None, Some("personal")), None);
+        assert_eq!(context_drift(None, None), None);
+    }
+
+    #[test]
+    fn context_drift_mismatch_yields_pair() {
+        assert_eq!(
+            context_drift(Some("personal"), Some("work")),
+            Some(("personal".to_string(), "work".to_string()))
+        );
+    }
+
+    #[test]
+    fn context_drift_recorded_some_active_none_yields_pair() {
+        // A namespaced record adopted under bare-layers (no active context)
+        // is drift; the active side renders as "(none)".
+        assert_eq!(
+            context_drift(Some("personal"), None),
+            Some(("personal".to_string(), "(none)".to_string()))
+        );
+    }
+
+    #[test]
+    fn warn_on_context_drift_never_panics_and_is_pure_pass_through() {
+        // The wrapper only eprintln!s on drift; it must be a no-op (no
+        // panic, no control-flow change) for every input combination.
+        for recorded in [None, Some("personal"), Some("work")] {
+            for active in [None, Some("personal"), Some("work")] {
+                warn_on_context_drift("personal-litellm", recorded, active);
+            }
+        }
     }
 
     // ---- ADR 0030 addendum 2 U2 behavior matrix (pure decide_chain) ----
@@ -690,7 +771,23 @@ mod tests {
     // ---- stale-record GC (prune_stale_records / prune_by_verdicts) ----
 
     fn register(dir: &std::path::Path, instance: &str, ports: &[u16]) -> Result<()> {
-        crate::microsandbox::port_registry::register_sandbox(dir, instance, None, "wl", ports)
+        // A1: keep (instance, workload, context) consistent — a
+        // `<ctx>-<wl>` instance registers under Some(<ctx>) with workload
+        // `<wl>`; a bare instance registers under None with workload =
+        // the instance name.
+        if let Some(wl) = instance.strip_prefix("personal-") {
+            crate::microsandbox::port_registry::register_sandbox(
+                dir,
+                instance,
+                Some("personal"),
+                wl,
+                ports,
+            )
+        } else {
+            crate::microsandbox::port_registry::register_sandbox(
+                dir, instance, None, instance, ports,
+            )
+        }
     }
 
     /// The prune decision core: exactly the records whose verdict is `Gone`

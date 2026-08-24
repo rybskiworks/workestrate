@@ -8,6 +8,13 @@ use crate::config::{ActiveContext, ConfigRepoEntry, Registry};
 /// Load the tool-home registry (`registry.toml` at [`registry_path`]).
 /// Returns `Ok(None)` when the file does not exist (normal first-run state);
 /// read/parse failures are hard errors.
+///
+/// G4 (fail-closed): every `[contexts.<name>]` key is validated with
+/// [`validate_context_name`] after deserialize — a registry carrying an
+/// invalid context name fails to load rather than silently admitting a name
+/// that would produce malformed sandbox instance prefixes. (The lenient
+/// `load_registry_for_dir_resolution` in config/paths.rs deliberately
+/// swallows this error for early path resolution.)
 pub fn load_registry() -> Result<Option<Registry>> {
     let path = registry_path();
     if !path.exists() {
@@ -17,7 +24,42 @@ pub fn load_registry() -> Result<Option<Registry>> {
         .map_err(|e| anyhow::anyhow!("failed to read registry {}: {}", path.display(), e))?;
     let registry: Registry = toml::from_str(&content)
         .map_err(|e| anyhow::anyhow!("failed to parse registry {}: {}", path.display(), e))?;
+    for name in registry.contexts.keys() {
+        validate_context_name(name)?;
+    }
     Ok(Some(registry))
+}
+
+/// Validate a context name (G4). Context names become sandbox instance name
+/// prefixes (`<context>-<workload>`), so they must be safe instance-name
+/// components: `^[a-z0-9][a-z0-9-]*$` — lowercase alphanumerics and hyphens,
+/// starting alphanumeric — plus no trailing hyphen (a trailing `-` would
+/// double the `<context>-<workload>` separator). Unlike
+/// [`crate::microsandbox::slots::validate_instance_id`] there is NO length
+/// cap and NO reserved-word/numeric rule.
+///
+/// Contexts are created by hand-editing the registry TOML (there is no
+/// `context new` command), so the load-time gate in [`load_registry`] is the
+/// single enforcement point; this function is its pure core.
+pub fn validate_context_name(name: &str) -> Result<()> {
+    let valid = !name.is_empty()
+        && !name.ends_with('-')
+        && name.chars().enumerate().all(|(i, c)| {
+            if i == 0 {
+                c.is_ascii_lowercase() || c.is_ascii_digit()
+            } else {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'
+            }
+        });
+    if !valid {
+        anyhow::bail!(
+            "invalid context name '{}': must match ^[a-z0-9][a-z0-9-]*$ (lowercase alphanumerics \
+             and hyphens, starting alphanumeric) — context names become sandbox instance name \
+             prefixes",
+            name
+        );
+    }
+    Ok(())
 }
 
 /// Persist the registry to `registry.toml`, creating the parent directory as
@@ -982,6 +1024,73 @@ pub(crate) mod tests {
             err.contains("no registry found"),
             "error must state no registry exists: {err}"
         );
+        Ok(())
+    }
+
+    // ---- G4: context-name validation (fail-closed at registry load) ----
+
+    #[test]
+    fn validate_context_name_accepts_valid_names() {
+        for ok in ["personal", "work-2", "a", "0", "a-b-c", "team2"] {
+            validate_context_name(ok)
+                .unwrap_or_else(|e| panic!("legitimate context '{ok}' rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_context_name_rejects_invalid_names_and_names_them() {
+        for bad in ["has space", "has@at", "Upper", "-leading", "trailing-", ""] {
+            let err = validate_context_name(bad).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(&format!("'{bad}'")),
+                "error must name the offending context '{bad}': {msg}"
+            );
+            assert!(
+                msg.contains("^[a-z0-9][a-z0-9-]*$"),
+                "error must state the pattern: {msg}"
+            );
+        }
+    }
+
+    /// A registry TOML carrying a bad `[contexts.<name>]` key must FAIL
+    /// `load_registry` (fail-closed; G4), naming the offending context.
+    #[test]
+    fn load_registry_rejects_invalid_context_key() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("g4-bad-context");
+        std::fs::write(
+            registry_path(),
+            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[contexts.\"has space\"]\nlayers = [\"team\"]\n",
+        )?;
+
+        let err = load_registry().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("has space"),
+            "error must name the offending context key: {msg}"
+        );
+        assert!(
+            msg.contains("invalid context name"),
+            "error must be the G4 validation error: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// A registry whose contexts are all valid loads unchanged (the G4 gate
+    /// admits the existing well-formed registries).
+    #[test]
+    fn load_registry_accepts_valid_context_keys() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = seed_two_context_home("g4-ok-context");
+
+        let registry = load_registry()?.expect("valid registry must load");
+        assert!(registry.contexts.contains_key("personal"));
+        assert!(registry.contexts.contains_key("work"));
+        let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }
 }

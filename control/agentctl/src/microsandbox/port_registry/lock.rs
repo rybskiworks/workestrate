@@ -165,10 +165,20 @@ mod tests {
         workload: &str,
         port: u16,
     ) -> Result<()> {
+        // A1: the registry refuses (instance, workload, context) triples
+        // whose slot doesn't match; derive the consistent context from the
+        // fixture's `<ctx>-<workload>` instance names (None when bare).
+        let slot = crate::microsandbox::slots::slot_of_instance(instance);
+        let context = if slot == workload {
+            None
+        } else {
+            slot.strip_suffix(workload)
+                .and_then(|prefix| prefix.strip_suffix('-'))
+        };
         check_and_register_sandbox_lifecycle(
             state_dir,
             instance,
-            None,
+            context,
             workload,
             IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             &[port],
@@ -208,7 +218,10 @@ mod tests {
             let b = std::sync::Arc::clone(&barrier);
             handles.push(std::thread::spawn(move || {
                 b.wait(); // release all threads at once
-                combined_register(&dir, &format!("inst-{i}"), "litellm", 4000)
+                          // A1: workload = instance name keeps (instance, workload,
+                          // None) consistent under context-at-create verification.
+                let instance = format!("inst-{i}");
+                combined_register(&dir, &instance, &instance, 4000)
             }));
         }
         let results: Vec<Result<()>> = handles
