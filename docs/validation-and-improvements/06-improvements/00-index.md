@@ -5,7 +5,7 @@
 > [../00-overview.md](../00-overview.md) ·
 > [../07-execution-order.md](../07-execution-order.md)
 
-This index catalogs the twenty-three post-validation improvement specifications under
+This index catalogs the twenty-four post-validation improvement specifications under
 `06-improvements/`. Each spec is a self-contained engineering document for a
 post-migration enhancement to the config-driven workestrate tool — work that is
 **not** required for the migration itself to be complete, but that hardens,
@@ -80,6 +80,7 @@ invariant.
 | [21-image-build-lifecycle.md](21-image-build-lifecycle.md) | Image build/load lifecycle: ensure-images pre-flight, change detection, selectors, reserved build dir | `IMPLEMENTED (phases A–E landed 2026-08-02/03; phase F multi-repo migration pending)` | ↔ [17](17-config-repo-directory-mode.md), [11](11-home-provisioning-and-lockfile.md), [12](12-per-instance-addressing.md)/ADR 0026 addendum, [01](01-mount-filtering-shadowing.md), [07](07-naming-consistency.md); additive-only per ADR 0021 §8 | A=S, B=S, C=M, D=M, E=M, F=S–M (phased) | HOST-KVM (phase E); C/D/F HOST-NIX |
 | [22-dynamic-mount-masking-policy.md](22-dynamic-mount-masking-policy.md) | Dynamic mount masking policy: hierarchical `[policy.mounts]` scopes, collect-and-compile, runtime program | `DESIGN-APPROVED (awaiting implementation; user decisions locked 2026-08-02)` | ↔ [01](01-mount-filtering-shadowing.md) (dispositioned to fallback; WP1–WP4 frozen), ADR 0029 (decision record), ADR 0020 Ruling 1 (unamended), ADR 0005/0004/0011 (adjacency) | M (parser + compiler + diagnostics; enforcement is a later spec/phase) | `verifiable-here` (docs + pure Rust); microsandbox runtime enforcement `HOST-KVM` |
 | [23-microsandbox-fork-nix-flake-packaging.md](23-microsandbox-fork-nix-flake-packaging.md) | microsandbox fork nix flake packaging (encapsulated source-build consumption) | `DESIGN / DEFERRED (2026-08-03; implementation deferred until workestrate+passthrough usage stabilizes on host)` | ↔ [22](22-dynamic-mount-masking-policy.md) (the consumer; unblocks runtime enforcement), [09](09-microsandbox-agentd-offline-build.md) (supersedes option 3 for the masking use case), ADR 0011 (adjacent — flake packaging ≠ reversed cargo-dep carrier), ADR 0029 (transmission adjacency) | M (flake authoring; deferred) | `verifiable-here` (docs-only); flake build `HOST-NIX`; runtime `HOST-KVM` |
+| [24-repo-content-boundary-migration.md](24-repo-content-boundary-migration.md) | Repo content boundary migration (ADR 0033 execution spec) | `SPEC (docs-only; migration executes on the user's go — no moves executed 2026-08-24)` | ADR 0033 + the agent-side knowledge/skills repos | **M** | `verifiable-here` (docs/link checks in-container); knowledge/skills repo pushes user-approved host-side |
 > **Effort legend:** S = small (hours), M = medium (days), L = large (week+).
 > Effort values are pulled verbatim from each spec's status banner where the
 > spec carries an explicit estimate; values marked "(inferred)" are deduced
@@ -457,6 +458,26 @@ no ADR is created for the deferred idea.
 
 **Key decision:** defer implementation; recommend fork-as-flake packaging for
 reversible, one-revision binary-plus-SDK consumption.
+
+### 24 — Repo content boundary migration
+
+Execution spec for ADR 0033's repo content boundary: the repo enforces how the
+repo works (project conventions, decisions, architecture, SDLC), not how an
+agent achieves it. The extraction program already built the agent-side
+destinations (knowledge repo: generic docs trees, byte-identical per its
+MANIFEST; skills repo: 255 generic skills @ `b4f5ada`); this spec cleans the
+workestrate source side. It enumerates the full move list (generic docs trees
+and the litellm/nix generic files → knowledge; 255 generic skills → source-side
+deletion only; the 34 project-specific skills, OUR-config litellm pair,
+`docs/nix-purity.md`, and `docs/nix` project files STAY), the pointer/redirect
+strategy (sibling-relative pointers or moved-annotations; never a dangling
+reference; historical docs annotated, not rebased), six validation gates
+(Phase 0 `diff -rq` per tree before ANY deletion; zero new dangling links),
+and a five-phase execution (0 user go + re-verify; 1 pointer rewires; 2
+source-side deletions, one commit per area; 3 BEADS.md split — conventions
+stay, mechanics become a new beads skill in the skills repo; 4 gates + index
+updates). **Key decision:** docs-only until the user's go; the boundary is
+enforced at review time, not by tooling.
 ---
 
 ## Dependency graph
@@ -530,7 +551,9 @@ Indented list (parent → child). `→` means "must land first"; `↔` means
 20-schema-evolution-and-migrations [↔ 15 (tombi/vendored schema), 16 (schema_version collapse); docs-only spec]
 
 21-image-build-lifecycle [↔ 17/11/12(ADR 0026 addendum)/01/07; ADR 0021 §8 additive-only; phased A–F — A–E IMPLEMENTED 2026-08-02/03; F pending]
-23-microsandbox-fork-nix-flake-packaging [↔ 22 (consumer; unblocks runtime enforcement), 09 (supersedes option 3 for masking), ADR 0011 (adjacent), ADR 0028 (adjacent); DESIGN/DEFERRED — no flake code now]```
+23-microsandbox-fork-nix-flake-packaging [↔ 22 (consumer; unblocks runtime enforcement), 09 (supersedes option 3 for masking), ADR 0011 (adjacent), ADR 0028 (adjacent); DESIGN/DEFERRED — no flake code now]
+
+24-repo-content-boundary-migration [deps: ADR 0033; ↔ knowledge/skills repos; docs-only until user go]```
 
 **Key dependency notes:**
 
