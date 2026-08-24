@@ -133,6 +133,10 @@ async fn fixture_image_full_pipeline_lifecycle() {
     std::env::set_var("MSB_PATH", &msb);
 
     let attr = "packages.x86_64-linux.wk-fixture-image";
+    // A2 (ADR 0032 §Image tags): BuildJob.tag is the caller-computed
+    // content-addressed tag in production; this e2e drives the pipeline
+    // directly, so any stable tag works. tag_ctx feeds the stage-4
+    // current-pointer upsert (asserted below).
     let tag = "wk-fixture-image:latest";
     let mut eval = NixCliEvaluator::new();
     let drv_path = eval
@@ -147,6 +151,7 @@ async fn fixture_image_full_pipeline_lifecycle() {
         },
         attr: attr.to_string(),
         tag: tag.to_string(),
+        tag_ctx: None,
         drv_path: drv_path.clone(),
         force: false,
     };
@@ -184,6 +189,15 @@ async fn fixture_image_full_pipeline_lifecycle() {
         assert_eq!(record.drv_path, drv_path);
         assert_eq!(record.out_path, first.out_path);
         assert_eq!(record.digest, None, "§3.5 probe point stays null");
+        // A2: the stage-4 upsert also moved the current-pointer.
+        let state = ImagesState::load(&state_dir);
+        assert_eq!(
+            state
+                .lookup_pointer(&workestrate::images::state::pointer_key("e2e", attr, None))
+                .map(|p| p.tag.as_str()),
+            Some(tag),
+            "the current-pointer for (repo, attr, ctx=None) moved to the loaded tag"
+        );
 
         // Run 2: same inputs → the outPath re-load gate SKIPS `msb load`.
         let second =

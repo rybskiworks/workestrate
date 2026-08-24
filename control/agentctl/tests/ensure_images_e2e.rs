@@ -241,6 +241,17 @@ impl E2eFixture {
             .collect()
     }
 
+    /// A2 (ADR 0032 §Image tags): learn the content-addressed tag an ensure
+    /// pass loaded for `attr` from the images.json record (the sha segment
+    /// is not knowable before the eval/build).
+    fn tag_for_attr(&self, attr: &str) -> Option<String> {
+        ImagesState::load(&self.state_dir())
+            .images
+            .values()
+            .find(|r| r.attr == attr)
+            .map(|r| r.tag.clone())
+    }
+
     /// The detached child's log for `slot` (svc-dep/svc-top — no context).
     fn child_log(&self, slot: &str) -> String {
         let path = self
@@ -318,20 +329,32 @@ fn ensure_images_parent_child_token_reload_and_batch_scope() {
         .expect("spawn workload up svc-dep");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        stderr.contains("ensure-images: wk-e2e-image:latest: build — built+loaded+recorded"),
+        stderr.contains("ensure-images: wk-e2e-image:")
+            && stderr.contains(": build — built+loaded+recorded"),
         "the parent ran the ensure pass before spawning; stderr:\n{stderr}"
     );
-    let record = fx
-        .records_for("wk-e2e-image:latest")
-        .into_iter()
-        .next()
+    // A2: the loaded tag is the computed content tag `wk-e2e-image:<sha>`
+    // (no ctx in config-dir single-layer mode) — learn it from the record.
+    let tag = fx
+        .tag_for_attr("wk-e2e-image")
         .expect("the parent's ensure wrote the images.json record");
+    assert!(
+        tag.starts_with("wk-e2e-image:") && !tag.ends_with(":latest"),
+        "A2 content-addressed tag, not the declared `latest`: {tag}"
+    );
+    let record = fx.records_for(&tag).into_iter().next().unwrap();
     assert!(
         !record.out_path.is_empty(),
         "a full phase-D record: {record:?}"
     );
+    // A2: the current-pointer moved to the same tag.
+    let pointers = &ImagesState::load(&fx.state_dir()).pointers;
     assert!(
-        store_has_tag(&fx, &msb, "wk-e2e-image:latest"),
+        pointers.values().any(|p| p.tag == tag),
+        "the current-pointer record moved to {tag}; pointers: {pointers:?}"
+    );
+    assert!(
+        store_has_tag(&fx, &msb, &tag),
         "the store holds the freshly-loaded tag (ground truth, spec §3.2)"
     );
 
@@ -355,7 +378,8 @@ fn ensure_images_parent_child_token_reload_and_batch_scope() {
          the --images-ready token (double-build inside the FS-8 window); log:\n{log}"
     );
 
-    // ---- Step 2: plain up → the skew matrix skips (record fresh).
+    // ---- Step 2: plain up → the content-addressed skip (same evaluated
+    // out_path → same tag → fresh record → skip; no rebuild churn).
     let out = fx
         .cmd(&msb)
         .args(["workload", "up", "svc-dep"])
@@ -363,7 +387,7 @@ fn ensure_images_parent_child_token_reload_and_batch_scope() {
         .expect("spawn workload up svc-dep (2)");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        stderr.contains("ensure-images: wk-e2e-image:latest: skip — none (up to date)"),
+        stderr.contains(&format!("ensure-images: {tag}: skip — none (up to date)")),
         "fresh record + tag present → skip (§3.4 row 1); stderr:\n{stderr}"
     );
 
@@ -377,7 +401,7 @@ fn ensure_images_parent_child_token_reload_and_batch_scope() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
         stderr.contains(
-            "ensure-images: wk-e2e-image:latest: rebuild (forced) — image unchanged in store; tag already current"
+            &format!("ensure-images: {tag}: rebuild (forced) — image unchanged in store; tag already current")
         ),
         "--reload-images flips the matrix to a forced rebuild (§5.2); stderr:\n{stderr}"
     );
@@ -390,8 +414,13 @@ fn ensure_images_parent_child_token_reload_and_batch_scope() {
         .output()
         .expect("spawn workload up svc-top");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    let named = stderr.find("ensure-images: wk-e2e-image-b:latest: build — built+loaded+recorded");
-    let dep = stderr.find("ensure-images: wk-e2e-image:latest: skip — none (up to date)");
+    let tag_b = fx
+        .tag_for_attr("wk-e2e-image-b")
+        .expect("the dep-inherited pass recorded svc-top's image");
+    let named = stderr.find(&format!(
+        "ensure-images: {tag_b}: build — built+loaded+recorded"
+    ));
+    let dep = stderr.find(&format!("ensure-images: {tag}: skip — none (up to date)"));
     assert!(
         named.is_some(),
         "svc-top's own image was ensured (build); stderr:\n{stderr}"
@@ -404,10 +433,6 @@ fn ensure_images_parent_child_token_reload_and_batch_scope() {
         named.unwrap() < dep.unwrap(),
         "the NAMED workload is ensured BEFORE dependency auto-start (§2.4); stderr:\n{stderr}"
     );
-    assert!(
-        !fx.records_for("wk-e2e-image-b:latest").is_empty(),
-        "the dep-inherited pass recorded svc-top's image"
-    );
 
     // ---- Step 5: bare up + --reload-images forces EVERY eligible service
     // workload in the batch (USER DECISION D3), all before any spawn.
@@ -417,7 +442,7 @@ fn ensure_images_parent_child_token_reload_and_batch_scope() {
         .output()
         .expect("spawn bare workload up --reload-images");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    for tag in ["wk-e2e-image:latest", "wk-e2e-image-b:latest"] {
+    for tag in [&tag, &tag_b] {
         assert!(
             stderr.contains(&format!("ensure-images: {tag}: rebuild (forced)")),
             "D3 batch scope: {tag} forced by the batch --reload-images; stderr:\n{stderr}"
@@ -470,9 +495,9 @@ fn bare_up_rejects_name_scoped_flags_accepts_reload_images() {
     );
 }
 
-/// HOST-KVM variant (spec §10 phase-E gate): after a TOML image edit, `up`
-/// rebuilds BEFORE spawn and the detached child actually BOOTS the rebuilt
-/// image — create() sees the freshly-loaded tag (the §11 item-2 host
+/// HOST-KVM variant (spec §10 phase-E gate): after an image CONTENT edit,
+/// `up` rebuilds BEFORE spawn and the detached child actually BOOTS the
+/// rebuilt image — create() sees the freshly-loaded tag (the §11 item-2 host
 /// remainder: no docker.io pull fallback). Run on a KVM host with nix +
 /// MSB_PATH set:
 ///
@@ -482,14 +507,16 @@ fn bare_up_rejects_name_scoped_flags_accepts_reload_images() {
 /// ```
 ///
 /// Honest fixture note: this e2e's flake is not TOML-generated (production
-/// config repos derive the image derivation from the TOML), so the "TOML
-/// image edit" is a tag edit in the TOML — the skew matrix treats the new
-/// tag as absent+absent → build+load, which is exactly the rebuild-before-
-/// spawn path under test. drvPath-drift rebuilds are covered by the phase-D
-/// e2e and the fake-seam unit tests.
+/// config repos derive the image derivation from the TOML), so the "image
+/// edit" is a CONTENT edit in the fixture flake. A2 (ADR 0032 §Image tags):
+/// the capsule's declared `tag` field is INERT — editing `tag = "latest"` →
+/// `"v2"` changes NOTHING (the store tag is the computed content tag
+/// `<name>:<sha>`); a content edit changes the evaluated outPath → a NEW
+/// sha tag → absent record + absent tag → build+load, which is exactly the
+/// rebuild-before-spawn path under test.
 #[test]
 #[ignore = "HOST-KVM: boots a real sandbox from the rebuilt image; needs KVM + nix + MSB_PATH (unwrapped msb)"]
-fn kvm_up_after_toml_image_edit_rebuilds_before_spawn() {
+fn kvm_up_after_image_content_edit_rebuilds_before_spawn() {
     assert!(nix_on_path(), "KVM e2e needs nix on PATH");
     let Some(msb) = msb_for_e2e() else {
         panic!("KVM e2e needs MSB_PATH to an unwrapped msb");
@@ -517,12 +544,15 @@ fn kvm_up_after_toml_image_edit_rebuilds_before_spawn() {
         "the child booted; stdout:\n{stdout}"
     );
     let named_pos = stderr
-        .find("ensure-images: wk-e2e-image:latest: build")
+        .find("ensure-images: wk-e2e-image:")
         .unwrap_or(usize::MAX);
     assert!(
         named_pos < usize::MAX,
         "the ensure pass ran before the spawn; stderr:\n{stderr}"
     );
+    let tag_v1 = fx
+        .tag_for_attr("wk-e2e-image")
+        .expect("the first up recorded the image");
     let log = poll_child_log(&fx, "svc-dep", Duration::from_secs(90), |l| {
         l.contains("started (Ctrl-C to stop)") || l.contains("exited")
     });
@@ -531,44 +561,48 @@ fn kvm_up_after_toml_image_edit_rebuilds_before_spawn() {
         "the booted child carried the token and skipped ensure; log:\n{log}"
     );
 
-    // TOML image edit: tag latest → v2. The next up must REBUILD (new tag:
-    // absent record + absent tag → build+load) BEFORE the spawn.
-    let toml = std::fs::read_to_string(fx.repo.join("workestrate.toml")).unwrap();
-    let edited = toml.replace(
-        "image = { recipe = \"nix-layered\", name = \"wk-e2e-image\", tag = \"latest\" }",
-        "image = { recipe = \"nix-layered\", name = \"wk-e2e-image\", tag = \"v2\" }",
-    );
-    assert_ne!(toml, edited, "the TOML edit applied");
-    std::fs::write(fx.repo.join("workestrate.toml"), edited).unwrap();
+    // A2: a CONTENT edit in the flake (the declared `tag` field is inert).
+    // The next up must REBUILD (new outPath → new sha tag: absent record +
+    // absent tag → build+load) BEFORE the spawn.
+    let flake = std::fs::read_to_string(fx.repo.join("flake.nix")).unwrap();
+    let edited = flake.replace("hello from svc-dep\n", "hello again from svc-dep v2\n");
+    assert_ne!(flake, edited, "the flake edit applied");
+    std::fs::write(fx.repo.join("flake.nix"), edited).unwrap();
 
     let mut up = fx.cmd(&msb);
     up.env("AGENTCTL_ROOT", &fx.repo);
     let out = up
         .args(["workload", "up", "svc-dep"])
         .output()
-        .expect("spawn workload up svc-dep after TOML edit");
+        .expect("spawn workload up svc-dep after content edit");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        stderr.contains("ensure-images: wk-e2e-image:v2: build — built+loaded+recorded"),
-        "the TOML edit triggered a rebuild BEFORE spawn; stderr:\n{stderr}"
+        stderr.contains("ensure-images: wk-e2e-image:")
+            && stderr.contains(": build — built+loaded+recorded"),
+        "the content edit triggered a rebuild BEFORE spawn; stderr:\n{stderr}"
     );
     assert!(
         out.status.success() && stdout.contains("started in background"),
         "the rebuilt image booted (create() saw the fresh tag — no docker.io \
          pull fallback); stdout:\n{stdout}\nstderr:\n{stderr}"
     );
+    let tag_v2 = fx
+        .tag_for_attr("wk-e2e-image")
+        .expect("the rebuild recorded the image");
+    assert_ne!(
+        tag_v1, tag_v2,
+        "a content edit yields a NEW content-addressed tag"
+    );
     assert!(
-        store_has_tag(&fx, &msb, "wk-e2e-image:v2"),
+        store_has_tag(&fx, &msb, &tag_v2),
         "the store holds the rebuilt tag"
     );
-    let key_prefix_found = ImagesState::load(&fx.state_dir()).images.keys().any(|k| {
-        k == &image_key(
-            &fx.repo.canonicalize().unwrap().to_string_lossy(),
-            "wk-e2e-image:v2",
-        )
-    });
-    assert!(key_prefix_found, "the v2 record landed in images.json");
+    let key_found = ImagesState::load(&fx.state_dir())
+        .images
+        .keys()
+        .any(|k| k == &image_key(&fx.repo.canonicalize().unwrap().to_string_lossy(), &tag_v2));
+    assert!(key_found, "the v2 record landed in images.json");
 
     // Best-effort teardown.
     let _ = fx.cmd(&msb).args(["workload", "down", "svc-dep"]).output();

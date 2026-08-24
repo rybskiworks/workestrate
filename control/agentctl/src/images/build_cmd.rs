@@ -13,9 +13,11 @@
 //!   decision; the nix-absent degrade is the §7 ladder handled AROUND the
 //!   matrix (store presence is known, freshness is not), not inside it. No
 //!   `Unknown` variant proved necessary.
-//! - **D1 trust record shape:** `drv_path` = the current eval; `out_path =
-//!   ""` (unknown until phase D realizes the drv — documented at the write
-//!   site); `digest = None`. Freshness is the drvPath-only predicate
+//! - **D1 trust record shape (A2):** `drv_path` = the current eval;
+//!   `out_path` = the EVALUATED out_path (known since the A2 out-path-first
+//!   flow evaluates it before deciding); `digest = None`; the
+//!   current-pointer for (repo, attr, ctx) moves in the same locked section.
+//!   Freshness is the content-addressed presence predicate
 //!   ([`detect::record_state_for`]).
 //! - **`--check` takes NO lock.** It is a read-only report (probe + load +
 //!   eval, no writes); the §3.3 lock guards the eval → build → load → record
@@ -43,7 +45,10 @@ use crate::images::pipeline::{
 };
 use crate::images::repo_key::{registered_repo_checkouts, repo_identity_for, repo_key_for};
 use crate::images::skew::{decide_skew, RecordState, SkewDecision, StoreTag};
-use crate::images::state::{image_key, ImageRecord, ImagesState, Provenance, RepoIdentity};
+use crate::images::state::{
+    compute_image_tag, image_key, image_tag_context, pointer_key, ImageRecord, ImagesState,
+    PointerRecord, Provenance, RepoIdentity,
+};
 use crate::merge::Provenance as MergeProvenance;
 
 /// The exact zero-eligible note (spec §5.1, stderr). Pinned by test.
@@ -63,7 +68,12 @@ pub struct BuildTarget {
     /// Flake attribute to eval/build (`image.name` verbatim — the tool flake
     /// names `buildImagesFromConfig` output attrs by it).
     pub attr: String,
-    /// Stable verbatim `<image.name>:<tag|latest>` (USER DECISION D2).
+    /// The LEGACY declared `<image.name>:<tag|latest>` (USER DECISION D2).
+    /// A2 (ADR 0032 §Image tags): no longer loaded into the store — the
+    /// effective store tag is the computed content-addressed tag
+    /// ([`crate::images::state::compute_image_tag`]). This field remains as
+    /// the pre-migration fallback: the §7 nix-absent ladder probes it when
+    /// no current-pointer exists yet.
     pub tag: String,
     /// Config-repo identity (repo_key rule + flake_root) for the record key.
     pub repo: RepoIdentity,
@@ -355,18 +365,67 @@ pub struct TargetSeams<'a, P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: I
     pub loader: &'a mut L,
 }
 
-/// The per-workload flow (spec §3.3/§3.4/§7), generic over the four seams so
-/// tests drive fakes with a temp state dir:
+/// The §7 "nix absent from PATH" ladder report (shared by the out_path and
+/// drvPath eval arms of [`process_target`]): `store` presence decides
+/// degrade-with-note (Present — no record written, nothing trustworthy to
+/// record) vs hard error with the install-nix / config-repo-ritual
+/// remediation (Gone). `tag` is the best tag nameable without nix — the
+/// computed content tag when the out_path eval succeeded, else the
+/// pointer/legacy fallback.
+fn nix_absent_ladder(target: &BuildTarget, tag: &str, store: StoreTag) -> Result<TargetReport> {
+    match store {
+        StoreTag::Present => {
+            // Degrade, don't block: the tag may be fresh; nothing is
+            // verifiable without nix. NO record is written — nothing
+            // trustworthy to record (documented phase-C decision).
+            eprintln!(
+                "note: nix not found on PATH; cannot verify freshness of '{}' — \
+                 proceeding with the store tag as-is; no record written (spec 21 §7)",
+                tag
+            );
+            Ok(TargetReport {
+                name: target.name.clone(),
+                repo: target.repo.name.clone(),
+                attr: target.attr.clone(),
+                tag: tag.to_string(),
+                record_state: "unknown".to_string(),
+                store_state: "present".to_string(),
+                drv_path: None,
+                decision: "trust (unverified)".to_string(),
+                action_taken: "none (nix absent; store tag trusted)".to_string(),
+            })
+        }
+        StoreTag::Gone => Err(anyhow::anyhow!(
+            "nix is required to build '{}': no store tag is present and nix was not \
+             found on PATH — install nix, or load the image manually via the \
+             config-repo ritual (the declaring repo's 'load-images' recipe), then \
+             retry (spec 21 §7)",
+            tag
+        )),
+    }
+}
+
+/// The per-workload flow (spec §3.3/§3.4/§7 + A2), generic over the four
+/// seams so tests drive fakes with a temp state dir:
 ///
-/// 1. acquire the per-tag lock (build mode only — `--check` takes NO lock);
-/// 2. INSIDE the lock: probe the store tag, load `images.json`, run the
-///    drvPath eval, derive the record state (drvPath-only, §3.1), and
+/// 1. **A2 out_path eval FIRST** (eval-only, no build — ADR 0032 §Image
+///    tags): the content-addressed tag `<name>:<ctx>:<sha>` (or
+///    `<name>:<sha>`) derives from the evaluated out_path, so the eval must
+///    precede the store probe and the lock acquisition (the lock keys on
+///    the computed tag). The eval is deterministic per flake content, so
+///    racing processes compute the SAME tag and serialize on the SAME lock.
+/// 2. acquire the per-tag lock (build mode only — `--check` takes NO lock);
+/// 3. INSIDE the lock: probe the store for the COMPUTED tag, load
+///    `images.json`, run the drvPath eval (recorded for provenance — spec
+///    §8 `drv_path`; no longer the freshness signal), derive the record
+///    state (presence under the computed key — content-addressed), and
 ///    `decide_skew` (re-checked inside the lock per the §7 concurrent row);
-/// 3. act: Skip → report; TrustAndRecord → write the D1 baseline record
-///    (upsert + save INSIDE the lock); Build/Rebuild/RebuildForced → the
-///    phase-D pipeline (nix build → outPath gate → `msb load` → record),
-///    still inside the lock; `--check` → structured "would …" report, never
-///    the pipeline, never a write.
+/// 4. act: Skip → report; TrustAndRecord → write the D1 baseline record
+///    AND move the current-pointer (upsert + save INSIDE the lock);
+///    Build/Rebuild/RebuildForced → the phase-D pipeline (nix build →
+///    outPath gate → `msb load` → record + pointer), still inside the lock;
+///    `--check` → structured "would …" report, never the pipeline, never a
+///    write.
 pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: ImageLoader>(
     target: &BuildTarget,
     state_dir: &Path,
@@ -386,60 +445,77 @@ pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: 
     let eval = &mut **eval;
     let builder = &mut **builder;
     let loader = &mut **loader;
-    let key = image_key(&target.repo.name, &target.tag);
-    // §3.3: the per-tag lock spans the eval → build → load → record critical
-    // section. `--check` has no critical section (read-only) → no lock.
+
+    // Step 1: the A2 out_path eval decides the effective tag BEFORE any
+    // probe/lock. §7 nix-absent ladder: without nix the computed tag is
+    // unknowable — probe the best nameable tag instead: the state-dir
+    // current-pointer for (repo, attr, ctx) when one exists (post-migration
+    // homes keep degrading correctly), else the legacy declared tag
+    // (pre-migration behavior, byte-identical).
+    let out_path = match eval.eval_out_path(&target.repo.flake_root, &target.attr) {
+        Ok(out) => out,
+        Err(DrvEvalError::NixAbsent) => {
+            let ctx = image_tag_context();
+            let fallback = ImagesState::load(state_dir)
+                .lookup_pointer(&pointer_key(
+                    &target.repo.name,
+                    &target.attr,
+                    ctx.as_deref(),
+                ))
+                .map(|p| p.tag.clone())
+                .unwrap_or_else(|| target.tag.clone());
+            let store = probe
+                .tag_state(&fallback)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return nix_absent_ladder(target, &fallback, store);
+        }
+        Err(DrvEvalError::AttrMissing { attr, detail }) => {
+            return Err(anyhow::anyhow!(
+                "flake {} does not provide attribute '{attr}' (needed by workload '{}'): \
+                 {detail}",
+                target.repo.flake_root.display(),
+                target.name
+            ));
+        }
+        Err(DrvEvalError::EvalFailed { detail }) => {
+            return Err(anyhow::anyhow!(
+                "nix eval failed for '{}#{}.outPath': {detail}",
+                target.repo.flake_root.display(),
+                target.attr
+            ));
+        }
+    };
+    let tag_ctx = image_tag_context();
+    let tag = compute_image_tag(&target.attr, tag_ctx.as_deref(), &out_path)?;
+    let key = image_key(&target.repo.name, &tag);
+
+    // Step 2: §3.3 — the per-tag lock spans the probe → eval → build → load
+    // → record critical section. `--check` has no critical section
+    // (read-only) → no lock.
     let _lock = if check {
         None
     } else {
         Some(ImageTagLock::acquire(state_dir, &key)?)
     };
 
-    // Store presence INSIDE the lock (§7 concurrent row: everything is
-    // re-checked inside). An unreachable store fails fast — the named §7
+    // Step 3: store presence INSIDE the lock (§7 concurrent row: everything
+    // is re-checked inside). An unreachable store fails fast — the named §7
     // error aborts the command (documented batch posture).
     let store = probe
-        .tag_state(&target.tag)
+        .tag_state(&tag)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let state = ImagesState::load(state_dir);
 
+    // The drvPath eval: recorded for provenance/diagnostics (spec §8), no
+    // longer the freshness signal (the content-addressed tag is).
     let drv = match eval.eval_drv_path(&target.repo.flake_root, &target.attr) {
         Ok(drv) => drv,
-        // §7 "nix absent from PATH" ladder, literally, in BOTH modes.
-        Err(DrvEvalError::NixAbsent) => {
-            return match store {
-                StoreTag::Present => {
-                    // Degrade, don't block: the tag may be fresh; nothing is
-                    // verifiable without nix. NO record is written — nothing
-                    // trustworthy to record (documented phase-C decision).
-                    eprintln!(
-                        "note: nix not found on PATH; cannot verify freshness of '{}' — \
-                         proceeding with the store tag as-is; no record written (spec 21 §7)",
-                        target.tag
-                    );
-                    Ok(TargetReport {
-                        name: target.name.clone(),
-                        repo: target.repo.name.clone(),
-                        attr: target.attr.clone(),
-                        tag: target.tag.clone(),
-                        record_state: "unknown".to_string(),
-                        store_state: "present".to_string(),
-                        drv_path: None,
-                        decision: "trust (unverified)".to_string(),
-                        action_taken: "none (nix absent; store tag trusted)".to_string(),
-                    })
-                }
-                StoreTag::Gone => Err(anyhow::anyhow!(
-                    "nix is required to build '{}': no store tag is present and nix was not \
-                     found on PATH — install nix, or load the image manually via the \
-                     config-repo ritual (the declaring repo's 'load-images' recipe), then \
-                     retry (spec 21 §7)",
-                    target.tag
-                )),
-            };
-        }
+        // Nix vanished between the two evals (or a PATH flip): the §7
+        // ladder applies verbatim, with the computed tag already known.
+        Err(DrvEvalError::NixAbsent) => return nix_absent_ladder(target, &tag, store),
         Err(DrvEvalError::AttrMissing { attr, detail }) => {
             return Err(anyhow::anyhow!(
                 "flake {} does not provide attribute '{attr}' (needed by workload '{}'): \
@@ -457,16 +533,16 @@ pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: 
         }
     };
 
-    // drvPath is THE §3.1 signal in phase C; the outPath re-load gate is
-    // phase D.
-    let record_state = record_state_for(state.lookup(&key), &drv);
+    // Content-addressed freshness: a record under the COMPUTED key exists
+    // only when exactly this content was built+loaded (or D1-trusted).
+    let record_state = record_state_for(state.lookup(&key));
     let decision = decide_skew(record_state, store, force);
 
     let mut report = TargetReport {
         name: target.name.clone(),
         repo: target.repo.name.clone(),
         attr: target.attr.clone(),
-        tag: target.tag.clone(),
+        tag: tag.clone(),
         record_state: record_state_label(record_state).to_string(),
         store_state: store_state_label(store).to_string(),
         drv_path: Some(drv.clone()),
@@ -486,11 +562,14 @@ pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: 
             } else {
                 report.decision = "trust+record".to_string();
                 // USER DECISION D1: the store tag is trusted as-is (records
-                // are advisory); write the baseline so the NEXT run has a
-                // drvPath to compare. `out_path = ""` — unknown until the
-                // phase-D pipeline realizes the drv (the drvPath-only
-                // freshness predicate never consults it). `digest = None`
-                // until the msb digest surface lands (§3.5/§11).
+                // are advisory); write the baseline so the NEXT run skips.
+                // A2: the out_path is KNOWN (the step-1 eval) — recording it
+                // lets the phase-D re-load gate skip a redundant `msb load`
+                // after a later forced rebuild. `digest = None` until the
+                // msb digest surface lands (§3.5/§11). The current-pointer
+                // moves in the SAME locked critical section (ADR 0032): the
+                // trusted tag is what plan/spawn-time resolution should
+                // resolve.
                 let prov = Provenance::capture();
                 let mut state = state;
                 state.upsert(
@@ -498,15 +577,22 @@ pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: 
                     ImageRecord {
                         repo: target.repo.clone(),
                         attr: target.attr.clone(),
-                        tag: target.tag.clone(),
+                        tag: tag.clone(),
                         drv_path: drv.clone(),
-                        out_path: String::new(),
+                        out_path: out_path.clone(),
                         digest: None,
                         built_at: prov.now.clone(),
                         loaded_at: prov.now.clone(),
                         loader: prov.loader,
                         host: prov.host,
                         user: prov.user,
+                    },
+                );
+                state.upsert_pointer(
+                    pointer_key(&target.repo.name, &target.attr, tag_ctx.as_deref()),
+                    PointerRecord {
+                        tag: tag.clone(),
+                        updated_at: prov.now,
                     },
                 );
                 // INSIDE the lock (§3.3 atomicity).
@@ -528,14 +614,16 @@ pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: 
             } else {
                 report.decision = verb.to_string();
                 // The phase-D pipeline: nix build → outPath re-load gate →
-                // `msb load` → record upsert. The lock is still held here —
-                // the whole critical section runs inside it (spec §3.3).
+                // `msb load` → record + pointer upsert. The lock is still
+                // held here — the whole critical section runs inside it
+                // (spec §3.3).
                 let PipelineOutcome { action, .. } = run_build_pipeline(
                     &BuildJob {
                         workload: target.name.clone(),
                         repo: target.repo.clone(),
                         attr: target.attr.clone(),
-                        tag: target.tag.clone(),
+                        tag: tag.clone(),
+                        tag_ctx: tag_ctx.clone(),
                         drv_path: drv,
                         force,
                     },
@@ -954,8 +1042,29 @@ mod tests {
 
     // ---- the per-workload flow (skew-in-lock integration, fake seams) ----
 
-    fn fake_eval_with(drv: &str) -> FakeEvaluator {
+    /// A2 fixtures: well-formed evaluated out_paths and their computed
+    /// content-addressed tags (ctx is None in these tests — each flow test
+    /// pins `set_active_context(None)` + `clear_inline_override()` under
+    /// ENV_TEST_LOCK so no leaked process-global context can flip the tag
+    /// to the three-segment form).
+    const OUT_A: &str = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-img-pi.tar.gz";
+    const OUT_B: &str = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-img-pi.tar.gz";
+    const TAG_A: &str = "img-pi:aaaaaaaaaaaa";
+    const TAG_B: &str = "img-pi:bbbbbbbbbbbb";
+
+    /// Pin the A2 tag context to None for the duration of a flow test.
+    fn pin_no_tag_context() -> std::sync::MutexGuard<'static, ()> {
+        let lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        crate::config::set_active_context(None);
+        crate::config::clear_inline_override();
+        lock
+    }
+
+    /// Fake evaluator queued for one target pass: the A2 out_path eval
+    /// (popped FIRST, decides the tag) then the drvPath eval (provenance).
+    fn fake_eval(out: &str, drv: &str) -> FakeEvaluator {
         let mut e = FakeEvaluator::new();
+        e.push_out_ok(out);
         e.push_ok(drv);
         e
     }
@@ -983,11 +1092,15 @@ mod tests {
         }
     }
 
-    /// D1 trust record: record absent + tag present → TrustAndRecord writes
-    /// the baseline INSIDE the lock, with the phase-C record shape (drv_path
-    /// = current eval, out_path = "", digest = None, provenance fields).
+    /// D1 trust record: record absent (no record under the COMPUTED tag) +
+    /// tag present → TrustAndRecord writes the baseline INSIDE the lock with
+    /// the A2 shape (drv_path = current eval, out_path = the EVALUATED
+    /// out_path — known since the out-path-first flow, digest = None) and
+    /// moves the current-pointer in the same locked section.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn d1_trust_writes_baseline_record_inside_lock() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("flow-d1", "pi");
         let state_dir = unique_state_dir("flow-d1-state");
         let mut probe = FakeStoreProbe::new();
@@ -1001,7 +1114,7 @@ mod tests {
             false,
             &mut seams(
                 &mut probe,
-                &mut fake_eval_with("drv-A"),
+                &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
             ),
@@ -1013,19 +1126,20 @@ mod tests {
         assert_eq!(report.drv_path.as_deref(), Some("drv-A"));
         assert_eq!(report.decision, "trust+record");
         assert_eq!(report.action_taken, "recorded baseline (D1 trust)");
+        assert_eq!(report.tag, TAG_A, "the report names the COMPUTED tag");
 
-        // Record content assertions (spec §8 + the phase-C shape decisions).
+        // Record content assertions (spec §8 + the A2 record shape).
         let state = ImagesState::load(&state_dir);
         assert_eq!(state.version, IMAGES_STATE_VERSION);
-        let key = image_key("personal", "img-pi:latest");
+        let key = image_key("personal", TAG_A);
         let record = state.lookup(&key).expect("baseline record written");
         assert_eq!(record.repo.name, "personal");
         assert_eq!(record.attr, "img-pi");
-        assert_eq!(record.tag, "img-pi:latest");
+        assert_eq!(record.tag, TAG_A);
         assert_eq!(record.drv_path, "drv-A", "drv_path = the current eval");
         assert_eq!(
-            record.out_path, "",
-            "out_path stays empty until phase D realizes the drv"
+            record.out_path, OUT_A,
+            "A2: the trust record carries the EVALUATED out_path (known before the decision)"
         );
         assert_eq!(record.digest, None);
         assert!(
@@ -1040,6 +1154,14 @@ mod tests {
             record.built_at
         );
         assert_eq!(record.loaded_at, record.built_at);
+        // A2: the current-pointer moved to the trusted tag, same stamp.
+        let pointer = state
+            .lookup_pointer(&crate::images::state::pointer_key(
+                "personal", "img-pi", None,
+            ))
+            .expect("D1 trust moves the current-pointer");
+        assert_eq!(pointer.tag, TAG_A);
+        assert_eq!(pointer.updated_at, record.built_at);
         // The lock file is released when the flow returns.
         assert!(
             !crate::images::state::image_locks_dir(&state_dir)
@@ -1053,12 +1175,16 @@ mod tests {
         Ok(())
     }
 
-    /// Fresh record + tag present → Skip; a drvPath change flips the SAME
-    /// setup to Rebuild, which runs the real pipeline over fakes: nix build
-    /// (fake) → gate (record out_path="" → load) → msb load (fake) → record
-    /// upsert with the realized outPath.
+    /// THE A2 content-addressed skip: the SAME evaluated out_path yields the
+    /// SAME computed tag → a record under that key is Fresh → tag Present →
+    /// SkewDecision::Skip with NO build invoked — even when the drvPath text
+    /// churned (eval churn costs nothing). A CHANGED out_path (new content)
+    /// computes a NEW tag → absent record + absent store tag → Build, and
+    /// the pipeline loads + records + moves the pointer.
     #[tokio::test]
-    async fn skip_then_drv_drift_rebuilds_through_the_pipeline() -> Result<()> {
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
+    async fn content_addressed_skip_then_content_change_builds() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("flow-skip", "pi");
         let state_dir = unique_state_dir("flow-skip-state");
         let (mut builder, mut loader) = no_pipeline();
@@ -1072,7 +1198,7 @@ mod tests {
             false,
             &mut seams(
                 &mut probe,
-                &mut fake_eval_with("drv-A"),
+                &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
             ),
@@ -1080,7 +1206,8 @@ mod tests {
         .await?;
         assert_eq!(first.decision, "trust+record");
 
-        // Same drv → fresh → skip.
+        // Same out_path → same tag → fresh record → skip. The drv text
+        // churned (drv-B) — irrelevant under content-addressed tags.
         let mut probe2 = FakeStoreProbe::new();
         probe2.push(StoreTag::Present);
         let skip = process_target(
@@ -1090,7 +1217,7 @@ mod tests {
             false,
             &mut seams(
                 &mut probe2,
-                &mut fake_eval_with("drv-A"),
+                &mut fake_eval(OUT_A, "drv-B"),
                 &mut builder,
                 &mut loader,
             ),
@@ -1099,16 +1226,20 @@ mod tests {
         assert_eq!(skip.record_state, "fresh");
         assert_eq!(skip.decision, "skip");
         assert_eq!(skip.action_taken, "none (up to date)");
+        assert!(
+            builder.calls.is_empty() && loader.calls.is_empty(),
+            "content-addressed skip: no build invoked"
+        );
 
-        // drvPath drift → stale + present → Rebuild → the pipeline runs:
-        // skew probe (present), pre-gate probe (present — record out_path=""
-        // so the gate loads anyway), post-load verification (present).
+        // Content change → new out_path → NEW tag → absent record + absent
+        // store tag → Build → the pipeline runs: build (fake) → pre-gate
+        // probe (gone) → msb load (fake) → post-load verification.
         let mut probe = FakeStoreProbe::new();
-        probe.push(StoreTag::Present);
-        probe.push(StoreTag::Present);
-        probe.push(StoreTag::Present);
+        probe.push(StoreTag::Gone); // skew probe for the NEW tag
+        probe.push(StoreTag::Gone); // pipeline pre-gate probe
+        probe.push(StoreTag::Present); // post-load verification
         let mut builder = FakeBuilder::new();
-        builder.push_ok("/nix/store/out-B-img.tar.gz");
+        builder.push_ok(OUT_B);
         let mut loader = FakeLoader::new();
         loader.push_ok();
         let report = process_target(
@@ -1118,48 +1249,59 @@ mod tests {
             false,
             &mut seams(
                 &mut probe,
-                &mut fake_eval_with("drv-B"),
+                &mut fake_eval(OUT_B, "drv-C"),
                 &mut builder,
                 &mut loader,
             ),
         )
         .await?;
-        assert_eq!(report.decision, "rebuild");
+        assert_eq!(report.decision, "build");
         assert_eq!(report.action_taken, "built+loaded+recorded");
         assert_eq!(
             loader.calls,
-            vec![(
-                PathBuf::from("/nix/store/out-B-img.tar.gz"),
-                "img-pi:latest".to_string()
-            )]
+            vec![(PathBuf::from(OUT_B), TAG_B.to_string())]
         );
 
-        // The record now carries the phase-D shape: realized out_path.
-        let key = image_key("personal", "img-pi:latest");
-        let record = ImagesState::load(&state_dir)
-            .lookup(&key)
+        // The record carries the phase-D shape under the NEW tag key; the
+        // pointer moved to the new tag.
+        let state = ImagesState::load(&state_dir);
+        let record = state
+            .lookup(&image_key("personal", TAG_B))
             .expect("pipeline upserted the record")
             .clone();
-        assert_eq!(record.drv_path, "drv-B");
-        assert_eq!(record.out_path, "/nix/store/out-B-img.tar.gz");
+        assert_eq!(record.drv_path, "drv-C");
+        assert_eq!(record.out_path, OUT_B);
         assert_eq!(record.digest, None);
+        assert_eq!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal", "img-pi", None
+                ))
+                .map(|p| p.tag.as_str()),
+            Some(TAG_B),
+            "the pointer moved to the freshly-built tag"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
 
-    /// Record present + tag gone → Rebuild (§3.4 row 3): the pipeline's
-    /// pre-gate probe sees the tag gone and loads anyway even when the
-    /// realized outPath MATCHES the recorded one (out-of-band deletion).
-    /// Record absent + tag gone → Build (row 5) → same load path.
+    /// Record present (under the computed tag) + tag gone → Rebuild (§3.4
+    /// row 3): the pipeline's pre-gate probe sees the tag gone and loads
+    /// anyway even when the realized outPath MATCHES the recorded one
+    /// (out-of-band deletion). Record absent + tag gone → Build (row 5) →
+    /// same load path.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn tag_gone_rows_load_anyway_and_build_row_records() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("flow-rows", "pi");
         let state_dir = unique_state_dir("flow-rows-state");
 
-        // Seed a record so row 3 applies, with a phase-D out_path.
-        let key = image_key("personal", "img-pi:latest");
+        // Seed a phase-D record under the computed tag (drv-A, realized
+        // out_path).
+        let key = image_key("personal", TAG_A);
         let mut state = ImagesState::default();
         let prov = Provenance::capture();
         state.upsert(
@@ -1167,9 +1309,9 @@ mod tests {
             ImageRecord {
                 repo: target.repo.clone(),
                 attr: target.attr.clone(),
-                tag: target.tag.clone(),
+                tag: TAG_A.to_string(),
                 drv_path: "drv-A".to_string(),
-                out_path: "/nix/store/out-A-img.tar.gz".to_string(),
+                out_path: OUT_A.to_string(),
                 digest: None,
                 built_at: prov.now.clone(),
                 loaded_at: prov.now.clone(),
@@ -1188,7 +1330,7 @@ mod tests {
         probe.push(StoreTag::Gone);
         probe.push(StoreTag::Present);
         let mut builder = FakeBuilder::new();
-        builder.push_ok("/nix/store/out-A-img.tar.gz");
+        builder.push_ok(OUT_A);
         let mut loader = FakeLoader::new();
         loader.push_ok();
         let report = process_target(
@@ -1198,7 +1340,7 @@ mod tests {
             false,
             &mut seams(
                 &mut probe,
-                &mut fake_eval_with("drv-A"),
+                &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
             ),
@@ -1207,6 +1349,10 @@ mod tests {
         assert_eq!(report.decision, "rebuild");
         assert_eq!(report.action_taken, "built+loaded+recorded");
         assert_eq!(loader.calls.len(), 1, "tag gone → load anyway (§3.1 gate)");
+        assert_eq!(
+            loader.calls[0].1, TAG_A,
+            "the load targets the computed tag"
+        );
 
         // Row 5: absent + absent → Build → pipeline loads and records.
         let state_dir2 = unique_state_dir("flow-rows-state2");
@@ -1215,7 +1361,7 @@ mod tests {
         probe.push(StoreTag::Gone);
         probe.push(StoreTag::Present);
         let mut builder = FakeBuilder::new();
-        builder.push_ok("/nix/store/out-A-img.tar.gz");
+        builder.push_ok(OUT_A);
         let mut loader = FakeLoader::new();
         loader.push_ok();
         let report = process_target(
@@ -1225,7 +1371,7 @@ mod tests {
             false,
             &mut seams(
                 &mut probe,
-                &mut fake_eval_with("drv-A"),
+                &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
             ),
@@ -1237,7 +1383,7 @@ mod tests {
             .lookup(&key)
             .expect("Build row writes the record")
             .clone();
-        assert_eq!(record.out_path, "/nix/store/out-A-img.tar.gz");
+        assert_eq!(record.out_path, OUT_A);
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -1245,18 +1391,23 @@ mod tests {
         Ok(())
     }
 
-    /// The §3.1 re-load gate end-to-end through process_target: drvPath
-    /// drift forces a Rebuild, but the realized outPath MATCHES the recorded
-    /// one and the tag is present → `msb load` is SKIPPED and the action is
+    /// The §3.1 re-load gate end-to-end through process_target: under A2 a
+    /// same-content run is a plain Skip (never reaches the pipeline), so the
+    /// gate is exercised via `--reload-images`: force flips the fresh+present
+    /// Skip to RebuildForced, the builder realizes the SAME outPath (nix-store
+    /// dedup) and the tag is present → `msb load` is SKIPPED and the action is
     /// the exact operator note "image unchanged in store; tag already
     /// current"; the record's drv_path still refreshes.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn outpath_gate_skip_reports_tag_already_current() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("flow-gate", "pi");
         let state_dir = unique_state_dir("flow-gate-state");
 
-        // Seed a phase-D record (drv-A, realized out_path).
-        let key = image_key("personal", "img-pi:latest");
+        // Seed a phase-D record (drv-A, realized out_path) under the
+        // computed tag.
+        let key = image_key("personal", TAG_A);
         let mut state = ImagesState::default();
         let prov = Provenance::capture();
         state.upsert(
@@ -1264,9 +1415,9 @@ mod tests {
             ImageRecord {
                 repo: target.repo.clone(),
                 attr: target.attr.clone(),
-                tag: target.tag.clone(),
+                tag: TAG_A.to_string(),
                 drv_path: "drv-A".to_string(),
-                out_path: "/nix/store/out-A-img.tar.gz".to_string(),
+                out_path: OUT_A.to_string(),
                 digest: None,
                 built_at: prov.now.clone(),
                 loaded_at: prov.now.clone(),
@@ -1277,29 +1428,28 @@ mod tests {
         );
         state.save(&state_dir)?;
 
-        // drv drift (drv-B) → stale + present → Rebuild; the builder
-        // realizes the SAME outPath (eval churn, nix-store dedup); the
+        // force → RebuildForced; the builder realizes the SAME outPath; the
         // pre-gate probe sees the tag present → SkipLoad, no loader call.
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Present);
         probe.push(StoreTag::Present);
         let mut builder = FakeBuilder::new();
-        builder.push_ok("/nix/store/out-A-img.tar.gz");
+        builder.push_ok(OUT_A);
         let mut loader = FakeLoader::new(); // empty queue: must NOT be called
         let report = process_target(
             &target,
             &state_dir,
             false,
-            false,
+            true,
             &mut seams(
                 &mut probe,
-                &mut fake_eval_with("drv-B"),
+                &mut fake_eval(OUT_A, "drv-B"),
                 &mut builder,
                 &mut loader,
             ),
         )
         .await?;
-        assert_eq!(report.decision, "rebuild");
+        assert_eq!(report.decision, "rebuild (forced)");
         assert_eq!(
             report.action_taken, "image unchanged in store; tag already current",
             "the exact §3.1 gate-skip note"
@@ -1310,7 +1460,7 @@ mod tests {
             .expect("record upserted on the gate-skip path")
             .clone();
         assert_eq!(record.drv_path, "drv-B", "drv_path refreshes");
-        assert_eq!(record.out_path, "/nix/store/out-A-img.tar.gz");
+        assert_eq!(record.out_path, OUT_A);
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -1319,16 +1469,21 @@ mod tests {
 
     /// §7 "nix absent + store tag present": degrade with a note, NO record
     /// written. "nix absent + store tag missing": HARD ERROR + remediation.
+    /// A2: the out_path eval fails first (no tag computable), so the ladder
+    /// probes the best nameable tag — the state-dir current-pointer when one
+    /// exists (post-migration homes), else the legacy declared tag.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn nix_absent_ladder_degrades_or_hard_errors_per_store_tag() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("flow-nix-absent", "pi");
         let state_dir = unique_state_dir("flow-nix-absent-state");
 
-        // Tag present → degrade; no record.
+        // Legacy fallback (no pointer): tag present → degrade; no record.
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Present);
         let mut eval = FakeEvaluator::new();
-        eval.push_err(DrvEvalError::NixAbsent);
+        eval.push_out_err(DrvEvalError::NixAbsent);
         let (mut builder, mut loader) = no_pipeline();
         let report = process_target(
             &target,
@@ -1341,6 +1496,12 @@ mod tests {
         assert_eq!(report.record_state, "unknown");
         assert_eq!(report.drv_path, None);
         assert_eq!(report.decision, "trust (unverified)");
+        assert_eq!(report.tag, "img-pi:latest", "legacy declared fallback");
+        assert_eq!(
+            probe.calls,
+            vec!["img-pi:latest"],
+            "the ladder probed the legacy declared tag"
+        );
         assert!(
             !images_state_path(&state_dir).exists(),
             "the degraded path writes NO record (nothing trustworthy to record)"
@@ -1350,7 +1511,7 @@ mod tests {
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Gone);
         let mut eval = FakeEvaluator::new();
-        eval.push_err(DrvEvalError::NixAbsent);
+        eval.push_out_err(DrvEvalError::NixAbsent);
         let err = process_target(
             &target,
             &state_dir,
@@ -1368,6 +1529,33 @@ mod tests {
         );
         assert!(msg.contains("img-pi:latest"), "names the tag: {msg}");
 
+        // Post-migration fallback: a current-pointer exists → the ladder
+        // probes/names the POINTER's computed tag, not the legacy one.
+        let mut state = ImagesState::default();
+        state.upsert_pointer(
+            crate::images::state::pointer_key("personal", "img-pi", None),
+            PointerRecord {
+                tag: TAG_A.to_string(),
+                updated_at: "2026-08-24T10:00:00Z".to_string(),
+            },
+        );
+        state.save(&state_dir)?;
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Present);
+        let mut eval = FakeEvaluator::new();
+        eval.push_out_err(DrvEvalError::NixAbsent);
+        let report = process_target(
+            &target,
+            &state_dir,
+            false,
+            false,
+            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+        )
+        .await?;
+        assert_eq!(report.tag, TAG_A, "the pointer's tag is the fallback");
+        assert_eq!(probe.calls, vec![TAG_A]);
+        assert_eq!(report.decision, "trust (unverified)");
+
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
@@ -1376,12 +1564,15 @@ mod tests {
     /// §7 "msb store unreachable": the named error aborts the flow (the
     /// batch command fails fast on it — documented posture).
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn unreachable_store_is_the_named_section7_error() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("flow-unreachable", "pi");
         let state_dir = unique_state_dir("flow-unreachable-state");
         let mut probe = FakeStoreProbe::new();
-        probe.push_unreachable("img-pi:latest", "io error: not a directory");
+        probe.push_unreachable(TAG_A, "io error: not a directory");
         let mut eval = FakeEvaluator::new();
+        eval.push_out_ok(OUT_A);
         eval.push_ok("drv-A");
         let (mut builder, mut loader) = no_pipeline();
 
@@ -1397,8 +1588,10 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("msb image store unreachable"), "{msg}");
         assert!(msg.contains("db unreachable"), "ps.rs vocabulary: {msg}");
-        // The eval never ran — the store is probed first.
-        assert!(eval.calls.is_empty());
+        // A2 ordering: the out_path eval ran FIRST (it decides the tag), but
+        // the drvPath eval never ran — the store is probed before it.
+        assert_eq!(eval.out_calls.len(), 1);
+        assert!(eval.calls.is_empty(), "drv eval runs only after the probe");
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -1408,16 +1601,13 @@ mod tests {
     /// --check: NO lock file, NO state file, structured "would …" decisions,
     /// and the D-seam is never reached even when a rebuild is due.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn check_mode_is_read_only_and_reports_would_verdicts() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("flow-check", "pi");
         let state_dir = unique_state_dir("flow-check-state");
 
-        // Stale + present → "would rebuild" (no seam error in --check).
-        let mut probe = FakeStoreProbe::new();
-        probe.push(StoreTag::Present);
-        let mut eval = FakeEvaluator::new();
-        eval.push_ok("drv-B");
-        // Seed a record with a DIFFERENT drv via a prior build-mode run.
+        // Seed a record via a prior build-mode run (trust baseline).
         let mut probe0 = FakeStoreProbe::new();
         probe0.push(StoreTag::Present);
         let (mut builder, mut loader) = no_pipeline();
@@ -1428,7 +1618,7 @@ mod tests {
             false,
             &mut seams(
                 &mut probe0,
-                &mut fake_eval_with("drv-A"),
+                &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
             ),
@@ -1436,15 +1626,24 @@ mod tests {
         .await?;
         let state_before = std::fs::read_to_string(images_state_path(&state_dir)).unwrap();
 
+        // Record present (under the computed tag) + tag GONE →
+        // "would rebuild" (no seam error in --check).
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Gone);
         let report = process_target(
             &target,
             &state_dir,
             true,
             false,
-            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+            &mut seams(
+                &mut probe,
+                &mut fake_eval(OUT_A, "drv-A"),
+                &mut builder,
+                &mut loader,
+            ),
         )
         .await?;
-        assert_eq!(report.record_state, "stale");
+        assert_eq!(report.record_state, "fresh");
         assert_eq!(report.decision, "would rebuild");
         assert_eq!(report.action_taken, "none (--check)");
         assert_eq!(
@@ -1465,7 +1664,7 @@ mod tests {
             false,
             &mut seams(
                 &mut probe,
-                &mut fake_eval_with("drv-A"),
+                &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
             ),
@@ -1486,7 +1685,7 @@ mod tests {
             true,
             &mut seams(
                 &mut probe,
-                &mut fake_eval_with("drv-A"),
+                &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
             ),

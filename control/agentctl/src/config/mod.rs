@@ -16,7 +16,7 @@ pub mod validation;
 pub use archive::{archive_dir, archive_store_root, ensure_archive};
 #[allow(unused_imports)]
 pub use inline_ref::{
-    arm_inline_override, clear_inline_override, parse_workload_selector,
+    arm_inline_override, clear_inline_override, parse_workload_selector, pending_inline_override,
     set_pending_inline_override, set_pending_inline_override_from_env,
     verb_arms_after_dep_autostart, InlineOverride, WORKLOAD_REF_ENV,
 };

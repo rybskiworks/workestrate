@@ -18,6 +18,21 @@
 //!
 //! Key format (spec §8): the map key is the `<repo>#<tag>` composite, e.g.
 //! `personal#workestrate-pi:latest` — see [`image_key`].
+//!
+//! ## A2 (ADR 0032 §Image tags — DECIDED 2026-08-24)
+//!
+//! Store tags are **immutable and content-addressed**: `<name>:<ctx>:<sha>`
+//! when a tag context is in effect ([`image_tag_context`]), `<name>:<sha>`
+//! otherwise, where `sha` is the first [`OUT_PATH_HASH_PREFIX_LEN`] chars of
+//! the evaluated out_path's store-hash segment ([`compute_image_tag`]). No
+//! mutable registry tags exist for nix-layered images: the mutable
+//! per-context **current-pointer** lives HERE, in the state file's `pointers`
+//! map ([`PointerRecord`], keyed by [`pointer_key`]), upserted by every
+//! successful build+load record update (pipeline stage 4, inside the same
+//! locked critical section) and read — read-only — by plan/spawn-time image
+//! resolution ([`resolve_image_tag`]). `pointers` is an additive optional
+//! field: legacy state files without it parse via serde default (never a
+//! hard fail) and resolution falls back to the legacy declared `name:tag`.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -47,10 +62,102 @@ pub fn image_locks_dir(state_dir: &Path) -> PathBuf {
 
 /// The record-map key: `<repo>#<tag>` (spec §8, e.g.
 /// `personal#workestrate-pi:latest`). `repo_key` comes from
-/// [`crate::images::repo_key`]; `tag` is the stable verbatim `name:tag` from
-/// config TOML (USER DECISION D2).
+/// [`crate::images::repo_key`]. Under A2 the `tag` segment is the COMPUTED
+/// content-addressed tag ([`compute_image_tag`], e.g.
+/// `workestrate-pi:personal:9f3a1c2e7b4d`); pre-migration records keep the
+/// verbatim `name:tag` from config TOML (USER DECISION D2).
 pub fn image_key(repo_key: &str, tag: &str) -> String {
     format!("{repo_key}#{tag}")
+}
+
+// ---------------------------------------------------------------------------
+// A2: content-addressed tags + the state-dir current-pointer (ADR 0032
+// §Image tags — DECIDED 2026-08-24)
+// ---------------------------------------------------------------------------
+
+/// Length of the sha segment in a computed image tag: the FIRST 12 chars of
+/// the out_path's 32-char base32 store-hash segment (ADR 0032 §Image tags).
+pub const OUT_PATH_HASH_PREFIX_LEN: usize = 12;
+
+/// The tag context segment (ADR 0032 §Image tags): the ARMED inline-override
+/// config ref wins (A5 rung 3 — `prime:feat-x` builds
+/// `workestrate-prime:feat-x:<sha>` and moves ONLY the `(name, "feat-x")`
+/// pointer; the home context's pointer never flaps), else the active context
+/// name, else `None` (bare-layers mode → the two-segment tag form).
+///
+/// The armed override is process-global and arms only for the invocation's
+/// own workload (deps are ensured BEFORE arming — see
+/// `commands::deps` / main.rs), so no workload-name filter is applied here.
+pub fn image_tag_context() -> Option<String> {
+    if let Some((_workload, config_ref)) = crate::config::inline_ref::armed_inline_override() {
+        return Some(config_ref);
+    }
+    crate::config::active_context_name()
+}
+
+/// Extract the sha segment for a computed tag: the first
+/// [`OUT_PATH_HASH_PREFIX_LEN`] chars of the store-hash segment of
+/// `out_path` (the base32 run between `/nix/store/` and the first `-` of
+/// `-<name>`). Returns `None` when the path is not a `/nix/store/<hash>-…`
+/// shape (a malformed nix eval result — the caller hard-errors).
+pub fn store_hash_prefix(out_path: &str) -> Option<String> {
+    let rest = out_path.strip_prefix("/nix/store/")?;
+    let hash = rest.split('-').next().filter(|h| !h.is_empty())?;
+    Some(hash.chars().take(OUT_PATH_HASH_PREFIX_LEN).collect())
+}
+
+/// The immutable per-build store tag (ADR 0032 §Image tags):
+/// `<name>:<ctx>:<sha>` when a tag context is in effect, `<name>:<sha>`
+/// when `ctx` is `None`. `name` is the image name (`image.name`, verbatim
+/// flake attr); `sha` derives from the EVALUATED out_path (eval-only — no
+/// build), so unchanged inputs yield the identical tag (the
+/// content-addressed skip) and changed inputs a fresh tag.
+pub fn compute_image_tag(name: &str, ctx: Option<&str>, out_path: &str) -> Result<String> {
+    let sha = store_hash_prefix(out_path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "nix eval printed an outPath in an unexpected shape: '{out_path}' \
+             (expected /nix/store/<hash>-<name>)"
+        )
+    })?;
+    Ok(match ctx {
+        Some(ctx) => format!("{name}:{ctx}:{sha}"),
+        None => format!("{name}:{sha}"),
+    })
+}
+
+/// The pointer-map key (ADR 0032 §Image tags): `<repo>#<name>` when no tag
+/// context is in effect, `<repo>#<name>#<ctx>` otherwise. `#` never appears
+/// in repo keys (registered name or canonical path), image names, or
+/// context/ref names by construction (git refnames and workload/image names
+/// exclude it), so the segments split unambiguously.
+pub fn pointer_key(repo: &str, name: &str, ctx: Option<&str>) -> String {
+    match ctx {
+        Some(ctx) => format!("{repo}#{name}#{ctx}"),
+        None => format!("{repo}#{name}"),
+    }
+}
+
+/// True when `key` (a [`pointer_key`] composite) addresses image `name`
+/// under tag context `ctx`, for ANY repo (the cross-repo scan half of
+/// [`resolve_image_tag`]).
+fn pointer_key_matches(key: &str, name: &str, ctx: Option<&str>) -> bool {
+    let parts: Vec<&str> = key.split('#').collect();
+    match (parts.as_slice(), ctx) {
+        ([_, n], None) => *n == name,
+        ([_, n, c], Some(want)) => *n == name && *c == want,
+        _ => false,
+    }
+}
+
+/// The mutable current-pointer record (ADR 0032 §Image tags): the state-dir
+/// replacement for the superseded mutable alias TAG. `tag` is the immutable
+/// content-addressed tag this (repo, name, ctx) currently resolves to;
+/// `updated_at` is the RFC3339 UTC stamp of the build+load (or D1 trust)
+/// that moved the pointer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointerRecord {
+    pub tag: String,
+    pub updated_at: String,
 }
 
 /// The config-repo identity embedded in every record (spec §8 `repo`). The
@@ -95,12 +202,18 @@ pub struct ImageRecord {
 }
 
 /// The full state file: `{ "version": 1, "images": { "<repo>#<tag>": … } }`
-/// (spec §8).
+/// (spec §8), plus the additive A2 `"pointers"` map (serde-defaulted —
+/// legacy files without it parse unchanged, and `version` stays 1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImagesState {
     pub version: u32,
     #[serde(default)]
     pub images: BTreeMap<String, ImageRecord>,
+    /// A2 current-pointers: `<repo>#<name>[#<ctx>]` → the immutable
+    /// content-addressed tag that (repo, name, ctx) currently resolves to
+    /// (ADR 0032 §Image tags). Additive/optional — never hard-fail old state.
+    #[serde(default)]
+    pub pointers: BTreeMap<String, PointerRecord>,
 }
 
 impl Default for ImagesState {
@@ -108,6 +221,7 @@ impl Default for ImagesState {
         Self {
             version: IMAGES_STATE_VERSION,
             images: BTreeMap::new(),
+            pointers: BTreeMap::new(),
         }
     }
 }
@@ -178,6 +292,56 @@ impl ImagesState {
     pub fn upsert(&mut self, key: String, record: ImageRecord) {
         self.images.insert(key, record);
     }
+
+    /// Look up the current-pointer for a [`pointer_key`] composite.
+    pub fn lookup_pointer(&self, key: &str) -> Option<&PointerRecord> {
+        self.pointers.get(key)
+    }
+
+    /// Move the current-pointer for a [`pointer_key`] composite. Called
+    /// alongside every successful build+load record upsert (pipeline stage
+    /// 4) and by the D1 trust baseline, inside the same locked critical
+    /// section (ADR 0032 §Image tags).
+    pub fn upsert_pointer(&mut self, key: String, record: PointerRecord) {
+        self.pointers.insert(key, record);
+    }
+}
+
+/// Plan/spawn-time image resolution (ADR 0032 §Image tags — DECIDED
+/// 2026-08-24): the tag a nix-layered workload's sandbox image resolves to.
+///
+/// READ-ONLY (a cheap `images.json` load — `resolve_image` runs at plan
+/// time; this path NEVER writes): look up the current-pointer for
+/// `(name, image_tag_context())`, preferring the `repo`-keyed entry when the
+/// declaring-repo identity is known; on a MISS fall back to the legacy
+/// declared `name:<declared-tag>` form — byte-identical to pre-migration
+/// behavior (golden plans, and not-yet-rebuilt homes such as pi/tempest,
+/// keep working until their first post-upgrade ensure writes a pointer).
+///
+/// Repo matching: when `repo` is `None` (declaring repo not determinable at
+/// plan time — synthetic/single-file layers), pointers are matched by
+/// name+ctx ACROSS repos; BTreeMap order makes a multi-repo collision
+/// resolve deterministically (lexicographically first key).
+pub fn resolve_image_tag(
+    state_dir: &Path,
+    repo: Option<&str>,
+    name: &str,
+    declared_tag: &str,
+) -> String {
+    let legacy = format!("{name}:{declared_tag}");
+    let ctx = image_tag_context();
+    let state = ImagesState::load(state_dir);
+    if let Some(repo) = repo {
+        if let Some(p) = state.lookup_pointer(&pointer_key(repo, name, ctx.as_deref())) {
+            return p.tag.clone();
+        }
+    }
+    for (key, p) in &state.pointers {
+        if pointer_key_matches(key, name, ctx.as_deref()) {
+            return p.tag.clone();
+        }
+    }
+    legacy
 }
 
 /// Sibling tmp path for the atomic save, unique per writer (pid + a process-
@@ -464,5 +628,256 @@ mod tests {
             "unexpected rfc3339 shape: {}",
             prov.now
         );
+    }
+
+    // ---- A2: content-addressed tags + current-pointers (ADR 0032) ----
+
+    /// A realistic 32-char base32 store-hash segment fixture.
+    const HASH32: &str = "abcdefghijklmnopqrstuvwxyz012345";
+
+    /// Tag computation (pure): `<name>:<ctx>:<sha>` with a tag context,
+    /// `<name>:<sha>` without; the sha is the FIRST 12 chars of the
+    /// out_path's store-hash segment.
+    #[test]
+    fn compute_image_tag_composes_name_ctx_sha() {
+        let out = format!("/nix/store/{HASH32}-workestrate-prime.tar.gz");
+        assert_eq!(
+            compute_image_tag("workestrate-prime", Some("personal"), &out).unwrap(),
+            "workestrate-prime:personal:abcdefghijkl",
+            "three-segment form under a tag context; 12-char sha slice"
+        );
+        assert_eq!(
+            compute_image_tag("workestrate-prime", None, &out).unwrap(),
+            "workestrate-prime:abcdefghijkl",
+            "two-segment form when no tag context is in effect"
+        );
+        // The name half of the store path may itself carry '-' — the hash
+        // segment ends at the FIRST '-'.
+        let dashed = format!("/nix/store/{HASH32}-workestrate-pi.tar.gz");
+        assert_eq!(store_hash_prefix(&dashed).as_deref(), Some("abcdefghijkl"));
+        // A name carrying the override ref as ctx (A5): prime:feat-x builds
+        // workestrate-prime:feat-x:<sha>.
+        assert_eq!(
+            compute_image_tag("workestrate-prime", Some("feat-x"), &out).unwrap(),
+            "workestrate-prime:feat-x:abcdefghijkl"
+        );
+        // Malformed eval output is a hard error, never a garbage tag.
+        assert!(compute_image_tag("img", None, "not-a-store-path").is_err());
+        assert!(compute_image_tag("img", None, "/nix/store/").is_err());
+    }
+
+    /// Pointer key shape: `<repo>#<name>` / `<repo>#<name>#<ctx>`.
+    #[test]
+    fn pointer_key_shape_and_matching() {
+        assert_eq!(pointer_key("personal", "img", None), "personal#img");
+        assert_eq!(
+            pointer_key("personal", "img", Some("feat-x")),
+            "personal#img#feat-x"
+        );
+        assert!(pointer_key_matches("personal#img", "img", None));
+        assert!(!pointer_key_matches(
+            "personal#img",
+            "img",
+            Some("personal")
+        ));
+        assert!(pointer_key_matches(
+            "personal#img#feat-x",
+            "img",
+            Some("feat-x")
+        ));
+        assert!(!pointer_key_matches("personal#img#feat-x", "img", None));
+        assert!(!pointer_key_matches("personal#other", "img", None));
+    }
+
+    /// Legacy state files (no `pointers` key) parse via serde default —
+    /// NEVER a hard fail — and resolution falls back to the legacy declared
+    /// tag (byte-identical pre-migration behavior).
+    #[test]
+    fn legacy_state_without_pointers_parses_and_resolution_falls_back() {
+        let json = r#"{
+  "version": 1,
+  "images": {
+    "personal#workestrate-pi:latest": {
+      "repo": {
+        "name": "personal",
+        "path": "/home/node/.workestrate/config-repos/personal",
+        "flake_root": "/home/node/.workestrate/config-repos/personal"
+      },
+      "attr": "workestrate-pi",
+      "tag": "workestrate-pi:latest",
+      "drv_path": "/nix/store/abc123-workestrate-pi.tar.gz.drv",
+      "out_path": "/nix/store/def456-workestrate-pi.tar.gz",
+      "digest": null,
+      "built_at": "2026-08-02T10:15:00Z",
+      "loaded_at": "2026-08-02T10:16:12Z",
+      "loader": "workestrate 0.1.0",
+      "host": "devbox",
+      "user": "node"
+    }
+  }
+}"#;
+        let state_dir = unique_state_dir("images-legacy");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(images_state_path(&state_dir), json).unwrap();
+
+        let state = ImagesState::load(&state_dir);
+        assert!(state.pointers.is_empty(), "legacy file → empty pointers");
+        assert!(
+            state.lookup("personal#workestrate-pi:latest").is_some(),
+            "the legacy image record still parses"
+        );
+        assert_eq!(
+            resolve_image_tag(&state_dir, Some("personal"), "workestrate-pi", "latest"),
+            "workestrate-pi:latest",
+            "pointer MISS → legacy declared tag (byte-identical pre-migration)"
+        );
+        // A hint-less lookup (repo not determinable) falls back identically.
+        assert_eq!(
+            resolve_image_tag(&state_dir, None, "workestrate-pi", "latest"),
+            "workestrate-pi:latest"
+        );
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// Pointer upsert/lookup round-trip through save+load, and
+    /// resolve_image_tag honoring the repo hint then the cross-repo scan.
+    #[test]
+    fn pointer_round_trip_and_resolution_preference() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        crate::config::set_active_context(None);
+        crate::config::clear_inline_override();
+        let state_dir = unique_state_dir("images-pointers");
+        let mut state = ImagesState::default();
+        state.upsert_pointer(
+            pointer_key("personal", "img", None),
+            PointerRecord {
+                tag: "img:aaaaaaaaaaaa".to_string(),
+                updated_at: "2026-08-24T10:00:00Z".to_string(),
+            },
+        );
+        state.upsert_pointer(
+            pointer_key("other", "img", None),
+            PointerRecord {
+                tag: "img:bbbbbbbbbbbb".to_string(),
+                updated_at: "2026-08-24T10:01:00Z".to_string(),
+            },
+        );
+        state.save(&state_dir).expect("save");
+
+        // Repo hint wins over the cross-repo scan.
+        assert_eq!(
+            resolve_image_tag(&state_dir, Some("personal"), "img", "latest"),
+            "img:aaaaaaaaaaaa"
+        );
+        // Unknown repo hint → the cross-repo scan by name+ctx decides
+        // (deterministically: lexicographically first key).
+        assert_eq!(
+            resolve_image_tag(&state_dir, Some("nosuch"), "img", "latest"),
+            "img:bbbbbbbbbbbb",
+            "scan order is BTreeMap (lexicographic): 'other' < 'personal'"
+        );
+        assert_eq!(
+            resolve_image_tag(&state_dir, None, "img", "latest"),
+            "img:bbbbbbbbbbbb"
+        );
+        // Unknown name → legacy fallback.
+        assert_eq!(
+            resolve_image_tag(&state_dir, None, "ghost", "v3"),
+            "ghost:v3"
+        );
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// image_tag_context precedence: armed inline-override ref > active
+    /// context name > None.
+    #[test]
+    fn image_tag_context_prefers_armed_override_then_active_context() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+        assert_eq!(image_tag_context(), None, "no context, no override");
+
+        crate::config::set_active_context(Some(crate::config::ActiveContext {
+            name: Some("personal".to_string()),
+            layers: vec!["personal".to_string()],
+        }));
+        assert_eq!(image_tag_context().as_deref(), Some("personal"));
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        assert_eq!(
+            image_tag_context().as_deref(),
+            Some("personal"),
+            "a PENDING (unarmed) override is invisible"
+        );
+        crate::config::arm_inline_override();
+        assert_eq!(
+            image_tag_context().as_deref(),
+            Some("feat-x"),
+            "the armed override ref IS the tag context"
+        );
+
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+    }
+
+    /// Under an armed override, resolution moves to the OVERRIDE-ctx pointer
+    /// and never touches the home-ctx pointer (the home pointer never flaps).
+    #[test]
+    fn resolve_image_tag_under_armed_override_uses_the_override_ctx_pointer() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(Some(crate::config::ActiveContext {
+            name: Some("personal".to_string()),
+            layers: vec!["personal".to_string()],
+        }));
+        let state_dir = unique_state_dir("images-override-ctx");
+        let mut state = ImagesState::default();
+        state.upsert_pointer(
+            pointer_key("personal", "workestrate-prime", Some("personal")),
+            PointerRecord {
+                tag: "workestrate-prime:personal:111111111111".to_string(),
+                updated_at: "2026-08-24T10:00:00Z".to_string(),
+            },
+        );
+        state.upsert_pointer(
+            pointer_key("personal", "workestrate-prime", Some("feat-x")),
+            PointerRecord {
+                tag: "workestrate-prime:feat-x:222222222222".to_string(),
+                updated_at: "2026-08-24T10:05:00Z".to_string(),
+            },
+        );
+        state.save(&state_dir).expect("save");
+
+        // Home context: the home-ctx pointer resolves.
+        assert_eq!(
+            resolve_image_tag(&state_dir, Some("personal"), "workestrate-prime", "latest"),
+            "workestrate-prime:personal:111111111111"
+        );
+        // Armed override: the override-ctx pointer resolves instead.
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        assert_eq!(
+            resolve_image_tag(&state_dir, Some("personal"), "workestrate-prime", "latest"),
+            "workestrate-prime:feat-x:222222222222",
+            "the armed override resolves the override-ctx pointer, not the home one"
+        );
+        // And the home pointer record itself is untouched (never flaps).
+        let state = ImagesState::load(&state_dir);
+        assert_eq!(
+            state
+                .lookup_pointer(&pointer_key(
+                    "personal",
+                    "workestrate-prime",
+                    Some("personal")
+                ))
+                .map(|p| p.tag.as_str()),
+            Some("workestrate-prime:personal:111111111111")
+        );
+
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 }

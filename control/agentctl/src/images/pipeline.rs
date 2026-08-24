@@ -68,8 +68,16 @@ pub struct BuildJob {
     pub repo: RepoIdentity,
     /// Flake attribute that builds the image tarball (e.g. `workestrate-pi`).
     pub attr: String,
-    /// Stable verbatim `name:tag` loaded into the msb store (USER DECISION D2).
+    /// The store tag to load under. A2 (ADR 0032 §Image tags — DECIDED
+    /// 2026-08-24): the caller computes the IMMUTABLE content-addressed tag
+    /// (`<name>:<ctx>:<sha>`, or `<name>:<sha>` without a tag context) from
+    /// the evaluated out_path; the capsule's declared `tag` field is no
+    /// longer loaded into the store for nix-layered images.
     pub tag: String,
+    /// The tag-context segment baked into [`BuildJob::tag`] (ADR 0032 —
+    /// [`crate::images::state::image_tag_context`] at ensure time). Also the
+    /// pointer-key segment for the stage-4 current-pointer upsert.
+    pub tag_ctx: Option<String>,
     /// The current drvPath eval (spec §3.1) — the pipeline realizes this drv.
     pub drv_path: String,
     /// The build verb's `--force` flag (RebuildForced verdicts).
@@ -605,6 +613,12 @@ pub async fn run_build_pipeline<B: ImageBuilder, L: ImageLoader, P: StoreProbe>(
     // capturing it here is deferred until the digest-COMPARISON design (the
     // §3.5 one-way signal in the D1 trust branch) lands; this write site is
     // the documented probe point.
+    //
+    // A2 (ADR 0032 §Image tags): the same locked critical section ALSO moves
+    // the state-dir current-pointer for (repo, attr, tag_ctx) to the
+    // just-loaded immutable tag — record + pointer upsert are atomic under
+    // the lock, so plan/spawn-time resolution never observes a record
+    // without its pointer.
     let mut state = state;
     state.upsert(
         key,
@@ -616,10 +630,17 @@ pub async fn run_build_pipeline<B: ImageBuilder, L: ImageLoader, P: StoreProbe>(
             out_path: out_path.clone(),
             digest: None,
             built_at: built_prov.now,
-            loaded_at: loaded_prov.now,
+            loaded_at: loaded_prov.now.clone(),
             loader: loaded_prov.loader,
             host: loaded_prov.host,
             user: loaded_prov.user,
+        },
+    );
+    state.upsert_pointer(
+        crate::images::state::pointer_key(&job.repo.name, &job.attr, job.tag_ctx.as_deref()),
+        crate::images::state::PointerRecord {
+            tag: job.tag.clone(),
+            updated_at: loaded_prov.now,
         },
     );
     state.save(state_dir)?;
@@ -744,6 +765,7 @@ mod tests {
             },
             attr: "workestrate-pi".to_string(),
             tag: "workestrate-pi:latest".to_string(),
+            tag_ctx: None,
             drv_path: "/nix/store/abc-workestrate-pi.tar.gz.drv".to_string(),
             force: false,
         }
@@ -892,6 +914,82 @@ mod tests {
             record.built_at
         );
         assert!(record.loaded_at.len() == 20 && record.loaded_at.ends_with('Z'));
+
+        // A2 (ADR 0032 §Image tags): the stage-4 upsert ALSO moved the
+        // current-pointer for (repo, attr, ctx=None) to the loaded tag —
+        // atomically under the same lock, with the loaded_at stamp.
+        let pointer = state
+            .lookup_pointer(&crate::images::state::pointer_key(
+                "personal",
+                "workestrate-pi",
+                None,
+            ))
+            .expect("pointer upserted alongside the record");
+        assert_eq!(pointer.tag, "workestrate-pi:latest");
+        assert_eq!(pointer.updated_at, record.loaded_at);
+        assert!(
+            pointer.updated_at.len() == 20 && pointer.updated_at.ends_with('Z'),
+            "rfc3339 stamp: {}",
+            pointer.updated_at
+        );
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// A2: a tag-context job (e.g. an armed inline override `prime:feat-x`)
+    /// moves ONLY the `(name, ctx)` pointer — the home context's pointer
+    /// (ctx=None) is untouched.
+    #[tokio::test]
+    async fn ctx_tagged_job_moves_only_the_ctx_pointer() -> Result<()> {
+        let state_dir = unique_state_dir("pipe-ctx-pointer");
+        let mut job = job_fixture();
+        job.tag = "workestrate-pi:feat-x:abcdefghijkl".to_string();
+        job.tag_ctx = Some("feat-x".to_string());
+        // Seed a home-context pointer; it must survive the ctx build.
+        let mut state = ImagesState::default();
+        state.upsert_pointer(
+            crate::images::state::pointer_key("personal", "workestrate-pi", None),
+            crate::images::state::PointerRecord {
+                tag: "workestrate-pi:000000000000".to_string(),
+                updated_at: "2026-08-24T09:00:00Z".to_string(),
+            },
+        );
+        state.save(&state_dir)?;
+
+        let mut builder = FakeBuilder::new();
+        builder.push_ok("/nix/store/abcdefghijklmnopqrstuvwxyz012345-workestrate-pi.tar.gz");
+        let mut loader = FakeLoader::new();
+        loader.push_ok();
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Gone);
+        probe.push(StoreTag::Present);
+
+        run_build_pipeline(&job, &state_dir, &mut builder, &mut loader, &mut probe).await?;
+
+        let state = ImagesState::load(&state_dir);
+        assert_eq!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal",
+                    "workestrate-pi",
+                    Some("feat-x")
+                ))
+                .map(|p| p.tag.as_str()),
+            Some("workestrate-pi:feat-x:abcdefghijkl"),
+            "the override-ctx pointer moved to the fresh tag"
+        );
+        assert_eq!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal",
+                    "workestrate-pi",
+                    None
+                ))
+                .map(|p| p.tag.as_str()),
+            Some("workestrate-pi:000000000000"),
+            "the home-context pointer NEVER flaps under an override build"
+        );
 
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())

@@ -998,7 +998,27 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // carries the --images-ready token and skips this entirely
             // (§2.2); a token-free foreground up/exec IS the parent and
             // ensures. `--reload-images` maps to force (§5.2).
-            if workestrate::images::ensure::ensure_should_run(verb, images_ready) {
+            //
+            // A2/A5 SEAM (ADR 0032 §Image tags — DECIDED 2026-08-24): when a
+            // per-workload inline override is PENDING (`workload up
+            // prime:feat-x`), this ordering is REORDERED — dep auto-start
+            // (unarmed, home-scoped deps) runs first, then
+            // arm_inline_override(), THEN the ensure — so the ensure sees
+            // the substituted config and tags/pointers under the OVERRIDE's
+            // tag context (image_tag_context: `workestrate-prime:feat-x:<sha>`,
+            // moving only the (name, "feat-x") pointer). With NO pending
+            // override today's order stands (fail-fast preserved). The
+            // decision is the pure images::ensure::ensure_after_arming; the
+            // reordered ensure call site is below the arming point.
+            let pending_override = workestrate::config::pending_inline_override().is_some();
+            let ensure_after_arming = workestrate::images::ensure::ensure_after_arming(
+                verb,
+                images_ready,
+                pending_override,
+            );
+            if workestrate::images::ensure::ensure_should_run(verb, images_ready)
+                && !ensure_after_arming
+            {
                 workestrate::images::ensure::ensure_images_for_workload(&name, reload_images)
                     .await?;
             }
@@ -1038,6 +1058,16 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // on a teardown/log config load.
             if workestrate::config::verb_arms_after_dep_autostart(verb) {
                 workestrate::config::arm_inline_override();
+            }
+            // A2/A5 SEAM (the reordered ensure call site — see the comment
+            // at the pre-flight above): a pending inline override on a
+            // parent up/exec ensures HERE, after arming, so the ensure's
+            // load_config sees the substituted declaration and its
+            // tags/pointers land under the override's tag context (ADR 0032
+            // §Image tags). No-op in every other shape.
+            if ensure_after_arming {
+                workestrate::images::ensure::ensure_images_for_workload(&name, reload_images)
+                    .await?;
             }
             overrides.extend(fresh_selections.iter().cloned());
             rewrite_action_for_resolved_instance(

@@ -282,8 +282,33 @@ impl ConfigWorkload {
             "registry" => self.workload.image.reference.clone(),
             "nix-layered" => {
                 let name = self.workload.image.name.as_deref().unwrap_or("");
-                let tag = self.workload.image.tag.as_deref().unwrap_or("latest");
-                Some(format!("{}:{}", name, tag))
+                let declared = self.workload.image.tag.as_deref().unwrap_or("latest");
+                // A2 (ADR 0032 §Image tags — DECIDED 2026-08-24): resolve
+                // through the state-dir current-pointer for
+                // (name, image_tag_context()). READ-ONLY (a cheap
+                // images.json load at plan time; never a write). MISS → the
+                // legacy `name:<declared-tag>` fallback (byte-identical
+                // pre-migration behavior — golden plans and
+                // not-yet-rebuilt homes keep working until their first
+                // post-upgrade ensure writes a pointer).
+                //
+                // Repo matching: `self.namespace` is the declaring
+                // config-repo identity (ADR 0030 P2 T1) — the registered
+                // repo NAME when the declaring layer is under a registered
+                // checkout (matching the pointer key's repo segment), or the
+                // "default" sentinel when no repo identity is resolvable
+                // (synthetic/single-file/unregistered layers). Pass it as
+                // the preference hint; resolve_image_tag falls back to a
+                // name+ctx scan across repos when the hint is absent or
+                // misses (unregistered repos key their pointers by
+                // canonical path, which the namespace never carries).
+                let state_dir = crate::config::resolve_state_dir();
+                let repo = (self.namespace
+                    != crate::microsandbox::port_registry::default_namespace())
+                .then_some(self.namespace.as_str());
+                Some(crate::images::state::resolve_image_tag(
+                    &state_dir, repo, name, declared,
+                ))
             }
             _ => None,
         }

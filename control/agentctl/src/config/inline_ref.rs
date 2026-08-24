@@ -225,7 +225,9 @@ pub fn arm_inline_override() {
 
 /// The armed `(workload, config_ref)` override, when one is live. Read by
 /// `load_config` (config/loading.rs) — the substitution applies ONLY when
-/// this returns `Some`.
+/// this returns `Some`. Also read by
+/// [`crate::images::state::image_tag_context`] (A2: the armed override ref
+/// IS the image tag/pointer context segment).
 pub(crate) fn armed_inline_override() -> Option<(String, String)> {
     let state = INLINE_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
     if state.armed {
@@ -233,6 +235,16 @@ pub(crate) fn armed_inline_override() -> Option<(String, String)> {
     } else {
         None
     }
+}
+
+/// The PENDING (not necessarily armed) `(workload, config_ref)` override,
+/// when one is recorded. main.rs reads this for the A2/A5 ensure-ordering
+/// seam ([`crate::images::ensure::ensure_after_arming`]): a pending override
+/// on `up`/`exec` moves the ensure pre-flight to AFTER dep auto-start +
+/// arming.
+pub fn pending_inline_override() -> Option<(String, String)> {
+    let state = INLINE_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
+    state.pending.clone()
 }
 
 /// Clear both phases. Production runs one command per process and never

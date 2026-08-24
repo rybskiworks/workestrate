@@ -11,16 +11,24 @@
 //! same-tag build" row): the winner's rebuild usually flips a waiter's
 //! verdict to [`SkewDecision::Skip`].
 
-/// Record state for a `<repo>#<tag>` key, derived by phase C from the
-/// drvPath/outPath comparison (spec §3.1).
+/// Record state for a `<repo>#<tag>` key, derived by phase C (spec §3.1).
+///
+/// A2 (ADR 0032 §Image tags): the key carries the COMPUTED content-
+/// addressed tag (`<repo>#<name:ctx:sha>`), so `Fresh` = "a record exists
+/// under the computed key" (presence IS freshness) and `Stale` is
+/// unreachable from the ensure/build flow — stale content computes a
+/// DIFFERENT tag and keys Absent. The variant remains for the documented
+/// §3.4 row-2 semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordState {
-    /// No record for this key in `images.json` (first run, or another home /
-    /// the old manual ritual loaded the tag — see the TRUST branch, D1).
+    /// No record for this key in `images.json` (first run, changed content
+    /// (a new tag), or another home / the old manual ritual loaded the tag —
+    /// see the TRUST branch, D1).
     Absent,
-    /// Record present; drvPath AND outPath match the current eval.
+    /// Record present under the computed content-addressed tag.
     Fresh,
-    /// Record present; drvPath or outPath differs from the current eval.
+    /// Record present; content differs from the current eval. Unreachable
+    /// under A2 content-addressed tags (kept for matrix completeness).
     Stale,
 }
 

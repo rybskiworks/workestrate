@@ -30,9 +30,14 @@
 //!    `--check` takes NO lock (read-only report);
 //! 3. consult the [`skew`] matrix (`skew.rs`) against the record in
 //!    [`state::ImagesState`] plus the msb store-tag presence
-//!    ([`detect::StoreProbe`]) and the drvPath eval ([`detect::DrvEvaluator`]);
-//! 4. on rebuild/trust, upsert the record and save `state/images.json`
-//!    (`state.rs`) INSIDE the lock (spec §3.3 atomicity).
+//!    ([`detect::StoreProbe`]) — keyed, under A2 (ADR 0032 §Image tags), by
+//!    the COMPUTED content-addressed tag from the eval-only outPath eval
+//!    ([`detect::DrvEvaluator`]);
+//! 4. on rebuild/trust, upsert the record AND the current-pointer
+//!    (A2: [`state::PointerRecord`] — the mutable per-context resolution
+//!    target replacing any mutable registry tag) and save
+//!    `state/images.json` (`state.rs`) INSIDE the lock (spec §3.3
+//!    atomicity).
 //!
 //! Two phase-B decisions, recorded here because they diverge from first-cut
 //! tasking (both spec-faithful):

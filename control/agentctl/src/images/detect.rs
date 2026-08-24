@@ -3,8 +3,10 @@
 //! Two seams, both trait-based so unit tests drive fakes while production
 //! uses the real backends:
 //!
-//! - [`DrvEvaluator`] — the eval-only §3.1 signal: `nix eval --raw
-//!   <flake_root>#<attr>.drvPath`. Eval-only means NO build is triggered and
+//! - [`DrvEvaluator`] — the eval-only §3.1 signals: `nix eval --raw
+//!   <flake_root>#<attr>.drvPath` (provenance) and, under A2,
+//!   `<attr>.outPath` (the content-addressed tag source). Eval-only means NO
+//!   build is triggered and
 //!   fakeHash placeholders eval fine (a placeholder FOD hash perturbs neither
 //!   the derivation structure nor its drvPath — the fixture test below proves
 //!   it with a fixed-output derivation carrying a placeholder hash, and the
@@ -21,10 +23,15 @@
 //!   matrix decides between present/gone, and "cannot tell" fails the
 //!   command.
 //!
-//! [`record_state_for`] derives the [`RecordState`] half of the skew matrix:
-//! phase C compares **drvPath only** — the outPath re-load gate (re-load only
-//! when the realized outPath differs) is phase D, and records written by
-//! phase C carry `out_path = ""` (unknown until the pipeline realizes it).
+//! [`record_state_for`] derives the [`RecordState`] half of the skew matrix.
+//! A2 (ADR 0032 §Image tags — DECIDED 2026-08-24): the freshness signal is
+//! the CONTENT-ADDRESSED tag — `nix eval --raw <flake>#<attr>.outPath`
+//! (eval-only, no build) decides the `<name>:<ctx>:<sha>` store tag BEFORE
+//! the store probe, and a record under that computed key is Fresh by
+//! construction. The drvPath eval is still recorded for provenance (spec §8)
+//! but no longer drives the decision; the outPath re-load gate (re-load only
+//! when the realized outPath differs, e.g. out-of-band tag deletion) stays
+//! phase D.
 
 use std::path::{Path, PathBuf};
 
@@ -65,10 +72,18 @@ impl std::fmt::Display for DrvEvalError {
 
 impl std::error::Error for DrvEvalError {}
 
-/// The drvPath-eval seam. `&mut self` so fakes can record calls.
+/// The drvPath/outPath-eval seam. `&mut self` so fakes can record calls.
 pub trait DrvEvaluator {
     /// `nix eval --raw <flake_root>#<attr>.drvPath` — eval-only (no build).
+    /// Recorded for provenance/diagnostics (spec §8 `drv_path`); no longer
+    /// the freshness signal (A2: the content-addressed tag is).
     fn eval_drv_path(&mut self, flake_root: &Path, attr: &str) -> Result<String, DrvEvalError>;
+
+    /// `nix eval --raw <flake_root>#<attr>.outPath` — eval-only (no build).
+    /// A2 (ADR 0032 §Image tags): the evaluated outPath decides the
+    /// content-addressed store tag BEFORE any store probe (unchanged inputs
+    /// → same outPath → same tag → Present → skip).
+    fn eval_out_path(&mut self, flake_root: &Path, attr: &str) -> Result<String, DrvEvalError>;
 }
 
 /// Real backend: the `nix` CLI. `program` is injectable so tests can point
@@ -98,9 +113,17 @@ impl Default for NixCliEvaluator {
     }
 }
 
-impl DrvEvaluator for NixCliEvaluator {
-    fn eval_drv_path(&mut self, flake_root: &Path, attr: &str) -> Result<String, DrvEvalError> {
-        let reference = format!("{}#{}.drvPath", flake_root.display(), attr);
+impl NixCliEvaluator {
+    /// Shared `nix eval --raw <flake_root>#<attr>.<suffix>` spawn (eval-only,
+    /// hermetic against the ambient nix config and cwd — see the comment at
+    /// the Command construction).
+    fn eval_raw(
+        &self,
+        flake_root: &Path,
+        attr: &str,
+        suffix: &str,
+    ) -> Result<String, DrvEvalError> {
+        let reference = format!("{}#{}{}", flake_root.display(), attr, suffix);
         // `--extra-experimental-features` is passed EXPLICITLY (additive — a
         // user nix.conf that already enables them is unaffected) so the eval
         // is hermetic against the ambient nix config: the fixture tests run
@@ -142,26 +165,40 @@ impl DrvEvaluator for NixCliEvaluator {
             }
             return Err(DrvEvalError::EvalFailed { detail: stderr });
         }
-        let drv = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if drv.is_empty() {
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if value.is_empty() {
             return Err(DrvEvalError::EvalFailed {
-                detail: format!("nix eval {reference} succeeded but printed an empty drvPath"),
+                detail: format!("nix eval {reference} succeeded but printed an empty value"),
             });
         }
-        Ok(drv)
+        Ok(value)
     }
 }
 
-/// Derive the record half of the skew matrix (spec §3.4): Absent when no
-/// record exists for the key; Fresh when the recorded drvPath matches the
-/// current eval; Stale otherwise. **drvPath is THE §3.1 signal in phase C** —
-/// the outPath re-load gate is phase D, so a record whose `out_path` is still
-/// `""` (phase-C trust record) is Fresh as long as its drvPath matches.
-pub fn record_state_for(record: Option<&ImageRecord>, current_drv: &str) -> RecordState {
+impl DrvEvaluator for NixCliEvaluator {
+    fn eval_drv_path(&mut self, flake_root: &Path, attr: &str) -> Result<String, DrvEvalError> {
+        self.eval_raw(flake_root, attr, ".drvPath")
+    }
+
+    fn eval_out_path(&mut self, flake_root: &Path, attr: &str) -> Result<String, DrvEvalError> {
+        self.eval_raw(flake_root, attr, ".outPath")
+    }
+}
+
+/// Derive the record half of the skew matrix (spec §3.4) for the
+/// A2 content-addressed tag scheme (ADR 0032 §Image tags): the caller looks
+/// up the record for the COMPUTED tag (`<repo>#<name:ctx:sha>`), so record
+/// PRESENCE is the freshness signal — a record under that key exists only
+/// when exactly this content was built+loaded (or D1-trusted). `Absent`
+/// when no record exists for the key (first run, changed content → a new
+/// tag, or another home loaded it — see the TRUST branch, D1); `Fresh`
+/// otherwise. [`RecordState::Stale`] is unreachable under content-addressed
+/// tags (stale content keys under a DIFFERENT tag) and remains only in the
+/// matrix for the documented row-2 semantics.
+pub fn record_state_for(record: Option<&ImageRecord>) -> RecordState {
     match record {
         None => RecordState::Absent,
-        Some(r) if r.drv_path == current_drv => RecordState::Fresh,
-        Some(_) => RecordState::Stale,
+        Some(_) => RecordState::Fresh,
     }
 }
 
@@ -240,10 +277,14 @@ pub mod test_fakes {
     use std::collections::VecDeque;
 
     /// Queue-driven fake evaluator: each call pops one queued response and
-    /// records the (flake_root, attr) call.
+    /// records the (flake_root, attr) call. drvPath and outPath evals have
+    /// SEPARATE queues (`responses`/`calls` vs `out_responses`/`out_calls`)
+    /// so tests drive the A2 out-path-first flow deterministically.
     pub struct FakeEvaluator {
         pub responses: VecDeque<Result<String, DrvEvalError>>,
         pub calls: Vec<(PathBuf, String)>,
+        pub out_responses: VecDeque<Result<String, DrvEvalError>>,
+        pub out_calls: Vec<(PathBuf, String)>,
     }
 
     impl FakeEvaluator {
@@ -251,6 +292,8 @@ pub mod test_fakes {
             Self {
                 responses: VecDeque::new(),
                 calls: Vec::new(),
+                out_responses: VecDeque::new(),
+                out_calls: Vec::new(),
             }
         }
 
@@ -260,6 +303,14 @@ pub mod test_fakes {
 
         pub fn push_err(&mut self, err: DrvEvalError) {
             self.responses.push_back(Err(err));
+        }
+
+        pub fn push_out_ok(&mut self, out_path: &str) {
+            self.out_responses.push_back(Ok(out_path.to_string()));
+        }
+
+        pub fn push_out_err(&mut self, err: DrvEvalError) {
+            self.out_responses.push_back(Err(err));
         }
     }
 
@@ -276,6 +327,14 @@ pub mod test_fakes {
             self.responses
                 .pop_front()
                 .expect("FakeEvaluator: no queued response")
+        }
+
+        fn eval_out_path(&mut self, flake_root: &Path, attr: &str) -> Result<String, DrvEvalError> {
+            self.out_calls
+                .push((flake_root.to_path_buf(), attr.to_string()));
+            self.out_responses
+                .pop_front()
+                .expect("FakeEvaluator: no queued out_path response")
         }
     }
 
@@ -333,7 +392,7 @@ mod tests {
     use super::*;
     use crate::config::test_support::uniq_dir;
 
-    // ---- record_state_for (the drvPath-only freshness predicate) ----
+    // ---- record_state_for (the A2 presence-based freshness predicate) ----
 
     fn record_with_drv(drv: &str) -> ImageRecord {
         ImageRecord {
@@ -343,11 +402,10 @@ mod tests {
                 flake_root: PathBuf::from("/tmp/repo"),
             },
             attr: "workestrate-pi".to_string(),
-            tag: "workestrate-pi:latest".to_string(),
+            tag: "workestrate-pi:abcdefghijkl".to_string(),
             drv_path: drv.to_string(),
-            // A phase-C trust record: out_path unknown until phase D. The
-            // freshness predicate must NOT consult it (drvPath-only, §3.1).
-            out_path: String::new(),
+            out_path: "/nix/store/abcdefghijklmnopqrstuvwxyz012345-workestrate-pi.tar.gz"
+                .to_string(),
             digest: None,
             built_at: "2026-08-02T10:15:00Z".to_string(),
             loaded_at: "2026-08-02T10:15:00Z".to_string(),
@@ -357,19 +415,18 @@ mod tests {
         }
     }
 
+    /// A2 (ADR 0032 §Image tags): the caller keys the lookup by the COMPUTED
+    /// content-addressed tag, so record presence IS freshness — drvPath is
+    /// no longer consulted (a drv-text churn with unchanged outPath yields
+    /// the same tag and must Skip, not rebuild).
     #[test]
-    fn record_state_absent_fresh_stale() {
-        assert_eq!(record_state_for(None, "drv-A"), RecordState::Absent);
+    fn record_state_absent_or_fresh_by_presence() {
+        assert_eq!(record_state_for(None), RecordState::Absent);
         let record = record_with_drv("drv-A");
         assert_eq!(
-            record_state_for(Some(&record), "drv-A"),
+            record_state_for(Some(&record)),
             RecordState::Fresh,
-            "drvPath match → Fresh even with an empty out_path (phase-C trust record)"
-        );
-        assert_eq!(
-            record_state_for(Some(&record), "drv-B"),
-            RecordState::Stale,
-            "drvPath drift → Stale"
+            "a record under the computed tag is Fresh regardless of drv text"
         );
     }
 
@@ -381,6 +438,11 @@ mod tests {
     fn unspawnable_nix_maps_to_nix_absent() {
         let mut eval = NixCliEvaluator::with_program("/definitely/not/on/path/nix");
         match eval.eval_drv_path(Path::new("/tmp/repo"), "workestrate-pi") {
+            Err(DrvEvalError::NixAbsent) => {}
+            other => panic!("expected NixAbsent, got {other:?}"),
+        }
+        // The A2 outPath eval maps identically (same spawn path).
+        match eval.eval_out_path(Path::new("/tmp/repo"), "workestrate-pi") {
             Err(DrvEvalError::NixAbsent) => {}
             other => panic!("expected NixAbsent, got {other:?}"),
         }
@@ -464,6 +526,33 @@ mod tests {
             .eval_drv_path(&dir, &fod_attr)
             .expect("eval-only drvPath must work with a placeholder FOD hash");
         assert!(fod.ends_with(".drv"));
+
+        // A2: the outPath eval (the content-addressed tag source) is
+        // eval-only too — succeeds with zero network, is stable across
+        // repeat evals, and yields a /nix/store/<hash>-<name> shape whose
+        // 12-char hash prefix feeds compute_image_tag.
+        let out = eval
+            .eval_out_path(&dir, &plain_attr)
+            .expect("outPath eval must succeed with zero network inputs");
+        assert!(
+            out.starts_with("/nix/store/") && !out.ends_with(".drv"),
+            "unexpected outPath shape: {out}"
+        );
+        assert_eq!(
+            crate::images::state::store_hash_prefix(&out).map(|s| s.len()),
+            Some(crate::images::state::OUT_PATH_HASH_PREFIX_LEN),
+            "the fixture out_path has a >=12-char store-hash segment: {out}"
+        );
+        let out2 = eval
+            .eval_out_path(&dir, &plain_attr)
+            .expect("re-eval outPath");
+        assert_eq!(out, out2, "outPath must be stable across repeat evals");
+        // fakeHash placeholder FOD: outPath evals WITHOUT realizing the hash
+        // (the tag tracks the placeholder until update-hashes fills it).
+        let fod_out = eval
+            .eval_out_path(&dir, &fod_attr)
+            .expect("eval-only outPath must work with a placeholder FOD hash");
+        assert!(fod_out.starts_with("/nix/store/"));
 
         // Editing the derivation definition changes the drvPath — THE
         // change-detection signal.

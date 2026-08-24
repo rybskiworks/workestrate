@@ -27,11 +27,14 @@
 //!   named-workload/batch scoped (USER DECISION D3), so deps get the plain
 //!   skew matrix, not the force.
 //!
-//! Ordering (§2.4): `main.rs` ensures the NAMED workload BEFORE
+//! Ordering (§2.4 + A2/A5 seam): `main.rs` ensures the NAMED workload BEFORE
 //! `auto_start_dependencies` runs — fail fast on the workload the operator
 //! actually asked for before spending minutes starting its dep closure.
-//! The bare-up batch ensures ALL starts before ANY spawn
-//! (`cmd_workload_up_all`).
+//! EXCEPTION (A2, ADR 0032 §Image tags): when a per-workload inline override
+//! is pending, the named ensure runs AFTER dep auto-start + arming so it
+//! sees the substituted config and tags under the override's tag context —
+//! see [`ensure_after_arming`]. The bare-up batch ensures ALL starts before
+//! ANY spawn (`cmd_workload_up_all`).
 //!
 //! §7 degradation is inherited verbatim from `process_target` (nix absent +
 //! tag present → proceed with a stderr note; nix absent + tag missing →
@@ -57,6 +60,21 @@ use crate::images::pipeline::{ImageBuilder, ImageLoader, MsbCliLoader, NixCliBui
 /// detached child (token present) never ensures.
 pub fn ensure_should_run(verb: &str, images_ready: bool) -> bool {
     matches!(verb, "up" | "exec") && !images_ready
+}
+
+/// A2/A5 seam (ADR 0032 §Image tags — DECIDED 2026-08-24; pure): when a
+/// per-workload inline override is PENDING, the ensure pre-flight must run
+/// AFTER `auto_start_dependencies` + `arm_inline_override` (not in its
+/// historic pre-auto-start fail-fast slot) so the ensure sees the
+/// SUBSTITUTED config and tags/pointers under the OVERRIDE's tag context
+/// ([`crate::images::state::image_tag_context`]). With no pending override
+/// the historic order stands (fail-fast preserved). The detached child
+/// (`images_ready` token) and non-start verbs never reorder — they never
+/// ensure at all.
+pub fn ensure_after_arming(verb: &str, images_ready: bool, pending_override: bool) -> bool {
+    pending_override
+        && crate::config::verb_arms_after_dep_autostart(verb)
+        && ensure_should_run(verb, images_ready)
 }
 
 /// Ensure the named workload's nix-layered images are built+loaded+recorded
@@ -123,7 +141,7 @@ pub async fn ensure_resolved<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L:
         let report = process_target(target, state_dir, false, force, &mut *seams).await?;
         eprintln!(
             "ensure-images: {}: {} — {}",
-            target.tag, report.decision, report.action_taken
+            report.tag, report.decision, report.action_taken
         );
     }
     Ok(())
@@ -271,6 +289,16 @@ gating_file = "package-lock.json"
 
     // ---- the seam-driven ensure core ----
 
+    /// Pin the A2 tag context to None for the duration of a flow test (the
+    /// computed tags asserted below are the two-segment `<name>:<sha>`
+    /// form only when no context/override leaks from a parallel test).
+    fn pin_no_tag_context() -> std::sync::MutexGuard<'static, ()> {
+        let lock = ENV_TEST_LOCK.lock().unwrap();
+        crate::config::set_active_context(None);
+        crate::config::clear_inline_override();
+        lock
+    }
+
     fn target_fixture(label: &str, name: &str) -> (PathBuf, BuildTarget) {
         let tmp = unique_state_dir(label);
         let checkout = tmp.join("checkout");
@@ -290,8 +318,18 @@ gating_file = "package-lock.json"
         (tmp, target)
     }
 
-    fn fake_eval_with(drv: &str) -> FakeEvaluator {
+    /// A2 fixtures: evaluated out_paths per test target and their computed
+    /// tags (ctx=None).
+    const OUT_A: &str = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-img-alpha.tar.gz";
+    const OUT_B: &str = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-img-beta.tar.gz";
+    const TAG_A: &str = "img-alpha:aaaaaaaaaaaa";
+    const TAG_B: &str = "img-beta:bbbbbbbbbbbb";
+
+    /// Fake evaluator queued for one target pass: the A2 out_path eval
+    /// (popped FIRST, decides the tag) then the drvPath eval (provenance).
+    fn fake_eval(out: &str, drv: &str) -> FakeEvaluator {
         let mut e = FakeEvaluator::new();
+        e.push_out_ok(out);
         e.push_ok(drv);
         e
     }
@@ -299,15 +337,18 @@ gating_file = "package-lock.json"
     /// D3 batch force scope at the ensure seam: force=true flips EVERY
     /// eligible target in the batch to a forced rebuild (not just the
     /// first, not just a named one) — both pipelines run, both records
-    /// land.
+    /// land, both pointers move.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn batch_force_applies_to_every_eligible_target() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp_a, target_a) = target_fixture("ensure-force-a", "alpha");
         let (tmp_b, target_b) = target_fixture("ensure-force-b", "beta");
         let state_dir = unique_state_dir("ensure-force-state");
 
         // Per target: skew probe (present) → rebuild forced → pipeline
-        // pre-gate probe (present; out_path="" → load) → post-load probe.
+        // pre-gate probe (present; no record under the computed key → load)
+        // → post-load probe.
         let mut probe = FakeStoreProbe::new();
         for _ in 0..2 {
             probe.push(StoreTag::Present);
@@ -315,11 +356,13 @@ gating_file = "package-lock.json"
             probe.push(StoreTag::Present);
         }
         let mut eval = FakeEvaluator::new();
+        eval.push_out_ok(OUT_A);
         eval.push_ok("drv-A");
+        eval.push_out_ok(OUT_B);
         eval.push_ok("drv-B");
         let mut builder = FakeBuilder::new();
-        builder.push_ok("/nix/store/out-A.tar.gz");
-        builder.push_ok("/nix/store/out-B.tar.gz");
+        builder.push_ok(OUT_A);
+        builder.push_ok(OUT_B);
         let mut loader = FakeLoader::new();
         loader.push_ok();
         loader.push_ok();
@@ -344,13 +387,25 @@ gating_file = "package-lock.json"
             "BOTH targets force-rebuild+load (D3 batch scope): {:?}",
             loader.calls
         );
-        for (target, drv) in [(&target_a, "drv-A"), (&target_b, "drv-B")] {
-            let key = image_key("personal", &target.tag);
+        for (target, tag, drv) in [(&target_a, TAG_A, "drv-A"), (&target_b, TAG_B, "drv-B")] {
+            let key = image_key("personal", tag);
             let state = ImagesState::load(&state_dir);
             let record = state
                 .lookup(&key)
-                .unwrap_or_else(|| panic!("record written for {}", target.tag));
+                .unwrap_or_else(|| panic!("record written for {tag}"));
             assert_eq!(record.drv_path, drv);
+            assert_eq!(
+                state
+                    .lookup_pointer(&crate::images::state::pointer_key(
+                        "personal",
+                        &target.attr,
+                        None
+                    ))
+                    .map(|p| p.tag.as_str()),
+                Some(tag),
+                "the pointer moved for {}",
+                target.name
+            );
         }
 
         let _ = std::fs::remove_dir_all(&tmp_a);
@@ -359,17 +414,21 @@ gating_file = "package-lock.json"
         Ok(())
     }
 
-    /// Plain (unforced) batch ensure: D1 trust records the baseline, a
-    /// second pass skips — the batch does NOT rebuild without the force.
+    /// Plain (unforced) batch ensure: D1 trust records the baseline AND moves
+    /// the pointer; a second pass hits the content-addressed skip — the batch
+    /// does NOT rebuild without the force.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn unforced_batch_trusts_then_skips() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp_a, target_a) = target_fixture("ensure-plain-a", "alpha");
         let state_dir = unique_state_dir("ensure-plain-state");
 
-        // Pass 1: absent record + tag present → D1 trust+record (no build).
+        // Pass 1: absent record (under the computed tag) + tag present →
+        // D1 trust+record (no build).
         let mut probe1 = FakeStoreProbe::new();
         probe1.push(StoreTag::Present);
-        let mut eval1 = fake_eval_with("drv-A");
+        let mut eval1 = fake_eval(OUT_A, "drv-A");
         let (mut builder1, mut loader1) = (FakeBuilder::new(), FakeLoader::new());
         let mut seams1 = TargetSeams {
             probe: &mut probe1,
@@ -387,10 +446,11 @@ gating_file = "package-lock.json"
         assert!(loader1.calls.is_empty(), "D1 trust never builds");
         assert!(images_state_path(&state_dir).exists());
 
-        // Pass 2: fresh record → skip; the pipeline seams stay untouched.
+        // Pass 2: same evaluated out_path → same computed tag → fresh record
+        // → content-addressed skip; the pipeline seams stay untouched.
         let mut probe2 = FakeStoreProbe::new();
         probe2.push(StoreTag::Present);
-        let mut eval2 = fake_eval_with("drv-A");
+        let mut eval2 = fake_eval(OUT_A, "drv-A");
         let (mut builder2, mut loader2) = (FakeBuilder::new(), FakeLoader::new());
         let mut seams2 = TargetSeams {
             probe: &mut probe2,
@@ -415,8 +475,12 @@ gating_file = "package-lock.json"
     /// §7 degradation ladder through the ensure seam: nix absent + tag
     /// present → Ok (degrade with a note, no record); nix absent + tag
     /// missing → HARD ERROR with the install-nix / manual-load remediation.
+    /// A2: the out_path eval fails first, so the ladder probes the legacy
+    /// declared tag (no pointer exists in these fixtures).
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn nix_absent_ladder_degrades_or_hard_errors() -> Result<()> {
+        let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("ensure-nix-absent", "pi");
         let state_dir = unique_state_dir("ensure-nix-absent-state");
 
@@ -424,7 +488,7 @@ gating_file = "package-lock.json"
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Present);
         let mut eval = FakeEvaluator::new();
-        eval.push_err(DrvEvalError::NixAbsent);
+        eval.push_out_err(DrvEvalError::NixAbsent);
         let (mut builder, mut loader) = (FakeBuilder::new(), FakeLoader::new());
         let mut seams = TargetSeams {
             probe: &mut probe,
@@ -442,7 +506,7 @@ gating_file = "package-lock.json"
         let mut probe = FakeStoreProbe::new();
         probe.push(StoreTag::Gone);
         let mut eval = FakeEvaluator::new();
-        eval.push_err(DrvEvalError::NixAbsent);
+        eval.push_out_err(DrvEvalError::NixAbsent);
         let (mut builder, mut loader) = (FakeBuilder::new(), FakeLoader::new());
         let mut seams = TargetSeams {
             probe: &mut probe,
@@ -456,6 +520,119 @@ gating_file = "package-lock.json"
         let msg = err.to_string();
         assert!(msg.contains("install nix"), "remediation: {msg}");
         assert!(msg.contains("load-images"), "ritual pointer: {msg}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- A2: the ensure-ordering decision (main.rs A5 seam) ----
+
+    /// `ensure_after_arming` (pure): the ensure pre-flight moves to AFTER
+    /// `auto_start_dependencies` + `arm_inline_override` ONLY when a pending
+    /// inline override exists on a start verb in the parent (no detach
+    /// token). Every other shape keeps the historic pre-auto-start fail-fast
+    /// order.
+    #[test]
+    fn ensure_after_arming_only_for_pending_override_on_parent_start_verbs() {
+        // Pending override + up/exec + parent → reorder.
+        assert!(ensure_after_arming("up", false, true));
+        assert!(ensure_after_arming("exec", false, true));
+        // The detached child (token) never ensures — never reorders.
+        assert!(!ensure_after_arming("up", true, true));
+        assert!(!ensure_after_arming("exec", true, true));
+        // No pending override → today's order stands (fail-fast preserved).
+        assert!(!ensure_after_arming("up", false, false));
+        assert!(!ensure_after_arming("exec", false, false));
+        // Non-start verbs never ensure.
+        for verb in ["plan", "down", "logs", "build"] {
+            assert!(!ensure_after_arming(verb, false, true), "{verb}");
+            assert!(!ensure_after_arming(verb, false, false), "{verb}");
+        }
+    }
+
+    // ---- A2: ensure → pointer → plan-time resolution (fake seams) ----
+
+    /// Legacy state (no `pointers` key) resolves to the declared tag; after
+    /// an ensure pass with the fake seams builds+loads, the pointer exists
+    /// and plan-time resolution returns the content-addressed sha tag.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
+    async fn legacy_state_falls_back_then_ensure_pointer_resolves_sha_tag() -> Result<()> {
+        let _guard = pin_no_tag_context();
+        let (tmp, target) = target_fixture("ensure-pointer", "alpha");
+        let state_dir = unique_state_dir("ensure-pointer-state");
+
+        // Seed a LEGACY images.json: a record under the old declared-tag key,
+        // NO pointers key at all (serde-default migration).
+        let legacy_json = format!(
+            r#"{{"version": 1, "images": {{"personal#img-alpha:latest": {{
+              "repo": {{"name": "personal", "path": "{}", "flake_root": "{}"}},
+              "attr": "img-alpha", "tag": "img-alpha:latest",
+              "drv_path": "/nix/store/old.drv", "out_path": "", "digest": null,
+              "built_at": "2026-08-02T10:15:00Z", "loaded_at": "2026-08-02T10:16:12Z",
+              "loader": "workestrate 0.1.0", "host": "devbox", "user": "node"
+            }}}}}}"#,
+            tmp.join("checkout").display(),
+            tmp.join("checkout").display()
+        );
+        std::fs::create_dir_all(&state_dir)?;
+        std::fs::write(images_state_path(&state_dir), legacy_json)?;
+
+        // Pre-migration resolution: pointer MISS → legacy declared tag
+        // (byte-identical pre-migration behavior — golden plans stay green).
+        assert_eq!(
+            crate::images::state::resolve_image_tag(
+                &state_dir,
+                Some("personal"),
+                "img-alpha",
+                "latest"
+            ),
+            "img-alpha:latest"
+        );
+        // The legacy record does NOT satisfy the computed-tag lookup: the
+        // ensure pass builds (absent record under TAG_A + absent tag).
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Gone); // skew probe for the computed tag
+        probe.push(StoreTag::Gone); // pipeline pre-gate probe
+        probe.push(StoreTag::Present); // post-load verification
+        let mut eval = fake_eval(OUT_A, "drv-A");
+        let mut builder = FakeBuilder::new();
+        builder.push_ok(OUT_A);
+        let mut loader = FakeLoader::new();
+        loader.push_ok();
+        let mut seams = TargetSeams {
+            probe: &mut probe,
+            eval: &mut eval,
+            builder: &mut builder,
+            loader: &mut loader,
+        };
+        ensure_resolved(std::slice::from_ref(&target), &state_dir, false, &mut seams).await?;
+
+        // Post-migration: the pointer exists and resolution returns the sha
+        // tag. The legacy record is untouched (immutable records per tag).
+        let state = ImagesState::load(&state_dir);
+        assert!(state.lookup("personal#img-alpha:latest").is_some());
+        assert_eq!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal",
+                    "img-alpha",
+                    None
+                ))
+                .map(|p| p.tag.as_str()),
+            Some(TAG_A)
+        );
+        assert_eq!(
+            crate::images::state::resolve_image_tag(
+                &state_dir,
+                Some("personal"),
+                "img-alpha",
+                "latest"
+            ),
+            TAG_A,
+            "resolution returns the content-addressed tag once the pointer exists"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
