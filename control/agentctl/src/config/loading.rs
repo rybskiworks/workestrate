@@ -39,6 +39,18 @@
 //! §3b): provenance strings stay `<repo>#<relpath>` and `layer_dirs` point
 //! at the content root — only the physical location moves to the archive
 //! dir for pinned entries.
+//!
+//! ## A5 Session 3b: the per-workload inline `name:ref` override
+//! (ADR 0032 addendum §Selection ladder rung 3)
+//!
+//! When the process-global inline override is ARMED (see
+//! [`crate::config::inline_ref`] for the two-phase pending/armed model),
+//! [`load_config`] substitutes the named workload's declaration at the
+//! override ref from its DECLARING repo's pinned archive —
+//! [`apply_inline_override_substitution`], applied after the home-scoped
+//! merge and before validation. Deps NEVER follow the override in v1: the
+//! pending-but-not-armed load (dependency auto-start's view) is
+//! byte-identical to no override.
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -327,6 +339,16 @@ pub fn load_config() -> Result<ConfigFile> {
     if let Ok(dir) = std::env::var("WORKESTRATE_CONFIG_DIR") {
         let path = PathBuf::from(dir).join("workestrate.toml");
         if path.exists() {
+            // A5 Session 3b: a single dev layer has no declaring config
+            // repo, so an inline ref override can never substitute into it —
+            // fail closed rather than silently ignore the override.
+            if crate::config::inline_ref::armed_inline_override().is_some() {
+                anyhow::bail!(
+                    "inline ref overrides (name:ref) are not supported with \
+                     WORKESTRATE_CONFIG_DIR (a single dev layer has no declaring \
+                     config repo)"
+                );
+            }
             set_active_context(None);
             let layer = crate::merge::Layer::load("local", &path)?;
             let collected = collect_policy_scopes(None, std::slice::from_ref(&layer))?;
@@ -437,8 +459,26 @@ pub fn load_config() -> Result<ConfigFile> {
         anyhow::bail!("no config found; run 'workestrate init' or set WORKESTRATE_CONFIG_DIR");
     }
 
-    let layer_dirs = crate::merge::layer_dirs_from(&layers);
-    let (merged, provenance) = crate::merge::merge_layers(&layers)?;
+    let mut layer_dirs = crate::merge::layer_dirs_from(&layers);
+    let (mut merged, mut provenance) = crate::merge::merge_layers(&layers)?;
+    // A5 Session 3b (ADR 0032 addendum §Selection ladder rung 3): the ARMED
+    // inline `name:ref` override substitutes the named workload's
+    // declaration at `<ref>` from its declaring repo's pinned archive —
+    // AFTER the home-scoped merge (deps never follow the override), BEFORE
+    // validation (the post-substitution config is what validate_config and
+    // the dependent's ConfigWorkload see). PENDING-but-not-armed (dep
+    // auto-start's view) leaves the merged config byte-identical to no
+    // override.
+    if let Some((workload, config_ref)) = crate::config::inline_ref::armed_inline_override() {
+        apply_inline_override_substitution(
+            &mut merged,
+            &mut provenance,
+            &mut layer_dirs,
+            registry.as_ref(),
+            &workload,
+            &config_ref,
+        )?;
+    }
     crate::mount_policy::set_collected_policy(Some(collect_policy_scopes(
         registry.as_ref(),
         &layers,
@@ -447,6 +487,150 @@ pub fn load_config() -> Result<ConfigFile> {
     crate::merge::set_layer_dirs(Some(layer_dirs));
     validate_config(&merged)?;
     Ok(merged)
+}
+
+/// Apply the ARMED inline `name:ref` override (A5 Session 3b): replace
+/// `merged.workloads[workload]` with the workload's declaration at
+/// `config_ref` from its DECLARING repo's pinned archive, and repoint the
+/// declaring layer's content root at the archive (so repo-relative mount /
+/// seed_file resolution — the F1 machinery — resolves against the ref's
+/// content). Everything else stays home-scoped (or `--config-ref`-scoped:
+/// the inline ref wins over `--config-ref` for THIS workload's declaring
+/// repo only; every other layer was already loaded by the caller).
+///
+/// Fail-closed rules:
+///
+/// - Workload ABSENT from the merged config: leave everything untouched —
+///   the existing "workload not found in config" error fires downstream,
+///   unmasked.
+/// - Declaring repo not determinable from the merge provenance (e.g. the
+///   workload is declared by the trusted-project layer, not a registry
+///   config repo): hard error.
+/// - Declaring repo is a PlainPath entry: hard error (content-as-is has no
+///   refs — inline overrides require a git-backed repo).
+/// - The ref does not resolve in the managed clone, or the workload does
+///   not exist at that ref: hard errors naming repo+ref / workload+ref+repo.
+fn apply_inline_override_substitution(
+    merged: &mut ConfigFile,
+    provenance: &mut crate::merge::Provenance,
+    layer_dirs: &mut std::collections::HashMap<String, PathBuf>,
+    registry: Option<&Registry>,
+    workload: &str,
+    config_ref: &str,
+) -> Result<()> {
+    use crate::config::registry::ConfigSourceKind;
+
+    // Unknown workload at HOME scope: do not mask today's existing error.
+    if !merged.workloads.contains_key(workload) {
+        return Ok(());
+    }
+
+    // The declaring repo = the repo component of the provenance path that
+    // declared the workload (`<repo>#<relpath>` for directory-mode
+    // pseudo-layers, `<repo>` for single-file registry layers). Prefer the
+    // `kind` field's provenance; fall back to the lexicographically-first
+    // `workloads.<name>.*` key for determinism.
+    let prefix = format!("workloads.{workload}.");
+    let declaring_layer = provenance
+        .get(&format!("workloads.{workload}.kind"))
+        .or_else(|| provenance.keys().filter(|k| k.starts_with(&prefix)).min())
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot determine the declaring config repo of workload '{workload}' \
+                 (no merge provenance recorded); inline ref overrides require a \
+                 registered config repo"
+            )
+        })?;
+    let repo = declaring_layer
+        .split('#')
+        .next()
+        .unwrap_or(&declaring_layer)
+        .to_string();
+    let registry = registry.ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot determine the declaring config repo of workload '{workload}': no home \
+             registry; inline ref overrides require a git-backed registry config repo"
+        )
+    })?;
+    let entry = registry.configs.get(&repo).ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot determine the declaring config repo of workload '{workload}': \
+             provenance layer '{declaring_layer}' is not a registered config repo; \
+             inline ref overrides require a git-backed registry config repo"
+        )
+    })?;
+    if crate::config::source_kind(&entry.url) == ConfigSourceKind::PlainPath {
+        anyhow::bail!(
+            "inline ref overrides require a git-backed config repo; '{repo}' is a \
+             local path source (url '{}'; content-as-is has no refs)",
+            entry.url
+        );
+    }
+    let clone = resolve_store_dir().join("config-repos").join(&repo);
+    if !clone.join(".git").exists() {
+        anyhow::bail!(
+            "config repo '{}' (url '{}') has no managed clone at {}; \
+             provision it with `workestrate config add` or `workestrate home clone`",
+            repo,
+            entry.url,
+            clone.display()
+        );
+    }
+    let archive = refs_map_locked_archive(
+        &repo,
+        entry,
+        registry,
+        &clone,
+        config_ref,
+        "inline override",
+    )?;
+
+    // Load ONLY the named workload at the ref (capsule-only substitution):
+    // the directory-mode capsule <archive>/workestrate/workloads/<name>/
+    // workload.toml (bare table form — the existing capsule parsing), else
+    // the single-file mode <archive>/workestrate.toml's [workloads.<name>].
+    let capsule_dir = archive.join("workestrate").join("workloads").join(workload);
+    let layer = if capsule_dir.join("workload.toml").is_file() {
+        load_workload_entry(
+            &repo,
+            workload,
+            &capsule_dir,
+            &mut std::collections::HashMap::new(),
+        )?
+    } else {
+        let file = archive.join("workestrate.toml");
+        if !file.is_file() {
+            anyhow::bail!(
+                "workload '{workload}' does not exist at ref '{config_ref}' in repo '{repo}'"
+            );
+        }
+        crate::merge::Layer::load(&repo, &file)?
+    };
+    let Some(substituted) = layer.config.workloads.get(workload).cloned() else {
+        anyhow::bail!(
+            "workload '{workload}' does not exist at ref '{config_ref}' in repo '{repo}'"
+        );
+    };
+
+    // Per-field provenance for the substituted declaration (a one-layer
+    // merge reproduces exactly the provenance keys the layer declares).
+    let (_sub_cfg, sub_provenance) = crate::merge::merge_layers(std::slice::from_ref(&layer))?;
+
+    merged.workloads.insert(workload.to_string(), substituted);
+    let exact = format!("workloads.{workload}");
+    provenance.retain(|k, _| *k != exact && !k.starts_with(&prefix));
+    for (key, layer_name) in sub_provenance {
+        if key == exact || key.starts_with(&prefix) {
+            provenance.insert(key, layer_name);
+        }
+    }
+    // The declaring layer's content root moves to the archive dir so F1
+    // repo-relative resolution resolves against the ref's content. Only the
+    // substituted layer's keys are replaced — other layers of the same repo
+    // stay home-scoped.
+    layer_dirs.extend(crate::merge::layer_dirs_from(std::slice::from_ref(&layer)));
+    Ok(())
 }
 
 /// Collect policy fragments in the loader's actual order. This deliberately
@@ -675,6 +859,35 @@ fn config_ref_layer_content_root(
     clone: &Path,
     config_ref: &str,
 ) -> Result<PathBuf> {
+    refs_map_locked_archive(name, entry, registry, clone, config_ref, "--config-ref")
+}
+
+/// Shared refs-map resolution behind [`config_ref_layer_content_root`]
+/// (the `--config-ref` rung) and the A5 Session 3b inline `name:ref`
+/// override substitution: resolve `ref_` for repo `name` to the
+/// content-addressed archive of its sha, keyed into the entry's REFS MAP.
+///
+/// 1. The lock's `refs[ref_]` pin for `(name, ref_)`: SILENT and write-free
+///    — already locked. (The PRIMARY pin and the registry's recorded `rev`
+///    are deliberately NOT consulted: an override replaces the entry's ref
+///    selection wholesale.)
+/// 2. FIRST-RESOLUTION-WITH-NOTICE: rev-parse `ref_` in the clone —
+///    FAIL-CLOSED naming repo+ref when it does not resolve — produce the
+///    archive, WRITE `refs[ref_] = {rev = ref_, sha, fetched_at}` via
+///    [`crate::config::upsert_locked_ref`] (the primary pin is NOT moved),
+///    and print the stderr notice. A sha-shaped ref is legal and is keyed
+///    by itself in the refs map.
+///
+/// `via` labels the error/notice with the consuming rung (`"--config-ref"`
+/// or `"inline override"`).
+fn refs_map_locked_archive(
+    name: &str,
+    entry: &ConfigRepoEntry,
+    registry: &Registry,
+    clone: &Path,
+    config_ref: &str,
+    via: &str,
+) -> Result<PathBuf> {
     let lock = crate::config::load_home_lock()?;
 
     // (1) Locked refs pin — silent.
@@ -689,10 +902,11 @@ fn config_ref_layer_content_root(
     // (2) First resolution WITH notice.
     let sha = crate::git::git_rev_parse_ref(clone, config_ref).map_err(|e| {
         anyhow::anyhow!(
-            "config repo '{}' (url '{}') does not resolve ref '{}' (--config-ref): {}",
+            "config repo '{}' (url '{}') does not resolve ref '{}' ({}): {}",
             name,
             entry.url,
             config_ref,
+            via,
             e
         )
     })?;
@@ -3300,6 +3514,329 @@ write.deny = ["sugar-write-deny"]
         assert!(
             !lock.repos.contains_key("plain"),
             "plain-path entries never enter the lock"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // A5 Session 3b: the per-workload inline `name:ref` override
+    // (two-phase pending/armed state → capsule-only substitution in
+    // load_config). Same temp-git-repo fixture discipline as the S2/S3a
+    // tests above; every test also clears the process-global inline
+    // override state before and after itself.
+    // ------------------------------------------------------------------
+
+    /// Directory-mode fixture content: the prime capsule at cpus `n`.
+    fn a5b_dir_mode_files(cpus: u32) -> Vec<(String, String)> {
+        vec![
+            (
+                "workestrate/default.toml".to_string(),
+                "schema_version = 1\n".to_string(),
+            ),
+            (
+                "workestrate/workloads/prime/workload.toml".to_string(),
+                bare_workload(cpus),
+            ),
+        ]
+    }
+
+    /// Build a directory-mode Remote home (repo `team`) with the prime
+    /// capsule at cpus=1 on main and cpus=2 on feat-x; primary-lock main.
+    /// Returns (home, clone, main sha, feat-x sha).
+    fn a5b_dir_mode_home(label: &str) -> (PathBuf, PathBuf, String, String) {
+        let owned = a5b_dir_mode_files(1);
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        let (home, clone, sha_main) = a5_remote_home(label, "team", &files);
+        a5_write_lock(&home, "team", &sha_main);
+        let owned_feat = a5b_dir_mode_files(2);
+        let feat_files: Vec<(&str, &str)> = owned_feat
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        let sha_feat = a5_commit_branch(&clone, "feat-x", &feat_files);
+        (home, clone, sha_main, sha_feat)
+    }
+
+    /// Armed substitution: the prime capsule is read at feat-x while the
+    /// rest of the merged config stays home-scoped (pinned main).
+    #[test]
+    fn inline_override_armed_substitutes_the_capsule_at_the_ref() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let (home, _clone, _sha_main, sha_feat) = a5b_dir_mode_home("a5b-dir-armed");
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let cfg = load_config()?;
+        crate::config::clear_inline_override();
+
+        assert_eq!(
+            cfg.workloads["prime"].cpus,
+            Some(2),
+            "the armed load must read the capsule at feat-x"
+        );
+        // The declaring layer's content root is the feat-x archive's
+        // directory-mode root, and the workload's field provenance points
+        // at the substituted pseudo-layer.
+        let layer_key = "team#workestrate/workloads/prime/workload.toml";
+        let layer_dirs = crate::merge::get_layer_dirs().expect("layer dirs set");
+        assert_eq!(
+            layer_dirs.get(layer_key).map(|p| p.as_path()),
+            Some(
+                crate::config::archive_dir(&sha_feat)?
+                    .join("workestrate")
+                    .as_path()
+            ),
+            "the declaring layer's content root must be the feat-x archive"
+        );
+        let provenance = crate::merge::get_provenance().expect("provenance set");
+        assert_eq!(
+            provenance.get("workloads.prime.cpus").map(|s| s.as_str()),
+            Some(layer_key),
+            "the substituted field's provenance names the capsule layer"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Two-phase state (deps NEVER follow the override): a PENDING-but-not-
+    /// armed load is byte-identical to no override at all — this is the
+    /// auto_start_dependencies config view. The fixture's feat-x branch
+    /// changes prime's depends_on to prove the home-scope depends_on is
+    /// what the un-armed view sees.
+    #[test]
+    fn inline_override_pending_not_armed_is_byte_identical_to_no_override() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let mut main_files = a5b_dir_mode_files(1);
+        main_files[1].1 = format!(
+            "{}\n[depends_on.litellm]\nenv = \"LITELLM_ADDR\"\n",
+            bare_workload(1)
+        );
+        main_files.push((
+            "workestrate/workloads/litellm/workload.toml".to_string(),
+            bare_workload(3),
+        ));
+        let main_refs: Vec<(&str, &str)> = main_files
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        let (home, clone, sha_main) = a5_remote_home("a5b-deps", "team", &main_refs);
+        a5_write_lock(&home, "team", &sha_main);
+        // feat-x: prime's depends_on is REMOVED (deps would differ if the
+        // dep view ever followed the override).
+        let mut feat_files = a5b_dir_mode_files(2);
+        feat_files.push((
+            "workestrate/workloads/litellm/workload.toml".to_string(),
+            bare_workload(3),
+        ));
+        let feat_refs: Vec<(&str, &str)> = feat_files
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        a5_commit_branch(&clone, "feat-x", &feat_refs);
+
+        let clean = load_config()?;
+        assert!(clean.workloads["prime"].depends_on.contains_key("litellm"));
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        let pending = load_config()?;
+        crate::config::clear_inline_override();
+
+        assert_eq!(
+            pending, clean,
+            "pending-but-not-armed load_config must be byte-identical to no override"
+        );
+        assert!(
+            pending.workloads["prime"]
+                .depends_on
+                .contains_key("litellm"),
+            "the un-armed (dep auto-start) view sees the HOME depends_on"
+        );
+
+        // ...while the ARMED view sees the substituted (dep-free) capsule.
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let armed = load_config()?;
+        crate::config::clear_inline_override();
+        assert!(
+            armed.workloads["prime"].depends_on.is_empty(),
+            "the armed view sees the ref's capsule (depends_on removed at feat-x)"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Fail-closed: an unknown inline ref errors naming the repo AND the
+    /// ref; NO lock write and NO substitution side effect.
+    #[test]
+    fn inline_override_unknown_ref_fails_closed_naming_repo_and_ref() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let (home, _clone, _sha_main, _sha_feat) = a5b_dir_mode_home("a5b-unknown-ref");
+
+        crate::config::set_pending_inline_override("prime", "no-such-ref");
+        crate::config::arm_inline_override();
+        let err = load_config().expect_err("an unknown inline ref must fail closed");
+        crate::config::clear_inline_override();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("team"), "error must name the repo: {msg}");
+        assert!(
+            msg.contains("no-such-ref"),
+            "error must name the ref: {msg}"
+        );
+        // Fail-closed: the lock gained no refs entry for the bad ref.
+        let lock = crate::config::load_home_lock()?.expect("lock");
+        assert!(
+            !lock.repos["team"].refs.contains_key("no-such-ref"),
+            "a failed resolution must not write the lock"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Fail-closed: the workload does not exist AT THE REF (the feat-x
+    /// branch drops the capsule) — the error names workload + ref + repo.
+    #[test]
+    fn inline_override_unknown_workload_at_ref_fails_closed() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let owned = a5b_dir_mode_files(1);
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        let (home, clone, sha_main) = a5_remote_home("a5b-unknown-wl", "team", &files);
+        a5_write_lock(&home, "team", &sha_main);
+        // feat-x: the prime capsule is REMOVED (default.toml remains).
+        a5_git(&clone, &["checkout", "--quiet", "-b", "feat-x"]);
+        a5_git(
+            &clone,
+            &["rm", "-r", "--quiet", "workestrate/workloads/prime"],
+        );
+        a5_git(&clone, &["commit", "--quiet", "-m", "drop prime"]);
+        a5_git(&clone, &["checkout", "--quiet", "main"]);
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let err = load_config().expect_err("a workload missing at the ref must fail closed");
+        crate::config::clear_inline_override();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("prime"), "error must name the workload: {msg}");
+        assert!(msg.contains("feat-x"), "error must name the ref: {msg}");
+        assert!(msg.contains("team"), "error must name the repo: {msg}");
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Single-file mode variant: the substitution reads
+    /// `<archive>/workestrate.toml`'s [workloads.prime] table at the ref.
+    #[test]
+    fn inline_override_single_file_mode_substitution() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let main_toml = "schema_version = 1\n\n[workloads.prime]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\ncpus = 1\n"
+            .to_string();
+        let feat_toml = main_toml.replace("cpus = 1", "cpus = 2");
+        let (home, clone, sha_main) =
+            a5_remote_home("a5b-file", "team", &[("workestrate.toml", &main_toml)]);
+        a5_write_lock(&home, "team", &sha_main);
+        a5_commit_branch(&clone, "feat-x", &[("workestrate.toml", &feat_toml)]);
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let cfg = load_config()?;
+        crate::config::clear_inline_override();
+
+        assert_eq!(
+            cfg.workloads["prime"].cpus,
+            Some(2),
+            "single-file mode: prime is read at feat-x"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Lock discipline: the first substitution resolution writes
+    /// refs[feat-x] (primary pin UNMOVED); the repeat is silent and
+    /// write-free (byte-identical lock).
+    #[test]
+    fn inline_override_first_resolution_locks_refs_then_repeat_is_write_free() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let (home, _clone, sha_main, sha_feat) = a5b_dir_mode_home("a5b-lock");
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let cfg = load_config()?;
+        assert_eq!(cfg.workloads["prime"].cpus, Some(2));
+
+        let lock_path = home.join("workestrate.lock");
+        let lock = crate::config::load_home_lock()?.expect("lock after first resolution");
+        let entry = &lock.repos["team"];
+        assert_eq!(
+            entry.rev.as_deref(),
+            Some(sha_main.as_str()),
+            "the PRIMARY pin must NOT be moved by an inline resolution"
+        );
+        let pin = &entry.refs["feat-x"];
+        assert_eq!(pin.rev, "feat-x", "the refs pin is keyed by the ref itself");
+        assert_eq!(pin.sha, sha_feat);
+        assert!(pin.fetched_at.ends_with('Z'), "fetched_at stamped");
+
+        // Repeat: silent + write-free (byte-identical lock).
+        let bytes = std::fs::read_to_string(&lock_path)?;
+        let cfg2 = load_config()?;
+        crate::config::clear_inline_override();
+        assert_eq!(cfg2.workloads["prime"].cpus, Some(2));
+        assert_eq!(
+            std::fs::read_to_string(&lock_path)?,
+            bytes,
+            "the repeat inline-override load must NOT touch the lock"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// The home-scope unknown-workload error is NOT masked: an armed
+    /// override naming a workload absent from the merged config leaves the
+    /// config untouched (today's "not found in config" fires downstream).
+    #[test]
+    fn inline_override_unknown_workload_at_home_scope_is_not_masked() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let (home, _clone, _sha_main, _sha_feat) = a5b_dir_mode_home("a5b-home-unknown");
+
+        crate::config::set_pending_inline_override("ghost", "feat-x");
+        crate::config::arm_inline_override();
+        let cfg = load_config()?;
+        crate::config::clear_inline_override();
+        assert!(
+            !cfg.workloads.contains_key("ghost"),
+            "the substitution must not fabricate the workload"
+        );
+        assert_eq!(
+            cfg.workloads["prime"].cpus,
+            Some(1),
+            "home-scoped content is untouched"
         );
 
         let _ = std::fs::remove_dir_all(&home);

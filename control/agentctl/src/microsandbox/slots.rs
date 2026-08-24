@@ -219,6 +219,48 @@ pub fn validate_instance_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Derive an instance id from an arbitrary config-ref string (A5 Session 3b;
+/// ADR 0032 addendum §Selection ladder rung 3): the inline `name:ref`
+/// override implies a parallel instance id = the sanitized ref.
+///
+/// Same slugging rules as [`dirname_slug`] (the per-dir machinery):
+/// ASCII-lowercased, every maximal run of non-`[a-z0-9]` chars collapsed to
+/// one `-`, leading/trailing `-` trimmed, capped at [`MAX_INSTANCE_ID_LEN`]
+/// (32) chars with any trailing `-` re-trimmed.
+///
+/// FAIL-CLOSED (unlike `dirname_slug`, which falls back to `"dir"`): the
+/// result MUST pass [`validate_instance_id`] — an all-symbols ref
+/// (e.g. `"!!!"` → empty) or a purely-numeric one (e.g. `"123"`) is a hard
+/// error naming the ref, never a silently fabricated id.
+pub fn sanitize_instance_id(raw: &str) -> Result<String> {
+    let mut slug = String::with_capacity(raw.len().min(MAX_INSTANCE_ID_LEN + 1));
+    let mut in_separator_run = false;
+    for c in raw.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            if in_separator_run && !slug.is_empty() {
+                slug.push('-');
+            }
+            in_separator_run = false;
+            slug.push(c);
+        } else {
+            in_separator_run = true;
+        }
+    }
+    // All bytes pushed are ASCII, so byte truncation is char-safe; a
+    // truncation can land right after a separator `-`, so re-trim.
+    slug.truncate(MAX_INSTANCE_ID_LEN);
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    validate_instance_id(&slug).map_err(|e| {
+        anyhow::anyhow!(
+            "cannot derive an instance id from ref '{raw}' (sanitized to '{slug}'): {e}"
+        )
+    })?;
+    Ok(slug)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -406,6 +448,62 @@ mod tests {
         validate_instance_id("a1").expect("'a1' is valid (not purely numeric)");
         validate_instance_id("1a").expect("'1a' is valid (not purely numeric)");
         validate_instance_id("v2-canary").expect("'v2-canary' is valid");
+    }
+
+    // ---- A5 Session 3b: sanitize_instance_id (ref → parallel instance id) ----
+
+    #[test]
+    fn sanitize_instance_id_matrix() {
+        let cases: &[(&str, &str)] = &[
+            ("feat/x", "feat-x"),                   // slash collapses to one hyphen
+            ("Feat-X", "feat-x"),                   // ASCII-lowercased
+            ("feat--x", "feat-x"),                  // separator runs collapse to one hyphen
+            ("feat/x/y", "feat-x-y"),               // multiple separators
+            ("release/2026.08", "release-2026-08"), // dot is a separator
+            ("--feat--", "feat"),                   // leading/trailing runs trimmed
+            ("my_branch", "my-branch"),             // underscore is a separator
+            ("v1.2.3-rc.1", "v1-2-3-rc-1"),
+        ];
+        for (raw, want) in cases {
+            assert_eq!(
+                sanitize_instance_id(raw).expect("sanitize must succeed"),
+                *want,
+                "sanitize({raw:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_instance_id_caps_at_32_and_retrims() {
+        let long = format!("{}/x", "a".repeat(40));
+        let id = sanitize_instance_id(&long).expect("long ref sanitizes");
+        assert!(id.len() <= MAX_INSTANCE_ID_LEN, "capped at 32: {id}");
+        assert!(!id.ends_with('-'), "no trailing hyphen: {id}");
+        validate_instance_id(&id).expect("the sanitized id must pass validation");
+    }
+
+    #[test]
+    fn sanitize_instance_id_fail_closed_on_all_symbols() {
+        let err = sanitize_instance_id("!!!").unwrap_err().to_string();
+        assert!(
+            err.contains("!!!"),
+            "error must name the offending ref: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitize_instance_id_fail_closed_on_purely_numeric() {
+        // "123" sanitizes to "123", which validate_instance_id rejects.
+        let err = sanitize_instance_id("123").unwrap_err().to_string();
+        assert!(err.contains("123"), "error must name the ref: {err}");
+    }
+
+    #[test]
+    fn sanitize_instance_id_is_deterministic() {
+        assert_eq!(
+            sanitize_instance_id("Feat/X.Y").unwrap(),
+            sanitize_instance_id("Feat/X.Y").unwrap()
+        );
     }
 
     // ---- ADR 0030 V-addendum §V1: per-dir instance id derivation ----

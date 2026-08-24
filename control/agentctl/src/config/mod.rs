@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod inline_ref;
 pub mod loading;
 pub mod lockfile;
 pub mod migration;
@@ -13,6 +14,12 @@ pub mod validation;
 // `use` of the re-exports, hence the allow).
 #[allow(unused_imports)]
 pub use archive::{archive_dir, archive_store_root, ensure_archive};
+#[allow(unused_imports)]
+pub use inline_ref::{
+    arm_inline_override, clear_inline_override, parse_workload_selector,
+    set_pending_inline_override, set_pending_inline_override_from_env, InlineOverride,
+    WORKLOAD_REF_ENV,
+};
 #[allow(unused_imports)]
 pub use loading::{
     check_required_files, load_config, load_overrides, resolve_secrets_layers, CheckEntry,

@@ -369,6 +369,114 @@ fn rewrite_action_for_resolved_instance(
     }
 }
 
+/// A5 Session 3b (ADR 0032 addendum §Selection ladder rung 3): rewrite the
+/// clap-parsed action in place from the parsed inline selector
+/// (`name[:config-ref][@instance]`, see
+/// [`workestrate::config::parse_workload_selector`]):
+///
+/// - the workload name becomes the BARE name (the part before `:`);
+/// - the inline instance identity lands in the action's `instance` field per
+///   the PINNED id precedence: explicit `--instance` > inline `@id` >
+///   `:ref`-derived id ([`sanitize_instance_id`]) — then the existing
+///   machinery (per-dir derivation > `--new` > strategy default) applies
+///   downstream. `--new` + inline ref: `--new` wins the id (no injection),
+///   the ref still drives the substitution. An injected id clears `new`
+///   (mirrors [`rewrite_action_for_resolved_instance`]; keeps
+///   `build_instance_spec`'s mutual-exclusion check untriggered);
+/// - VERB SCOPE (pin 5): `down`/`logs` with a `:ref` are a hard error —
+///   teardown targets the derived instance id via `--instance <id>`.
+///
+/// The `:ref`-derived id beats the per-dir derivation by construction:
+/// [`resolve_dependent_instance_id`] passes an explicit `instance` through
+/// BEFORE consulting the per-dir strategy, so the injected id wins.
+///
+/// [`sanitize_instance_id`]: workestrate::microsandbox::slots::sanitize_instance_id
+/// [`resolve_dependent_instance_id`]: workestrate::commands::lifecycle::resolve_dependent_instance_id
+fn rewrite_action_for_inline_selector(
+    action: &mut WorkloadAction,
+    selector: &workestrate::config::InlineOverride,
+) -> Result<()> {
+    let workestrate::config::InlineOverride {
+        name,
+        config_ref,
+        instance: at_id,
+    } = selector;
+
+    // Verb scope: down/logs reject the ref form (their grammar-only `@id`
+    // form already failed closed in parse_workload_selector).
+    match action {
+        WorkloadAction::Down { name: n, .. } | WorkloadAction::Logs { name: n, .. } => {
+            if config_ref.is_some() {
+                anyhow::bail!(
+                    "inline ref overrides are not meaningful for down/logs; \
+                     use --instance <id>"
+                );
+            }
+            *n = name.clone();
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let new_requested = match action {
+        WorkloadAction::Up { new, .. } | WorkloadAction::Exec { new, .. } => *new,
+        _ => false,
+    };
+    let derived_id: Option<String> = if let Some(id) = at_id {
+        Some(id.clone())
+    } else if new_requested {
+        None // --new wins the id over the :ref-derived default
+    } else {
+        config_ref
+            .as_deref()
+            .map(workestrate::microsandbox::slots::sanitize_instance_id)
+            .transpose()?
+    };
+
+    match action {
+        WorkloadAction::Up {
+            name: n,
+            instance,
+            new,
+            ..
+        } => {
+            *n = Some(name.clone());
+            if instance.is_none() {
+                if let Some(id) = derived_id {
+                    *instance = Some(id);
+                    *new = false;
+                }
+            }
+        }
+        WorkloadAction::Exec {
+            name: n,
+            instance,
+            new,
+            ..
+        } => {
+            *n = name.clone();
+            if instance.is_none() {
+                if let Some(id) = derived_id {
+                    *instance = Some(id);
+                    *new = false;
+                }
+            }
+        }
+        WorkloadAction::Plan {
+            name: n, instance, ..
+        } => {
+            *n = name.clone();
+            if instance.is_none() {
+                if let Some(id) = derived_id {
+                    *instance = Some(id);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Translate a clap-parsed verb-first [`WorkloadAction`] into the legacy
 /// [`ServiceAction`] shape (pure field mapping — the caller has already
 /// kind-checked the route via [`workload_route`]).
@@ -576,6 +684,13 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     if let Some(ref config_ref) = cli.config_ref {
         std::env::set_var("WORKESTRATE_CONFIG_REF", config_ref);
     }
+    // A5 Session 3b (ADR 0032 addendum §Selection ladder rung 3): a DETACHED
+    // CHILD inherits WORKESTRATE_WORKLOAD_REF="name:ref" from its parent
+    // (env inheritance through the detach spawn; its argv carries only the
+    // bare name + --instance from detach_args). Record it as the PENDING
+    // inline override; the verb flow below arms it at the pinned points.
+    // No-op when the var is absent (the common case).
+    workestrate::config::set_pending_inline_override_from_env()?;
     // --home <DIR> populates the WORKESTRATE_HOME precedence step
     // (paths.rs resolve_home_with_kind checks it first), so the flag becomes
     // the highest-precedence override with no path-resolution change.
@@ -766,6 +881,31 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                     unreachable!("workload build is dispatched above")
                 }
             };
+            // A5 Session 3b (ADR 0032 addendum §Selection ladder rung 3):
+            // parse the inline `name[:config-ref][@instance]` selector
+            // (fail-closed grammar — bare `name@id` and empty refs are hard
+            // errors; down/logs reject the ref form) and REWRITE the action
+            // in place so the rest of the pipeline sees ONE consistent view:
+            // the bare workload name plus the resolved inline instance id
+            // (--instance > inline @id > :ref-derived; --new beats the
+            // :ref-derived default). The ref itself rides the two-phase
+            // pending/armed state: deps never follow the override, so
+            // `plan` arms IMMEDIATELY (it never starts deps — unknown
+            // refs/workloads then fail closed AT PLAN TIME) while up/exec
+            // arm AFTER auto_start_dependencies returns, below.
+            let selector = workestrate::config::parse_workload_selector(&name)?;
+            rewrite_action_for_inline_selector(&mut action, &selector)?;
+            let name = selector.name.clone();
+            if let Some(ref inline_ref) = selector.config_ref {
+                workestrate::config::set_pending_inline_override(&name, inline_ref);
+                std::env::set_var(
+                    workestrate::config::WORKLOAD_REF_ENV,
+                    format!("{name}:{inline_ref}"),
+                );
+                if verb == "plan" {
+                    workestrate::config::arm_inline_override();
+                }
+            }
             let mut overrides =
                 workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
             // ADR 0030 P2.1: resolve the DEPENDENT's OWN parallel instance id
@@ -846,6 +986,14 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                 dependent_instance_id.as_deref(),
             )
             .await?;
+            // A5 Session 3b arming point (up/exec): deps NEVER follow the
+            // override — auto_start_dependencies above saw the home-scoped
+            // config — but the dependent's ConfigWorkload constructed below
+            // MUST see the substituted declaration. No-op without a pending
+            // override. (The detached child reaches this SAME point with the
+            // env-derived pending: its own auto-start above likewise ran
+            // un-armed.)
+            workestrate::config::arm_inline_override();
             overrides.extend(fresh_selections.iter().cloned());
             rewrite_action_for_resolved_instance(
                 &mut action,
@@ -1124,6 +1272,209 @@ mod tests {
             panic!("expected Plan");
         };
         assert_eq!(instance, &None, "plan is not rewritten");
+    }
+
+    // ---- A5 Session 3b: rewrite_action_for_inline_selector ----
+
+    fn inline_selector(positional: &str) -> workestrate::config::InlineOverride {
+        workestrate::config::parse_workload_selector(positional).expect("test selectors must parse")
+    }
+
+    fn up_action_no_new() -> WorkloadAction {
+        WorkloadAction::Up {
+            name: Some("prime".to_string()),
+            foreground: false,
+            replace: false,
+            instance: None,
+            new: false,
+            port_auto: false,
+            use_: Vec::new(),
+            no_deps: false,
+            reseed: false,
+            reload_images: false,
+            images_ready: false,
+        }
+    }
+
+    /// `up prime:feat-x` → bare name + the :ref-derived parallel instance id
+    /// `feat-x` (sanitize_instance_id; the instance COEXISTS with the
+    /// home-ref instance via the standard parallel machinery).
+    #[test]
+    fn inline_selector_up_ref_derives_instance_id() {
+        let mut action = up_action_no_new();
+        rewrite_action_for_inline_selector(&mut action, &inline_selector("prime:feat-x")).unwrap();
+        let WorkloadAction::Up {
+            name,
+            instance,
+            new,
+            ..
+        } = &action
+        else {
+            panic!("expected Up");
+        };
+        assert_eq!(name.as_deref(), Some("prime"), "the name is de-ref'd");
+        assert_eq!(instance.as_deref(), Some("feat-x"));
+        assert!(!new);
+    }
+
+    /// `up prime:feat-x@canary` → the inline @id wins over the :ref-derived
+    /// id.
+    #[test]
+    fn inline_selector_up_ref_at_id_wins_over_derived() {
+        let mut action = up_action_no_new();
+        rewrite_action_for_inline_selector(&mut action, &inline_selector("prime:feat-x@canary"))
+            .unwrap();
+        let WorkloadAction::Up { instance, .. } = &action else {
+            panic!("expected Up");
+        };
+        assert_eq!(instance.as_deref(), Some("canary"));
+    }
+
+    /// Id precedence: explicit --instance beats BOTH inline forms.
+    #[test]
+    fn inline_selector_explicit_instance_flag_wins() {
+        let mut action = WorkloadAction::Up {
+            name: Some("prime".to_string()),
+            foreground: false,
+            replace: false,
+            instance: Some("custom".to_string()),
+            new: false,
+            port_auto: false,
+            use_: Vec::new(),
+            no_deps: false,
+            reseed: false,
+            reload_images: false,
+            images_ready: false,
+        };
+        rewrite_action_for_inline_selector(&mut action, &inline_selector("prime:feat-x@canary"))
+            .unwrap();
+        let WorkloadAction::Up { instance, .. } = &action else {
+            panic!("expected Up");
+        };
+        assert_eq!(instance.as_deref(), Some("custom"), "--instance beats both");
+    }
+
+    /// `--new` + inline ref: --new wins the id (no injection, `new` stays
+    /// set); the ref still drives the substitution (the pending/armed state,
+    /// not this rewrite).
+    #[test]
+    fn inline_selector_new_wins_the_id_over_the_derived_default() {
+        let mut action = up_action(); // new: true
+        rewrite_action_for_inline_selector(&mut action, &inline_selector("prime:feat-x")).unwrap();
+        let WorkloadAction::Up {
+            name,
+            instance,
+            new,
+            ..
+        } = &action
+        else {
+            panic!("expected Up");
+        };
+        assert_eq!(name.as_deref(), Some("prime"), "the name is still de-ref'd");
+        assert_eq!(instance, &None, "--new wins: no derived id is injected");
+        assert!(*new);
+    }
+
+    /// Exec gets the same rewrite; plan previews the derived id.
+    #[test]
+    fn inline_selector_exec_and_plan_rewrite() {
+        let mut exec = WorkloadAction::Exec {
+            name: "prime".to_string(),
+            foreground: false,
+            replace: false,
+            instance: None,
+            new: false,
+            port_auto: false,
+            use_: Vec::new(),
+            no_deps: false,
+            reseed: false,
+            reload_images: false,
+        };
+        rewrite_action_for_inline_selector(&mut exec, &inline_selector("prime:feat-x")).unwrap();
+        let WorkloadAction::Exec {
+            name,
+            instance,
+            new,
+            ..
+        } = &exec
+        else {
+            panic!("expected Exec");
+        };
+        assert_eq!(name, "prime");
+        assert_eq!(instance.as_deref(), Some("feat-x"));
+        assert!(!new);
+
+        let mut plan = WorkloadAction::Plan {
+            name: "prime".to_string(),
+            instance: None,
+            use_: Vec::new(),
+        };
+        rewrite_action_for_inline_selector(&mut plan, &inline_selector("prime:feat-x@canary"))
+            .unwrap();
+        let WorkloadAction::Plan { name, instance, .. } = &plan else {
+            panic!("expected Plan");
+        };
+        assert_eq!(name, "prime");
+        assert_eq!(instance.as_deref(), Some("canary"), "plan previews the id");
+    }
+
+    /// Verb scope (pin 5): down/logs with a `:ref` are a hard error naming
+    /// --instance; the name is still de-ref'd when no ref is present.
+    #[test]
+    fn inline_selector_down_and_logs_reject_the_ref_form() {
+        for mut action in [
+            WorkloadAction::Down {
+                name: "prime".to_string(),
+                instance: None,
+                all_instances: false,
+            },
+            WorkloadAction::Logs {
+                name: "prime".to_string(),
+                instance: None,
+            },
+        ] {
+            let err =
+                rewrite_action_for_inline_selector(&mut action, &inline_selector("prime:feat-x"))
+                    .unwrap_err()
+                    .to_string();
+            assert!(
+                err.contains(
+                    "inline ref overrides are not meaningful for down/logs; use --instance <id>"
+                ),
+                "down/logs rejection message: {err}"
+            );
+        }
+        // No ref → the name rewrites cleanly (defensive; parse already
+        // guarantees no '@' survives on this path).
+        let mut down = WorkloadAction::Down {
+            name: "prime".to_string(),
+            instance: None,
+            all_instances: false,
+        };
+        rewrite_action_for_inline_selector(&mut down, &inline_selector("prime")).unwrap();
+        let WorkloadAction::Down { name, .. } = &down else {
+            panic!("expected Down");
+        };
+        assert_eq!(name, "prime");
+    }
+
+    /// A bare name leaves up/exec/plan actions untouched.
+    #[test]
+    fn inline_selector_bare_name_is_a_no_op() {
+        let mut action = up_action_no_new();
+        rewrite_action_for_inline_selector(&mut action, &inline_selector("prime")).unwrap();
+        let WorkloadAction::Up {
+            name,
+            instance,
+            new,
+            ..
+        } = &action
+        else {
+            panic!("expected Up");
+        };
+        assert_eq!(name.as_deref(), Some("prime"));
+        assert_eq!(instance, &None);
+        assert!(!new);
     }
 
     #[test]

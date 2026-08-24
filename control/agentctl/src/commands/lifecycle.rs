@@ -1269,6 +1269,60 @@ strategy = "per-dir"
         let _ = std::fs::remove_dir_all(&cfg_dir);
         let _ = std::fs::remove_dir_all(&state_dir);
     }
+
+    /// A5 Session 3b (PINNED id precedence): the inline `:ref`-derived
+    /// instance id beats the per-dir derivation. main.rs injects the
+    /// derived id as the explicit `instance` BEFORE this resolver runs
+    /// (rewrite_action_for_inline_selector), so the passthrough arm returns
+    /// it verbatim WITHOUT consulting the per-dir strategy — this test pins
+    /// that composition on a per-dir-strategy workload.
+    #[test]
+    fn resolve_dependent_instance_id_inline_ref_instance_beats_per_dir() {
+        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _env = EnvGuard::capture(&[
+            "WORKESTRATE_CONFIG_DIR",
+            "WORKESTRATE_STATE_DIR",
+            crate::config::INVOKE_CWD_ENV,
+        ]);
+        let cfg_dir = uniq_dir("depid-cfg-inline-perdir");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("workestrate.toml"),
+            r#"schema_version = 1
+
+[workloads.pd]
+kind = "service"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pd.instance]
+strategy = "per-dir"
+"#,
+        )
+        .unwrap();
+        let state_dir = uniq_dir("depid-state-inline-perdir");
+        let invoke = uniq_dir("depid-invoke-inline-perdir");
+        std::fs::create_dir_all(&invoke).unwrap();
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+        std::env::set_var(
+            crate::config::INVOKE_CWD_ENV,
+            std::fs::canonicalize(&invoke).unwrap(),
+        );
+
+        let per_dir = crate::microsandbox::slots::per_dir_instance_id(
+            &std::fs::canonicalize(&invoke).unwrap().to_string_lossy(),
+        );
+        assert_eq!(
+            resolve_dependent_instance_id("pd", Some("feat-x"), false, false).unwrap(),
+            Some("feat-x".to_string()),
+            "the inline-ref-derived id must beat the per-dir derivation ({per_dir})"
+        );
+        let _ = std::fs::remove_dir_all(&cfg_dir);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let _ = std::fs::remove_dir_all(&invoke);
+    }
 }
 
 #[cfg(test)]
