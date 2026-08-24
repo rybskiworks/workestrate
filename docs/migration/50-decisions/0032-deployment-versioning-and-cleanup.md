@@ -43,6 +43,11 @@ Full identity form: **`<workload>@<instance>` in context `<ctx>` built from
 
 ### Image identity: content-hash tags + per-context alias
 
+> **Superseded by the 2026-08-24 addendum** (§ Image tags — DECIDED): the
+> tag format is `name:ctx:sha` immutable per build, and the per-context
+> mutable alias TAG is replaced by the state-dir image record as the
+> mutable current-pointer.
+
 Images are tagged with **immutable content-hash tags** plus a **per-context
 mutable alias**:
 
