@@ -189,11 +189,22 @@ deferred.
 - **Per-dir default-for-agents** — RESOLVED: **opt-in first**; the capsule
   declares `strategy = "per-dir"`; default-for-agents-with-cwd-mounts is
   reconsidered after the host batch proves it (ADR 0030 §V5).
-- **Per-workload config-branch override UX** — RESOLVED: **BOTH forms** —
-  the `--from <ref>` flag AND the inline colon syntax `prime:feat-x`
+- **Per-workload config-branch override UX** — AMENDED 2026-08-24
+  (same-day): RESOLVED: **ONLY the inline colon syntax** `prime:feat-x`
   (`:` = config branch, consistent with the `name:ctx:sha` image tags;
-  `@` = instance id; the combined form `prime:feat-x@canary` is legal).
-  Default = the home's pinned ref.
+  `@` = instance id; the combined form `prime:feat-x@canary` is legal);
+  the `--from <ref>` flag form is DROPPED. Superseded original (retained
+  as historical record): ~~RESOLVED: **BOTH forms** — the `--from <ref>`
+  flag AND the inline colon syntax `prime:feat-x`~~. Rationale: (1)
+  `--from` already carries two other meanings in the CLI's history —
+  `migrate home --from <xdg|bundle>` (legacy) and the dropped
+  `home init --from <src>` (ADR 0025 addendum, removed as "surface area
+  without leverage", guard test at control/agentctl/src/main.rs:1121) —
+  a third meaning on workload up/exec would collide; (2) one grammar
+  (`name:ref[@instance]`) is leaner than two forms and consistent with
+  the image-tag shape; (3) `config new --from-reference` is a different
+  flag/subcommand and is UNAFFECTED. Default = the home's pinned ref
+  (unchanged).
 - **GC policy for hash tags** — RESOLVED: **schema-configurable cascade** —
   built-in default N=5 < home settings < config repo < workload capsule (a
   keep/retain-count setting; exact field name per repo conventions);
@@ -270,10 +281,18 @@ Registry entries are `{ url, ref, rev }` with a SINGLE `url` field,
 
 ### Selection ladder
 
-> **UX decision (2026-08-24):** the per-workload override has BOTH forms —
-> the `--from <ref>` flag AND inline colon syntax `prime:feat-x` (`:` =
-> config branch, consistent with image tags; `@` = instance id; combined
-> `prime:feat-x@canary` legal). Default = the home's pinned ref.
+> **UX decision (2026-08-24):** ~~the per-workload override has BOTH forms —
+> the `--from <ref>` flag AND inline colon syntax `prime:feat-x`~~
+> AMENDED 2026-08-24 (same-day): the per-workload override is ONLY the
+> inline colon syntax `prime:feat-x` (`:` = config branch, consistent
+> with image tags; `@` = instance id; combined `prime:feat-x@canary`
+> legal); the `--from <ref>` flag form is DROPPED (rationale: `--from`
+> collision history — `migrate home --from <xdg|bundle>` legacy + dropped
+> `home init --from` per ADR 0025 addendum, guard test at
+> control/agentctl/src/main.rs:1121 — plus one-grammar leanness
+> (`name:ref[@instance]`) consistent with the image-tag shape;
+> `config new --from-reference` is a different flag/subcommand,
+> UNAFFECTED). Default = the home's pinned ref.
 
 Precedence, highest first:
 
@@ -282,17 +301,17 @@ Precedence, highest first:
 2. **`--config-ref <branch|sha>`** — "the home on that branch": resolves
    every config entry at the given ref (via the archive cache) and IMPLIES
    the context (the ref's branch becomes the context).
-3. **Per-workload `--from <ref>`** — capsule-only substitution: the named
-   workload's capsule is read at `<ref>` from its declaring repo while
-   everything else stays home-scoped.
+3. **Per-workload inline override `prime:feat-x`** — capsule-only
+   substitution: the named workload's capsule is read at `<ref>` from its
+   declaring repo while everything else stays home-scoped.
 
-`--from` rules:
+Inline override rules:
 
 - **Deps NEVER follow the override in v1** — `depends_on` resolves against
   the home-scoped config; a `--with-deps` closure flag is noted as possible
   later work (implementation-detail, parked).
 - **Instance identity carries the override ref as a parallel instance** —
-  `workload up prime --from feat-x` plans `prime@feat-x`, which COEXISTS
+  `workload up prime:feat-x` plans `prime@feat-x`, which COEXISTS
   with `prime@main` (parallel-slot bind + dynamic ports per ADR 0030); no
   port or state collision by construction.
 - **Validation:** the ref must EXIST in the declaring repo AND the workload
@@ -347,7 +366,8 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
   **No `prod` branch (RESOLVED 2026-08-24):** `main` IS the stable line
   (tidy discipline); homes pin `ref = "main"` + the lockfile rev; per-entry
   `ref`/`rev` and per-invocation `--config-ref` remain the overrides.
-- **dev** = any branch BY NAME via refs (`--config-ref` / `--from`) —
+- **dev** = any branch BY NAME via refs (`--config-ref` / inline
+  `prime:feat-x`) —
   freshness without moving pins.
 - **Nothing is checked out unless it is being edited** — consumption reads
   the archive cache, not a working copy.
