@@ -200,7 +200,7 @@ physically live, not how paths resolve against them. When a config entry is
 consumed at a pinned/locked ref, the layer's content root is a directory in
 the content-addressed archive store `<state>/cache/gitv3/<sha>/` — a plain
 immutable directory produced by `git archive <sha>` from the single managed
-clone (NO worktrees, NO checkouts); `<home>/config-repos.lock` maps
+clone (NO worktrees, NO checkouts); `<home>/workestrate.lock` (v2) maps
 entry+ref → sha. Every rule in this spec is UNCHANGED under that model:
 the content root is still the directory-mode root `<layer>/workestrate/`
 (F1), the flake-root gate still resolves against the declaring repo root

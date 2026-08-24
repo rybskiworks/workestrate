@@ -278,7 +278,7 @@ Registry entries are `{ url, ref, rev }` with a SINGLE `url` field,
 | `git+file://` | local git repo | full ref support (branches, tags, shas resolve), NO network. |
 | plain path | local working repo (git) or plain dir | a git working repo resolves refs against its own object store; a plain dir is consumed content-as-is with branch = `"local"`. |
 
-- **Generated lockfile `<home>/config-repos.lock`** — `{ rev, sha,
+- **Generated lockfile `<home>/workestrate.lock` (v2)** — `{ rev, sha,
   fetched_at }` per entry+ref. Written ONLY by an explicit
   `workestrate config update` or by first-resolution-with-notice; **never
   silently** (no verb mutates pins as a side effect).
@@ -378,7 +378,7 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
 
 ### Operating model (A6 preview)
 
-- **prod** = pinned rev (config-repos.lock) + pinned profile binary.
+- **prod** = pinned rev (workestrate.lock v2) + pinned profile binary.
   **No `prod` branch (RESOLVED 2026-08-24):** `main` IS the stable line
   (tidy discipline); homes pin `ref = "main"` + the lockfile rev; per-entry
   `ref`/`rev` and per-invocation `--config-ref` remain the overrides.
@@ -392,3 +392,57 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
   entry consumed content-as-is is the explicit exception).
 - **Worktrees are for ONE thing only:** simultaneous editing of two
   branches. They are a human editing tool, never a consumption mechanism.
+
+## Addendum (2026-08-24): config source model LANDED — implementation notes
+
+- Landed as commits `24385e9` (foundations: source-kind classification,
+  git archive plumbing, archive store, lock v2), `0ff3b30` (pinned archive
+  consumption + lock-writer semantics), `db60a8e` (`--config-ref` + context
+  derivation), `43deba1` (inline override), `2367acb` (review fixes) — all
+  on `migration/tool-model`.
+- **Lockfile collision RESOLVED**: the addendum's
+  `<home>/config-repos.lock` does NOT exist as a file. The existing
+  `<home>/workestrate.lock` (ADR 0025(e)) was EVOLVED to version 2 to
+  carry the A5 semantics — its own header mandated one lock story ("do not
+  build a second one"), and every signed-off semantic (per entry+ref pins
+  `{rev, sha, fetched_at}`; written only by explicit `config update`/`add`
+  or first-resolution-with-notice; never silently by runtime verbs) is
+  preserved; only the filename differs from the addendum's letter. v1
+  locks read via serde defaults; v2 written by current binaries; a v2 lock
+  read by an old binary hard-errors ("home created by a newer workestrate")
+  by design.
+- **`sha` semantics**: `sha` = the commit sha the archive was produced
+  from (== `rev` for git-backed entries today). The field separates the
+  pin (`rev`) from the content key (`sha`) so a future tree-hash keying
+  never migrates pins. Archive dirs are content-addressed by it:
+  `<state>/cache/gitv3/<sha>/`.
+- **Grammar** (one-grammar, inline-only; no `--from` flag):
+  `name[:ref][@id]` — `:` = config branch (consistent with `name:ctx:sha`
+  image tags), `@` = instance id, combined `prime:feat-x@canary` legal.
+  Bare `name@id` (no colon) is rejected, pointing at `--instance`. Id
+  precedence: `--instance` > `@id` > `:ref`-derived (sanitized) > `--new`
+  > per-dir derivation > strategy default.
+- **Two-phase arming** (deps never follow): the override is pending at
+  parse and arms only after dep auto-start (up/exec) or immediately
+  (plan); detached children re-arm from `WORKESTRATE_WORKLOAD_REF`,
+  name-gated and verb-scoped (down/logs never arm).
+- **Devshell context hook**: NOT shipped — subsumed by the CLI's
+  checkout-branch context derivation (the hook's semantics). A6 documents
+  this; an explicit per-shell pin stays optional.
+
+### Open questions surfaced by the A5 implementation (2026-08-24)
+
+- **Registry-rev fallback ignores ref changes**: a hand-edited `ref` with
+  a stale registry `rev` consumes the old rev silently until
+  `config update` (fail-safe direction). Track or reject?
+- **Bare homes acquire branch-derived context names** (checkout-branch
+  derivation step): existing no-[contexts] homes with a git-checkout first
+  layer gain `context = Some(<branch>)` and slot renaming on next
+  invocation. Pinned design; needs a release note / migration note in the
+  operating-model doc (A6).
+- **ensure-images pre-flight runs pre-arming**: an inline ref changing the
+  image recipe ensures the home-scoped image while the detached child
+  skips its own ensure. A2 must wire ensure against the substituted view.
+- **Leftover exported `WORKESTRATE_WORKLOAD_REF` + bare `workload up`**:
+  a name-matching batch child arms the override (explicit export =
+  intent; accepted, recorded).
