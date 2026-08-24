@@ -315,6 +315,23 @@ pub fn resolve_default_ref(
     )
 }
 
+/// The EFFECTIVE ref of one registry entry (A5 Session 2): the entry's
+/// explicit `ref` when set, else [`resolve_default_ref`] against `checkout`.
+/// This is the ref the lock pins under `(name, effective ref)` and the ref
+/// `config update` rev-parses. Unlike [`resolve_default_ref`] it does NOT
+/// probe git when an explicit ref is set (the probe could not change the
+/// answer — explicit wins — so skipping it is pure savings).
+pub fn effective_ref(
+    name: &str,
+    entry: &ConfigRepoEntry,
+    checkout: &std::path::Path,
+) -> Result<String> {
+    match entry.r#ref.as_deref() {
+        Some(r) => Ok(r.to_string()),
+        None => resolve_default_ref(name, entry, checkout),
+    }
+}
+
 /// Insert/replace a config repo entry in the registry. If `layers` is empty,
 /// push `name` as the default layer (mirrors cmd_config_add's behavior).
 /// Shared by `cmd_config_add` (clone + register) and `cmd_config_new`
@@ -1383,5 +1400,28 @@ pub(crate) mod tests {
 
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&plain);
+    }
+
+    // ---- A5 Session 2: effective_ref ----
+
+    #[test]
+    fn effective_ref_prefers_explicit_and_delegates_otherwise() {
+        // Explicit ref: returned verbatim, NO git probe (a nonexistent
+        // checkout would fail the probe — passing it proves the short-circuit).
+        let missing = std::path::Path::new("/nonexistent/a5-effective-ref-checkout");
+        let e = entry("https://example.invalid/repo.git", Some("pinned"), None);
+        assert_eq!(effective_ref("r", &e, missing).unwrap(), "pinned");
+
+        // No explicit ref: delegates to resolve_default_ref (a Remote entry
+        // against a checkout with no origin/HEAD is its hard error).
+        let repo = uniq_dir("a5-effref-repo");
+        init_repo(&repo);
+        let e = entry("https://example.invalid/repo.git", None, None);
+        let err = effective_ref("effrepo", &e, &repo).unwrap_err();
+        assert!(
+            err.to_string().contains("effrepo"),
+            "the delegated hard error must name the repo: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

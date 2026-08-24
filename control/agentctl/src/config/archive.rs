@@ -13,8 +13,12 @@
 //!   is never rewritten (concurrent producers race a rename; the loser
 //!   drops its tmp dir and returns the winner).
 //!
-//! Session 1 ships the store unwired; consumption (ref resolution through
-//! the cache) lands in a later A5 session.
+//! Session 1 shipped the store unwired; Session 2 wired consumption:
+//! `config::loading::layer_content_root` resolves Remote/GitFile layers to
+//! the archive of the LOCKED rev (not the managed clone's working tree), so
+//! edits committed in a managed clone are INVISIBLE to consumers until
+//! `workestrate config update` moves the pin (commit-before-consume).
+//! Plain-path entries are the documented exception (content-as-is).
 
 use std::path::{Path, PathBuf};
 

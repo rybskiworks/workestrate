@@ -33,13 +33,19 @@ pub fn derive_age_recipient(key_file: &std::path::Path) -> Result<String> {
 
 /// Resolve a registered config repo's secrets target paths for setup-secrets.
 ///
-/// The resolution MUST match `config::resolve_secrets_layers()` for
-/// context-layer entries: dir = `<store>/config-repos/<name>`, secrets_file
-/// from the
-/// entry override or ".env.enc", age_key_file from the entry override
-/// (tilde-expanded). When the entry has no age_key_file override, the fallback
-/// matches `secrets_loader::decrypt_layer()`: `SOPS_AGE_KEY_FILE` env, else
-/// `$HOME` + `scaffold::AGE_KEY_DEFAULT_PATH` with the `~/` prefix stripped.
+/// This is the WRITE-side target: `dir` is the managed store clone
+/// (`<store>/config-repos/<name>`), where the operator commits the encrypted
+/// `.env.enc`. A5 Session 2 changed the READ side only — consumption
+/// (`config::resolve_secrets_layers`) reads the pinned archive of the locked
+/// rev for Remote/GitFile entries, so this function deliberately no longer
+/// mirrors it: the committed file rides the archive like any other content,
+/// while new/edited secrets still land in the clone and become visible to
+/// consumption at the next `workestrate config update`. `secrets_file` comes
+/// from the entry override or ".env.enc", `age_key_file` from the entry
+/// override (tilde-expanded); when the entry has no age_key_file override,
+/// the fallback matches `secrets_loader::decrypt_layer()`:
+/// `SOPS_AGE_KEY_FILE` env, else `$HOME` + `scaffold::AGE_KEY_DEFAULT_PATH`
+/// with the `~/` prefix stripped.
 pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
     let registry = config::load_registry()?;
     let entry = registry

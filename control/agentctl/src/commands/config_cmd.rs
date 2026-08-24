@@ -269,6 +269,12 @@ pub fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
     // (shared with cmd_config_new's local-path registration).
     config::register_config(name, url, Some(git_ref), Some(rev.as_str()))?;
 
+    // A5 Session 2: `config add` is an explicit management verb — produce
+    // the initial content archive AND the initial lock pin (same write path
+    // as `config update`, minus the pull). Consumption reads the archive of
+    // the locked rev from here on.
+    config::ensure_archive(&dest, &rev)?;
+
     // ADR 0025(e): upsert the lock entry for this repo. Load-or-default so a
     // home that predates the lock gains one on the first add; home_version
     // comes from the registry (default 2 — the ADR 0023 single-home layout).
@@ -281,21 +287,10 @@ pub fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
         repos: std::collections::BTreeMap::new(),
     });
+    lock.version = config::LOCK_VERSION;
     lock.home_version = home_version;
     lock.tool_version = env!("CARGO_PKG_VERSION").to_string();
-    lock.repos.insert(
-        name.to_string(),
-        config::LockedRepo {
-            url: url.to_string(),
-            r#ref: Some(git_ref.to_string()),
-            rev: Some(rev.clone()),
-            // A5 Session 1: v2 fields stay empty here; Session 2 wires the
-            // archive-aware writer.
-            sha: None,
-            fetched_at: None,
-            refs: std::collections::BTreeMap::new(),
-        },
-    );
+    config::upsert_locked_pin(&mut lock, name, url, Some(git_ref), &rev);
     config::save_home_lock(&lock)?;
 
     println!(
@@ -627,6 +622,9 @@ pub async fn cmd_config_update(name: Option<&str>) -> Result<()> {
         None => registry.configs.keys().cloned().collect(),
     };
 
+    // A5 Session 2: track the entries actually updated this run — each gets
+    // an archive refresh + an explicit per-entry lock pin below.
+    let mut updated: Vec<(String, String)> = Vec::new();
     for n in names {
         let dest = config::config_repo_dir(&n);
         // FS-18: distinguish LOCAL-PATH entries (registered via
@@ -662,19 +660,36 @@ pub async fn cmd_config_update(name: Option<&str>) -> Result<()> {
             .configs
             .get_mut(&n)
             .ok_or_else(|| anyhow::anyhow!("config repo '{}' disappeared", n))?
-            .rev = Some(rev);
+            .rev = Some(rev.clone());
+        updated.push((n.clone(), rev));
         println!("{}: updated to {}", n, short);
     }
     config::save_registry(&registry)?;
 
-    // ADR 0025(e): rebuild the lock from the updated registry + the actual
-    // checked-out revs (local-path repos keep rev=None — that is their
-    // registry shape too). Checkouts live under the STORE dir
-    // (`config_repo_dir` = resolve_store_dir()/config-repos/<name>), which is
-    // the home itself in the single-home layout and the XDG data dir in a
-    // legacy home — so the lock's rev follows HEAD in both layouts.
+    // ADR 0025(e) + A5 Session 2: `config update` is THE explicit
+    // lock-writer and archive refresh. The lock is updated IN PLACE (a
+    // `lock_from_registry` rebuild would clobber the v2 per-entry
+    // sha/fetched_at/refs back to empty — see its fn doc); the rebuild only
+    // bootstraps a lock for a home that never had one. For each pulled
+    // entry: refresh the content archive of the new rev, then write the pin
+    // {rev = sha, sha, fetched_at = now} (the registry.rev write-back above
+    // stays for compat — the registry shape is unchanged). Entries not
+    // covered by this run keep their existing pins untouched.
     let store = config::resolve_store_dir();
-    let lock = config::lock_from_registry(&registry, &store);
+    let mut lock =
+        config::load_home_lock()?.unwrap_or_else(|| config::lock_from_registry(&registry, &store));
+    lock.version = config::LOCK_VERSION;
+    lock.home_version = registry.settings.home_version.unwrap_or(2);
+    lock.tool_version = env!("CARGO_PKG_VERSION").to_string();
+    for (n, rev) in &updated {
+        let dest = config::config_repo_dir(n);
+        config::ensure_archive(&dest, rev)?;
+        let entry = registry
+            .configs
+            .get(n)
+            .ok_or_else(|| anyhow::anyhow!("config repo '{}' disappeared", n))?;
+        config::upsert_locked_pin(&mut lock, n, &entry.url, entry.r#ref.as_deref(), rev);
+    }
     config::save_home_lock(&lock)?;
     Ok(())
 }

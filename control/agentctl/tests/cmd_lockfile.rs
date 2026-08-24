@@ -165,6 +165,26 @@ fn config_add_writes_lock_with_url_ref_and_actual_head_rev() {
         section.contains(&format!("rev = \"{clone_head}\"")),
         "lock rev must equal the checkout HEAD ({clone_head}):\n{section}"
     );
+    // A5 Session 2: `config add` also writes the v2 pin fields and produces
+    // the initial content archive of the locked rev.
+    assert!(
+        section.contains(&format!("sha = \"{clone_head}\"")),
+        "lock entry must record sha = the pinned commit:\n{section}"
+    );
+    assert!(
+        section.contains("fetched_at = \""),
+        "lock entry must stamp fetched_at:\n{section}"
+    );
+    let archive = store
+        .join("state")
+        .join("cache")
+        .join("gitv3")
+        .join(&clone_head);
+    assert!(
+        archive.join("workestrate.toml").exists(),
+        "config add must produce the initial archive at {} ",
+        archive.display()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +246,26 @@ fn config_update_advances_the_lock_rev_to_the_new_head() {
     assert!(
         !section.contains(&format!("rev = \"{first_head}\"")),
         "the stale rev must be gone:\n{section}"
+    );
+    // A5 Session 2: the explicit pin fields follow too, and the archive of
+    // the NEW rev exists (the archive of the first rev also remains —
+    // archive entries are immutable and content-addressed).
+    assert!(
+        section.contains(&format!("sha = \"{second_head}\"")),
+        "lock sha must follow the new HEAD:\n{section}"
+    );
+    assert!(
+        section.contains("fetched_at = \""),
+        "fetched_at must be stamped:\n{section}"
+    );
+    let gitv3 = store.join("state").join("cache").join("gitv3");
+    assert!(
+        gitv3.join(&second_head).join("notes.md").exists(),
+        "config update must refresh the archive with the new rev's content"
+    );
+    assert!(
+        gitv3.join(&first_head).join("workestrate.toml").exists(),
+        "the first rev's archive stays (immutable content-addressed entries)"
     );
 }
 

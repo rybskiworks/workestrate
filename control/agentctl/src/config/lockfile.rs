@@ -13,8 +13,12 @@
 //! `migrate-home` precedent, ADR 0023).
 //!
 //! Writers: `cmd_config_add`, `cmd_config_update`, `cmd_config_remove`,
-//! `cmd_home_init` (scaffold) and `cmd_home_clone`. Consumers: `home clone`
-//! provisioning and
+//! `cmd_home_init` (scaffold) and `cmd_home_clone` — plus the A5 Session 2
+//! FIRST-RESOLUTION-WITH-NOTICE path in `config::loading` (a consumption
+//! verb that writes ONLY when no pin exists yet, and announces the write on
+//! stderr; see `layer_content_root`). No other verb may write the lock — no
+//! verb mutates pins silently as a side effect. Consumers: pinned config
+//! consumption (`config::loading`), `home clone` provisioning and
 //! the future `up --pin` / spawn-provenance work (the lock is THEIR
 //! mechanism; do not build a second one).
 //!
@@ -202,6 +206,14 @@ fn save_home_lock_at(path: &Path, lock: &HomeLock) -> Result<()> {
 /// their registry shape too). `home_version` defaults to 2 (the ADR 0023
 /// single-home layout) when the registry does not record one; `tool_version`
 /// is this binary's version; `version` is [`LOCK_VERSION`].
+///
+/// A5 Session 2: this stays the BOOTSTRAP writer (home init/clone, and the
+/// no-prior-lock fallback in `cmd_config_update`) and deliberately leaves
+/// `sha`/`fetched_at` empty — the EXPLICIT pin writers (`config add`,
+/// `config update`, first-resolution-with-notice) populate those via
+/// [`upsert_locked_pin`], which is also why `cmd_config_update` must update
+/// a loaded lock IN PLACE rather than rebuilding via this function (a
+/// rebuild would clobber the archive-aware fields back to None).
 pub fn lock_from_registry(registry: &Registry, home: &Path) -> HomeLock {
     let mut repos = BTreeMap::new();
     for (name, entry) in &registry.configs {
@@ -219,11 +231,9 @@ pub fn lock_from_registry(registry: &Registry, home: &Path) -> HomeLock {
                 url: entry.url.clone(),
                 r#ref: entry.r#ref.clone(),
                 rev,
-                // A5 Session 1: the v2 fields are threaded with None/empty
-                // here DELIBERATELY — populating sha/fetched_at from the
-                // archive store would change the emitted lock content at the
-                // existing call sites (config add/update, home init/clone).
-                // Session 2 wires the real writer.
+                // Bootstrap writer: sha/fetched_at stay empty here (see the
+                // fn doc); the explicit pin writers populate them via
+                // upsert_locked_pin.
                 sha: None,
                 fetched_at: None,
                 refs: BTreeMap::new(),
@@ -236,6 +246,44 @@ pub fn lock_from_registry(registry: &Registry, home: &Path) -> HomeLock {
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
         repos,
     }
+}
+
+/// Upsert the PRIMARY pin for `name` in `lock` (A5 Session 2; ADR 0032
+/// addendum §Config source model). This is THE shared write path of the
+/// explicit lock writers (`config add`, `config update`, and the
+/// first-resolution-with-notice path in `config::loading`):
+///
+/// - `rev` = `sha` = the resolved commit — the pin IS the commit; `sha`
+///   additionally keys the content archive (`<state>/cache/gitv3/<sha>/`).
+/// - `fetched_at` is stamped with
+///   `crate::microsandbox::runtime::time::current_rfc3339_utc`.
+/// - An existing `refs` map (pins for NON-primary refs, written by the
+///   selection ladder in a later session) is PRESERVED.
+///
+/// Callers own `lock.version`/`tool_version` stamping and the atomic save.
+pub fn upsert_locked_pin(
+    lock: &mut HomeLock,
+    name: &str,
+    url: &str,
+    git_ref: Option<&str>,
+    sha: &str,
+) {
+    let refs = lock
+        .repos
+        .get(name)
+        .map(|existing| existing.refs.clone())
+        .unwrap_or_default();
+    lock.repos.insert(
+        name.to_string(),
+        LockedRepo {
+            url: url.to_string(),
+            r#ref: git_ref.map(|s| s.to_string()),
+            rev: Some(sha.to_string()),
+            sha: Some(sha.to_string()),
+            fetched_at: Some(crate::microsandbox::runtime::time::current_rfc3339_utc()),
+            refs,
+        },
+    );
 }
 
 #[cfg(test)]
@@ -656,5 +704,65 @@ pub(crate) mod tests {
 
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
+    }
+
+    // ---- A5 Session 2: upsert_locked_pin (the explicit pin write path) ----
+
+    #[test]
+    fn upsert_locked_pin_stamps_sha_and_fetched_at_and_preserves_refs() {
+        let mut lock = sample_lock();
+        // Pre-existing NON-primary ref pin must survive an upsert of the
+        // primary pin.
+        lock.repos.get_mut("work").unwrap().refs.insert(
+            "feat-x".to_string(),
+            LockedRef {
+                rev: "feat-x".to_string(),
+                sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                fetched_at: "2026-08-24T10:01:00Z".to_string(),
+            },
+        );
+
+        upsert_locked_pin(
+            &mut lock,
+            "work",
+            "https://example.invalid/work.git",
+            Some("main"),
+            "aaaaaaa1111111bbbbbbb2222222ccccccc3333333",
+        );
+
+        let repo = &lock.repos["work"];
+        assert_eq!(
+            repo.rev.as_deref(),
+            Some("aaaaaaa1111111bbbbbbb2222222ccccccc3333333"),
+            "rev = the resolved commit"
+        );
+        assert_eq!(
+            repo.sha.as_deref(),
+            Some("aaaaaaa1111111bbbbbbb2222222ccccccc3333333"),
+            "sha = rev (the pin IS the commit)"
+        );
+        let fetched_at = repo.fetched_at.as_deref().expect("fetched_at stamped");
+        assert!(
+            fetched_at.ends_with('Z') && fetched_at.contains('T'),
+            "fetched_at must be RFC3339 UTC: {fetched_at}"
+        );
+        assert_eq!(repo.r#ref.as_deref(), Some("main"));
+        assert!(
+            lock.repos["work"].refs.contains_key("feat-x"),
+            "an existing refs map must be preserved across a primary-pin upsert"
+        );
+
+        // A fresh entry (name not present) gets an empty refs map.
+        upsert_locked_pin(
+            &mut lock,
+            "new",
+            "https://example.invalid/n.git",
+            None,
+            "0123abc",
+        );
+        let new = &lock.repos["new"];
+        assert_eq!(new.sha.as_deref(), Some("0123abc"));
+        assert_eq!(new.r#ref, None);
+        assert!(new.refs.is_empty());
     }
 }

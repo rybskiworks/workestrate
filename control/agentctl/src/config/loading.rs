@@ -1,5 +1,31 @@
 //! Config loading (`load_config` layering), user-global overrides, secrets
 //! layer resolution, and the `agentctl check` scaffold checks.
+//!
+//! ## A5 Session 2: pinned consumption (ADR 0032 addendum §Config source model)
+//!
+//! WHERE a config layer's files physically live depends on the registry
+//! entry's [`crate::config::ConfigSourceKind`] (see [`layer_content_root`]):
+//!
+//! - **PlainPath** entries are consumed CONTENT-AS-IS from
+//!   [`crate::config::local_entry_checkout_dir`] (falling back to the
+//!   historical store path) with branch `"local"` — the documented explicit
+//!   exception: commit-before-consume does NOT apply, edits are visible on
+//!   the next load, and no archive/lock entry is ever produced for them.
+//! - **Remote / GitFile** entries are consumed REF-PINNED from the
+//!   content-addressed archive store (`<state>/cache/gitv3/<sha>/`, see
+//!   `config::archive`), NOT from the managed clone's working tree. The
+//!   consumed rev resolves (in order): the lock entry for
+//!   `(name, effective ref)` → the registry's recorded `rev` →
+//!   FIRST-RESOLUTION-WITH-NOTICE (resolve the effective ref in the clone,
+//!   write the lock entry, print a stderr notice). The first two are SILENT
+//!   (already pinned); only the third writes, and never silently.
+//!
+//! BEHAVIOR CHANGE (vs. pre-A5): edits committed in the managed clone are
+//! INVISIBLE to consumption until `workestrate config update` moves the pin
+//! (commit-before-consume). Everything path-shaped is UNCHANGED (spec 17
+//! §3b): provenance strings stay `<repo>#<relpath>` and `layer_dirs` point
+//! at the content root — only the physical location moves to the archive
+//! dir for pinned entries.
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -12,7 +38,7 @@ use crate::config::registry::{load_registry, resolve_active_context};
 use crate::config::trust::is_trusted_project;
 use crate::config::types::{CONFIG_FIELDS, WORKLOAD_FIELDS};
 use crate::config::validation::validate_config;
-use crate::config::{set_active_context, ConfigFile, SecretsLayer};
+use crate::config::{set_active_context, ConfigFile, ConfigRepoEntry, Registry, SecretsLayer};
 
 /// One row in the `agentctl check` report.
 #[derive(Debug, Clone)]
@@ -312,12 +338,21 @@ pub fn load_config() -> Result<ConfigFile> {
         }
     }
 
-    // 3. Resolve active context and load its layers.
+    // 3. Resolve active context and load its layers. Each layer's CONTENT
+    //    ROOT comes from `layer_content_root` (A5 Session 2: pinned archive
+    //    consumption for Remote/GitFile entries, content-as-is for
+    //    PlainPath; see the module doc).
     let active_context = resolve_active_context()?;
     set_active_context(Some(active_context.clone()));
     for name in &active_context.layers {
-        let repo_dir = resolve_store_dir().join("config-repos").join(name);
-        layers.extend(load_config_repo_layers(name, &repo_dir)?);
+        let content_root = match registry.as_ref() {
+            Some(reg) => layer_content_root(name, reg)?,
+            // No registry → no configs map to classify against; keep the
+            // historical store path (unreachable in practice: a registry-less
+            // resolve_active_context yields no layers).
+            None => resolve_store_dir().join("config-repos").join(name),
+        };
+        layers.extend(load_config_repo_layers(name, &content_root)?);
     }
 
     // 3.5. User-global overrides (between context layers and trusted project).
@@ -488,6 +523,108 @@ fn collect_policy_scopes(
 // ---------------------------------------------------------------------------
 // Config-repo directory mode (spec 17)
 // ---------------------------------------------------------------------------
+
+/// Resolve the CONTENT ROOT of one config layer (A5 Session 2; ADR 0032
+/// addendum §Config source model, spec 17 §3b). This is THE one resolver
+/// shared by `load_config` (layer files) and `resolve_secrets_layers`
+/// (`.env.enc` rides the same root — it is committed encrypted content).
+///
+/// - Entry absent from the registry (a context naming an unregistered
+///   layer): the historical store path, unchanged (a missing dir yields no
+///   layers, as before).
+/// - [`ConfigSourceKind::PlainPath`]: [`local_entry_checkout_dir`] when the
+///   entry has the local-path shape, else the historical store path —
+///   content-as-is, branch `"local"`, commit-before-consume does NOT apply.
+/// - [`ConfigSourceKind::Remote`] / [`ConfigSourceKind::GitFile`]:
+///   REF-PINNED archive consumption — see [`pinned_layer_content_root`].
+pub(crate) fn layer_content_root(name: &str, registry: &Registry) -> Result<PathBuf> {
+    use crate::config::registry::ConfigSourceKind;
+    let store_path = || resolve_store_dir().join("config-repos").join(name);
+    let Some(entry) = registry.configs.get(name) else {
+        return Ok(store_path());
+    };
+    match crate::config::source_kind(&entry.url) {
+        ConfigSourceKind::PlainPath => {
+            Ok(crate::config::local_entry_checkout_dir(entry).unwrap_or_else(store_path))
+        }
+        ConfigSourceKind::Remote | ConfigSourceKind::GitFile => {
+            pinned_layer_content_root(name, entry, registry)
+        }
+    }
+}
+
+/// Ref-pinned content root of a Remote/GitFile layer: the content-addressed
+/// archive of the consumed rev, produced from the EXISTING managed clone
+/// (NO worktrees, NO checkouts — the clone is the object database).
+///
+/// Rev resolution precedence (LOCK-NEVER-SILENT discipline):
+///
+/// 1. The lock entry for `(name, effective ref)`: a `[repos.<name>.refs
+///    .<ref>]` pin, or the primary pin when the lock's recorded `ref`
+///    matches the registry entry's current `ref` (a changed `ref` invalidates
+///    the primary pin). SILENT — already pinned.
+/// 2. The registry entry's recorded `rev` (the pin `config update` wrote
+///    back). SILENT — already pinned.
+/// 3. FIRST-RESOLUTION-WITH-NOTICE: resolve the effective ref in the clone
+///    (`git_rev_parse_ref`), produce the archive, WRITE the lock entry
+///    `{rev = sha, sha, fetched_at = now}` and print a stderr notice. This
+///    is the ONLY lock write a consumption verb may perform.
+fn pinned_layer_content_root(
+    name: &str,
+    entry: &ConfigRepoEntry,
+    registry: &Registry,
+) -> Result<PathBuf> {
+    let clone = resolve_store_dir().join("config-repos").join(name);
+    if !clone.join(".git").exists() {
+        anyhow::bail!(
+            "config repo '{}' (url '{}') has no managed clone at {}; \
+             provision it with `workestrate config add` or `workestrate home clone`",
+            name,
+            entry.url,
+            clone.display()
+        );
+    }
+    let effective_ref = crate::config::effective_ref(name, entry, &clone)?;
+    let lock = crate::config::load_home_lock()?;
+
+    // (1) Lock pin for (name, effective ref) — silent.
+    if let Some(locked) = lock.as_ref().and_then(|l| l.repos.get(name)) {
+        if let Some(pin) = locked.refs.get(&effective_ref) {
+            return crate::config::ensure_archive(&clone, &pin.sha);
+        }
+        if locked.r#ref == entry.r#ref {
+            if let Some(sha) = locked.sha.as_deref().or(locked.rev.as_deref()) {
+                return crate::config::ensure_archive(&clone, sha);
+            }
+        }
+    }
+
+    // (2) Registry-recorded rev (written back by `config update`) — silent.
+    if let Some(rev) = entry.rev.as_deref() {
+        return crate::config::ensure_archive(&clone, rev);
+    }
+
+    // (3) First resolution WITH notice: resolve, archive, write the lock.
+    let sha = crate::git::git_rev_parse_ref(&clone, &effective_ref)?;
+    let archive = crate::config::ensure_archive(&clone, &sha)?;
+    let mut lock = lock.unwrap_or_else(|| crate::config::HomeLock {
+        version: crate::config::LOCK_VERSION,
+        home_version: registry.settings.home_version.unwrap_or(2),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        repos: std::collections::BTreeMap::new(),
+    });
+    lock.version = crate::config::LOCK_VERSION;
+    lock.tool_version = env!("CARGO_PKG_VERSION").to_string();
+    crate::config::upsert_locked_pin(&mut lock, name, &entry.url, entry.r#ref.as_deref(), &sha);
+    crate::config::save_home_lock(&lock)?;
+    eprintln!(
+        "locked {}@{} → {} (first resolution); `workestrate config update` moves pins explicitly",
+        name,
+        effective_ref,
+        crate::git::short_rev(&sha)
+    );
+    Ok(archive)
+}
 
 /// Load the layer(s) contributed by one registry config repo.
 ///
@@ -795,12 +932,16 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
         }
     }
 
-    // 3. Context layers in declared order, each with its own .env.enc.
+    // 3. Context layers in declared order, each with its own .env.enc. The
+    //    secrets dir is the SAME content root as config consumption (A5
+    //    Session 2): the pinned archive dir for Remote/GitFile entries
+    //    (.env.enc is committed encrypted content and rides the archive like
+    //    any other file), the plain-path dir unchanged otherwise.
     let registry = load_registry()?;
     let active_context = resolve_active_context()?;
     if let Some(registry) = registry {
         for name in &active_context.layers {
-            let dir = resolve_store_dir().join("config-repos").join(name);
+            let dir = layer_content_root(name, &registry)?;
             let entry = registry.configs.get(name);
             let secrets_mode = entry.and_then(|e| e.secrets.as_deref()).unwrap_or("file");
             let secrets_file = entry
@@ -1255,16 +1396,20 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&config_dir)?;
         std::fs::create_dir_all(&data_dir)?;
 
+        // A5 Session 2: a Remote entry is consumed REF-PINNED from the
+        // archive store, so the store clone must be a real git repo and the
+        // registry carries the pinned rev (case (ii): silent consumption).
+        let repo_dir = data_dir.join("config-repos").join("personal");
+        init_git_repo(&repo_dir, &[("workestrate.toml", "schema_version = 1\n")]);
+        let pinned_rev = crate::git::git_rev_parse(&repo_dir)?;
+
         // Registry with a context and a config repo
         std::fs::write(
             config_dir.join("config.toml"),
-            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[configs.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\n",
+            format!(
+                "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[configs.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\nrev = \"{pinned_rev}\"\n"
+            ),
         )?;
-
-        // Config repo dir with a workestrate.toml (so the layer is loaded)
-        let repo_dir = data_dir.join("config-repos").join("personal");
-        std::fs::create_dir_all(&repo_dir)?;
-        std::fs::write(repo_dir.join("workestrate.toml"), "schema_version = 1\n")?;
 
         // Create a dummy .env.local.enc in the XDG config dir
         std::fs::write(config_dir.join(".env.local.enc"), "# dummy")?;
@@ -1369,15 +1514,20 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&config_dir)?;
         std::fs::create_dir_all(&data_dir)?;
 
+        // A5 Session 2: a Remote entry is consumed REF-PINNED from the
+        // archive store (see the sibling test above) — real git clone dir +
+        // registry-recorded rev pin.
+        let repo_dir = data_dir.join("config-repos").join("personal");
+        init_git_repo(&repo_dir, &[("workestrate.toml", "schema_version = 1\n")]);
+        let pinned_rev = crate::git::git_rev_parse(&repo_dir)?;
+
         // Registry with a context
         std::fs::write(
             config_dir.join("config.toml"),
-            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[configs.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\n",
+            format!(
+                "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[configs.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\nrev = \"{pinned_rev}\"\n"
+            ),
         )?;
-
-        let repo_dir = data_dir.join("config-repos").join("personal");
-        std::fs::create_dir_all(&repo_dir)?;
-        std::fs::write(repo_dir.join("workestrate.toml"), "schema_version = 1\n")?;
 
         // NO .env.local.enc — should still include the layer (decrypt handles missing file)
         let old_home = std::env::var("HOME").ok();
@@ -2382,6 +2532,406 @@ write.deny = ["sugar-write-deny"]
         let collected = collect_policy_scopes(None, &[layer])?;
         assert!(collected.is_empty());
         assert_eq!(expected.workloads["pi"].kind, "agent");
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // A5 Session 2: pinned consumption (layer_content_root) + the
+    // LOCK-NEVER-SILENT discipline.
+    //
+    // These tests build REAL temp git repos (the git.rs/archive.rs test
+    // precedent: git + tar are on the pinned PATH, ungated). Each pins
+    // WORKESTRATE_HOME at a fresh temp dir (HomeKind::Env: store = the home
+    // itself, state = <home>/state, lock = <home>/workestrate.lock) and
+    // holds ENV_TEST_LOCK + an EnvGuard.
+    // ------------------------------------------------------------------
+
+    /// Env keys these tests mutate (superset coverage of HOME_ENV_KEYS
+    /// members they touch, plus the reference/state discovery vars).
+    const A5_ENV_KEYS: &[&str] = &[
+        "WORKESTRATE_HOME",
+        "WORKESTRATE_CONFIG_DIR",
+        "WORKESTRATE_NO_PROJECT_CONFIG",
+        "WORKESTRATE_CONTEXT",
+        "WORKESTRATE_REFERENCE_CONFIG",
+        "WORKESTRATE_STATE_DIR",
+    ];
+
+    /// Git-runner for the A5 fixtures: repo-local identity, assert success.
+    fn a5_git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .expect("git must be runnable");
+        assert!(
+            status.success(),
+            "git {:?} failed in {}",
+            args,
+            dir.display()
+        );
+    }
+
+    /// Init a git repo at `dir` (branch main) with `files` committed;
+    /// returns the HEAD sha. Shared by the A5 fixtures and the two pinned
+    /// secrets-layer tests above.
+    fn init_git_repo(dir: &Path, files: &[(&str, &str)]) {
+        std::fs::create_dir_all(dir).expect("create repo dir");
+        a5_git(dir, &["init", "--quiet", "-b", "main"]);
+        a5_git(dir, &["config", "user.email", "a5-loading@test.invalid"]);
+        a5_git(dir, &["config", "user.name", "a5-loading-test"]);
+        for (rel, content) in files {
+            let path = dir.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create parent");
+            }
+            std::fs::write(&path, content).expect("write fixture file");
+        }
+        a5_git(dir, &["add", "."]);
+        a5_git(dir, &["commit", "--quiet", "-m", "fixture"]);
+    }
+
+    /// A one-workload workestrate.toml whose workload name is the content
+    /// marker (rev A vs rev B discrimination).
+    fn a5_marker_toml(marker: &str) -> String {
+        format!(
+            "schema_version = 1\n\n[workloads.{marker}]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n"
+        )
+    }
+
+    /// Pin WORKESTRATE_HOME at a fresh temp dir and neutralize the other
+    /// discovery env vars; return the home. Caller holds ENV_TEST_LOCK; the
+    /// EnvGuard is created by the caller BEFORE calling this.
+    fn a5_pin_home(label: &str) -> PathBuf {
+        let home = uniq_dir(label);
+        std::fs::create_dir_all(&home).expect("create pinned home");
+        std::env::set_var("WORKESTRATE_HOME", &home);
+        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        std::env::remove_var("WORKESTRATE_CONTEXT");
+        std::env::remove_var("WORKESTRATE_REFERENCE_CONFIG");
+        std::env::remove_var("WORKESTRATE_STATE_DIR");
+        home
+    }
+
+    /// Registry TOML for a single-layer home. `extra_entry_lines` carries
+    /// e.g. `rev = "..."`.
+    fn a5_registry(
+        name: &str,
+        url: &str,
+        git_ref: Option<&str>,
+        extra_entry_lines: &str,
+    ) -> String {
+        let ref_line = git_ref
+            .map(|r| format!("ref = \"{r}\"\n"))
+            .unwrap_or_default();
+        format!(
+            "layers = [\"{name}\"]\n\n[configs.{name}]\nurl = \"{url}\"\n{ref_line}{extra_entry_lines}"
+        )
+    }
+
+    /// Build a home with a MANAGED CLONE `<home>/config-repos/<name>`
+    /// committed at `files`, register it as a Remote entry (ref main), and
+    /// return (home, clone, sha). No lock is written — each test decides
+    /// the lock state explicitly.
+    fn a5_remote_home(
+        label: &str,
+        name: &str,
+        files: &[(&str, &str)],
+    ) -> (PathBuf, PathBuf, String) {
+        let home = a5_pin_home(label);
+        let clone = home.join("config-repos").join(name);
+        init_git_repo(&clone, files);
+        let sha = crate::git::git_rev_parse(&clone).expect("clone HEAD sha");
+        std::fs::write(
+            home.join("config.toml"),
+            a5_registry(name, "https://example.invalid/a5.git", Some("main"), ""),
+        )
+        .expect("write registry");
+        (home, clone, sha)
+    }
+
+    /// Commit a follow-up rev on top of `clone` (advancing the working tree
+    /// WITHOUT `config update` — the commit-before-consume gap).
+    fn a5_advance_clone(clone: &Path, files: &[(&str, &str)]) -> String {
+        for (rel, content) in files {
+            std::fs::write(clone.join(rel), content).expect("write advance file");
+        }
+        a5_git(clone, &["add", "."]);
+        a5_git(clone, &["commit", "--quiet", "-m", "advance"]);
+        crate::git::git_rev_parse(clone).expect("advanced HEAD sha")
+    }
+
+    /// Write a lock pinning `name` at `sha` (primary pin, ref = main) into
+    /// `home`.
+    fn a5_write_lock(home: &Path, name: &str, sha: &str) {
+        let mut lock = crate::config::HomeLock {
+            version: crate::config::LOCK_VERSION,
+            home_version: 2,
+            tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            repos: std::collections::BTreeMap::new(),
+        };
+        crate::config::upsert_locked_pin(
+            &mut lock,
+            name,
+            "https://example.invalid/a5.git",
+            Some("main"),
+            sha,
+        );
+        crate::config::save_home_lock_to(home, &lock).expect("write pin lock");
+    }
+
+    /// Pinned consumption: with the lock pinning rev A, advancing the clone
+    /// to B (WITHOUT `config update`) must NOT change what `load_config`
+    /// reads — consumption comes from A's archive, and the lock is left
+    /// byte-identical (LOCK-NEVER-SILENT: case (i) writes nothing).
+    #[test]
+    fn pinned_consumption_reads_locked_rev_not_the_advanced_checkout() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let (home, clone, sha_a) = a5_remote_home(
+            "a5-pinned",
+            "team",
+            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+        );
+        a5_write_lock(&home, "team", &sha_a);
+        let sha_b = a5_advance_clone(&clone, &[("workestrate.toml", &a5_marker_toml("rev_b"))]);
+        assert_ne!(sha_a, sha_b);
+
+        let lock_before = std::fs::read_to_string(home.join("workestrate.lock"))?;
+        let cfg = load_config()?;
+
+        assert!(
+            cfg.workloads.contains_key("rev_a"),
+            "consumption must read the LOCKED rev A, not the checkout: {:?}",
+            cfg.workloads.keys().collect::<Vec<_>>()
+        );
+        assert!(!cfg.workloads.contains_key("rev_b"));
+        // The content root IS the archive of sha A.
+        let archive = crate::config::archive_dir(&sha_a)?;
+        assert!(
+            archive.join("workestrate.toml").exists(),
+            "the archive of the locked rev must exist"
+        );
+        let layer_dirs = crate::merge::get_layer_dirs().expect("layer dirs set by load_config");
+        assert_eq!(
+            layer_dirs.get("team").map(|p| p.as_path()),
+            Some(archive.as_path()),
+            "layer_dirs must point at the archive dir, not the checkout"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("workestrate.lock"))?,
+            lock_before,
+            "a lock-covered load must perform NO lock write (byte-identical)"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// First-resolution-with-notice: no lock, no registry rev → the first
+    /// load resolves the effective ref in the clone, WRITES the lock entry
+    /// and prints the stderr notice; a second identical load is silent and
+    /// write-free (byte-identical lock). (The notice itself goes to the
+    /// process's stderr and cannot be captured in-process; the write branch
+    /// is the only place it is printed, and byte-identity proves that branch
+    /// did not run on the second load.)
+    #[test]
+    fn first_resolution_writes_lock_then_second_load_is_silent() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let (home, _clone, sha_a) = a5_remote_home(
+            "a5-first",
+            "team",
+            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+        );
+        let lock_path = home.join("workestrate.lock");
+        assert!(!lock_path.exists(), "fixture starts lock-free");
+
+        let cfg = load_config()?;
+        assert!(cfg.workloads.contains_key("rev_a"));
+
+        // First resolution WROTE the lock: primary pin {rev = sha, sha,
+        // fetched_at} for (team, main).
+        let written = crate::config::load_home_lock()?.expect("lock written by first resolution");
+        let entry = &written.repos["team"];
+        assert_eq!(entry.rev.as_deref(), Some(sha_a.as_str()));
+        assert_eq!(entry.sha.as_deref(), Some(sha_a.as_str()));
+        assert!(
+            entry.fetched_at.is_some(),
+            "first resolution stamps fetched_at"
+        );
+        assert_eq!(written.version, crate::config::LOCK_VERSION);
+
+        // Second load: silent and write-free.
+        let lock_bytes = std::fs::read_to_string(&lock_path)?;
+        let cfg2 = load_config()?;
+        assert!(cfg2.workloads.contains_key("rev_a"));
+        assert_eq!(
+            std::fs::read_to_string(&lock_path)?,
+            lock_bytes,
+            "the second load must NOT touch the lock"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Registry-rev fallback: no lock, `rev` recorded in the registry →
+    /// consume that rev SILENTLY (no lock write — the lock file stays
+    /// absent), even when the clone has since advanced.
+    #[test]
+    fn registry_rev_fallback_consumes_recorded_rev_without_lock_write() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let home = a5_pin_home("a5-regrev");
+        let clone = home.join("config-repos").join("team");
+        init_git_repo(&clone, &[("workestrate.toml", &a5_marker_toml("rev_a"))]);
+        let sha_a = crate::git::git_rev_parse(&clone)?;
+        a5_advance_clone(&clone, &[("workestrate.toml", &a5_marker_toml("rev_b"))]);
+        std::fs::write(
+            home.join("config.toml"),
+            a5_registry(
+                "team",
+                "https://example.invalid/a5.git",
+                Some("main"),
+                &format!("rev = \"{sha_a}\"\n"),
+            ),
+        )?;
+
+        let cfg = load_config()?;
+        assert!(
+            cfg.workloads.contains_key("rev_a"),
+            "the registry-recorded rev must be consumed, not the checkout tip"
+        );
+        assert!(
+            !home.join("workestrate.lock").exists(),
+            "registry-rev consumption is SILENT: no lock file may appear"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// PlainPath entries are the documented exception: content-as-is from
+    /// the working dir (an edit is visible on the very next load), NO
+    /// archive and NO lock write.
+    #[test]
+    fn plain_path_entry_consumes_working_dir_as_is() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let home = a5_pin_home("a5-plain");
+        let plain = home.join("my-plain-config");
+        std::fs::create_dir_all(&plain)?;
+        std::fs::write(plain.join("workestrate.toml"), a5_marker_toml("v1"))?;
+        std::fs::write(
+            home.join("config.toml"),
+            a5_registry("local", &plain.to_string_lossy(), None, ""),
+        )?;
+
+        let cfg = load_config()?;
+        assert!(cfg.workloads.contains_key("v1"));
+
+        // Edit the plain dir → the NEXT load sees the edit (no commit, no
+        // update, no archive).
+        std::fs::write(plain.join("workestrate.toml"), a5_marker_toml("v2"))?;
+        let cfg = load_config()?;
+        assert!(
+            cfg.workloads.contains_key("v2"),
+            "plain-path consumption is content-as-is: edits are immediately visible"
+        );
+        assert!(
+            !home.join("workestrate.lock").exists(),
+            "plain-path consumption never writes the lock"
+        );
+        assert!(
+            !crate::config::archive_store_root().exists(),
+            "plain-path consumption never produces an archive"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Secrets layers resolve against the SAME content root: for a pinned
+    /// entry the `.env.enc` path lives in the ARCHIVE dir (rev A content),
+    /// not the checkout (rev B content).
+    #[test]
+    fn secrets_layer_resolves_from_the_archive_for_pinned_entries() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let (home, clone, sha_a) = a5_remote_home(
+            "a5-secrets",
+            "team",
+            &[
+                ("workestrate.toml", &a5_marker_toml("rev_a")),
+                (".env.enc", "enc-content-A"),
+            ],
+        );
+        a5_write_lock(&home, "team", &sha_a);
+        a5_advance_clone(&clone, &[(".env.enc", "enc-content-B")]);
+
+        let layers = resolve_secrets_layers()?;
+        let layer = layers
+            .iter()
+            .find(|l| l.name == "team")
+            .expect("team secrets layer");
+        let archive = crate::config::archive_dir(&sha_a)?;
+        assert_eq!(
+            layer.dir, archive,
+            "the pinned secrets dir IS the archive of the locked rev"
+        );
+        assert_eq!(
+            std::fs::read_to_string(layer.dir.join(&layer.secrets_file))?,
+            "enc-content-A",
+            ".env.enc rides the archive: rev A content, not the checkout's rev B"
+        );
+        assert_eq!(
+            std::fs::read_to_string(clone.join(".env.enc"))?,
+            "enc-content-B",
+            "the checkout DID advance (the archive is what holds A)"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Provenance under pinned consumption (spec 17 §3b): pseudo-layer
+    /// provenance strings still carry `<repo>#workestrate/...` relpaths —
+    /// computed against the archive dir exactly as against a working copy.
+    #[test]
+    fn pinned_consumption_provenance_keeps_repo_relpath_strings() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let (home, _clone, sha_a) = a5_remote_home(
+            "a5-prov",
+            "team",
+            &[
+                ("workestrate/default.toml", "schema_version = 1\n"),
+                (
+                    "workestrate/workloads/pinned.toml",
+                    &full_workload("pinned", 2),
+                ),
+            ],
+        );
+        a5_write_lock(&home, "team", &sha_a);
+
+        let cfg = load_config()?;
+        assert!(cfg.workloads.contains_key("pinned"));
+        let provenance = crate::merge::get_provenance().expect("provenance set by load_config");
+        assert_eq!(
+            provenance.get("schema_version").map(String::as_str),
+            Some("team#workestrate/default.toml"),
+            "provenance relpaths are computed against the archive dir (spec 17 §3b: F-rules unchanged)"
+        );
+        assert_eq!(
+            provenance.get("workloads.pinned.kind").map(String::as_str),
+            Some("team#workestrate/workloads/pinned.toml")
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }
 }
