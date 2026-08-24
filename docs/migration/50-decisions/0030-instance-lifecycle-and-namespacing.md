@@ -1608,3 +1608,49 @@ environment with declared state, ports, and teardown). The agent workload
 Naming, docs, and config vocabulary must NOT paint the mechanism into an
 agents-only corner — the strategy is `per-dir`, the state structure is
 `workspaces/<name>-state/<instance-key>`, and neither names agents.
+
+## Addendum (2026-08-24): per-dir LANDED — implementation notes
+
+Landed as commit a01319d (tool repo) + b639318 (personal config repo: prime
+capsule opts in per §V5; prime-smoke pins `--instance prime-smoke`). This
+records the mechanics pinned at implementation time (the V-addendum left them
+open):
+
+- **Shorthash**: FNV-1a 64-bit over the canonicalized cwd's UTF-8 bytes,
+  lowercase hex, first 8 chars. Hand-rolled (no new crate dependency);
+  deterministic across toolchain upgrades.
+- **Dirname-slug**: last path component, ASCII-lowercased, non-[a-z0-9] runs
+  collapse to one '-', trimmed, capped at 23 chars (23 + '-' + 8 = 32 =
+  MAX_INSTANCE_ID_LEN); fallbacks "dir" (unusable basename) and "root" (/).
+- **instance-key == the instance id's @-suffix**; state-mount scoping applies
+  only when strategy = per-dir (singletons byte-identical).
+- **Registry record field**: `source_dir` (serde-default Option<String>) —
+  canonical invocation cwd at create, per-dir instances only; absent =
+  unknown/legacy, never hard-fails.
+- **`--replace --instance <id>` is now legal globally** (replace that specific
+  instance; the teardown machinery was already instance-name-generic).
+  Required by per-dir --replace and pinned-instance smokes. `--new` stays
+  mutually exclusive with both.
+- **on_skew ships as a STUB**: parse/validation/Display + the pure
+  skew_notice decision + one wired call site passing None stamps
+  (build_sandbox Reuse arm). The real stamp comparison wires in A3 (ADR 0032
+  provenance stamps) — note for A3: the current call site is unreachable for
+  detached-up reuses (the parent short-circuits before build_sandbox), so A3
+  must add a parent-side site.
+
+### Open questions surfaced by the per-dir implementation (2026-08-24)
+
+- **per-dir workload as a depends_on target**: dep auto-start plans the dep
+  against its singleton/scoped slot but the detached child re-keys to the
+  cwd-derived id (resolve_dependent_instance_id) — disposition and record
+  disagree. Not reachable today (no per-dir workload is anyone's dep; agents
+  already refuse auto-start). Guard (validation refuses per-dir on
+  dep-referenced workloads) vs defining dep-mode semantics: USER DECISION
+  needed before per-dir spreads.
+- **Scoped-dep id length**: <dep>@<dependent>-<id> can exceed the 32-char
+  instance-id cap when the dependent id is a per-dir key (up to 32 itself).
+  Shorter slug cap budgeting the prefix, or documented constraint: open.
+- **Bare `workload up` batch + per-dir**: the parent-side reuse short-circuit
+  checks the bare slot while the child re-derives the cwd-keyed id (FS-8
+  grace misreport can resurface). Latent (prime is agent-kind; batch skips
+  agents): open.
