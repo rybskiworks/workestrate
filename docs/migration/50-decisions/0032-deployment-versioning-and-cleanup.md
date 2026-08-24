@@ -231,6 +231,22 @@ deferred.
 - **Personal-repo remote target** — RESOLVED: **local-only FOR NOW**; the
   user will push to origin eventually. NOTE: nothing in the personal config
   repo is backed up off-host until then.
+- **Context-at-create verification (A1)** — RESOLVED (2026-08-24): registry
+  records keep recording `context` = active context at register time
+  (unchanged). NEW write-side refuse: the registry refuses a record whose
+  `context` does not match the slot prefix of the instance name
+  (`slot_of_instance(instance) == slot_for(workload, context)`); namespaced
+  instance + `context: null` is refused; bare name + null stays legal
+  (backward compat). Read-side: adopting an existing record
+  (reuse/start-existing/dep-satisfied) warns (never fails) when record
+  context ≠ invocation context; legacy `context: null` records are
+  unknown-context forever — never migrated, never hard-failed (they are the
+  A4 cleanup classification's "unknown" bucket). ALSO RESOLVED: context
+  names are validated at registry load, fail-closed — slug shape (start
+  `[a-z0-9]`, continue `[a-z0-9-]`, no trailing `-`) because names become
+  instance-name prefixes; the lenient dir-resolution load path stays
+  lenient. Context display folded into A1: `instances` text and `workloads`
+  text+JSON gain the context column/field.
 
 **REMAINING (parked):**
 
