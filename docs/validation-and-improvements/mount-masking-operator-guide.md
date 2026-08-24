@@ -8,13 +8,14 @@
 
 ## What mount masking does
 
-Mount masking hides, protects, or restricts writes to paths inside a guest
-mount — without copying the mount. The operator declares glob patterns in a
+Mount masking hides paths, seals them entirely, or restricts writes to paths
+inside a guest mount — without copying the mount. The operator declares glob patterns in a
 `[policy.mounts]` fragment at one of six hierarchical scopes; the compiler
 collects every scope's fragment (never merges them) and compiles a single
 ordered program that the runtime enforces for the mount's lifetime. A masked
 path returns `ENOENT` to the guest and is omitted from directory listings; a
-protected path is hidden AND untouchable; writes default to allow+tag (the
+sealed path (operator-scope final `read.deny`) is hidden AND untouchable;
+writes default to allow+tag (the
 guest writes the real file, tagged with an alias).
 
 ## v1 status (important)
@@ -91,7 +92,7 @@ each axis.
 **Trust model:** only operator scopes (1–2) may declare final ALLOWS
 (`read.allow` / `write.allow`). Any scope may declare a final DENY (denying is
 the fail-closed direction). An operator scope's final `read.deny` additionally
-routes to the protect tier (see below). This preserves the monotonic-deny
+routes to the final-deny tier (see below). This preserves the monotonic-deny
 posture: an untrusted repo cannot permanently reopen a path an operator
 expects closable.
 
@@ -116,9 +117,9 @@ deny = [
 ```
 
 The reference config intentionally declares nothing final and nothing
-protected — protection is an operator-only tier declared in the home registry
-or user-global overrides (a final `read.deny` there compiles to the protect
-wire bucket).
+sealed — the final-deny tier is an operator-only tier declared in the home
+registry or user-global overrides (a final `read.deny` there compiles to the
+wire format's `protect` bucket — wire-internal name).
 
 ## Semantics operators need to know
 
@@ -126,11 +127,11 @@ wire bucket).
   the real file (there is one filesystem, no copy); the write is tagged with an
   alias so the host can identify it. `write.deny` forbids writes; `write.allow`
   re-permits them. Deny beats allow on overlap.
-- **Protect tier:** protection is independent of the finality axis. A protected
-  path is hidden and cannot be written, regardless of write rules. It is
-  declared as a final `read.deny` from an operator scope (home registry or
-  user-global overrides) — only those entries compile to the protect wire
-  bucket.
+- **The final-deny tier:** sealing is independent of the finality axis. A
+  sealed path is hidden and cannot be written, regardless of write rules. It
+  is declared as a final `read.deny` from an operator scope (home registry or
+  user-global overrides) — only those entries compile to the wire format's
+  `protect` bucket (wire-internal name).
 - **Traversal-only:** a masked directory that contains an unmasked descendant
   is shown in directory listings (so the guest can reach the descendant) but
   its own masked contents are filtered out.
@@ -153,7 +154,7 @@ denial against every later scope; a final `write.allow` is operator-only
 
 **Activation caveat:** the pinned runtime (microsandbox fork rev `3bd051bf`)
 treats `write.allow` as INERT — at this pin, write admission enforces
-`write.deny` (and protect) only. `write.allow` activates when the fork pin is
+`write.deny` (and the final-deny tier) only. `write.allow` activates when the fork pin is
 bumped after the fork's `feat/write-allow-semantics` branch lands on the
 pinned rev. Authoring `write.allow` rules today is safe: they compile,
 validate, and show up in `explain`/`preview`. The workestrate-side mirror
@@ -244,13 +245,13 @@ read_only = true
 policy = { read.deny = ["**"], read.allow = ["template.toml"] }
 ```
 
-### Protect + writes (operator scope, home registry)
+### Final deny + writes (operator scope, home registry)
 
 ```toml
 # In the home registry config.toml — operator scope.
 [policy.mounts.read]
-# Protection is operator-only: a final read.deny here compiles to the protect
-# wire bucket — hidden AND untouchable.
+# This tier is operator-only: a final read.deny here compiles to the wire
+# format's `protect` bucket — hidden AND untouchable.
 deny = [{ pattern = "**/admin/**", final = true }]
 
 [policy.mounts.write]
@@ -260,5 +261,5 @@ allow = ["data/**"]
 ```
 
 A config-repo layer can then carve out a specific config file with
-`read.allow` (non-final default), but cannot lift the protection or override
-the operator's final deny.
+`read.allow` (non-final default), but cannot lift the operator's final deny or
+override it.
