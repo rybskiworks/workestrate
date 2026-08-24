@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod loading;
 pub mod lockfile;
 pub mod migration;
@@ -11,13 +12,16 @@ pub mod validation;
 // resolving as `crate::config::X` via these (a binary crate has no external
 // `use` of the re-exports, hence the allow).
 #[allow(unused_imports)]
+pub use archive::{archive_dir, archive_store_root, ensure_archive};
+#[allow(unused_imports)]
 pub use loading::{
     check_required_files, load_config, load_overrides, resolve_secrets_layers, CheckEntry,
 };
 #[allow(unused_imports)]
 pub use lockfile::{
     home_lock_path, home_lock_path_for, load_home_lock, load_home_lock_from, lock_from_registry,
-    save_home_lock, save_home_lock_to, HomeLock, LockedRepo, LOCK_FILE_NAME, LOCK_VERSION,
+    save_home_lock, save_home_lock_to, HomeLock, LockedRef, LockedRepo, LOCK_FILE_NAME,
+    LOCK_VERSION,
 };
 #[allow(unused_imports)]
 pub use migration::{run_migrate_home, MigrateSummary, MovedEntry};
@@ -39,7 +43,8 @@ pub(crate) use registry::looks_like_git_url;
 #[allow(unused_imports)]
 pub use registry::{
     entry_is_local_path, load_registry, local_entry_checkout_dir, register_config,
-    resolve_active_context, save_registry, set_default_context,
+    resolve_active_context, resolve_default_ref, save_registry, set_default_context, source_kind,
+    ConfigSourceKind,
 };
 #[allow(unused_imports)]
 pub use trust::is_dir_trusted_via_base_registry;

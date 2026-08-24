@@ -207,6 +207,114 @@ pub(crate) fn looks_like_git_url(url: &str) -> bool {
         || url.ends_with(".git")
 }
 
+/// Scheme-discriminated source-kind of a registry entry's `url`
+/// (ADR 0032 addendum 2026-08-24 §Config source model). This is the A5
+/// classification; it does NOT change [`looks_like_git_url`] /
+/// [`entry_is_local_path`] semantics (their existing call sites are
+/// unchanged).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigSourceKind {
+    /// `github:` / `https://` / `http://` / `ssh://` / `git@` / `git://` /
+    /// `.git`-suffixed — cloned into the managed store; network fetch.
+    /// (A strict superset of [`looks_like_git_url`]: that set PLUS
+    /// `github:`.)
+    Remote,
+    /// `git+file://` — a local git repo with full ref support (branches,
+    /// tags, shas resolve), NO network. Checked BEFORE the `.git`-suffix
+    /// rule so `git+file:///path/repo.git` is GitFile, not Remote.
+    GitFile,
+    /// Everything else — a local working repo (git) or a plain dir. A git
+    /// working repo resolves refs against its own object store; a plain dir
+    /// is consumed content-as-is with branch `"local"`.
+    PlainPath,
+}
+
+/// Classify `url` into its [`ConfigSourceKind`]. Pure; the ONLY ordering
+/// subtlety is that `git+file://` is checked before the `.git`-suffix
+/// remote rule (a `git+file://` url may itself end in `.git`).
+pub fn source_kind(url: &str) -> ConfigSourceKind {
+    if url.starts_with("git+file://") {
+        return ConfigSourceKind::GitFile;
+    }
+    if url.starts_with("github:") || looks_like_git_url(url) {
+        return ConfigSourceKind::Remote;
+    }
+    ConfigSourceKind::PlainPath
+}
+
+/// Pure decision core of [`resolve_default_ref`]: the ADR 0032 addendum
+/// default-ref order — explicit `ref` > `origin/HEAD` (Remote/GitFile
+/// checkouts) > checkout HEAD (PlainPath working git repos) > HARD ERROR
+/// naming the repo.
+fn pick_default_ref(
+    name: &str,
+    explicit: Option<&str>,
+    kind: ConfigSourceKind,
+    remote_head: Option<&str>,
+    checkout_head: Option<&str>,
+) -> Result<String> {
+    if let Some(r) = explicit {
+        return Ok(r.to_string());
+    }
+    let resolved = match kind {
+        ConfigSourceKind::Remote | ConfigSourceKind::GitFile => remote_head,
+        ConfigSourceKind::PlainPath => checkout_head,
+    };
+    match resolved {
+        Some(r) => Ok(r.to_string()),
+        None => {
+            let tried = match kind {
+                ConfigSourceKind::Remote | ConfigSourceKind::GitFile => {
+                    "no origin/HEAD in the managed clone"
+                }
+                ConfigSourceKind::PlainPath => "the checkout is not a git working repo on a branch",
+            };
+            anyhow::bail!(
+                "cannot resolve a default ref for config repo '{}': no explicit `ref` in the \
+                 registry entry and {}; set `ref` in the registry entry",
+                name,
+                tried
+            )
+        }
+    }
+}
+
+/// Resolve the default ref of one registry entry against its checkout
+/// (ADR 0032 addendum §Config source model). Order: the entry's explicit
+/// `ref` > `origin/HEAD` of `checkout` for Remote/GitFile entries >
+/// `checkout`'s own HEAD branch when it is a working git repo (PlainPath
+/// with `.git`) > HARD ERROR naming the repo.
+///
+/// Pure classification + decision; the only side effects are the two
+/// read-only git probes. Session 1 ships the helper unwired — consumption
+/// lands with the A5 session that resolves refs through the archive store.
+pub fn resolve_default_ref(
+    name: &str,
+    entry: &ConfigRepoEntry,
+    checkout: &std::path::Path,
+) -> Result<String> {
+    let kind = source_kind(&entry.url);
+    let (remote_head, checkout_head) = match kind {
+        ConfigSourceKind::Remote | ConfigSourceKind::GitFile => {
+            (crate::git::git_remote_default_branch(checkout)?, None)
+        }
+        ConfigSourceKind::PlainPath => {
+            if checkout.join(".git").exists() {
+                (None, crate::git::git_checkout_branch(checkout)?)
+            } else {
+                (None, None)
+            }
+        }
+    };
+    pick_default_ref(
+        name,
+        entry.r#ref.as_deref(),
+        kind,
+        remote_head.as_deref(),
+        checkout_head.as_deref(),
+    )
+}
+
 /// Insert/replace a config repo entry in the registry. If `layers` is empty,
 /// push `name` as the default layer (mirrors cmd_config_add's behavior).
 /// Shared by `cmd_config_add` (clone + register) and `cmd_config_new`
@@ -1092,5 +1200,188 @@ pub(crate) mod tests {
         assert!(registry.contexts.contains_key("work"));
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
+    }
+
+    // ---- A5: scheme-discriminated source-kind classification ----
+
+    #[test]
+    fn source_kind_classifies_each_scheme() {
+        for remote in [
+            "github:org/repo",
+            "https://example.invalid/repo.git",
+            "http://example.invalid/repo",
+            "ssh://git@example.invalid/org/repo",
+            "git@example.invalid:org/repo.git",
+            "git://example.invalid/repo",
+            // The `.git`-suffix rule (superset of looks_like_git_url).
+            "/local/path/repo.git",
+            "relative/repo.git",
+        ] {
+            assert_eq!(
+                source_kind(remote),
+                ConfigSourceKind::Remote,
+                "{remote} must classify Remote"
+            );
+        }
+        assert_eq!(
+            source_kind("git+file:///home/user/repo"),
+            ConfigSourceKind::GitFile
+        );
+        // `git+file://` is checked BEFORE the `.git`-suffix rule.
+        assert_eq!(
+            source_kind("git+file:///home/user/repo.git"),
+            ConfigSourceKind::GitFile,
+            "a git+file url ending in .git is GitFile, not Remote"
+        );
+        for plain in [
+            "/home/user/my-config",
+            "relative/path",
+            "~/my-config",
+            ".",
+            "..",
+            "",
+        ] {
+            assert_eq!(
+                source_kind(plain),
+                ConfigSourceKind::PlainPath,
+                "{plain:?} must classify PlainPath"
+            );
+        }
+    }
+
+    // ---- A5: default-ref resolution (pure core) ----
+
+    #[test]
+    fn pick_default_ref_prefers_explicit_then_kind_source_then_errors() {
+        // Explicit ref wins for every kind.
+        for kind in [
+            ConfigSourceKind::Remote,
+            ConfigSourceKind::GitFile,
+            ConfigSourceKind::PlainPath,
+        ] {
+            assert_eq!(
+                pick_default_ref(
+                    "r",
+                    Some("pinned"),
+                    kind,
+                    Some("origin-main"),
+                    Some("co-main")
+                )
+                .unwrap(),
+                "pinned"
+            );
+        }
+        // Remote/GitFile fall back to origin/HEAD.
+        for kind in [ConfigSourceKind::Remote, ConfigSourceKind::GitFile] {
+            assert_eq!(
+                pick_default_ref("r", None, kind, Some("main"), None).unwrap(),
+                "main"
+            );
+            let err = pick_default_ref("myrepo", None, kind, None, None).unwrap_err();
+            assert!(
+                err.to_string().contains("myrepo"),
+                "hard error must name the repo: {err}"
+            );
+        }
+        // PlainPath falls back to the checkout branch.
+        assert_eq!(
+            pick_default_ref("r", None, ConfigSourceKind::PlainPath, None, Some("feat-x")).unwrap(),
+            "feat-x"
+        );
+        let err = pick_default_ref("localrepo", None, ConfigSourceKind::PlainPath, None, None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("localrepo"),
+            "hard error must name the repo: {err}"
+        );
+    }
+
+    // ---- A5: default-ref resolution (git-backed, real temp repos) ----
+
+    /// Init a git repo in `dir` with one committed file (repo-scoped
+    /// identity, mirrors the git.rs test helper).
+    fn init_repo(dir: &std::path::Path) {
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .status()
+                .expect("git must be runnable");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        std::fs::create_dir_all(dir).expect("create repo dir");
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "a5@test.invalid"]);
+        run(&["config", "user.name", "a5-test"]);
+        std::fs::write(dir.join("f.txt"), "x").expect("write file");
+        run(&["add", "f.txt"]);
+        run(&["commit", "--quiet", "-m", "init"]);
+    }
+
+    #[test]
+    fn resolve_default_ref_remote_uses_origin_head_of_clone() {
+        // Holds ENV_TEST_LOCK: the clone probes HOME for git config, and
+        // parallel env-mutating tests can point HOME at a removed dir.
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let src = uniq_dir("a5-defref-src");
+        init_repo(&src);
+        let clone = uniq_dir("a5-defref-clone");
+        let out = std::process::Command::new("git")
+            .args(["clone", "--quiet"])
+            .arg(&src)
+            .arg(&clone)
+            .output()
+            .expect("git must be runnable");
+        assert!(
+            out.status.success(),
+            "git clone failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let want = crate::git::git_checkout_branch(&src)
+            .unwrap()
+            .expect("src on a branch");
+
+        let e = entry("https://example.invalid/repo.git", None, None);
+        assert_eq!(
+            resolve_default_ref("repo", &e, &clone).unwrap(),
+            want,
+            "a Remote entry with no explicit ref resolves to the clone's origin/HEAD"
+        );
+        // Explicit ref wins even when origin/HEAD exists.
+        let e = entry("https://example.invalid/repo.git", Some("pinned"), None);
+        assert_eq!(resolve_default_ref("repo", &e, &clone).unwrap(), "pinned");
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&clone);
+    }
+
+    #[test]
+    fn resolve_default_ref_plain_path_uses_checkout_branch_or_errors() {
+        let repo = uniq_dir("a5-defref-workrepo");
+        init_repo(&repo);
+        let want = crate::git::git_checkout_branch(&repo)
+            .unwrap()
+            .expect("repo on a branch");
+
+        let e = entry(repo.to_str().unwrap(), None, None);
+        assert_eq!(
+            resolve_default_ref("work", &e, &repo).unwrap(),
+            want,
+            "a PlainPath entry on a git working repo resolves to its checkout branch"
+        );
+
+        // A plain dir (no .git) is a hard error naming the repo.
+        let plain = uniq_dir("a5-defref-plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        let e = entry(plain.to_str().unwrap(), None, None);
+        let err = resolve_default_ref("myplain", &e, &plain).unwrap_err();
+        assert!(
+            err.to_string().contains("myplain"),
+            "hard error must name the repo: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&plain);
     }
 }

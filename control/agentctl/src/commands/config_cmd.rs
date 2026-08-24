@@ -289,6 +289,11 @@ pub fn cmd_config_add(url: &str, name: &str, git_ref: &str) -> Result<()> {
             url: url.to_string(),
             r#ref: Some(git_ref.to_string()),
             rev: Some(rev.clone()),
+            // A5 Session 1: v2 fields stay empty here; Session 2 wires the
+            // archive-aware writer.
+            sha: None,
+            fetched_at: None,
+            refs: std::collections::BTreeMap::new(),
         },
     );
     config::save_home_lock(&lock)?;

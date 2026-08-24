@@ -17,6 +17,17 @@
 //! provisioning and
 //! the future `up --pin` / spawn-provenance work (the lock is THEIR
 //! mechanism; do not build a second one).
+//!
+//! v2 (A5, ADR 0032 addendum 2026-08-24 §Config source model): adds the
+//! ref-aware fields — per-repo `sha`/`fetched_at` and the per-ref
+//! `[repos.<name>.refs.<ref>]` map ([`LockedRef`]). Read-side evolution is
+//! pure serde defaults: a v1 file (version absent or 1) loads with
+//! `sha`/`fetched_at` = None and an empty `refs` map and is NOT
+//! version-bumped on read; writers always write `version = 2`. A v2 file
+//! read by an OLD binary hard-errors via the version check — that posture
+//! is BY DESIGN (the same fail-closed stance as every other versioned
+//! file). This is the ONE lock story: no `config-repos.lock`, no second
+//! lockfile.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -25,8 +36,10 @@ use anyhow::Result;
 
 use crate::config::types::Registry;
 
-/// Newest lockfile version this binary can read/write.
-pub const LOCK_VERSION: u32 = 1;
+/// Newest lockfile version this binary can read/write. v2 = the A5
+/// ref-aware shape ([`LockedRepo::sha`], [`LockedRepo::fetched_at`],
+/// [`LockedRepo::refs`]); v1 files load via serde defaults.
+pub const LOCK_VERSION: u32 = 2;
 
 /// Name of the generated lockfile in the home root.
 pub const LOCK_FILE_NAME: &str = "workestrate.lock";
@@ -58,12 +71,46 @@ pub struct HomeLock {
 /// One pinned config repo (`[repos.<name>]`). `rev` is `None` for local-path
 /// repos (registered via `config new` — their registry shape has no rev
 /// either).
+///
+/// A5/v2 fields: `sha` is the commit sha the content archive was produced
+/// from — it equals `rev` for git-backed entries today, and exists as a
+/// SEPARATE field so the pin (`rev`) is never conflated with the content
+/// key (`sha`): future tree-hash keying changes the content key without
+/// migrating the pin. `fetched_at` is the RFC3339 (UTC) time the pin was
+/// resolved (sourced from
+/// `crate::microsandbox::runtime::time::current_rfc3339_utc` when
+/// populated). Plain-path entries keep `rev`/`sha`/`fetched_at` = None
+/// (content-as-is, branch `"local"`). `refs` pins additional refs of the
+/// same repo (the A5 selection ladder consumes them); the key is omitted
+/// from serialization when empty so a no-refs v2 lock stays byte-clean of
+/// it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockedRepo {
     pub url: String,
     pub r#ref: Option<String>,
     pub rev: Option<String>,
+    #[serde(default)]
+    pub sha: Option<String>,
+    #[serde(default)]
+    pub fetched_at: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refs: BTreeMap<String, LockedRef>,
+}
+
+/// One pinned ref of a config repo (`[repos.<name>.refs.<ref>]`, lock v2).
+/// `rev` is the pin as written (branch, tag, or sha); `sha` is the commit
+/// sha the archive for this ref was produced from (the content key — see
+/// [`LockedRepo::sha`]); `fetched_at` is the RFC3339 (UTC) resolution time.
+/// Not schema-surfaced: the lock is a generated artifact, deliberately
+/// outside the schemars projection (verify against
+/// `diagnostics::generate_schema_pair` before ever adding schemars here).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedRef {
+    pub rev: String,
+    pub sha: String,
+    pub fetched_at: String,
 }
 
 /// The lockfile path for an EXPLICIT home dir: `<home>/workestrate.lock`.
@@ -172,6 +219,14 @@ pub fn lock_from_registry(registry: &Registry, home: &Path) -> HomeLock {
                 url: entry.url.clone(),
                 r#ref: entry.r#ref.clone(),
                 rev,
+                // A5 Session 1: the v2 fields are threaded with None/empty
+                // here DELIBERATELY — populating sha/fetched_at from the
+                // archive store would change the emitted lock content at the
+                // existing call sites (config add/update, home init/clone).
+                // Session 2 wires the real writer.
+                sha: None,
+                fetched_at: None,
+                refs: BTreeMap::new(),
             },
         );
     }
@@ -212,6 +267,9 @@ pub(crate) mod tests {
                 url: "https://example.invalid/personal.git".to_string(),
                 r#ref: Some("main".to_string()),
                 rev: Some("abc123".to_string()),
+                sha: None,
+                fetched_at: None,
+                refs: BTreeMap::new(),
             },
         );
         repos.insert(
@@ -220,6 +278,9 @@ pub(crate) mod tests {
                 url: "https://example.invalid/work.git".to_string(),
                 r#ref: Some("main".to_string()),
                 rev: Some("def456".to_string()),
+                sha: None,
+                fetched_at: None,
+                refs: BTreeMap::new(),
             },
         );
         HomeLock {
@@ -451,6 +512,147 @@ pub(crate) mod tests {
             "https://example.invalid/cloned.git"
         );
         assert_eq!(lock.repos["cloned"].r#ref.as_deref(), Some("main"));
+        // A5 Session 1: the v2 fields are threaded empty until Session 2
+        // wires the archive-aware writer.
+        assert_eq!(lock.repos["cloned"].sha, None);
+        assert_eq!(lock.repos["cloned"].fetched_at, None);
+        assert!(lock.repos["cloned"].refs.is_empty());
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    // ---- A5 / lock v2: ref-aware fields ----
+
+    /// A v1 lock (old shape: version absent or 1, no sha/fetched_at/refs
+    /// keys) parses with the v2 fields DEFAULTED — and loading does NOT
+    /// bump the in-memory version (writers, not readers, own the bump).
+    #[test]
+    fn v1_lock_parses_with_defaulted_v2_fields_and_is_not_bumped() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("lock-v1-read");
+
+        // version absent (= oldest) and an old-shape [repos.x] entry.
+        std::fs::write(
+            home_lock_path(),
+            "home_version = 2\ntool_version = \"0.1.0\"\n\n[repos.work]\nurl = \"https://example.invalid/work.git\"\nref = \"main\"\nrev = \"abc123\"\n",
+        )?;
+
+        let lock = load_home_lock()?.expect("v1 lock must parse");
+        assert_eq!(lock.version, 1, "reading must NOT bump the version");
+        let repo = &lock.repos["work"];
+        assert_eq!(repo.rev.as_deref(), Some("abc123"));
+        assert_eq!(repo.sha, None, "v1 entry has no sha");
+        assert_eq!(repo.fetched_at, None, "v1 entry has no fetched_at");
+        assert!(repo.refs.is_empty(), "v1 entry has an empty refs map");
+
+        // Explicit version = 1 parses the same way.
+        std::fs::write(
+            home_lock_path(),
+            "version = 1\nhome_version = 2\ntool_version = \"0.1.0\"\n\n[repos.work]\nurl = \"u\"\n",
+        )?;
+        let lock = load_home_lock()?.expect("explicit v1 lock must parse");
+        assert_eq!(lock.version, 1);
+        assert_eq!(lock.repos["work"].sha, None);
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// v2 round-trip: sha/fetched_at and the refs map survive save+load.
+    #[test]
+    fn v2_round_trip_includes_sha_fetched_at_and_refs() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("lock-v2-roundtrip");
+
+        let mut lock = sample_lock();
+        lock.repos.get_mut("personal").unwrap().sha = Some("abc123".to_string());
+        lock.repos.get_mut("personal").unwrap().fetched_at =
+            Some("2026-08-24T10:00:00Z".to_string());
+        let mut refs = BTreeMap::new();
+        refs.insert(
+            "feat-x".to_string(),
+            LockedRef {
+                rev: "feat-x".to_string(),
+                sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                fetched_at: "2026-08-24T10:01:00Z".to_string(),
+            },
+        );
+        lock.repos.get_mut("work").unwrap().refs = refs;
+
+        save_home_lock(&lock)?;
+        let content = std::fs::read_to_string(home_lock_path())?;
+        assert!(
+            content.contains("version = 2"),
+            "writers must stamp version = 2:\n{content}"
+        );
+        assert!(
+            content.contains("[repos.work.refs.feat-x]"),
+            "the refs map must serialize as [repos.<name>.refs.<ref>]:\n{content}"
+        );
+        let loaded = load_home_lock()?.expect("v2 lock parses");
+        assert_eq!(loaded, lock);
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Version 3 (one past the newest supported) hard-errors with the exact
+    /// compat phrase — the BY-DESIGN posture: a v2 file read by an old
+    /// (v1-only) binary fails the same way.
+    #[test]
+    fn version_3_is_a_hard_error_naming_the_phrase() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("lock-v3");
+
+        std::fs::write(
+            home_lock_path(),
+            "version = 3\nhome_version = 2\ntool_version = \"0.1.0\"\n",
+        )?;
+        let err = load_home_lock().expect_err("version 3 must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("home created by a newer workestrate"),
+            "error must contain the exact phrase: {msg}"
+        );
+        assert!(msg.contains('3'), "error must name the lock version: {msg}");
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// `skip_serializing_if` keeps a no-refs lock byte-clean of the `refs`
+    /// key (a v2 lock with no extra pins is a v1-looking file plus the
+    /// version stamp).
+    #[test]
+    fn no_refs_lock_serializes_without_the_refs_key() {
+        let content = toml::to_string_pretty(&sample_lock()).expect("serialize sample lock");
+        assert!(
+            !content.contains("refs"),
+            "an empty refs map must not appear in the serialized lock:\n{content}"
+        );
+    }
+
+    /// An unknown key inside `[repos.x.refs.<ref>]` is a loud parse error
+    /// (deny_unknown_fields on LockedRef, same posture as the rest of the
+    /// lock).
+    #[test]
+    fn unknown_key_inside_refs_is_rejected() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let home = pin_home("lock-refs-unknown");
+
+        std::fs::write(
+            home_lock_path(),
+            "version = 2\nhome_version = 2\ntool_version = \"0.1.0\"\n\n[repos.x]\nurl = \"u\"\n\n[repos.x.refs.main]\nrev = \"main\"\nsha = \"0123456789abcdef0123456789abcdef01234567\"\nfetched_at = \"2026-08-24T10:00:00Z\"\nbogus = 1\n",
+        )?;
+        assert!(
+            load_home_lock().is_err(),
+            "an unknown key inside [repos.x.refs.main] must fail to parse"
+        );
 
         let _ = std::fs::remove_dir_all(&home);
         Ok(())

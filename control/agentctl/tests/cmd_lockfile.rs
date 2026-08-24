@@ -132,8 +132,8 @@ fn config_add_writes_lock_with_url_ref_and_actual_head_rev() {
     assert!(lock_path.exists(), "config add must write workestrate.lock");
     let lock = std::fs::read_to_string(&lock_path).expect("read lock");
     assert!(
-        lock.contains("version = 1"),
-        "lock must carry version = 1:\n{lock}"
+        lock.contains("version = 2"),
+        "lock must carry version = 2 (the A5 ref-aware format):\n{lock}"
     );
     assert!(
         lock.contains("home_version = 2"),
@@ -279,7 +279,7 @@ fn config_remove_drops_the_lock_entry() {
     );
     // The lock itself still exists (a home that had a lock keeps one).
     assert!(
-        lock.contains("version = 1"),
+        lock.contains("version = 2"),
         "the lock file itself must survive a remove:\n{lock}"
     );
 }
@@ -309,8 +309,8 @@ fn bare_home_init_writes_a_lock_with_empty_repos() {
     assert!(lock_path.exists(), "bare home init must write the lock");
     let lock = std::fs::read_to_string(&lock_path).expect("read lock");
     assert!(
-        lock.contains("version = 1"),
-        "lock must carry version = 1:\n{lock}"
+        lock.contains("version = 2"),
+        "lock must carry version = 2 (the A5 ref-aware format):\n{lock}"
     );
     assert!(
         lock.contains("home_version = 2"),
@@ -425,7 +425,7 @@ fn home_init_from_writes_dest_lock_pinning_the_checked_out_rev() {
         "provisioning must write dest/workestrate.lock"
     );
     let lock = std::fs::read_to_string(&lock_path).expect("read dest lock");
-    assert!(lock.contains("version = 1"), "lock version:\n{lock}");
+    assert!(lock.contains("version = 2"), "lock version:\n{lock}");
     assert!(
         lock.contains("home_version = 2"),
         "lock home_version (src registry recorded 2):\n{lock}"
