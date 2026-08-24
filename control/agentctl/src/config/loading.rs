@@ -587,15 +587,30 @@ fn apply_inline_override_substitution(
     )?;
 
     // Load ONLY the named workload at the ref (capsule-only substitution):
-    // the directory-mode capsule <archive>/workestrate/workloads/<name>/
-    // workload.toml (bare table form — the existing capsule parsing), else
-    // the single-file mode <archive>/workestrate.toml's [workloads.<name>].
-    let capsule_dir = archive.join("workestrate").join("workloads").join(workload);
+    // probe the two spec-17 §2.3 directory-mode forms first — the capsule
+    // <archive>/workestrate/workloads/<name>/workload.toml, then the flat
+    // file <archive>/workestrate/workloads/<name>.toml (both parse via the
+    // existing entry loader, bare or full form) — else fall back to the
+    // single-file mode <archive>/workestrate.toml's [workloads.<name>].
+    // Fail-closed "does not exist at ref" fires only when NONE of the three
+    // forms carries the workload (A5 review MEDIUM-2: the flat file is a
+    // first-class directory-mode form and must substitute at a ref).
+    let workloads_root = archive.join("workestrate").join("workloads");
+    let capsule_dir = workloads_root.join(workload);
+    let flat_name = format!("{workload}.toml");
+    let flat_file = workloads_root.join(&flat_name);
     let layer = if capsule_dir.join("workload.toml").is_file() {
         load_workload_entry(
             &repo,
             workload,
             &capsule_dir,
+            &mut std::collections::HashMap::new(),
+        )?
+    } else if flat_file.is_file() {
+        load_workload_entry(
+            &repo,
+            &flat_name,
+            &flat_file,
             &mut std::collections::HashMap::new(),
         )?
     } else {
@@ -3767,6 +3782,124 @@ write.deny = ["sugar-write-deny"]
             Some(2),
             "single-file mode: prime is read at feat-x"
         );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Flat-file directory-mode fixture content: prime declared as the flat
+    /// file `workestrate/workloads/prime.toml` (bare form, spec 17 §2.3) at
+    /// cpus `n`.
+    fn a5b_flat_mode_files(cpus: u32) -> Vec<(String, String)> {
+        vec![
+            (
+                "workestrate/default.toml".to_string(),
+                "schema_version = 1\n".to_string(),
+            ),
+            (
+                "workestrate/workloads/prime.toml".to_string(),
+                bare_workload(cpus),
+            ),
+        ]
+    }
+
+    /// Flat-file variant of [`a5b_dir_mode_home`]: prime at cpus=1 on main,
+    /// cpus=2 on feat-x; primary-lock main. Returns (home, clone, main sha,
+    /// feat-x sha).
+    fn a5b_flat_mode_home(label: &str) -> (PathBuf, PathBuf, String, String) {
+        let owned = a5b_flat_mode_files(1);
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        let (home, clone, sha_main) = a5_remote_home(label, "team", &files);
+        a5_write_lock(&home, "team", &sha_main);
+        let owned_feat = a5b_flat_mode_files(2);
+        let feat_files: Vec<(&str, &str)> = owned_feat
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        let sha_feat = a5_commit_branch(&clone, "feat-x", &feat_files);
+        (home, clone, sha_main, sha_feat)
+    }
+
+    /// A5 review MEDIUM-2: the flat-file directory-mode form
+    /// (`workestrate/workloads/<name>.toml`) is substitutable at a ref —
+    /// same capsule-only semantics as the capsule dir: the flat file is read
+    /// at feat-x, provenance names the flat-file pseudo-layer, and the
+    /// declaring layer's content root is the feat-x archive.
+    #[test]
+    fn inline_override_flat_file_substitutes_at_the_ref() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let (home, _clone, _sha_main, sha_feat) = a5b_flat_mode_home("a5b-flat-armed");
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let cfg = load_config()?;
+        crate::config::clear_inline_override();
+
+        assert_eq!(
+            cfg.workloads["prime"].cpus,
+            Some(2),
+            "the armed load must read the flat file at feat-x"
+        );
+        let layer_key = "team#workestrate/workloads/prime.toml";
+        let layer_dirs = crate::merge::get_layer_dirs().expect("layer dirs set");
+        assert_eq!(
+            layer_dirs.get(layer_key).map(|p| p.as_path()),
+            Some(
+                crate::config::archive_dir(&sha_feat)?
+                    .join("workestrate")
+                    .as_path()
+            ),
+            "the flat-file layer's content root must be the feat-x archive"
+        );
+        let provenance = crate::merge::get_provenance().expect("provenance set");
+        assert_eq!(
+            provenance.get("workloads.prime.cpus").map(|s| s.as_str()),
+            Some(layer_key),
+            "the substituted field's provenance names the flat-file layer"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Fail-closed (A5 review MEDIUM-2): a workload declared ONLY as a flat
+    /// file at home scope, dropped at the ref (no capsule, no flat file, no
+    /// single-file table there), errors naming workload + ref + repo.
+    #[test]
+    fn inline_override_flat_file_absent_at_ref_fails_closed() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let owned = a5b_flat_mode_files(1);
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        let (home, clone, sha_main) = a5_remote_home("a5b-flat-absent", "team", &files);
+        a5_write_lock(&home, "team", &sha_main);
+        // feat-x: the prime flat file is REMOVED (default.toml remains).
+        a5_git(&clone, &["checkout", "--quiet", "-b", "feat-x"]);
+        a5_git(
+            &clone,
+            &["rm", "--quiet", "workestrate/workloads/prime.toml"],
+        );
+        a5_git(&clone, &["commit", "--quiet", "-m", "drop prime"]);
+        a5_git(&clone, &["checkout", "--quiet", "main"]);
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let err = load_config()
+            .expect_err("a workload absent from ALL three forms at the ref must fail closed");
+        crate::config::clear_inline_override();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("prime"), "error must name the workload: {msg}");
+        assert!(msg.contains("feat-x"), "error must name the ref: {msg}");
+        assert!(msg.contains("team"), "error must name the repo: {msg}");
 
         let _ = std::fs::remove_dir_all(&home);
         Ok(())

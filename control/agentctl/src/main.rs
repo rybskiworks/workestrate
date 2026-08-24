@@ -477,6 +477,36 @@ fn rewrite_action_for_inline_selector(
     Ok(())
 }
 
+/// A5 review MEDIUM-1: the BARE workload name the current invocation targets
+/// (the positional before any `:`), used to NAME-GATE the
+/// `WORKESTRATE_WORKLOAD_REF` env pickup
+/// ([`workestrate::config::set_pending_inline_override_from_env`]).
+///
+/// Spawn env inheritance reaches EVERY detached child — including a
+/// DEPENDENCY's (`auto_start_dependencies` → `start_service_detached_instance`
+/// → `workload up <dep>`) — so only an invocation whose positional names the
+/// SAME workload as the override may record it pending. Returns `None` for
+/// the bare batch `workload up` (no name), the batch forms of `build`, and
+/// every non-workload command: those never set pending.
+///
+/// Lenient by construction (`split(':')`, no selector validation): a
+/// malformed positional fails closed later at the real
+/// `parse_workload_selector` call in the verb flow.
+fn invocation_workload_name(command: &Commands) -> Option<String> {
+    let Commands::Workload { action } = command else {
+        return None;
+    };
+    let positional: Option<&str> = match action {
+        WorkloadAction::Up { name, .. } | WorkloadAction::Build { name, .. } => name.as_deref(),
+        WorkloadAction::Exec { name, .. }
+        | WorkloadAction::Plan { name, .. }
+        | WorkloadAction::Down { name, .. }
+        | WorkloadAction::Logs { name, .. }
+        | WorkloadAction::New { name, .. } => Some(name.as_str()),
+    };
+    positional.map(|p| p.split(':').next().unwrap_or(p).to_string())
+}
+
 /// Translate a clap-parsed verb-first [`WorkloadAction`] into the legacy
 /// [`ServiceAction`] shape (pure field mapping — the caller has already
 /// kind-checked the route via [`workload_route`]).
@@ -690,7 +720,15 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     // bare name + --instance from detach_args). Record it as the PENDING
     // inline override; the verb flow below arms it at the pinned points.
     // No-op when the var is absent (the common case).
-    workestrate::config::set_pending_inline_override_from_env()?;
+    //
+    // A5 review MEDIUM-1 NAME GATE: the inheritance reaches EVERY detached
+    // child — including a DEPENDENCY's (`workload up litellm` spawned by
+    // auto_start_dependencies) — so the pickup fires ONLY when this
+    // invocation's workload positional names the SAME workload as the
+    // override. The dep's child (name mismatch) records nothing; bare batch
+    // `workload up` and non-workload commands (no positional) never record.
+    let invocation_name = invocation_workload_name(&cli.command);
+    workestrate::config::set_pending_inline_override_from_env(invocation_name.as_deref())?;
     // --home <DIR> populates the WORKESTRATE_HOME precedence step
     // (paths.rs resolve_home_with_kind checks it first), so the flag becomes
     // the highest-precedence override with no path-resolution change.
@@ -993,7 +1031,14 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // override. (The detached child reaches this SAME point with the
             // env-derived pending: its own auto-start above likewise ran
             // un-armed.)
-            workestrate::config::arm_inline_override();
+            //
+            // A5 review MEDIUM-1 VERB SCOPE: only up/exec arm here. down/logs
+            // (which also flow through this match arm) NEVER arm — a leftover
+            // exported WORKESTRATE_WORKLOAD_REF must not arm the substitution
+            // on a teardown/log config load.
+            if workestrate::config::verb_arms_after_dep_autostart(verb) {
+                workestrate::config::arm_inline_override();
+            }
             overrides.extend(fresh_selections.iter().cloned());
             rewrite_action_for_resolved_instance(
                 &mut action,
@@ -2807,5 +2852,78 @@ mod tests {
             rewrite_legacy_workload_argv(args.clone(), &known_subcommand_names(), |_| false);
         assert_eq!(rewritten, args);
         assert!(warning.is_none());
+    }
+
+    // ---- A5 review MEDIUM-1: invocation_workload_name (the env-pickup name gate) ----
+
+    /// Parse `argv` through the REAL clap parser and return the name gate
+    /// input the async_main env pickup would see.
+    fn gate_input(args: &[&str]) -> Option<String> {
+        let cli = Cli::try_parse_from(args).expect("argv must parse");
+        invocation_workload_name(&cli.command)
+    }
+
+    /// Every named workload verb yields the BARE positional name (the part
+    /// before any `:ref`) — this is what a detached dependent child
+    /// (`workload up prime --instance <id>`, env WORKESTRATE_WORKLOAD_REF=
+    /// prime:feat-x) matches on.
+    #[test]
+    fn invocation_workload_name_extracts_the_bare_positional() {
+        for (args, expected) in [
+            (
+                &["workestrate", "workload", "up", "prime"][..],
+                Some("prime"),
+            ),
+            (
+                &["workestrate", "workload", "up", "prime:feat-x"][..],
+                Some("prime"),
+            ),
+            (
+                &["workestrate", "workload", "up", "prime:feat-x@canary"][..],
+                Some("prime"),
+            ),
+            (
+                &["workestrate", "workload", "exec", "prime"][..],
+                Some("prime"),
+            ),
+            (
+                &["workestrate", "workload", "plan", "prime"][..],
+                Some("prime"),
+            ),
+            (
+                &["workestrate", "workload", "down", "prime"][..],
+                Some("prime"),
+            ),
+            (
+                &["workestrate", "workload", "logs", "prime"][..],
+                Some("prime"),
+            ),
+            (
+                &["workestrate", "workload", "build", "prime"][..],
+                Some("prime"),
+            ),
+        ] {
+            assert_eq!(
+                gate_input(args),
+                expected.map(str::to_string),
+                "gate input for {args:?}"
+            );
+        }
+    }
+
+    /// The bare batch `workload up` (no name), batch `build`, and every
+    /// non-workload command carry NO invocation name — the env pickup never
+    /// sets pending for them, so an inherited/leftover
+    /// WORKESTRATE_WORKLOAD_REF can never arm there.
+    #[test]
+    fn invocation_workload_name_is_none_for_batch_and_non_workload_commands() {
+        for args in [
+            &["workestrate", "workload", "up"][..],
+            &["workestrate", "workload", "build"][..],
+            &["workestrate", "ps"][..],
+            &["workestrate", "workloads"][..],
+        ] {
+            assert_eq!(gate_input(args), None, "gate input for {args:?}");
+        }
     }
 }

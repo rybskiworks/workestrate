@@ -649,10 +649,14 @@ pub async fn cmd_config_update(name: Option<&str>) -> Result<()> {
                 n
             );
         }
-        let git_ref = entry_ref
-            .and_then(|e| e.r#ref.as_deref())
-            .unwrap_or("main")
-            .to_string();
+        // A5 review LOW-3: pull the SAME effective ref consumption resolves
+        // (config::effective_ref — explicit `ref` > origin/HEAD of the
+        // managed clone > checkout branch), not a hardcoded "main": a
+        // ref-less entry on a non-main default branch must pull the ref its
+        // consumers pinned. A ref-less entry whose default ref cannot be
+        // resolved fails closed here, naming the repo + remediation.
+        let entry = entry_ref.ok_or_else(|| anyhow::anyhow!("config repo '{}' disappeared", n))?;
+        let git_ref = config::effective_ref(&n, entry, &dest)?;
         git_pull(&dest, &git_ref)?;
         let rev = git_rev_parse(&dest)?;
         let short = short_rev(&rev);

@@ -18,11 +18,18 @@
 //!    CLI parse (or, in a detached child, from the inherited
 //!    [`WORKLOAD_REF_ENV`] env var via
 //!    [`set_pending_inline_override_from_env`] — env inheritance reaches the
-//!    child, whose argv carries only the bare name + `--instance`).
+//!    child, whose argv carries only the bare name + `--instance`). The env
+//!    pickup is NAME-GATED: it records pending ONLY when the current
+//!    invocation's workload positional equals the override's workload name,
+//!    so a DEPENDENCY's detached child (spawned by `auto_start_dependencies`
+//!    with the same inherited env) never picks up the dependent's override.
 //! 2. [`arm_inline_override`] flips the pending override LIVE. Arming points
 //!    (main.rs): `plan` arms immediately (it never starts deps); `up`/`exec`
 //!    arm AFTER `auto_start_dependencies` returns and BEFORE the
-//!    `ConfigWorkload` is constructed.
+//!    `ConfigWorkload` is constructed ([`verb_arms_after_dep_autostart`]).
+//!    `down`/`logs` and every other verb NEVER arm — a leftover exported
+//!    [`WORKLOAD_REF_ENV`] must not arm the substitution on their config
+//!    loads.
 //! 3. `load_config` applies the substitution ONLY when armed
 //!    ([`armed_inline_override`]).
 //!
@@ -158,10 +165,24 @@ pub fn set_pending_inline_override(workload: &str, config_ref: &str) {
 
 /// Detached-child pickup (phase 1 from the environment): read
 /// [`WORKLOAD_REF_ENV`] (`"<name>:<config-ref>"`, set process-wide by the
-/// parent and inherited through the detach spawn) and record it pending.
+/// parent and inherited through the detach spawn) and record it pending —
+/// but ONLY when `invocation_name` (the current invocation's BARE workload
+/// positional; `None` for the bare batch `workload up` and for non-workload
+/// commands) EQUALS the override's workload name.
+///
+/// NAME GATE (A5 review MEDIUM-1): spawn env inheritance reaches EVERY
+/// detached child, including a DEPENDENCY's (`auto_start_dependencies` →
+/// `start_service_detached_instance` → `workload up <dep>`). Without the
+/// gate the dep's child would record the dependent's override pending and
+/// arm it at its own up/exec arming point — resolving/archiving/lock-writing
+/// the dependent's ref from the dep's process (racing the parent's lock
+/// write, mis-attributing resolution errors to the dep, spamming the dep's
+/// log with the dependent's notice). A `None` invocation name never sets
+/// pending.
+///
 /// No-op when the var is absent or empty; a MALFORMED value is a hard error
 /// (fail-closed — the parent only ever writes the well-formed shape).
-pub fn set_pending_inline_override_from_env() -> Result<()> {
+pub fn set_pending_inline_override_from_env(invocation_name: Option<&str>) -> Result<()> {
     let Ok(value) = std::env::var(WORKLOAD_REF_ENV) else {
         return Ok(());
     };
@@ -174,8 +195,23 @@ pub fn set_pending_inline_override_from_env() -> Result<()> {
     let Some(config_ref) = selector.config_ref else {
         anyhow::bail!("malformed {WORKLOAD_REF_ENV}='{value}' (expected name:ref)");
     };
+    if invocation_name != Some(selector.name.as_str()) {
+        return Ok(());
+    }
     set_pending_inline_override(&selector.name, &config_ref);
     Ok(())
+}
+
+/// Verb scope of the POST-AUTO-START arming point (A5 review MEDIUM-1):
+/// only `up`/`exec` arm there (main.rs, after `auto_start_dependencies`
+/// returns and before the `ConfigWorkload` is constructed). `down`/`logs` —
+/// and every other verb's config loads — NEVER arm: a leftover exported
+/// [`WORKLOAD_REF_ENV`] must not arm the substitution during teardown or
+/// log reads. (`plan` is exempt from this predicate by construction: it
+/// never starts deps, so it arms at its own EARLIER point at CLI parse —
+/// and only from the inline `name:ref` selector on its own argv.)
+pub fn verb_arms_after_dep_autostart(verb: &str) -> bool {
+    matches!(verb, "up" | "exec")
 }
 
 /// Flip the pending override LIVE (phase 2). No-op when nothing is pending
@@ -336,7 +372,7 @@ mod tests {
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
         std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
-        set_pending_inline_override_from_env().unwrap();
+        set_pending_inline_override_from_env(Some("prime")).unwrap();
         assert_eq!(
             armed_inline_override(),
             None,
@@ -356,7 +392,7 @@ mod tests {
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
         std::env::remove_var(WORKLOAD_REF_ENV);
-        set_pending_inline_override_from_env().unwrap();
+        set_pending_inline_override_from_env(Some("prime")).unwrap();
         arm_inline_override();
         assert_eq!(armed_inline_override(), None);
     }
@@ -368,7 +404,7 @@ mod tests {
         clear_inline_override();
         for bad in ["prime", "prime:", ":feat-x"] {
             std::env::set_var(WORKLOAD_REF_ENV, bad);
-            let err = set_pending_inline_override_from_env()
+            let err = set_pending_inline_override_from_env(Some("prime"))
                 .unwrap_err()
                 .to_string();
             assert!(
@@ -376,6 +412,98 @@ mod tests {
                 "error must name the env var for '{bad}': {err}"
             );
         }
+        clear_inline_override();
+    }
+
+    // ---- A5 review MEDIUM-1: the name gate + verb-scoped arming ----
+
+    /// A DEPENDENCY's detached child inherits WORKESTRATE_WORKLOAD_REF but
+    /// its invocation name differs from the override's workload name: the
+    /// pickup records NOTHING, so even the child's own up/exec arming point
+    /// is a no-op (no substitution, no archive/lock writes from the dep's
+    /// process).
+    #[test]
+    fn env_pickup_name_gates_non_matching_invocations() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
+        clear_inline_override();
+        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        set_pending_inline_override_from_env(Some("litellm")).unwrap();
+        arm_inline_override();
+        assert_eq!(
+            armed_inline_override(),
+            None,
+            "a non-matching invocation name must never arm the override"
+        );
+        clear_inline_override();
+    }
+
+    /// Bare batch `workload up` (no name) and non-workload commands carry no
+    /// invocation name: the pickup never sets pending, even when the var
+    /// names a workload the batch will start.
+    #[test]
+    fn env_pickup_never_sets_pending_without_an_invocation_name() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
+        clear_inline_override();
+        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        set_pending_inline_override_from_env(None).unwrap();
+        arm_inline_override();
+        assert_eq!(
+            armed_inline_override(),
+            None,
+            "a name-less invocation (bare batch up / non-workload verb) must never arm"
+        );
+        clear_inline_override();
+    }
+
+    /// The matching-name path: the env-derived pending arms at the verb's
+    /// arming point (the dependent's own detached child).
+    #[test]
+    fn env_pickup_matching_invocation_name_arms() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
+        clear_inline_override();
+        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        set_pending_inline_override_from_env(Some("prime")).unwrap();
+        arm_inline_override();
+        assert_eq!(
+            armed_inline_override(),
+            Some(("prime".to_string(), "feat-x".to_string())),
+            "a matching invocation name arms the env-derived override"
+        );
+        clear_inline_override();
+    }
+
+    /// down/logs (and every verb outside up/exec) never arm at the
+    /// post-auto-start point: a leftover exported WORKESTRATE_WORKLOAD_REF
+    /// with a MATCHING name stays pending-but-invisible on their config
+    /// loads.
+    #[test]
+    fn down_and_logs_routes_never_arm_a_leftover_env_override() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
+        clear_inline_override();
+        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        set_pending_inline_override_from_env(Some("prime")).unwrap();
+        for verb in ["down", "logs", "plan", "build"] {
+            assert!(
+                !verb_arms_after_dep_autostart(verb),
+                "{verb} must not arm at the post-auto-start point"
+            );
+        }
+        // Simulating the down/logs route: no arming call fires, so the
+        // override stays invisible to load_config.
+        assert_eq!(armed_inline_override(), None);
+        // ...while up/exec DO arm there.
+        for verb in ["up", "exec"] {
+            assert!(verb_arms_after_dep_autostart(verb));
+        }
+        arm_inline_override();
+        assert_eq!(
+            armed_inline_override(),
+            Some(("prime".to_string(), "feat-x".to_string()))
+        );
         clear_inline_override();
     }
 }
