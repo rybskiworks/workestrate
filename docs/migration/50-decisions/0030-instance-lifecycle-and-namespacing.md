@@ -7,12 +7,17 @@ policy schema; namespace scoping + DepInstanceMode + parallel strategy;
 dynamic port selection + litellm migration prep; the `instances` verb +
 `ps` 5-state status + `workloads` policy columns; 2026-08-16/17 addenda
 below). §4.5 versions/config variants remains design; the U7 A–D host e2e
-is deferred to the host batch.
+is deferred to the host batch. The 2026-08-24 addendum (per-dir strategy,
+instance-scoped state, `source-gone`, `on_skew`) is design accepted this
+session, not yet implemented.
 **Date:** 2026-08-16
 **Addendum:** 2026-08-16 (user design threads — depends_on scoping, parallel deps,
 dynamic ports; refined phased plan; supersedes §6); 2026-08-16b (strategy
 chains + port `on_occupied` options; supersedes the single-disposition model
-and the `on_occupied = "auto"|"fail"` surface; resolves Q2)
+and the `on_occupied = "auto"|"fail"` surface; resolves Q2); 2026-08-24
+(per-dir instance strategy keyed on the canonicalized cwd; instance-scoped
+state mounts; `source-gone` reconcile state; `on_skew` divergence knob;
+`mount_refresh` evaluated and dropped; general code-runner framing)
 **References:** ADR 0021 (instance lifecycle model), ADR 0026 (per-instance
 addressing + discovery-lite, incl. the 2026-08-16 on_conflict addendum),
 ADR 0019 (contexts + `<context>-<workload>` namespacing), ADR 0027 (verb-first
@@ -1469,3 +1474,127 @@ last-layer-wins merge are unchanged (26c657e).
   hard unknown-field errors; the compiled-program wire format is unchanged);
   the mount-row sugar is now `read.deny`/`read.allow`/`write.deny`/
   `write.allow`. See the ADR 0029 addendum (2026-08-20) and spec 22.
+
+---
+
+## Addendum (2026-08-24): per-dir instance strategy + instance-scoped state + `source-gone` + `on_skew`
+
+This addendum records the 2026-08-24 design session decisions: a fifth
+instance strategy keyed on the caller's working directory, the per-instance
+state-mount structure, a new `source-gone` reconcile state, and the
+`on_skew` divergence knob. Design accepted; NOT yet implemented. It extends
+§4.1 (strategy enum), §4.2 (reconcile fact set), and the P3 staleness
+reasoning (seeds baked at create); it does not supersede any prior addendum.
+
+### V1. `strategy = "per-dir"` — the fifth strategy value
+
+`instance.strategy` gains `per-dir` alongside
+`singleton | parallel | replace | reuse`:
+
+| value | meaning |
+|---|---|
+| `per-dir` | one instance per working directory: the instance id is `<dirname-slug>-<shorthash>` of the CANONICALIZED invocation cwd. |
+
+- **Canonicalization at plan time.** The cwd is canonicalized with
+  `fs::canonicalize` at PLAN time, before slugging/hashing — this kills the
+  two-spellings-of-one-dir class (symlinks, `..`, trailing slashes,
+  case-folded spellings): every spelling of one directory maps to one
+  instance id, and two different directories never share one.
+- **Validity gate.** `per-dir` is VALID ONLY for workloads with a
+  cwd-templated mount (a mount whose host source renders the invocation cwd,
+  the `${CWD}` / invoke-cwd template of commit `ec1908e`). Declaring
+  `strategy = "per-dir"` on a workload with no cwd-templated mount is a
+  VALIDATION ERROR (fail-closed at config validation, not a runtime
+  surprise) — a per-dir instance with no per-dir content is a contradiction.
+- Reuse/starts of the same directory hit the SAME instance id, so the
+  standard conflict chain (`["reuse","start","replace"]`) disposes on it;
+  a second directory gets its own instance with its own parallel-slot bind
+  and dynamic ports (P3 machinery unchanged).
+
+### V2. Per-dir STATE — instance-scoped state mounts
+
+- The capsule's `workspaces/<name>-state` host template resolves to
+  `workspaces/<name>-state/<instance-key>` — a per-instance subdirectory of
+  the state mount root. The operating principle, recorded verbatim:
+
+  > **the recipe declares what state it needs, workestrate provides the
+  > per-instance structure.**
+
+  The capsule keeps declaring a single logical state mount; the tool — not
+  the recipe — derives the per-instance layout from the instance key. A
+  singleton instance resolves to the same root as today (no layout churn for
+  non-per-dir workloads).
+- **Seeds render per instance at create**, each against the then-current dep
+  record — the P3 seed-time rendering semantics (build_seed_env_view →
+  render_seed_text before create) applied per instance, so two per-dir
+  instances created at different times can carry different baked dep
+  addresses (the T3.3 staleness-window reasoning applies per instance).
+- **Policy files are already per-instance** (`policy_file.rs` writes the
+  compiled program under the instance's own policy path) — no change needed;
+  recorded here so the per-dir model does not re-open it.
+
+### V3. `source-gone` joins the reconcile state model
+
+The reconcile fact set (§4.2, P0 `reconcile` module, P4 `classify_status`)
+gains a new state:
+
+- **`source-gone`**: the registry record exists, but the resolved mount
+  source (for per-dir: the canonicalized cwd recorded at create) is gone
+  from the filesystem.
+- **Behavior:** `exec`/`up` against a `source-gone` instance ERRORS with
+  guidance — replace from the new location (re-invoke from the moved dir,
+  which plans a new instance) or `down` the instance. `down` and the
+  cleanup family SWEEP it (a `source-gone` instance is always safe to
+  tear down — its declared input no longer exists).
+- **Move = new instance by default.** Instance identity is PATH-KEYED: a
+  moved directory canonicalizes/hashes differently, so the moved location
+  plans a NEW instance and the old one goes `source-gone`. Inode-tracking
+  re-link (recognize a move and re-key the existing instance) is PARKED as
+  an implementation-detail refinement — not part of v1.
+
+### V4. `on_skew` — config/image divergence policy knob
+
+New optional `instance.on_skew` knob governing hash divergence between the
+current build inputs and a RUNNING instance's provenance stamp (the
+`{ image_out_hash, config_hash, created_at }` stamps of ADR 0032):
+
+| value | meaning |
+|---|---|
+| `warn` (default) | proceed (reuse/start per the conflict chain) and print the divergence — e.g. `config a1b2 → current d4e5`. |
+| `replace` | tear down and start fresh on the new inputs. |
+| `reuse-silently` | adopt the running instance without comment. |
+
+`warn` is the default because divergence is common and usually benign
+(doc/config edits that do hash — see ADR 0032's runtime-relevant hash
+scope); silent reuse hides real drift; auto-replace destroys instances the
+operator may want.
+
+### V5. Default-strategy question — per-dir is OPT-IN first
+
+Whether `per-dir` should become the DEFAULT for agent workloads with
+cwd-templated mounts is an OPEN USER DECISION. Recommendation: **opt-in
+first** — ship `per-dir` as an explicit strategy, let the host batch (the
+U7 A–D e2e plus a per-dir smoke) prove the mechanics, then revisit
+default-for-agents-with-cwd-mounts. Recorded in the session's open-questions
+report.
+
+### V6. `mount_refresh` — evaluated and DROPPED
+
+A `mount_refresh` flag (re-resolve/re-sync mount sources under an existing
+instance) was evaluated and DROPPED: per-dir (a new directory is a new
+instance, with correct mounts by construction) plus `on_skew` (the
+divergence policy for changed inputs) cover the legitimate cases correctly.
+Refreshing mounts under a running instance would blur instance identity —
+the record would no longer say what the instance actually is — for no
+remaining use case.
+
+### V7. Generalization note — the general on-demand code-runner
+
+per-dir + the instance policies + dynamic ports + the cleanup family (ADR
+0032 down-scope ladder) compose into **a general on-demand isolated
+code-runner** (devcontainers-style: point at a directory, get an isolated
+environment with declared state, ports, and teardown). The agent workload
+(prime) is the FIRST TENANT of that mechanism, not its only tenant.
+Naming, docs, and config vocabulary must NOT paint the mechanism into an
+agents-only corner — the strategy is `per-dir`, the state structure is
+`workspaces/<name>-state/<instance-key>`, and neither names agents.

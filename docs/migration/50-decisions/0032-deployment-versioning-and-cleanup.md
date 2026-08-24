@@ -2,6 +2,10 @@
 
 **Status:** Accepted (blue-green/promote deferred)
 **Date:** 2026-08-23
+**Addendum:** 2026-08-24 (config source model + selection ladder + down
+scope ladder + image tags DECIDED + operating model; supersedes the
+`clean --vms` verb shape in § Cleanup family — the ladder and the
+`down`/`clean` verb split below govern)
 **References:** ADR 0019 (contexts + `<context>-<workload>` namespacing),
 ADR 0021 (instance lifecycle + AI-native surfaces; `down --all` back-compat
 alias), ADR 0026 (per-instance addressing + dynamic ports), ADR 0030
@@ -71,6 +75,12 @@ workload changes — edits that cannot change runtime behavior must not churn
 the hash.
 
 ### Cleanup family
+
+> **Superseded in verb shape by the 2026-08-24 addendum** (§ Down scope
+> ladder): VM teardown moves to `down` with an explicit scope ladder, and
+> `clean` keeps state/cache hygiene only. The classification model,
+> hardened-teardown requirement, per-target outcomes, and nonzero-exit
+> rules below STAND and are carried into the ladder unchanged.
 
 **Accepted; build order next** (see Consequences):
 
@@ -163,9 +173,140 @@ deferred.
 
 ## Open questions
 
-- **Tag format**: `name:ctx` + `name:sha` alias pair vs single `name-ctx:sha`.
-- **GC policy for hash tags**: keep-last-N vs manual.
+**RESOLVED (2026-08-24):**
+
+- **Tag format** — DECIDED: `name:ctx:sha` immutable per build; the
+  per-context mutable alias is replaced by the state-dir image record as the
+  mutable current-pointer (§ Image identity, 2026-08-24 decision).
+
+**REMAINING:**
+
+- **GC policy for hash tags** — keep-last-N per context (RECOMMENDED; the
+  2026-08-24 addendum records it as the working default) vs manual
+  `workestrate images gc` only. User decision.
+- **Prod config strategy** — a dedicated `prod` branch (RECOMMENDED) vs a
+  pinned clone of the config repo. User decision.
+- **`--from` flag name** — `--from` (RECOMMENDED) vs `--workload-ref`.
+  User decision.
+- **Per-dir default-for-agents** — opt-in first (RECOMMENDED) vs default
+  for agent workloads with cwd-templated mounts now (ADR 0030 V5).
+  User decision.
 - **Promote command shape when un-deferred**: explicit `workload promote` vs
   chain element promote-if-healthy.
 - **Whether models.json seed content belongs in the config hash** or stays a
   `--reseed` concern.
+
+---
+
+## Addendum (2026-08-24): config source model + selection ladder + down scope ladder + image tags + operating model
+
+This addendum records the 2026-08-24 design session decisions. It extends
+the identity/provenance decisions above with the config-consumption model
+they depend on, supersedes the `clean --vms` verb shape (§ Cleanup family),
+and resolves the tag-format open question.
+
+### Config source model (the "repository thing")
+
+Registry entries are `{ url, ref, rev }` with a SINGLE `url` field,
+**scheme-discriminated**:
+
+| url form | kind | semantics |
+|---|---|---|
+| `github:` / `https` / `ssh` / `git://` | remote | cloned into the managed store; network fetch. |
+| `git+file://` | local git repo | full ref support (branches, tags, shas resolve), NO network. |
+| plain path | local working repo (git) or plain dir | a git working repo resolves refs against its own object store; a plain dir is consumed content-as-is with branch = `"local"`. |
+
+- **Generated lockfile `<home>/config-repos.lock`** — `{ rev, sha,
+  fetched_at }` per entry+ref. Written ONLY by an explicit
+  `workestrate config update` or by first-resolution-with-notice; **never
+  silently** (no verb mutates pins as a side effect).
+- **Content-addressed archive store** `<state>/cache/gitv3/<sha>/` —
+  produced by `git archive <sha>` from the EXISTING single managed clone
+  per repo. Recorded explicitly: **NO worktrees, NO checkouts** — one clone
+  IS the object database; cache entries are plain immutable directories;
+  simultaneous branches are free (two refs of one repo are two archive
+  dirs, never two checkouts).
+- **Default-ref resolution order:** explicit `ref` > `origin/HEAD`
+  (clones/remotes) > checkout HEAD (local working repos) > HARD ERROR
+  naming the repo.
+- **Platform/deps:** the git binary is already required; `tar` on unix
+  (git archive emits tar); a zip fallback is the noted Windows path
+  (`git archive --format=zip`). **No new dependencies.**
+
+### Selection ladder
+
+Precedence, highest first:
+
+1. **`--home`** — the hard boundary: which home (registry + state) the
+   invocation operates on at all.
+2. **`--config-ref <branch|sha>`** — "the home on that branch": resolves
+   every config entry at the given ref (via the archive cache) and IMPLIES
+   the context (the ref's branch becomes the context).
+3. **Per-workload `--from <ref>`** — capsule-only substitution: the named
+   workload's capsule is read at `<ref>` from its declaring repo while
+   everything else stays home-scoped.
+
+`--from` rules:
+
+- **Deps NEVER follow the override in v1** — `depends_on` resolves against
+  the home-scoped config; a `--with-deps` closure flag is noted as possible
+  later work (implementation-detail, parked).
+- **Instance identity carries the override ref as a parallel instance** —
+  `workload up prime --from feat-x` plans `prime@feat-x`, which COEXISTS
+  with `prime@main` (parallel-slot bind + dynamic ports per ADR 0030); no
+  port or state collision by construction.
+- **Validation:** the ref must EXIST in the declaring repo AND the workload
+  must EXIST at that ref — both fail-closed at plan time.
+
+**Context derivation order:** explicit `--context` > `--config-ref` branch
+> checkout branch (local working repo) > `main`.
+
+**Defaults:** pinned ref everywhere — an unadorned invocation consumes the
+locked rev (the stable line); branch names are opt-in freshness.
+
+### Down scope ladder (supersedes the `clean --vms` sketch)
+
+`down` gains an explicit scope ladder, narrowest to widest:
+
+```
+instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  <  everything (--everything, double-gated)
+```
+
+- **Classification engine** (carried over unchanged from § Cleanup family):
+  a target is workestrate-managed iff registry record ∨ slot-name pattern
+  (`<context>-<workload>`) ∨ artifact evidence (`workestrate.log` in the
+  sandbox dir, `workestrate-*` image tags).
+- **Hardened teardown path** (the stop-fix semantics, commits `56297b1` /
+  `36a8be2`): every target at every scope goes stop → wait-exit → remove →
+  unregister → policy-dir → sandbox-dir.
+- **Per-target outcomes reported; nonzero exit on ANY failure.**
+- **Verb split (recorded):** `down` owns ALL VM teardown across the ladder;
+  `clean` keeps state/cache hygiene only (the existing state-dir content
+  removal — workspaces/, var/run/ — plus, under this addendum, archive-cache
+  GC bounds) and NEVER tears down VMs. The `clean --vms` sketch is
+  superseded; `down --all` remains the home-wide teardown (no alias needed
+  — it already IS a `down` scope).
+
+### Image tags — DECIDED
+
+- **Tag format: `name:ctx:sha`, immutable per build.** The earlier
+  alias-pair sketch (`name:sha-<hash>` + `:ctx` mutable alias tag) is
+  replaced: the **state-dir image record is the mutable current-pointer**
+  for the context — no mutable registry tags at all, so a dev build cannot
+  even transiently move what prod resolves.
+- **GC:** keep-last-N per context (RECOMMENDED working default — user
+  confirmation pending, § Open questions) with a manual
+  `workestrate images gc` as the fallback.
+
+### Operating model (A6 preview)
+
+- **prod** = pinned rev (config-repos.lock) + pinned profile binary.
+- **dev** = any branch BY NAME via refs (`--config-ref` / `--from`) —
+  freshness without moving pins.
+- **Nothing is checked out unless it is being edited** — consumption reads
+  the archive cache, not a working copy.
+- **Commit-before-consume** — only committed content is archivable; a dirty
+  working tree is invisible to the pinned/remote paths (a local working-repo
+  entry consumed content-as-is is the explicit exception).
+- **Worktrees are for ONE thing only:** simultaneous editing of two
+  branches. They are a human editing tool, never a consumption mechanism.

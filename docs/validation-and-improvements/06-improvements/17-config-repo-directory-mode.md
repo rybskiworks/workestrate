@@ -193,6 +193,25 @@ hard error).
 
 ---
 
+## 3b. Config-source path model (ADR 0032 addendum, 2026-08-24)
+
+ADR 0032's 2026-08-24 addendum changes WHERE a consumed config layer's files
+physically live, not how paths resolve against them. When a config entry is
+consumed at a pinned/locked ref, the layer's content root is a directory in
+the content-addressed archive store `<state>/cache/gitv3/<sha>/` — a plain
+immutable directory produced by `git archive <sha>` from the single managed
+clone (NO worktrees, NO checkouts); `<home>/config-repos.lock` maps
+entry+ref → sha. Every rule in this spec is UNCHANGED under that model:
+the content root is still the directory-mode root `<layer>/workestrate/`
+(F1), the flake-root gate still resolves against the declaring repo root
+(F2), seeds still never fall back to the caller's cwd (F3), and provenance
+strings still carry `<repo>#<relpath>` — the relpath is computed against
+the archive dir exactly as against a working copy. Local working-copy
+entries (plain-path urls, ADR 0024) keep resolving against the working
+copy as today; the archive store applies only to ref-pinned consumption.
+
+---
+
 ## 4. Rationale
 
 - **Precedent.** docker-compose multi-file/`extends`; kustomize
