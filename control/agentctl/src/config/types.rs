@@ -705,6 +705,11 @@ pub struct InstancePolicy {
     /// parses + validates.
     #[serde(default)]
     pub port: Option<InstancePort>,
+    /// Config/image divergence policy for a RUNNING instance (ADR 0030
+    /// V-addendum §V4): warn (default) | replace | reuse-silently. `None` →
+    /// warn at decision time (mirrors the `on_conflict` Option pattern).
+    #[serde(default)]
+    pub on_skew: Option<OnSkew>,
     /// Optional display/version identity label (ADR 0030 §4.5 / Q4 lighter
     /// option). Free-form string.
     #[serde(default)]
@@ -722,6 +727,12 @@ pub enum InstanceStrategy {
     Parallel,
     Replace,
     Reuse,
+    /// One instance per working directory (ADR 0030 V-addendum §V1): the
+    /// instance id is `<dirname-slug>-<shorthash>` of the CANONICALIZED
+    /// invocation cwd. `rename_all = "snake_case"` would render this
+    /// `per_dir` — the pinned config vocabulary is kebab-case `per-dir`.
+    #[serde(rename = "per-dir")]
+    PerDir,
 }
 
 impl fmt::Display for InstanceStrategy {
@@ -731,6 +742,37 @@ impl fmt::Display for InstanceStrategy {
             Self::Parallel => "parallel",
             Self::Replace => "replace",
             Self::Reuse => "reuse",
+            Self::PerDir => "per-dir",
+        };
+        f.write_str(s)
+    }
+}
+
+/// The `instance.on_skew` divergence policy knob (ADR 0030 V-addendum §V4):
+/// what to do when the current build inputs diverge from a RUNNING
+/// instance's recorded provenance stamps. `Warn` is the default (divergence
+/// is common and usually benign; silent reuse hides real drift; auto-replace
+/// destroys instances the operator may want).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnSkew {
+    /// Proceed (reuse/start per the conflict chain) and print the divergence.
+    #[default]
+    Warn,
+    /// Tear down and start fresh on the new inputs.
+    Replace,
+    /// Adopt the running instance without comment.
+    ReuseSilently,
+}
+
+impl fmt::Display for OnSkew {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Warn => "warn",
+            Self::Replace => "replace",
+            Self::ReuseSilently => "reuse-silently",
         };
         f.write_str(s)
     }
@@ -3239,5 +3281,97 @@ env = "LITELLM_URL"
 "#;
         let config: ConfigFile = toml::from_str(raw).unwrap();
         assert_eq!(config.workloads["pi"].depends_on["litellm"].instance, None);
+    }
+
+    // ---- ADR 0030 V-addendum §V1: strategy = "per-dir" ----
+
+    /// `strategy = "per-dir"` parses (kebab-case — snake_case would be
+    /// `per_dir` and must NOT parse) and Displays as "per-dir".
+    #[test]
+    fn instance_strategy_per_dir_parses_and_displays() {
+        let raw = r#"
+schema_version = 1
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.instance]
+strategy = "per-dir"
+"#;
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].instance.strategy,
+            InstanceStrategy::PerDir
+        );
+        assert_eq!(InstanceStrategy::PerDir.to_string(), "per-dir");
+        // The serde spelling is kebab-case; snake_case is rejected.
+        let snake = raw.replace("\"per-dir\"", "\"per_dir\"");
+        assert!(
+            toml::from_str::<ConfigFile>(&snake).is_err(),
+            "per_dir (snake_case) must NOT parse — the vocabulary is per-dir"
+        );
+    }
+
+    // ---- ADR 0030 V-addendum §V4: instance.on_skew ----
+
+    /// Each on_skew value parses; the default-absent case is None (the warn
+    /// default applies at decision time).
+    #[test]
+    fn on_skew_variants_parse_and_default_none() {
+        for (value, expected) in [
+            ("warn", OnSkew::Warn),
+            ("replace", OnSkew::Replace),
+            ("reuse-silently", OnSkew::ReuseSilently),
+        ] {
+            let raw = format!(
+                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[workloads.pi.instance]\non_skew = \"{value}\"\n"
+            );
+            let config: ConfigFile = toml::from_str(&raw)
+                .unwrap_or_else(|e| panic!("on_skew = \"{value}\" must parse: {e}"));
+            assert_eq!(
+                config.workloads["pi"].instance.on_skew,
+                Some(expected),
+                "on_skew = \"{value}\""
+            );
+        }
+        // Absent → None (warn applies at decision time).
+        let raw = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n";
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(config.workloads["pi"].instance.on_skew, None);
+        // Display strings match the config vocabulary.
+        assert_eq!(OnSkew::Warn.to_string(), "warn");
+        assert_eq!(OnSkew::Replace.to_string(), "replace");
+        assert_eq!(OnSkew::ReuseSilently.to_string(), "reuse-silently");
+        assert_eq!(OnSkew::default(), OnSkew::Warn);
+    }
+
+    /// An unknown on_skew value is rejected by serde's closed vocabulary
+    /// (kebab-case; `reuse_silently` must NOT parse).
+    #[test]
+    fn on_skew_unknown_value_rejected() {
+        for bad in ["nuke", "reuse_silently", "WARN"] {
+            let raw = format!(
+                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[workloads.pi.instance]\non_skew = \"{bad}\"\n"
+            );
+            assert!(
+                toml::from_str::<ConfigFile>(&raw).is_err(),
+                "unknown on_skew value '{bad}' must fail"
+            );
+        }
+    }
+
+    /// An explicit on_skew survives a serialize/deserialize round-trip.
+    #[test]
+    fn on_skew_round_trips() {
+        let raw = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.instance]\non_skew = \"reuse-silently\"\n";
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let serialized = toml::to_string(&config).unwrap();
+        let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            reparsed.workloads["pi"].instance.on_skew,
+            Some(OnSkew::ReuseSilently)
+        );
     }
 }

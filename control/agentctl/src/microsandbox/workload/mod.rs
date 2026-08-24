@@ -100,6 +100,13 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         None
     }
 
+    /// The workload's declared `instance.on_skew` divergence policy (ADR
+    /// 0030 V-addendum §V4): None = the warn default at decision time.
+    /// ConfigWorkload overrides from the `[workloads.<name>.instance]` block.
+    fn instance_on_skew(&self) -> Option<crate::config::OnSkew> {
+        None
+    }
+
     /// Format the plan with a `[source]` annotation for each field.
     fn show_source(&self) -> String {
         self.plan().to_string()
@@ -187,13 +194,25 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// `only_if_missing` for those entries); static seeds and
     /// `only_if_missing = false` behavior are unchanged.
     ///
+    /// `instance_state_key` (ADR 0030 V-addendum §V2) is the per-instance
+    /// state key — the instance id's `@`-suffix for a `per-dir`-strategy
+    /// workload, `None` otherwise. Seed targets under the workload's state
+    /// root (`workspaces/<name>-state[/...]`) gain the key segment; with
+    /// `None` every target is byte-identical to before (no layout churn).
+    ///
     /// `SeedEnvView` is crate-internal (`pub(crate)`, env.rs); the default
-    /// implementation ignores both arguments, and callers inside this crate
+    /// implementation ignores all arguments, and callers inside this crate
     /// are the only ones that ever construct or consume the view.
     #[allow(private_interfaces)] // SeedEnvView is crate-internal by design
-    fn prepare(&self, env_view: &SeedEnvView, reseed: bool) -> Result<()> {
+    fn prepare(
+        &self,
+        env_view: &SeedEnvView,
+        reseed: bool,
+        instance_state_key: Option<&str>,
+    ) -> Result<()> {
         let _ = env_view;
         let _ = reseed;
+        let _ = instance_state_key;
         Ok(())
     }
 

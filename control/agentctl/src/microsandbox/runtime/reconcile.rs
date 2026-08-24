@@ -53,6 +53,11 @@ pub struct ReconcileFacts {
     pub healthy: Option<bool>,
     /// The record's `created_at` is within [`BOOT_GRACE`].
     pub recently_started: bool,
+    /// The instance's recorded source directory is gone (ADR 0030 V-addendum
+    /// §V3): record present AND `source_dir` recorded AND that path no longer
+    /// exists. `source_dir: None` (legacy/unknown posture) is NEVER
+    /// source-gone.
+    pub source_gone: bool,
 }
 
 /// Resolve the msb home dir (`$MSB_HOME` or `~/.microsandbox`), mirroring
@@ -106,6 +111,13 @@ pub async fn gather_facts(
         .and_then(|r| record_age_secs(&r.created_at))
         .map(|age| age < BOOT_GRACE.as_secs())
         .unwrap_or(false);
+    // ADR 0030 V-addendum §V3: the recorded per-dir source directory (the
+    // canonical invocation cwd at create) no longer exists. Legacy records
+    // (source_dir None) are never source-gone.
+    let source_gone = record
+        .as_ref()
+        .and_then(|r| r.source_dir.as_deref())
+        .is_some_and(|p| !Path::new(p).exists());
     Ok(ReconcileFacts {
         record,
         msb_status,
@@ -113,6 +125,7 @@ pub async fn gather_facts(
         dir_exists,
         healthy,
         recently_started,
+        source_gone,
     })
 }
 
@@ -228,6 +241,28 @@ pub enum ChainStep {
     Fail,
 }
 
+/// The source-gone guidance error (ADR 0030 V-addendum §V3): the recorded
+/// source directory no longer exists, so reusing/starting this instance
+/// would resurrect mounts against a deleted input. Names the instance and
+/// the gone path; the remediation is a NEW instance (re-invoke from the
+/// moved directory) or teardown.
+fn source_gone_error(facts: &ReconcileFacts, instance: &str) -> Option<anyhow::Error> {
+    if !facts.source_gone {
+        return None;
+    }
+    let path = facts
+        .record
+        .as_ref()
+        .and_then(|r| r.source_dir.as_deref())
+        .unwrap_or("(unknown)");
+    let slot = crate::microsandbox::slots::slot_of_instance(instance);
+    Some(anyhow::anyhow!(
+        "instance '{instance}' source directory '{path}' no longer exists; \
+         re-invoke from the moved directory (plans a new instance), or \
+         'workload down {slot}' / down --all to remove it"
+    ))
+}
+
 /// Decide the disposition for `instance` by iterating `chain` in order and
 /// returning the FIRST element whose precondition holds (ADR 0030 addendum 2
 /// U2 behavior matrix). Returns Err (chain exhausted) when no element
@@ -238,13 +273,20 @@ pub fn decide_chain(
     instance: &str,
 ) -> Result<ChainStep> {
     // msb unavailable → fail-closed per the ADR matrix: record present →
-    // Fail; else plain Start.
+    // Fail; else plain Start. (Checked before source-gone, mirroring the
+    // classify_status ordering: msb_unavailable wins.)
     if facts.msb_unavailable {
         return Ok(if facts.record.is_some() {
             ChainStep::Fail
         } else {
             ChainStep::Start
         });
+    }
+    // ADR 0030 V-addendum §V3: a source-gone instance is never reused,
+    // started, or chain-replaced — bail with guidance BEFORE chain walking.
+    // (`down` sweeps it by name; no down path consults this.)
+    if let Some(err) = source_gone_error(facts, instance) {
+        return Err(err);
     }
     // Plain start when the slot is free (no row, no dir, no record) — the
     // chain is irrelevant.
@@ -383,6 +425,15 @@ pub fn decide_step(
     instance: &str,
     replace: bool,
 ) -> Result<ChainStep> {
+    // ADR 0030 V-addendum §V3: source-gone bails BEFORE the --replace
+    // preemption too — replacing in place would recreate an instance whose
+    // declared input no longer exists; the guidance is re-invoke-from-moved
+    // (a NEW instance) or down. (msb-unavailable fail-closed handling stays
+    // inside decide_chain; with replace=true the operator's explicit
+    // teardown intent still wins over that, as before.)
+    if let Some(err) = source_gone_error(facts, instance) {
+        return Err(err);
+    }
     if replace {
         return Ok(ChainStep::Replace);
     }
@@ -413,6 +464,7 @@ mod tests {
             created_at: created_at.to_string(),
             bind_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             namespace: crate::microsandbox::port_registry::default_namespace(),
+            source_dir: None,
         }
     }
 
@@ -433,6 +485,7 @@ mod tests {
             dir_exists,
             healthy,
             recently_started,
+            source_gone: false,
         }
     }
 
@@ -671,6 +724,157 @@ mod tests {
             ChainStep::Start,
             "without --replace a free slot is a plain start"
         );
+    }
+
+    // ---- ADR 0030 V-addendum §V3: source-gone ----
+
+    /// Facts with a record whose `source_dir` points at a path that does not
+    /// exist → source-gone.
+    fn source_gone_facts(
+        msb_status: Option<SandboxStatus>,
+        healthy: Option<bool>,
+    ) -> ReconcileFacts {
+        let mut rec = record("2026-01-01T00:00:00Z");
+        rec.source_dir = Some("/definitely/not/a/real/path/workestrate-test".to_string());
+        let mut f = facts(Some(rec), msb_status, false, false, healthy, false);
+        f.source_gone = true;
+        f
+    }
+
+    /// A source-gone record + an explicit target: decide_chain bails with
+    /// guidance naming the instance and the gone path, BEFORE chain walking
+    /// (even a running-healthy instance is not reused).
+    #[test]
+    fn source_gone_decide_chain_bails_with_guidance() {
+        let f = source_gone_facts(Some(SandboxStatus::Running), Some(true));
+        let err = decide_chain(&default_chain(), &f, "pd@work-1234abcd").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("instance 'pd@work-1234abcd' source directory '/definitely/not/a/real/path/workestrate-test' no longer exists"),
+            "error must name the instance and the gone path: {msg}"
+        );
+        assert!(
+            msg.contains("re-invoke from the moved directory"),
+            "error must point at the new-instance remediation: {msg}"
+        );
+        assert!(
+            msg.contains("workload down pd") && msg.contains("down --all"),
+            "error must point at teardown: {msg}"
+        );
+    }
+
+    /// decide_step bails on source-gone too — INCLUDING under an explicit
+    /// --replace (the replace preemption never fires for a gone source).
+    #[test]
+    fn source_gone_decide_step_bails_even_with_replace() {
+        let f = source_gone_facts(Some(SandboxStatus::Running), Some(true));
+        assert!(decide_step(&default_chain(), &f, "pd@work-1234abcd", false).is_err());
+        let err = decide_step(&default_chain(), &f, "pd@work-1234abcd", true).unwrap_err();
+        assert!(
+            err.to_string().contains("no longer exists"),
+            "replace must not bypass the source-gone bail: {err}"
+        );
+    }
+
+    /// A LEGACY record (source_dir None) is never source-gone: the chain
+    /// disposes normally (running healthy → Reuse).
+    #[test]
+    fn legacy_none_source_dir_is_never_source_gone() {
+        let f = running(Some(true), false);
+        assert!(!f.source_gone, "fixture record has no source_dir");
+        assert_eq!(
+            decide_chain(&default_chain(), &f, "b").unwrap(),
+            ChainStep::Reuse,
+            "legacy posture must reuse normally"
+        );
+    }
+
+    /// msb-unavailable beats source-gone in decide_chain (fail-closed Fail,
+    /// mirroring the classify_status ordering).
+    #[test]
+    fn msb_unavailable_beats_source_gone_in_decide_chain() {
+        let mut f = source_gone_facts(None, None);
+        f.msb_unavailable = true;
+        assert_eq!(
+            decide_chain(&default_chain(), &f, "b").unwrap(),
+            ChainStep::Fail,
+            "msb-unavailable fail-closed wins over the source-gone bail"
+        );
+    }
+
+    /// gather_facts computes source_gone from the record + filesystem: a
+    /// recorded source_dir that exists is not source-gone; one that does not
+    /// is; a missing source_dir is never source-gone. The msb DB is made
+    /// unreachable (MSB_HOME under a regular file — the blocker idiom) so
+    /// the SDK's process-global pool is never pinned by this test; the
+    /// source_gone fact is record-derived and unaffected by msb state.
+    #[tokio::test]
+    // ENV_TEST_LOCK held across `.await`: single-threaded test runtime, no
+    // spawned tasks — see the prune_stale_records msb-unreachable test.
+    #[allow(clippy::await_holding_lock)]
+    async fn gather_facts_computes_source_gone() -> Result<()> {
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-gather-source-gone-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        std::fs::write(tmp.join("blocker"), b"x")?;
+        let _msb = MsbHomeGuard::set(&tmp.join("blocker"));
+
+        let dir = crate::config::test_support::unique_state_dir_runtime("gather-source-gone");
+        let gone = "/definitely/not/a/real/path/workestrate-gather-test";
+        // Record WITH a gone source_dir.
+        crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
+            &dir,
+            "gone-src",
+            None,
+            "gone-src",
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            &[4500],
+            &[PortMapping::new(4500, 4500)],
+            "2026-01-01T00:00:00Z",
+            "default",
+            Some(gone),
+        )?;
+        // Record WITH a live source_dir (the state dir exists).
+        crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
+            &dir,
+            "live-src",
+            None,
+            "live-src",
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            &[4501],
+            &[PortMapping::new(4501, 4501)],
+            "2026-01-01T00:00:00Z",
+            "default",
+            Some(dir.to_str().unwrap()),
+        )?;
+        // Record with NO source_dir (legacy posture — the legacy minimal
+        // register writes None).
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "legacy-src",
+            None,
+            "legacy-src",
+            &[4502],
+        )?;
+
+        let f = gather_facts(&dir, "gone-src", &[]).await?;
+        assert!(f.source_gone, "gone recorded source_dir → source_gone");
+        let f = gather_facts(&dir, "live-src", &[]).await?;
+        assert!(!f.source_gone, "live recorded source_dir → not source_gone");
+        let f = gather_facts(&dir, "legacy-src", &[]).await?;
+        assert!(!f.source_gone, "legacy None source_dir → never source_gone");
+        let f = gather_facts(&dir, "no-record", &[]).await?;
+        assert!(!f.source_gone, "no record → not source_gone");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
     }
 
     #[test]

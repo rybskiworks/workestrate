@@ -1295,6 +1295,7 @@ guest = 4003
             }],
             "2026-08-01T00:00:00Z",
             "default",
+            None,
         )
     }
 
@@ -1677,6 +1678,7 @@ on_conflict = "fail"
             created_at: "2026-01-01T00:00:00Z".to_string(),
             bind_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             namespace: crate::microsandbox::port_registry::default_namespace(),
+            source_dir: None,
         }
     }
 
@@ -1695,6 +1697,7 @@ on_conflict = "fail"
             dir_exists: false,
             healthy,
             recently_started,
+            source_gone: false,
         }
     }
 
@@ -2572,6 +2575,7 @@ guest = 4000
             }],
             "2026-08-01T00:00:00Z",
             "default",
+            None,
         )
     }
 

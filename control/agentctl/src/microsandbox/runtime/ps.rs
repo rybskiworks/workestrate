@@ -34,7 +34,8 @@ pub enum PsKind {
     Parallel,
 }
 
-/// The reconciled 5-state status of an instance (ADR 0030 §4.4): computed
+/// The reconciled status of an instance (ADR 0030 §4.4 + V-addendum §V3
+/// `source-gone`): computed
 /// from the shared reconcile facts (registry record + msb status + host-port
 /// liveness). `stale` (ADR 0021) remains for back-compat in JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -50,6 +51,9 @@ pub enum InstanceStatus {
     Crashed,
     /// Registry record present + msb gone (no row, no dir) — stale record.
     StaleRecord,
+    /// The record's source directory (per-dir create-time cwd) is gone from
+    /// the filesystem (ADR 0030 V-addendum §V3).
+    SourceGone,
     /// msb unavailable (fail-closed) — status unknown.
     Unknown,
 }
@@ -64,15 +68,23 @@ impl InstanceStatus {
             InstanceStatus::Stopped => "stopped",
             InstanceStatus::Crashed => "crashed",
             InstanceStatus::StaleRecord => "stale-record",
+            InstanceStatus::SourceGone => "source-gone",
             InstanceStatus::Unknown => "unknown",
         }
     }
 }
 
-/// Classify the 5-state status from reconcile facts (PURE — unit-testable).
+/// Classify the status from reconcile facts (PURE — unit-testable).
+/// Ordering (ADR 0030 §4.4 + V-addendum §V3): msb-unavailable → Unknown
+/// first; then source-gone → SourceGone (a gone source is reported even for
+/// a RUNNING instance — its declared input no longer exists); then the
+/// existing msb-status logic.
 pub fn classify_status(facts: &ReconcileFacts) -> InstanceStatus {
     if facts.msb_unavailable {
         return InstanceStatus::Unknown;
+    }
+    if facts.source_gone {
+        return InstanceStatus::SourceGone;
     }
     match facts.msb_status {
         Some(SandboxStatus::Running) => {
@@ -411,6 +423,7 @@ mod tests {
             &pairs,
             "2026-07-20T14:05:42Z",
             "default",
+            None,
         )?;
         let entries = ps(&dir)?;
         assert_eq!(entries.len(), 1);
@@ -453,6 +466,7 @@ mod tests {
             &pairs,
             "2026-07-20T14:05:42Z",
             "default",
+            None,
         )?;
         let entries = ps(&dir)?;
         assert_eq!(entries.len(), 1);
@@ -773,6 +787,7 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".to_string(),
             bind_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             namespace: crate::microsandbox::port_registry::default_namespace(),
+            source_dir: None,
         }
     }
 
@@ -790,6 +805,7 @@ mod tests {
             dir_exists: false,
             healthy,
             recently_started,
+            source_gone: false,
         }
     }
 
@@ -881,5 +897,54 @@ mod tests {
     fn classify_status_no_record_no_msb() {
         let f = facts(None, None, false, None, false);
         assert_eq!(classify_status(&f), InstanceStatus::Unknown);
+    }
+
+    // ---- ADR 0030 V-addendum §V3: source-gone classification ----
+
+    fn source_gone_facts(
+        msb_status: Option<SandboxStatus>,
+        msb_unavailable: bool,
+        healthy: Option<bool>,
+    ) -> ReconcileFacts {
+        let mut rec = record();
+        rec.source_dir = Some("/definitely/not/a/real/path/workestrate-ps-test".to_string());
+        let mut f = facts(Some(rec), msb_status, msb_unavailable, healthy, false);
+        f.source_gone = true;
+        f
+    }
+
+    /// source-gone beats RUNNING: a running instance whose recorded source
+    /// directory is gone reports source-gone, not running-healthy.
+    #[test]
+    fn classify_status_source_gone_beats_running() {
+        let f = source_gone_facts(Some(SandboxStatus::Running), false, Some(true));
+        assert_eq!(classify_status(&f), InstanceStatus::SourceGone);
+    }
+
+    /// msb-unavailable beats source-gone (fail-closed Unknown first).
+    #[test]
+    fn classify_status_msb_unavailable_beats_source_gone() {
+        let f = source_gone_facts(None, true, None);
+        assert_eq!(classify_status(&f), InstanceStatus::Unknown);
+    }
+
+    /// source-gone also beats the stopped/crashed/stale-record arms.
+    #[test]
+    fn classify_status_source_gone_beats_stopped_and_stale() {
+        let f = source_gone_facts(Some(SandboxStatus::Stopped), false, None);
+        assert_eq!(classify_status(&f), InstanceStatus::SourceGone);
+        let f = source_gone_facts(None, false, None);
+        assert_eq!(classify_status(&f), InstanceStatus::SourceGone);
+    }
+
+    /// The text form is "source-gone" and the serde form is snake_case
+    /// `source_gone`.
+    #[test]
+    fn source_gone_status_strings() {
+        assert_eq!(InstanceStatus::SourceGone.as_str(), "source-gone");
+        assert_eq!(
+            serde_json::to_string(&InstanceStatus::SourceGone).unwrap(),
+            "\"source_gone\""
+        );
     }
 }

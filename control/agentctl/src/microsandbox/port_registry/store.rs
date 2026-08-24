@@ -173,6 +173,7 @@ pub fn check_and_register_sandbox_lifecycle(
     port_pairs: &[PortMapping],
     created_at: &str,
     namespace: &str,
+    source_dir: Option<&str>,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     let pairs: Vec<(IpAddr, u16)> = host_ports.iter().map(|p| (bind_ip, *p)).collect();
@@ -187,6 +188,7 @@ pub fn check_and_register_sandbox_lifecycle(
         port_pairs,
         created_at,
         namespace,
+        source_dir,
     )
 }
 
@@ -227,6 +229,9 @@ pub fn register_sandbox(
         created_at: String::new(),
         bind_ip: crate::microsandbox::plan::default_bind_ip(),
         namespace: super::default_namespace(),
+        // The legacy minimal-registration entry point predates the per-dir
+        // strategy (ADR 0030 V-addendum §V3): source unknown.
+        source_dir: None,
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -256,6 +261,7 @@ pub fn register_sandbox_lifecycle(
     port_pairs: &[PortMapping],
     created_at: &str,
     namespace: &str,
+    source_dir: Option<&str>,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     register_sandbox_lifecycle_locked(
@@ -268,6 +274,7 @@ pub fn register_sandbox_lifecycle(
         port_pairs,
         created_at,
         namespace,
+        source_dir,
     )
 }
 
@@ -285,6 +292,7 @@ fn register_sandbox_lifecycle_locked(
     port_pairs: &[PortMapping],
     created_at: &str,
     namespace: &str,
+    source_dir: Option<&str>,
 ) -> Result<()> {
     // A1: refuse BEFORE writing the record file (pure check, no I/O; the
     // caller already holds the registry lock).
@@ -300,6 +308,7 @@ fn register_sandbox_lifecycle_locked(
         created_at: created_at.to_string(),
         bind_ip,
         namespace: namespace.to_string(),
+        source_dir: source_dir.map(|s| s.to_string()),
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -583,6 +592,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(port, port)],
             "2026-07-23T00:00:00Z",
             "default",
+            None,
         )
     }
 
@@ -868,6 +878,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
         )
         .unwrap_err();
         assert!(
@@ -915,6 +926,7 @@ mod tests {
             &pairs,
             "2026-07-20T14:05:42Z",
             "default",
+            None,
         )?;
         let record = find_record(&state_dir, "personal-litellm@canary")?
             .expect("record should exist after register_lifecycle");
@@ -961,6 +973,49 @@ mod tests {
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             "legacy record without bind_ip parses as 127.0.0.1 (ADR 0026(b))"
         );
+        assert_eq!(
+            record.source_dir, None,
+            "legacy record without source_dir parses as None (ADR 0030 §V3 legacy posture)"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// The per-dir source_dir (ADR 0030 V-addendum §V3) round-trips through
+    /// the registry file: registered Some(...) reads back Some(...).
+    #[test]
+    fn source_dir_round_trips_through_registry() -> Result<()> {
+        let state_dir = unique_state_dir("source-dir");
+        register_sandbox_lifecycle(
+            &state_dir,
+            "pd@work-1234abcd",
+            None,
+            "pd",
+            singleton_bind(),
+            &[14000],
+            &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
+            "2026-08-24T00:00:00Z",
+            "default",
+            Some("/home/node/work"),
+        )?;
+        let record = find_record(&state_dir, "pd@work-1234abcd")?.expect("record must exist");
+        assert_eq!(record.source_dir.as_deref(), Some("/home/node/work"));
+        // And None stays None (absent from the write? no — serialized as
+        // null; both spellings parse to None per #[serde(default)]).
+        register_sandbox_lifecycle(
+            &state_dir,
+            "pd2",
+            None,
+            "pd2",
+            singleton_bind(),
+            &[14001],
+            &[crate::microsandbox::plan::PortMapping::new(14001, 4001)],
+            "2026-08-24T00:00:00Z",
+            "default",
+            None,
+        )?;
+        let record = find_record(&state_dir, "pd2")?.expect("record must exist");
+        assert_eq!(record.source_dir, None);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -1007,6 +1062,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
             "2026-07-20T14:05:42Z",
             "default",
+            None,
         )?;
         let records = list_records(&state_dir)?;
         assert_eq!(
@@ -1206,6 +1262,7 @@ mod tests {
             created_at: String::new(),
             bind_ip: ip,
             namespace: crate::microsandbox::port_registry::default_namespace(),
+            source_dir: None,
         }
     }
 
@@ -1273,6 +1330,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
         )?;
         // Next allocation skips .2 → .3.
         assert_eq!(allocate_loopback_ip(&state_dir)?, loopback(3));
@@ -1466,6 +1524,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
         )?;
         assert_eq!(prospective_loopback_ip(&state_dir)?, loopback(3));
         assert_eq!(
@@ -1534,6 +1593,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
         )?;
         // A second registration for the same (127.0.0.2, 4000) must refuse,
         // naming the bind:port.
@@ -1641,6 +1701,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "repo-a",
+            None,
         )?;
         check_and_register_sandbox_lifecycle(
             &state_dir,
@@ -1652,6 +1713,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(5000, 5000)],
             "2026-07-30T00:00:00Z",
             "repo-b",
+            None,
         )?;
         // Namespace-scoped isolation.
         let a = list_records_for_workload(&state_dir, "litellm", "repo-a")?;

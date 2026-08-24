@@ -25,12 +25,15 @@ pub use migration::{run_migrate_home, MigrateSummary, MovedEntry};
 pub use paths::expand_tilde;
 #[allow(unused_imports)]
 pub use paths::{
+    canonical_invoke_cwd_string, ensure_invoke_cwd_env, invoke_cwd, invoke_cwd_or_err,
+    INVOKE_CWD_ENV,
+};
+#[allow(unused_imports)]
+pub use paths::{
     config_repo_dir, overrides_path, registry_path, resolve_active_config_dir, resolve_home,
     resolve_home_with_kind, resolve_state_dir, resolve_store_dir, source_store_dir, xdg_config_dir,
     xdg_data_dir, xdg_state_dir, HomeKind,
 };
-#[allow(unused_imports)]
-pub use paths::{ensure_invoke_cwd_env, invoke_cwd, invoke_cwd_or_err, INVOKE_CWD_ENV};
 #[allow(unused_imports)]
 pub(crate) use registry::looks_like_git_url;
 #[allow(unused_imports)]
@@ -47,8 +50,8 @@ pub use types::{
     BakedFileSpec, BinarySpec, Bound, ConfigFile, ConfigRepoEntry, ConflictStep, Context,
     DepConflict, DepInstanceMode, DependsOnSpec, EnvBinding, EnvBindings, EnvSecretRef,
     EnvVarConfig, ImageSpec, InstancePolicy, InstancePort, InstanceStrategy, LocalBuildConfig,
-    NetworkConfig, PolicyConfig, PortOccupiedBare, PortOccupiedChain, PortOccupiedStep, Registry,
-    RegistrySettings, SecretDefConfig, SecretsLayer, SeedFileConfig, TrustedProject,
+    NetworkConfig, OnSkew, PolicyConfig, PortOccupiedBare, PortOccupiedChain, PortOccupiedStep,
+    Registry, RegistrySettings, SecretDefConfig, SecretsLayer, SeedFileConfig, TrustedProject,
     WorkloadConfig,
 };
 #[allow(unused_imports)]

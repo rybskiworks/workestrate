@@ -277,16 +277,38 @@ fn rewrite_legacy_workload_argv(
     (rewritten, Some(warning))
 }
 
-/// ADR 0030 P2.1: the dependent-instance id a `workload plan` previews — an
-/// EXPLICIT passthrough of `--instance <id>` ONLY. Plan is read-only and
-/// must NEVER allocate a slug, so [`resolve_dependent_instance_id`] (which
-/// auto-allocates for the parallel strategy) is deliberately NOT called on
-/// this path: plan with no `--instance` is `None` (the singleton view).
-/// Pure — unit-testable.
-fn plan_preview_instance_id(action: &WorkloadAction) -> Option<String> {
+/// ADR 0030 P2.1 + V-addendum §V1: the dependent-instance id a `workload
+/// plan` previews.
+///
+/// - An explicit `--instance <id>` passes through verbatim.
+/// - With no `--instance`, a `per-dir`-strategy workload previews the
+///   DERIVED cwd-keyed id (`per_dir_instance_id` of the canonical invocation
+///   cwd) — deterministic, NO allocation. Any other strategy is `None` (the
+///   singleton view).
+///
+/// Plan is read-only and must NEVER allocate a slug, so
+/// [`resolve_dependent_instance_id`] (which auto-allocates for the parallel
+/// strategy) is deliberately NOT called on this path. The caller resolves
+/// `strategy` from the loaded config (the only fallible/I/O step); the
+/// derivation itself is pure.
+fn plan_preview_instance_id(
+    action: &WorkloadAction,
+    strategy: workestrate::config::InstanceStrategy,
+) -> Result<Option<String>> {
     match action {
-        WorkloadAction::Plan { instance, .. } => instance.clone(),
-        _ => None,
+        WorkloadAction::Plan { instance, .. } => {
+            if let Some(id) = instance {
+                return Ok(Some(id.clone()));
+            }
+            if strategy == workestrate::config::InstanceStrategy::PerDir {
+                let canonical = workestrate::config::canonical_invoke_cwd_string()?;
+                return Ok(Some(workestrate::microsandbox::slots::per_dir_instance_id(
+                    &canonical,
+                )));
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
     }
 }
 
@@ -759,7 +781,17 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                     };
                     resolve_dependent_instance_id(&name, instance, new, replace)?
                 }
-                "plan" => plan_preview_instance_id(&action),
+                "plan" => {
+                    // The strategy lookup is the only I/O: per-dir previews
+                    // the DERIVED id (deterministic, no allocation); every
+                    // other strategy stays on the singleton view.
+                    let strategy = workestrate::config::load_config()?
+                        .workloads
+                        .get(&name)
+                        .map(|w| w.instance.strategy)
+                        .unwrap_or(workestrate::config::InstanceStrategy::Singleton);
+                    plan_preview_instance_id(&action, strategy)?
+                }
                 _ => None,
             };
             // Spec 21 §2/§2.4 (phase E): the ensure-images pre-flight runs
@@ -905,21 +937,28 @@ mod tests {
         }
     }
 
-    /// ADR 0030 P2.1: `plan --instance <id>` passes the id through for the
-    /// scoped dep preview; plan WITHOUT --instance is None and NEVER
-    /// allocates (the seam is pure — no resolve_dependent_instance_id call,
-    /// no state_dir access); non-Plan actions yield None.
+    /// ADR 0030 P2.1 + V-addendum §V1: `plan --instance <id>` passes the id
+    /// through for the scoped dep preview; plan WITHOUT --instance on a
+    /// non-per-dir workload is None (the singleton view; no slug
+    /// allocation); a per-dir workload previews the DERIVED cwd-keyed id
+    /// (deterministic, no allocation); non-Plan actions yield None.
     #[test]
-    fn plan_preview_instance_id_is_explicit_passthrough_only() {
+    fn plan_preview_instance_id_passthrough_and_per_dir_derivation() {
+        use workestrate::config::InstanceStrategy;
         let plan_with = WorkloadAction::Plan {
             name: "prime".to_string(),
             instance: Some("x7".to_string()),
             use_: Vec::new(),
         };
         assert_eq!(
-            plan_preview_instance_id(&plan_with),
+            plan_preview_instance_id(&plan_with, InstanceStrategy::Singleton).unwrap(),
             Some("x7".to_string()),
             "explicit --instance must pass through verbatim"
+        );
+        // Explicit id passes through even for a per-dir workload.
+        assert_eq!(
+            plan_preview_instance_id(&plan_with, InstanceStrategy::PerDir).unwrap(),
+            Some("x7".to_string())
         );
         let plan_without = WorkloadAction::Plan {
             name: "prime".to_string(),
@@ -927,15 +966,47 @@ mod tests {
             use_: Vec::new(),
         };
         assert_eq!(
-            plan_preview_instance_id(&plan_without),
+            plan_preview_instance_id(&plan_without, InstanceStrategy::Singleton).unwrap(),
             None,
             "no --instance → None (singleton view; no slug allocation)"
         );
         assert_eq!(
-            plan_preview_instance_id(&up_action()),
+            plan_preview_instance_id(&plan_without, InstanceStrategy::Parallel).unwrap(),
+            None,
+            "parallel strategy still previews nothing (never allocates)"
+        );
+        assert_eq!(
+            plan_preview_instance_id(&up_action(), InstanceStrategy::PerDir).unwrap(),
             None,
             "non-Plan actions are not handled by the plan seam"
         );
+    }
+
+    /// The per-dir plan preview derives the cwd-keyed id from the CANONICAL
+    /// invocation cwd — deterministic, with no registry allocation.
+    #[test]
+    fn plan_preview_instance_id_per_dir_derives_cwd_keyed_id() {
+        use workestrate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _env = EnvGuard::capture(&[workestrate::config::INVOKE_CWD_ENV]);
+        let invoke = uniq_dir("plan-preview-perdir");
+        std::fs::create_dir_all(&invoke).unwrap();
+        let canonical = std::fs::canonicalize(&invoke).unwrap();
+        std::env::set_var(workestrate::config::INVOKE_CWD_ENV, &canonical);
+        let plan_without = WorkloadAction::Plan {
+            name: "prime".to_string(),
+            instance: None,
+            use_: Vec::new(),
+        };
+        let id =
+            plan_preview_instance_id(&plan_without, workestrate::config::InstanceStrategy::PerDir)
+                .unwrap()
+                .expect("per-dir plan previews the derived id");
+        assert_eq!(
+            id,
+            workestrate::microsandbox::slots::per_dir_instance_id(&canonical.to_string_lossy())
+        );
+        let _ = std::fs::remove_dir_all(&invoke);
     }
 
     /// The resolved dependent id becomes an explicit `--instance` (with
@@ -1220,6 +1291,7 @@ mod tests {
             no_deps: false,
             reseed: false,
             images_ready: false,
+            source_dir: None,
         }
     }
 

@@ -547,6 +547,18 @@
             }
           ]
         },
+        "on_skew": {
+          "description": "Config/image divergence policy for a RUNNING instance (ADR 0030 V-addendum §V4): warn (default) | replace | reuse-silently. `None` → warn at decision time (mirrors the `on_conflict` Option pattern).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OnSkew"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "port": {
           "description": "Port strategy: strict integer | \"auto\" | { preferred, on_occupied } (ADR 0030 addendum 2 U6). Selection behavior is Phase 3; Phase 1 parses + validates.",
           "default": null,
@@ -589,12 +601,23 @@
     },
     "InstanceStrategy": {
       "description": "The instance model a workload defaults to (ADR 0030 §4.1 `strategy`).",
-      "type": "string",
-      "enum": [
-        "singleton",
-        "parallel",
-        "replace",
-        "reuse"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "singleton",
+            "parallel",
+            "replace",
+            "reuse"
+          ]
+        },
+        {
+          "description": "One instance per working directory (ADR 0030 V-addendum §V1): the instance id is `<dirname-slug>-<shorthash>` of the CANONICALIZED invocation cwd. `rename_all = \"snake_case\"` would render this `per_dir` — the pinned config vocabulary is kebab-case `per-dir`.",
+          "type": "string",
+          "enum": [
+            "per-dir"
+          ]
+        }
       ]
     },
     "LocalBuildConfig": {
@@ -796,6 +819,32 @@
         }
       },
       "additionalProperties": false
+    },
+    "OnSkew": {
+      "description": "The `instance.on_skew` divergence policy knob (ADR 0030 V-addendum §V4): what to do when the current build inputs diverge from a RUNNING instance's recorded provenance stamps. `Warn` is the default (divergence is common and usually benign; silent reuse hides real drift; auto-replace destroys instances the operator may want).",
+      "oneOf": [
+        {
+          "description": "Proceed (reuse/start per the conflict chain) and print the divergence.",
+          "type": "string",
+          "enum": [
+            "warn"
+          ]
+        },
+        {
+          "description": "Tear down and start fresh on the new inputs.",
+          "type": "string",
+          "enum": [
+            "replace"
+          ]
+        },
+        {
+          "description": "Adopt the running instance without comment.",
+          "type": "string",
+          "enum": [
+            "reuse-silently"
+          ]
+        }
+      ]
     },
     "ParameterizedIncrement": {
       "description": "The parameterized `increment` element: `on_occupied = { increment = ... }`.",
@@ -1131,6 +1180,7 @@
           "default": {
             "label": null,
             "on_conflict": null,
+            "on_skew": null,
             "port": null,
             "strategy": "singleton"
           },

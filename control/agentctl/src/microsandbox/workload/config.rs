@@ -504,6 +504,10 @@ impl Workload for ConfigWorkload {
         self.workload.instance.port.clone()
     }
 
+    fn instance_on_skew(&self) -> Option<crate::config::OnSkew> {
+        self.workload.instance.on_skew
+    }
+
     fn exec(&self) -> SandboxCommand {
         match self.workload.command.split_first() {
             Some((binary, args)) => {
@@ -515,7 +519,12 @@ impl Workload for ConfigWorkload {
     }
 
     #[allow(private_interfaces)] // SeedEnvView is crate-internal by design
-    fn prepare(&self, env_view: &SeedEnvView, reseed: bool) -> Result<()> {
+    fn prepare(
+        &self,
+        env_view: &SeedEnvView,
+        reseed: bool,
+        instance_state_key: Option<&str>,
+    ) -> Result<()> {
         if self.workload.seed_files.is_empty() {
             return Ok(());
         }
@@ -542,11 +551,21 @@ impl Workload for ConfigWorkload {
         };
         let state_dir = crate::config::resolve_state_dir();
         for seed in &self.workload.seed_files {
+            // ADR 0030 V-addendum §V2: per-instance state addressing — under
+            // a per-dir instance key, targets at/below the workload's state
+            // root (`workspaces/<name>-state[/...]`) gain the key segment so
+            // each instance seeds its OWN state subdir. `None` (singleton /
+            // non-per-dir) leaves every target byte-identical to before.
+            let scoped_target = crate::microsandbox::mounts::instance_scoped_state_path(
+                &seed.target,
+                self.name(),
+                instance_state_key,
+            );
             let target_dir =
-                if seed.target.starts_with("workspaces/") || seed.target.starts_with("var/") {
-                    state_dir.join(&seed.target)
+                if scoped_target.starts_with("workspaces/") || scoped_target.starts_with("var/") {
+                    state_dir.join(&scoped_target)
                 } else {
-                    root.join(&seed.target)
+                    root.join(&scoped_target)
                 };
             match &seed.source {
                 Some(src) => {
@@ -554,7 +573,7 @@ impl Workload for ConfigWorkload {
                     self.seed_one_file(
                         &source,
                         &target_dir,
-                        &seed.target,
+                        &scoped_target,
                         seed.template,
                         seed.only_if_missing.unwrap_or(true),
                         src,
@@ -593,7 +612,7 @@ impl Workload for ConfigWorkload {
                         self.seed_one_file(
                             file,
                             &target,
-                            &seed.target,
+                            &scoped_target,
                             seed.template,
                             seed.only_if_missing.unwrap_or(true),
                             &rel.to_string_lossy(),
@@ -844,6 +863,7 @@ default_deny = true
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
         )
     }
 
@@ -1009,6 +1029,7 @@ default_deny = true
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             namespace,
+            None,
         )
     }
 
@@ -1094,6 +1115,7 @@ default_deny = true
             &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
         )?;
 
         let pi = ConfigWorkload::new("pi")?;
@@ -1429,13 +1451,67 @@ default_deny = true
         )?;
 
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&empty_seed_env_view(), false)?;
+        svc.prepare(&empty_seed_env_view(), false, None)?;
 
         let target = guard.state_dir().join("workspaces/svc-state/settings.json");
         assert_eq!(
             std::fs::read_to_string(&target)?,
             "{\"seeded\":true}",
             "seed payload must come from the declaring layer's dir"
+        );
+        Ok(())
+    }
+
+    /// ADR 0030 V-addendum §V2: with a per-instance state key, prepare()
+    /// seeds under `workspaces/<name>-state/<key>/...`; with `None` the
+    /// target is byte-identical to the legacy path (no layout churn).
+    #[test]
+    fn prepare_scopes_state_seed_targets_to_the_instance_key() -> Result<()> {
+        // Keyed (per-dir instance): the state target gains the key segment.
+        // (Scoped block: DependsEnvGuard holds ENV_TEST_LOCK for its
+        // lifetime, so the unkeyed guard below is constructed only after
+        // this one drops.)
+        {
+            let guard = DependsEnvGuard::new("cw-prepare-seed-keyed", SEED_CONFIG_TOML);
+            std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+            std::fs::write(
+                guard.config_dir().join("seed").join("settings.json"),
+                "{\"seeded\":true}",
+            )?;
+            let svc = ConfigWorkload::new("svc")?;
+            svc.prepare(&empty_seed_env_view(), false, Some("work-1234abcd"))?;
+            let keyed = guard
+                .state_dir()
+                .join("workspaces/svc-state/work-1234abcd/settings.json");
+            assert_eq!(
+                std::fs::read_to_string(&keyed)?,
+                "{\"seeded\":true}",
+                "keyed prepare must seed under the instance-scoped state subdir"
+            );
+            assert!(
+                !guard
+                    .state_dir()
+                    .join("workspaces/svc-state/settings.json")
+                    .exists(),
+                "the keyed prepare must NOT write the legacy unscoped path"
+            );
+        }
+
+        // Unkeyed (singleton/non-per-dir): byte-identical legacy path.
+        let guard2 = DependsEnvGuard::new("cw-prepare-seed-unkeyed", SEED_CONFIG_TOML);
+        std::fs::create_dir_all(guard2.config_dir().join("seed"))?;
+        std::fs::write(
+            guard2.config_dir().join("seed").join("settings.json"),
+            "{\"seeded\":true}",
+        )?;
+        let svc2 = ConfigWorkload::new("svc")?;
+        svc2.prepare(&empty_seed_env_view(), false, None)?;
+        assert!(
+            guard2
+                .state_dir()
+                .join("workspaces/svc-state/settings.json")
+                .exists(),
+            "key=None must seed the legacy path unchanged (no churn)"
         );
         Ok(())
     }
@@ -1461,8 +1537,11 @@ default_deny = true
         std::env::remove_var("CARGO_MANIFEST_DIR");
         std::env::set_current_dir(&cwd)?;
 
-        let result =
-            synthetic_workload(SEED_CONFIG_TOML, "svc").prepare(&empty_seed_env_view(), false);
+        let result = synthetic_workload(SEED_CONFIG_TOML, "svc").prepare(
+            &empty_seed_env_view(),
+            false,
+            None,
+        );
 
         match old_root {
             Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
@@ -1487,7 +1566,7 @@ default_deny = true
     #[test]
     fn prepare_without_seed_files_is_a_noop() -> Result<()> {
         let svc = synthetic_workload(MINIMAL_SEEDLESS_TOML, "svc");
-        svc.prepare(&empty_seed_env_view(), false)
+        svc.prepare(&empty_seed_env_view(), false, None)
     }
 
     // ---- P1.2: template = true seed files render against the env view ----
@@ -1526,7 +1605,7 @@ default_deny = true
             defined_secrets: std::collections::HashSet::new(),
         };
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&view, false)?;
+        svc.prepare(&view, false, None)?;
 
         let target = guard.state_dir().join("workspaces/svc-state/settings.json");
         assert_eq!(
@@ -1551,7 +1630,7 @@ default_deny = true
         let view = empty_seed_env_view();
         let svc = ConfigWorkload::new("svc")?;
         let err = svc
-            .prepare(&view, false)
+            .prepare(&view, false, None)
             .expect_err("a template referencing a missing var must hard-error");
         let msg = format!("{err}");
         assert!(msg.contains("NOPE"), "must name the missing var: {msg}");
@@ -1584,7 +1663,7 @@ default_deny = true
         };
         let svc = ConfigWorkload::new("svc")?;
         let err = svc
-            .prepare(&view, false)
+            .prepare(&view, false, None)
             .expect_err("a template referencing an unbound secret must hard-error");
         let msg = format!("{err}");
         assert!(msg.contains("UNBOUND"), "must name the secret: {msg}");
@@ -1622,7 +1701,7 @@ default_deny = true
             defined_secrets: std::collections::HashSet::new(),
         };
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&view, false)?;
+        svc.prepare(&view, false, None)?;
 
         assert_eq!(
             std::fs::read_to_string(&target)?,
@@ -1659,7 +1738,7 @@ default_deny = true
             defined_secrets: std::collections::HashSet::new(),
         };
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&view, false)?;
+        svc.prepare(&view, false, None)?;
 
         let content = std::fs::read_to_string(&target)?;
         assert!(
@@ -1693,7 +1772,7 @@ default_deny = true
 
         // First boot: the seed renders into the (missing) target.
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&view, false)?;
+        svc.prepare(&view, false, None)?;
         assert_eq!(
             std::fs::read_to_string(&target)?,
             r#"{"v":"host.microsandbox.internal:4000"}"#
@@ -1709,7 +1788,7 @@ default_deny = true
             )]),
             defined_secrets: std::collections::HashSet::new(),
         };
-        svc.prepare(&view2, false)?;
+        svc.prepare(&view2, false, None)?;
         assert_eq!(
             std::fs::read_to_string(&target)?,
             r#"{"v":"host.microsandbox.internal:4000"}"#,
@@ -1718,7 +1797,7 @@ default_deny = true
 
         // With --reseed the template seed re-renders over the existing
         // target (edited source + CURRENT env view).
-        svc.prepare(&view2, true)?;
+        svc.prepare(&view2, true, None)?;
         assert_eq!(
             std::fs::read_to_string(&target)?,
             r#"{"v2":"host.microsandbox.internal:5000"}"#,
@@ -1742,7 +1821,7 @@ default_deny = true
         std::fs::write(&target, "stale")?;
 
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&empty_seed_env_view(), true)?;
+        svc.prepare(&empty_seed_env_view(), true, None)?;
 
         assert_eq!(
             std::fs::read_to_string(&target)?,
@@ -1783,7 +1862,7 @@ default_deny = true
         // Both with and without --reseed the target is re-rendered.
         for reseed in [false, true] {
             std::fs::write(&target, "stale")?;
-            svc.prepare(&view, reseed)?;
+            svc.prepare(&view, reseed, None)?;
             assert_eq!(
                 std::fs::read_to_string(&target)?,
                 r#"{"v":"host.microsandbox.internal:4000"}"#,
@@ -1812,7 +1891,7 @@ default_deny = true
             defined_secrets: std::collections::HashSet::new(),
         };
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&view, true)?;
+        svc.prepare(&view, true, None)?;
 
         let target = guard.state_dir().join("workspaces/svc-state/settings.json");
         assert_eq!(
@@ -1842,7 +1921,7 @@ default_deny = true
             defined_secrets: std::collections::HashSet::new(),
         };
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&view, false)?;
+        svc.prepare(&view, false, None)?;
 
         let target = guard.state_dir().join("workspaces/svc-state/settings.json");
         assert_eq!(
@@ -1877,7 +1956,7 @@ default_deny = true
         std::fs::create_dir_all(guard.config_dir().join("seed").join("emptydir"))?;
 
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&empty_seed_env_view(), false)?;
+        svc.prepare(&empty_seed_env_view(), false, None)?;
 
         let globbed = guard.state_dir().join("workspaces/svc-state/globbed");
         let expect = [("a/x.json", "x"), ("a/sub.json", "s"), ("b.json", "b")];
@@ -1910,7 +1989,7 @@ default_deny = true
         // No `seed/` tree at all → the pattern matches nothing.
         let svc = ConfigWorkload::new("svc")?;
         let err = svc
-            .prepare(&empty_seed_env_view(), false)
+            .prepare(&empty_seed_env_view(), false, None)
             .expect_err("a no-match seed glob must hard-error in prepare()");
         let msg = err.to_string();
         assert!(
@@ -1935,7 +2014,7 @@ default_deny = true
         std::fs::write(globbed.join("a.json"), "stale")?;
 
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&empty_seed_env_view(), false)?;
+        svc.prepare(&empty_seed_env_view(), false, None)?;
 
         assert_eq!(
             std::fs::read_to_string(globbed.join("a.json"))?,
@@ -1973,7 +2052,7 @@ default_deny = true
             defined_secrets: std::collections::HashSet::new(),
         };
         let svc = ConfigWorkload::new("svc")?;
-        svc.prepare(&view, false)?;
+        svc.prepare(&view, false, None)?;
 
         let globbed = guard.state_dir().join("workspaces/svc-state/globbed");
         assert_eq!(

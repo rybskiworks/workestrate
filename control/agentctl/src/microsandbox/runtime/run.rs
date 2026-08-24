@@ -656,6 +656,31 @@ pub(crate) enum BuildOutcome {
     Reused,
 }
 
+/// The `on_skew` divergence notice decision (ADR 0030 V-addendum §V4) —
+/// PURE. Returns `Some(message)` ONLY when the effective policy is `Warn`
+/// (the default when `on_skew` is None) AND both provenance stamps are
+/// present AND they differ; `Replace`/`ReuseSilently` and any stub-missing
+/// stamp yield `None`. The stamps are opaque strings — this function makes
+/// NO assumption about their format (A3 wires the real stamp values).
+pub(crate) fn skew_notice(
+    on_skew: Option<crate::config::OnSkew>,
+    recorded: Option<&str>,
+    current: Option<&str>,
+) -> Option<String> {
+    let policy = on_skew.unwrap_or_default();
+    if policy != crate::config::OnSkew::Warn {
+        return None;
+    }
+    let (recorded, current) = (recorded?, current?);
+    if recorded == current {
+        return None;
+    }
+    Some(format!(
+        "warning: instance was built from {recorded}; current inputs {current} \
+         (on_skew = \"warn\": proceeding with reuse)"
+    ))
+}
+
 /// Prepare, resolve, and create the sandbox plus the foreground config used
 /// to run the workload's real command.
 pub(crate) async fn build_sandbox<W: Workload>(
@@ -670,6 +695,30 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let secrets = crate::microsandbox::secrets_loader::load_secrets()?;
 
     let mut plan = workload.plan();
+
+    // ADR 0030 V-addendum §V2: instance-scoped state mounts. For a
+    // `per-dir`-strategy workload the state mount root
+    // (`workspaces/<name>-state[/...]`) gains the instance-key segment (the
+    // instance id's @-suffix) so each per-dir instance gets its OWN state
+    // subdir; singleton/non-per-dir workloads pass key=None and every host
+    // is byte-identical to before (no layout churn). Applied to the plan
+    // BEFORE `resolve_mount_roots_owned` so the plan-time existence
+    // preflight and the runtime mount resolution agree on the scoped path.
+    let instance_state_key: Option<&str> =
+        if workload.instance_strategy() == crate::config::InstanceStrategy::PerDir {
+            crate::microsandbox::slots::instance_id_of(&spec.instance)
+        } else {
+            None
+        };
+    if let Some(key) = instance_state_key {
+        for m in &mut plan.mounts {
+            m.host = super::super::mounts::instance_scoped_state_path(
+                &m.host,
+                workload.name(),
+                Some(key),
+            );
+        }
+    }
 
     // F1/F2 mount-root resolution is shared with the plan-time existence
     // preflight via `resolve_mount_roots_owned` (mounts.rs) so the runtime
@@ -694,7 +743,9 @@ pub(crate) async fn build_sandbox<W: Workload>(
         crate::microsandbox::env::build_seed_env_view(&plan, &secrets, &defined_secrets)?;
     // `--reseed` rides the spec: template seeds re-render over existing
     // targets; without it the seed step is byte-identical to before.
-    workload.prepare(&env_view, spec.reseed)?;
+    // `instance_state_key` scopes seed targets to the per-instance state
+    // subdir exactly like the mount hosts above (ADR 0030 V-addendum §V2).
+    workload.prepare(&env_view, spec.reseed, instance_state_key)?;
 
     // Hoist state_dir before the occupancy check so it can be reused for
     // collision detection and lifecycle registration below.
@@ -813,6 +864,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
                 facts.record.as_ref().and_then(|r| r.context.as_deref()),
                 crate::config::active_context_name().as_deref(),
             );
+            // ADR 0030 V-addendum §V4 STUB (the A3 wiring point): the
+            // divergence notice for config/image skew between the current
+            // build inputs and the reused instance's provenance stamps. Both
+            // stamps are stub-None today (no hash function exists yet — A3
+            // wires the real stamps), so this NEVER fires; with stub-None
+            // stamps `skew_notice` returns None for every policy.
+            if let Some(notice) = skew_notice(workload.instance_on_skew(), None, None) {
+                eprintln!("{notice}");
+            }
             return Ok(BuildOutcome::Reused);
         }
         super::reconcile::ChainStep::Fail => {
@@ -942,6 +1002,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
         &port_pairs,
         &created_at,
         &workload.namespace(),
+        spec.source_dir.as_deref(),
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -984,6 +1045,7 @@ async fn start_existing_sandbox<W: Workload>(
         port_pairs,
         &created_at,
         &workload.namespace(),
+        spec.source_dir.as_deref(),
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -1419,6 +1481,64 @@ mod tests {
     // gate (`prepare_create_target`) refuses any pre-existing dir with
     // `SandboxAlreadyExists`.
 
+    // ---- ADR 0030 V-addendum §V4: skew_notice truth table (stub) ----
+
+    /// Default-absent policy (None → warn) with BOTH stamps present and
+    /// DIFFERENT yields the divergence notice.
+    #[test]
+    fn skew_notice_warns_on_divergence_under_default_policy() {
+        let notice = skew_notice(None, Some("built-inputs"), Some("current-inputs"))
+            .expect("warn + differing stamps must notice");
+        assert!(
+            notice.contains("built from built-inputs")
+                && notice.contains("current inputs current-inputs"),
+            "notice must name both stamps: {notice}"
+        );
+        let notice = skew_notice(Some(crate::config::OnSkew::Warn), Some("a"), Some("b"))
+            .expect("explicit warn behaves like the default");
+        assert!(notice.contains('a') && notice.contains('b'));
+    }
+
+    /// replace / reuse-silently never notice.
+    #[test]
+    fn skew_notice_non_warn_policies_are_silent() {
+        for policy in [
+            crate::config::OnSkew::Replace,
+            crate::config::OnSkew::ReuseSilently,
+        ] {
+            assert_eq!(
+                skew_notice(Some(policy), Some("a"), Some("b")),
+                None,
+                "{policy} must not notice"
+            );
+        }
+    }
+
+    /// Stub-None stamps (today's wiring) never fire, for EVERY policy; equal
+    /// stamps never fire either.
+    #[test]
+    fn skew_notice_stub_none_or_equal_stamps_never_fire() {
+        for policy in [
+            None,
+            Some(crate::config::OnSkew::Warn),
+            Some(crate::config::OnSkew::Replace),
+            Some(crate::config::OnSkew::ReuseSilently),
+        ] {
+            assert_eq!(
+                skew_notice(policy, None, None),
+                None,
+                "stub-None: {policy:?}"
+            );
+            assert_eq!(skew_notice(policy, Some("a"), None), None);
+            assert_eq!(skew_notice(policy, None, Some("b")), None);
+            assert_eq!(
+                skew_notice(policy, Some("same"), Some("same")),
+                None,
+                "equal stamps: {policy:?}"
+            );
+        }
+    }
+
     #[test]
     fn should_create_with_replace_true_for_chain_driven_replace() {
         use crate::microsandbox::runtime::ChainStep;
@@ -1498,6 +1618,7 @@ mod tests {
             &[PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
         )?;
         // … makes the next parallel slot draw 127.0.0.3.
         let ip = slot_bind_ip("personal-litellm@blue", &state_dir)?;
@@ -1655,6 +1776,7 @@ mod tests {
             &port_pairs,
             "2026-08-10T00:00:00Z",
             "default",
+            None,
         )?;
         let record = super::super::super::port_registry::find_record(&state_dir, "personal-test")?
             .expect("record must exist after registration");

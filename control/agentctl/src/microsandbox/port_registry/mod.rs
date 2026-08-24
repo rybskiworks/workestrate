@@ -50,6 +50,13 @@ pub struct SandboxInstanceRecord {
     /// unchanged. Legacy records without the field parse as "default".
     #[serde(default = "default_namespace")]
     pub namespace: String,
+    /// The CANONICAL invocation cwd recorded at create time (ADR 0030
+    /// V-addendum §V3) — populated ONLY for `per-dir`-strategy workloads;
+    /// the source-gone reconcile state compares it against the filesystem.
+    /// `None` (or a missing/null field on disk) = unknown = LEGACY posture:
+    /// never source-gone, never a hard fail (A1 interop).
+    #[serde(default)]
+    pub source_dir: Option<String>,
 }
 
 /// The default namespace for a registry record: the declaring config repo of

@@ -212,6 +212,11 @@ pub struct InstanceSpec {
     /// field from its clap parse. A foreground `up` without the token IS the
     /// parent (false here) and ensures.
     pub images_ready: bool,
+    /// The CANONICAL invocation cwd recorded at create time (ADR 0030
+    /// V-addendum §V3): populated ONLY for `strategy = "per-dir"` workloads
+    /// (it becomes the registry record's `source_dir`, which the source-gone
+    /// reconcile state reads); `None` for every other strategy.
+    pub source_dir: Option<String>,
 }
 
 /// Outcome of stopping one instance. Used by `down --instance`, `down

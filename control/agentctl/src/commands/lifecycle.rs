@@ -18,7 +18,9 @@ use crate::microsandbox::workload::Workload;
 /// uniform validation closes the bypass where the old `--new` integer id
 /// skipped the slug rule.
 ///
-/// Mutually-exclusive flag groups (replace/instance/new) are validated here.
+/// Mutually-exclusive flag groups are validated here: `--new` conflicts with
+/// both `--replace` and `--instance`; `--replace` + `--instance` is legal
+/// (ADR 0030 V-addendum pin 5 — replace THAT instance).
 /// Whether `up`/`exec` should default to a NEW parallel instance (auto-slug)
 /// for a workload with the given strategy and flags (ADR 0030 §4.1): true
 /// when `--new` was given, OR the strategy is `parallel` AND no explicit
@@ -32,6 +34,18 @@ fn parallel_strategy_defaults_new(
     new || (strategy == crate::config::InstanceStrategy::Parallel && !replace && no_instance)
 }
 
+/// The `InstanceSpec.source_dir` value for an up/exec dispatch (ADR 0030
+/// V-addendum §V3): the CANONICAL invocation cwd for a `per-dir`-strategy
+/// workload (recorded on the registry record at create; read back by the
+/// source-gone reconcile state), `None` for every other strategy.
+fn per_dir_source_dir(strategy: crate::config::InstanceStrategy) -> Result<Option<String>> {
+    if strategy == crate::config::InstanceStrategy::PerDir {
+        Ok(Some(crate::config::canonical_invoke_cwd_string()?))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Resolve the DEPENDENT workload's own parallel instance id BEFORE dep
 /// auto-start (ADR 0030 P2.1). main.rs calls this for the `up`/`exec` verbs
 /// so the dependent's id is known when `plan_dep_starts` composes scoped
@@ -41,12 +55,18 @@ fn parallel_strategy_defaults_new(
 /// Semantics (mirrors [`parallel_strategy_defaults_new`]):
 ///
 /// - explicit `--instance <id>` → `Some(id)` verbatim (passthrough);
+/// - else `strategy = "per-dir"` WITHOUT `--new` →
+///   `Some(per_dir_instance_id(canonical invocation cwd))` — deterministic,
+///   no allocation (ADR 0030 V-addendum §V1). This applies INCLUDING with
+///   `--replace` (pin 5: per-dir `--replace` replaces the cwd-keyed
+///   instance);
 /// - else `--new`, OR `strategy = "parallel"` without `--replace` →
 ///   `Some(auto_allocate_slug(state_dir, slot))` — the caller REWRITES the
 ///   action (`instance = Some(id)`, `new = false`) so
 ///   `dispatch_service`/`dispatch_agent` use the SAME id and never allocate
 ///   a second slug (with `instance` now `Some`, the `no_instance` guard in
-///   the Up/Exec arms skips their allocation);
+///   the Up/Exec arms skips their allocation). `--new` on a per-dir
+///   workload lands HERE (a FRESH, non-dir-keyed instance);
 /// - else (`--replace` with the parallel strategy, singleton strategy, …) →
 ///   `None` (the singleton model; no allocation).
 pub fn resolve_dependent_instance_id(
@@ -64,6 +84,15 @@ pub fn resolve_dependent_instance_id(
         .get(name)
         .map(|w| w.instance.strategy)
         .unwrap_or(crate::config::InstanceStrategy::Singleton);
+    if strategy == crate::config::InstanceStrategy::PerDir && !new {
+        // ADR 0030 V-addendum §V1: the canonicalized invocation cwd keys the
+        // instance — re-invoking from the same directory derives the SAME
+        // id, a different/moved directory derives a new one.
+        let canonical = crate::config::canonical_invoke_cwd_string()?;
+        return Ok(Some(crate::microsandbox::slots::per_dir_instance_id(
+            &canonical,
+        )));
+    }
     if parallel_strategy_defaults_new(strategy, new, replace, true) {
         let state_dir = crate::config::resolve_state_dir();
         let slot = crate::microsandbox::slots::slot_for(
@@ -93,14 +122,16 @@ pub fn build_instance_spec(
     use crate::microsandbox::runtime::InstanceSpec;
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
 
-    let exclusives = [replace, instance_id.is_some(), new_id.is_some()]
-        .iter()
-        .filter(|&&b| b)
-        .count();
-    if exclusives > 1 {
+    // ADR 0030 V-addendum (pin 5): `--replace` + `--instance <id>` is LEGAL
+    // (replace THAT instance — the teardown machinery is already
+    // instance-name-generic); per-dir `--replace` (replace the cwd-keyed
+    // instance) and the pinned-instance smoke both rely on it. `--new` stays
+    // mutually exclusive with BOTH (a fresh allocation cannot also name or
+    // replace a specific instance).
+    if new_id.is_some() && (replace || instance_id.is_some()) {
         anyhow::bail!(
-            "--replace, --instance <id>, and --new are mutually exclusive; \
-             pass at most one"
+            "--new is mutually exclusive with --replace and --instance <id>; \
+             pass at most one of them"
         );
     }
 
@@ -135,6 +166,10 @@ pub fn build_instance_spec(
         // set it (a detached up's spec describes the ensured child-to-be;
         // the detached child reconstitutes it from its clap parse).
         images_ready: false,
+        // ADR 0030 V-addendum §V3: the per-dir canonical source dir is set by
+        // the dispatch arms (they know the workload's strategy); the spec
+        // constructor defaults to None.
+        source_dir: None,
     })
 }
 
@@ -234,6 +269,10 @@ pub async fn dispatch_service<W: Workload>(
             // detached child itself re-parsed --images-ready — both carry
             // the token. A plain foreground up is the parent (no token).
             spec.images_ready = images_ready || !foreground;
+            // ADR 0030 V-addendum §V3: record the canonical invocation cwd
+            // at create time for per-dir workloads (the registry record's
+            // `source_dir`, read by the source-gone reconcile state).
+            spec.source_dir = per_dir_source_dir(workload.instance_strategy())?;
             crate::microsandbox::runtime::up_service_with_spec(workload, &spec, foreground).await
         }
         ServiceAction::Down {
@@ -316,6 +355,12 @@ pub async fn dispatch_agent<W: Workload>(
                 no_deps,
                 reseed,
             )?;
+            // ADR 0030 V-addendum §V3: same source_dir recording as the
+            // service Up arm above.
+            let spec = crate::microsandbox::runtime::InstanceSpec {
+                source_dir: per_dir_source_dir(workload.instance_strategy())?,
+                ..spec
+            };
             crate::microsandbox::runtime::exec_agent_with_spec(workload, &spec).await
         }
         AgentAction::Down {
@@ -1081,6 +1126,119 @@ strategy = "parallel"
         );
         let _ = std::fs::remove_dir_all(&cfg_dir);
         let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    // ---- ADR 0030 V-addendum pin 5: --replace + --instance is legal ----
+
+    /// `--replace` + `--instance <id>` builds a spec targeting THAT instance
+    /// with replace set (teardown machinery is instance-name-generic).
+    #[test]
+    fn build_instance_spec_allows_replace_with_instance() {
+        let spec = build_instance_spec("pi", true, Some("canary"), None, false, &[], false, false)
+            .expect("--replace --instance canary must be legal (ADR 0030 V-addendum pin 5)");
+        assert!(spec.replace);
+        assert!(
+            spec.instance.ends_with("@canary"),
+            "the spec targets the named instance: {}",
+            spec.instance
+        );
+    }
+
+    /// `--new` stays mutually exclusive with BOTH --replace and --instance.
+    #[test]
+    fn build_instance_spec_new_still_exclusive() {
+        let err = match build_instance_spec("pi", true, None, Some("x7"), false, &[], false, false)
+        {
+            Ok(_) => panic!("new+replace must fail"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("--new is mutually exclusive"),
+            "new+replace must fail: {err}"
+        );
+        let err = match build_instance_spec(
+            "pi",
+            false,
+            Some("canary"),
+            Some("x7"),
+            false,
+            &[],
+            false,
+            false,
+        ) {
+            Ok(_) => panic!("new+instance must fail"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("--new is mutually exclusive"),
+            "new+instance must fail: {err}"
+        );
+    }
+
+    /// A per-dir-strategy workload with no explicit flags derives the
+    /// deterministic cwd-keyed id — INCLUDING with `--replace` (pin 5:
+    /// replace the cwd-keyed instance). `--new` takes the fresh-allocation
+    /// path instead.
+    #[test]
+    fn resolve_dependent_instance_id_per_dir_derives_cwd_keyed_id() {
+        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _env = EnvGuard::capture(&[
+            "WORKESTRATE_CONFIG_DIR",
+            "WORKESTRATE_STATE_DIR",
+            crate::config::INVOKE_CWD_ENV,
+        ]);
+        let cfg_dir = uniq_dir("depid-cfg-perdir");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("workestrate.toml"),
+            r#"schema_version = 1
+
+[workloads.pd]
+kind = "service"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[[workloads.pd.mounts]]
+host = "${CWD}"
+guest = "/work"
+
+[workloads.pd.instance]
+strategy = "per-dir"
+"#,
+        )
+        .unwrap();
+        let state_dir = uniq_dir("depid-state-perdir");
+        let invoke = uniq_dir("depid-invoke-perdir");
+        std::fs::create_dir_all(&invoke).unwrap();
+        std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+        std::env::set_var(
+            crate::config::INVOKE_CWD_ENV,
+            std::fs::canonicalize(&invoke).unwrap(),
+        );
+
+        let expected = Some(crate::microsandbox::slots::per_dir_instance_id(
+            &std::fs::canonicalize(&invoke).unwrap().to_string_lossy(),
+        ));
+        // No flags → derived id.
+        assert_eq!(
+            resolve_dependent_instance_id("pd", None, false, false).unwrap(),
+            expected
+        );
+        // --replace → the SAME derived id (replace the cwd-keyed instance).
+        assert_eq!(
+            resolve_dependent_instance_id("pd", None, false, true).unwrap(),
+            expected
+        );
+        // --new → a FRESH auto-allocated slug, NOT the dir-keyed id.
+        let fresh = resolve_dependent_instance_id("pd", None, true, false)
+            .unwrap()
+            .expect("--new must allocate");
+        assert_ne!(Some(fresh), expected, "--new must not be dir-keyed");
+        let _ = std::fs::remove_dir_all(&cfg_dir);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let _ = std::fs::remove_dir_all(&invoke);
     }
 
     /// A singleton-strategy workload with no flags stays on the singleton

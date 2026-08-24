@@ -156,6 +156,17 @@ pub fn invoke_cwd_or_err() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("failed to resolve the invocation working directory"))
 }
 
+/// The CANONICALIZED invocation cwd as a string (ADR 0030 V-addendum §V1):
+/// `fs::canonicalize` resolves symlinks, `..`, and trailing slashes so every
+/// spelling of one directory keys the SAME `per-dir` instance id (and two
+/// different directories never share one). Non-UTF-8 paths are rendered
+/// lossy — deterministic, and such paths are pathological for this
+/// mechanism.
+pub fn canonical_invoke_cwd_string() -> anyhow::Result<String> {
+    let canonical = std::fs::canonicalize(invoke_cwd_or_err()?)?;
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
 /// Capture the invocation cwd into [`INVOKE_CWD_ENV`] if not already set.
 ///
 /// Called as the FIRST thing in `main()`, before argv handling, so every

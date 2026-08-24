@@ -5,7 +5,9 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use crate::config::types::ConfigFile;
-use crate::config::types::{InstancePort, ParameterizedIncrement, PortOccupiedStep};
+use crate::config::types::{
+    InstancePort, InstanceStrategy, ParameterizedIncrement, PortOccupiedStep,
+};
 use crate::policy;
 use crate::recipes::EgressRecipeRef;
 
@@ -272,6 +274,31 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                     }
                 }
             }
+        }
+    }
+
+    // ADR 0030 V-addendum §V1 validity gate: `strategy = "per-dir"` is valid
+    // ONLY for workloads with a cwd-templated mount (a mount whose host is
+    // `${CWD}` or `${CWD}/...` — commit ec1908e's invoke-cwd template). A
+    // per-dir instance with no per-dir content is a contradiction, so this
+    // fails closed at config validation rather than surprising at runtime.
+    for (workload_name, workload) in &config.workloads {
+        if workload.instance.strategy != InstanceStrategy::PerDir {
+            continue;
+        }
+        let has_cwd_mount = workload
+            .mounts
+            .iter()
+            .any(|m| m.host == "${CWD}" || m.host.starts_with("${CWD}/"));
+        if !has_cwd_mount {
+            anyhow::bail!(
+                "workload '{}' declares instance.strategy = \"per-dir\" but has no \
+                 cwd-templated mount: per-dir keys the instance on the invocation \
+                 directory, so it requires a mount with host = \"${{CWD}}\" or \
+                 \"${{CWD}}/...\". Add a cwd-templated mount or drop the per-dir \
+                 strategy.",
+                workload_name
+            );
         }
     }
 
@@ -884,6 +911,48 @@ pub(crate) mod tests {
 
         result?;
         Ok(())
+    }
+
+    // ---- ADR 0030 V-addendum §V1: per-dir requires a cwd-templated mount ----
+
+    const PER_DIR_NO_CWD_MOUNT_TOML: &str = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network]\ndefault_deny = true";
+
+    /// `strategy = "per-dir"` with NO cwd-templated mount is a hard
+    /// validation error naming the workload and the remediation.
+    #[test]
+    fn validate_rejects_per_dir_without_cwd_mount() {
+        let config: ConfigFile = toml::from_str(PER_DIR_NO_CWD_MOUNT_TOML).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("workload 'pi'") && err.contains("per-dir"),
+            "error must name the workload and the strategy: {err}"
+        );
+        assert!(
+            err.contains("${CWD}"),
+            "error must name the cwd-templated mount remediation: {err}"
+        );
+    }
+
+    /// A per-dir workload WITH a cwd-templated mount (`${CWD}` exact or
+    /// `${CWD}/...`) validates clean; non-per-dir workloads need no such
+    /// mount.
+    #[test]
+    fn validate_accepts_per_dir_with_cwd_mount() {
+        for host in ["${CWD}", "${CWD}/sub/dir"] {
+            let toml = format!(
+                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[[workloads.pi.mounts]]\nhost = \"{host}\"\nguest = \"/work\"\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network]\ndefault_deny = true"
+            );
+            let config: ConfigFile = toml::from_str(&toml).unwrap();
+            validate_config(&config)
+                .unwrap_or_else(|e| panic!("per-dir with host '{host}' must validate: {e}"));
+        }
+        // A non-cwd mount (state root) does NOT satisfy the gate.
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[[workloads.pi.mounts]]\nhost = \"workspaces/pi-state\"\nguest = \"/state\"\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network]\ndefault_deny = true";
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        assert!(
+            validate_config(&config).is_err(),
+            "a state-only mount must not satisfy the per-dir gate"
+        );
     }
 
     // ---- WP10/A11: env var name validation ----

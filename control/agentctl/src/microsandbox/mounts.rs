@@ -70,6 +70,27 @@ pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathB
     }
 }
 
+/// Instance-scoped state-mount rewrite (ADR 0030 V-addendum §V2): when `key`
+/// is `Some` (a per-dir instance's id) and `path` is the workload's state
+/// mount root `workspaces/<workload>-state` or a path beneath it, insert the
+/// key segment immediately after the state root —
+/// `workspaces/<workload>-state/<key>[/...]`. Every other input (and ANY
+/// input when `key` is `None` — singleton/non-per-dir posture) is returned
+/// byte-identical, so non-per-dir workloads see NO layout churn. Pure.
+pub(crate) fn instance_scoped_state_path(path: &str, workload: &str, key: Option<&str>) -> String {
+    let Some(key) = key else {
+        return path.to_string();
+    };
+    let root = format!("workspaces/{workload}-state");
+    if path == root {
+        format!("{root}/{key}")
+    } else if let Some(rest) = path.strip_prefix(&format!("{root}/")) {
+        format!("{root}/{key}/{rest}")
+    } else {
+        path.to_string()
+    }
+}
+
 /// Validate a mount host string as it appears in the raw config TOML
 /// (before `${CWD}` / `${WORKESTRATE_<NAME>_BUILD}` template substitution).
 ///
@@ -525,9 +546,74 @@ pub(crate) fn preflight_existence(
 )]
 mod tests {
     use super::{ensure_mount_sources, preflight_existence, resolve_mount_host, MountRoots};
-    use super::{expand_seed_glob, literal_glob_root};
+    use super::{expand_seed_glob, instance_scoped_state_path, literal_glob_root};
     use super::{validate_mount_guest, validate_mount_host};
     use crate::microsandbox::plan::{MountMode, MountPlan, NetworkPlan, SandboxPlan};
+
+    // ---- ADR 0030 V-addendum §V2: instance-scoped state paths ----
+
+    #[test]
+    fn instance_scoped_state_path_inserts_key_after_state_root() {
+        // The bare state root gains the key segment.
+        assert_eq!(
+            instance_scoped_state_path("workspaces/svc-state", "svc", Some("work-1234abcd")),
+            "workspaces/svc-state/work-1234abcd"
+        );
+        // A path BENEATH the state root keeps its suffix after the key.
+        assert_eq!(
+            instance_scoped_state_path(
+                "workspaces/svc-state/settings.json",
+                "svc",
+                Some("work-1234abcd")
+            ),
+            "workspaces/svc-state/work-1234abcd/settings.json"
+        );
+        assert_eq!(
+            instance_scoped_state_path("workspaces/svc-state/a/b/c", "svc", Some("work-1234abcd")),
+            "workspaces/svc-state/work-1234abcd/a/b/c"
+        );
+    }
+
+    #[test]
+    fn instance_scoped_state_path_key_none_is_byte_identical() {
+        // Singleton / non-per-dir posture: NO layout churn — every shape is
+        // returned byte-identical.
+        for path in [
+            "workspaces/svc-state",
+            "workspaces/svc-state/settings.json",
+            "workspaces/other-state",
+            "workspaces/svc-stateful",
+            "var/run/x",
+            "plain/relative",
+            "/abs/host",
+        ] {
+            assert_eq!(
+                instance_scoped_state_path(path, "svc", None),
+                path,
+                "key=None must not rewrite '{path}'"
+            );
+        }
+    }
+
+    #[test]
+    fn instance_scoped_state_path_leaves_non_state_paths_alone() {
+        // Only THIS workload's exact state root (or beneath it) is scoped —
+        // lookalikes and other roots pass through unchanged even with a key.
+        for path in [
+            "workspaces/other-state",  // another workload's state root
+            "workspaces/svc-stateful", // prefix lookalike, NOT the root
+            "workspaces/svc-statex/y", // prefix lookalike beneath
+            "var/run/x",               // var/ root
+            "workspaces/svc",          // no -state suffix
+            "plain/relative",
+        ] {
+            assert_eq!(
+                instance_scoped_state_path(path, "svc", Some("work-1234abcd")),
+                path,
+                "non-state path '{path}' must not be scoped"
+            );
+        }
+    }
 
     fn unique_root(label: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
