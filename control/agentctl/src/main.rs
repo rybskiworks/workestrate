@@ -46,6 +46,14 @@ struct Cli {
     #[arg(
         long,
         global = true,
+        value_name = "REF",
+        help = "Consume every git-backed config entry at this branch/sha and derive the context from it (ADR 0032 addendum: the --config-ref ladder rung)"
+    )]
+    config_ref: Option<String>,
+
+    #[arg(
+        long,
+        global = true,
         value_name = "DIR",
         help = "Workestrate tool home"
     )]
@@ -556,6 +564,17 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     }
     if let Some(ref ctx) = cli.context {
         std::env::set_var("WORKESTRATE_CONTEXT", ctx);
+    }
+    // --config-ref <branch|sha> populates WORKESTRATE_CONFIG_REF (ADR 0032
+    // addendum §Selection ladder, A5 Session 3a): the pinned-consumption
+    // layer (config::loading) resolves every Remote/GitFile entry at that
+    // ref, and the context-derivation ladder
+    // (config::registry::resolve_active_context step b) reads a
+    // branch-shaped ref as the context-name candidate. Setting it as an env
+    // var (like --context/--home) propagates the override to detached
+    // children via spawn env inheritance.
+    if let Some(ref config_ref) = cli.config_ref {
+        std::env::set_var("WORKESTRATE_CONFIG_REF", config_ref);
     }
     // --home <DIR> populates the WORKESTRATE_HOME precedence step
     // (paths.rs resolve_home_with_kind checks it first), so the flag becomes
@@ -1118,6 +1137,81 @@ mod tests {
             home.is_global_set(),
             "--home must be a global argument (valid on every subcommand)"
         );
+    }
+
+    /// A5 Session 3a (ADR 0032 addendum §Selection ladder): `--config-ref`
+    /// is a GLOBAL flag — accepted at the root and on every subcommand.
+    #[test]
+    fn cli_root_has_global_config_ref_flag() {
+        let mut cmd = Cli::command();
+        let arg = cmd
+            .get_arguments()
+            .find(|a| a.get_long() == Some("config-ref"))
+            .expect("root command must have a --config-ref argument");
+        assert!(
+            arg.is_global_set(),
+            "--config-ref must be a global argument (valid on every subcommand)"
+        );
+        // Parses at the root…
+        let cli = Cli::try_parse_from(["workestrate", "--config-ref", "feat-x", "ps"])
+            .expect("--config-ref must parse before the subcommand");
+        assert_eq!(cli.config_ref.as_deref(), Some("feat-x"));
+        // …and after a subcommand (global propagation), mirroring the
+        // doctor/migrate-home --json test's build()-propagation check.
+        cmd.build();
+        for name in ["ps", "workload", "config", "home"] {
+            let sub = cmd
+                .find_subcommand(name)
+                .unwrap_or_else(|| panic!("missing subcommand: {name}"));
+            let propagated = sub
+                .get_arguments()
+                .find(|a| a.get_long() == Some("config-ref"))
+                .unwrap_or_else(|| panic!("{name} must expose --config-ref"));
+            assert!(
+                propagated.is_global_set(),
+                "{name} --config-ref must be the propagated GLOBAL flag"
+            );
+        }
+        let cli = Cli::try_parse_from(["workestrate", "ps", "--config-ref", "0123abc"])
+            .expect("--config-ref must parse after the subcommand");
+        assert_eq!(cli.config_ref.as_deref(), Some("0123abc"));
+    }
+
+    /// ADR 0032 addendum (2026-08-24 same-day amendment): the `--from <ref>`
+    /// form of the per-workload override is DROPPED — the inline
+    /// `name:ref[@instance]` grammar is the ONLY shape. NO command anywhere
+    /// in the tree may carry a `--from` flag, with ONE grandfathered
+    /// exception: `migrate-home --from <xdg|bundle>` (the legacy layout
+    /// selector whose collision history is exactly why no NEW --from may be
+    /// added; `config new --from-reference` is a different flag and is
+    /// UNAFFECTED; the dropped `home init --from` per ADR 0025 stays
+    /// dropped, per the home_init_has_no_path_flag guard).
+    #[test]
+    fn no_from_flag_anywhere_in_the_command_tree() {
+        fn assert_no_from(cmd: &clap::Command, path: &str) {
+            for arg in cmd.get_arguments() {
+                if path == "workestrate migrate-home" && arg.get_long() == Some("from") {
+                    continue; // grandfathered legacy layout selector
+                }
+                assert_ne!(
+                    arg.get_long(),
+                    Some("from"),
+                    "{path} must NOT have a --from flag (ADR 0032 addendum)"
+                );
+                let aliases: Vec<&str> = arg.get_all_aliases().unwrap_or_default().to_vec();
+                assert!(
+                    !aliases.contains(&"from"),
+                    "{path} --{} must NOT alias `from`; got: {aliases:?}",
+                    arg.get_id()
+                );
+            }
+            for sub in cmd.get_subcommands() {
+                assert_no_from(sub, &format!("{path} {}", sub.get_name()));
+            }
+        }
+        let mut cmd = Cli::command();
+        cmd.build();
+        assert_no_from(&cmd, "workestrate");
     }
 
     /// W1: `doctor` and `migrate-home` must NOT shadow the global --json with

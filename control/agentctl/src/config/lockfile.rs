@@ -13,10 +13,13 @@
 //! `migrate-home` precedent, ADR 0023).
 //!
 //! Writers: `cmd_config_add`, `cmd_config_update`, `cmd_config_remove`,
-//! `cmd_home_init` (scaffold) and `cmd_home_clone` — plus the A5 Session 2
-//! FIRST-RESOLUTION-WITH-NOTICE path in `config::loading` (a consumption
-//! verb that writes ONLY when no pin exists yet, and announces the write on
-//! stderr; see `layer_content_root`). No other verb may write the lock — no
+//! `cmd_home_init` (scaffold) and `cmd_home_clone` — plus the A5
+//! FIRST-RESOLUTION-WITH-NOTICE paths in `config::loading` (consumption
+//! verbs that write ONLY when no pin exists yet, and announce the write on
+//! stderr; see `layer_content_root`): Session 2 writes the PRIMARY pin via
+//! [`upsert_locked_pin`], Session 3a writes `--config-ref` override pins
+//! into the refs map via [`upsert_locked_ref`] (the primary pin is never
+//! moved by an override resolution). No other verb may write the lock — no
 //! verb mutates pins silently as a side effect. Consumers: pinned config
 //! consumption (`config::loading`), `home clone` provisioning and
 //! the future `up --pin` / spawn-provenance work (the lock is THEIR
@@ -258,7 +261,7 @@ pub fn lock_from_registry(registry: &Registry, home: &Path) -> HomeLock {
 /// - `fetched_at` is stamped with
 ///   `crate::microsandbox::runtime::time::current_rfc3339_utc`.
 /// - An existing `refs` map (pins for NON-primary refs, written by the
-///   selection ladder in a later session) is PRESERVED.
+///   `--config-ref` override path via [`upsert_locked_ref`]) is PRESERVED.
 ///
 /// Callers own `lock.version`/`tool_version` stamping and the atomic save.
 pub fn upsert_locked_pin(
@@ -282,6 +285,49 @@ pub fn upsert_locked_pin(
             sha: Some(sha.to_string()),
             fetched_at: Some(crate::microsandbox::runtime::time::current_rfc3339_utc()),
             refs,
+        },
+    );
+}
+
+/// Upsert a NON-PRIMARY ref pin into `repos.<name>.refs.<ref>` (A5 Session
+/// 3a; ADR 0032 addendum §Selection ladder). This is THE write path of the
+/// `--config-ref` consumption override (`config::loading`): the resolved ref
+/// rides the refs map KEYED BY THE REF ITSELF (a sha-shaped ref is legal and
+/// keyed by itself) as `{rev = <ref>, sha = <resolved commit>, fetched_at}`.
+///
+/// The PRIMARY pin (`rev`/`sha`/`fetched_at` at `[repos.<name>]`) is NEVER
+/// moved by this writer — only [`upsert_locked_pin`] moves it; an existing
+/// entry's primary fields pass through untouched. When the repo has no lock
+/// entry yet, one is created carrying the registry's `url`/`ref` with EMPTY
+/// primary pin fields (`rev`/`sha`/`fetched_at` = None) — a home whose ONLY
+/// resolutions were `--config-ref` overrides still has no primary pin.
+///
+/// Callers own `lock.version`/`tool_version` stamping and the atomic save.
+pub fn upsert_locked_ref(
+    lock: &mut HomeLock,
+    name: &str,
+    url: &str,
+    git_ref: Option<&str>,
+    ref_name: &str,
+    sha: &str,
+) {
+    let entry = lock
+        .repos
+        .entry(name.to_string())
+        .or_insert_with(|| LockedRepo {
+            url: url.to_string(),
+            r#ref: git_ref.map(|s| s.to_string()),
+            rev: None,
+            sha: None,
+            fetched_at: None,
+            refs: BTreeMap::new(),
+        });
+    entry.refs.insert(
+        ref_name.to_string(),
+        LockedRef {
+            rev: ref_name.to_string(),
+            sha: sha.to_string(),
+            fetched_at: crate::microsandbox::runtime::time::current_rfc3339_utc(),
         },
     );
 }
@@ -764,5 +810,68 @@ pub(crate) mod tests {
         assert_eq!(new.sha.as_deref(), Some("0123abc"));
         assert_eq!(new.r#ref, None);
         assert!(new.refs.is_empty());
+    }
+
+    // ---- A5 Session 3a: upsert_locked_ref (the --config-ref write path) ----
+
+    #[test]
+    fn upsert_locked_ref_pins_the_ref_without_moving_the_primary_pin() {
+        let mut lock = sample_lock();
+        // "work" starts with the sample primary pin (rev = def456).
+        upsert_locked_ref(
+            &mut lock,
+            "work",
+            "https://example.invalid/work.git",
+            Some("main"),
+            "feat-x",
+            "0123456789abcdef0123456789abcdef01234567",
+        );
+        let repo = &lock.repos["work"];
+        // The PRIMARY pin is untouched.
+        assert_eq!(repo.rev.as_deref(), Some("def456"));
+        assert_eq!(repo.sha, None, "the sample primary sha stays as it was");
+        assert_eq!(repo.fetched_at, None);
+        // The refs map carries the new pin keyed by the ref itself.
+        let pin = &repo.refs["feat-x"];
+        assert_eq!(pin.rev, "feat-x");
+        assert_eq!(
+            pin.sha, "0123456789abcdef0123456789abcdef01234567",
+            "sha = the resolved commit (the archive content key)"
+        );
+        assert!(
+            pin.fetched_at.ends_with('Z') && pin.fetched_at.contains('T'),
+            "fetched_at must be RFC3339 UTC: {}",
+            pin.fetched_at
+        );
+
+        // A sha-shaped ref is legal and keyed by itself.
+        let sha_ref = "aaaaaaa1111111bbbbbbb2222222ccccccc3333333";
+        upsert_locked_ref(
+            &mut lock,
+            "work",
+            "https://example.invalid/work.git",
+            Some("main"),
+            sha_ref,
+            sha_ref,
+        );
+        assert_eq!(lock.repos["work"].refs[sha_ref].rev, sha_ref);
+
+        // A repo with NO lock entry yet gets one with EMPTY primary fields —
+        // a --config-ref-only history never manufactures a primary pin.
+        upsert_locked_ref(
+            &mut lock,
+            "fresh",
+            "https://example.invalid/f.git",
+            Some("main"),
+            "feat-y",
+            "bbbbbbb",
+        );
+        let fresh = &lock.repos["fresh"];
+        assert_eq!(fresh.url, "https://example.invalid/f.git");
+        assert_eq!(fresh.r#ref.as_deref(), Some("main"));
+        assert_eq!(fresh.rev, None, "no primary pin is fabricated");
+        assert_eq!(fresh.sha, None);
+        assert_eq!(fresh.fetched_at, None);
+        assert_eq!(fresh.refs["feat-y"].sha, "bbbbbbb");
     }
 }

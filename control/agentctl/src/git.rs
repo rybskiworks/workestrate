@@ -226,6 +226,30 @@ pub fn git_checkout_branch(repo: &std::path::Path) -> Result<Option<String>> {
     }
 }
 
+/// True when `branch` names an existing BRANCH ref in `repo` —
+/// `refs/heads/<branch>` or `refs/remotes/origin/<branch>` (a thin
+/// `git show-ref --verify --quiet` probe per form: read-only, no fetch, no
+/// output). A purely-sha input resolves as a commit but is NOT a branch, so
+/// this returns false for it — that distinction is exactly what the A5
+/// context-derivation ladder (ADR 0032 addendum §Selection ladder) keys on
+/// when it asks whether `--config-ref <ref>` names a branch.
+pub fn git_branch_ref_exists(repo: &std::path::Path, branch: &str) -> Result<bool> {
+    for full_ref in [
+        format!("refs/heads/{branch}"),
+        format!("refs/remotes/origin/{branch}"),
+    ] {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["show-ref", "--verify", "--quiet", &full_ref])
+            .status()?;
+        if status.success() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Produce a plain-directory export of `rev` from `repo` into `dest`:
 /// `git archive --format=tar` to a sibling `<dest>.tmp.tar`, then `tar -xf`
 /// into `dest` (created first). The tmp tar is removed on BOTH the success
@@ -465,6 +489,54 @@ mod tests {
             "detached HEAD must yield None"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_branch_ref_exists_distinguishes_branch_from_sha_and_bogus() {
+        // Holds ENV_TEST_LOCK: the clone probes HOME for git config, and
+        // parallel env-mutating tests can point HOME at a removed dir.
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let dir = uniq_dir("git-branch-ref");
+        init_repo_with_commit(&dir);
+        let head = git_rev_parse(&dir).expect("HEAD sha");
+        let branch = git_checkout_branch(&dir)
+            .expect("symbolic-ref HEAD")
+            .expect("fresh commit repo is on a branch");
+
+        assert!(
+            git_branch_ref_exists(&dir, &branch).expect("local branch probe"),
+            "refs/heads/<branch> must read as an existing branch"
+        );
+        assert!(
+            !git_branch_ref_exists(&dir, &head).expect("sha probe"),
+            "a purely-sha ref resolves as a commit but is NOT a branch"
+        );
+        assert!(
+            !git_branch_ref_exists(&dir, "no-such-branch").expect("bogus probe"),
+            "an absent ref is not a branch"
+        );
+
+        // A clone carries the source's branch under refs/remotes/origin/<b>
+        // (and its own local refs/heads/<b>); both forms count.
+        let clone = uniq_dir("git-branch-ref-clone");
+        let out = std::process::Command::new("git")
+            .args(["clone", "--quiet"])
+            .arg(&dir)
+            .arg(&clone)
+            .output()
+            .expect("git must be runnable");
+        assert!(
+            out.status.success(),
+            "git clone failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            git_branch_ref_exists(&clone, &branch).expect("clone branch probe"),
+            "refs/remotes/origin/<branch> in a clone must read as an existing branch"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&clone);
     }
 
     #[test]

@@ -390,16 +390,87 @@ pub fn set_default_context(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Step (b) of the A5 derivation order (see [`resolve_active_context`]):
+/// when `WORKESTRATE_CONFIG_REF` (`--config-ref`) names a BRANCH —
+/// `refs/heads/<ref>` or `refs/remotes/origin/<ref>` present in ANY
+/// Remote/GitFile entry's managed clone (first match wins) — the ref IS the
+/// context-name candidate. A purely-sha ref yields None (shas are not
+/// branches). Probe failures (missing clone, git error) read as
+/// non-matches: consumption is the fail-closed layer
+/// (`config::loading`'s pinned resolver errors name repo+ref).
+fn config_ref_branch_candidate(registry: &Registry) -> Option<String> {
+    let config_ref = std::env::var("WORKESTRATE_CONFIG_REF").ok()?;
+    if config_ref.is_empty() {
+        return None;
+    }
+    for (name, entry) in &registry.configs {
+        if source_kind(&entry.url) == ConfigSourceKind::PlainPath {
+            continue;
+        }
+        let clone = crate::config::paths::resolve_store_dir()
+            .join("config-repos")
+            .join(name);
+        if !clone.join(".git").exists() {
+            continue;
+        }
+        if crate::git::git_branch_ref_exists(&clone, &config_ref).unwrap_or(false) {
+            return Some(config_ref);
+        }
+    }
+    None
+}
+
+/// Step (c) of the A5 derivation order (see [`resolve_active_context`]):
+/// the FIRST layer's checkout branch — [`local_entry_checkout_dir`] for
+/// PlainPath entries, else the managed clone — when that dir is a git repo
+/// on a branch ([`crate::git::git_checkout_branch`]; detached HEAD and
+/// non-repos yield None).
+fn checkout_branch_candidate(registry: &Registry) -> Option<String> {
+    let first = registry.layers.first()?;
+    let dir = registry
+        .configs
+        .get(first)
+        .and_then(local_entry_checkout_dir)
+        .unwrap_or_else(|| {
+            crate::config::paths::resolve_store_dir()
+                .join("config-repos")
+                .join(first)
+        });
+    if !dir.join(".git").exists() {
+        return None;
+    }
+    crate::git::git_checkout_branch(&dir).ok().flatten()
+}
+
 /// Resolve the active context.
 ///
-/// Precedence:
-/// 1. WORKESTRATE_CONTEXT env (set by --context flag or by user)
-/// 2. [settings] default_context
-/// 3. If NO contexts defined: bare `layers` (backward compat)
+/// A5 derivation order (ADR 0032 addendum 2026-08-24 §Selection ladder;
+/// order PINNED 2026-08-24):
 ///
-/// Returns ActiveContext { name: None, layers: registry.layers } when no
-/// contexts are defined (backward-compat). Returns an error if contexts are
-/// defined but neither env nor default_context resolves to a valid context.
+/// a. `WORKESTRATE_CONTEXT` env (set by `--context` or by hand) —
+///    UNCHANGED strict semantics: when contexts are defined the name MUST
+///    be one of them (hard error otherwise); a contexts-less home ignores
+///    the env and keeps the bare-layers shape (`name = None`), as before.
+/// b. `WORKESTRATE_CONFIG_REF` (`--config-ref`) when it names a BRANCH —
+///    see [`config_ref_branch_candidate`]. A purely-sha ref yields NO
+///    context here.
+/// c. Checkout branch: the FIRST layer's checkout — see
+///    [`checkout_branch_candidate`].
+/// d. Otherwise today's behavior: `[settings] default_context` / bare
+///    `layers` when no contexts are defined / the existing hard error. The
+///    ADR's "> main" final step IS this default resolution (main = the
+///    stable line) — there is NO literal "main" context name.
+///
+/// Candidate-name resolution for steps b/c (the name did NOT come from an
+/// explicit `--context`): when `registry.contexts` CONTAINS the candidate,
+/// its layers are used; ELSE the candidate rides LENIENTLY as the context
+/// NAME (slot prefixing, instance identity) while the LAYER LIST falls
+/// back to `default_context`'s layers, else the bare `layers`. When
+/// contexts ARE defined AND the candidate is undefined AND no
+/// `default_context` exists, the existing hard error stands. Bare-layers
+/// homes (no `[contexts]`) keep `name = None` UNLESS a candidate arose
+/// from step b/c — then `name = Some(candidate)` over the bare layers
+/// (the dev-model namespacing).
 pub fn resolve_active_context() -> Result<ActiveContext> {
     let registry = match load_registry()? {
         Some(r) => r,
@@ -410,17 +481,24 @@ pub fn resolve_active_context() -> Result<ActiveContext> {
             })
         }
     };
+    let available = || {
+        registry
+            .contexts
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
 
-    // Backward-compat: no contexts defined → use bare layers.
-    if registry.contexts.is_empty() {
-        return Ok(ActiveContext {
-            name: None,
-            layers: registry.layers,
-        });
-    }
-
-    // 1. WORKESTRATE_CONTEXT env (set by --context flag or by user)
+    // (a) WORKESTRATE_CONTEXT env (set by --context flag or by user) —
+    //     unchanged strict semantics; a contexts-less home ignores it.
     if let Ok(name) = std::env::var("WORKESTRATE_CONTEXT") {
+        if registry.contexts.is_empty() {
+            return Ok(ActiveContext {
+                name: None,
+                layers: registry.layers,
+            });
+        }
         if let Some(ctx) = registry.contexts.get(&name) {
             return Ok(ActiveContext {
                 name: Some(name),
@@ -430,16 +508,64 @@ pub fn resolve_active_context() -> Result<ActiveContext> {
         anyhow::bail!(
             "context '{}' not found in registry; available contexts: {}",
             name,
-            registry
-                .contexts
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
+            available()
         );
     }
 
-    // 2. [settings] default_context
+    // (b) / (c): a derived candidate name — the --config-ref branch, else
+    //     the first layer's checkout branch.
+    if let Some(candidate) =
+        config_ref_branch_candidate(&registry).or_else(|| checkout_branch_candidate(&registry))
+    {
+        // A DEFINED context of that name: its layers.
+        if let Some(ctx) = registry.contexts.get(&candidate) {
+            return Ok(ActiveContext {
+                name: Some(candidate),
+                layers: ctx.layers.clone(),
+            });
+        }
+        // Lenient identity-only mode: the candidate rides as the context
+        // NAME over default_context's layers, else the bare layers.
+        if let Some(ref default) = registry.settings.default_context {
+            match registry.contexts.get(default) {
+                Some(ctx) => {
+                    return Ok(ActiveContext {
+                        name: Some(candidate),
+                        layers: ctx.layers.clone(),
+                    });
+                }
+                None => {
+                    anyhow::bail!(
+                        "default_context '{}' not found in registry contexts; available: {}",
+                        default,
+                        available()
+                    );
+                }
+            }
+        }
+        if registry.contexts.is_empty() {
+            return Ok(ActiveContext {
+                name: Some(candidate),
+                layers: registry.layers,
+            });
+        }
+        // Contexts defined, candidate undefined, no default: the existing
+        // hard error stands.
+        anyhow::bail!(
+            "contexts are defined but no default_context is set; use --context <name> or set WORKESTRATE_CONTEXT env. Available contexts: {}",
+            available()
+        );
+    }
+
+    // (d) today's behavior, unchanged: bare layers when no contexts are
+    //     defined (backward compat), else default_context, else the hard
+    //     error.
+    if registry.contexts.is_empty() {
+        return Ok(ActiveContext {
+            name: None,
+            layers: registry.layers,
+        });
+    }
     if let Some(ref default) = registry.settings.default_context {
         if let Some(ctx) = registry.contexts.get(default) {
             return Ok(ActiveContext {
@@ -450,19 +576,14 @@ pub fn resolve_active_context() -> Result<ActiveContext> {
         anyhow::bail!(
             "default_context '{}' not found in registry contexts; available: {}",
             default,
-            registry
-                .contexts
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
+            available()
         );
     }
 
-    // 3. Contexts exist but no env/default → error
+    // Contexts exist but no env/candidate/default → error
     anyhow::bail!(
         "contexts are defined but no default_context is set; use --context <name> or set WORKESTRATE_CONTEXT env. Available contexts: {}",
-        registry.contexts.keys().cloned().collect::<Vec<_>>().join(", ")
+        available()
     );
 }
 
@@ -1423,5 +1544,270 @@ pub(crate) mod tests {
             "the delegated hard error must name the repo: {err}"
         );
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // ---- A5 Session 3a: the context derivation order (ADR 0032 addendum) ----
+    //
+    // Fixture conventions: pinned WORKESTRATE_HOME (HomeKind::Env: registry
+    // at <home>/config.toml, managed clones at <home>/config-repos/<name>),
+    // REAL temp git repos (the git.rs precedent: git on the pinned PATH),
+    // ENV_TEST_LOCK + EnvGuard over the discovery vars PLUS the two ladder
+    // env vars (WORKESTRATE_CONTEXT is removed by default and set per test;
+    // WORKESTRATE_CONFIG_REF likewise).
+
+    const A5_DERIVE_ENV_KEYS: &[&str] = &[
+        "WORKESTRATE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "WORKESTRATE_CONFIG_DIR",
+        "WORKESTRATE_NO_PROJECT_CONFIG",
+        "WORKESTRATE_INVOKE_CWD",
+        "HOME",
+        "WORKESTRATE_CONTEXT",
+        "WORKESTRATE_CONFIG_REF",
+    ];
+
+    /// Pin the home and neutralize the ladder env vars. Caller holds
+    /// ENV_TEST_LOCK; the EnvGuard is captured by the caller BEFORE this.
+    fn a5_derive_home(label: &str) -> std::path::PathBuf {
+        let home = pin_home(label);
+        std::env::remove_var("WORKESTRATE_CONTEXT");
+        std::env::remove_var("WORKESTRATE_CONFIG_REF");
+        home
+    }
+
+    fn a5_derive_git(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .expect("git must be runnable");
+        assert!(
+            status.success(),
+            "git {:?} failed in {}",
+            args,
+            dir.display()
+        );
+    }
+
+    /// Init a git working repo at `dir` on branch `branch` with one commit;
+    /// returns the HEAD sha.
+    fn a5_derive_repo(dir: &std::path::Path, branch: &str) -> String {
+        std::fs::create_dir_all(dir).expect("create repo dir");
+        a5_derive_git(dir, &["init", "--quiet", "-b", branch]);
+        a5_derive_git(dir, &["config", "user.email", "a5-derive@test.invalid"]);
+        a5_derive_git(dir, &["config", "user.name", "a5-derive-test"]);
+        std::fs::write(dir.join("f.txt"), "x").expect("write file");
+        a5_derive_git(dir, &["add", "f.txt"]);
+        a5_derive_git(dir, &["commit", "--quiet", "-m", "init"]);
+        crate::git::git_rev_parse(dir).expect("HEAD sha")
+    }
+
+    /// Register a Remote entry `name` with a managed clone
+    /// (`<home>/config-repos/<name>`) on branch `checkout_branch`, in a
+    /// bare-layers home (`layers = [<name>]`, no [contexts]).
+    fn a5_derive_remote_bare_home(
+        label: &str,
+        name: &str,
+        checkout_branch: &str,
+    ) -> std::path::PathBuf {
+        let home = a5_derive_home(label);
+        let clone = home.join("config-repos").join(name);
+        a5_derive_repo(&clone, checkout_branch);
+        std::fs::write(
+            home.join("config.toml"),
+            format!(
+                "layers = [\"{name}\"]\n\n[configs.{name}]\nurl = \"https://example.invalid/{name}.git\"\nref = \"main\"\n"
+            ),
+        )
+        .expect("write registry");
+        home
+    }
+
+    /// Step b: a branch-shaped --config-ref namespaces a bare-layers home —
+    /// name = Some(<branch>) over the bare layer list (the dev-model
+    /// namespacing).
+    #[test]
+    fn config_ref_branch_namespaces_a_bare_layers_home() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let home = a5_derive_remote_bare_home("a5-derive-cfgref", "team", "main");
+        let clone = home.join("config-repos").join("team");
+        // The branch exists in the clone but is NOT checked out (isolating
+        // step b from step c, which would report the checkout branch).
+        a5_derive_git(&clone, &["branch", "feat-x"]);
+        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+
+        let ctx = resolve_active_context()?;
+
+        assert_eq!(ctx.name.as_deref(), Some("feat-x"));
+        assert_eq!(ctx.layers, vec!["team".to_string()]);
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Step b with a purely-sha --config-ref yields NO context (shas are
+    /// not branches); with no checkout-branch candidate either (detached
+    /// HEAD), the bare-layers home keeps name = None.
+    #[test]
+    fn sha_config_ref_yields_no_context_name() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let home = a5_derive_remote_bare_home("a5-derive-sha", "team", "main");
+        let clone = home.join("config-repos").join("team");
+        let sha = crate::git::git_rev_parse(&clone)?;
+        // Detach HEAD so step c cannot name a context either — isolating
+        // the sha-ref behavior at step b.
+        crate::git::git_checkout_rev(&clone, &sha)?;
+        std::env::set_var("WORKESTRATE_CONFIG_REF", &sha);
+
+        let ctx = resolve_active_context()?;
+
+        assert_eq!(
+            ctx.name, None,
+            "a purely-sha --config-ref must not set a context name"
+        );
+        assert_eq!(ctx.layers, vec!["team".to_string()]);
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Step c: with no --config-ref, the FIRST layer's checkout branch is
+    /// the candidate — a PlainPath working repo (local_entry_checkout_dir)
+    /// and a managed clone alike.
+    #[test]
+    fn checkout_branch_namespaces_a_bare_layers_home() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+
+        // (i) PlainPath first layer on branch wip.
+        let home = a5_derive_home("a5-derive-plain");
+        let work = home.join("my-work-config");
+        a5_derive_repo(&work, "wip");
+        std::fs::write(
+            home.join("config.toml"),
+            format!(
+                "layers = [\"local\"]\n\n[configs.local]\nurl = \"{}\"\n",
+                work.display()
+            ),
+        )?;
+        let ctx = resolve_active_context()?;
+        assert_eq!(ctx.name.as_deref(), Some("wip"));
+        assert_eq!(ctx.layers, vec!["local".to_string()]);
+        let _ = std::fs::remove_dir_all(&home);
+
+        // (ii) Remote entry: the managed clone's checkout branch.
+        let home = a5_derive_remote_bare_home("a5-derive-clonebr", "team", "on-call");
+        let ctx = resolve_active_context()?;
+        assert_eq!(ctx.name.as_deref(), Some("on-call"));
+        assert_eq!(ctx.layers, vec!["team".to_string()]);
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Ladder precedence (a > b): an explicit --context (WORKESTRATE_CONTEXT)
+    /// beats a branch-shaped --config-ref, with UNCHANGED strict semantics.
+    #[test]
+    fn explicit_context_beats_config_ref_branch() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let home = a5_derive_remote_bare_home("a5-derive-explicit", "team", "main");
+        let clone = home.join("config-repos").join("team");
+        a5_derive_git(&clone, &["branch", "feat-x"]);
+        // Add a [contexts.work] section (layers = [team]).
+        std::fs::write(
+            home.join("config.toml"),
+            "layers = [\"team\"]\n\n[configs.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
+        )?;
+        std::env::set_var("WORKESTRATE_CONTEXT", "work");
+        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+
+        let ctx = resolve_active_context()?;
+
+        assert_eq!(ctx.name.as_deref(), Some("work"));
+        assert_eq!(ctx.layers, vec!["team".to_string()]);
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Ladder precedence (b > c): a branch-shaped --config-ref beats the
+    /// first layer's checkout branch.
+    #[test]
+    fn config_ref_branch_beats_checkout_branch() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        // Clone is CHECKED OUT on main (the step-c candidate) while feat-x
+        // exists as a branch (the step-b candidate via --config-ref).
+        let home = a5_derive_remote_bare_home("a5-derive-b-over-c", "team", "main");
+        let clone = home.join("config-repos").join("team");
+        a5_derive_git(&clone, &["branch", "feat-x"]);
+        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+
+        let ctx = resolve_active_context()?;
+
+        assert_eq!(
+            ctx.name.as_deref(),
+            Some("feat-x"),
+            "the --config-ref branch must beat the checkout branch (main)"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Ladder precedence (c > d): the checkout branch beats the default —
+    /// an UNDEFINED candidate rides leniently over default_context's
+    /// layers; a DEFINED candidate resolves to its own context's layers.
+    #[test]
+    fn checkout_branch_beats_default_context() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let home = a5_derive_remote_bare_home("a5-derive-c-over-d", "team", "feat-wip");
+        let clone = home.join("config-repos").join("team");
+        std::fs::write(
+            home.join("config.toml"),
+            "layers = [\"team\"]\n\n[configs.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[settings]\ndefault_context = \"stable\"\n\n[contexts.stable]\nlayers = [\"team\"]\n\n[contexts.dev]\nlayers = [\"other\"]\n",
+        )?;
+
+        // Undefined candidate: name rides over the DEFAULT's layers.
+        let ctx = resolve_active_context()?;
+        assert_eq!(ctx.name.as_deref(), Some("feat-wip"));
+        assert_eq!(
+            ctx.layers,
+            vec!["team".to_string()],
+            "an undefined candidate falls back to default_context's layers"
+        );
+
+        // Defined candidate: its OWN layers.
+        a5_derive_git(&clone, &["checkout", "--quiet", "-b", "dev"]);
+        let ctx = resolve_active_context()?;
+        assert_eq!(ctx.name.as_deref(), Some("dev"));
+        assert_eq!(ctx.layers, vec!["other".to_string()]);
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Ladder discipline: contexts defined + candidate undefined + NO
+    /// default_context → the existing hard error stands.
+    #[test]
+    fn undefined_candidate_with_contexts_and_no_default_errors() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let home = a5_derive_remote_bare_home("a5-derive-no-default", "team", "wip");
+        std::fs::write(
+            home.join("config.toml"),
+            "layers = [\"team\"]\n\n[configs.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
+        )?;
+
+        let err = resolve_active_context().expect_err("undefined candidate must hard-error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("contexts are defined but no default_context is set"),
+            "the existing hard error must stand: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
     }
 }

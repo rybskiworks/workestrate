@@ -20,6 +20,19 @@
 //!   write the lock entry, print a stderr notice). The first two are SILENT
 //!   (already pinned); only the third writes, and never silently.
 //!
+//! ## A5 Session 3a: the `--config-ref` override (ADR 0032 addendum §Selection ladder)
+//!
+//! When `WORKESTRATE_CONFIG_REF` is set (the global `--config-ref
+//! <branch|sha>` flag), every Remote/GitFile entry resolves at THAT ref —
+//! overriding its own pinned/default ref — via
+//! [`config_ref_layer_content_root`]: the refs-map lock entry for
+//! `(name, <ref>)` (SILENT, write-free) wins; otherwise the ref is
+//! rev-parsed in the managed clone (FAIL-CLOSED naming repo+ref when it
+//! does not resolve), archived, and locked into `refs[<ref>]` with the
+//! first-resolution stderr notice. The entry's PRIMARY pin is never moved
+//! by an override resolution. PlainPath entries are UNAFFECTED by
+//! `--config-ref` — content-as-is, no archive, no lock write.
+//!
 //! BEHAVIOR CHANGE (vs. pre-A5): edits committed in the managed clone are
 //! INVISIBLE to consumption until `workestrate config update` moves the pin
 //! (commit-before-consume). Everything path-shaped is UNCHANGED (spec 17
@@ -535,8 +548,11 @@ fn collect_policy_scopes(
 /// - [`ConfigSourceKind::PlainPath`]: [`local_entry_checkout_dir`] when the
 ///   entry has the local-path shape, else the historical store path —
 ///   content-as-is, branch `"local"`, commit-before-consume does NOT apply.
+///   PlainPath entries are UNAFFECTED by `--config-ref` (A5 Session 3a):
+///   a local path is consumed as-is regardless of the override.
 /// - [`ConfigSourceKind::Remote`] / [`ConfigSourceKind::GitFile`]:
-///   REF-PINNED archive consumption — see [`pinned_layer_content_root`].
+///   REF-PINNED archive consumption — see [`pinned_layer_content_root`]
+///   (and, under `--config-ref`, [`config_ref_layer_content_root`]).
 pub(crate) fn layer_content_root(name: &str, registry: &Registry) -> Result<PathBuf> {
     use crate::config::registry::ConfigSourceKind;
     let store_path = || resolve_store_dir().join("config-repos").join(name);
@@ -584,6 +600,16 @@ fn pinned_layer_content_root(
             clone.display()
         );
     }
+
+    // A5 Session 3a (ADR 0032 addendum §Selection ladder): the --config-ref
+    // rung — when WORKESTRATE_CONFIG_REF is set, THIS ref overrides the
+    // entry's own pinned/default ref entirely.
+    if let Ok(config_ref) = std::env::var("WORKESTRATE_CONFIG_REF") {
+        if !config_ref.is_empty() {
+            return config_ref_layer_content_root(name, entry, registry, &clone, &config_ref);
+        }
+    }
+
     let effective_ref = crate::config::effective_ref(name, entry, &clone)?;
     let lock = crate::config::load_home_lock()?;
 
@@ -621,6 +647,77 @@ fn pinned_layer_content_root(
         "locked {}@{} → {} (first resolution); `workestrate config update` moves pins explicitly",
         name,
         effective_ref,
+        crate::git::short_rev(&sha)
+    );
+    Ok(archive)
+}
+
+/// Ref-pinned content root under `--config-ref` (A5 Session 3a; ADR 0032
+/// addendum §Selection ladder rung 2): the content-addressed archive of
+/// `config_ref` resolved in the managed clone — overriding the entry's own
+/// pinned/default ref. Same LOCK-NEVER-SILENT discipline as
+/// [`pinned_layer_content_root`], keyed into the entry's REFS MAP:
+///
+/// 1. The lock's `refs[config_ref]` pin for `(name, config_ref)`: SILENT
+///    and write-free — already locked. (The PRIMARY pin and the registry's
+///    recorded `rev` are deliberately NOT consulted: the override replaces
+///    the entry's ref selection wholesale.)
+/// 2. FIRST-RESOLUTION-WITH-NOTICE: rev-parse `config_ref` in the clone —
+///    FAIL-CLOSED naming repo+ref when the ref does not resolve — produce
+///    the archive, WRITE `refs[config_ref] = {rev = config_ref, sha,
+///    fetched_at}` via [`crate::config::upsert_locked_ref`] (the primary
+///    pin is NOT moved), and print the stderr notice. A sha-shaped
+///    `config_ref` is legal and is keyed by itself in the refs map.
+fn config_ref_layer_content_root(
+    name: &str,
+    entry: &ConfigRepoEntry,
+    registry: &Registry,
+    clone: &Path,
+    config_ref: &str,
+) -> Result<PathBuf> {
+    let lock = crate::config::load_home_lock()?;
+
+    // (1) Locked refs pin — silent.
+    if let Some(pin) = lock
+        .as_ref()
+        .and_then(|l| l.repos.get(name))
+        .and_then(|repo| repo.refs.get(config_ref))
+    {
+        return crate::config::ensure_archive(clone, &pin.sha);
+    }
+
+    // (2) First resolution WITH notice.
+    let sha = crate::git::git_rev_parse_ref(clone, config_ref).map_err(|e| {
+        anyhow::anyhow!(
+            "config repo '{}' (url '{}') does not resolve ref '{}' (--config-ref): {}",
+            name,
+            entry.url,
+            config_ref,
+            e
+        )
+    })?;
+    let archive = crate::config::ensure_archive(clone, &sha)?;
+    let mut lock = lock.unwrap_or_else(|| crate::config::HomeLock {
+        version: crate::config::LOCK_VERSION,
+        home_version: registry.settings.home_version.unwrap_or(2),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        repos: std::collections::BTreeMap::new(),
+    });
+    lock.version = crate::config::LOCK_VERSION;
+    lock.tool_version = env!("CARGO_PKG_VERSION").to_string();
+    crate::config::upsert_locked_ref(
+        &mut lock,
+        name,
+        &entry.url,
+        entry.r#ref.as_deref(),
+        config_ref,
+        &sha,
+    );
+    crate::config::save_home_lock(&lock)?;
+    eprintln!(
+        "locked {}@{} → {} (first resolution); `workestrate config update` moves pins explicitly",
+        name,
+        config_ref,
         crate::git::short_rev(&sha)
     );
     Ok(archive)
@@ -2553,6 +2650,7 @@ write.deny = ["sugar-write-deny"]
         "WORKESTRATE_CONFIG_DIR",
         "WORKESTRATE_NO_PROJECT_CONFIG",
         "WORKESTRATE_CONTEXT",
+        "WORKESTRATE_CONFIG_REF",
         "WORKESTRATE_REFERENCE_CONFIG",
         "WORKESTRATE_STATE_DIR",
     ];
@@ -2611,6 +2709,7 @@ write.deny = ["sugar-write-deny"]
         std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
         std::env::remove_var("WORKESTRATE_CONFIG_DIR");
         std::env::remove_var("WORKESTRATE_CONTEXT");
+        std::env::remove_var("WORKESTRATE_CONFIG_REF");
         std::env::remove_var("WORKESTRATE_REFERENCE_CONFIG");
         std::env::remove_var("WORKESTRATE_STATE_DIR");
         home
@@ -2929,6 +3028,278 @@ write.deny = ["sugar-write-deny"]
         assert_eq!(
             provenance.get("workloads.pinned.kind").map(String::as_str),
             Some("team#workestrate/workloads/pinned.toml")
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // A5 Session 3a: the --config-ref override (WORKESTRATE_CONFIG_REF) —
+    // every Remote/GitFile entry resolves at THAT ref, locked into the
+    // entry's refs map; PlainPath entries are unaffected.
+    // ------------------------------------------------------------------
+
+    /// Commit `files` on a NEW branch `branch` of `clone`, then return the
+    /// checkout to `main`; returns the branch tip sha.
+    fn a5_commit_branch(clone: &Path, branch: &str, files: &[(&str, &str)]) -> String {
+        a5_git(clone, &["checkout", "--quiet", "-b", branch]);
+        for (rel, content) in files {
+            std::fs::write(clone.join(rel), content).expect("write branch file");
+        }
+        a5_git(clone, &["add", "."]);
+        a5_git(clone, &["commit", "--quiet", "-m", branch]);
+        let sha = crate::git::git_rev_parse(clone).expect("branch tip sha");
+        a5_git(clone, &["checkout", "--quiet", "main"]);
+        sha
+    }
+
+    /// --config-ref resolves EVERY git-backed entry at the ref: two Remote
+    /// entries with primary pins on main both consume their feat-x content;
+    /// the PRIMARY pins are NOT moved, and the resolutions land in each
+    /// entry's refs map.
+    #[test]
+    fn config_ref_resolves_every_git_entry_at_the_ref() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let home = a5_pin_home("a5-cfgref-two");
+        let alpha = home.join("config-repos").join("alpha");
+        let beta = home.join("config-repos").join("beta");
+        init_git_repo(
+            &alpha,
+            &[("workestrate.toml", &a5_marker_toml("alpha_main"))],
+        );
+        init_git_repo(&beta, &[("workestrate.toml", &a5_marker_toml("beta_main"))]);
+        let alpha_main = crate::git::git_rev_parse(&alpha)?;
+        let beta_main = crate::git::git_rev_parse(&beta)?;
+        let alpha_feat = a5_commit_branch(
+            &alpha,
+            "feat-x",
+            &[("workestrate.toml", &a5_marker_toml("alpha_feat"))],
+        );
+        let beta_feat = a5_commit_branch(
+            &beta,
+            "feat-x",
+            &[("workestrate.toml", &a5_marker_toml("beta_feat"))],
+        );
+        std::fs::write(
+            home.join("config.toml"),
+            "layers = [\"alpha\", \"beta\"]\n\n[configs.alpha]\nurl = \"https://example.invalid/alpha.git\"\nref = \"main\"\n\n[configs.beta]\nurl = \"https://example.invalid/beta.git\"\nref = \"main\"\n",
+        )?;
+        // Primary pins on main for BOTH entries (S2 shape).
+        let mut lock = crate::config::HomeLock {
+            version: crate::config::LOCK_VERSION,
+            home_version: 2,
+            tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            repos: std::collections::BTreeMap::new(),
+        };
+        for (name, sha) in [("alpha", &alpha_main), ("beta", &beta_main)] {
+            crate::config::upsert_locked_pin(
+                &mut lock,
+                name,
+                &format!("https://example.invalid/{name}.git"),
+                Some("main"),
+                sha,
+            );
+        }
+        crate::config::save_home_lock_to(&home, &lock)?;
+        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+
+        let cfg = load_config()?;
+
+        for feat in ["alpha_feat", "beta_feat"] {
+            assert!(
+                cfg.workloads.contains_key(feat),
+                "both entries must be consumed at feat-x: {:?}",
+                cfg.workloads.keys().collect::<Vec<_>>()
+            );
+        }
+        for main_rev in ["alpha_main", "beta_main"] {
+            assert!(
+                !cfg.workloads.contains_key(main_rev),
+                "the primary (main) content must NOT leak into a --config-ref load"
+            );
+        }
+        // Both archives come from feat-x's shas.
+        assert!(crate::config::archive_dir(&alpha_feat)?
+            .join("workestrate.toml")
+            .exists());
+        assert!(crate::config::archive_dir(&beta_feat)?
+            .join("workestrate.toml")
+            .exists());
+        // Lock: refs map carries feat-x; PRIMARY pins unmoved.
+        let lock = crate::config::load_home_lock()?.expect("lock");
+        assert_eq!(
+            lock.repos["alpha"].rev.as_deref(),
+            Some(alpha_main.as_str())
+        );
+        assert_eq!(lock.repos["beta"].rev.as_deref(), Some(beta_main.as_str()));
+        assert_eq!(lock.repos["alpha"].refs["feat-x"].sha, alpha_feat);
+        assert_eq!(lock.repos["beta"].refs["feat-x"].sha, beta_feat);
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Fail-closed: an unknown --config-ref errors naming the repo AND the
+    /// ref (per entry; the first failing entry surfaces).
+    #[test]
+    fn config_ref_unknown_ref_errors_naming_repo_and_ref() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let (home, _clone, _sha) = a5_remote_home(
+            "a5-cfgref-unknown",
+            "team",
+            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+        );
+        std::env::set_var("WORKESTRATE_CONFIG_REF", "no-such-ref");
+
+        let err = load_config().expect_err("an unknown --config-ref must fail closed");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("team"), "error must name the repo: {msg}");
+        assert!(
+            msg.contains("no-such-ref"),
+            "error must name the ref: {msg}"
+        );
+        // Fail-closed means NO lock write and NO archive side effect.
+        assert!(!home.join("workestrate.lock").exists());
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Refs-map lock discipline: the first --config-ref load writes
+    /// refs[<ref>] (primary pin UNMOVED — it stays on main); the second
+    /// load is SILENT and write-free (byte-identical lock).
+    #[test]
+    fn config_ref_first_resolution_locks_refs_then_second_is_write_free() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let (home, clone, sha_main) = a5_remote_home(
+            "a5-cfgref-discipline",
+            "team",
+            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+        );
+        a5_write_lock(&home, "team", &sha_main);
+        let sha_feat = a5_commit_branch(
+            &clone,
+            "feat-x",
+            &[("workestrate.toml", &a5_marker_toml("rev_feat"))],
+        );
+        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+
+        let cfg = load_config()?;
+        assert!(cfg.workloads.contains_key("rev_feat"));
+
+        let lock_path = home.join("workestrate.lock");
+        let lock = crate::config::load_home_lock()?.expect("lock after first resolution");
+        let entry = &lock.repos["team"];
+        assert_eq!(
+            entry.rev.as_deref(),
+            Some(sha_main.as_str()),
+            "the PRIMARY pin must NOT be moved by a --config-ref resolution"
+        );
+        assert_eq!(entry.sha.as_deref(), Some(sha_main.as_str()));
+        let pin = &entry.refs["feat-x"];
+        assert_eq!(pin.rev, "feat-x", "the refs pin is keyed by the ref itself");
+        assert_eq!(pin.sha, sha_feat);
+        assert!(pin.fetched_at.ends_with('Z'), "fetched_at stamped");
+
+        // Second load: silent + write-free (byte-identical lock).
+        let bytes = std::fs::read_to_string(&lock_path)?;
+        let cfg2 = load_config()?;
+        assert!(cfg2.workloads.contains_key("rev_feat"));
+        assert_eq!(
+            std::fs::read_to_string(&lock_path)?,
+            bytes,
+            "the second --config-ref load must NOT touch the lock"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// A sha-shaped --config-ref is legal and keyed BY ITSELF in the refs
+    /// map; with no prior lock, the primary pin stays ABSENT (an
+    /// override-only history never fabricates one).
+    #[test]
+    fn config_ref_sha_pins_keyed_by_itself_without_a_primary_pin() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let (home, _clone, sha_a) = a5_remote_home(
+            "a5-cfgref-sha",
+            "team",
+            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+        );
+        std::env::set_var("WORKESTRATE_CONFIG_REF", &sha_a);
+
+        let cfg = load_config()?;
+        assert!(cfg.workloads.contains_key("rev_a"));
+
+        let lock = crate::config::load_home_lock()?.expect("lock written");
+        let entry = &lock.repos["team"];
+        assert_eq!(entry.rev, None, "no primary pin is fabricated");
+        assert_eq!(entry.sha, None);
+        let pin = &entry.refs[&sha_a];
+        assert_eq!(pin.rev, sha_a, "a sha-shaped ref is keyed by itself");
+        assert_eq!(pin.sha, sha_a);
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// PlainPath entries are UNAFFECTED by --config-ref: content-as-is
+    /// (an edit is visible on the very next load), no archive, no lock
+    /// entry — while the git-backed sibling entry IS pinned at the ref.
+    #[test]
+    fn config_ref_leaves_plain_path_entries_unaffected() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let home = a5_pin_home("a5-cfgref-plain");
+        let plain = home.join("my-plain-config");
+        std::fs::create_dir_all(&plain)?;
+        std::fs::write(plain.join("workestrate.toml"), a5_marker_toml("plain_v1"))?;
+        let clone = home.join("config-repos").join("team");
+        init_git_repo(
+            &clone,
+            &[("workestrate.toml", &a5_marker_toml("team_main"))],
+        );
+        a5_commit_branch(
+            &clone,
+            "feat-x",
+            &[("workestrate.toml", &a5_marker_toml("team_feat"))],
+        );
+        std::fs::write(
+            home.join("config.toml"),
+            format!(
+                "layers = [\"plain\", \"team\"]\n\n[configs.plain]\nurl = \"{}\"\n\n[configs.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n",
+                plain.display()
+            ),
+        )?;
+        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+
+        let cfg = load_config()?;
+        assert!(cfg.workloads.contains_key("plain_v1"));
+        assert!(cfg.workloads.contains_key("team_feat"));
+        assert!(!cfg.workloads.contains_key("team_main"));
+
+        // Content-as-is: an edit to the plain dir is visible on the NEXT
+        // load even under --config-ref.
+        std::fs::write(plain.join("workestrate.toml"), a5_marker_toml("plain_v2"))?;
+        let cfg = load_config()?;
+        assert!(
+            cfg.workloads.contains_key("plain_v2"),
+            "plain-path consumption stays content-as-is under --config-ref"
+        );
+        assert!(cfg.workloads.contains_key("team_feat"));
+
+        // Lock: the git-backed entry has its refs pin; the plain entry has
+        // NO lock entry at all.
+        let lock = crate::config::load_home_lock()?.expect("lock");
+        assert!(lock.repos["team"].refs.contains_key("feat-x"));
+        assert!(
+            !lock.repos.contains_key("plain"),
+            "plain-path entries never enter the lock"
         );
 
         let _ = std::fs::remove_dir_all(&home);
