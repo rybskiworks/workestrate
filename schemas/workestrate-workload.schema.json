@@ -49,6 +49,7 @@
         "binary": null,
         "contents": null,
         "features": null,
+        "keep_last": null,
         "name": null,
         "recipe": "",
         "ref": null,
@@ -559,6 +560,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "keep_last": {
+          "description": "Keep-last-N rung for this capsule's nix-layered image (ADR 0032 §Image tags, RESOLVED user decision 3): the top rung of the cascade `crate::images::gc::DEFAULT_IMAGE_KEEP_LAST` < home settings (`RegistrySettings.image_keep_last`) < config-repo entry (`ConfigRepoEntry.image_keep_last`) < THIS field. First Some wins; an explicit 0 is a hard error (the just-loaded tag always counts toward N). Enforced at load time by prune-on-load.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
         },
         "name": {
           "type": [

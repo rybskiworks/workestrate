@@ -1003,6 +1003,10 @@ pub(crate) async fn build_sandbox<W: Workload>(
         &created_at,
         &workload.namespace(),
         spec.source_dir.as_deref(),
+        // A2 (ADR 0032 §Image tags): the CREATE path knows the image —
+        // record the resolved store tag so the keep-last-N GC never prunes
+        // a tag a running sandbox was created with.
+        plan.image.as_deref(),
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -1046,6 +1050,9 @@ async fn start_existing_sandbox<W: Workload>(
         &created_at,
         &workload.namespace(),
         spec.source_dir.as_deref(),
+        // A re-START of an existing sandbox: the running tag is unknown
+        // here (ADR 0032 §Image tags — documented None posture).
+        None,
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -1619,6 +1626,7 @@ mod tests {
             "2026-07-30T00:00:00Z",
             "default",
             None,
+            None,
         )?;
         // … makes the next parallel slot draw 127.0.0.3.
         let ip = slot_bind_ip("personal-litellm@blue", &state_dir)?;
@@ -1776,6 +1784,7 @@ mod tests {
             &port_pairs,
             "2026-08-10T00:00:00Z",
             "default",
+            None,
             None,
         )?;
         let record = super::super::super::port_registry::find_record(&state_dir, "personal-test")?

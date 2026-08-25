@@ -52,7 +52,9 @@ use crate::images::build_cmd::{
     process_target, resolve_targets, BuildScope, BuildTarget, TargetSeams,
 };
 use crate::images::detect::{DrvEvaluator, MsbStoreProbe, NixCliEvaluator, StoreProbe};
-use crate::images::pipeline::{ImageBuilder, ImageLoader, MsbCliLoader, NixCliBuilder};
+use crate::images::pipeline::{
+    ImageBuilder, ImageLoader, ImageRemover, MsbCliLoader, MsbCliRemover, NixCliBuilder,
+};
 
 /// The token gate (spec §2.2, pure): ensure-images runs only on the start
 /// verbs (`up`/`exec`) AND only when the process does NOT carry the
@@ -116,11 +118,13 @@ async fn ensure_named(names: &[String], force: bool, single: bool) -> Result<()>
     let mut eval = NixCliEvaluator::new();
     let mut builder = NixCliBuilder::new();
     let mut loader = MsbCliLoader::new();
+    let mut remover = MsbCliRemover::new();
     let mut seams = TargetSeams {
         probe: &mut probe,
         eval: &mut eval,
         builder: &mut builder,
         loader: &mut loader,
+        remover: &mut remover,
     };
     ensure_resolved(&targets, &state_dir, force, &mut seams).await
 }
@@ -131,11 +135,17 @@ async fn ensure_named(names: &[String], force: bool, single: bool) -> Result<()>
 /// one operator-facing stderr line per ensured target. Hard errors (the §7
 /// unreachable-store / nix-absent-tag-missing / eval / pipeline rows) abort
 /// the pass — the documented fail-fast posture.
-pub async fn ensure_resolved<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: ImageLoader>(
+pub async fn ensure_resolved<
+    P: StoreProbe,
+    E: DrvEvaluator,
+    B: ImageBuilder,
+    L: ImageLoader,
+    R: ImageRemover,
+>(
     targets: &[BuildTarget],
     state_dir: &Path,
     force: bool,
-    seams: &mut TargetSeams<'_, P, E, B, L>,
+    seams: &mut TargetSeams<'_, P, E, B, L, R>,
 ) -> Result<()> {
     for target in targets {
         let report = process_target(target, state_dir, false, force, &mut *seams).await?;
@@ -164,7 +174,7 @@ mod tests {
     use crate::images::build_cmd::SelectSkip;
     use crate::images::detect::test_fakes::{FakeEvaluator, FakeStoreProbe};
     use crate::images::detect::DrvEvalError;
-    use crate::images::pipeline::test_fakes::{FakeBuilder, FakeLoader};
+    use crate::images::pipeline::test_fakes::{FakeBuilder, FakeLoader, FakeRemover};
     use crate::images::repo_key::repo_identity_for;
     use crate::images::skew::StoreTag;
     use crate::images::state::{image_key, images_state_path, ImagesState};
@@ -314,6 +324,7 @@ gating_file = "package-lock.json"
             tag: format!("{attr}:latest"),
             attr,
             repo,
+            keep_last: None,
         };
         (tmp, target)
     }
@@ -364,6 +375,7 @@ gating_file = "package-lock.json"
         builder.push_ok(OUT_A);
         builder.push_ok(OUT_B);
         let mut loader = FakeLoader::new();
+        let mut remover = FakeRemover::new();
         loader.push_ok();
         loader.push_ok();
         let mut seams = TargetSeams {
@@ -371,6 +383,7 @@ gating_file = "package-lock.json"
             eval: &mut eval,
             builder: &mut builder,
             loader: &mut loader,
+            remover: &mut remover,
         };
 
         ensure_resolved(
@@ -430,11 +443,13 @@ gating_file = "package-lock.json"
         probe1.push(StoreTag::Present);
         let mut eval1 = fake_eval(OUT_A, "drv-A");
         let (mut builder1, mut loader1) = (FakeBuilder::new(), FakeLoader::new());
+        let mut remover1 = FakeRemover::new();
         let mut seams1 = TargetSeams {
             probe: &mut probe1,
             eval: &mut eval1,
             builder: &mut builder1,
             loader: &mut loader1,
+            remover: &mut remover1,
         };
         ensure_resolved(
             std::slice::from_ref(&target_a),
@@ -452,11 +467,13 @@ gating_file = "package-lock.json"
         probe2.push(StoreTag::Present);
         let mut eval2 = fake_eval(OUT_A, "drv-A");
         let (mut builder2, mut loader2) = (FakeBuilder::new(), FakeLoader::new());
+        let mut remover2 = FakeRemover::new();
         let mut seams2 = TargetSeams {
             probe: &mut probe2,
             eval: &mut eval2,
             builder: &mut builder2,
             loader: &mut loader2,
+            remover: &mut remover2,
         };
         ensure_resolved(
             std::slice::from_ref(&target_a),
@@ -490,11 +507,13 @@ gating_file = "package-lock.json"
         let mut eval = FakeEvaluator::new();
         eval.push_out_err(DrvEvalError::NixAbsent);
         let (mut builder, mut loader) = (FakeBuilder::new(), FakeLoader::new());
+        let mut remover = FakeRemover::new();
         let mut seams = TargetSeams {
             probe: &mut probe,
             eval: &mut eval,
             builder: &mut builder,
             loader: &mut loader,
+            remover: &mut remover,
         };
         ensure_resolved(std::slice::from_ref(&target), &state_dir, false, &mut seams).await?;
         assert!(
@@ -508,11 +527,13 @@ gating_file = "package-lock.json"
         let mut eval = FakeEvaluator::new();
         eval.push_out_err(DrvEvalError::NixAbsent);
         let (mut builder, mut loader) = (FakeBuilder::new(), FakeLoader::new());
+        let mut remover = FakeRemover::new();
         let mut seams = TargetSeams {
             probe: &mut probe,
             eval: &mut eval,
             builder: &mut builder,
             loader: &mut loader,
+            remover: &mut remover,
         };
         let err = ensure_resolved(std::slice::from_ref(&target), &state_dir, false, &mut seams)
             .await
@@ -600,12 +621,14 @@ gating_file = "package-lock.json"
         let mut builder = FakeBuilder::new();
         builder.push_ok(OUT_A);
         let mut loader = FakeLoader::new();
+        let mut remover = FakeRemover::new();
         loader.push_ok();
         let mut seams = TargetSeams {
             probe: &mut probe,
             eval: &mut eval,
             builder: &mut builder,
             loader: &mut loader,
+            remover: &mut remover,
         };
         ensure_resolved(std::slice::from_ref(&target), &state_dir, false, &mut seams).await?;
 
@@ -634,6 +657,170 @@ gating_file = "package-lock.json"
             "resolution returns the content-addressed tag once the pointer exists"
         );
 
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    // ---- A2 stage 2 ensure-seam completion (scope item 12) ----
+
+    /// NON-OVERRIDE path under an ACTIVE CONTEXT (the existing flow tests
+    /// pin ctx=None): the ensure computes the THREE-SEGMENT tag
+    /// `<attr>:<home-ctx>:<sha>` and moves the `(repo, attr, Some(ctx))`
+    /// pointer — never a two-segment tag or a ctx-less pointer while a home
+    /// context is active (ADR 0032 §Image tags:
+    /// image_tag_context = active_context_name when no override is armed).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
+    async fn home_context_ensure_writes_three_segment_tag_and_ctx_pointer() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(Some(crate::config::ActiveContext {
+            name: Some("personal".to_string()),
+            layers: vec!["personal".to_string()],
+        }));
+        let (tmp, target) = target_fixture("ensure-home-ctx", "alpha");
+        let state_dir = unique_state_dir("ensure-home-ctx-state");
+
+        // D1 trust path: absent record + present store tag → baseline record
+        // + pointer, no build.
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Present);
+        let mut eval = fake_eval(OUT_A, "drv-A");
+        let (mut builder, mut loader) = (FakeBuilder::new(), FakeLoader::new());
+        let mut remover = FakeRemover::new();
+        let mut seams = TargetSeams {
+            probe: &mut probe,
+            eval: &mut eval,
+            builder: &mut builder,
+            loader: &mut loader,
+            remover: &mut remover,
+        };
+        ensure_resolved(std::slice::from_ref(&target), &state_dir, false, &mut seams).await?;
+
+        let want_tag = "img-alpha:personal:aaaaaaaaaaaa";
+        let state = ImagesState::load(&state_dir);
+        assert_eq!(
+            state
+                .lookup(&image_key("personal", want_tag))
+                .map(|r| r.tag.as_str()),
+            Some(want_tag),
+            "the record keys under the THREE-SEGMENT home-context tag"
+        );
+        assert_eq!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal",
+                    "img-alpha",
+                    Some("personal")
+                ))
+                .map(|p| p.tag.as_str()),
+            Some(want_tag),
+            "the (repo, attr, home-ctx) pointer moved"
+        );
+        assert!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal",
+                    "img-alpha",
+                    None
+                ))
+                .is_none(),
+            "no ctx-less pointer is written while a home context is active"
+        );
+        assert!(builder.calls.is_empty() && loader.calls.is_empty());
+
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// OVERRIDE path with an ARMED inline override (`alpha:feat-x`): the
+    /// ensure tags under the override context — `<attr>:feat-x:<sha>` — and
+    /// moves ONLY the `(repo, attr, "feat-x")` pointer; the home-context
+    /// pointer is untouched (never flaps). This pins the reordered
+    /// ensure-after-arming seam end-to-end at the ensure core level (ADR
+    /// 0032 §Image tags + A5 arming discipline).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
+    async fn armed_override_ensure_tags_under_override_ctx_and_moves_only_that_pointer(
+    ) -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(Some(crate::config::ActiveContext {
+            name: Some("personal".to_string()),
+            layers: vec!["personal".to_string()],
+        }));
+        let (tmp, target) = target_fixture("ensure-override-ctx", "alpha");
+        let state_dir = unique_state_dir("ensure-override-ctx-state");
+
+        // Seed the HOME-context pointer; it must survive the override build.
+        let mut state = ImagesState::default();
+        state.upsert_pointer(
+            crate::images::state::pointer_key("personal", "img-alpha", Some("personal")),
+            crate::images::state::PointerRecord {
+                tag: "img-alpha:personal:111111111111".to_string(),
+                updated_at: "2026-08-24T09:00:00Z".to_string(),
+            },
+        );
+        state.save(&state_dir)?;
+
+        // ARM the override (the discipline used in state.rs tests: pending,
+        // then arm — mirroring main.rs's post-auto-start arming point).
+        crate::config::set_pending_inline_override("alpha", "feat-x");
+        crate::config::arm_inline_override();
+
+        // D1 trust path under the armed override.
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Present);
+        let mut eval = fake_eval(OUT_A, "drv-A");
+        let (mut builder, mut loader) = (FakeBuilder::new(), FakeLoader::new());
+        let mut remover = FakeRemover::new();
+        let mut seams = TargetSeams {
+            probe: &mut probe,
+            eval: &mut eval,
+            builder: &mut builder,
+            loader: &mut loader,
+            remover: &mut remover,
+        };
+        ensure_resolved(std::slice::from_ref(&target), &state_dir, false, &mut seams).await?;
+
+        let want_tag = "img-alpha:feat-x:aaaaaaaaaaaa";
+        let state = ImagesState::load(&state_dir);
+        assert_eq!(
+            state
+                .lookup(&image_key("personal", want_tag))
+                .map(|r| r.tag.as_str()),
+            Some(want_tag),
+            "the computed tag carries the OVERRIDE ref as its ctx segment"
+        );
+        assert_eq!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal",
+                    "img-alpha",
+                    Some("feat-x")
+                ))
+                .map(|p| p.tag.as_str()),
+            Some(want_tag),
+            "ONLY the (repo, attr, feat-x) pointer moved"
+        );
+        assert_eq!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal",
+                    "img-alpha",
+                    Some("personal")
+                ))
+                .map(|p| p.tag.as_str()),
+            Some("img-alpha:personal:111111111111"),
+            "the home-context pointer NEVER flaps"
+        );
+
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())

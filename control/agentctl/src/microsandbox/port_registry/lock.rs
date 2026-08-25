@@ -186,6 +186,8 @@ mod tests {
             "2026-07-23T00:00:00Z",
             "default",
             None,
+            // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
         )
     }
 

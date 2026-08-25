@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use workestrate::cli_actions::{
-    AgentAction, ConfigAction, ContextAction, HomeAction, PolicyAction, SchemasAction,
-    ServiceAction, SourceAction, WorkloadAction,
+    AgentAction, ConfigAction, ContextAction, HomeAction, ImagesAction, PolicyAction,
+    SchemasAction, ServiceAction, SourceAction, WorkloadAction,
 };
 use workestrate::cli_error::{classify_exit_code, emit_error};
 use workestrate::commands::config_cmd::{
@@ -128,6 +128,11 @@ enum Commands {
         /// Skip the interactive confirmation.
         #[arg(long)]
         yes: bool,
+    },
+    /// Manage nix-layered images in the msb store (ADR 0032 §Image tags).
+    Images {
+        #[command(subcommand)]
+        action: ImagesAction,
     },
     /// Manage workestrate contexts
     Context {
@@ -757,6 +762,11 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::Ps => cmd_ps(cli.json).await,
         Commands::DownAll { yes } => cmd_down_all(yes, cli.json).await,
         Commands::Clean { yes } => cmd_clean(yes, cli.json),
+        Commands::Images { action } => match action {
+            // Manual keep-last-N sweep (ADR 0032 §Image tags — RESOLVED
+            // user decision 3); cleanup-family aggregate exit rule applies.
+            ImagesAction::Gc {} => workestrate::images::gc::cmd_images_gc(cli.json).await,
+        },
         Commands::Context { action } => cmd_context(action, cli.json).await,
         Commands::GenerateSchema {
             output,

@@ -38,10 +38,11 @@ use crate::config::{ConfigFile, ConfigRepoEntry};
 use crate::images::detect::{
     record_state_for, DrvEvalError, DrvEvaluator, MsbStoreProbe, NixCliEvaluator, StoreProbe,
 };
+use crate::images::gc;
 use crate::images::lock::ImageTagLock;
 use crate::images::pipeline::{
-    run_build_pipeline, BuildJob, ImageBuilder, ImageLoader, LoadAction, MsbCliLoader,
-    NixCliBuilder, PipelineOutcome,
+    run_build_pipeline, BuildJob, ImageBuilder, ImageLoader, ImageRemover, LoadAction,
+    MsbCliLoader, MsbCliRemover, NixCliBuilder, PipelineOutcome,
 };
 use crate::images::repo_key::{registered_repo_checkouts, repo_identity_for, repo_key_for};
 use crate::images::skew::{decide_skew, RecordState, SkewDecision, StoreTag};
@@ -77,6 +78,11 @@ pub struct BuildTarget {
     pub tag: String,
     /// Config-repo identity (repo_key rule + flake_root) for the record key.
     pub repo: RepoIdentity,
+    /// The capsule keep-last-N rung (`image.keep_last`, ADR 0032 §Image
+    /// tags — RESOLVED user decision 3): the TOP rung of the prune cascade,
+    /// resolved against the repo-entry/settings/default rungs at the
+    /// prune-on-load trigger point. `None` = not configured on the capsule.
+    pub keep_last: Option<u32>,
 }
 
 /// A workload skipped during selection (batch modes report these as notes;
@@ -209,6 +215,7 @@ pub fn select_eligible(
                 attr,
                 tag,
                 repo,
+                keep_last: wl.image.keep_last,
             }),
             None => skips.push(SelectSkip::NoFlakeRoot {
                 workload: name.clone(),
@@ -354,15 +361,25 @@ fn store_state_label(state: StoreTag) -> &'static str {
     }
 }
 
-/// The four seam implementations the flow drives, bundled so
+/// The five seam implementations the flow drives, bundled so
 /// [`process_target`] stays readable (and within the argument-count lint):
 /// the two phase-C change-detection seams (`detect.rs`) plus the two
-/// phase-D process seams (`pipeline.rs`).
-pub struct TargetSeams<'a, P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: ImageLoader> {
+/// phase-D process seams (`pipeline.rs`) and the A2-stage-2 removal seam
+/// ([`pipeline::ImageRemover`] — the keep-last-N GC cascade's msb tag
+/// removal, ADR 0032 §Image tags).
+pub struct TargetSeams<
+    'a,
+    P: StoreProbe,
+    E: DrvEvaluator,
+    B: ImageBuilder,
+    L: ImageLoader,
+    R: ImageRemover,
+> {
     pub probe: &'a mut P,
     pub eval: &'a mut E,
     pub builder: &'a mut B,
     pub loader: &'a mut L,
+    pub remover: &'a mut R,
 }
 
 /// The §7 "nix absent from PATH" ladder report (shared by the out_path and
@@ -426,18 +443,25 @@ fn nix_absent_ladder(target: &BuildTarget, tag: &str, store: StoreTag) -> Result
 ///    outPath gate → `msb load` → record + pointer), still inside the lock;
 ///    `--check` → structured "would …" report, never the pipeline, never a
 ///    write.
-pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: ImageLoader>(
+pub async fn process_target<
+    P: StoreProbe,
+    E: DrvEvaluator,
+    B: ImageBuilder,
+    L: ImageLoader,
+    R: ImageRemover,
+>(
     target: &BuildTarget,
     state_dir: &Path,
     check: bool,
     force: bool,
-    seams: &mut TargetSeams<'_, P, E, B, L>,
+    seams: &mut TargetSeams<'_, P, E, B, L, R>,
 ) -> Result<TargetReport> {
     let TargetSeams {
         probe,
         eval,
         builder,
         loader,
+        remover,
     } = seams;
     // Reborrow the &mut fields so the generic seam bounds (P: StoreProbe
     // etc.) are satisfied by &mut P directly, not &mut &mut P.
@@ -445,6 +469,7 @@ pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: 
     let eval = &mut **eval;
     let builder = &mut **builder;
     let loader = &mut **loader;
+    let remover = &mut **remover;
 
     // Step 1: the A2 out_path eval decides the effective tag BEFORE any
     // probe/lock. §7 nix-absent ladder: without nix the computed tag is
@@ -635,11 +660,36 @@ pub async fn process_target<P: StoreProbe, E: DrvEvaluator, B: ImageBuilder, L: 
                 .await?;
                 report.action_taken = match action {
                     LoadAction::Loaded => "built+loaded+recorded".to_string(),
-                    // The §3.1 re-load gate skip: exact operator-facing note.
+                    // The §3.1 re-load gate skip: exact operator note.
                     LoadAction::AlreadyCurrent => {
                         "image unchanged in store; tag already current".to_string()
                     }
                 };
+                // A2 stage 2 PRUNE-ON-LOAD (ADR 0032 §Image tags — RESOLVED
+                // user decision 3): immediately after a successful pipeline
+                // (BOTH LoadAction outcomes — the just-loaded tag is
+                // confirmed current either way), INSIDE the still-held
+                // per-tag lock, build mode only. The capsule rung rides the
+                // target; repo/settings rungs resolve from the live registry
+                // (unreadable → defaults, the advisory posture). Cleanup
+                // never fails the load: per-tag failures aggregate into one
+                // stderr note inside prune_on_load.
+                let registry = crate::config::load_registry().ok().flatten();
+                let settings_rung = registry.as_ref().and_then(|r| r.settings.image_keep_last);
+                let repo_rung = registry
+                    .as_ref()
+                    .and_then(|r| r.configs.get(&target.repo.name))
+                    .and_then(|e| e.image_keep_last);
+                let keep_last = gc::resolve_keep_last(settings_rung, repo_rung, target.keep_last)?;
+                gc::prune_on_load(
+                    state_dir,
+                    &target.attr,
+                    tag_ctx.as_deref(),
+                    keep_last,
+                    probe,
+                    remover,
+                )
+                .await?;
             }
         }
     }
@@ -726,6 +776,7 @@ pub async fn cmd_workload_build(
     let mut eval = NixCliEvaluator::new();
     let mut builder = NixCliBuilder::new();
     let mut loader = MsbCliLoader::new();
+    let mut remover = MsbCliRemover::new();
     let mut reports = Vec::with_capacity(targets.len());
     for target in &targets {
         // Fail-fast: the first hard error (unreachable store, nix-absent with
@@ -736,6 +787,7 @@ pub async fn cmd_workload_build(
             eval: &mut eval,
             builder: &mut builder,
             loader: &mut loader,
+            remover: &mut remover,
         };
         reports.push(process_target(target, &state_dir, check, force, &mut seams).await?);
     }
@@ -763,7 +815,7 @@ pub async fn cmd_workload_build(
 )]
 mod tests {
     use super::super::detect::test_fakes::{FakeEvaluator, FakeStoreProbe};
-    use super::super::pipeline::test_fakes::{FakeBuilder, FakeLoader};
+    use super::super::pipeline::test_fakes::{FakeBuilder, FakeLoader, FakeRemover};
     use super::*;
     use crate::config::test_support::unique_state_dir;
     use crate::images::detect::StoreUnreachable;
@@ -814,6 +866,7 @@ mod tests {
             tag: format!("{attr}:latest"),
             attr,
             repo,
+            keep_last: None,
         };
         (tmp, target)
     }
@@ -1076,19 +1129,21 @@ mod tests {
         (FakeBuilder::new(), FakeLoader::new())
     }
 
-    /// Bundle the four fakes into the [`TargetSeams`] shape
+    /// Bundle the five fakes into the [`TargetSeams`] shape
     /// [`process_target`] takes.
     fn seams<'a>(
         probe: &'a mut FakeStoreProbe,
         eval: &'a mut FakeEvaluator,
         builder: &'a mut FakeBuilder,
         loader: &'a mut FakeLoader,
-    ) -> TargetSeams<'a, FakeStoreProbe, FakeEvaluator, FakeBuilder, FakeLoader> {
+        remover: &'a mut FakeRemover,
+    ) -> TargetSeams<'a, FakeStoreProbe, FakeEvaluator, FakeBuilder, FakeLoader, FakeRemover> {
         TargetSeams {
             probe,
             eval,
             builder,
             loader,
+            remover,
         }
     }
 
@@ -1117,6 +1172,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1201,6 +1257,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1220,6 +1277,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-B"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1252,6 +1310,7 @@ mod tests {
                 &mut fake_eval(OUT_B, "drv-C"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1343,6 +1402,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1374,6 +1434,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1446,6 +1507,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-B"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1490,7 +1552,13 @@ mod tests {
             &state_dir,
             false,
             false,
-            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+            &mut seams(
+                &mut probe,
+                &mut eval,
+                &mut builder,
+                &mut loader,
+                &mut FakeRemover::new(),
+            ),
         )
         .await?;
         assert_eq!(report.record_state, "unknown");
@@ -1517,7 +1585,13 @@ mod tests {
             &state_dir,
             false,
             false,
-            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+            &mut seams(
+                &mut probe,
+                &mut eval,
+                &mut builder,
+                &mut loader,
+                &mut FakeRemover::new(),
+            ),
         )
         .await
         .expect_err("nix absent + tag missing is a hard error (§7)");
@@ -1549,7 +1623,13 @@ mod tests {
             &state_dir,
             false,
             false,
-            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+            &mut seams(
+                &mut probe,
+                &mut eval,
+                &mut builder,
+                &mut loader,
+                &mut FakeRemover::new(),
+            ),
         )
         .await?;
         assert_eq!(report.tag, TAG_A, "the pointer's tag is the fallback");
@@ -1581,7 +1661,13 @@ mod tests {
             &state_dir,
             false,
             false,
-            &mut seams(&mut probe, &mut eval, &mut builder, &mut loader),
+            &mut seams(
+                &mut probe,
+                &mut eval,
+                &mut builder,
+                &mut loader,
+                &mut FakeRemover::new(),
+            ),
         )
         .await
         .expect_err("unreachable store fails the flow");
@@ -1592,6 +1678,98 @@ mod tests {
         // the drvPath eval never ran — the store is probed before it.
         assert_eq!(eval.out_calls.len(), 1);
         assert!(eval.calls.is_empty(), "drv eval runs only after the probe");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// A2 stage 2 GC framing — RECREATE-AFTER-PRUNE (ADR 0032 §Image tags,
+    /// RESOLVED decision 3: "a pruned tag = rebuild-from-store on recreate"):
+    /// a record + pointer exist for TAG_A but the store tag was pruned
+    /// (probe Gone). The skew matrix says Rebuild (row 3), the pipeline
+    /// reloads the SAME computed tag, and the current-pointer survives the
+    /// recreate INTACT (it already points at TAG_A; stage 4 re-points it to
+    /// the same tag). No special case, no error.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
+    async fn recreate_after_prune_rebuilds_and_pointer_survives() -> Result<()> {
+        let _guard = pin_no_tag_context();
+        let (tmp, target) = target_fixture("flow-recreate", "pi");
+        let state_dir = unique_state_dir("flow-recreate-state");
+
+        // Seed the record AND the current-pointer for TAG_A (as if TAG_A had
+        // been loaded before and later pruned from the store).
+        let key = image_key("personal", TAG_A);
+        let mut state = ImagesState::default();
+        let prov = Provenance::capture();
+        state.upsert(
+            key.clone(),
+            ImageRecord {
+                repo: target.repo.clone(),
+                attr: target.attr.clone(),
+                tag: TAG_A.to_string(),
+                drv_path: "drv-A".to_string(),
+                out_path: OUT_A.to_string(),
+                digest: None,
+                built_at: prov.now.clone(),
+                loaded_at: prov.now.clone(),
+                loader: prov.loader,
+                host: prov.host,
+                user: prov.user,
+            },
+        );
+        state.upsert_pointer(
+            crate::images::state::pointer_key("personal", "img-pi", None),
+            PointerRecord {
+                tag: TAG_A.to_string(),
+                updated_at: "2026-08-24T09:00:00Z".to_string(),
+            },
+        );
+        state.save(&state_dir)?;
+
+        // Pruned-tag probe: Gone at skew time → Rebuild (§3.4 row 3); gone
+        // again at the pipeline pre-gate → load anyway; present post-load.
+        let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Gone);
+        probe.push(StoreTag::Gone);
+        probe.push(StoreTag::Present);
+        let mut builder = FakeBuilder::new();
+        builder.push_ok(OUT_A);
+        let mut loader = FakeLoader::new();
+        loader.push_ok();
+        let report = process_target(
+            &target,
+            &state_dir,
+            false,
+            false,
+            &mut seams(
+                &mut probe,
+                &mut fake_eval(OUT_A, "drv-A"),
+                &mut builder,
+                &mut loader,
+                &mut FakeRemover::new(),
+            ),
+        )
+        .await?;
+
+        assert_eq!(report.decision, "rebuild", "pruned tag → row 3 rebuild");
+        assert_eq!(report.action_taken, "built+loaded+recorded");
+        assert_eq!(loader.calls.len(), 1, "the pruned tag is re-loaded");
+        assert_eq!(loader.calls[0].1, TAG_A, "recreate targets the SAME tag");
+
+        // The pointer survived the recreate — still TAG_A, never dangled.
+        let state = ImagesState::load(&state_dir);
+        assert_eq!(
+            state
+                .lookup_pointer(&crate::images::state::pointer_key(
+                    "personal", "img-pi", None
+                ))
+                .map(|p| p.tag.as_str()),
+            Some(TAG_A),
+            "the current-pointer is intact after the prune-recreate"
+        );
+        assert!(state.lookup(&key).is_some(), "the record is re-established");
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -1621,6 +1799,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1640,6 +1819,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1667,6 +1847,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;
@@ -1688,6 +1869,7 @@ mod tests {
                 &mut fake_eval(OUT_A, "drv-A"),
                 &mut builder,
                 &mut loader,
+                &mut FakeRemover::new(),
             ),
         )
         .await?;

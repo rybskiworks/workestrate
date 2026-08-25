@@ -1296,6 +1296,8 @@ guest = 4003
             "2026-08-01T00:00:00Z",
             "default",
             None,
+            // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
         )
     }
 
@@ -1679,6 +1681,7 @@ on_conflict = "fail"
             bind_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             namespace: crate::microsandbox::port_registry::default_namespace(),
             source_dir: None,
+            image_tag: None,
         }
     }
 
@@ -2575,6 +2578,8 @@ guest = 4000
             }],
             "2026-08-01T00:00:00Z",
             "default",
+            None,
+            // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
         )
     }

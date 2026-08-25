@@ -166,6 +166,42 @@ mod tests {
         );
     }
 
+    /// A2 stage 2 GC framing (ADR 0032 §Image tags — RESOLVED user decision
+    /// 3): a keep-last-N-pruned tag reads `StoreTag::Gone` at the next
+    /// ensure/build. That is §3.4 ROW 3 verbatim — Fresh|Stale + Gone →
+    /// **Rebuild**, never an error: "a pruned tag = rebuild-from-store on
+    /// recreate". The prune itself never touches a running sandbox and the
+    /// recreate path needs no special case; this test pins the invariant so
+    /// a future matrix edit cannot turn pruned-tag recreation into a hard
+    /// failure.
+    #[test]
+    fn gc_pruned_tag_reads_store_gone_and_rebuilds_never_errors() {
+        // The pruned tag's record still exists (records are only dropped by
+        // the prune's state cleanup) but the store no longer holds the bits.
+        assert_eq!(
+            decide_skew(RecordState::Fresh, StoreTag::Gone, false),
+            SkewDecision::Rebuild,
+            "pruned tag with a surviving record → row 3 Rebuild"
+        );
+        assert_eq!(
+            decide_skew(RecordState::Stale, StoreTag::Gone, false),
+            SkewDecision::Rebuild,
+            "pruned tag with a stale record → row 3 Rebuild"
+        );
+        // If the prune ALSO dropped the record (already-gone cleanup), the
+        // recreate is row 5 Build — still a rebuild-shaped success.
+        assert_eq!(
+            decide_skew(RecordState::Absent, StoreTag::Gone, false),
+            SkewDecision::Build
+        );
+        // --reload-images changes nothing on these rows (force is a no-op on
+        // rows that already rebuild).
+        assert_eq!(
+            decide_skew(RecordState::Fresh, StoreTag::Gone, true),
+            SkewDecision::Rebuild
+        );
+    }
+
     // ---- `--reload-images` force variants (§5.2) ----
 
     /// §5.2: force flips the row-1 SKIP to a forced rebuild.

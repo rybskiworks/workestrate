@@ -174,6 +174,7 @@ pub fn check_and_register_sandbox_lifecycle(
     created_at: &str,
     namespace: &str,
     source_dir: Option<&str>,
+    image_tag: Option<&str>,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     let pairs: Vec<(IpAddr, u16)> = host_ports.iter().map(|p| (bind_ip, *p)).collect();
@@ -189,6 +190,7 @@ pub fn check_and_register_sandbox_lifecycle(
         created_at,
         namespace,
         source_dir,
+        image_tag,
     )
 }
 
@@ -232,6 +234,10 @@ pub fn register_sandbox(
         // The legacy minimal-registration entry point predates the per-dir
         // strategy (ADR 0030 V-addendum §V3): source unknown.
         source_dir: None,
+        // ...and predates the A2 computed tags (ADR 0032 §Image tags): no
+        // image tag is knowable here → unprotected by the GC (its tags are
+        // legacy-shape and never GC candidates anyway).
+        image_tag: None,
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -262,6 +268,7 @@ pub fn register_sandbox_lifecycle(
     created_at: &str,
     namespace: &str,
     source_dir: Option<&str>,
+    image_tag: Option<&str>,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     register_sandbox_lifecycle_locked(
@@ -275,6 +282,7 @@ pub fn register_sandbox_lifecycle(
         created_at,
         namespace,
         source_dir,
+        image_tag,
     )
 }
 
@@ -293,6 +301,7 @@ fn register_sandbox_lifecycle_locked(
     created_at: &str,
     namespace: &str,
     source_dir: Option<&str>,
+    image_tag: Option<&str>,
 ) -> Result<()> {
     // A1: refuse BEFORE writing the record file (pure check, no I/O; the
     // caller already holds the registry lock).
@@ -309,6 +318,7 @@ fn register_sandbox_lifecycle_locked(
         bind_ip,
         namespace: namespace.to_string(),
         source_dir: source_dir.map(|s| s.to_string()),
+        image_tag: image_tag.map(|t| t.to_string()),
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -592,6 +602,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(port, port)],
             "2026-07-23T00:00:00Z",
             "default",
+            None,
             None,
         )
     }
@@ -879,6 +890,7 @@ mod tests {
             "2026-07-30T00:00:00Z",
             "default",
             None,
+            None,
         )
         .unwrap_err();
         assert!(
@@ -926,6 +938,7 @@ mod tests {
             &pairs,
             "2026-07-20T14:05:42Z",
             "default",
+            None,
             None,
         )?;
         let record = find_record(&state_dir, "personal-litellm@canary")?
@@ -977,6 +990,50 @@ mod tests {
             record.source_dir, None,
             "legacy record without source_dir parses as None (ADR 0030 §V3 legacy posture)"
         );
+        assert_eq!(
+            record.image_tag, None,
+            "legacy record without image_tag parses as None (ADR 0032 §Image tags — \
+             unprotected by the GC, legacy tags are never candidates)"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// A2 (ADR 0032 §Image tags): the computed store tag a sandbox was
+    /// created with round-trips through the registry file, and the GC
+    /// protection set reads it back.
+    #[test]
+    fn image_tag_round_trips_through_registry() -> Result<()> {
+        let state_dir = unique_state_dir("image-tag");
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-pi",
+            Some("personal"),
+            "pi",
+            singleton_bind(),
+            &[14000],
+            &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
+            "2026-08-24T00:00:00Z",
+            "default",
+            None,
+            Some("img-pi:personal:aaaaaaaaaaaa"),
+        )?;
+        let record = find_record(&state_dir, "personal-pi")?.expect("record must exist");
+        assert_eq!(
+            record.image_tag.as_deref(),
+            Some("img-pi:personal:aaaaaaaaaaaa"),
+            "the create-time store tag survives the save+load cycle"
+        );
+        // The protection-set derivation (images::gc) sees exactly this tag.
+        let protected: std::collections::BTreeSet<String> =
+            crate::microsandbox::port_registry::list_records(&state_dir)?
+                .into_iter()
+                .filter_map(|r| r.image_tag)
+                .collect();
+        assert_eq!(
+            protected,
+            std::collections::BTreeSet::from(["img-pi:personal:aaaaaaaaaaaa".to_string()])
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -997,6 +1054,7 @@ mod tests {
             "2026-08-24T00:00:00Z",
             "default",
             Some("/home/node/work"),
+            None,
         )?;
         let record = find_record(&state_dir, "pd@work-1234abcd")?.expect("record must exist");
         assert_eq!(record.source_dir.as_deref(), Some("/home/node/work"));
@@ -1012,6 +1070,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(14001, 4001)],
             "2026-08-24T00:00:00Z",
             "default",
+            None,
             None,
         )?;
         let record = find_record(&state_dir, "pd2")?.expect("record must exist");
@@ -1062,6 +1121,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
             "2026-07-20T14:05:42Z",
             "default",
+            None,
             None,
         )?;
         let records = list_records(&state_dir)?;
@@ -1263,6 +1323,7 @@ mod tests {
             bind_ip: ip,
             namespace: crate::microsandbox::port_registry::default_namespace(),
             source_dir: None,
+            image_tag: None,
         }
     }
 
@@ -1330,6 +1391,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
             None,
         )?;
         // Next allocation skips .2 → .3.
@@ -1525,6 +1587,7 @@ mod tests {
             "2026-07-30T00:00:00Z",
             "default",
             None,
+            None,
         )?;
         assert_eq!(prospective_loopback_ip(&state_dir)?, loopback(3));
         assert_eq!(
@@ -1593,6 +1656,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
             None,
         )?;
         // A second registration for the same (127.0.0.2, 4000) must refuse,
@@ -1702,6 +1766,7 @@ mod tests {
             "2026-07-30T00:00:00Z",
             "repo-a",
             None,
+            None,
         )?;
         check_and_register_sandbox_lifecycle(
             &state_dir,
@@ -1713,6 +1778,7 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(5000, 5000)],
             "2026-07-30T00:00:00Z",
             "repo-b",
+            None,
             None,
         )?;
         // Namespace-scoped isolation.

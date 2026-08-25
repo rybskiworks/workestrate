@@ -424,6 +424,8 @@ mod tests {
             "2026-07-20T14:05:42Z",
             "default",
             None,
+            // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
         )?;
         let entries = ps(&dir)?;
         assert_eq!(entries.len(), 1);
@@ -466,6 +468,8 @@ mod tests {
             &pairs,
             "2026-07-20T14:05:42Z",
             "default",
+            None,
+            // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
         )?;
         let entries = ps(&dir)?;
@@ -788,6 +792,7 @@ mod tests {
             bind_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             namespace: crate::microsandbox::port_registry::default_namespace(),
             source_dir: None,
+            image_tag: None,
         }
     }
 

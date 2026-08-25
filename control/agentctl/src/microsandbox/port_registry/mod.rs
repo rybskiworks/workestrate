@@ -57,6 +57,18 @@ pub struct SandboxInstanceRecord {
     /// never source-gone, never a hard fail (A1 interop).
     #[serde(default)]
     pub source_dir: Option<String>,
+    /// A2 (ADR 0032 §Image tags — RESOLVED user decision 3): the immutable
+    /// computed store tag (`<name>:<ctx>:<sha>`) this sandbox was CREATED
+    /// with, recorded ONLY where the image is known at create time (the
+    /// create-from-plan paths; re-start/adopt paths pass `None` — a
+    /// re-adoption does not know the running tag). Feeds the keep-last-N GC
+    /// protection set: every record's `image_tag` is never pruned.
+    /// Conservative by design — stale records over-protect until teardown
+    /// unregisters them. Legacy records without the field parse as `None`
+    /// → unprotected, but their tags are legacy-shape and never GC
+    /// candidates anyway.
+    #[serde(default)]
+    pub image_tag: Option<String>,
 }
 
 /// The default namespace for a registry record: the declaring config repo of

@@ -560,6 +560,17 @@ pub enum SchemasAction {
         check: bool,
     },
 }
+/// Actions for managing nix-layered images in the msb store
+/// (`workestrate images ...`, ADR 0032 §Image tags).
+#[derive(Subcommand)]
+pub enum ImagesAction {
+    /// Manual keep-last-N sweep of computed image tags across ALL state-dir
+    /// groups (ADR 0032 §Image tags — RESOLVED user decision 3). The
+    /// automatic prune-on-load runs on every build; this verb is the manual
+    /// sweep. Running sandboxes are never affected.
+    Gc {},
+}
+
 /// Mount-policy diagnostics (spec 22 §13).
 #[derive(Subcommand)]
 pub enum PolicyAction {

@@ -465,6 +465,7 @@ mod tests {
             bind_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             namespace: crate::microsandbox::port_registry::default_namespace(),
             source_dir: None,
+            image_tag: None,
         }
     }
 
@@ -840,6 +841,7 @@ mod tests {
             "2026-01-01T00:00:00Z",
             "default",
             Some(gone),
+            None,
         )?;
         // Record WITH a live source_dir (the state dir exists).
         crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
@@ -853,6 +855,7 @@ mod tests {
             "2026-01-01T00:00:00Z",
             "default",
             Some(dir.to_str().unwrap()),
+            None,
         )?;
         // Record with NO source_dir (legacy posture — the legacy minimal
         // register writes None).

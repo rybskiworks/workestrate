@@ -535,6 +535,87 @@ impl ImageLoader for MsbCliLoader {
 }
 
 // ---------------------------------------------------------------------------
+// msb tag removal (ADR 0032 §Image tags — keep-last-N GC, RESOLVED decision 3)
+// ---------------------------------------------------------------------------
+
+/// Failure modes of the `msb` tag-removal stage. `Clone` so fakes can queue
+/// responses. Style mirrors [`LoadError`]: named variants carrying the tag,
+/// with Display impls surfacing msb's own diagnosis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoveError {
+    /// msb refused to remove the tag (e.g. a backend-level refusal for a
+    /// reference it considers protected); `detail` carries msb's own
+    /// explanation.
+    Refused { tag: String, detail: String },
+    /// The msb store could not be reached (or the SDK call failed for a
+    /// non-not-found reason); `source` carries the error text.
+    Unreachable { tag: String, source: String },
+}
+
+impl std::fmt::Display for RemoveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RemoveError::Refused { tag, detail } => {
+                write!(f, "msb refused to remove image tag '{tag}': {detail}")
+            }
+            RemoveError::Unreachable { tag, source } => write!(
+                f,
+                "msb image store unreachable while removing tag '{tag}' \
+                 (db unreachable: {source}) — check that msb is installed and its \
+                 database is readable (MSB_HOME), then retry",
+                tag = tag,
+                source = source
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RemoveError {}
+
+/// The msb tag-removal seam (ADR 0032 §Image tags — the keep-last-N GC
+/// cascade's process seam, next to [`ImageLoader`]). Async because the real
+/// backend is the async microsandbox SDK; `&mut self` so fakes can record
+/// calls.
+pub trait ImageRemover {
+    fn remove_tag(
+        &mut self,
+        tag: &str,
+    ) -> impl std::future::Future<Output = Result<(), RemoveError>> + Send;
+}
+
+/// Real backend: `microsandbox::Image::remove(tag, false)` — never forced
+/// (a referenced image is msb's business, not ours). Mapping:
+/// `MicrosandboxError::ImageNotFound(_)` → `Ok(())` (already gone — removal
+/// is idempotent); every other error → [`RemoveError::Unreachable`] with the
+/// SDK's own text.
+pub struct MsbCliRemover;
+
+impl MsbCliRemover {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for MsbCliRemover {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ImageRemover for MsbCliRemover {
+    async fn remove_tag(&mut self, tag: &str) -> Result<(), RemoveError> {
+        match microsandbox::Image::remove(tag, false).await {
+            Ok(()) => Ok(()),
+            Err(microsandbox::MicrosandboxError::ImageNotFound(_)) => Ok(()),
+            Err(e) => Err(RemoveError::Unreachable {
+                tag: tag.to_string(),
+                source: e.to_string(),
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The pipeline (stages 1–4)
 // ---------------------------------------------------------------------------
 
@@ -738,6 +819,47 @@ pub mod test_fakes {
             self.responses
                 .pop_front()
                 .expect("FakeLoader: no queued response")
+        }
+    }
+
+    /// Queue-driven fake remover (the A2 GC seam): each call pops one queued
+    /// response and records the tag. An EMPTY queue answers `Ok(())` — the
+    /// common "removal succeeds" case needs no boilerplate.
+    pub struct FakeRemover {
+        pub responses: VecDeque<Result<(), RemoveError>>,
+        pub calls: Vec<String>,
+    }
+
+    impl FakeRemover {
+        pub fn new() -> Self {
+            Self {
+                responses: VecDeque::new(),
+                calls: Vec::new(),
+            }
+        }
+
+        pub fn push_ok(&mut self) {
+            self.responses.push_back(Ok(()));
+        }
+
+        pub fn push_err(&mut self, err: RemoveError) {
+            self.responses.push_back(Err(err));
+        }
+    }
+
+    impl Default for FakeRemover {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl ImageRemover for FakeRemover {
+        async fn remove_tag(&mut self, tag: &str) -> Result<(), RemoveError> {
+            self.calls.push(tag.to_string());
+            match self.responses.pop_front() {
+                Some(r) => r,
+                None => Ok(()),
+            }
         }
     }
 }

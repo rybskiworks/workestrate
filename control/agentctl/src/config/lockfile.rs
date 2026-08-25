@@ -562,6 +562,7 @@ pub(crate) mod tests {
                 secrets: None,
                 secrets_file: None,
                 age_key_file: None,
+                image_keep_last: None,
             };
         registry.configs.insert(
             "cloned".to_string(),

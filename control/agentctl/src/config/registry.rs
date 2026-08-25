@@ -354,6 +354,7 @@ pub fn register_config(
                 secrets: None,
                 secrets_file: None,
                 age_key_file: None,
+                image_keep_last: None,
             },
         );
         if registry.layers.is_empty() {
@@ -949,6 +950,7 @@ pub(crate) mod tests {
             secrets: None,
             secrets_file: None,
             age_key_file: None,
+            image_keep_last: None,
         }
     }
 
@@ -1025,6 +1027,7 @@ pub(crate) mod tests {
                 secrets: None,
                 secrets_file: None,
                 age_key_file: None,
+                image_keep_last: None,
             },
         );
         save_registry(&registry)?;

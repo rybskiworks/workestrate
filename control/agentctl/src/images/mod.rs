@@ -39,6 +39,13 @@
 //!    `state/images.json` (`state.rs`) INSIDE the lock (spec §3.3
 //!    atomicity).
 //!
+//! A2 stage 2 (ADR 0032 §Image tags — RESOLVED user decision 3) landed the
+//! keep-last-N GC cascade (`gc.rs`): the capsule < repo-entry < settings <
+//! default N resolution, prune-on-load inside `process_target`'s held lock,
+//! the `workestrate images gc` manual sweep, running-sandbox protection via
+//! the port-registry `image_tag` field, and the `ImageRemover` seam
+//! (`pipeline.rs`).
+//!
 //! Two phase-B decisions, recorded here because they diverge from first-cut
 //! tasking (both spec-faithful):
 //!
@@ -53,6 +60,7 @@
 pub mod build_cmd;
 pub mod detect;
 pub mod ensure;
+pub mod gc;
 pub mod lock;
 pub mod pipeline;
 pub mod repo_key;

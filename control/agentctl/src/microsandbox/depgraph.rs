@@ -292,6 +292,8 @@ env = "A_URL"
             "2026-07-30T00:00:00Z",
             "default",
             None,
+            // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
         )
     }
 
@@ -319,6 +321,8 @@ env = "A_URL"
             }],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
+            // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
         )
     }

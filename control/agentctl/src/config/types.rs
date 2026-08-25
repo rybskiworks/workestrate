@@ -37,6 +37,14 @@ pub struct ImageSpec {
     pub binary: Option<BinarySpec>,
     pub baked_files: Option<Vec<BakedFileSpec>>,
     pub features: Option<Vec<String>>,
+    /// Keep-last-N rung for this capsule's nix-layered image (ADR 0032
+    /// §Image tags, RESOLVED user decision 3): the top rung of the cascade
+    /// `crate::images::gc::DEFAULT_IMAGE_KEEP_LAST` < home settings
+    /// (`RegistrySettings.image_keep_last`) < config-repo entry
+    /// (`ConfigRepoEntry.image_keep_last`) < THIS field. First Some wins;
+    /// an explicit 0 is a hard error (the just-loaded tag always counts
+    /// toward N). Enforced at load time by prune-on-load.
+    pub keep_last: Option<u32>,
 }
 
 /// A binary built from source and baked into the image (`image.binary`).
@@ -1330,6 +1338,12 @@ pub struct RegistrySettings {
     /// [`HomeKind`] resolution already determines the active layout.
     #[serde(default)]
     pub home_version: Option<u32>,
+    /// Home-wide keep-last-N rung for nix-layered image tags (ADR 0032
+    /// §Image tags, RESOLVED user decision 3): middle rung of the cascade —
+    /// beats the built-in default, loses to a config-repo entry and a
+    /// workload capsule `keep_last`. `None` = not configured at this rung.
+    #[serde(default)]
+    pub image_keep_last: Option<u32>,
 }
 
 /// One registered config repo in the tool-home registry (`[configs.<name>]`).
@@ -1348,6 +1362,12 @@ pub struct ConfigRepoEntry {
     pub secrets_file: Option<String>, // default ".env.enc"
     #[serde(default)]
     pub age_key_file: Option<String>, // default: SOPS_AGE_KEY_FILE env or default path
+    /// Per-repo keep-last-N rung for nix-layered image tags (ADR 0032
+    /// §Image tags, RESOLVED user decision 3): beats the home-settings and
+    /// built-in-default rungs, loses to a workload capsule `keep_last`.
+    /// `None` = not configured at this rung.
+    #[serde(default)]
+    pub image_keep_last: Option<u32>,
 }
 
 /// A resolved secrets layer for multi-layer secret loading.
