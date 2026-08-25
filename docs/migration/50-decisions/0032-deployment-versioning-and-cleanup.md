@@ -440,9 +440,117 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
   layer gain `context = Some(<branch>)` and slot renaming on next
   invocation. Pinned design; needs a release note / migration note in the
   operating-model doc (A6).
-- **ensure-images pre-flight runs pre-arming**: an inline ref changing the
-  image recipe ensures the home-scoped image while the detached child
-  skips its own ensure. A2 must wire ensure against the substituted view.
+- **ensure-images pre-flight runs pre-arming** — **RESOLVED (2026-08-24,
+  A2 stage 2)**: the override path now lands POST-ARMING and tags under the
+  OVERRIDE's tag context (`ensure_after_arming` reorders the named ensure
+  after dep auto-start + `arm_inline_override`, so it sees the substituted
+  declaration and moves only the `(repo, attr, "feat-x")` pointer); the
+  non-override path was VERIFIED NO-GAP (an ensure never runs while an
+  override is merely pending on up/exec parents — it either runs
+  pre-auto-start with no override in play or post-arming under the override
+  ctx; detached children skip ensure entirely via the token). Flow tests
+  pin both shapes. See the image-GC LANDED addendum below.
 - **Leftover exported `WORKESTRATE_WORKLOAD_REF` + bare `workload up`**:
   a name-matching batch child arms the override (explicit export =
   intent; accepted, recorded).
+
+## Addendum (2026-08-24): image GC LANDED — implementation notes
+
+Landed as commit `16af715` (code + schemas + tests) and this docs commit,
+both on `migration/tool-model`. Stage 1 (`001a2ca`) landed the immutable
+`name:ctx:sha` store tags + the state-dir current-pointer; stage 2 closes
+A2 with the keep-last-N GC cascade (RESOLVED user decision 3). The
+mechanics below are PINNED (they are the recorded contract, verified by
+the test suite):
+
+- **Field-name pins** (all `Option<u32>`, schemars-derived, snake_case;
+  both committed schemas + the template copies regenerated):
+  capsule `ImageSpec.keep_last` → `[workloads.<name>.image] keep_last = N`;
+  home settings `RegistrySettings.image_keep_last` → registry.toml
+  `[settings]`; config-repo entry `ConfigRepoEntry.image_keep_last` →
+  `[configs.<name>]`. Cascade resolver `resolve_keep_last(settings, repo,
+  capsule)`: first Some wins scanning **capsule → repo → settings →
+  default**; ANY explicitly-provided `0` is a hard error naming the field
+  and locus (`keep_last >= 1`: the just-loaded/current tag always counts
+  toward N and is always retained). `DEFAULT_IMAGE_KEEP_LAST = 5`.
+- **Prune trigger point**: in `process_target`, immediately AFTER
+  `run_build_pipeline` returns Ok, INSIDE the still-held per-tag lock,
+  build mode only — never `--check`, never the D1-trust path, never Skip.
+  BOTH `LoadAction` outcomes prune ("prune-on-load"). The capsule rung
+  rides `BuildTarget.keep_last`; repo/settings rungs resolve from the live
+  registry (unreadable → defaults, the advisory posture). Prune failures
+  never fail the load — they aggregate into one stderr note.
+- **Manual-gc cascade scope asymmetry (documented)**: `workestrate images
+  gc` resolves keep_last WITHOUT the capsule rung (settings < repo entry <
+  default 5), because the sweep operates on state-dir groups, not
+  invocations; the capsule rung is enforced at load time by prune-on-load.
+  Repo lookup per group uses the repo identity of the group's
+  lexicographically-first record; canonical-path (unregistered) repo keys
+  match no entry → fall through. Cross-repo same-name groups are
+  pathological (D5-warning territory); this pin is deterministic.
+- **Migration shape = TOLERATE**: no rewrite-on-read. Legacy records stay
+  under legacy keys indefinitely; GC/prune candidates must parse as
+  computed-shape `<name>:<sha>` / `<name>:<ctx>:<sha>` with a 12-char
+  lowercase-alphanumeric sha segment (`split_computed_tag`). Legacy
+  declared tags (e.g. `img-pi:latest`) NEVER parse → never candidates,
+  never touched. Known edge (accepted): a user-DECLARED tag that happens
+  to look computed-shape would parse as a candidate — shape is the only
+  discriminator by design.
+- **Running-sandbox protection mechanics**: `SandboxInstanceRecord` gains
+  additive `#[serde(default)] image_tag: Option<String>`, populated ONLY
+  where the image is known at create (the create-from-plan path records
+  `plan.image`; `start_existing` re-starts and reconcile re-registrations
+  pass None — documented). Protection set for any prune/gc = every
+  `image_tag` across ALL `${state_dir}/var/run/*.json` records.
+  Conservative: stale records over-protect until teardown unregisters
+  them. Legacy records parse as None → unprotected, but their tags are
+  legacy-shape and never candidates anyway. An UNVERIFIABLE protection set
+  (unreadable port registry) makes gc REFUSE the sweep and prune-on-load
+  skip pruning — fail-closed in the don't-prune direction.
+- **Selection + ordering**: group candidate tags by `(name, ctx)` (tags
+  carry no repo; records do); order by `ImageRecord.loaded_at` DESCENDING
+  (missing/empty stamp → oldest; a tag in several records takes its newest
+  stamp and appears once), tie-break tag ASC. Retain the newest N; NEVER
+  pruned: any pointer-referenced tag (pointers never dangle), any
+  running-protected tag (reported as skipped-running), the newest tag.
+- **Removal seam**: `ImageRemover { fn remove_tag(&mut self, tag) -> impl
+  Future<Output = Result<(), RemoveError>> + Send }` next to `ImageLoader`
+  in pipeline.rs; `RemoveError::{Refused, Unreachable}` (Display names
+  msb, LoadError style). Real backend `MsbCliRemover` calls
+  `microsandbox::Image::remove(tag, false)`; `ImageNotFound` maps to Ok
+  (idempotent). Execution: probe → Present → remove → drop the record
+  under every `<repo>#<tag>` key + any pointer whose `.tag == tag`;
+  Gone → same state cleanup counted "already gone"; Err → aggregate and
+  continue. State saves: ONE fresh-reload save per batch under the held
+  lock (prune-on-load) / one save per pruned tag under its own per-tag
+  `ImageTagLock` (gc).
+- **GC verb**: `workestrate images gc` (`ImagesAction::Gc`,
+  `cmd_images_gc(json)`). Text: summary line `images gc: swept G group(s),
+  pruned P tag(s), skipped S running, errors E` + one line per group
+  `name[:ctx] kept=<k> pruned=[…] skipped-running=[…] gone=[…]`
+  (deterministic order). `--json`: bare-array envelope of `{group, kept,
+  pruned, skipped_running, already_gone, errors}`. Exit nonzero AFTER
+  sweeping everything if any removal errored (cleanup-family aggregate
+  rule).
+- **Ensure-seam verification result**: non-override home-scoped resolution
+  VERIFIED NO-GAP (see the resolved open question above); override-path
+  flow test pins `<attr>:feat-x:<sha>` tagging + only-the-override-pointer
+  movement under ARMED override; home-context flow test pins the
+  three-segment tag + `(repo, attr, Some(ctx))` pointer when an active
+  context is set. Skew invariant pinned from the GC side: a pruned tag
+  reads `StoreTag::Gone` → §3.4 row 3 Rebuild, never an error
+  ("pruned tag = rebuild-from-store on recreate"), with a
+  recreate-after-prune flow test proving the current-pointer survives.
+
+### Open questions surfaced by the A2 stage-2 implementation (2026-08-24)
+
+- **Untracked store tags are invisible to the sweep**: `images gc` sweeps
+  groups derived from `images.json` records only. A computed-shape tag
+  present in the msb store but absent from the state file (loaded manually
+  or by an older tool version) is never a candidate and accumulates until
+  it is either recorded (D1 trust on next ensure) or removed manually.
+  Extend the sweep to enumerate the msb store listing?
+- **Cross-repo same-name groups have no warning surface yet**: the pin is
+  deterministic (lexicographically-first record's repo identity decides
+  the rung lookup), but a D5-style warning naming pathological
+  cross-repo same-name groups at sweep time is unbuilt.
