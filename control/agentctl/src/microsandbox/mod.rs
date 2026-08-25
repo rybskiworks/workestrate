@@ -5,6 +5,7 @@ pub(crate) mod mounts;
 pub mod plan;
 pub mod policy_file;
 pub mod port_registry;
+pub mod provenance;
 pub mod runtime;
 pub mod secrets;
 pub mod secrets_loader;

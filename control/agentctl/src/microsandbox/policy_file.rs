@@ -72,10 +72,31 @@ pub fn policy_file_rel(instance: &str, mount_slug: &str) -> PathBuf {
 
 /// Convert a guest mount path into its policy-file slug.
 ///
-/// The root guest path `/` produces an empty slug; validation normally makes
-/// this unusual, but callers should use a non-empty fallback if needed.
+/// The mapping is INJECTIVE (the §9r collision fix): plain sanitization
+/// (`/` → `_`) is lossy — `/da/ta` and `/da_ta` both sanitize to `da_ta`,
+/// so two DISTINCT guest paths would map to the same
+/// `<instance>/da_ta.json` policy file and silently clobber each other
+/// (last writer wins; exact-duplicate guests are already rejected at
+/// validation, but slug-colliding distinct paths were not).
+///
+/// Rule: when the sanitized form contains `_` — either because separators
+/// collapsed or because the path literally contains an underscore, either of
+/// which could collide — the slug gains a `-<8-hex fnv1a64(raw guest)>`
+/// suffix over the RAW guest path, making distinct guests produce distinct
+/// files. Simple paths whose sanitized form has no underscore
+/// (`/workspace` → `workspace`) keep their UNCHANGED names (host-smoke
+/// assets reference plain slugs — do not churn them). The root guest `/`
+/// produces the empty slug as before (existing documented edge).
 pub fn mount_slug(guest: &str) -> String {
-    guest.strip_prefix('/').unwrap_or(guest).replace('/', "_")
+    let base = guest.strip_prefix('/').unwrap_or(guest).replace('/', "_");
+    if base.contains('_') {
+        format!(
+            "{base}-{:08x}",
+            crate::microsandbox::provenance::fnv1a64(guest.as_bytes())
+        )
+    } else {
+        base
+    }
 }
 
 /// Atomically write a compiled program as restrictive JSON beneath the
@@ -201,5 +222,57 @@ mod tests {
         assert!(!rel
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir)));
+    }
+
+    // ---- §9r slug-collision fix: mount_slug is injective ----
+
+    /// THE regression: `/da/ta` and `/da_ta` both sanitized to `da_ta`, so
+    /// two DIFFERENT guest paths collided on `<instance>/da_ta.json` and the
+    /// last writer silently clobbered the first. With the suffix rule they
+    /// map to DISTINCT files.
+    #[test]
+    fn mount_slug_colliding_distinct_paths_map_to_distinct_files() {
+        let slashed = mount_slug("/da/ta");
+        let literal = mount_slug("/da_ta");
+        assert_ne!(
+            slashed, literal,
+            "distinct guest paths must not share one policy-file slug"
+        );
+        assert_ne!(
+            policy_file_rel("inst", &slashed),
+            policy_file_rel("inst", &literal),
+            "the colliding guests must resolve to distinct policy files"
+        );
+        // Both keep the sanitized stem as a recognizable prefix.
+        assert!(slashed.starts_with("da_ta-"), "got {slashed}");
+        assert!(literal.starts_with("da_ta-"), "got {literal}");
+    }
+
+    /// Simple paths whose sanitized form has no underscore keep their
+    /// UNCHANGED legacy names (host-smoke assets reference plain slugs).
+    #[test]
+    fn mount_slug_simple_paths_stay_unsuffixed_and_stable() {
+        assert_eq!(mount_slug("/workspace"), "workspace");
+        assert_eq!(mount_slug("plain"), "plain");
+        // The documented root edge is unchanged.
+        assert_eq!(mount_slug("/"), "");
+        // Deterministic across calls (the suffix is a pure content hash).
+        assert_eq!(mount_slug("/a/b_c"), mount_slug("/a/b_c"));
+    }
+
+    /// Suffixed slugs still satisfy the fork loader's rel-token path rules
+    /// (no absolute path, no parent-dir components) — the suffix adds only
+    /// `[0-9a-f-]`.
+    #[test]
+    fn mount_slug_suffixed_tokens_satisfy_loader_path_rules() {
+        for guest in ["/da/ta", "/da_ta", "/x_y/z_w", "/_"] {
+            let rel = policy_file_rel("slot@id", &mount_slug(guest));
+            assert!(!rel.is_absolute(), "guest {guest}: {rel:?}");
+            assert!(
+                !rel.components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir)),
+                "guest {guest}: {rel:?}"
+            );
+        }
     }
 }
