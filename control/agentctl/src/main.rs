@@ -20,7 +20,7 @@ use workestrate::commands::doctor::cmd_doctor;
 use workestrate::commands::home::cmd_home;
 use workestrate::commands::init::{cmd_init, cmd_new};
 use workestrate::commands::lifecycle::{
-    cmd_clean, cmd_down_all, dispatch_agent, dispatch_service, resolve_dependent_instance_id,
+    cmd_clean, cmd_down_ladder, dispatch_agent, dispatch_service, resolve_dependent_instance_id,
     workload_route, WorkloadRoute,
 };
 use workestrate::commands::migrate::cmd_migrate_home;
@@ -116,11 +116,36 @@ enum Commands {
     /// List running workestrate sandbox instances (reads the port registry).
     /// Use --json for machine-readable output.
     Ps,
-    /// Stop every running workestrate sandbox across all workloads/contexts.
-    /// Destructive; confirms unless --yes.
-    #[command(alias = "down")]
-    DownAll {
-        #[arg(long, help = "Skip the interactive confirmation", alias = "all")]
+    /// Stop sandboxes at an explicit scope (ADR 0032 addendum §Down scope
+    /// ladder: instance < workload < context < config-ref < home <
+    /// everything). Exactly ONE scope selector per invocation; bare `down`
+    /// is a usage error naming the ladder. The instance/workload rungs stay
+    /// on `workload <name> down [--instance|--all-instances]`.
+    /// Destructive; confirms unless --yes (--everything is DOUBLE-gated).
+    #[command(alias = "down-all")]
+    Down {
+        /// Home scope: every workestrate-managed target (back-compat with
+        /// the former `down-all` behavior).
+        #[arg(long, conflicts_with_all = ["context", "config_ref", "everything"])]
+        all: bool,
+        /// Context scope: every managed target whose record context
+        /// (primary) or `<ctx>-` slot prefix (corroborating) matches.
+        #[arg(long, value_name = "CTX", conflicts_with_all = ["all", "config_ref", "everything"])]
+        context: Option<String>,
+        /// Config-ref scope: a VALIDATED branch-shaped ref; resolves as the
+        /// context the branch implies (a sha implies nothing and is refused).
+        #[arg(long, value_name = "REF", conflicts_with_all = ["all", "context", "everything"])]
+        config_ref: Option<String>,
+        /// Everything scope (DOUBLE-GATED): give it TWICE plus the standard
+        /// yes-gate; stops EVERY msb sandbox including unmanaged ones.
+        #[arg(
+            long,
+            action = clap::ArgAction::Count,
+            conflicts_with_all = ["all", "context", "config_ref"]
+        )]
+        everything: u8,
+        /// Skip the interactive confirmation.
+        #[arg(long, help = "Skip the interactive confirmation")]
         yes: bool,
     },
     /// Remove state-dir contents (workspaces, var, run). Does not touch config-repos/sources/config.
@@ -760,7 +785,21 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::SecretsSchema => cmd_secrets_schema(),
         Commands::GenerateEnvExample { output } => cmd_generate_env_example(output.as_deref()),
         Commands::Ps => cmd_ps(cli.json).await,
-        Commands::DownAll { yes } => cmd_down_all(yes, cli.json).await,
+        Commands::Down {
+            all,
+            context,
+            config_ref,
+            everything,
+            yes,
+        } => {
+            let scope = workestrate::microsandbox::runtime::down_scope::resolve_cli_scope(
+                all,
+                context.as_deref(),
+                config_ref.as_deref(),
+                everything,
+            )?;
+            cmd_down_ladder(scope, everything, yes, cli.json).await
+        }
         Commands::Clean { yes } => cmd_clean(yes, cli.json),
         Commands::Images { action } => match action {
             // Manual keep-last-N sweep (ADR 0032 §Image tags — RESOLVED
@@ -2320,28 +2359,128 @@ mod tests {
     fn cli_exposes_lifecycle_subcommands() {
         let cmd = Cli::command();
         let names: Vec<_> = cmd.get_subcommands().map(|s| s.get_name()).collect();
-        for expected in ["ps", "down-all", "generate-schema"] {
+        for expected in ["ps", "down", "generate-schema"] {
             assert!(names.contains(&expected), "missing subcommand: {expected}");
         }
     }
 
-    /// Root `down` is a HIDDEN clap alias of `down-all` (ADR 0027 shim
-    /// shape): `workestrate down --yes`, `workestrate down --all`, and the
-    /// primary `workestrate down-all --yes` (with its hidden `--all` arg
-    /// alias) all parse into the same `DownAll { yes: true }` action.
+    /// Root `down` carries the ADR 0032 addendum §Down scope ladder; the
+    /// former `down-all` verb survives as a HIDDEN clap alias (back-compat):
+    /// `workestrate down --all` and `workestrate down-all --all` both parse
+    /// into `Commands::Down { all: true, .. }` (the home scope), and the
+    /// other selectors parse to their own rungs.
     #[test]
-    fn root_down_alias_parses_as_down_all() {
-        for argv in [
-            ["workestrate", "down", "--yes"],
-            ["workestrate", "down", "--all"],
-            ["workestrate", "down-all", "--yes"],
-            ["workestrate", "down-all", "--all"],
-        ] {
-            let cli = Cli::try_parse_from(argv).expect("root down/down-all must parse");
+    fn root_down_ladder_scopes_parse() {
+        let home_cases: [&[&str]; 4] = [
+            &["workestrate", "down", "--all"],
+            &["workestrate", "down-all", "--all"],
+            &["workestrate", "down", "--all", "--yes"],
+            &["workestrate", "down-all", "--all", "--yes"],
+        ];
+        for argv in home_cases {
+            let cli = Cli::try_parse_from(argv).expect("home-scope down must parse");
             match cli.command {
-                Commands::DownAll { yes } => assert!(yes, "yes must be set for: {argv:?}"),
-                _ => panic!("expected Commands::DownAll for: {argv:?}"),
+                Commands::Down {
+                    all,
+                    context,
+                    config_ref,
+                    everything,
+                    yes,
+                } => {
+                    assert!(all, "--all must be set for: {argv:?}");
+                    assert!(context.is_none() && config_ref.is_none());
+                    assert_eq!(everything, 0);
+                    assert_eq!(yes, argv.contains(&"--yes"), "yes flag for: {argv:?}");
+                }
+                _ => panic!("expected Commands::Down for: {argv:?}"),
             }
+        }
+        // Context / config-ref / everything rungs.
+        let cli = Cli::try_parse_from(["workestrate", "down", "--context", "personal"])
+            .expect("context scope must parse");
+        match cli.command {
+            Commands::Down { context, .. } => assert_eq!(context.as_deref(), Some("personal")),
+            _ => panic!("expected Commands::Down"),
+        }
+        let cli = Cli::try_parse_from(["workestrate", "down-all", "--config-ref", "feat-x"])
+            .expect("config-ref scope must parse (alias kept)");
+        match cli.command {
+            Commands::Down { config_ref, .. } => {
+                assert_eq!(config_ref.as_deref(), Some("feat-x"))
+            }
+            _ => panic!("expected Commands::Down"),
+        }
+        // The DOUBLE GATE's first half is a Count: once parses (the gate
+        // refuses later), twice parses to count 2.
+        let cli = Cli::try_parse_from(["workestrate", "down", "--everything"])
+            .expect("single --everything parses; the gate refuses it");
+        match cli.command {
+            Commands::Down { everything, .. } => assert_eq!(everything, 1),
+            _ => panic!("expected Commands::Down"),
+        }
+        let cli = Cli::try_parse_from([
+            "workestrate",
+            "down",
+            "--everything",
+            "--everything",
+            "--yes",
+        ])
+        .expect("doubled --everything must parse");
+        match cli.command {
+            Commands::Down {
+                everything, yes, ..
+            } => {
+                assert_eq!(everything, 2);
+                assert!(yes);
+            }
+            _ => panic!("expected Commands::Down"),
+        }
+    }
+
+    /// Exactly ONE scope selector per invocation (ADR 0032 addendum §Down
+    /// scope ladder): clap conflicts_with rejects any pair of selectors.
+    #[test]
+    fn root_down_scope_selectors_conflict() {
+        let cases: [&[&str]; 6] = [
+            &["workestrate", "down", "--all", "--context", "x"],
+            &["workestrate", "down", "--all", "--config-ref", "y"],
+            &["workestrate", "down", "--all", "--everything"],
+            &["workestrate", "down", "--context", "x", "--config-ref", "y"],
+            &["workestrate", "down", "--context", "x", "--everything"],
+            &["workestrate", "down", "--config-ref", "y", "--everything"],
+        ];
+        for argv in cases {
+            assert!(
+                Cli::try_parse_from(argv).is_err(),
+                "selectors must conflict: {argv:?}"
+            );
+        }
+    }
+
+    /// Bare `down` with NO selector parses at the clap layer but is a USAGE
+    /// error naming the ladder (resolve_cli_scope) — it never guesses a
+    /// scope. The per-workload `workload down <name>` surface is unchanged.
+    #[test]
+    fn root_down_bare_requires_a_selector_naming_the_ladder() {
+        let cli = Cli::try_parse_from(["workestrate", "down"]).expect("bare down parses");
+        match cli.command {
+            Commands::Down {
+                all,
+                context,
+                config_ref,
+                everything,
+                ..
+            } => {
+                assert!(!all && context.is_none() && config_ref.is_none() && everything == 0);
+            }
+            _ => panic!("expected Commands::Down"),
+        }
+        let err =
+            workestrate::microsandbox::runtime::down_scope::resolve_cli_scope(false, None, None, 0)
+                .unwrap_err()
+                .to_string();
+        for scope in ["--all", "--context", "--config-ref", "--everything"] {
+            assert!(err.contains(scope), "usage error must list {scope}: {err}");
         }
     }
 

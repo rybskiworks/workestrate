@@ -22,6 +22,10 @@ mod spawn;
 pub(crate) mod time;
 mod wait;
 
+// ADR 0032 addendum §Down scope ladder: the scope model, classification
+// engine, enumeration, and resolution for the ladder-scoped `down`.
+pub mod down_scope;
+
 pub use network::network_plan_to_policy;
 pub use ps::probe_liveness;
 pub use ps::PsKind;
@@ -385,18 +389,38 @@ pub async fn down(name: &str) -> Result<()> {
     }
 }
 
-/// Stop a single instance by name (state-dir-explicit). The legacy
-/// [`down`] wraps this with the resolved state dir for back-compat.
-pub async fn down_instance(state_dir: &Path, instance: &str) -> DownResult {
-    match down_one(state_dir, instance).await {
-        Ok(DownOutcome::Stopped) => DownResult {
+/// The hardened teardown path for EVERY down-ladder scope (ADR 0032
+/// addendum §Down scope ladder / §Cleanup family): stop → wait-exit →
+/// remove → unregister → policy-dir wipe → sandbox-dir removal, by REUSING
+/// the ONE instance-generic [`teardown_for_replace`] sequence (never
+/// duplicated). Stopped vs NotFound is decided by a `Sandbox::get`
+/// pre-check INSIDE this function; the posture stays never-refuses — a
+/// missing sandbox still walks the full state-clearing sequence. An msb
+/// that is UNREACHABLE (a hard `Sandbox::get` error, not NotFound) surfaces
+/// as [`DownStatus::Error`] WITHOUT clearing any state — the fail-closed
+/// posture the legacy single-instance down always had.
+pub async fn down_hardened(state_dir: &Path, instance: &str) -> DownResult {
+    let precheck = Sandbox::get(instance).await;
+    match &precheck {
+        Err(MicrosandboxError::SandboxNotFound(_)) => {}
+        Err(e) => {
+            return DownResult {
+                instance: instance.to_string(),
+                status: DownStatus::Error,
+                message: Some(e.to_string()),
+            };
+        }
+        Ok(_) => {}
+    }
+    let existed = precheck.is_ok();
+    match teardown_for_replace(state_dir, instance).await {
+        Ok(()) => DownResult {
             instance: instance.to_string(),
-            status: DownStatus::Stopped,
-            message: None,
-        },
-        Ok(DownOutcome::NotFound) => DownResult {
-            instance: instance.to_string(),
-            status: DownStatus::NotFound,
+            status: if existed {
+                DownStatus::Stopped
+            } else {
+                DownStatus::NotFound
+            },
             message: None,
         },
         Err(e) => DownResult {
@@ -407,27 +431,12 @@ pub async fn down_instance(state_dir: &Path, instance: &str) -> DownResult {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum DownOutcome {
-    Stopped,
-    NotFound,
-}
-
-async fn down_one(state_dir: &Path, instance: &str) -> Result<DownOutcome> {
-    match Sandbox::get(instance).await {
-        Ok(handle) => {
-            stop_and_remove(handle).await?;
-            let _ = super::port_registry::unregister_sandbox(state_dir, instance);
-            let _ = super::policy_file::remove_policy_dir(instance);
-            Ok(DownOutcome::Stopped)
-        }
-        Err(MicrosandboxError::SandboxNotFound(_)) => {
-            let _ = super::port_registry::unregister_sandbox(state_dir, instance);
-            let _ = super::policy_file::remove_policy_dir(instance);
-            Ok(DownOutcome::NotFound)
-        }
-        Err(e) => Err(e.into()),
-    }
+/// Stop a single instance by name (state-dir-explicit). The hardened path
+/// ([`down_hardened`]) since the A4 down-ladder unification: the legacy
+/// single-instance down previously skipped the sandbox-dir-removal step and
+/// now walks the SAME six-step sequence every ladder scope uses.
+pub async fn down_instance(state_dir: &Path, instance: &str) -> DownResult {
+    down_hardened(state_dir, instance).await
 }
 
 /// Stop every instance whose workload matches `workload`. Used by
@@ -435,7 +444,9 @@ async fn down_one(state_dir: &Path, instance: &str) -> Result<DownOutcome> {
 ///
 /// Teardown is namespace-agnostic: `down --all-instances` stops every
 /// instance of the workload regardless of its declaring-repo namespace (the
-/// namespace is a RESOLUTION filter, not a teardown scope).
+/// namespace is a RESOLUTION filter, not a teardown scope). Routes through
+/// [`down_instance`] → [`down_hardened`] (ADR 0032 addendum §Down scope
+/// ladder: every rung uses the hardened path).
 pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<DownResult>> {
     let records =
         super::port_registry::list_records_for_workload_any_namespace(state_dir, workload)?;
@@ -446,7 +457,9 @@ pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<
     Ok(results)
 }
 
-/// Stop every workestrate-tracked instance. Used by `workestrate down --all`.
+/// Stop every workestrate-tracked instance. Used by `workestrate down --all`
+/// (the HOME rung of the ADR 0032 addendum §Down scope ladder). Routes
+/// through [`down_instance`] → [`down_hardened`].
 pub async fn down_all(state_dir: &Path) -> Result<Vec<DownResult>> {
     let records = super::port_registry::list_records(state_dir)?;
     let mut results = Vec::with_capacity(records.len());
@@ -751,6 +764,141 @@ mod tests {
                 .exists(),
             "teardown_for_replace must unregister the port-registry record"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// down_hardened with an UNREACHABLE msb db must surface
+    /// DownStatus::Error WITHOUT clearing any state (the fail-closed posture
+    /// the legacy single-instance down always had): the registry record and
+    /// the sandbox dir survive untouched, because the pre-check hard-errors
+    /// BEFORE the teardown sequence runs. Same MSB_HOME-under-a-file trick
+    /// as the Error test above (deterministic in any ordering; the SDK's
+    /// process-global DB pool is never initialized).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see Error test
+    async fn down_hardened_errors_and_preserves_state_when_msb_db_unreachable() -> anyhow::Result<()>
+    {
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-hardened-db-blocked-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        // `<MSB_HOME>/db` is a regular FILE, so the SDK's
+        // `create_dir_all(<MSB_HOME>/db)` fails (ENOTDIR) and `Sandbox::get`
+        // hard-errors (never NotFound); the DB pool is never initialized.
+        // Unlike the down_all_instances Error test (which points MSB_HOME at
+        // a plain file), this test also creates sandbox DIRS, so MSB_HOME
+        // itself must stay a real directory.
+        std::fs::write(tmp.join("db"), b"x")?;
+        let _msb = MsbHomeGuard::set(&tmp);
+
+        let dir = unique_state_dir_runtime("down-hardened-unreachable");
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        let lingering = sandbox_dir("personal-litellm");
+        std::fs::create_dir_all(&lingering)?;
+
+        let result = super::down_hardened(&dir, "personal-litellm").await;
+        assert!(
+            matches!(result.status, DownStatus::Error),
+            "expected Error when the msb db is unreachable; got {:?} ({:?})",
+            result.status,
+            result.message,
+        );
+        assert!(
+            dir.join("var")
+                .join("run")
+                .join("personal-litellm.json")
+                .exists(),
+            "the registry record must NOT be cleared when msb is unreachable"
+        );
+        assert!(
+            lingering.exists(),
+            "the sandbox dir must NOT be removed when msb is unreachable"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    /// THE SIX-STEP ASSERTION (ADR 0032 addendum §Down scope ladder:
+    /// hardened path at every scope): with a writable, EMPTY msb home the
+    /// pre-check resolves NotFound and `down_hardened` still walks the FULL
+    /// sequence — port-registry record cleared, policy dir wiped, AND the
+    /// lingering sandbox DIR removed (the step the legacy single-instance
+    /// down skipped before the A4 unification). Mirrors the
+    /// `#[ignore]`'d empty-db test above: run alone with `--ignored`
+    /// (process-global DB pool pinning).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see Error test
+    #[ignore = "shares the SDK process-global DB pool with the Error tests; run alone with --ignored"]
+    async fn down_hardened_notfound_walks_the_full_six_step_sequence() -> anyhow::Result<()> {
+        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-hardened-empty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let _msb = MsbHomeGuard::set(&tmp);
+
+        let dir = unique_state_dir_runtime("down-hardened-notfound");
+        crate::microsandbox::port_registry::register_sandbox(
+            &dir,
+            "personal-litellm",
+            Some("personal"),
+            "litellm",
+            &[4000],
+        )?;
+        // The lingering artifacts all three state stores would leave behind.
+        let lingering = sandbox_dir("personal-litellm");
+        std::fs::create_dir_all(&lingering)?;
+        let program = crate::mount_policy::compile(Vec::new())?;
+        let slug = crate::microsandbox::policy_file::mount_slug("/data");
+        let policy_path =
+            crate::microsandbox::policy_file::policy_file_path("personal-litellm", &slug);
+        crate::microsandbox::policy_file::write_policy_file("personal-litellm", &slug, &program)?;
+
+        let result = super::down_hardened(&dir, "personal-litellm").await;
+        assert!(
+            matches!(result.status, DownStatus::NotFound),
+            "expected NotFound on an empty-but-openable msb db; got {:?} ({:?})",
+            result.status,
+            result.message,
+        );
+        assert!(
+            !dir.join("var")
+                .join("run")
+                .join("personal-litellm.json")
+                .exists(),
+            "step 4: the port-registry record must be unregistered"
+        );
+        assert!(
+            !policy_path.exists(),
+            "step 5: the policy dir must be wiped"
+        );
+        assert!(
+            !lingering.exists(),
+            "step 6: the sandbox dir must be removed (the step the legacy \
+             single-instance down used to skip)"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())

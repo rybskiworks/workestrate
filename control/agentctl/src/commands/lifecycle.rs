@@ -1,5 +1,6 @@
 //! Workload lifecycle: instance-spec construction, service/agent dispatch,
-//! raw-args action parsing, and teardown (`down`, `down --all`, `clean`).
+//! raw-args action parsing, and teardown (`workload <name> down`, the
+//! ladder-scoped `down <scope>`, `clean`).
 
 use anyhow::Result;
 use std::io::Write;
@@ -577,62 +578,183 @@ pub fn report_down_aggregate(results: &[crate::microsandbox::runtime::DownResult
     Ok(())
 }
 
-pub async fn cmd_down_all(yes: bool, json: bool) -> Result<()> {
-    use crate::microsandbox::runtime::{down_all, DownStatus};
-    if !yes {
-        // Read a single line of confirmation so piped input ("y\n") does not
-        // block waiting for EOF — the old read_to_string hung interactive and
-        // scripted use. Mirrors cmd_clean's single-line confirm; the prompt is
-        // shown only on a tty, but a line is read in every mode so a piped
-        // "y"/"yes" confirms and an empty/non-tty stdin aborts. Accepted tokens
-        // are unified to `y`/`yes` (case-insensitive), matching cmd_clean.
-        use std::io::IsTerminal;
-        if std::io::stdin().is_terminal() {
-            eprint!("This will stop EVERY running workestrate sandbox. Continue? [y/N] ");
-            std::io::stderr().flush()?;
-        }
-        use std::io::BufRead;
-        let answer = std::io::stdin()
-            .lock()
-            .lines()
-            .next()
-            .transpose()?
-            .unwrap_or_default();
-        let confirmed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
-        if !confirmed {
-            if json {
-                eprintln!(
-                    "{}",
-                    serde_json::to_string(&serde_json::json!({
-                        "error": {
-                            "kind": "aborted",
-                            "message": "down --all not confirmed"
-                        }
-                    }))?
-                );
-            } else {
-                eprintln!("aborted");
-            }
-            std::process::exit(1);
-        }
+/// The pinned interactive prompt for the EVERYTHING scope (ADR 0032
+/// addendum §Down scope ladder double gate): names the widened blast
+/// radius — msb sandboxes workestrate does NOT manage are included.
+const EVERYTHING_PROMPT: &str = "This will stop EVERY msb sandbox INCLUDING ones \
+     workestrate does not manage. Continue? [y/N] ";
+
+/// Read ONE line of confirmation (the down-all posture): the prompt shows
+/// only on a tty, but a line is read in every mode so a piped "y"/"yes"
+/// confirms and an empty/non-tty stdin aborts. Accepted tokens are unified
+/// to `y`/`yes` (case-insensitive), matching cmd_clean. A refusal prints
+/// the JSON abort envelope (or plain "aborted") and exits 1.
+fn confirm_or_abort(prompt: &str, abort_message: &str, json: bool) {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        eprint!("{prompt}");
+        std::io::stderr().flush().ok();
     }
+    use std::io::BufRead;
+    let answer = std::io::stdin()
+        .lock()
+        .lines()
+        .next()
+        .transpose()
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let confirmed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+    if !confirmed {
+        abort_not_confirmed(abort_message, json);
+    }
+}
+
+/// Print the aborted envelope (JSON mode) or plain "aborted" and exit 1 —
+/// the shared refusal exit for every down-scope confirmation.
+fn abort_not_confirmed(message: &str, json: bool) -> ! {
+    if json {
+        eprintln!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "error": { "kind": "aborted", "message": message }
+            }))
+            .unwrap_or_else(|_| "{\"error\":{\"kind\":\"aborted\"}}".to_string())
+        );
+    } else {
+        eprintln!("aborted");
+    }
+    std::process::exit(1);
+}
+
+/// Interactive confirmation for the EVERYTHING scope's yes-gate half:
+/// `Some(true/false)` from a tty prompt, `None` when stdin is not a tty
+/// (no confirmation available → [`everything_gate`] hard-refuses, the
+/// cmd_clean posture).
+fn everything_interactive_confirm() -> Option<bool> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    eprint!("{EVERYTHING_PROMPT}");
+    std::io::stderr().flush().ok();
+    use std::io::BufRead;
+    let answer = std::io::stdin()
+        .lock()
+        .lines()
+        .next()
+        .transpose()
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    Some(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+/// The per-scope confirmation prompt for the MANAGED rungs (context /
+/// config-ref / home). Home keeps the exact legacy down-all wording.
+fn managed_scope_prompt(scope: &crate::microsandbox::runtime::down_scope::DownScope) -> String {
+    use crate::microsandbox::runtime::down_scope::DownScope;
+    match scope {
+        DownScope::Home => {
+            "This will stop EVERY running workestrate sandbox. Continue? [y/N] ".to_string()
+        }
+        DownScope::Context(ctx) => format!(
+            "This will stop every workestrate-managed sandbox in context \
+             '{ctx}'. Continue? [y/N] "
+        ),
+        DownScope::ConfigRef(r) => format!(
+            "This will stop every workestrate-managed sandbox derived from \
+             config ref '{r}' (context '{r}'). Continue? [y/N] "
+        ),
+        DownScope::Everything => EVERYTHING_PROMPT.to_string(),
+    }
+}
+
+/// `workestrate down <scope>` — the ADR 0032 addendum §Down scope ladder:
+/// enumerate the candidates for the resolved scope, classify them, resolve,
+/// and tear EVERY selected target down through the hardened path
+/// ([`down_hardened`]: stop → wait-exit → remove → unregister → policy-dir
+/// → sandbox-dir). Per-target outcomes are reported; ANY failure exits
+/// nonzero (`report_down_aggregate`). An EMPTY selection is Ok and reported
+/// as `0 target(s)` — never an error.
+///
+/// Gates: the managed rungs (context/config-ref/home) take the standard
+/// single yes-gate (interactive prompt; piped y confirms; `--yes` skips).
+/// EVERYTHING is DOUBLE-GATED: the flag must appear twice AND pass the
+/// yes-gate, whose non-interactive form hard-refuses without `--yes`
+/// (cmd_clean posture).
+pub async fn cmd_down_ladder(
+    scope: crate::microsandbox::runtime::down_scope::DownScope,
+    everything_count: u8,
+    yes: bool,
+    json: bool,
+) -> Result<()> {
+    use crate::microsandbox::runtime::down_hardened;
+    use crate::microsandbox::runtime::down_scope::{
+        enumerate_all_candidates, enumerate_managed, everything_gate, known_config_refs,
+        resolve_scope, validate_config_ref, DownScope,
+    };
+
+    // ---- gates ----
+    if let DownScope::Everything = scope {
+        // Yes-gate half (interactive decline aborts exactly like the managed
+        // rungs) — but ONLY once the doubled-flag half would even pass, so an
+        // under-counted invocation gets its usage error without a prompt.
+        let confirmed = if yes || everything_count < 2 {
+            None
+        } else {
+            everything_interactive_confirm()
+        };
+        if confirmed == Some(false) {
+            abort_not_confirmed("down everything not confirmed", json);
+        }
+        everything_gate(everything_count, yes, confirmed)?;
+    } else if !yes {
+        confirm_or_abort(
+            &managed_scope_prompt(&scope),
+            &format!("down {} not confirmed", scope.description()),
+            json,
+        );
+    }
+
+    // ---- config-ref fail-closed validation (BEFORE any teardown) ----
+    if let DownScope::ConfigRef(r) = &scope {
+        let known = known_config_refs()?;
+        validate_config_ref(r, &known)?;
+    }
+
+    // ---- enumeration + resolution ----
     let state_dir = crate::config::resolve_state_dir();
-    let results = down_all(&state_dir).await?;
+    let targets = match &scope {
+        DownScope::Everything => enumerate_all_candidates(&state_dir).await?,
+        _ => enumerate_managed(&state_dir).await?,
+    };
+    let selected = resolve_scope(&scope, &targets);
+
+    // ---- hardened teardown at every scope ----
+    let mut results = Vec::with_capacity(selected.len());
+    for t in &selected {
+        results.push(down_hardened(&state_dir, &t.instance).await);
+    }
+
+    // ---- outcomes: ONE scope header line + per-target lines / JSON ----
+    let description = scope.description();
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&down_results_json(&results))?
+            serde_json::to_string_pretty(&crate::json_out::down_scope_results_json(
+                &description,
+                &results
+            ))?
         );
     } else {
+        println!("down {description}: {} target(s)", results.len());
         print_down_results_text(&results);
     }
-    let had_error = results
-        .iter()
-        .any(|r| matches!(r.status, DownStatus::Error));
-    if had_error {
-        anyhow::bail!("one or more instances failed to stop");
-    }
-    Ok(())
+    report_down_aggregate(&results)
 }
 
 /// `workestrate clean` — remove the CONTENTS of the volatile state-dir
@@ -740,6 +862,42 @@ pub fn cmd_clean(yes: bool, json: bool) -> Result<()> {
 )]
 mod tests {
     use super::*;
+
+    // ---- ADR 0032 addendum §Down scope ladder: outcome aggregation ----
+
+    /// Partial failure (one Error among Stopped) → aggregate error (nonzero
+    /// exit) — while every per-target outcome is still printed first
+    /// (`print_down_results_text` renders the WHOLE slice unfiltered; the
+    /// aggregate check runs only after). Pure pin of the exit rule.
+    #[test]
+    fn report_down_aggregate_fails_on_any_error_among_stopped() {
+        use crate::microsandbox::runtime::{DownResult, DownStatus};
+        let results = vec![
+            DownResult {
+                instance: "personal-litellm".to_string(),
+                status: DownStatus::Stopped,
+                message: None,
+            },
+            DownResult {
+                instance: "work-pi".to_string(),
+                status: DownStatus::Error,
+                message: Some("msb unreachable".to_string()),
+            },
+            DownResult {
+                instance: "team-worker".to_string(),
+                status: DownStatus::NotFound,
+                message: None,
+            },
+        ];
+        let err = report_down_aggregate(&results).unwrap_err().to_string();
+        assert!(
+            err.contains("failed to stop"),
+            "any Error must fail the aggregate: {err}"
+        );
+        // All-stopped and empty selections are Ok (empty = 0 target(s), exit 0).
+        assert!(report_down_aggregate(&results[..1]).is_ok());
+        assert!(report_down_aggregate(&[]).is_ok());
+    }
 
     // ---- ADR 0021 CLI flag-parsing tests ----
 

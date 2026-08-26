@@ -31,6 +31,26 @@ pub fn down_results_json(
     results.iter().map(down_result_json).collect()
 }
 
+/// ADR 0032 addendum §Down scope ladder: the ladder-scoped `down` envelope.
+/// The per-result objects are IDENTICAL to the legacy bare-array shape;
+/// they are wrapped with an additive `scope` field naming the resolved
+/// scope (the same string as the text header line).
+#[derive(serde::Serialize)]
+pub struct DownScopeResultsJson {
+    pub scope: String,
+    pub results: Vec<DownResultJson>,
+}
+
+pub fn down_scope_results_json(
+    scope: &str,
+    results: &[crate::microsandbox::runtime::DownResult],
+) -> DownScopeResultsJson {
+    DownScopeResultsJson {
+        scope: scope.to_string(),
+        results: down_results_json(results),
+    }
+}
+
 #[derive(serde::Serialize)]
 pub struct PsPortJson {
     host: u16,
