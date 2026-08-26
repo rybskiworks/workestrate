@@ -264,7 +264,7 @@ pub fn sanitize_instance_id(raw: &str) -> Result<String> {
 // ---- msb sandbox-name encoding (ADR 0030 addendum 2026-08-26) ----
 //
 // The microsandbox SDK validates sandbox names at every create/get
-// (microsandbox-types 0.6.8 `lib/validation.rs::validate_sandbox_name`):
+// (microsandbox-types 0.6.15 `lib/validation.rs::validate_sandbox_name`):
 // non-empty, at most 128 BYTES, first char ASCII alphanumeric, every char
 // ASCII alphanumeric or '.' '-' '_'. Workestrate identities are
 // `<slot>@<id>` (parallel / per-dir / scoped-dep shapes) and the `@` is
@@ -278,12 +278,12 @@ pub fn sanitize_instance_id(raw: &str) -> Result<String> {
 // existing singleton homes keep their exact on-disk sandbox names.
 
 /// Maximum length of an msb sandbox name in BYTES — the mirror of
-/// microsandbox-types 0.6.8 `MAX_SANDBOX_NAME_BYTES`, pinned here so the
+/// microsandbox-types 0.6.15 `MAX_SANDBOX_NAME_BYTES`, pinned here so the
 /// encoder can clamp without depending on SDK internals.
 pub const MAX_MSB_NAME_BYTES: usize = 128;
 
 /// true iff `name` passes the microsandbox SDK's own sandbox-name rule —
-/// the exact mirror of microsandbox-types 0.6.8
+/// the exact mirror of microsandbox-types 0.6.15
 /// `lib/validation.rs::validate_sandbox_name`: non-empty, at most
 /// [`MAX_MSB_NAME_BYTES`] (128) bytes, first char ASCII alphanumeric, and
 /// every char ASCII alphanumeric or one of '.' '-' '_'. Pure string check;

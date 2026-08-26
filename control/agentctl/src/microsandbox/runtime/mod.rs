@@ -59,7 +59,7 @@ use super::slots;
 const REMOVE_RETRY_POLL: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Hard deadline for the remove-retry loop in [`stop_and_remove`]. Composes
-/// with the fork SDK's stop grace (fork @158b06cf: `stop()`/`kill()` await
+/// with the fork SDK's stop grace (fork @79dc8a19: `stop()`/`kill()` await
 /// the recorded process for up to 30s before SIGKILL escalation): the
 /// workestrate-side deadline must comfortably exceed that grace so the two
 /// never deadlock each other, AND accommodate a slow multi-GB writeback
@@ -644,7 +644,7 @@ mod tests {
 
     /// Composition invariant on the constants themselves: the kill threshold
     /// must sit strictly between one poll and the deadline, and the deadline
-    /// must exceed the fork SDK's 30s stop grace (@158b06cf) so the
+    /// must exceed the fork SDK's 30s stop grace (@79dc8a19) so the
     /// workestrate-side wait composes with the SDK-side await instead of
     /// expiring first.
     #[test]
