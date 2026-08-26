@@ -650,3 +650,104 @@ recorded contract, verified by the test suite):
 
 None new. (The parked promote question stands unchanged; `down --stale`
 remains future work riding the stamps landed here.)
+
+## Addendum (2026-08-26): down scope ladder LANDED — implementation notes
+
+Landed as commit `e6e220b` (code + tests) and this docs commit, both on
+`migration/tool-model`. The mechanics below are PINNED (they are the
+recorded contract, verified by the test suite):
+
+- **CLI shape**: `Commands::DownAll { yes }` is REPLACED by
+  `Commands::Down { all, context, config_ref, everything, yes }` carrying
+  the ladder. Exactly ONE scope selector per invocation (`--all` ∨
+  `--context <ctx>` ∨ `--config-ref <ref>` ∨ `--everything`; clap
+  `conflicts_with` rejects any pair, exit 2). Bare `down` with NO selector
+  is a USAGE ERROR naming the ladder and all four selectors — it never
+  guesses a scope (the old bare `down-all` required confirmation anyway).
+  `down-all` survives as a HIDDEN clap alias: `down --all` /
+  `down-all --all` = the home scope (back-compat with today's down-all
+  behavior). NOTE the deliberate break: `down-all --yes` (no selector) is
+  now a usage error — scripts move to `down --all --yes`. The
+  per-workload `workload <name> down [--instance|--all-instances]` surface
+  is UNCHANGED — it IS the instance/workload rungs.
+- **Double-gate UX pin (`--everything`)**: TWO INDEPENDENT confirmations.
+  (a) The flag must appear TWICE (`ArgAction::Count >= 2`; count == 1 →
+  usage error "--everything was given once; repeat it …", raised BEFORE
+  any prompt so an under-counted invocation never asks). (b) The standard
+  yes-gate: interactive tty → the DISTINCT widened-blast-radius prompt
+  ("This will stop EVERY msb sandbox INCLUDING ones workestrate does not
+  manage. Continue? [y/N]"); `--yes` skips it entirely; non-interactive
+  stdin WITHOUT `--yes` HARD-REFUSES (cmd_clean posture — unlike the
+  managed rungs, no piped-"y" escape). Escape hatch: `--yes`.
+- **Context-scope evidence order**: RECORD context is PRIMARY (record says
+  `<ctx>` → included iff equal); slot-prefix `<ctx>-` is CORROBORATING
+  (used only when the record is absent or carries no context); a record
+  naming ANOTHER context EXCLUDES despite a slot-prefix match (pinned).
+  Zero matches → EMPTY outcome, Ok, reported as `0 target(s)` — never an
+  error.
+- **Config-ref v1 pin**: records carry NO config-ref stamp, so v1
+  config-ref scope = VALIDATED-BRANCH CONTEXT SCOPE (after validation it
+  resolves exactly as the context the branch name implies). Validation is
+  fail-closed at the command boundary, BEFORE any teardown: a 40-hex sha
+  is refused ("a sha does not imply a context; name a branch or use
+  --context"); an unknown ref hard-errors LISTING the known refs — the
+  union of registered entries' `ref` fields (registry config.toml) and the
+  lockfile's entry refs + per-entry ref KEYS (workestrate.lock v2), sorted
+  + deduped.
+- **Classification edge pins**: (1) bare-name-vs-context ambiguity —
+  context scope keys on RECORD context / slot PREFIX only; an instance
+  whose whole bare name EQUALS the context name (no dash, no record
+  context) is NOT matched (the trailing dash of `<ctx>-` is the
+  discriminator); a workload NAMED like its context (`staging-staging`)
+  matches normally. (2) Unmanaged candidates (present in the msb listing
+  but zero evidence) exist ONLY under `--everything`: they are torn down
+  too and REPORTED with `evidence: []` — the report stays honest about
+  what was foreign. (3) Degraded-enumeration posture: an SDK
+  `Sandbox::list()` error DEGRADES to the `<msb_home>/sandboxes/*`
+  dir-listing fallback with one stderr warning — an unreachable store must
+  not brick `down --context`; pagination is bounded (hostile repeating
+  cursors cannot hang a sweep).
+- **Hardened-path unification**: new `runtime::down_hardened(state_dir,
+  instance)` routes EVERY teardown through `teardown_for_replace`'s exact
+  six-step sequence (stop → wait-exit → remove → unregister → policy-dir →
+  sandbox-dir; reused, not duplicated). The legacy single-instance
+  `down_one` SKIPPED the sandbox-dir removal step — fixed by rewiring
+  `down_instance` onto `down_hardened`, so `workload <name> down`,
+  `down --all-instances`, `down_all`, and every ladder scope now walk the
+  SAME six steps. Stopped-vs-NotFound comes from a `Sandbox::get`
+  pre-check inside `down_hardened`; the never-refuses posture stands
+  (NotFound still clears all state). An UNREACHABLE msb stays a fail-closed
+  `Error` result that clears NOTHING (pre-existing posture preserved and
+  pinned). The policy-wipe-before-create ordering invariant comments are
+  untouched.
+- **Outcomes + exit**: ONE scope header line (`down context 'personal':
+  3 target(s)`; home renders as `down --all (home): N target(s)`) then the
+  per-target lines as before; JSON keeps the per-result objects byte-shape
+  and wraps them additively as `{scope, results}`. Exit nonzero iff ANY
+  target Errored (`report_down_aggregate` reused); empty selection exits 0.
+- **clean UNCHANGED**: hygiene-only stands (state-dir contents wipe;
+  never tears down VMs; non-interactive refusal without --yes). The
+  archive-cache GC bounds for `clean` remain UNBUILT — noted for A6.
+- **README drift (accepted)**: the top-level README CLI rows still
+  describe the old `down-all` verb shape; docs sweeps are separate commits
+  by convention, so the drift is recorded here rather than silently fixed.
+
+### Open questions surfaced by the A4 implementation (2026-08-26)
+
+- **No config-ref stamp on registry records**: config-ref scope cannot
+  select by provenance — a sandbox created under `feat-x` but whose record
+  context was derived differently is invisible to `--config-ref feat-x`
+  unless its slot/record context carries the branch name. Stamping
+  `config_ref` on records (and selecting by it) is the natural v2.
+- **Context scope vs foreign-namespace records**: resolution ignores the
+  declaring-repo namespace entirely (context is the filter). Two repos
+  declaring same-named workloads in one context are swept together —
+  correct for teardown, but worth a warning surface if namespaces collide.
+- **`--everything` pagination bound**: the msb listing loop caps at 1000
+  pages of 100 (100k sandboxes) and proceeds with what it gathered plus a
+  warning. A streaming/cursor-resync strategy is unbuilt; fine until
+  someone runs ten thousand sandboxes.
+- **Stale consumer schema copies in live homes**: `schemas update --check`
+  flags pre-A2 home copies (machine state, outside the repo); a
+  `schemas update` pass or release note belongs in A6's operating-model
+  doc, not this branch.
