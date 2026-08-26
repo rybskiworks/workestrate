@@ -3061,8 +3061,14 @@ command = []
     /// re-filling the slot before the take.
     #[test]
     fn standalone_construction_namespace_is_declaring_repo_key() -> Result<()> {
-        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS};
+        use crate::config::test_support::{
+            uniq_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS, PROVENANCE_STORAGE_TEST_LOCK,
+        };
         let _lock = ENV_TEST_LOCK.lock().unwrap();
+        // This test DRAINS the process-global provenance slot (take_provenance
+        // below) and re-fills it via load_config; hold the shared storage lock
+        // so it cannot steal the slot from merge.rs's storage tests mid-test.
+        let _storage_lock = PROVENANCE_STORAGE_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(HOME_ENV_KEYS);
         let home = uniq_dir("ns-standalone");
         std::fs::create_dir_all(&home)?;

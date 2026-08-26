@@ -1138,14 +1138,14 @@ mod tests {
     /// A9 regression: a value set on one OS thread must be readable on a
     /// DIFFERENT thread (a plain thread_local would return None there — the
     /// exact failure mode on a tokio multi-thread runtime after task
-    /// migration). Serial execution is guaranteed by an env-mutex-style lock
-    /// shared with the other storage tests below (these tests mutate global
-    /// state, so they must not interleave).
-    static STORAGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// migration). Serial execution is guaranteed by a shared test-only lock
+    /// (crate::config::test_support) so these tests cannot interleave with
+    /// OTHER modules' tests that mutate the same process-global stores.
+    use crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK;
 
     #[test]
     fn provenance_set_from_another_thread_is_visible() {
-        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        let _guard = PROVENANCE_STORAGE_TEST_LOCK.lock().unwrap();
         set_provenance(None); // isolate from any earlier test state
         std::thread::spawn(|| set_provenance(Some(sample_provenance())))
             .join()
@@ -1157,7 +1157,7 @@ mod tests {
 
     #[test]
     fn secret_provenance_set_from_another_thread_is_visible() {
-        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        let _guard = PROVENANCE_STORAGE_TEST_LOCK.lock().unwrap();
         set_secret_provenance(None);
         std::thread::spawn(|| set_secret_provenance(Some(sample_provenance())))
             .join()
@@ -1174,9 +1174,21 @@ mod tests {
         );
     }
 
+    /// A9 regression: provenance must survive await-points on a tokio
+    /// MULTI-THREAD runtime (task migration across worker threads).
+    ///
+    /// Isolation note: this test holds [`PROVENANCE_STORAGE_TEST_LOCK`],
+    /// which serializes the DIRECT mutators of the process-global stores
+    /// (the other storage tests here and deps.rs's drain-pin test). Tests
+    /// that mutate the slots only INDIRECTLY (any concurrent test calling
+    /// `load_config` or `ConfigWorkload::new`) are NOT serialized by it, so
+    /// a theoretical interference window remains between
+    /// `set_provenance(Some(..))` and `take_provenance()` below; that window
+    /// is µs-scale (100 yield_now awaits), matching this test's rare,
+    /// load-dependent flake history.
     #[test]
     fn provenance_survives_tokio_multi_thread_migration() {
-        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        let _guard = PROVENANCE_STORAGE_TEST_LOCK.lock().unwrap();
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .build()
@@ -1199,7 +1211,7 @@ mod tests {
     /// if any of these changed shape this would fail to compile.
     #[test]
     fn provenance_function_signatures_stable() {
-        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        let _guard = PROVENANCE_STORAGE_TEST_LOCK.lock().unwrap();
         let _: fn(Option<Provenance>) = set_provenance;
         let _: fn() -> Option<Provenance> = take_provenance;
         let _: fn(Option<Provenance>) = set_secret_provenance;
@@ -1249,7 +1261,7 @@ mod tests {
     /// (same tokio multi-thread migration hazard as provenance, WP10/A9).
     #[test]
     fn layer_dirs_set_from_another_thread_is_visible() {
-        let _guard = STORAGE_TEST_LOCK.lock().unwrap();
+        let _guard = PROVENANCE_STORAGE_TEST_LOCK.lock().unwrap();
         set_layer_dirs(None);
         let mut sample = HashMap::new();
         sample.insert(

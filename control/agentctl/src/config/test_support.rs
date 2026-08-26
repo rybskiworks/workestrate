@@ -18,6 +18,18 @@ use std::path::{Path, PathBuf};
 /// `WORKESTRATE_CONFIG_DIR` or similar env vars would otherwise race.
 pub static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Global lock for tests that mutate the process-global provenance stores
+/// (`merge::MERGED_PROVENANCE`, `merge::SECRET_PROVENANCE`,
+/// `merge::LAYER_DIRS`) directly — set/take around assertions on the slot
+/// contents. Serializes the DIRECT mutators across test modules (the stores
+/// are process-global, so a concurrent `take_provenance()` from another
+/// module's test can steal a value mid-test). Tests that only mutate them
+/// INDIRECTLY (via `load_config` / `ConfigWorkload::new`) are not serialized
+/// by this lock — see `merge::tests::
+/// provenance_survives_tokio_multi_thread_migration` for the residual-risk
+/// note.
+pub static PROVENANCE_STORAGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
 /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
 /// previous state on drop. Holds a global lock so env-var tests do not race
