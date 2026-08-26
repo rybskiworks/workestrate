@@ -1,7 +1,7 @@
 # microsandbox — msb CLI + runtime libraries, built from the user's fork.
 #
 # Source provenance: fork branch fix/filesystem-agentd-path-override, pinned
-# via the `microsandbox-fork` flake input at validated rev 74919059. The fork is a 0.6.8 workspace
+# via the `microsandbox-fork` flake input at validated rev 79dc8a19. The fork is a 0.6.15 workspace
 # (edition 2024, resolver 3). msb is built from source via buildRustPackage
 # with the fenix-pinned toolchain (same as agentctl.nix) for host-toolchain
 # consistency. agentd is built separately (nix/packages/agentd.nix, musl

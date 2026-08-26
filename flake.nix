@@ -10,7 +10,7 @@
     };
 
     microsandbox-fork = {
-      # Pinned fork rev 158b06cf0e6d532541a6f4b4a512639c11393cf5 — the merge
+      # Pinned fork rev 79dc8a197f2e58fadddb79ce427a204606c6c9de — the merge
       # of fix/stop-process-exit-wait onto develop (0-conflict --no-ff merge
       # on top of 205a7b95), verified pushed to origin via
       # `git ls-remote origin develop`. Moves to `develop` tracking or a
@@ -27,7 +27,7 @@
       # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
       # wait → hard MicrosandboxError::Runtime). The transient build-time
       # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
-      url = "github:georgrybski/microsandbox/158b06cf0e6d532541a6f4b4a512639c11393cf5";
+      url = "github:georgrybski/microsandbox/79dc8a197f2e58fadddb79ce427a204606c6c9de";
       flake = false;
     };
   };
