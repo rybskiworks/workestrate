@@ -38,17 +38,20 @@ pub const EXPECTED_SCHEMA_VERSION: u32 = 1;
 /// metacharacters / leading hyphen.
 ///
 /// "Escape nothing — reject instead" is the policy. This is a thin wrapper
-/// around [`validate_identifier`] shared with [`validate_workload_name`] in
-/// main.rs (mirrored here to keep config-domain logic in config.rs without a
-/// cross-module dependency from main.rs's validator).
+/// around [`validate_identifier`] — the ONE shared identifier rule backing
+/// every name gate: this create-time check, [`validate_workload_name`]
+/// (`workestrate workload new`, commands/init.rs), and the load-time
+/// workload-key gate in [`validate_config`]. One implementation means the
+/// load-time and create-time rules cannot drift.
 pub fn validate_config_name(name: &str) -> Result<()> {
     validate_identifier(name, "config name")
 }
 
-/// Shared identifier validator. `label` is interpolated into error messages
-/// ("workload name ...", "config name ..."). Pattern:
-/// `^[a-z0-9][a-z0-9-]{0,62}$`.
-fn validate_identifier(name: &str, label: &str) -> Result<()> {
+/// THE ONE shared identifier validator (crate-visible so commands/init.rs's
+/// `validate_workload_name` delegates here instead of carrying a drifted
+/// copy). `label` is interpolated into error messages ("workload name ...",
+/// "config name ..."). Pattern: `^[a-z0-9][a-z0-9-]{0,62}$`.
+pub(crate) fn validate_identifier(name: &str, label: &str) -> Result<()> {
     if name.is_empty() {
         anyhow::bail!("{label} cannot be empty");
     }

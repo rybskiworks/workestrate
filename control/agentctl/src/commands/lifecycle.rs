@@ -584,29 +584,71 @@ pub fn report_down_aggregate(results: &[crate::microsandbox::runtime::DownResult
 const EVERYTHING_PROMPT: &str = "This will stop EVERY msb sandbox INCLUDING ones \
      workestrate does not manage. Continue? [y/N] ";
 
-/// Read ONE line of confirmation (the down-all posture): the prompt shows
-/// only on a tty, but a line is read in every mode so a piped "y"/"yes"
-/// confirms and an empty/non-tty stdin aborts. Accepted tokens are unified
-/// to `y`/`yes` (case-insensitive), matching cmd_clean. A refusal prints
-/// the JSON abort envelope (or plain "aborted") and exits 1.
-fn confirm_or_abort(prompt: &str, abort_message: &str, json: bool) {
+/// Outcome of the ONE stdin-confirm read shared by every destructive verb's
+/// yes-gate (`down` managed rungs, `down --everything`, `clean`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfirmAnswer {
+    /// The answer token confirms (`y`/`yes`, case-insensitive, trimmed).
+    Confirm,
+    /// An explicit non-confirm token — decline.
+    Decline,
+    /// No answer given: EOF on stdin, or an empty/whitespace-only line (the
+    /// `[y/N]` default-No). Aborts exactly like a decline.
+    Eof,
+    /// A genuine stdin READ FAILURE — surfaced to the caller, never
+    /// swallowed into a silent abort. Carries the rendered error text (an
+    /// `io::Error` is neither `Clone` nor `Eq`, which the pure-decision
+    /// tests need).
+    Error(String),
+}
+
+/// Pure decision core for [`read_confirm_answer`]: classify one line-read
+/// result against the unified confirm tokens (`y`/`yes`, case-insensitive,
+/// trimmed — matching every destructive verb). Split out so the confirm
+/// contract is unit-testable without stdin plumbing.
+fn classify_confirm_answer(read: std::io::Result<Option<String>>) -> ConfirmAnswer {
+    match read {
+        Ok(Some(line)) => match line.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => ConfirmAnswer::Confirm,
+            "" => ConfirmAnswer::Eof,
+            _ => ConfirmAnswer::Decline,
+        },
+        Ok(None) => ConfirmAnswer::Eof,
+        Err(e) => ConfirmAnswer::Error(e.to_string()),
+    }
+}
+
+/// THE ONE stdin-confirm reader for every destructive verb: the prompt shows
+/// only on a tty, but ONE line is read in every mode so a piped "y"/"yes"
+/// confirms and an empty/EOF stream declines. A genuine read ERROR comes
+/// back as [`ConfirmAnswer::Error`] so the caller can surface it instead of
+/// masquerading it as a decline.
+fn read_confirm_answer(prompt: &str) -> ConfirmAnswer {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
         eprint!("{prompt}");
         std::io::stderr().flush().ok();
     }
     use std::io::BufRead;
-    let answer = std::io::stdin()
-        .lock()
-        .lines()
-        .next()
-        .transpose()
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let confirmed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
-    if !confirmed {
-        abort_not_confirmed(abort_message, json);
+    let read = std::io::stdin().lock().lines().next().transpose();
+    classify_confirm_answer(read)
+}
+
+/// The managed-rung yes-gate (`down <scope>`): prompt + read via
+/// [`read_confirm_answer`]. Confirm proceeds (`Ok`). An explicit decline or
+/// EOF-as-decline prints the JSON abort envelope (or plain "aborted") and
+/// exits 1. A genuine stdin READ ERROR propagates as `Err` — distinct
+/// message, standard error envelope under `--json` — instead of the old
+/// silent-abort behavior.
+fn confirm_or_abort(prompt: &str, abort_message: &str, json: bool) -> Result<()> {
+    match read_confirm_answer(prompt) {
+        ConfirmAnswer::Confirm => Ok(()),
+        ConfirmAnswer::Decline | ConfirmAnswer::Eof => {
+            abort_not_confirmed(abort_message, json);
+        }
+        ConfirmAnswer::Error(e) => {
+            anyhow::bail!("could not read confirmation from stdin: {e}");
+        }
     }
 }
 
@@ -628,29 +670,22 @@ fn abort_not_confirmed(message: &str, json: bool) -> ! {
 }
 
 /// Interactive confirmation for the EVERYTHING scope's yes-gate half:
-/// `Some(true/false)` from a tty prompt, `None` when stdin is not a tty
-/// (no confirmation available → [`everything_gate`] hard-refuses, the
-/// cmd_clean posture).
-fn everything_interactive_confirm() -> Option<bool> {
+/// `Ok(Some(true/false))` from a tty prompt, `Ok(None)` when stdin is not a
+/// tty (no confirmation available → [`everything_gate`] hard-refuses, the
+/// cmd_clean posture). A genuine stdin READ ERROR propagates as `Err`
+/// instead of masquerading as a decline.
+fn everything_interactive_confirm() -> Result<Option<bool>> {
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
-        return None;
+        return Ok(None);
     }
-    eprint!("{EVERYTHING_PROMPT}");
-    std::io::stderr().flush().ok();
-    use std::io::BufRead;
-    let answer = std::io::stdin()
-        .lock()
-        .lines()
-        .next()
-        .transpose()
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    Some(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    match read_confirm_answer(EVERYTHING_PROMPT) {
+        ConfirmAnswer::Confirm => Ok(Some(true)),
+        ConfirmAnswer::Decline | ConfirmAnswer::Eof => Ok(Some(false)),
+        ConfirmAnswer::Error(e) => {
+            anyhow::bail!("could not read confirmation from stdin: {e}");
+        }
+    }
 }
 
 /// The per-scope confirmation prompt for the MANAGED rungs (context /
@@ -706,7 +741,7 @@ pub async fn cmd_down_ladder(
         let confirmed = if yes || everything_count < 2 {
             None
         } else {
-            everything_interactive_confirm()
+            everything_interactive_confirm()?
         };
         if confirmed == Some(false) {
             abort_not_confirmed("down everything not confirmed", json);
@@ -717,7 +752,7 @@ pub async fn cmd_down_ladder(
             &managed_scope_prompt(&scope),
             &format!("down {} not confirmed", scope.description()),
             json,
-        );
+        )?;
     }
 
     // ---- config-ref fail-closed validation (BEFORE any teardown) ----
@@ -763,6 +798,9 @@ pub async fn cmd_down_ladder(
 /// or any
 /// config file. Interactive confirmation unless `--yes`; non-interactive
 /// stdin without `--yes` is a hard refusal (same policy as `down --all`).
+/// Declines route through [`abort_not_confirmed`] so every destructive verb
+/// emits the same JSON abort envelope; stdin read errors propagate instead
+/// of aborting silently.
 pub fn cmd_clean(yes: bool, json: bool) -> Result<()> {
     use std::io::IsTerminal;
     let state_dir = config::resolve_state_dir();
@@ -770,22 +808,18 @@ pub fn cmd_clean(yes: bool, json: bool) -> Result<()> {
 
     if !yes {
         if std::io::stdin().is_terminal() {
-            eprint!(
+            let prompt = format!(
                 "This will remove contents of {}/{{workspaces,var,run}}. Continue? [y/N] ",
                 state_dir.display()
             );
-            std::io::stderr().flush()?;
-            use std::io::BufRead;
-            let answer = std::io::stdin()
-                .lock()
-                .lines()
-                .next()
-                .transpose()?
-                .unwrap_or_default();
-            let confirmed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
-            if !confirmed {
-                eprintln!("aborted");
-                std::process::exit(1);
+            match read_confirm_answer(&prompt) {
+                ConfirmAnswer::Confirm => {}
+                ConfirmAnswer::Decline | ConfirmAnswer::Eof => {
+                    abort_not_confirmed("clean not confirmed", json);
+                }
+                ConfirmAnswer::Error(e) => {
+                    anyhow::bail!("could not read confirmation from stdin: {e}");
+                }
             }
         } else {
             anyhow::bail!("refusing to clean in non-interactive mode without --yes");
@@ -862,6 +896,49 @@ pub fn cmd_clean(yes: bool, json: bool) -> Result<()> {
 )]
 mod tests {
     use super::*;
+
+    // ---- destructive-verb confirm contract (classify_confirm_answer) ----
+
+    /// The ONE confirm-token rule shared by every destructive verb:
+    /// `y`/`yes` (case-insensitive, trimmed) confirms; any other non-empty
+    /// token declines; an empty line or EOF is EOF-as-decline (the `[y/N]`
+    /// default); a read ERROR is its own variant so it can surface instead
+    /// of masquerading as a decline.
+    #[test]
+    fn classify_confirm_answer_matrix() {
+        use super::{classify_confirm_answer, ConfirmAnswer};
+        let ok = |line: &str| Ok(Some(line.to_string()));
+        // Confirm tokens.
+        for line in ["y", "Y", "yes", "YES", "Yes", " y ", "\tyes\t"] {
+            assert_eq!(
+                classify_confirm_answer(ok(line)),
+                ConfirmAnswer::Confirm,
+                "'{line}' must confirm"
+            );
+        }
+        // Explicit declines.
+        for line in ["n", "N", "no", "NO", "abort", "y es", "yes!", "0"] {
+            assert_eq!(
+                classify_confirm_answer(ok(line)),
+                ConfirmAnswer::Decline,
+                "'{line}' must decline"
+            );
+        }
+        // EOF-as-decline: no answer at all, or the bare [y/N] default.
+        assert_eq!(classify_confirm_answer(Ok(None)), ConfirmAnswer::Eof);
+        assert_eq!(classify_confirm_answer(ok("")), ConfirmAnswer::Eof);
+        assert_eq!(classify_confirm_answer(ok("   ")), ConfirmAnswer::Eof);
+        // A genuine read error is distinguishable from every decline shape —
+        // the anomaly fix: it must never be flattened into a silent abort.
+        let err = classify_confirm_answer(Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pipe closed",
+        )));
+        assert!(
+            matches!(err, ConfirmAnswer::Error(ref m) if m.contains("pipe closed")),
+            "a read error must surface as Error carrying the io message; got {err:?}"
+        );
+    }
 
     // ---- ADR 0032 addendum §Down scope ladder: outcome aggregation ----
 

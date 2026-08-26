@@ -65,38 +65,14 @@ pub fn cmd_init(url: Option<&str>) -> Result<()> {
 ///
 /// "Escape nothing — reject instead" is the policy: workload names flow into
 /// both filesystem paths and TOML keys, so the safe set is the intersection.
+///
+/// Delegates to [`crate::config::validation::validate_identifier`] — the ONE
+/// shared identifier rule also enforced at config-load time
+/// (`validate_config`'s workload-key gate) and by `validate_config_name` —
+/// so the create-time and load-time rules cannot drift. Trailing hyphens
+/// remain allowed BY DESIGN (the pattern permits them; see the test pin).
 pub fn validate_workload_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        anyhow::bail!("workload name cannot be empty");
-    }
-    if name.len() > 63 {
-        anyhow::bail!(
-            "workload name cannot exceed 63 characters (got {}): '{}'",
-            name.len(),
-            name
-        );
-    }
-    let mut chars = name.chars();
-    let first_ok = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    if !first_ok {
-        anyhow::bail!(
-            "workload name must start with [a-z0-9]; \
-             pattern: ^[a-z0-9][a-z0-9-]{{0,62}}$; got: '{name}'"
-        );
-    }
-    for c in chars {
-        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-' {
-            anyhow::bail!(
-                "workload name contains invalid character '{}' (allowed: [a-z0-9-]); \
-                 pattern: ^[a-z0-9][a-z0-9-]{{0,62}}$; got: '{}'",
-                c,
-                name
-            );
-        }
-    }
-    Ok(())
+    crate::config::validation::validate_identifier(name, "workload name")
 }
 
 pub fn cmd_new(name: &str, kind: &str) -> Result<()> {
