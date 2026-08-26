@@ -357,10 +357,9 @@ Stated plainly, each verified against the current tree:
   a wider (e.g. 16-hex) or keyed suffix hash, fully reversible
   percent-style escape encoding, or an upstream widening of the SDK's
   `validate_sandbox_name` charset.
-* **README verb-shape drift (accepted).** The top-level README still
-  describes the old `down-all` verb shape (its CLI row near line 330 and
-  the verb table row near line 819); docs sweeps are separate commits by
-  convention, so the drift is recorded rather than silently fixed here.
+* **README verb-shape drift (RESOLVED 2026-08-26).** The README CLI rows
+  described the old `down-all` verb shape; the README sweep updated them to
+  the as-built ladder. No longer applicable.
 * **Ignored-test inventory (exact, counted at `bffa481` — five total).**
   Two DB-pool lib tests in `src/microsandbox/runtime/mod.rs` run only with
   `--ignored` (the SDK pins a process-global database pool):

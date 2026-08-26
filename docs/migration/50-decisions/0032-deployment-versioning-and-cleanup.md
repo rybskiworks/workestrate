@@ -746,6 +746,8 @@ recorded contract, verified by the test suite):
 - **README drift (accepted)**: the top-level README CLI rows still
   describe the old `down-all` verb shape; docs sweeps are separate commits
   by convention, so the drift is recorded here rather than silently fixed.
+  (Resolved by the README verb-shape sweep: the README CLI rows now
+  describe the as-built ladder.)
 
 ### Open questions surfaced by the A4 implementation (2026-08-26)
 

@@ -323,11 +323,23 @@ workestrate workload up litellm --instance canary   # parallel canary on 127.0.0
 workestrate workload up litellm --new               # auto-named canary on 127.0.0.N:4000
 
 # Listing + teardown
-workestrate ps                               # list running instances for the active context
+workestrate ps                               # list running instances (all contexts)
 workestrate ps --json                        # machine-readable (agents, CI)
 workestrate workload down litellm --instance canary   # stop one parallel instance
 workestrate workload down litellm --all-instances     # stop singleton + all parallel instances
-workestrate down [--yes]                  # stop everything (down-all is the canonical name; --all is accepted)
+workestrate down --all [--yes]            # home scope: every managed target
+#
+# Teardown ladder (narrowest → widest):
+#   instance < workload < context < config-ref < home (--all) < everything
+# Instance/workload rungs: workestrate workload <name> down [--instance|--all-instances].
+# Sweep rungs: workestrate down with EXACTLY ONE selector
+#   (--all | --context <ctx> | --config-ref <ref> | --everything);
+#   bare `down` is a usage error. --everything is double-gated (flag twice +
+#   widened confirmation; non-interactive without --yes hard-refuses).
+# Scripted migration: down-all --yes → down --all --yes (down-all survives
+#   as a hidden alias but also requires a selector).
+# `clean` is state/cache hygiene only — it NEVER tears down VMs.
+# Full detail: docs/operating-model.md §10.
 ```
 
 The singleton slot publishes on the shared bind `127.0.0.1` at the declared
@@ -802,7 +814,7 @@ require a registered config repo).
 | `workestrate home clone <src> [dest]` | Provision a home from an existing one (git-clone semantics; registry urls rewritten to dest-local `config-repos/<name>` paths; dest defaults to the resolved home) |
 | `workestrate config add <url> <name> [--ref main]` | Clone a config repo into the managed store |
 | `workestrate config new <name> [dest] [--age-recipient <key>] [--with-flake] [--no-register] [--no-git-init] [--from-reference \| --empty] [--json]` | Scaffold a new config repo with a minimal valid `workestrate.toml`, `.sops.yaml`, `.env.example`, README, and `.gitignore`. The in-store default (`<store>/config-repos/<name>`) auto-registers in the registry and runs `git init`; an out-of-store `[dest]` is scaffold-only (not registered until `config add`). Writes `.copier-answers.yml` for future `copier update`. |
-| `workestrate config update [name]` | Pull latest for a config repo (or all) |
+| `workestrate config update [name]` | Pull latest for a config repo (or all); refuses dirty clones, pulls each repo's effective ref (not hardcoded main), refreshes content archives, and writes per-repo lock pins (`{rev, sha, fetched_at}`) |
 | `workestrate config remove <name> [--delete] [--force]` | Unregister a config repo (`--delete` also deletes the store clone; `--force` overrides the dirty-clone refusal) |
 | `workestrate config list` | List registered config repos with rev + dirty status |
 | `workestrate config trust <dir>` | Trust a project directory for project-layer config |
@@ -816,7 +828,7 @@ require a registered config repo).
 | `workestrate generate-env-example` | Generate `.env.example` from config secrets section |
 | `workestrate ps [--json]` | List running workestrate sandboxes (reads the port registry; covers all contexts) |
 | `workestrate workloads` | List configured workloads with kind + running status (discovery verb, ADR 0027) |
-| `workestrate down [--yes]` | Stop every running workestrate sandbox (destructive; confirms unless `--yes`); `down-all` is the canonical name and `--all` is accepted |
+| `workestrate down <selector> [--yes]` | Stop sandboxes at an explicit scope (ADR 0032 ladder): exactly one of `--all` (home) / `--context <ctx>` / `--config-ref <ref>` / `--everything` (double-gated); bare `down` is a usage error; `down-all` is a hidden alias that also requires a selector. Instance/workload teardown stays on `workload <name> down`. See docs/operating-model.md §10 |
 | `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived from the config types; `--output` / `--output-workload` write the canonical files under `schemas/`) |
 | `workestrate schemas update [--repo <name>] [--check]` | Sync the generated schema artifacts (workestrate.schema.json + workestrate-workload.schema.json) to every consumer copy (tool copier template, tool home, registered config repos); `--check` reports staleness and exits 1 when stale |
 | `workestrate --no-project-config <cmd>` | Disable project-layer config loading |
