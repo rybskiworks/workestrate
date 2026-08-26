@@ -707,6 +707,21 @@ recorded contract, verified by the test suite):
   dir-listing fallback with one stderr warning — an unreachable store must
   not brick `down --context`; pagination is bounded (hostile repeating
   cursors cannot hang a sweep).
+- **Artifact-evidence narrowing pin**: the § Cleanup family letter lists TWO
+  artifact forms — `workestrate.log` AND the `workestrate-*` image tag — but
+  the landed engine implements ONLY the log (`Evidence::ArtifactLog`).
+  Deliberate: (a) the `workestrate-*` tag sketch predates the A2 tag
+  decision (tags are immutable `name:ctx:sha` — no workestrate prefix — so
+  the literal check has no referent anymore); (b) `spawn` writes
+  `workestrate.log` into EVERY workestrate-created sandbox dir, so the log
+  alone carries full recall over any candidate that exists to be torn down;
+  (c) image-tag evidence could only relabel candidates with ZERO other
+  evidence, whose teardown set is identical (swept under `--everything`
+  either way; managed-scope membership would move only in the contrived
+  record+log+dashed-slot all-missing corner). Adding live per-candidate SDK
+  config parsing to a destructive sweep for that residue was judged net
+  negative; revisit alongside the config-ref stamp v2 (first open question
+  below).
 - **Hardened-path unification**: new `runtime::down_hardened(state_dir,
   instance)` routes EVERY teardown through `teardown_for_replace`'s exact
   six-step sequence (stop → wait-exit → remove → unregister → policy-dir →
