@@ -24,8 +24,8 @@
     "microsandbox-fork": {
       "flake": false,
       "locked": {
-        "lastModified": 1787452317,
-        "narHash": "sha256-tHGZgQ4QDmNyAE74SuLsW+V0cKNepUEMoGNyi0klheU=",
+        "lastModified": 1787721096,
+        "narHash": "sha256-p1Ezx/liGWQOIrqLBB2vqLP9AG8pt19MtQea6NSSaEk=",
         "owner": "georgrybski",
         "repo": "microsandbox",
         "rev": "79dc8a197f2e58fadddb79ce427a204606c6c9de",
