@@ -255,8 +255,9 @@ deferred.
   promote design (§ Deferred: blue-green / promote) — resolves when that
   work is un-deferred.
 - **Whether models.json seed content belongs in the config hash** or stays a
-  `--reseed` concern. Parked; tied to the provenance-stamp implementation
-  round.
+  `--reseed` concern. **RESOLVED (2026-08-24, A3)**: seed content AND seed
+  declarations stay OUTSIDE the hash — a `--reseed` concern, never a silent
+  staleness trigger (§ Provenance stamps LANDED addendum below).
 
 ---
 
@@ -554,3 +555,98 @@ the test suite):
   deterministic (lexicographically-first record's repo identity decides
   the rung lookup), but a D5-style warning naming pathological
   cross-repo same-name groups at sweep time is unbuilt.
+
+## Addendum (2026-08-24): provenance stamps LANDED — implementation notes
+
+Landed as commit `05c9c56` (the policy_file slug fix that seeded the
+`microsandbox::provenance` module), commit `8a791e0` (stamps + real on_skew
+wiring + ps staleness, code + tests) and this docs commit, all on
+`migration/tool-model`. The mechanics below are PINNED (they are the
+recorded contract, verified by the test suite):
+
+- **Canonical-serialization pin**: `config_hash_of_plan` = FNV-1a 64-bit
+  (hand-rolled, the per-dir shorthash precedent — no new crate dependency,
+  nix vendor surface unchanged) over a LABELED canonical form: `\x1f`
+  unit-separators within a field group, `\x1e` record-separators between
+  groups; every group carries its label. Field order is PINNED (changing it
+  changes every hash): image / workdir / command / cpus / memory_mib /
+  env(sorted `NAME=value`, the effective post-merge view incl. baked env) /
+  secret_names(sorted NAMES only) / ports(guest + optional name ONLY,
+  declared order — HOST PORTS AND BIND IPS EXCLUDED as allocation-dependent:
+  staleness keys on build inputs, not which host port the allocator drew) /
+  mounts(per mount in declared order: guest, host AS PLANNED — post
+  instance-state scoping, NOT the FS-resolved root, so the hash stays
+  computable without filesystem I/O and parent and child compute
+  identically — mode, and the mount's policy fragment canonically when
+  present) / network(default_deny + egress/deny/ingress rules SORTED by
+  canonical encoding). Further exclusions: `policy_file` PATHS (late-bound
+  tokens; the mount's policy CONTENT rides the fragment), seed_files
+  declarations + content (see the models.json resolution below),
+  `created_at`, instance/slot/context names (`plan.name`), namespace,
+  `instance_policy` (orchestration policy, not build inputs), env/secret
+  metadata beyond names+values, egress `derived_from`. Digests render as
+  16-char lowercase hex; `PROVENANCE_DISPLAY_LEN = 4` pins the human-surface
+  truncation (matches the ADR's `config a1b2 → current d4e5` example);
+  stored hashes stay FULL-length. The empty-plan reference vector is pinned
+  in-test (`6f49a79fa3596a27`) so accidental serialization drift fails loud.
+- **models.json RESOLVED (handover §8.2)**: seed content AND seed
+  declarations stay OUTSIDE `config_hash` — seeds are a `--reseed` concern,
+  never a silent staleness trigger. The mount a seed lands IN remains hashed
+  via `mounts`. Rationale: folding seed content into identity would stale
+  running instances on template edits without any runtime-input change,
+  contradicting the runtime-relevant-only scope.
+- **on_skew wiring (ADR 0030 §V4 real)**: pure `skew_disposition` returns
+  `SkewDisposition::{Proceed, Warn, ReplaceNow}`. BOTH-stamps-present gate:
+  an absent stamp is a PRE-STAMP (unknown-version) record — it NEVER warns
+  and NEVER replaces under ANY policy (old records are never auto-stale);
+  equal stamps proceed for every policy. Two REAL call sites: the child
+  `build_sandbox` Reuse arm compares the record stamp against its
+  already-mutated plan (instance-scoped mounts + name override applied;
+  host ports excluded so later port policy/probing cannot churn the
+  comparison), and a NEW PARENT-SIDE site in `up_service_with_spec`'s
+  detached Reuse arm hashing through `current_config_hash_for_workload`
+  (fresh plan + the identical mutations) — THIS CLOSES the per-dir landed
+  note's "A3 must add a parent-side site" pointer (the parent short-circuit
+  is the only path detached-up reuses take; the child Reuse arm is
+  unreachable for them). Parent/child hash equivalence is pinned by test.
+  `ReplaceNow` reuses `teardown_for_replace` plus the replace-semantics
+  create gate (`should_create_with_replace(...) || skew_replaced`) — NO new
+  teardown code. The warn notice wording is PINNED:
+  ``warning: instance '<instance>' was built from config <rec4>; current
+  inputs config <cur4> (on_skew = "warn": proceeding with reuse)``.
+- **Stamping/carry-forward site policy**: CREATE sites stamp the
+  post-mutation plan values (the `build_sandbox` create path hashes the
+  FINAL mutated plan and takes the image out-hash from the resolved tag).
+  `start_existing` and every re-registration CARRY FORWARD the prior
+  record's stamps unchanged — starting a STOPPED sandbox does not change
+  its build inputs (absent prior → None, the pre-stamp posture).
+- **`image_out_hash`** = A2's computed sha segment via `split_computed_tag`
+  on the resolved `<name>[:<ctx>:]<sha>` tag — NEVER re-hashed. `None` for
+  registry refs and legacy declared tags (no content hash; staleness then
+  rides `config_hash` alone).
+- **ps staleness display**: additive `ConfigStaleness {recorded, current}`
+  on `PsEntry` (FULL hashes; renderers truncate to 4). Text rows append
+  ` stale (config xxxx → current yyyy)` after STARTED; JSON gains the
+  additive `staleness` object — both SKIPPED when unknown so
+  pre-stamp/unresolvable rows keep the legacy shape byte-identical.
+  Computation (`apply_config_staleness`) keys each row against the ACTIVE
+  config view under the record's OWN namespace, honest-unknown throughout:
+  pre-stamp records, workloads gone from the active config,
+  FOREIGN-NAMESPACE records, config-load or workload-construction failures,
+  and equal hashes all display NOTHING.
+- **policy_file slug fix (`05c9c56`)**: `mount_slug` was lossy — `/da/ta`
+  and `/da_ta` both sanitized to `da_ta`, colliding on
+  `<instance>/da_ta.json` with silent last-writer clobber of the first
+  mount's compiled policy (exact-duplicate guests were already rejected at
+  validation; slug-colliding distinct paths were not). Slugs are now
+  injective: when the sanitized form contains `_` (collapsed separators OR
+  a literal underscore — either could collide), the slug gains a
+  `-<8-hex fnv1a64(raw guest)>` suffix over the RAW guest path. Simple
+  paths whose sanitized form has no underscore (`/workspace` → `workspace`)
+  keep their UNCHANGED names (host-smoke assets reference plain slugs); the
+  root `/` → empty-slug edge is unchanged.
+
+### Open questions surfaced by the A3 implementation (2026-08-24)
+
+None new. (The parked promote question stands unchanged; `down --stale`
+remains future work riding the stamps landed here.)
