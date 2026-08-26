@@ -46,7 +46,7 @@ let
 in
 rustPlatform.buildRustPackage rec {
   pname = "microsandbox";
-  version = "0.6.8";
+  version = "0.6.15";
 
   src = microsandbox-fork;
 
