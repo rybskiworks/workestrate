@@ -46,7 +46,7 @@ pub use spawn::spawn_detached_service;
 pub use wait::{wait_for_port, DEFAULT_WAIT};
 
 use anyhow::Result;
-use microsandbox::sandbox::{SandboxHandle, SandboxStatus};
+use microsandbox::sandbox::{SandboxBuilder, SandboxHandle, SandboxStatus};
 use microsandbox::{MicrosandboxError, Sandbox};
 use std::path::Path;
 
@@ -54,6 +54,25 @@ use std::path::Path;
 // workestrate identity into an SDK-legal msb sandbox name via
 // `slots::msb_name_of_instance`; the identity itself never changes.
 use super::slots;
+
+/// THE ONE SDK-boundary `Sandbox::get` for a workestrate instance identity
+/// (ADR 0030 addendum 2026-08-26): encodes the identity into an SDK-legal
+/// msb sandbox name ([`slots::msb_name_of_instance`]) before the lookup and
+/// returns the result UNCHANGED (including the typed [`MicrosandboxError`],
+/// so callers' NotFound / reachability matching behaves exactly as before).
+/// Every runtime SDK-boundary get goes through here so the encoding cannot
+/// drift at a call site; the identity itself never changes.
+pub(crate) async fn get_sandbox(instance: &str) -> Result<SandboxHandle, MicrosandboxError> {
+    Sandbox::get(&slots::msb_name_of_instance(instance)).await
+}
+
+/// THE ONE SDK-boundary builder entry for a workestrate instance identity:
+/// encodes the identity into an SDK-legal msb sandbox name before handing it
+/// to `Sandbox::builder` (the SDK validates names and rejects `@`). All
+/// other builder configuration stays at the call site.
+pub(crate) fn builder_for(instance: &str) -> SandboxBuilder {
+    Sandbox::builder(slots::msb_name_of_instance(instance))
+}
 
 /// Poll interval for the post-stop remove-retry loop in [`stop_and_remove`].
 const REMOVE_RETRY_POLL: std::time::Duration = std::time::Duration::from_millis(150);
@@ -262,7 +281,7 @@ pub enum DownStatus {
 /// Returns Ok(()) when the slot is free (or has been cleared by --replace).
 pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) -> Result<()> {
     if spec.replace {
-        match Sandbox::get(&slots::msb_name_of_instance(&spec.instance)).await {
+        match get_sandbox(&spec.instance).await {
             Ok(handle) => {
                 stop_and_remove(handle).await?;
                 // The sandbox is gone — its registry record must go with it;
@@ -284,7 +303,7 @@ pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) ->
         return Ok(());
     }
 
-    match Sandbox::get(&slots::msb_name_of_instance(&spec.instance)).await {
+    match get_sandbox(&spec.instance).await {
         Ok(_handle) => {
             // Truly running — refuse. The handle drops without stopping;
             // the existing sandbox keeps running (this is the desired
@@ -461,13 +480,13 @@ pub(crate) async fn teardown_for_replace(state_dir: &Path, instance: &str) -> Re
 /// Generic lifecycle: stop and remove any sandbox by name.
 //
 // Legacy single-name teardown; the CLI's `down` subcommand routes through the
-// state-dir-explicit [`down_instance`] / [`down_all`] / [`down_all_instances`]
+// state-dir-explicit [`down_instance`] / [`down_all_instances`]
 // variants so it can clean parallel-instance state. Retained on the migration
 // branch as the resolved-state-dir convenience wrapper documented by
 // [`down_instance`].
 #[allow(dead_code)]
 pub async fn down(name: &str) -> Result<()> {
-    match Sandbox::get(&slots::msb_name_of_instance(name)).await {
+    match get_sandbox(name).await {
         Ok(handle) => {
             stop_and_remove(handle).await?;
             let state_dir = crate::config::resolve_state_dir();
@@ -545,18 +564,6 @@ pub async fn down_instance(state_dir: &Path, instance: &str) -> DownResult {
 pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<DownResult>> {
     let records =
         super::port_registry::list_records_for_workload_any_namespace(state_dir, workload)?;
-    let mut results = Vec::with_capacity(records.len());
-    for r in records {
-        results.push(down_instance(state_dir, &r.instance).await);
-    }
-    Ok(results)
-}
-
-/// Stop every workestrate-tracked instance. Used by `workestrate down --all`
-/// (the HOME rung of the ADR 0032 addendum §Down scope ladder). Routes
-/// through [`down_instance`] → [`down_hardened`].
-pub async fn down_all(state_dir: &Path) -> Result<Vec<DownResult>> {
-    let records = super::port_registry::list_records(state_dir)?;
     let mut results = Vec::with_capacity(records.len());
     for r in records {
         results.push(down_instance(state_dir, &r.instance).await);

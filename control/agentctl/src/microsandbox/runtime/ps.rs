@@ -3,7 +3,7 @@ use super::super::slots;
 use super::reconcile::ReconcileFacts;
 use anyhow::Result;
 use microsandbox::sandbox::SandboxStatus;
-use microsandbox::{MicrosandboxError, Sandbox};
+use microsandbox::MicrosandboxError;
 use std::path::Path;
 
 /// Result of an occupancy probe against the state registry (no msb call).
@@ -310,8 +310,9 @@ pub async fn probe_liveness(entries: &mut [PsEntry]) -> (usize, usize) {
     for e in entries.iter() {
         // ADR 0030 addendum 2026-08-26: probe the ENCODED msb name (records
         // keep the workestrate identity; a legacy raw-@ sandbox simply reads
-        // as gone → stale).
-        let outcome = match Sandbox::get(&slots::msb_name_of_instance(&e.instance)).await {
+        // as gone → stale). The encoding lives in the ONE SDK-boundary
+        // wrapper [`super::get_sandbox`].
+        let outcome = match super::get_sandbox(&e.instance).await {
             Ok(_) => ProbeOutcome::Alive,
             Err(MicrosandboxError::SandboxNotFound(_)) => ProbeOutcome::NotFound,
             // FS-7: match the error variants the SDK actually exposes for

@@ -1041,17 +1041,16 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let policy = super::network_plan_to_policy(&plan.network)?;
 
     // ADR 0030 addendum 2026-08-26: the SDK validates sandbox names
-    // (`@` is illegal), so the BUILDER gets the encoded msb name; every
-    // registry/record surface keeps the workestrate identity.
-    let mut builder = Sandbox::builder(crate::microsandbox::slots::msb_name_of_instance(
-        &spec.instance,
-    ))
-    .image(plan.image.as_deref().unwrap_or("alpine:latest"))
-    .cpus(plan.cpus.unwrap_or(2))
-    .memory(plan.memory_mib.unwrap_or(2048))
-    .workdir(plan.workdir.as_deref().unwrap_or("/app"))
-    .network(|n| n.policy(policy))
-    .detached(true);
+    // (`@` is illegal), so the BUILDER gets the encoded msb name — via the
+    // ONE SDK-boundary wrapper [`super::builder_for`]; every registry/
+    // record surface keeps the workestrate identity.
+    let mut builder = super::builder_for(&spec.instance)
+        .image(plan.image.as_deref().unwrap_or("alpine:latest"))
+        .cpus(plan.cpus.unwrap_or(2))
+        .memory(plan.memory_mib.unwrap_or(2048))
+        .workdir(plan.workdir.as_deref().unwrap_or("/app"))
+        .network(|n| n.policy(policy))
+        .detached(true);
 
     let EntrypointSpec::Shell = workload.entrypoint();
     // Bare `/bin/sh` does not reliably block: the image's inherited CMD is
@@ -1175,10 +1174,8 @@ async fn start_existing_sandbox<W: Workload>(
 ) -> Result<(Sandbox, ForegroundConfig)> {
     // ADR 0030 addendum 2026-08-26: single encoded-name lookup — records
     // drive the re-START, so a legacy raw-@ sandbox simply reads as gone.
-    let handle = Sandbox::get(&crate::microsandbox::slots::msb_name_of_instance(
-        &spec.instance,
-    ))
-    .await?;
+    // The encoding lives in the ONE SDK-boundary wrapper [`get_sandbox`].
+    let handle = super::get_sandbox(&spec.instance).await?;
     let sandbox = handle.start().await?;
     let created_at = super::time::current_rfc3339_utc();
     super::super::port_registry::check_and_register_sandbox_lifecycle(

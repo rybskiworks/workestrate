@@ -273,7 +273,8 @@ pub fn sanitize_instance_id(raw: &str) -> Result<String> {
 //
 // The fix: the workestrate identity STAYS `slot@id` everywhere (registries,
 // slots, down-scopes, CLI); only the name handed to the SDK is ENCODED,
-// deterministically and collision-free, by [`msb_name_of_instance`] at each
+// deterministically and collision-resistantly (NOT injectively — see the
+// [`msb_name_of_instance`] durability note), at each
 // SDK name boundary. Plain (already-legal) names pass through UNCHANGED, so
 // existing singleton homes keep their exact on-disk sandbox names.
 
@@ -324,8 +325,12 @@ pub fn is_legal_msb_name(name: &str) -> bool {
 ///   BASE is truncated by bytes (at a char boundary; identities are ASCII in
 ///   practice) to fit base + suffix, and the suffix is re-appended intact.
 ///
-/// Injective up to FNV collisions: distinct identities yield distinct
-/// encodings because the hash suffix keys the original bytes.
+/// Collision-resistant, NOT injective: distinct identities USUALLY yield
+/// distinct encodings because the hash suffix keys the original bytes, but
+/// FNV-1a is not cryptographic — adversarially constructed identities can
+/// collide on the same hex8 suffix. Accepted for the local single-operator
+/// threat model; registry records, not names, remain the identity authority
+/// (ADR 0030 addendum durability disclaimer).
 pub fn msb_name_of_instance(instance: &str) -> String {
     if is_legal_msb_name(instance) {
         return instance.to_string();
