@@ -1701,3 +1701,16 @@ STAYS `slot@id` everywhere else (registries, slots, down-scopes, CLI):
   `~/.microsandbox/sandboxes/*` dir names must expect the ENCODED spelling
   for @-identities (e.g. `personal-litellm--canary-<hash8>`); singleton
   homes are byte-identical to before.
+- **Durability disclaimer**: the suffix hash is collision-RESISTANT, not
+  cryptographic — adversarially constructed identities can collide
+  (accepted for the local single-operator threat model; never treat an
+  encoded name as a unique identifier in a multi-tenant/adversarial
+  context), and decode cannot reconstruct identities whose sanitized base
+  holds a literal `--` or a leading-illegal character (display-only
+  corner; every record-driven path is unaffected). Registry records stay
+  the identity authority: never parse meaning out of an msb dir name.
+- **Open question (2026-08-26; none scheduled)**: revisit only if a real
+  collision or reconstruction need appears — candidate upgrades: a wider
+  (e.g. 16-hex) or keyed suffix hash; fully reversible percent-style
+  escape encoding (at the cost of uglier dir names); an upstream change
+  widening `validate_sandbox_name`'s charset.

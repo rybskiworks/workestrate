@@ -341,6 +341,22 @@ Stated plainly, each verified against the current tree:
   ADR 0032): the gc rung lookup for a same-named group is deterministic
   (lexicographically-first record's repo decides) but pathological
   cross-repo collisions produce no warning surface yet.
+* **Encoded msb names are collision-resistant, not cryptographic** (ADR 0030
+  2026-08-26 addendum): the `-<fnv1a64 hex8>` suffix deters accidental
+  collisions, but adversarially constructed identities can still collide.
+  Accepted for the local single-operator threat model. Implication: never
+  treat an encoded name as a unique identifier in a multi-tenant or
+  adversarial context — registry records, not names, are the identity
+  authority.
+* **Decode cannot reconstruct every identity** (same addendum): a sanitized
+  base containing a literal `--` or starting with an illegal character is
+  unrecoverable — a display-only corner; every record-driven path is
+  unaffected. Implication: never parse meaning out of an msb sandbox dir
+  name; always resolve through the registry record. Open question (dated
+  2026-08-26, nothing scheduled): candidate upgrades if either ever bites —
+  a wider (e.g. 16-hex) or keyed suffix hash, fully reversible
+  percent-style escape encoding, or an upstream widening of the SDK's
+  `validate_sandbox_name` charset.
 * **README verb-shape drift (accepted).** The top-level README still
   describes the old `down-all` verb shape (its CLI row near line 330 and
   the verb table row near line 819); docs sweeps are separate commits by
