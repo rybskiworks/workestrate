@@ -166,6 +166,16 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
+    // Hardening (@ retrospective): workload keys are raw TOML map keys, so a
+    // hand-edited layer bypasses the creation-time `validate_workload_name`
+    // gate entirely. Re-run the shared identifier validator on every key at
+    // load/validation time: an out-of-charset name must fail closed HERE,
+    // naming the offending key and the rule, instead of leaking into
+    // filesystem paths / registry keys / msb sandbox names downstream.
+    for workload_name in config.workloads.keys() {
+        validate_identifier(workload_name, "workload name")?;
+    }
+
     // WP6(d)/C9: recipe/feature vocabulary hard errors. The string-valued
     // recipes are plain strings in the schema (unlike egress, whose tagged
     // enum already fails unknown variants at TOML parse), so they must be
@@ -689,6 +699,80 @@ pub(crate) mod tests {
     )]
     use super::*;
     use crate::config::test_support::*;
+
+    // ---- Hardening (@ retrospective): workload-key charset gate ----
+
+    /// Hand-edited TOML layers bypass the creation-time
+    /// `validate_workload_name` gate, so `validate_config` must re-run the
+    /// shared identifier validator on every workload KEY and fail closed.
+    /// Keys are always QUOTED in these fixtures (`[workloads."<key>"]`) — a
+    /// literal dot in a bare key would parse as table nesting instead of
+    /// part of the name.
+    #[test]
+    fn validate_rejects_invalid_workload_key_charset() {
+        let too_long = "a".repeat(64);
+        for key in ["Pi", "my_agent", "my.agent", "-pi", too_long.as_str()] {
+            let toml = MINIMAL_VALID_TOML
+                .replace("[workloads.pi]", &format!("[workloads.\"{key}\"]"))
+                .replace(
+                    "[workloads.pi.network]",
+                    &format!("[workloads.\"{key}\".network]"),
+                );
+            let config: ConfigFile = toml::from_str(&toml).unwrap_or_else(|e| {
+                panic!("key '{key}' must PARSE (the gate is validation, not deserialization): {e}")
+            });
+            let err = validate_config(&config).unwrap_err().to_string();
+            assert!(
+                err.contains(key),
+                "error must name the offending key '{key}': {err}"
+            );
+            if key.len() > 63 {
+                // The overlong branch of `validate_identifier` reports the
+                // length violation without the regex; pin its own message.
+                assert!(
+                    err.contains("cannot exceed 63 characters"),
+                    "overlong key must be rejected with the length message: {err}"
+                );
+            } else {
+                assert!(
+                    err.contains("^[a-z0-9][a-z0-9-]{0,62}$"),
+                    "error must carry the rule text for key '{key}': {err}"
+                );
+            }
+        }
+    }
+
+    /// Valid keys pass unchanged — including the 63-character DNS-label
+    /// boundary — so the gate rejects only genuinely out-of-charset names.
+    #[test]
+    fn validate_accepts_valid_workload_keys() {
+        let boundary = "a".repeat(63);
+        let toml = format!(
+            "schema_version = 1\n\n\
+             [workloads.pi]\n\
+             kind = \"agent\"\n\
+             image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
+             command = []\n\n\
+             [workloads.pi.network]\n\
+             default_deny = true\n\n\
+             [workloads.\"{boundary}\"]\n\
+             kind = \"agent\"\n\
+             image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
+             command = []\n\n\
+             [workloads.\"{boundary}\".network]\n\
+             default_deny = true\n\n\
+             [workloads.example-agent-2]\n\
+             kind = \"service\"\n\
+             image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
+             command = []\n\n\
+             [workloads.example-agent-2.network]\n\
+             default_deny = true\n"
+        );
+        let config: ConfigFile = toml::from_str(&toml).expect("multi-workload config must parse");
+        assert_eq!(config.workloads.len(), 3);
+        validate_config(&config)
+            .unwrap_or_else(|e| panic!("valid workload keys must pass the charset gate: {e}"));
+    }
 
     // ---- WP6(d)/C9: recipe/feature vocabulary validation ----
 
