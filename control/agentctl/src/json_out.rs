@@ -59,6 +59,11 @@ pub struct PsEntryJson {
     /// `cmd_ps` populates it).
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<crate::microsandbox::runtime::InstanceStatus>,
+    /// ADR 0032 §Provenance stamps: config-hash drift (recorded vs current
+    /// build inputs; FULL hashes). Additive, skipped when `None` so
+    /// pre-stamp/unresolvable rows keep the legacy shape byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    staleness: Option<crate::microsandbox::runtime::ConfigStaleness>,
 }
 
 pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec<PsEntryJson> {
@@ -83,6 +88,7 @@ pub fn ps_entries_json(entries: &[crate::microsandbox::runtime::PsEntry]) -> Vec
                 .collect(),
             stale: e.stale,
             status: e.status,
+            staleness: e.staleness.clone(),
         })
         .collect()
 }
@@ -255,6 +261,9 @@ mod tests {
                 started_at: "2026-07-20T14:03:11Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "personal-pi".to_string(),
@@ -266,6 +275,9 @@ mod tests {
                 started_at: "2026-07-20T14:06:00Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
         ];
 

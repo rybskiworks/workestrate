@@ -188,6 +188,8 @@ mod tests {
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )
     }
 

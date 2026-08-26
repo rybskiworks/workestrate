@@ -26,12 +26,13 @@ pub use network::network_plan_to_policy;
 pub use ps::probe_liveness;
 pub use ps::PsKind;
 pub use ps::{
-    classify_status, format_refuse_message, occupancy_from_state, ps, InstanceStatus, Occupancy,
-    PsEntry,
+    classify_status, format_refuse_message, occupancy_from_state, ps, ConfigStaleness,
+    InstanceStatus, Occupancy, PsEntry,
 };
 pub use reconcile::{
     decide_chain, default_chain, gather_facts, sandbox_dir, ChainStep, ReconcileFacts,
 };
+pub(crate) use run::current_config_hash_for_workload;
 pub use run::{exec_agent_with_spec, up_service_with_spec};
 // Crate-visible so the seed-file env-view builder (env.rs) reuses the ONE
 // resolution algorithm/order the runtime applies to the guest env.

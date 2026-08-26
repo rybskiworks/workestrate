@@ -1014,6 +1014,8 @@ mod tests {
             "default",
             None,
             image_tag,
+            None,
+            None,
         )
         .unwrap();
     }

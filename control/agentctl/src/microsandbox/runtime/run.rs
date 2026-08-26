@@ -656,29 +656,103 @@ pub(crate) enum BuildOutcome {
     Reused,
 }
 
-/// The `on_skew` divergence notice decision (ADR 0030 V-addendum §V4) —
-/// PURE. Returns `Some(message)` ONLY when the effective policy is `Warn`
-/// (the default when `on_skew` is None) AND both provenance stamps are
-/// present AND they differ; `Replace`/`ReuseSilently` and any stub-missing
-/// stamp yield `None`. The stamps are opaque strings — this function makes
-/// NO assumption about their format (A3 wires the real stamp values).
-pub(crate) fn skew_notice(
+/// The `on_skew` disposition (ADR 0030 V-addendum §V4, wired by ADR 0032
+/// A3 provenance stamps) — PURE, exhaustively matrix-tested.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SkewDisposition {
+    /// Adopt the running instance (reuse/start per the conflict chain).
+    Proceed,
+    /// Adopt AND print the divergence notice (the warn default).
+    Warn(String),
+    /// Tear down the skewed instance and create fresh on the new inputs.
+    ReplaceNow,
+}
+
+/// The ONE canonical `on_skew` decision (ADR 0030 V-addendum §V4 + ADR 0032
+/// §Provenance stamps). BOTH stamps must be present: an absent stamp is a
+/// PRE-STAMP (unknown-version) record — it NEVER warns and NEVER replaces
+/// for any policy (pinned; old records are never auto-stale). Equal stamps
+/// proceed for every policy. On a real divergence:
+/// - `Warn` (the default when `on_skew` is None) → [`SkewDisposition::Warn`]
+///   with the PINNED notice naming the instance and both 4-char hash
+///   prefixes;
+/// - `Replace` → [`SkewDisposition::ReplaceNow`] (teardown + fresh create);
+/// - `ReuseSilently` → [`SkewDisposition::Proceed`] without comment.
+pub(crate) fn skew_disposition(
     on_skew: Option<crate::config::OnSkew>,
+    instance: &str,
     recorded: Option<&str>,
     current: Option<&str>,
-) -> Option<String> {
+) -> SkewDisposition {
     let policy = on_skew.unwrap_or_default();
-    if policy != crate::config::OnSkew::Warn {
-        return None;
-    }
-    let (recorded, current) = (recorded?, current?);
+    let (Some(recorded), Some(current)) = (recorded, current) else {
+        // Unknown-version posture: either stamp missing → never fire.
+        return SkewDisposition::Proceed;
+    };
     if recorded == current {
-        return None;
+        return SkewDisposition::Proceed;
     }
-    Some(format!(
-        "warning: instance was built from {recorded}; current inputs {current} \
-         (on_skew = \"warn\": proceeding with reuse)"
-    ))
+    match policy {
+        crate::config::OnSkew::Warn => SkewDisposition::Warn(skew_warn_message(
+            instance,
+            crate::microsandbox::provenance::short_hash(recorded),
+            crate::microsandbox::provenance::short_hash(current),
+        )),
+        crate::config::OnSkew::Replace => SkewDisposition::ReplaceNow,
+        crate::config::OnSkew::ReuseSilently => SkewDisposition::Proceed,
+    }
+}
+
+/// The PINNED divergence-notice wording (ADR 0032 §Provenance stamps /
+/// ADR 0030 §V4): `warning: instance '<instance>' was built from config
+/// <rec4>; current inputs config <cur4> (on_skew = "warn": proceeding with
+/// reuse)` — 4-char hash prefixes per [`PROVENANCE_DISPLAY_LEN`].
+fn skew_warn_message(instance: &str, recorded4: &str, current4: &str) -> String {
+    format!(
+        "warning: instance '{instance}' was built from config {recorded4}; \
+         current inputs config {current4} (on_skew = \"warn\": proceeding with reuse)"
+    )
+}
+
+/// The CURRENT config-hash input view of a workload for `instance`: the
+/// freshly-built plan with exactly the deterministic mutations
+/// [`build_sandbox`] applies BEFORE any chain decision — instance-scoped
+/// state mounts for `per-dir` strategies (keyed on the instance id's
+/// @-suffix) and the name override to the spec's instance name. The
+/// detached-up PARENT short-circuit (`up_service_with_spec`) computes its
+/// skew comparison through this helper while the child (`build_sandbox`)
+/// hashes its already-mutated plan directly; host ports (mutated later by
+/// port policy/probing) are excluded from the hash, so parent and child
+/// CANNOT diverge (equivalence pinned by test).
+pub(crate) fn current_config_hash_for_workload<W: Workload>(
+    workload: &W,
+    instance: &str,
+) -> String {
+    let mut plan = workload.plan();
+    apply_current_view_mutations(&mut plan, workload, instance);
+    crate::microsandbox::provenance::config_hash_of_plan(&plan)
+}
+
+/// The shared pre-chain plan mutations of [`build_sandbox`] (instance-state
+/// scoping + name override), extracted so the parent-side skew comparison
+/// applies the identical view.
+fn apply_current_view_mutations<W: Workload>(plan: &mut SandboxPlan, workload: &W, instance: &str) {
+    let instance_state_key: Option<&str> =
+        if workload.instance_strategy() == crate::config::InstanceStrategy::PerDir {
+            crate::microsandbox::slots::instance_id_of(instance)
+        } else {
+            None
+        };
+    if let Some(key) = instance_state_key {
+        for m in &mut plan.mounts {
+            m.host = super::super::mounts::instance_scoped_state_path(
+                &m.host,
+                workload.name(),
+                Some(key),
+            );
+        }
+    }
+    plan.name = instance.to_string();
 }
 
 /// Prepare, resolve, and create the sandbox plus the foreground config used
@@ -855,6 +929,10 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let facts = super::reconcile::gather_facts(&state_dir, &spec.instance, &declared_ports).await?;
     let chain = workload.instance_conflict_chain();
     let step = super::reconcile::decide_step(&chain, &facts, &spec.instance, spec.replace)?;
+    // ADR 0032 A3: an on_skew = "replace" disposition decided on the Reuse
+    // arm tears down here and falls through to the create path with replace
+    // semantics (the slot must be re-created fresh).
+    let mut skew_replaced = false;
     match step {
         super::reconcile::ChainStep::Reuse => {
             // A1/P3: adopting a record registered under a different context
@@ -864,16 +942,35 @@ pub(crate) async fn build_sandbox<W: Workload>(
                 facts.record.as_ref().and_then(|r| r.context.as_deref()),
                 crate::config::active_context_name().as_deref(),
             );
-            // ADR 0030 V-addendum §V4 STUB (the A3 wiring point): the
-            // divergence notice for config/image skew between the current
-            // build inputs and the reused instance's provenance stamps. Both
-            // stamps are stub-None today (no hash function exists yet — A3
-            // wires the real stamps), so this NEVER fires; with stub-None
-            // stamps `skew_notice` returns None for every policy.
-            if let Some(notice) = skew_notice(workload.instance_on_skew(), None, None) {
-                eprintln!("{notice}");
+            // ADR 0030 V-addendum §V4 wired (ADR 0032 A3): compare the
+            // reused instance's recorded config stamp against the CURRENT
+            // build inputs. `plan` at this point carries exactly the view
+            // the create path would hash (instance-scoped mounts applied,
+            // name overridden; host ports are excluded from the hash), so
+            // this matches the detached parent's helper-derived comparison
+            // by construction.
+            let recorded = facts.record.as_ref().and_then(|r| r.config_hash.as_deref());
+            let current = crate::microsandbox::provenance::config_hash_of_plan(&plan);
+            match skew_disposition(
+                workload.instance_on_skew(),
+                &spec.instance,
+                recorded,
+                Some(&current),
+            ) {
+                SkewDisposition::Proceed => return Ok(BuildOutcome::Reused),
+                SkewDisposition::Warn(message) => {
+                    eprintln!("{message}");
+                    return Ok(BuildOutcome::Reused);
+                }
+                SkewDisposition::ReplaceNow => {
+                    eprintln!(
+                        "on_skew = \"replace\": replacing instance '{}' (build inputs diverged)",
+                        spec.instance
+                    );
+                    super::teardown_for_replace(&state_dir, &spec.instance).await?;
+                    skew_replaced = true;
+                }
             }
-            return Ok(BuildOutcome::Reused);
         }
         super::reconcile::ChainStep::Fail => {
             anyhow::bail!(
@@ -894,6 +991,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
             // so the write must cover this path too (ordering invariant: see
             // [`write_mount_policy_files`]).
             write_mount_policy_files(spec, workload, &mut plan)?;
+            // A3 carry-forward (ADR 0032 §Provenance stamps): starting a
+            // STOPPED sandbox does not change its build inputs — the prior
+            // record's stamps ride forward unchanged (absent prior → None,
+            // the pre-stamp posture).
+            let (prior_image_out_hash, prior_config_hash) = facts
+                .record
+                .as_ref()
+                .map(|r| (r.image_out_hash.clone(), r.config_hash.clone()))
+                .unwrap_or((None, None));
             let (sandbox, mut config) = start_existing_sandbox(
                 &state_dir,
                 spec,
@@ -901,6 +1007,8 @@ pub(crate) async fn build_sandbox<W: Workload>(
                 bind_ip,
                 &host_ports,
                 &port_pairs,
+                prior_image_out_hash.as_deref(),
+                prior_config_hash.as_deref(),
             )
             .await?;
             config.mounts = plan
@@ -970,8 +1078,10 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // fork's non-replace create gate (`prepare_create_target`) refuses any
     // pre-existing dir with `SandboxAlreadyExists`, so the create must carry
     // replace semantics whenever the build DECIDED Replace, not only on the
-    // explicit flag. An explicit `--replace` keeps working unchanged.
-    let create_with_replace = should_create_with_replace(spec.replace, step);
+    // explicit flag. An explicit `--replace` keeps working unchanged. A3:
+    // an on_skew = "replace" disposition (the Reuse arm's fall-through)
+    // joins the same rule — the skewed instance was torn down above.
+    let create_with_replace = should_create_with_replace(spec.replace, step) || skew_replaced;
     let builder = if create_with_replace {
         builder.replace()
     } else {
@@ -980,6 +1090,16 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let sandbox = builder.create().await?;
 
     let created_at = super::time::current_rfc3339_utc();
+    // A3 (ADR 0032 §Provenance stamps): the create path knows the FULL
+    // build-input view — compute the config hash over the FINAL mutated
+    // plan (instance-scoped mounts, name override, port policy applied) and
+    // take the image out-hash from the resolved tag. Recorded so reuse
+    // decisions and `ps` can compare against current inputs.
+    let config_hash = crate::microsandbox::provenance::config_hash_of_plan(&plan);
+    let image_out_hash = plan
+        .image
+        .as_deref()
+        .and_then(crate::microsandbox::provenance::image_out_hash_from_tag);
     // FN-6: atomic check + register under ONE registry-lock hold. The
     // collision check must not run as a separate pre-create call: it
     // released the lock before `create().await`, letting a concurrent
@@ -1007,6 +1127,9 @@ pub(crate) async fn build_sandbox<W: Workload>(
         // record the resolved store tag so the keep-last-N GC never prunes
         // a tag a running sandbox was created with.
         plan.image.as_deref(),
+        // A3 (ADR 0032 §Provenance stamps): the create-time stamps.
+        image_out_hash.as_deref(),
+        Some(&config_hash),
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -1028,6 +1151,13 @@ pub(crate) async fn build_sandbox<W: Workload>(
 /// live sandbox + foreground config so the caller execs the workload command
 /// into it. Preserves the sandbox state (filesystem/config); the service
 /// process is re-run by the caller.
+//
+// too_many_arguments: the positional tail mirrors the registry's lifecycle
+// entry point (identity, bind, ports, metadata); the A3 carry-forward stamps
+// (ADR 0032) complete it, exactly as they completed
+// check_and_register_sandbox_lifecycle. A params struct is deferred to the
+// C2 wiring commit.
+#[allow(clippy::too_many_arguments)]
 async fn start_existing_sandbox<W: Workload>(
     state_dir: &Path,
     spec: &InstanceSpec,
@@ -1035,6 +1165,8 @@ async fn start_existing_sandbox<W: Workload>(
     bind_ip: IpAddr,
     host_ports: &[u16],
     port_pairs: &[PortMapping],
+    image_out_hash: Option<&str>,
+    config_hash: Option<&str>,
 ) -> Result<(Sandbox, ForegroundConfig)> {
     let handle = Sandbox::get(&spec.instance).await?;
     let sandbox = handle.start().await?;
@@ -1053,6 +1185,11 @@ async fn start_existing_sandbox<W: Workload>(
         // A re-START of an existing sandbox: the running tag is unknown
         // here (ADR 0032 §Image tags — documented None posture).
         None,
+        // A3 carry-forward: the caller passes the PRIOR record's stamps
+        // (starting a stopped sandbox does not change its build inputs);
+        // absent prior → None (pre-stamp posture).
+        image_out_hash,
+        config_hash,
     )?;
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
@@ -1120,8 +1257,41 @@ pub async fn up_service_with_spec<W: Workload>(
                     facts.record.as_ref().and_then(|r| r.context.as_deref()),
                     crate::config::active_context_name().as_deref(),
                 );
-                println!("instance '{}' is already running — reusing", spec.instance);
-                return Ok(());
+                // ADR 0032 A3 — the PARENT-side skew site (closes the
+                // per-dir landed note: this short-circuit is the ONLY path
+                // detached-up reuses take; the child's build_sandbox Reuse
+                // arm is unreachable for them). The comparison uses the
+                // same helper-derived current view the child would hash.
+                let recorded = facts.record.as_ref().and_then(|r| r.config_hash.as_deref());
+                let current = current_config_hash_for_workload(workload, &spec.instance);
+                match skew_disposition(
+                    workload.instance_on_skew(),
+                    &spec.instance,
+                    recorded,
+                    Some(&current),
+                ) {
+                    SkewDisposition::ReplaceNow => {
+                        // on_skew = "replace": tear down here (the same
+                        // hardened teardown the should_teardown_in_parent
+                        // arm runs) and CONTINUE to spawn the child — the
+                        // slot is now free, so the child re-derives Start
+                        // and creates fresh with new stamps.
+                        eprintln!(
+                            "on_skew = \"replace\": replacing instance '{}' (build inputs diverged)",
+                            spec.instance
+                        );
+                        super::teardown_for_replace(&state_dir, &spec.instance).await?;
+                    }
+                    SkewDisposition::Warn(message) => {
+                        eprintln!("{message}");
+                        println!("instance '{}' is already running — reusing", spec.instance);
+                        return Ok(());
+                    }
+                    SkewDisposition::Proceed => {
+                        println!("instance '{}' is already running — reusing", spec.instance);
+                        return Ok(());
+                    }
+                }
             }
             super::reconcile::ChainStep::Fail => {
                 anyhow::bail!(
@@ -1488,43 +1658,65 @@ mod tests {
     // gate (`prepare_create_target`) refuses any pre-existing dir with
     // `SandboxAlreadyExists`.
 
-    // ---- ADR 0030 V-addendum §V4: skew_notice truth table (stub) ----
+    // ---- ADR 0030 V-addendum §V4 wired: skew_disposition truth table ----
 
     /// Default-absent policy (None → warn) with BOTH stamps present and
-    /// DIFFERENT yields the divergence notice.
+    /// DIFFERENT yields the PINNED divergence notice (instance + 4-char
+    /// hash prefixes).
     #[test]
-    fn skew_notice_warns_on_divergence_under_default_policy() {
-        let notice = skew_notice(None, Some("built-inputs"), Some("current-inputs"))
-            .expect("warn + differing stamps must notice");
-        assert!(
-            notice.contains("built from built-inputs")
-                && notice.contains("current inputs current-inputs"),
-            "notice must name both stamps: {notice}"
+    fn skew_disposition_warns_on_divergence_under_default_policy() {
+        let notice = match skew_disposition(
+            None,
+            "personal-litellm",
+            Some("a1b2c3d4e5f60718"),
+            Some("d4e5f60718273a4b"),
+        ) {
+            SkewDisposition::Warn(m) => m,
+            other => panic!("warn + differing stamps must notice, got {other:?}"),
+        };
+        assert_eq!(
+            notice,
+            "warning: instance 'personal-litellm' was built from config a1b2; \
+             current inputs config d4e5 (on_skew = \"warn\": proceeding with reuse)",
+            "the notice wording is PINNED (ADR 0032 §Provenance stamps)"
         );
-        let notice = skew_notice(Some(crate::config::OnSkew::Warn), Some("a"), Some("b"))
-            .expect("explicit warn behaves like the default");
-        assert!(notice.contains('a') && notice.contains('b'));
+        let notice = match skew_disposition(
+            Some(crate::config::OnSkew::Warn),
+            "x",
+            Some("aaaa"),
+            Some("bbbb"),
+        ) {
+            SkewDisposition::Warn(m) => m,
+            other => panic!("explicit warn behaves like the default, got {other:?}"),
+        };
+        assert!(notice.contains("aaaa") && notice.contains("bbbb"));
     }
 
-    /// replace / reuse-silently never notice.
+    /// replace → ReplaceNow; reuse-silently → silent Proceed.
     #[test]
-    fn skew_notice_non_warn_policies_are_silent() {
+    fn skew_disposition_replace_and_silent_policies() {
         for policy in [
             crate::config::OnSkew::Replace,
             crate::config::OnSkew::ReuseSilently,
         ] {
-            assert_eq!(
-                skew_notice(Some(policy), Some("a"), Some("b")),
-                None,
-                "{policy} must not notice"
-            );
+            let d = skew_disposition(Some(policy), "x", Some("a"), Some("b"));
+            if matches!(policy, crate::config::OnSkew::Replace) {
+                assert_eq!(d, SkewDisposition::ReplaceNow, "{policy} must replace");
+            } else {
+                assert_eq!(
+                    d,
+                    SkewDisposition::Proceed,
+                    "{policy} must proceed silently"
+                );
+            }
         }
     }
 
-    /// Stub-None stamps (today's wiring) never fire, for EVERY policy; equal
-    /// stamps never fire either.
+    /// Unknown-version posture: EITHER stamp missing (pre-stamp record or
+    /// no current view) → Proceed for EVERY policy — never warns, never
+    /// replaces. Equal stamps → Proceed for every policy too.
     #[test]
-    fn skew_notice_stub_none_or_equal_stamps_never_fire() {
+    fn skew_disposition_missing_or_equal_stamps_never_fire() {
         for policy in [
             None,
             Some(crate::config::OnSkew::Warn),
@@ -1532,18 +1724,118 @@ mod tests {
             Some(crate::config::OnSkew::ReuseSilently),
         ] {
             assert_eq!(
-                skew_notice(policy, None, None),
-                None,
-                "stub-None: {policy:?}"
+                skew_disposition(policy, "x", None, None),
+                SkewDisposition::Proceed,
+                "both stamps missing: {policy:?}"
             );
-            assert_eq!(skew_notice(policy, Some("a"), None), None);
-            assert_eq!(skew_notice(policy, None, Some("b")), None);
             assert_eq!(
-                skew_notice(policy, Some("same"), Some("same")),
-                None,
+                skew_disposition(policy, "x", Some("a"), None),
+                SkewDisposition::Proceed,
+                "recorded missing: {policy:?}"
+            );
+            assert_eq!(
+                skew_disposition(policy, "x", None, Some("b")),
+                SkewDisposition::Proceed,
+                "current missing: {policy:?}"
+            );
+            assert_eq!(
+                skew_disposition(policy, "x", Some("same"), Some("same")),
+                SkewDisposition::Proceed,
                 "equal stamps: {policy:?}"
             );
         }
+    }
+
+    // ---- ADR 0032 A3: parent/child current-view equivalence ----
+
+    /// A per-dir-shaped workload whose plan carries THIS workload's state
+    /// mount (the only plan dimension the pre-chain mutations touch).
+    #[derive(Debug)]
+    struct PerDirWorkload {
+        strategy: crate::config::InstanceStrategy,
+    }
+
+    impl Workload for PerDirWorkload {
+        fn name(&self) -> &str {
+            "pd"
+        }
+        fn plan(&self) -> SandboxPlan {
+            let mut p = empty_plan_with_env(Vec::new());
+            p.mounts = vec![crate::microsandbox::plan::MountPlan {
+                host: "workspaces/pd-state".to_string(),
+                guest: "/data".to_string(),
+                mode: crate::microsandbox::plan::MountMode::Rw,
+                policy: None,
+                policy_file: None,
+            }];
+            p.ports = vec![PortMapping::new(4000, 4000)];
+            p
+        }
+        fn exec(&self) -> SandboxCommand {
+            SandboxCommand::with_args("", &[])
+        }
+        fn instance_strategy(&self) -> crate::config::InstanceStrategy {
+            self.strategy
+        }
+    }
+
+    /// THE non-divergence pin: the detached PARENT hashes through
+    /// `current_config_hash_for_workload` (fresh plan + mutations) while
+    /// the CHILD hashes its already-mutated build_sandbox plan. Both views
+    /// must produce the SAME hash — including under per-dir instance-state
+    /// scoping — so a skewed reuse cannot be judged differently by the two
+    /// sites.
+    #[test]
+    fn parent_helper_matches_child_mutated_plan_hash() -> Result<()> {
+        use crate::microsandbox::plan::MountMode;
+        let workload = PerDirWorkload {
+            strategy: crate::config::InstanceStrategy::PerDir,
+        };
+        let instance = "pd@work-1234abcd";
+
+        // Parent view (helper).
+        let parent_hash = current_config_hash_for_workload(&workload, instance);
+
+        // Child view: replicate build_sandbox's pre-chain mutations on a
+        // fresh plan (scoping keyed on the @-suffix + name override).
+        let mut child_plan = workload.plan();
+        let key = crate::microsandbox::slots::instance_id_of(instance).expect("per-dir id");
+        for m in &mut child_plan.mounts {
+            m.host = crate::microsandbox::mounts::instance_scoped_state_path(
+                &m.host,
+                workload.name(),
+                Some(key),
+            );
+        }
+        child_plan.name = instance.to_string();
+        // Host-port probing happens after these mutations in build_sandbox;
+        // it must NOT affect the comparison (host ports are excluded), so
+        // simulate a probe redrawing the host while the guest stays put.
+        child_plan.ports[0].host = 54321;
+
+        assert_eq!(
+            parent_hash,
+            crate::microsandbox::provenance::config_hash_of_plan(&child_plan),
+            "parent helper and child mutated-plan views must hash identically"
+        );
+
+        // And the scoping itself is visible: a DIFFERENT per-dir key yields
+        // a different hash (state mounts differ), while a singleton
+        // strategy ignores the key entirely.
+        let other = current_config_hash_for_workload(&workload, "pd@work-9999zzzz");
+        assert_ne!(other, parent_hash, "per-dir keys scope the state mount");
+        let singleton = PerDirWorkload {
+            strategy: crate::config::InstanceStrategy::Singleton,
+        };
+        let s1 = current_config_hash_for_workload(&singleton, "pd");
+        let mut expected_singleton = singleton.plan();
+        expected_singleton.name = "pd".to_string();
+        assert_eq!(
+            s1,
+            crate::microsandbox::provenance::config_hash_of_plan(&expected_singleton)
+        );
+        let _ = MountMode::Rw; // keep the import honest when fixtures evolve
+        Ok(())
     }
 
     #[test]
@@ -1625,6 +1917,8 @@ mod tests {
             &[PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
+            None,
             None,
             None,
         )?;
@@ -1784,6 +2078,8 @@ mod tests {
             &port_pairs,
             "2026-08-10T00:00:00Z",
             "default",
+            None,
+            None,
             None,
             None,
         )?;

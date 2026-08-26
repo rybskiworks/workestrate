@@ -160,8 +160,10 @@ fn check_port_collisions_locked(
 /// collide mid-create — but the post-create registration window is closed:
 /// the loser's combined call fails the collision check and leaves no record.
 // too_many_arguments: the ADR 0021 registry surface is positional by design
-// (identity, bind, ports, metadata); the bind_ip addition (ADR 0026) pushes
-// the count to 8. A params struct is deferred to the C2 wiring commit.
+// (identity, bind, ports, metadata); the bind_ip addition (ADR 0026) pushed
+// the count to 8 and the A2 image_tag + A3 provenance stamps (ADR 0032)
+// complete the metadata tail. A params struct is deferred to the C2 wiring
+// commit.
 #[allow(clippy::too_many_arguments)]
 pub fn check_and_register_sandbox_lifecycle(
     state_dir: &Path,
@@ -175,6 +177,8 @@ pub fn check_and_register_sandbox_lifecycle(
     namespace: &str,
     source_dir: Option<&str>,
     image_tag: Option<&str>,
+    image_out_hash: Option<&str>,
+    config_hash: Option<&str>,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     let pairs: Vec<(IpAddr, u16)> = host_ports.iter().map(|p| (bind_ip, *p)).collect();
@@ -191,6 +195,8 @@ pub fn check_and_register_sandbox_lifecycle(
         namespace,
         source_dir,
         image_tag,
+        image_out_hash,
+        config_hash,
     )
 }
 
@@ -238,6 +244,10 @@ pub fn register_sandbox(
         // image tag is knowable here → unprotected by the GC (its tags are
         // legacy-shape and never GC candidates anyway).
         image_tag: None,
+        // ...and predates the A3 provenance stamps: pre-stamp record
+        // posture (never auto-stale, never replaced on skew).
+        image_out_hash: None,
+        config_hash: None,
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -269,6 +279,8 @@ pub fn register_sandbox_lifecycle(
     namespace: &str,
     source_dir: Option<&str>,
     image_tag: Option<&str>,
+    image_out_hash: Option<&str>,
+    config_hash: Option<&str>,
 ) -> Result<()> {
     let _lock = PortRegistryLock::acquire(state_dir)?;
     register_sandbox_lifecycle_locked(
@@ -283,6 +295,8 @@ pub fn register_sandbox_lifecycle(
         namespace,
         source_dir,
         image_tag,
+        image_out_hash,
+        config_hash,
     )
 }
 
@@ -302,6 +316,8 @@ fn register_sandbox_lifecycle_locked(
     namespace: &str,
     source_dir: Option<&str>,
     image_tag: Option<&str>,
+    image_out_hash: Option<&str>,
+    config_hash: Option<&str>,
 ) -> Result<()> {
     // A1: refuse BEFORE writing the record file (pure check, no I/O; the
     // caller already holds the registry lock).
@@ -319,6 +335,10 @@ fn register_sandbox_lifecycle_locked(
         namespace: namespace.to_string(),
         source_dir: source_dir.map(|s| s.to_string()),
         image_tag: image_tag.map(|t| t.to_string()),
+        // A3 (ADR 0032 §Provenance stamps): the create-path stamps. None =
+        // pre-stamp/unknown-version posture (never auto-stale).
+        image_out_hash: image_out_hash.map(|h| h.to_string()),
+        config_hash: config_hash.map(|h| h.to_string()),
     };
     let path = run_dir.join(format!("{}.json", instance_name));
     let content = serde_json::to_string_pretty(&record)?;
@@ -602,6 +622,8 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(port, port)],
             "2026-07-23T00:00:00Z",
             "default",
+            None,
+            None,
             None,
             None,
         )
@@ -891,6 +913,8 @@ mod tests {
             "default",
             None,
             None,
+            None,
+            None,
         )
         .unwrap_err();
         assert!(
@@ -938,6 +962,8 @@ mod tests {
             &pairs,
             "2026-07-20T14:05:42Z",
             "default",
+            None,
+            None,
             None,
             None,
         )?;
@@ -995,6 +1021,16 @@ mod tests {
             "legacy record without image_tag parses as None (ADR 0032 §Image tags — \
              unprotected by the GC, legacy tags are never candidates)"
         );
+        assert_eq!(
+            record.image_out_hash, None,
+            "legacy record without image_out_hash parses as None (ADR 0032 §Provenance \
+             stamps — pre-stamp posture: never auto-stale)"
+        );
+        assert_eq!(
+            record.config_hash, None,
+            "legacy record without config_hash parses as None (ADR 0032 §Provenance \
+             stamps — pre-stamp posture: never auto-stale, never replaced on skew)"
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -1017,6 +1053,8 @@ mod tests {
             "default",
             None,
             Some("img-pi:personal:aaaaaaaaaaaa"),
+            None,
+            None,
         )?;
         let record = find_record(&state_dir, "personal-pi")?.expect("record must exist");
         assert_eq!(
@@ -1033,6 +1071,44 @@ mod tests {
         assert_eq!(
             protected,
             std::collections::BTreeSet::from(["img-pi:personal:aaaaaaaaaaaa".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// A3 (ADR 0032 §Provenance stamps): the create-time provenance stamps
+    /// (`image_out_hash` + `config_hash`) round-trip through the registry
+    /// file: registered Some(...) reads back Some(...) via find_record.
+    #[test]
+    fn provenance_stamps_round_trip_through_registry() -> Result<()> {
+        let state_dir = unique_state_dir("provenance-stamps");
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-pi",
+            Some("personal"),
+            "pi",
+            singleton_bind(),
+            &[14000],
+            &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
+            "2026-08-24T00:00:00Z",
+            "default",
+            None,
+            Some("img-pi:personal:aaaaaaaaaaaa"),
+            // A3 stamps: the sha segment of the computed tag + a config hash
+            // over the creating plan (values opaque to the registry).
+            Some("aaaaaaaaaaaa"),
+            Some("6f49a79fa3596a27"),
+        )?;
+        let record = find_record(&state_dir, "personal-pi")?.expect("record must exist");
+        assert_eq!(
+            record.image_out_hash.as_deref(),
+            Some("aaaaaaaaaaaa"),
+            "the create-time image out-hash survives the save+load cycle"
+        );
+        assert_eq!(
+            record.config_hash.as_deref(),
+            Some("6f49a79fa3596a27"),
+            "the create-time config hash survives the save+load cycle"
         );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
@@ -1055,6 +1131,8 @@ mod tests {
             "default",
             Some("/home/node/work"),
             None,
+            None,
+            None,
         )?;
         let record = find_record(&state_dir, "pd@work-1234abcd")?.expect("record must exist");
         assert_eq!(record.source_dir.as_deref(), Some("/home/node/work"));
@@ -1070,6 +1148,8 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(14001, 4001)],
             "2026-08-24T00:00:00Z",
             "default",
+            None,
+            None,
             None,
             None,
         )?;
@@ -1121,6 +1201,8 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(14000, 4000)],
             "2026-07-20T14:05:42Z",
             "default",
+            None,
+            None,
             None,
             None,
         )?;
@@ -1324,6 +1406,8 @@ mod tests {
             namespace: crate::microsandbox::port_registry::default_namespace(),
             source_dir: None,
             image_tag: None,
+            image_out_hash: None,
+            config_hash: None,
         }
     }
 
@@ -1391,6 +1475,8 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
+            None,
             None,
             None,
         )?;
@@ -1588,6 +1674,8 @@ mod tests {
             "default",
             None,
             None,
+            None,
+            None,
         )?;
         assert_eq!(prospective_loopback_ip(&state_dir)?, loopback(3));
         assert_eq!(
@@ -1656,6 +1744,8 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(4000, 4000)],
             "2026-07-30T00:00:00Z",
             "default",
+            None,
+            None,
             None,
             None,
         )?;
@@ -1767,6 +1857,8 @@ mod tests {
             "repo-a",
             None,
             None,
+            None,
+            None,
         )?;
         check_and_register_sandbox_lifecycle(
             &state_dir,
@@ -1778,6 +1870,8 @@ mod tests {
             &[crate::microsandbox::plan::PortMapping::new(5000, 5000)],
             "2026-07-30T00:00:00Z",
             "repo-b",
+            None,
+            None,
             None,
             None,
         )?;

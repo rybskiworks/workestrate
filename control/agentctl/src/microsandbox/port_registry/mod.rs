@@ -69,6 +69,26 @@ pub struct SandboxInstanceRecord {
     /// candidates anyway.
     #[serde(default)]
     pub image_tag: Option<String>,
+    /// A3 (ADR 0032 §Provenance stamps): the image out-path hash segment of
+    /// the computed store tag the sandbox was CREATED from (the trailing sha
+    /// of a `<name>:<sha>` / `<name>:<ctx>:<sha>` tag). `None` for registry
+    /// refs and legacy declared tags — they have no content hash, so
+    /// staleness then rides `config_hash` alone. Absent on disk = pre-stamp
+    /// record (unknown-version posture): parses fine, NEVER auto-stale,
+    /// never triggers replace.
+    #[serde(default)]
+    pub image_out_hash: Option<String>,
+    /// A3 (ADR 0032 §Provenance stamps): FNV-1a-64 config hash over the
+    /// canonical RUNTIME-RELEVANT serialization of the creating plan
+    /// (`microsandbox::provenance::config_hash_of_plan` — image out path,
+    /// env incl baked, mounts + policies, command, resources, network,
+    /// secret names; comments/docs/formatting/unrelated-workload edits
+    /// cannot churn it by construction). Consumed by the ADR 0030 §V4
+    /// on_skew disposition and the `ps` staleness display. Absent/None =
+    /// PRE-STAMP record: parses fine, NEVER auto-stale, never triggers
+    /// replace.
+    #[serde(default)]
+    pub config_hash: Option<String>,
 }
 
 /// The default namespace for a registry record: the declaring config repo of

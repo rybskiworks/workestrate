@@ -891,6 +891,8 @@ default_deny = true
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )
     }
 
@@ -1059,6 +1061,8 @@ default_deny = true
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )
     }
 
@@ -1146,6 +1150,8 @@ default_deny = true
             "default",
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
+            None,
             None,
         )?;
 

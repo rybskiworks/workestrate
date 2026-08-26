@@ -1298,6 +1298,8 @@ guest = 4003
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )
     }
 
@@ -1682,6 +1684,8 @@ on_conflict = "fail"
             namespace: crate::microsandbox::port_registry::default_namespace(),
             source_dir: None,
             image_tag: None,
+            image_out_hash: None,
+            config_hash: None,
         }
     }
 
@@ -2580,6 +2584,8 @@ guest = 4000
             "default",
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
+            None,
             None,
         )
     }

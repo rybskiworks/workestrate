@@ -110,6 +110,18 @@ pub fn classify_status(facts: &ReconcileFacts) -> InstanceStatus {
     }
 }
 
+/// Provenance staleness for one `ps` row (ADR 0032 §Provenance stamps):
+/// the record's recorded config hash vs the CURRENT build inputs' hash.
+/// Both are FULL 16-hex digests — renderers truncate to
+/// [`crate::microsandbox::provenance::PROVENANCE_DISPLAY_LEN`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigStaleness {
+    /// The config hash stamped on the registry record at create time.
+    pub recorded: String,
+    /// The config hash over the CURRENT runtime-relevant plan view.
+    pub current: String,
+}
+
 /// One row of `workestrate ps` output. Pure: no msb calls. The `stale` flag
 /// is the exception — it is populated by the async caller via
 /// [`probe_liveness`]; [`ps`] itself leaves it `false`. The `status` field is
@@ -137,6 +149,19 @@ pub struct PsEntry {
     /// Reconciled 5-state status (ADR 0030 §4.4); set by the async caller via
     /// [`classify_status`] (`None` from [`ps`]).
     pub status: Option<InstanceStatus>,
+    /// ADR 0032 §Provenance stamps: the record's FULL config hash stamp.
+    /// `None` = pre-stamp record (unknown-version posture: NEVER auto-stale,
+    /// nothing displayed). Populated by [`ps`]; consumed by the async
+    /// caller's staleness computation.
+    pub config_hash: Option<String>,
+    /// The record's declaring-config-repo namespace (ADR 0030 Phase 2 T1):
+    /// the resolution filter deciding whether the ACTIVE config view owns
+    /// this row (a foreign-namespace record is never compared).
+    pub namespace: String,
+    /// Config-hash drift (recorded vs current), set by the async caller
+    /// (`cmd_ps`) when both stamps are derivable; `None` from [`ps`] and for
+    /// every pre-stamp/unresolvable row (honest unknown — no display).
+    pub staleness: Option<ConfigStaleness>,
 }
 
 /// The canonical refuse message (text mode). Pinned by ADR 0021 §2.
@@ -202,6 +227,9 @@ pub fn ps(state_dir: &Path) -> Result<Vec<PsEntry>> {
                 started_at: r.created_at,
                 stale: false,
                 status: None,
+                config_hash: r.config_hash,
+                namespace: r.namespace,
+                staleness: None,
             }
         })
         .collect())
@@ -426,6 +454,8 @@ mod tests {
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )?;
         let entries = ps(&dir)?;
         assert_eq!(entries.len(), 1);
@@ -470,6 +500,8 @@ mod tests {
             "default",
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
+            None,
             None,
         )?;
         let entries = ps(&dir)?;
@@ -648,6 +680,9 @@ mod tests {
                 started_at: String::new(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "b".into(),
@@ -659,6 +694,9 @@ mod tests {
                 started_at: String::new(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "c@y".into(),
@@ -670,6 +708,9 @@ mod tests {
                 started_at: String::new(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
         ];
         let outcomes = [
@@ -706,6 +747,9 @@ mod tests {
                 started_at: String::new(),
                 stale: true, // pre-existing; Unknown must NOT overwrite it
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "b".into(),
@@ -717,6 +761,9 @@ mod tests {
                 started_at: String::new(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
         ];
         let outcomes = [ProbeOutcome::Unknown, ProbeOutcome::Unknown];
@@ -746,6 +793,9 @@ mod tests {
                 started_at: String::new(),
                 stale: true, // start stale; Alive must clear it
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "b".into(),
@@ -757,6 +807,9 @@ mod tests {
                 started_at: String::new(),
                 stale: true,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
         ];
         let outcomes = [ProbeOutcome::Alive, ProbeOutcome::Alive];
@@ -793,6 +846,8 @@ mod tests {
             namespace: crate::microsandbox::port_registry::default_namespace(),
             source_dir: None,
             image_tag: None,
+            image_out_hash: None,
+            config_hash: None,
         }
     }
 

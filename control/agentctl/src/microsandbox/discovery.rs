@@ -784,6 +784,8 @@ default_deny = true
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )
     }
 
@@ -814,6 +816,8 @@ default_deny = true
             "default",
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
+            None,
             None,
         )
     }
@@ -1144,6 +1148,8 @@ default_deny = true
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )?;
         let config = depends_config();
 
@@ -1205,6 +1211,8 @@ default_deny = true
             "default",
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
+            None,
             None,
         )
     }
@@ -1419,6 +1427,8 @@ default_deny = true
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )?;
         let config = depends_config();
 
@@ -1463,6 +1473,8 @@ default_deny = true
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )?;
         let config = depends_config();
 
@@ -1505,6 +1517,8 @@ default_deny = true
             "default",
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
+            None,
             None,
         )?;
         let mut config = named_config();
@@ -1717,6 +1731,8 @@ default_deny = true
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
             None,
+            None,
+            None,
         )?;
         let mut config = named_config();
         let spec = config
@@ -1774,6 +1790,8 @@ default_deny = true
             "repo-a",
             None,
             // A2 (ADR 0032 §Image tags): no running tag known at this site.
+            None,
+            None,
             None,
         )?;
         let config = depends_config();

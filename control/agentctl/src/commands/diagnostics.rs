@@ -283,6 +283,10 @@ pub async fn cmd_ps(json: bool) -> Result<()> {
             }
         }
     }
+    // ADR 0032 §Provenance stamps: config-hash staleness per entry, computed
+    // only where CHEAPLY DERIVABLE from the active config view. Pre-stamp
+    // records and unresolvable rows display nothing (honest unknown).
+    apply_config_staleness(&mut entries);
     if json {
         println!(
             "{}",
@@ -292,6 +296,51 @@ pub async fn cmd_ps(json: bool) -> Result<()> {
         print_ps_text(&entries)?;
     }
     Ok(())
+}
+
+/// ADR 0032 §Provenance stamps: compute per-entry config staleness against
+/// the ACTIVE config view. For each entry whose workload resolves in the
+/// merged config under the record's OWN namespace, build the current plan
+/// view (the same deterministic mutations the up path applies — instance
+/// state scoping + name override, via the shared runtime helper) and compare
+/// its config hash with the record's stamp. Honest-unknown posture:
+/// - pre-stamp records (`config_hash: None`) are NEVER compared (never
+///   auto-stale) — nothing displayed;
+/// - a workload gone from the active config, a FOREIGN-NAMESPACE record,
+///   a config-load failure, or a workload-construction failure (e.g. a
+///   required dep not running) all leave `staleness` None — no display.
+///   Equal hashes also leave None (only a real divergence is displayed).
+fn apply_config_staleness(entries: &mut [crate::microsandbox::runtime::PsEntry]) {
+    let cfg = match config::load_config() {
+        Ok(cfg) => cfg,
+        Err(_) => return, // no active view → honest unknown for every row
+    };
+    // get_provenance (non-draining) + layer dirs resolve each workload's
+    // declaring-repo namespace exactly as ConfigWorkload::new would.
+    let provenance = crate::merge::get_provenance();
+    let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
+    for e in entries.iter_mut() {
+        let Some(recorded) = e.config_hash.clone() else {
+            continue; // pre-stamp record: never auto-stale, nothing displayed
+        };
+        if !cfg.workloads.contains_key(&e.workload) {
+            continue; // workload gone from the active config
+        }
+        let namespace =
+            crate::commands::deps::namespace_for(provenance.as_ref(), &layer_dirs, &e.workload);
+        if namespace != e.namespace {
+            continue; // foreign-namespace record: not this config's row
+        }
+        // Full construction (dep resolution included); failures → unknown.
+        let Ok(wl) = crate::microsandbox::workload::ConfigWorkload::new(&e.workload) else {
+            continue;
+        };
+        let current =
+            crate::microsandbox::runtime::current_config_hash_for_workload(&wl, &e.instance);
+        if current != recorded {
+            e.staleness = Some(crate::microsandbox::runtime::ConfigStaleness { recorded, current });
+        }
+    }
 }
 
 pub fn print_ps_text(entries: &[crate::microsandbox::runtime::PsEntry]) -> Result<()> {
@@ -357,15 +406,32 @@ pub fn print_ps_text_to<W: std::io::Write>(
         // ADR 0030 §4.4: reconciled 5-state status; `-` when the async caller
         // could not gather facts (or from the pure `ps()` path).
         let status_display = e.status.map(|s| s.as_str()).unwrap_or("-");
+        // ADR 0032 §Provenance stamps: config-hash drift suffix, matching
+        // the ADR's `stale (config a1b2 → current d4e5)` shape (4-char
+        // prefixes of the FULL hashes). Absent for pre-stamp/unresolvable
+        // rows.
+        let staleness_display = e
+            .staleness
+            .as_ref()
+            .map(|s| {
+                use crate::microsandbox::provenance::short_hash;
+                format!(
+                    " stale (config {} → current {})",
+                    short_hash(&s.recorded),
+                    short_hash(&s.current)
+                )
+            })
+            .unwrap_or_default();
         writeln!(
             out,
-            "{:<32} {:<16} {:<12} {:<24} {:<18} {}",
+            "{:<32} {:<16} {:<12} {:<24} {:<18} {}{}",
             e.instance,
             e.workload,
             e.context.clone().unwrap_or_else(|| "-".into()),
             ports_str,
             status_display,
             started_display,
+            staleness_display,
         )?;
     }
 
@@ -1118,6 +1184,9 @@ mod tests {
             started_at: "2026-07-20T14:03:11Z".to_string(),
             stale: false,
             status: None,
+            config_hash: None,
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+            staleness: None,
         };
         let parallel = PsEntry {
             instance: "personal-litellm@canary".to_string(),
@@ -1134,6 +1203,9 @@ mod tests {
             started_at: "2026-07-20T14:05:42Z".to_string(),
             stale: false,
             status: None,
+            config_hash: None,
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+            staleness: None,
         };
 
         let json = serde_json::to_string_pretty(&ps_entries_json(&[singleton, parallel]))
@@ -1202,6 +1274,9 @@ mod tests {
                 started_at: "2026-07-20T14:05:42Z".to_string(),
                 stale: true,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "personal-pi".to_string(),
@@ -1213,6 +1288,9 @@ mod tests {
                 started_at: "2026-07-20T14:06:00Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
         ];
 
@@ -1274,6 +1352,9 @@ mod tests {
                 started_at: "2026-07-20T14:03:11Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "personal-litellm@canary".to_string(),
@@ -1290,6 +1371,9 @@ mod tests {
                 started_at: "2026-07-20T14:05:42Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
         ];
 
@@ -1345,6 +1429,9 @@ mod tests {
                 started_at: "2026-07-20T14:03:11Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "personal-litellm@canary".to_string(),
@@ -1361,6 +1448,9 @@ mod tests {
                 started_at: "2026-07-20T14:05:42Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "personal-pi".to_string(),
@@ -1372,6 +1462,9 @@ mod tests {
                 started_at: "2026-07-20T14:06:00Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
         ];
 
@@ -1417,6 +1510,9 @@ mod tests {
             started_at: "2026-07-20T14:03:11Z".to_string(),
             stale: false,
             status: None,
+            config_hash: None,
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+            staleness: None,
         }];
         let mut buf: Vec<u8> = Vec::new();
         print_ps_text_to(&entries, &mut buf).expect("render ps text");
@@ -1723,6 +1819,9 @@ mod tests {
             started_at: "2026-07-20T14:03:11Z".to_string(),
             stale: false,
             status: None,
+            config_hash: None,
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+            staleness: None,
         };
         let json = serde_json::to_string_pretty(&crate::json_out::ps_entries_json(&[entry]))
             .expect("serialize ps entry");
@@ -1752,6 +1851,9 @@ mod tests {
                 started_at: "2026-07-20T14:03:11Z".to_string(),
                 stale: false,
                 status: Some(InstanceStatus::RunningUnhealthy),
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
             PsEntry {
                 instance: "personal-pi".to_string(),
@@ -1763,6 +1865,9 @@ mod tests {
                 started_at: "2026-07-20T14:06:00Z".to_string(),
                 stale: false,
                 status: None,
+                config_hash: None,
+                namespace: crate::microsandbox::port_registry::default_namespace(),
+                staleness: None,
             },
         ];
         let mut buf: Vec<u8> = Vec::new();
@@ -1795,6 +1900,263 @@ mod tests {
             pi_line.contains(" - "),
             "None status must render `-`; got line: {pi_line}"
         );
+    }
+
+    // ---- ADR 0032 §Provenance stamps: ps staleness display + computation ----
+
+    /// A stamped+drifted entry renders the PINNED drift suffix
+    /// ` stale (config xxxx → current yyyy)` — 4-char prefixes
+    /// ([`crate::microsandbox::provenance::PROVENANCE_DISPLAY_LEN`]) of the
+    /// FULL stored hashes — appended after STARTED; a pre-stamp entry
+    /// (staleness None) renders NOTHING extra.
+    #[test]
+    fn print_ps_text_renders_staleness_suffix_only_when_populated() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{ConfigStaleness, PsEntry};
+
+        let drifted = PsEntry {
+            instance: "personal-litellm".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping::new(4000, 4000)],
+            started_at: "2026-07-20T14:03:11Z".to_string(),
+            stale: false,
+            status: None,
+            config_hash: Some("a1b2c3d4e5f60718".to_string()),
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+            staleness: Some(ConfigStaleness {
+                recorded: "a1b2c3d4e5f60718".to_string(),
+                current: "d4e5f60718273a4b".to_string(),
+            }),
+        };
+        let pre_stamp = PsEntry {
+            instance: "personal-pi".to_string(),
+            workload: "pi".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-pi".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping::new(3000, 3000)],
+            started_at: "2026-07-20T14:06:00Z".to_string(),
+            stale: false,
+            status: None,
+            config_hash: None,
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+            staleness: None,
+        };
+
+        let mut buf: Vec<u8> = Vec::new();
+        print_ps_text_to(&[drifted, pre_stamp], &mut buf).expect("render ps text");
+        let out = String::from_utf8(buf).expect("utf8");
+
+        // The drifted row carries the pinned suffix with 4-char prefixes of
+        // the stored FULL hashes.
+        let litellm_line = out
+            .lines()
+            .find(|l| l.contains("personal-litellm"))
+            .expect("litellm row must exist");
+        assert!(
+            litellm_line.contains(" stale (config a1b2 → current d4e5)"),
+            "drifted row must render the pinned staleness suffix; got line: {litellm_line}"
+        );
+        // The pre-stamp row renders nothing extra (no drift suffix at all).
+        let pi_line = out
+            .lines()
+            .find(|l| l.contains("personal-pi"))
+            .expect("pi row must exist");
+        assert!(
+            !pi_line.contains("stale"),
+            "pre-stamp row must render no staleness suffix; got line: {pi_line}"
+        );
+    }
+
+    /// `ps --json`: the `staleness` field is ADDITIVE — present (with the
+    /// full recorded/current hashes) only on stamped+drifted rows; absent
+    /// entirely otherwise, so pre-stamp/unresolvable rows keep the legacy
+    /// shape byte-identical (the established skip_serializing_if convention).
+    #[test]
+    fn ps_json_serializes_staleness_additively() {
+        use crate::microsandbox::plan::PortMapping;
+        use crate::microsandbox::runtime::{ConfigStaleness, PsEntry};
+
+        let drifted = PsEntry {
+            instance: "personal-litellm".to_string(),
+            workload: "litellm".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-litellm".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping::new(4000, 4000)],
+            started_at: "2026-07-20T14:03:11Z".to_string(),
+            stale: false,
+            status: None,
+            config_hash: Some("a1b2c3d4e5f60718".to_string()),
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+            staleness: Some(ConfigStaleness {
+                recorded: "a1b2c3d4e5f60718".to_string(),
+                current: "d4e5f60718273a4b".to_string(),
+            }),
+        };
+        let clean = PsEntry {
+            instance: "personal-pi".to_string(),
+            workload: "pi".to_string(),
+            context: Some("personal".to_string()),
+            slot: "personal-pi".to_string(),
+            kind: PsKind::Singleton,
+            ports: vec![PortMapping::new(3000, 3000)],
+            started_at: "2026-07-20T14:06:00Z".to_string(),
+            stale: false,
+            status: None,
+            config_hash: None,
+            namespace: crate::microsandbox::port_registry::default_namespace(),
+            staleness: None,
+        };
+
+        let json = serde_json::to_string_pretty(&ps_entries_json(&[drifted, clean]))
+            .expect("serialize ps entries");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        // Drifted row: the additive object with FULL hashes.
+        assert_eq!(
+            value[0]["staleness"]["recorded"], "a1b2c3d4e5f60718",
+            "staleness.recorded must carry the FULL recorded hash; got:\n{json}"
+        );
+        assert_eq!(
+            value[0]["staleness"]["current"], "d4e5f60718273a4b",
+            "staleness.current must carry the FULL current hash; got:\n{json}"
+        );
+        // Clean/pre-stamp row: the key is absent entirely (not null).
+        assert!(
+            value[1].get("staleness").is_none(),
+            "staleness must be omitted when None; got:\n{json}"
+        );
+    }
+
+    /// `apply_config_staleness` integration against the committed fixture
+    /// config (TestConfigGuard): a record whose stamp matches the CURRENT
+    /// runtime-relevant view shows no staleness; a diverged stamp populates
+    /// it; a FOREIGN-NAMESPACE record and an UNKNOWN-WORKLOAD record are
+    /// honest-unknown (nothing displayed).
+    #[test]
+    fn apply_config_staleness_matches_current_and_skips_unresolvable_rows() -> Result<()> {
+        use crate::config::test_support::{unique_state_dir, TestConfigGuard};
+        use crate::microsandbox::plan::PortMapping;
+
+        let _guard = TestConfigGuard::new();
+        let state_dir = unique_state_dir("staleness-apply");
+
+        // The fixture's example-litellm is a registry-image service with no
+        // mounts / depends_on: plan() is pure, and its declaring layer (the
+        // fixture dir) is not a registered config repo → namespace "default".
+        let wl = crate::microsandbox::workload::ConfigWorkload::new("example-litellm")?;
+        let current =
+            crate::microsandbox::runtime::current_config_hash_for_workload(&wl, "example-litellm");
+        let stale_hash = "0000000000000000";
+
+        let register = |state_dir: &_,
+                        instance: &str,
+                        context: Option<&str>,
+                        workload: &str,
+                        namespace: &str,
+                        config_hash: &str|
+         -> Result<()> {
+            // Distinct host ports per record: the registry refuses a
+            // (bind, port) collision. Ports never reach the hash (host ports
+            // are allocation-dependent and pinned out), so the choice is
+            // display-neutral.
+            static NEXT_PORT: std::sync::atomic::AtomicU16 =
+                std::sync::atomic::AtomicU16::new(4000);
+            let port = NEXT_PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
+                state_dir,
+                instance,
+                context,
+                workload,
+                crate::microsandbox::plan::default_bind_ip(),
+                &[port],
+                &[PortMapping::new(port, 4000)],
+                "2026-08-24T00:00:00Z",
+                namespace,
+                None,
+                None,
+                None,
+                Some(config_hash),
+            )
+        };
+
+        // 1. Matching stamp → equal hashes → no staleness displayed.
+        register(
+            &state_dir,
+            "example-litellm",
+            None,
+            "example-litellm",
+            "default",
+            &current,
+        )?;
+        // 2. Diverged stamp → staleness populated (recorded vs current).
+        register(
+            &state_dir,
+            "personal-example-litellm",
+            Some("personal"),
+            "example-litellm",
+            "default",
+            stale_hash,
+        )?;
+        // 3. Foreign-namespace record → not this config's row → unknown.
+        register(
+            &state_dir,
+            "work-example-litellm",
+            Some("work"),
+            "example-litellm",
+            "foreign-repo",
+            stale_hash,
+        )?;
+        // 4. Workload gone from the active config → unknown.
+        register(
+            &state_dir,
+            "ghost-workload",
+            None,
+            "ghost-workload",
+            "default",
+            stale_hash,
+        )?;
+
+        let mut entries = crate::microsandbox::runtime::ps(&state_dir)?;
+        assert_eq!(entries.len(), 4, "all four records listed");
+        apply_config_staleness(&mut entries);
+
+        let by_instance = |name: &str| {
+            entries
+                .iter()
+                .find(|e| e.instance == name)
+                .unwrap_or_else(|| panic!("entry '{name}' must be listed"))
+        };
+
+        let matching = by_instance("example-litellm");
+        assert!(
+            matching.staleness.is_none(),
+            "an up-to-date stamp must display nothing; got {:?}",
+            matching.staleness
+        );
+
+        let drifted = by_instance("personal-example-litellm");
+        let s = drifted
+            .staleness
+            .as_ref()
+            .expect("a diverged stamp must populate staleness");
+        assert_eq!(s.recorded, stale_hash);
+        assert_eq!(s.current, current, "current side is the live view's hash");
+
+        assert!(
+            by_instance("work-example-litellm").staleness.is_none(),
+            "a foreign-namespace record is honest-unknown (nothing displayed)"
+        );
+        assert!(
+            by_instance("ghost-workload").staleness.is_none(),
+            "an unknown workload is honest-unknown (nothing displayed)"
+        );
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
     }
 
     /// `workloads --json` includes the policy + namespace columns (ADR 0030
