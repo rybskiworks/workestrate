@@ -3022,7 +3022,7 @@ write.deny = ["sugar-write-deny"]
         let (home, clone, sha_a) = a5_remote_home(
             "a5-pinned",
             "team",
-            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+            &[("workestrate.toml", &a5_marker_toml("rev-a"))],
         );
         a5_write_lock(&home, "team", &sha_a);
         let sha_b = a5_advance_clone(&clone, &[("workestrate.toml", &a5_marker_toml("rev_b"))]);
@@ -3032,7 +3032,7 @@ write.deny = ["sugar-write-deny"]
         let cfg = load_config()?;
 
         assert!(
-            cfg.workloads.contains_key("rev_a"),
+            cfg.workloads.contains_key("rev-a"),
             "consumption must read the LOCKED rev A, not the checkout: {:?}",
             cfg.workloads.keys().collect::<Vec<_>>()
         );
@@ -3073,13 +3073,13 @@ write.deny = ["sugar-write-deny"]
         let (home, _clone, sha_a) = a5_remote_home(
             "a5-first",
             "team",
-            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+            &[("workestrate.toml", &a5_marker_toml("rev-a"))],
         );
         let lock_path = home.join("workestrate.lock");
         assert!(!lock_path.exists(), "fixture starts lock-free");
 
         let cfg = load_config()?;
-        assert!(cfg.workloads.contains_key("rev_a"));
+        assert!(cfg.workloads.contains_key("rev-a"));
 
         // First resolution WROTE the lock: primary pin {rev = sha, sha,
         // fetched_at} for (team, main).
@@ -3096,7 +3096,7 @@ write.deny = ["sugar-write-deny"]
         // Second load: silent and write-free.
         let lock_bytes = std::fs::read_to_string(&lock_path)?;
         let cfg2 = load_config()?;
-        assert!(cfg2.workloads.contains_key("rev_a"));
+        assert!(cfg2.workloads.contains_key("rev-a"));
         assert_eq!(
             std::fs::read_to_string(&lock_path)?,
             lock_bytes,
@@ -3116,7 +3116,7 @@ write.deny = ["sugar-write-deny"]
         let _g = EnvGuard::capture(A5_ENV_KEYS);
         let home = a5_pin_home("a5-regrev");
         let clone = home.join("config-repos").join("team");
-        init_git_repo(&clone, &[("workestrate.toml", &a5_marker_toml("rev_a"))]);
+        init_git_repo(&clone, &[("workestrate.toml", &a5_marker_toml("rev-a"))]);
         let sha_a = crate::git::git_rev_parse(&clone)?;
         a5_advance_clone(&clone, &[("workestrate.toml", &a5_marker_toml("rev_b"))]);
         std::fs::write(
@@ -3131,7 +3131,7 @@ write.deny = ["sugar-write-deny"]
 
         let cfg = load_config()?;
         assert!(
-            cfg.workloads.contains_key("rev_a"),
+            cfg.workloads.contains_key("rev-a"),
             "the registry-recorded rev must be consumed, not the checkout tip"
         );
         assert!(
@@ -3194,7 +3194,7 @@ write.deny = ["sugar-write-deny"]
             "a5-secrets",
             "team",
             &[
-                ("workestrate.toml", &a5_marker_toml("rev_a")),
+                ("workestrate.toml", &a5_marker_toml("rev-a")),
                 (".env.enc", "enc-content-A"),
             ],
         );
@@ -3304,12 +3304,12 @@ write.deny = ["sugar-write-deny"]
         let alpha_feat = a5_commit_branch(
             &alpha,
             "feat-x",
-            &[("workestrate.toml", &a5_marker_toml("alpha_feat"))],
+            &[("workestrate.toml", &a5_marker_toml("alpha-feat"))],
         );
         let beta_feat = a5_commit_branch(
             &beta,
             "feat-x",
-            &[("workestrate.toml", &a5_marker_toml("beta_feat"))],
+            &[("workestrate.toml", &a5_marker_toml("beta-feat"))],
         );
         std::fs::write(
             home.join("config.toml"),
@@ -3336,7 +3336,7 @@ write.deny = ["sugar-write-deny"]
 
         let cfg = load_config()?;
 
-        for feat in ["alpha_feat", "beta_feat"] {
+        for feat in ["alpha-feat", "beta-feat"] {
             assert!(
                 cfg.workloads.contains_key(feat),
                 "both entries must be consumed at feat-x: {:?}",
@@ -3379,7 +3379,7 @@ write.deny = ["sugar-write-deny"]
         let (home, _clone, _sha) = a5_remote_home(
             "a5-cfgref-unknown",
             "team",
-            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+            &[("workestrate.toml", &a5_marker_toml("rev-a"))],
         );
         std::env::set_var("WORKESTRATE_CONFIG_REF", "no-such-ref");
 
@@ -3407,18 +3407,18 @@ write.deny = ["sugar-write-deny"]
         let (home, clone, sha_main) = a5_remote_home(
             "a5-cfgref-discipline",
             "team",
-            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+            &[("workestrate.toml", &a5_marker_toml("rev-a"))],
         );
         a5_write_lock(&home, "team", &sha_main);
         let sha_feat = a5_commit_branch(
             &clone,
             "feat-x",
-            &[("workestrate.toml", &a5_marker_toml("rev_feat"))],
+            &[("workestrate.toml", &a5_marker_toml("rev-feat"))],
         );
         std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
 
         let cfg = load_config()?;
-        assert!(cfg.workloads.contains_key("rev_feat"));
+        assert!(cfg.workloads.contains_key("rev-feat"));
 
         let lock_path = home.join("workestrate.lock");
         let lock = crate::config::load_home_lock()?.expect("lock after first resolution");
@@ -3437,7 +3437,7 @@ write.deny = ["sugar-write-deny"]
         // Second load: silent + write-free (byte-identical lock).
         let bytes = std::fs::read_to_string(&lock_path)?;
         let cfg2 = load_config()?;
-        assert!(cfg2.workloads.contains_key("rev_feat"));
+        assert!(cfg2.workloads.contains_key("rev-feat"));
         assert_eq!(
             std::fs::read_to_string(&lock_path)?,
             bytes,
@@ -3458,12 +3458,12 @@ write.deny = ["sugar-write-deny"]
         let (home, _clone, sha_a) = a5_remote_home(
             "a5-cfgref-sha",
             "team",
-            &[("workestrate.toml", &a5_marker_toml("rev_a"))],
+            &[("workestrate.toml", &a5_marker_toml("rev-a"))],
         );
         std::env::set_var("WORKESTRATE_CONFIG_REF", &sha_a);
 
         let cfg = load_config()?;
-        assert!(cfg.workloads.contains_key("rev_a"));
+        assert!(cfg.workloads.contains_key("rev-a"));
 
         let lock = crate::config::load_home_lock()?.expect("lock written");
         let entry = &lock.repos["team"];
@@ -3487,7 +3487,7 @@ write.deny = ["sugar-write-deny"]
         let home = a5_pin_home("a5-cfgref-plain");
         let plain = home.join("my-plain-config");
         std::fs::create_dir_all(&plain)?;
-        std::fs::write(plain.join("workestrate.toml"), a5_marker_toml("plain_v1"))?;
+        std::fs::write(plain.join("workestrate.toml"), a5_marker_toml("plain-v1"))?;
         let clone = home.join("config-repos").join("team");
         init_git_repo(
             &clone,
@@ -3496,7 +3496,7 @@ write.deny = ["sugar-write-deny"]
         a5_commit_branch(
             &clone,
             "feat-x",
-            &[("workestrate.toml", &a5_marker_toml("team_feat"))],
+            &[("workestrate.toml", &a5_marker_toml("team-feat"))],
         );
         std::fs::write(
             home.join("config.toml"),
@@ -3508,19 +3508,19 @@ write.deny = ["sugar-write-deny"]
         std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
 
         let cfg = load_config()?;
-        assert!(cfg.workloads.contains_key("plain_v1"));
-        assert!(cfg.workloads.contains_key("team_feat"));
+        assert!(cfg.workloads.contains_key("plain-v1"));
+        assert!(cfg.workloads.contains_key("team-feat"));
         assert!(!cfg.workloads.contains_key("team_main"));
 
         // Content-as-is: an edit to the plain dir is visible on the NEXT
         // load even under --config-ref.
-        std::fs::write(plain.join("workestrate.toml"), a5_marker_toml("plain_v2"))?;
+        std::fs::write(plain.join("workestrate.toml"), a5_marker_toml("plain-v2"))?;
         let cfg = load_config()?;
         assert!(
-            cfg.workloads.contains_key("plain_v2"),
+            cfg.workloads.contains_key("plain-v2"),
             "plain-path consumption stays content-as-is under --config-ref"
         );
-        assert!(cfg.workloads.contains_key("team_feat"));
+        assert!(cfg.workloads.contains_key("team-feat"));
 
         // Lock: the git-backed entry has its refs pin; the plain entry has
         // NO lock entry at all.

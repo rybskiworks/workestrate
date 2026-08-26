@@ -167,7 +167,7 @@ pub(crate) mod tests {
 
         std::fs::write(
             root.join("cwd").join("workestrate.local.toml"),
-            one_workload_toml("a1_hostile_local_marker"),
+            one_workload_toml("a1-hostile-local-marker"),
         )?;
 
         let old_home = std::env::var("HOME").ok();
@@ -196,7 +196,7 @@ pub(crate) mod tests {
         write_test_registry(&root.join("home"), &[])?;
         let cfg = crate::config::load_config()?;
         assert!(
-            !cfg.workloads.contains_key("a1_hostile_local_marker"),
+            !cfg.workloads.contains_key("a1-hostile-local-marker"),
             "A1 regression: local.toml loaded without trust! workloads: {:?}",
             cfg.workloads.keys().collect::<Vec<_>>()
         );
@@ -206,7 +206,7 @@ pub(crate) mod tests {
         trust_project(&cwd_canonical)?;
         let cfg2 = crate::config::load_config()?;
         assert!(
-            cfg2.workloads.contains_key("a1_hostile_local_marker"),
+            cfg2.workloads.contains_key("a1-hostile-local-marker"),
             "A1 regression: local.toml NOT loaded after trust! workloads: {:?}",
             cfg2.workloads.keys().collect::<Vec<_>>()
         );
@@ -252,7 +252,7 @@ pub(crate) mod tests {
 
         std::fs::write(
             root.join("cwd").join("workestrate.local.toml"),
-            one_workload_toml("a1_bootstrap_marker"),
+            one_workload_toml("a1-bootstrap-marker"),
         )?;
 
         let old_home = std::env::var("HOME").ok();
@@ -275,7 +275,7 @@ pub(crate) mod tests {
         // NO registry file present -> load_registry returns None -> bootstrap.
         let cfg = crate::config::load_config()?;
         assert!(
-            cfg.workloads.contains_key("a1_bootstrap_marker"),
+            cfg.workloads.contains_key("a1-bootstrap-marker"),
             "A1 bootstrap: local.toml should load when no registry exists; got {:?}",
             cfg.workloads.keys().collect::<Vec<_>>()
         );
