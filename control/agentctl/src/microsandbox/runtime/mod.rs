@@ -50,6 +50,11 @@ use microsandbox::sandbox::{SandboxHandle, SandboxStatus};
 use microsandbox::{MicrosandboxError, Sandbox};
 use std::path::Path;
 
+// ADR 0030 addendum 2026-08-26: every SDK name boundary encodes the
+// workestrate identity into an SDK-legal msb sandbox name via
+// `slots::msb_name_of_instance`; the identity itself never changes.
+use super::slots;
+
 /// Poll interval for the post-stop remove-retry loop in [`stop_and_remove`].
 const REMOVE_RETRY_POLL: std::time::Duration = std::time::Duration::from_millis(150);
 
@@ -257,7 +262,7 @@ pub enum DownStatus {
 /// Returns Ok(()) when the slot is free (or has been cleared by --replace).
 pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) -> Result<()> {
     if spec.replace {
-        match Sandbox::get(&spec.instance).await {
+        match Sandbox::get(&slots::msb_name_of_instance(&spec.instance)).await {
             Ok(handle) => {
                 stop_and_remove(handle).await?;
                 // The sandbox is gone — its registry record must go with it;
@@ -279,7 +284,7 @@ pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) ->
         return Ok(());
     }
 
-    match Sandbox::get(&spec.instance).await {
+    match Sandbox::get(&slots::msb_name_of_instance(&spec.instance)).await {
         Ok(_handle) => {
             // Truly running — refuse. The handle drops without stopping;
             // the existing sandbox keeps running (this is the desired
@@ -320,6 +325,89 @@ pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) ->
     }
 }
 
+/// One spelling's pre-check outcome for the dual-spelling teardown paths,
+/// abstracted over the async `Sandbox::get` so the decision is pure and
+/// unit-testable (the SDK handle is a concrete type with no mock seam).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SpellingOutcome {
+    /// `Sandbox::get` resolved the sandbox (any status).
+    Present,
+    /// Definitive `SandboxNotFound` — fall through to the next spelling.
+    Missing,
+    /// Any OTHER error — surfaced, never swallowed (fail-closed).
+    Failed(String),
+}
+
+/// The verdict of the dual-spelling pre-check over
+/// [`slots::lookup_msb_names`] outcomes (see [`decide_spelling_verdict`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpellingVerdict {
+    /// Whether ANY spelling resolved — drives Stopped-vs-NotFound reporting
+    /// in [`down_hardened`].
+    pub existed: bool,
+    /// The first hard error hit, if any — surfaced to the caller.
+    pub error: Option<String>,
+}
+
+/// Pure decision core for the dual-spelling pre-check shared by
+/// [`teardown_for_replace`] and [`down_hardened`] (ADR 0030 addendum
+/// 2026-08-26). Outcomes are consumed IN ORDER (encoded spelling first):
+/// the first Present wins; Missing falls through to the next spelling; the
+/// FIRST hard error aborts the search and is surfaced — so a NotFound on
+/// the encoded name followed by a hard error on the legacy raw name also
+/// surfaces the error. Proceed-as-missing ONLY when every spelling came
+/// back Missing.
+pub(crate) fn decide_spelling_verdict(outcomes: &[SpellingOutcome]) -> SpellingVerdict {
+    for outcome in outcomes {
+        match outcome {
+            SpellingOutcome::Present => {
+                return SpellingVerdict {
+                    existed: true,
+                    error: None,
+                };
+            }
+            SpellingOutcome::Missing => {}
+            // A hard error aborts BEFORE any later spelling could resolve,
+            // and no earlier spelling can have resolved either (Present
+            // returns immediately) — so `existed` is always false here.
+            SpellingOutcome::Failed(e) => {
+                return SpellingVerdict {
+                    existed: false,
+                    error: Some(e.clone()),
+                };
+            }
+        }
+    }
+    SpellingVerdict {
+        existed: false,
+        error: None,
+    }
+}
+
+/// Probe each spelling from [`slots::lookup_msb_names`] in order, stopping
+/// at the first Present or hard error (the collected prefix decides the
+/// verdict via [`decide_spelling_verdict`]). Returns the outcomes plus the
+/// live handle when a spelling resolved.
+async fn probe_spellings(instance: &str) -> (Vec<SpellingOutcome>, Option<SandboxHandle>) {
+    let mut outcomes = Vec::new();
+    for name in slots::lookup_msb_names(instance) {
+        match Sandbox::get(&name).await {
+            Ok(handle) => {
+                outcomes.push(SpellingOutcome::Present);
+                return (outcomes, Some(handle));
+            }
+            Err(MicrosandboxError::SandboxNotFound(_)) => {
+                outcomes.push(SpellingOutcome::Missing);
+            }
+            Err(e) => {
+                outcomes.push(SpellingOutcome::Failed(e.to_string()));
+                return (outcomes, None);
+            }
+        }
+    }
+    (outcomes, None)
+}
+
 /// Idempotent three-store teardown for the conflict chain's `replace`
 /// disposition (ADR 0030 Phase 0): stop+remove the msb sandbox when present,
 /// then clear the port-registry record and the policy dir — all best-effort.
@@ -330,18 +418,27 @@ pub async fn check_occupied_or_replace(spec: &InstanceSpec, state_dir: &Path) ->
 /// Unlike the `--replace` branch of [`check_occupied_or_replace`], this never
 /// refuses and never hard-errors on a missing sandbox: the caller proceeds to
 /// a fresh create either way.
+///
+/// Dual-spelling lookup (ADR 0030 addendum 2026-08-26): the sandbox may be
+/// registered under the encoded msb name or — for old-fork-created homes —
+/// the raw legacy spelling; both are tried ([`probe_spellings`]) and the
+/// first hard error still surfaces as a warning (never swallowed), while
+/// proceed-as-missing requires EVERY spelling to come back NotFound.
 pub(crate) async fn teardown_for_replace(state_dir: &Path, instance: &str) -> Result<()> {
-    match Sandbox::get(instance).await {
-        Ok(handle) => {
+    let (outcomes, found) = probe_spellings(instance).await;
+    let verdict = decide_spelling_verdict(&outcomes);
+    match found {
+        Some(handle) => {
             stop_and_remove(handle).await?;
         }
-        Err(MicrosandboxError::SandboxNotFound(_)) => {}
-        Err(e) => {
-            eprintln!(
-                "warning: could not verify sandbox '{}' via msb ({}); \
-                 proceeding with replace and clearing any stale state",
-                instance, e
-            );
+        None => {
+            if let Some(e) = verdict.error {
+                eprintln!(
+                    "warning: could not verify sandbox '{}' via msb ({}); \
+                     proceeding with replace and clearing any stale state",
+                    instance, e
+                );
+            }
         }
     }
     let _ = super::port_registry::unregister_sandbox(state_dir, instance);
@@ -370,7 +467,7 @@ pub(crate) async fn teardown_for_replace(state_dir: &Path, instance: &str) -> Re
 // [`down_instance`].
 #[allow(dead_code)]
 pub async fn down(name: &str) -> Result<()> {
-    match Sandbox::get(name).await {
+    match Sandbox::get(&slots::msb_name_of_instance(name)).await {
         Ok(handle) => {
             stop_and_remove(handle).await?;
             let state_dir = crate::config::resolve_state_dir();
@@ -394,25 +491,23 @@ pub async fn down(name: &str) -> Result<()> {
 /// remove → unregister → policy-dir wipe → sandbox-dir removal, by REUSING
 /// the ONE instance-generic [`teardown_for_replace`] sequence (never
 /// duplicated). Stopped vs NotFound is decided by a `Sandbox::get`
-/// pre-check INSIDE this function; the posture stays never-refuses — a
-/// missing sandbox still walks the full state-clearing sequence. An msb
-/// that is UNREACHABLE (a hard `Sandbox::get` error, not NotFound) surfaces
-/// as [`DownStatus::Error`] WITHOUT clearing any state — the fail-closed
-/// posture the legacy single-instance down always had.
+/// pre-check INSIDE this function — dual-spelling per ADR 0030 addendum
+/// 2026-08-26 ([`probe_spellings`]): Stopped-vs-NotFound reports whether
+/// ANY spelling existed, and the first hard error fails closed WITHOUT
+/// clearing any state — the posture the legacy single-instance down always
+/// had. A missing sandbox under every spelling still walks the full
+/// state-clearing sequence.
 pub async fn down_hardened(state_dir: &Path, instance: &str) -> DownResult {
-    let precheck = Sandbox::get(instance).await;
-    match &precheck {
-        Err(MicrosandboxError::SandboxNotFound(_)) => {}
-        Err(e) => {
-            return DownResult {
-                instance: instance.to_string(),
-                status: DownStatus::Error,
-                message: Some(e.to_string()),
-            };
-        }
-        Ok(_) => {}
+    let (outcomes, _found) = probe_spellings(instance).await;
+    let verdict = decide_spelling_verdict(&outcomes);
+    if let Some(e) = verdict.error {
+        return DownResult {
+            instance: instance.to_string(),
+            status: DownStatus::Error,
+            message: Some(e),
+        };
     }
-    let existed = precheck.is_ok();
+    let existed = verdict.existed;
     match teardown_for_replace(state_dir, instance).await {
         Ok(()) => DownResult {
             instance: instance.to_string(),
@@ -559,6 +654,87 @@ mod tests {
         assert!(
             REMOVE_DEADLINE > Duration::from_secs(30),
             "the remove deadline must outlast the fork SDK's 30s stop grace"
+        );
+    }
+
+    // ---- msb-name encoding boundary (ADR 0030 addendum 2026-08-26) ----
+
+    /// LEGACY COMPAT lookup order: a legal name yields exactly ONE spelling;
+    /// an @-identity yields [encoded, raw] with the encoded form FIRST so
+    /// post-fix sandboxes are found without touching legacy names.
+    #[test]
+    fn lookup_msb_names_ordering_and_dedup_matrix() {
+        use crate::microsandbox::slots::{lookup_msb_names, msb_name_of_instance};
+        // Legal name → single entry (no legacy fallback entry).
+        assert_eq!(
+            lookup_msb_names("personal-litellm"),
+            vec!["personal-litellm".to_string()],
+            "legal names need no dual-spelling lookup"
+        );
+        // @-identity → [encoded, raw], deduped, encoded first.
+        let identity = "personal-litellm@canary";
+        let lookups = lookup_msb_names(identity);
+        assert_eq!(lookups.len(), 2, "encoded + raw legacy spelling");
+        assert_eq!(lookups[0], msb_name_of_instance(identity));
+        assert_eq!(lookups[1], identity);
+    }
+
+    /// Exhaustive pin of the dual-spelling pre-check decision (ADR 0030
+    /// addendum 2026-08-26): first Present wins; Missing falls through; the
+    /// FIRST hard error surfaces — including the NotFound-then-hard-error
+    /// sequence across the two spellings.
+    #[test]
+    fn decide_spelling_verdict_matrix() {
+        use super::{decide_spelling_verdict, SpellingOutcome, SpellingVerdict};
+        let missing = SpellingOutcome::Missing;
+        let present = SpellingOutcome::Present;
+        let failed = |m: &str| SpellingOutcome::Failed(m.to_string());
+        // No spellings / every spelling missing → NotFound posture.
+        assert_eq!(
+            decide_spelling_verdict(&[]),
+            SpellingVerdict {
+                existed: false,
+                error: None
+            }
+        );
+        assert_eq!(
+            decide_spelling_verdict(&[missing.clone(), missing.clone()]),
+            SpellingVerdict {
+                existed: false,
+                error: None
+            }
+        );
+        // Present on the first or after a missing → existed.
+        assert_eq!(
+            decide_spelling_verdict(std::slice::from_ref(&present)),
+            SpellingVerdict {
+                existed: true,
+                error: None
+            }
+        );
+        assert_eq!(
+            decide_spelling_verdict(&[missing.clone(), present]),
+            SpellingVerdict {
+                existed: true,
+                error: None
+            }
+        );
+        // Hard error on the FIRST spelling keeps the fail-closed behavior.
+        assert_eq!(
+            decide_spelling_verdict(&[failed("boom")]),
+            SpellingVerdict {
+                existed: false,
+                error: Some("boom".into())
+            }
+        );
+        // NotFound on the encoded name + HARD error on the legacy name:
+        // the error is surfaced, never swallowed.
+        assert_eq!(
+            decide_spelling_verdict(&[missing, failed("boom")]),
+            SpellingVerdict {
+                existed: false,
+                error: Some("boom".into())
+            }
         );
     }
 

@@ -261,6 +261,157 @@ pub fn sanitize_instance_id(raw: &str) -> Result<String> {
     Ok(slug)
 }
 
+// ---- msb sandbox-name encoding (ADR 0030 addendum 2026-08-26) ----
+//
+// The microsandbox SDK validates sandbox names at every create/get
+// (microsandbox-types 0.6.8 `lib/validation.rs::validate_sandbox_name`):
+// non-empty, at most 128 BYTES, first char ASCII alphanumeric, every char
+// ASCII alphanumeric or '.' '-' '_'. Workestrate identities are
+// `<slot>@<id>` (parallel / per-dir / scoped-dep shapes) and the `@` is
+// ILLEGAL — before this fix every parallel-instance create failed with
+// "invalid config: sandbox name must start with an alphanumeric ...".
+//
+// The fix: the workestrate identity STAYS `slot@id` everywhere (registries,
+// slots, down-scopes, CLI); only the name handed to the SDK is ENCODED,
+// deterministically and collision-free, by [`msb_name_of_instance`] at each
+// SDK name boundary. Plain (already-legal) names pass through UNCHANGED, so
+// existing singleton homes keep their exact on-disk sandbox names.
+
+/// Maximum length of an msb sandbox name in BYTES — the mirror of
+/// microsandbox-types 0.6.8 `MAX_SANDBOX_NAME_BYTES`, pinned here so the
+/// encoder can clamp without depending on SDK internals.
+pub const MAX_MSB_NAME_BYTES: usize = 128;
+
+/// true iff `name` passes the microsandbox SDK's own sandbox-name rule —
+/// the exact mirror of microsandbox-types 0.6.8
+/// `lib/validation.rs::validate_sandbox_name`: non-empty, at most
+/// [`MAX_MSB_NAME_BYTES`] (128) bytes, first char ASCII alphanumeric, and
+/// every char ASCII alphanumeric or one of '.' '-' '_'. Pure string check;
+/// no I/O.
+pub fn is_legal_msb_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > MAX_MSB_NAME_BYTES {
+        return false;
+    }
+    let mut chars = name.chars();
+    // `name` is non-empty here, so `chars.next()` is always Some.
+    let first_alphanumeric = chars.next().is_some_and(|c| c.is_ascii_alphanumeric());
+    first_alphanumeric
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
+/// Encode a workestrate instance identity into the SANDBOX NAME handed to
+/// the microsandbox SDK (ADR 0030 addendum 2026-08-26). Deterministic,
+/// pure, total; the workestrate identity itself never changes.
+///
+/// - If [`is_legal_msb_name(instance)`] the instance is returned UNCHANGED:
+///   plain slots (`litellm`, `personal-litellm`) and any already-legal name
+///   keep their exact observable sandbox name — zero churn for existing
+///   homes.
+/// - Otherwise the `@` (and any other illegal char) must be mapped into the
+///   SDK charset WITHOUT colliding with literal names. Encoding: replace
+///   EVERY illegal char with `--` (so the single `@` becomes `--`), then
+///   append `-` + the FNV-1a 64 hex8 of the ORIGINAL identity
+///   ([`fnv1a64_hex8`]). The hash suffix disambiguates encoded names from
+///   legal names that literally contain `--`: identity `"a--b"` stays
+///   `"a--b"` unsuffixed while `"a@b"` becomes `"a--b-<hash>"`.
+/// - Corner guard: an identity whose FIRST char maps to a non-alphanumeric
+///   (a leading illegal char, or a leading '.'/'_'/'-' which the charset
+///   allows but the SDK's first-char rule rejects) would still encode to an
+///   illegal name; such bases are anchored with a legal `x` prefix so the
+///   output is ALWAYS SDK-legal. Unreachable for real workestrate identities
+///   (slots start `[a-z0-9]`).
+/// - Length clamp: if the encoded form exceeds [`MAX_MSB_NAME_BYTES`] the
+///   BASE is truncated by bytes (at a char boundary; identities are ASCII in
+///   practice) to fit base + suffix, and the suffix is re-appended intact.
+///
+/// Injective up to FNV collisions: distinct identities yield distinct
+/// encodings because the hash suffix keys the original bytes.
+pub fn msb_name_of_instance(instance: &str) -> String {
+    if is_legal_msb_name(instance) {
+        return instance.to_string();
+    }
+    let mut base = String::with_capacity(instance.len() + 8);
+    for c in instance.chars() {
+        if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+            base.push(c);
+        } else {
+            base.push_str("--");
+        }
+    }
+    // Corner guard (see doc): anchor a base the SDK's first-char rule would
+    // reject. Only fires when the identity ITSELF starts non-alphanumeric.
+    if !base.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        base.insert(0, 'x');
+    }
+    let suffix = format!("-{}", fnv1a64_hex8(instance.as_bytes()));
+    let max_base = MAX_MSB_NAME_BYTES - suffix.len();
+    if base.len() > max_base {
+        // Byte truncation at a char boundary (defensive floor scan; the
+        // mapped base is pure ASCII in practice).
+        let mut cut = max_base;
+        while cut > 0 && !base.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        base.truncate(cut);
+    }
+    base.push_str(&suffix);
+    base
+}
+
+/// Best-effort REVERSE of [`msb_name_of_instance`] (ADR 0030 addendum
+/// 2026-08-26). REGISTRY RECORDS REMAIN THE SOURCE OF TRUTH — callers must
+/// not rely on decode for correctness, only for display/lookup convenience.
+///
+/// If `name` ends with `-` + 8 lowercase hex chars, strip that suffix, map
+/// every `--` in the remainder back to `@`, and accept the candidate ONLY
+/// when its fnv1a64 hex8 equals the stripped suffix (self-verifying).
+/// Otherwise — plain/legacy names, tampered suffixes, and the documented
+/// corner where a literal `--` inside the base breaks reconstruction — the
+/// input is returned unchanged.
+///
+/// Returns [`std::borrow::Cow`] so the overwhelmingly common
+/// already-decodable case borrows; only a successful reconstruction
+/// allocates. (The spec-shaped `-> &str` is unrepresentable in Rust: a
+/// reconstructed `@`-identity is new text, not a slice of the input.)
+pub fn instance_of_msb_name(name: &str) -> std::borrow::Cow<'_, str> {
+    const HEX_SUFFIX_LEN: usize = 8;
+    if name.len() > HEX_SUFFIX_LEN {
+        let split = name.len() - HEX_SUFFIX_LEN;
+        // Defensive: never split mid-char (multibyte names are possible in
+        // foreign dir listings).
+        if name.is_char_boundary(split) {
+            let (base, suffix) = name.split_at(split);
+            let lower_hex = suffix
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            if lower_hex {
+                if let Some(stripped) = base.strip_suffix('-') {
+                    let candidate = stripped.replace("--", "@");
+                    if fnv1a64_hex8(candidate.as_bytes()) == suffix {
+                        return std::borrow::Cow::Owned(candidate);
+                    }
+                }
+            }
+        }
+    }
+    std::borrow::Cow::Borrowed(name)
+}
+
+/// LEGACY COMPAT lookup order for an instance's possible msb sandbox names
+/// (ADR 0030 addendum 2026-08-26): [`msb_name_of_instance`] first, then —
+/// when different — the raw identity itself, so sandboxes created by old
+/// forks under raw-`@` names remain manageable. Deduped; order matters
+/// (encoded first). Used by the never-refuse teardown paths
+/// (`runtime::teardown_for_replace` / `runtime::down_hardened`).
+pub fn lookup_msb_names(instance: &str) -> Vec<String> {
+    let mut out = Vec::with_capacity(2);
+    out.push(msb_name_of_instance(instance));
+    if out[0] != instance {
+        out.push(instance.to_string());
+    }
+    out
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -620,5 +771,205 @@ mod tests {
         let full = format!("{:016x}", fnv_reference(b"/home/node/work"));
         let expected = format!("work-{}", &full[..8]);
         assert_eq!(per_dir_instance_id("/home/node/work"), expected);
+    }
+
+    // ---- msb sandbox-name encoding (ADR 0030 addendum 2026-08-26) ----
+
+    #[test]
+    fn is_legal_msb_name_mirrors_the_sdk_rule() {
+        for ok in [
+            "a",
+            "litellm",
+            "personal-litellm",
+            "feat--x-pi",
+            "A.b_c-9",
+            "9start",
+            &"a".repeat(MAX_MSB_NAME_BYTES), // exactly at the cap
+        ] {
+            assert!(is_legal_msb_name(ok), "must be legal: {ok}");
+        }
+        for bad in [
+            "",      // empty
+            "-lead", // first char not alphanumeric
+            ".dot",
+            "_under",
+            "@foo",                              // '@' is illegal
+            "foo@bar",                           // '@' interior
+            "foo bar",                           // space
+            "café",                              // non-ASCII
+            &"a".repeat(MAX_MSB_NAME_BYTES + 1), // one byte over
+        ] {
+            assert!(!is_legal_msb_name(bad), "must be illegal: {bad:?}");
+        }
+    }
+
+    /// The encode matrix over ALL identity shapes (ADR 0030 addendum):
+    /// bare singleton, context slot, parallel `<slot>@<id>`, per-dir
+    /// `<slot>@<slug>-<hash8>`, scoped-dep `<dep>@<dependent>-<id>`, and a
+    /// literal `--` legal name.
+    #[test]
+    fn msb_name_encode_matrix_over_all_shapes() {
+        // Legal names pass through UNCHANGED (zero churn for existing homes).
+        assert_eq!(msb_name_of_instance("litellm"), "litellm");
+        assert_eq!(msb_name_of_instance("personal-litellm"), "personal-litellm");
+        assert_eq!(msb_name_of_instance("feat--x-pi"), "feat--x-pi");
+
+        // @-identities encode: every '@' → "--", plus "-<fnv1a64 hex8 of
+        // the ORIGINAL identity>".
+        for identity in [
+            "personal-litellm@canary", // parallel
+            "prime@feat-x-1a2b3c4d",   // per-dir
+            "litellm@prime-1",         // scoped-dep
+        ] {
+            let encoded = msb_name_of_instance(identity);
+            let want_base = identity.replace('@', "--");
+            let want_suffix = format!("-{}", fnv1a64_hex8(identity.as_bytes()));
+            assert_eq!(
+                encoded,
+                format!("{want_base}{want_suffix}"),
+                "encode({identity})"
+            );
+        }
+    }
+
+    /// INJECTIVITY PIN: a legal name containing literal `--` stays
+    /// unsuffixed while the corresponding @-identity encodes to the same
+    /// base WITH the hash suffix — the two never collide.
+    #[test]
+    fn msb_name_encoding_is_injective_against_literal_dash_names() {
+        let dashed = msb_name_of_instance("a--b");
+        let at = msb_name_of_instance("a@b");
+        assert_eq!(dashed, "a--b", "legal literal-dash name unchanged");
+        assert_ne!(dashed, at, "encoded form must not collide with literal --");
+        assert!(
+            at.ends_with(&format!("-{}", fnv1a64_hex8(b"a@b"))),
+            "encoded name carries the hash suffix: {at}"
+        );
+    }
+
+    #[test]
+    fn msb_name_encoding_is_deterministic() {
+        for identity in ["personal-litellm@canary", "litellm", "café-wl@x"] {
+            assert_eq!(
+                msb_name_of_instance(identity),
+                msb_name_of_instance(identity),
+                "same input → same encoding"
+            );
+        }
+    }
+
+    /// LEGALITY PROPERTY: EVERY encoded output — matrix shapes plus
+    /// adversarial inputs — must pass the SDK's own rule and fit the byte
+    /// cap. This is the property the bug violated.
+    #[test]
+    fn msb_name_encoded_outputs_are_always_sdk_legal() {
+        let identities = [
+            // Matrix shapes.
+            "litellm",
+            "personal-litellm",
+            "personal-litellm@canary",
+            "prime@feat-x-1a2b3c4d",
+            "litellm@prime-1",
+            "feat--x-pi",
+            // Adversarial inputs.
+            "@leading",       // leading '@'
+            "@",              // '@'-only
+            "café-日本語@x",  // unicode chars
+            &"a".repeat(200), // overlong identity
+        ];
+        for identity in identities {
+            let encoded = msb_name_of_instance(identity);
+            assert!(
+                is_legal_msb_name(&encoded),
+                "encode({identity:?}) → {encoded:?} must be SDK-legal"
+            );
+            assert!(
+                encoded.len() <= MAX_MSB_NAME_BYTES,
+                "encode({identity:?}) → {} bytes exceeds the cap",
+                encoded.len()
+            );
+        }
+    }
+
+    /// The overlong case in detail: the BASE is truncated to fit and the
+    /// hash suffix survives intact at the exact 128-byte cap.
+    #[test]
+    fn msb_name_overlong_identity_clamps_base_keeps_suffix() {
+        let long = format!("{}@canary", "a".repeat(193)); // 200-char identity
+        let encoded = msb_name_of_instance(&long);
+        let suffix = format!("-{}", fnv1a64_hex8(long.as_bytes()));
+        assert!(
+            long.len() > MAX_MSB_NAME_BYTES,
+            "precondition: input exceeds the cap"
+        );
+        assert_eq!(
+            encoded.len(),
+            MAX_MSB_NAME_BYTES,
+            "clamped to exactly the cap: {encoded}"
+        );
+        assert!(
+            encoded.ends_with(&suffix),
+            "hash suffix preserved after truncation: {encoded}"
+        );
+        assert!(
+            encoded.len() < long.len() + suffix.len(),
+            "truncation happened"
+        );
+        assert!(is_legal_msb_name(&encoded));
+    }
+
+    /// Decode round-trips every matrix identity that has NO literal `--`
+    /// component (the documented corner: literal `--` in the base breaks
+    /// reconstruction; records remain the source of truth).
+    #[test]
+    fn msb_name_decode_round_trips_identities_without_literal_dashes() {
+        for identity in [
+            "litellm",
+            "personal-litellm",
+            "personal-litellm@canary",
+            "prime@feat-x-1a2b3c4d",
+            "litellm@prime-1",
+        ] {
+            let encoded = msb_name_of_instance(identity);
+            assert_eq!(
+                instance_of_msb_name(&encoded).as_ref(),
+                identity,
+                "round-trip({identity})"
+            );
+        }
+    }
+
+    #[test]
+    fn msb_name_decode_leaves_plain_and_legacy_names_unchanged() {
+        for name in [
+            "litellm",
+            "personal-litellm",
+            "feat--x-pi",
+            "some-legacy-sandbox",
+        ] {
+            assert_eq!(
+                instance_of_msb_name(name).as_ref(),
+                name,
+                "decode must be identity on plain/legacy names"
+            );
+        }
+    }
+
+    #[test]
+    fn msb_name_decode_rejects_a_tampered_hash_suffix() {
+        let encoded = msb_name_of_instance("personal-litellm@canary");
+        let real = &encoded[encoded.len() - 8..];
+        let wrong = if real == "deadbeef" {
+            "12345678"
+        } else {
+            "deadbeef"
+        };
+        let tampered = format!("{}{wrong}", &encoded[..encoded.len() - 8]);
+        assert_ne!(tampered, encoded, "precondition: suffix actually changed");
+        assert_eq!(
+            instance_of_msb_name(&tampered).as_ref(),
+            tampered,
+            "a hash mismatch must return the input unchanged"
+        );
     }
 }

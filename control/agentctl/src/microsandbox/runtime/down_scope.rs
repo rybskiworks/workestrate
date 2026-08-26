@@ -213,12 +213,22 @@ async fn enumerate_targets(
 ) -> Result<Vec<ManagedTarget>> {
     // Store 1: registry records (source-gone instances are ORDINARY records
     // — reconcile.rs gather_facts keeps them registered — so they enter the
-    // sweep naturally here).
+    // sweep naturally here). Record-driven targets keep the WORKESTRATE
+    // identity in `instance` (down_hardened encodes it back).
     let records = crate::microsandbox::port_registry::list_records(state_dir)?;
     let mut names: Vec<String> = records.iter().map(|r| r.instance.clone()).collect();
     // Store 2: the msb listing (SDK, degrading to the dir fallback).
+    // DUAL-SPELLING DEDUP (ADR 0030 addendum 2026-08-26): since the SDK
+    // name boundary encodes identities, a record `x@y` and its listed
+    // sandbox `x--y-<hash>` are ONE physical target — a listing name is
+    // skipped when ANY record matches it directly or under its encoded
+    // spelling. Listing-only names (foreign / legacy-unmatched) pass
+    // through as today.
     for n in msb_sandbox_names().await {
-        if !names.contains(&n) {
+        let covered_by_record = records.iter().any(|r| {
+            n == r.instance || n == crate::microsandbox::slots::msb_name_of_instance(&r.instance)
+        });
+        if !covered_by_record && !names.contains(&n) {
             names.push(n);
         }
     }
@@ -228,11 +238,22 @@ async fn enumerate_targets(
     let mut targets = Vec::with_capacity(names.len());
     for name in &names {
         let record = by_name.get(name.as_str()).copied();
-        let evidence = classify(
-            name,
-            record.map(|r| r.context.as_deref()),
-            artifact_log_path(name).exists(),
-        );
+        // Artifact evidence lives in the SANDBOX DIR, whose on-disk name is
+        // the ENCODED spelling for anything created after ADR 0030's
+        // 2026-08-26 encoding addendum. A record-backed target therefore
+        // also probes its identity's encoded dir; listing-derived names
+        // keep using the listed (dir) name, as before.
+        let artifact = match record {
+            Some(r) => {
+                artifact_log_path(name).exists()
+                    || artifact_log_path(&crate::microsandbox::slots::msb_name_of_instance(
+                        &r.instance,
+                    ))
+                    .exists()
+            }
+            None => artifact_log_path(name).exists(),
+        };
+        let evidence = classify(name, record.map(|r| r.context.as_deref()), artifact);
         if evidence.is_empty() && !include_unmanaged {
             continue;
         }
@@ -994,6 +1015,101 @@ mod tests {
                 scope
             );
         }
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let _ = std::fs::remove_dir_all(&msb);
+        Ok(())
+    }
+
+    /// ENUMERATION DEDUP under the msb-name encoding (ADR 0030 addendum
+    /// 2026-08-26): a registry record `personal-pi@canary` and its LISTED
+    /// sandbox dir named `msb_name_of_instance("personal-pi@canary")` are
+    /// ONE physical target — enumerate_managed yields EXACTLY ONE target,
+    /// carrying the WORKESTRATE identity (not the encoded name), with
+    /// RegistryRecord + ArtifactLog evidence stacked, and context scope
+    /// selects it.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime tests
+    async fn enumerate_managed_dedupes_record_against_encoded_listing_name() -> anyhow::Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let msb = unreachable_msb_home("down-scope-enum-encoded");
+        let _msb = MsbHomeGuard::set(&msb);
+
+        let state_dir =
+            crate::config::test_support::unique_state_dir_runtime("down-scope-enum-encoded");
+        let identity = "personal-pi@canary";
+        write_record(&state_dir, identity, Some("personal"), None);
+        // The physical sandbox dir carries the ENCODED msb name.
+        let encoded = crate::microsandbox::slots::msb_name_of_instance(identity);
+        assert_ne!(
+            encoded, identity,
+            "precondition: the identity needs encoding"
+        );
+        assert!(
+            !encoded.contains('@'),
+            "precondition: the encoded name is SDK-legal"
+        );
+        let sb_dir = crate::microsandbox::runtime::reconcile::sandbox_dir(&encoded);
+        std::fs::create_dir_all(&sb_dir)?;
+        std::fs::write(sb_dir.join("workestrate.log"), b"managed\n")?;
+
+        let managed = enumerate_managed(&state_dir).await?;
+        assert_eq!(
+            managed.len(),
+            1,
+            "record + its encoded listing dir must dedupe to ONE target"
+        );
+        assert_eq!(
+            managed[0].instance, identity,
+            "the target keeps the WORKESTRATE identity, not the encoded name"
+        );
+        assert!(managed[0].evidence.contains(&Evidence::RegistryRecord));
+        assert!(
+            managed[0].evidence.contains(&Evidence::ArtifactLog),
+            "artifact evidence is found via the record identity's encoded dir"
+        );
+
+        let picked = resolve_scope(&DownScope::Context("personal".into()), &managed);
+        assert_eq!(picked.len(), 1, "context scope selects the deduped target");
+        assert_eq!(picked[0].instance, identity);
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let _ = std::fs::remove_dir_all(&msb);
+        Ok(())
+    }
+
+    /// DUAL-MATCHING MUST NOT SWALLOW FOREIGN DIRS: a listing-only dir that
+    /// merely LOOKS encoded (matches no record's identity or encoding)
+    /// still appears — managed via its artifact evidence under home scope
+    /// and listed under everything-enumeration.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime tests
+    async fn enumerate_keeps_listing_only_encoded_looking_dirs() -> anyhow::Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let msb = unreachable_msb_home("down-scope-enum-foreign");
+        let _msb = MsbHomeGuard::set(&msb);
+
+        let state_dir =
+            crate::config::test_support::unique_state_dir_runtime("down-scope-enum-foreign");
+        // An unrelated record to prove matching is per-record, not global.
+        write_record(&state_dir, "other-wl", Some("team"), None);
+        // Foreign encoded-looking dir: no record matches its identity or
+        // its encoding; it carries artifact evidence only.
+        let foreign = crate::microsandbox::slots::msb_name_of_instance("team-worker@foreign");
+        let sb_dir = crate::microsandbox::runtime::reconcile::sandbox_dir(&foreign);
+        std::fs::create_dir_all(&sb_dir)?;
+        std::fs::write(sb_dir.join("workestrate.log"), b"foreign\n")?;
+
+        let managed = enumerate_managed(&state_dir).await?;
+        assert!(
+            managed.iter().any(|t| t.instance == foreign),
+            "a listing-only encoded-looking dir must survive dual-spelling dedup"
+        );
+        let everything = enumerate_all_candidates(&state_dir).await?;
+        assert!(
+            everything.iter().any(|t| t.instance == foreign),
+            "the foreign dir also appears under everything-enumeration"
+        );
 
         let _ = std::fs::remove_dir_all(&state_dir);
         let _ = std::fs::remove_dir_all(&msb);

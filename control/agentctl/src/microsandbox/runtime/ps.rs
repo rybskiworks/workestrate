@@ -308,7 +308,10 @@ pub async fn probe_liveness(entries: &mut [PsEntry]) -> (usize, usize) {
     // released before apply_liveness_outcomes takes it mutably.
     let mut outcomes: Vec<ProbeOutcome> = Vec::with_capacity(entries.len());
     for e in entries.iter() {
-        let outcome = match Sandbox::get(&e.instance).await {
+        // ADR 0030 addendum 2026-08-26: probe the ENCODED msb name (records
+        // keep the workestrate identity; a legacy raw-@ sandbox simply reads
+        // as gone → stale).
+        let outcome = match Sandbox::get(&slots::msb_name_of_instance(&e.instance)).await {
             Ok(_) => ProbeOutcome::Alive,
             Err(MicrosandboxError::SandboxNotFound(_)) => ProbeOutcome::NotFound,
             // FS-7: match the error variants the SDK actually exposes for

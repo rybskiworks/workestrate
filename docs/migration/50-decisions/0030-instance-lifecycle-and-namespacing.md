@@ -1654,3 +1654,50 @@ open):
   checks the bare slot while the child re-derives the cwd-keyed id (FS-8
   grace misreport can resurface). Latent (prime is agent-kind; batch skips
   agents): open.
+
+## Addendum (2026-08-26): msb sandbox-name encoding for parallel instances
+
+AS-BUILT note for the usage blocker hit when parallel instances first ran
+against microsandbox SDK 0.6.8: the SDK validates every sandbox name itself
+(`microsandbox-types` 0.6.8 `lib/validation.rs::validate_sandbox_name`) —
+non-empty, at most 128 BYTES, first char ASCII alphanumeric, every char
+ASCII alphanumeric or one of `.` `-` `_`. Workestrate identities are
+`<slot>@<id>` (parallel `<slot>@<id>`, per-dir `<slot>@<slug>-<hash8>`,
+scoped-dep `<dep>@<dependent>-<id>`), and the `@` is illegal — so EVERY
+parallel-instance create failed with "invalid config: sandbox name must
+start with an alphanumeric ...". Plain slots were unaffected.
+
+The fix encodes ONLY the name handed to the SDK; the workestrate identity
+STAYS `slot@id` everywhere else (registries, slots, down-scopes, CLI):
+
+- **Encoding** (`slots::msb_name_of_instance`): an already-legal name is
+  returned UNCHANGED (zero observable churn for existing homes). Otherwise
+  every illegal char becomes `--` (the single `@` → `--`) and the result
+  gains a `-<fnv1a64 hex8 of the original identity>` suffix, which keeps
+  encoded names collision-free against legal names that literally contain
+  `--` (`a--b` stays `a--b`; `a@b` becomes `a--b-<hash>`). Overlong
+  identities clamp the base by bytes to fit the 128-byte cap with the
+  suffix intact.
+- **Boundaries**: `Sandbox::builder` in run.rs and EVERY `Sandbox::get`
+  site — occupancy checks (`check_occupied_or_replace`), ps liveness,
+  reconcile facts + stale-record pruning, run re-START, legacy `down`, and
+  the teardown paths. The never-refuse teardown paths
+  (`teardown_for_replace`, `down_hardened`) try the LEGACY raw spelling as
+  a fallback (`slots::lookup_msb_names`: encoded first) so old-fork-created
+  raw-@ sandboxes remain manageable; they proceed as NotFound only when
+  EVERY spelling came back SandboxNotFound, and any hard error still
+  surfaces (fail-closed preserved).
+- **Enumeration dual-spelling dedup** (down_scope.rs): a listing name is
+  skipped when ANY record matches it directly or under its encoding, so a
+  record `x@y` plus its listed `x--y-<hash>` dir count as ONE target that
+  keeps the WORKESTRATE identity; record-backed targets also probe their
+  identity's encoded dir for the `workestrate.log` artifact.
+- **Decode is best-effort** (`slots::instance_of_msb_name`): strip a
+  trailing `-<8 lowercase hex>` suffix, map `--` back to `@`, accept only
+  when the recomputed hash matches. A literal `--` inside the base breaks
+  reconstruction — records remain the source of truth; decode exists for
+  display/lookup convenience only.
+- **Observable-name change**: anyone scripting against
+  `~/.microsandbox/sandboxes/*` dir names must expect the ENCODED spelling
+  for @-identities (e.g. `personal-litellm--canary-<hash8>`); singleton
+  homes are byte-identical to before.

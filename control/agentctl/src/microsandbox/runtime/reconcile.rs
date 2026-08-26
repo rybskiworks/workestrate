@@ -95,11 +95,14 @@ pub async fn gather_facts(
     declared_ports: &[u16],
 ) -> Result<ReconcileFacts> {
     let record = find_record(state_dir, instance)?;
-    let (msb_status, msb_unavailable) = match Sandbox::get(instance).await {
-        Ok(handle) => (Some(handle.status_snapshot()), false),
-        Err(MicrosandboxError::SandboxNotFound(_)) => (None, false),
-        Err(_) => (None, true),
-    };
+    // ADR 0030 addendum 2026-08-26: single encoded-name lookup — records
+    // drive the chain decision, so a legacy raw-@ sandbox reads as gone.
+    let (msb_status, msb_unavailable) =
+        match Sandbox::get(&crate::microsandbox::slots::msb_name_of_instance(instance)).await {
+            Ok(handle) => (Some(handle.status_snapshot()), false),
+            Err(MicrosandboxError::SandboxNotFound(_)) => (None, false),
+            Err(_) => (None, true),
+        };
     let dir_exists = sandbox_dir(instance).exists();
     let healthy = if msb_status == Some(SandboxStatus::Running) {
         probe_health(state_dir, instance, record.as_ref(), declared_ports)?
@@ -364,11 +367,20 @@ pub async fn prune_stale_records(state_dir: &Path) -> Result<usize> {
     let records = crate::microsandbox::port_registry::list_records(state_dir)?;
     let mut verdicts = Vec::with_capacity(records.len());
     for r in &records {
-        verdicts.push(match Sandbox::get(&r.instance).await {
-            Ok(_) => RecordLiveness::Live,
-            Err(MicrosandboxError::SandboxNotFound(_)) => RecordLiveness::Gone,
-            Err(_) => RecordLiveness::Unknown,
-        });
+        // ADR 0030 addendum 2026-08-26: single encoded-name lookup — a
+        // legacy raw-@ sandbox reads as gone (record pruned) only on a
+        // positive NotFound, exactly as before for legal names.
+        verdicts.push(
+            match Sandbox::get(&crate::microsandbox::slots::msb_name_of_instance(
+                &r.instance,
+            ))
+            .await
+            {
+                Ok(_) => RecordLiveness::Live,
+                Err(MicrosandboxError::SandboxNotFound(_)) => RecordLiveness::Gone,
+                Err(_) => RecordLiveness::Unknown,
+            },
+        );
     }
     prune_by_verdicts(state_dir, &records, &verdicts)
 }
