@@ -435,9 +435,10 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
 - **Grammar** (one-grammar, inline-only; no `--from` flag):
   `name[:ref][@id]` — `:` = config branch (consistent with `name:ctx:sha`
   image tags), `@` = instance id, combined `prime:feat-x@canary` legal.
-  Bare `name@id` (no colon) is rejected, pointing at `--instance`. Id
-  precedence: `--instance` > `@id` > `:ref`-derived (sanitized) > `--new`
-  > per-dir derivation > strategy default.
+   Bare `name@id` (no colon) is rejected, pointing at `--instance`. Id
+   precedence: `--instance` > `@id` > (`--new` allocates | `:ref`-derived)
+   > per-dir > strategy default. (`--new` allocation wins over
+   `:ref`-derivation — handover D1, RESOLVED 2026-08-28.)
 - **Two-phase arming** (deps never follow): the override is pending at
   parse and arms only after dep auto-start (up/exec) or immediately
   (plan); detached children re-arm from `WORKESTRATE_WORKLOAD_REF`,

@@ -1567,7 +1567,11 @@ current build inputs and a RUNNING instance's provenance stamp (the
 `warn` is the default because divergence is common and usually benign
 (doc/config edits that do hash — see ADR 0032's runtime-relevant hash
 scope); silent reuse hides real drift; auto-replace destroys instances the
-operator may want.
+operator may want. Under `warn`, a `start` step of the conflict chain is
+StartExisting: it boots the EXISTING sandbox with its OLD inputs (the
+recorded provenance) — it does NOT rebuild or replace on the diverged
+inputs; only `on_skew = replace` tears down and rebuilds on the new
+inputs.
 
 ### V5. Default-strategy question — RESOLVED (2026-08-24): opt-in first
 

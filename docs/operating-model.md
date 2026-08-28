@@ -33,7 +33,8 @@ each `[repos.<name>]` entry carries `{url, ref, rev, sha, fetched_at}` —
 Additional refs of the same repo are pinned per-ref under
 `[repos.<name>.refs.<ref>]` with the same `{rev, sha, fetched_at}` shape.
 The lock is generated — never hand-edited — and written only by explicit
-verbs (`config add`, `config update`) or first-resolution-with-notice; no
+verbs (`config add`, `config update`, `config remove`, `home init`,
+`home clone`) or first-resolution-with-notice; no
 verb moves a pin silently as a side effect.
 
 Overrides exist at two levels: per-entry (`ref`/`rev` fields in the

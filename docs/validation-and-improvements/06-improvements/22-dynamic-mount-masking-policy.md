@@ -470,8 +470,8 @@ versioned program before the guest starts.
   Resolution plan: renumber this ADR → **0029** during the merge and update its
   references (spec 22, spec 21, 50-decisions/README.md, 00-index.md, STATUS,
   NEXT-SESSION, MOUNT-MASKING-HANDOVER).
-- **SDK seam:** `apply_mount_policy` (runtime/run.rs) remains a no-op until the
-  workestrate flake pin moves from `74919059` to a fork rev containing the msb
-  mount path policy field (Phase 3 of the runbook).
+- **SDK seam:** the workestrate flake pin moved from `74919059` to fork rev
+  `79dc8a19` containing the msb mount path policy field (Phase 3 of the
+  runbook, landed 2026-08-28).
 - **Tests:** committed on this branch (`tests/cmd_policy.rs` + policy suite);
   must be re-run against the merged tree (schema regen re-run included).
