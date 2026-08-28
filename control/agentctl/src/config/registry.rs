@@ -391,13 +391,58 @@ pub fn set_default_context(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Slugify a ladder-derived context-name candidate (rungs b/c of the A5
+/// derivation order) into the context-name charset `^[a-z0-9][a-z0-9-]*$`
+/// ([`validate_context_name`]): lowercase ASCII, every maximal run of
+/// characters outside `[a-z0-9]` mapped to a single `-`, leading/trailing
+/// `-` trimmed. Returns None when nothing usable remains (e.g. `"###"`) —
+/// the derivation ladder simply falls through as if no candidate existed.
+///
+/// Slugifying AT DERIVATION (rather than validate-and-skip) keeps the
+/// common `feature/x` case working: `migration/tool-model` rides as
+/// `migration-tool-model`, `feat/Foo#1.2` as `feat-foo-1-2`. Context names
+/// become sandbox instance-name prefixes and image-tag segments, so a raw
+/// branch name is never a legal context name as-is. Collisions between
+/// distinct branches slugging equal are accepted: the context name is
+/// identity-only in lenient mode; records are the identity authority (ADR
+/// 0032 addendum §Selection ladder, note 2026-08-28).
+fn slugify_context_candidate(raw: &str) -> Option<String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut pending_dash = false;
+    for c in raw.chars() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(c);
+        } else if c.is_ascii_uppercase() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(c.to_ascii_lowercase());
+        } else {
+            // Illegal run (incl. leading): collapse to at most one dash,
+            // never leading.
+            pending_dash = true;
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
+}
+
 /// Step (b) of the A5 derivation order (see [`resolve_active_context`]):
 /// when `WORKESTRATE_CONFIG_REF` (`--config-ref`) names a BRANCH —
 /// `refs/heads/<ref>` or `refs/remotes/origin/<ref>` present in ANY
-/// Remote/GitFile entry's managed clone (first match wins) — the ref IS the
-/// context-name candidate. A purely-sha ref yields None (shas are not
-/// branches). Probe failures (missing clone, git error) read as
-/// non-matches: consumption is the fail-closed layer
+/// Remote/GitFile entry's managed clone (first match wins) — the ref is
+/// the context-name candidate, SLUGIFIED by
+/// [`slugify_context_candidate`] (a candidate with no usable characters
+/// yields no candidate, and the ladder falls through). A purely-sha ref
+/// yields None (shas are not branches). Probe failures (missing clone, git
+/// error) read as non-matches: consumption is the fail-closed layer
 /// (`config::loading`'s pinned resolver errors name repo+ref).
 fn config_ref_branch_candidate(registry: &Registry) -> Option<String> {
     let config_ref = std::env::var("WORKESTRATE_CONFIG_REF").ok()?;
@@ -415,7 +460,7 @@ fn config_ref_branch_candidate(registry: &Registry) -> Option<String> {
             continue;
         }
         if crate::git::git_branch_ref_exists(&clone, &config_ref).unwrap_or(false) {
-            return Some(config_ref);
+            return slugify_context_candidate(&config_ref);
         }
     }
     None
@@ -425,7 +470,9 @@ fn config_ref_branch_candidate(registry: &Registry) -> Option<String> {
 /// the FIRST layer's checkout branch — [`local_entry_checkout_dir`] for
 /// PlainPath entries, else the managed clone — when that dir is a git repo
 /// on a branch ([`crate::git::git_checkout_branch`]; detached HEAD and
-/// non-repos yield None).
+/// non-repos yield None). The branch name is the context-name candidate,
+/// SLUGIFIED by [`slugify_context_candidate`] (a candidate with no usable
+/// characters yields no candidate, and the ladder falls through).
 fn checkout_branch_candidate(registry: &Registry) -> Option<String> {
     let first = registry.layers.first()?;
     let dir = registry
@@ -440,7 +487,10 @@ fn checkout_branch_candidate(registry: &Registry) -> Option<String> {
     if !dir.join(".git").exists() {
         return None;
     }
-    crate::git::git_checkout_branch(&dir).ok().flatten()
+    crate::git::git_checkout_branch(&dir)
+        .ok()
+        .flatten()
+        .and_then(|branch| slugify_context_candidate(&branch))
 }
 
 /// Resolve the active context.
@@ -463,8 +513,17 @@ fn checkout_branch_candidate(registry: &Registry) -> Option<String> {
 ///    stable line) — there is NO literal "main" context name.
 ///
 /// Candidate-name resolution for steps b/c (the name did NOT come from an
-/// explicit `--context`): when `registry.contexts` CONTAINS the candidate,
-/// its layers are used; ELSE the candidate rides LENIENTLY as the context
+/// explicit `--context`): the raw candidate (a branch name) is SLUGIFIED
+/// at derivation by [`slugify_context_candidate`] into the context-name
+/// charset `^[a-z0-9][a-z0-9-]*$` (2026-08-28: context names become
+/// sandbox instance-name prefixes and image-tag segments, so raw branch
+/// names like `migration/tool-model` are never legal as-is); a candidate
+/// that slugifies to nothing yields NO candidate (the ladder falls
+/// through to step d). The defined-context lookup below uses the SLUG —
+/// a context named `migration-tool-model` matches a checkout of
+/// `migration/tool-model`. When `registry.contexts` CONTAINS the
+/// candidate, its layers are used; ELSE the candidate rides LENIENTLY as
+/// the context
 /// NAME (slot prefixing, instance identity) while the LAYER LIST falls
 /// back to `default_context`'s layers, else the bare `layers`. When
 /// contexts ARE defined AND the candidate is undefined AND no
@@ -1810,6 +1869,108 @@ pub(crate) mod tests {
             msg.contains("contexts are defined but no default_context is set"),
             "the existing hard error must stand: {msg}"
         );
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    // ---- Candidate slugification (2026-08-28): ladder-derived context-name
+    // candidates ride in the context-name charset ----
+
+    /// The pure slug core: lowercase ASCII, every maximal illegal run → one
+    /// `-`, leading/trailing `-` trimmed, None when nothing usable remains.
+    #[test]
+    fn slugify_context_candidate_maps_illegal_runs_to_dashes() {
+        // Slash (the common feature/x case), uppercase, `#`, dots.
+        assert_eq!(
+            slugify_context_candidate("feat/Foo#1.2").as_deref(),
+            Some("feat-foo-1-2")
+        );
+        assert_eq!(
+            slugify_context_candidate("migration/tool-model").as_deref(),
+            Some("migration-tool-model")
+        );
+        assert_eq!(
+            slugify_context_candidate("Fix__Big--Thing").as_deref(),
+            Some("fix-big-thing")
+        );
+        // Maximal illegal runs collapse to a single dash; leading/trailing
+        // runs are trimmed (never a leading/trailing dash).
+        assert_eq!(slugify_context_candidate("--wip--").as_deref(), Some("wip"));
+        assert_eq!(
+            slugify_context_candidate("//a//b//").as_deref(),
+            Some("a-b")
+        );
+        // All-illegal input yields NO candidate (the ladder falls through).
+        assert_eq!(slugify_context_candidate("###"), None);
+        assert_eq!(slugify_context_candidate(""), None);
+        // A legal branch name passes through UNCHANGED.
+        assert_eq!(
+            slugify_context_candidate("feat-wip-2").as_deref(),
+            Some("feat-wip-2")
+        );
+        assert_eq!(slugify_context_candidate("main").as_deref(), Some("main"));
+        // Every Some result satisfies the context-name gate.
+        for raw in ["feat/Foo#1.2", "migration/tool-model", "feat-wip-2"] {
+            let slug = slugify_context_candidate(raw).expect("slug");
+            validate_context_name(&slug).expect("slug must satisfy validate_context_name");
+        }
+    }
+
+    /// Step c slugifies: a checkout branch outside the context-name charset
+    /// namespaces the bare-layers home under the SLUG, not the raw name.
+    #[test]
+    fn checkout_branch_candidate_is_slugified() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let home = a5_derive_remote_bare_home("a5-derive-slug-c", "team", "migration/tool-model");
+
+        let ctx = resolve_active_context()?;
+        assert_eq!(ctx.name.as_deref(), Some("migration-tool-model"));
+        assert_eq!(ctx.layers, vec!["team".to_string()]);
+        let _ = std::fs::remove_dir_all(&home);
+
+        // A branch with `#`, uppercase, and dots.
+        let home = a5_derive_remote_bare_home("a5-derive-slug-c2", "team", "feat/Foo#1.2");
+        let ctx = resolve_active_context()?;
+        assert_eq!(ctx.name.as_deref(), Some("feat-foo-1-2"));
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Step b slugifies: a branch-shaped --config-ref outside the charset
+    /// rides under its slug.
+    #[test]
+    fn config_ref_branch_candidate_is_slugified() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let home = a5_derive_remote_bare_home("a5-derive-slug-b", "team", "main");
+        let clone = home.join("config-repos").join("team");
+        a5_derive_git(&clone, &["branch", "feat/Foo#1.2"]);
+        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat/Foo#1.2");
+
+        let ctx = resolve_active_context()?;
+        assert_eq!(ctx.name.as_deref(), Some("feat-foo-1-2"));
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// An all-illegal branch slugifies to NOTHING: the ladder falls through
+    /// to step d (bare-layers home keeps name = None) rather than riding an
+    /// illegal context name.
+    #[test]
+    fn all_illegal_branch_yields_no_candidate() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        // `###` is a valid git branch name (check-ref-format) but has no
+        // usable context-name characters.
+        let home = a5_derive_remote_bare_home("a5-derive-slug-none", "team", "###");
+
+        let ctx = resolve_active_context()?;
+        assert_eq!(
+            ctx.name, None,
+            "an all-illegal checkout branch must yield NO candidate"
+        );
+        assert_eq!(ctx.layers, vec!["team".to_string()]);
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }

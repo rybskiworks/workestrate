@@ -340,6 +340,21 @@ Inline override rules:
 **Defaults:** pinned ref everywhere — an unadorned invocation consumes the
 locked rev (the stable line); branch names are opt-in freshness.
 
+> **Note (2026-08-28):** derived context-name candidates (context
+> derivation rungs b/c — the `--config-ref` branch and the checkout
+> branch) are SLUGIFIED to the context-name charset
+> `^[a-z0-9][a-z0-9-]*$` at derivation: lowercased ASCII, every maximal
+> run of characters outside `[a-z0-9]` collapses to one `-`,
+> leading/trailing `-` trimmed, and a candidate with no usable characters
+> yields NO candidate (the ladder falls through). Context names become
+> sandbox instance-name prefixes and image-tag segments
+> (`name:ctx:sha`), so raw branch names like `migration/tool-model` are
+> never legal as-is; the defined-context lookup uses the SLUG (a context
+> named `migration-tool-model` matches a checkout of
+> `migration/tool-model`). Collisions between distinct branches slugging
+> equal are accepted: the context name is identity-only in lenient mode;
+> records are the identity authority.
+
 ### Down scope ladder (supersedes the `clean --vms` sketch)
 
 `down` gains an explicit scope ladder, narrowest to widest:
