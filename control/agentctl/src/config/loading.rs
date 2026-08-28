@@ -469,20 +469,31 @@ pub fn load_config() -> Result<ConfigFile> {
     // the dependent's ConfigWorkload see). PENDING-but-not-armed (dep
     // auto-start's view) leaves the merged config byte-identical to no
     // override.
-    if let Some((workload, config_ref)) = crate::config::inline_ref::armed_inline_override() {
-        apply_inline_override_substitution(
-            &mut merged,
-            &mut provenance,
-            &mut layer_dirs,
-            registry.as_ref(),
-            &workload,
-            &config_ref,
-        )?;
+    let substituted_layer =
+        if let Some((workload, config_ref)) = crate::config::inline_ref::armed_inline_override() {
+            apply_inline_override_substitution(
+                &mut merged,
+                &mut provenance,
+                &mut layer_dirs,
+                registry.as_ref(),
+                &workload,
+                &config_ref,
+            )?
+            .map(|layer| (workload, layer))
+        } else {
+            None
+        };
+    let mut collected = collect_policy_scopes(registry.as_ref(), &layers)?;
+    if let Some((workload, layer)) = substituted_layer {
+        // The policy collection must reflect the substitution: the home
+        // collection above saw the PRE-substitution declaration, which
+        // would silently drop the ref's `policy.mounts` fragment while
+        // validate_config sees the substituted one. The substituted
+        // declaration is the whole workload declaration at the ref, so its
+        // policy is authoritative for this workload.
+        replace_workload_scopes_from_layer(&mut collected, &workload, &layer);
     }
-    crate::mount_policy::set_collected_policy(Some(collect_policy_scopes(
-        registry.as_ref(),
-        &layers,
-    )?));
+    crate::mount_policy::set_collected_policy(Some(collected));
     crate::merge::set_provenance(Some(provenance));
     crate::merge::set_layer_dirs(Some(layer_dirs));
     validate_config(&merged)?;
@@ -510,6 +521,11 @@ pub fn load_config() -> Result<ConfigFile> {
 ///   refs — inline overrides require a git-backed repo).
 /// - The ref does not resolve in the managed clone, or the workload does
 ///   not exist at that ref: hard errors naming repo+ref / workload+ref+repo.
+///
+/// Returns the substituted layer loaded from the archive (`Some`) so the
+/// caller can re-collect the workload's policy scopes from the REF's
+/// declaration; `None` when no substitution happened (workload absent at
+/// home scope).
 fn apply_inline_override_substitution(
     merged: &mut ConfigFile,
     provenance: &mut crate::merge::Provenance,
@@ -517,12 +533,12 @@ fn apply_inline_override_substitution(
     registry: Option<&Registry>,
     workload: &str,
     config_ref: &str,
-) -> Result<()> {
+) -> Result<Option<crate::merge::Layer>> {
     use crate::config::registry::ConfigSourceKind;
 
     // Unknown workload at HOME scope: do not mask today's existing error.
     if !merged.workloads.contains_key(workload) {
-        return Ok(());
+        return Ok(None);
     }
 
     // The declaring repo = the repo component of the provenance path that
@@ -645,7 +661,70 @@ fn apply_inline_override_substitution(
     // substituted layer's keys are replaced — other layers of the same repo
     // stay home-scoped.
     layer_dirs.extend(crate::merge::layer_dirs_from(std::slice::from_ref(&layer)));
-    Ok(())
+    Ok(Some(layer))
+}
+
+/// Re-collect ONE workload's policy scopes from a substituted layer,
+/// replacing whatever the home-scoped [`collect_policy_scopes`] pass
+/// recorded for it (inline-override policy consistency, 2026-08-28). The
+/// substituted declaration IS the whole workload declaration at the ref,
+/// so its policy is authoritative: a ref declaration carrying NO policy
+/// fragment REMOVES the home-collected scopes for that workload. Scope
+/// construction mirrors collect_policy_scopes exactly (workload fragment →
+/// [`crate::mount_policy::ScopeKind::Workload`], mount policies →
+/// `ScopeKind::MountEntry`; the archive layer names a config repo, so a
+/// layer-level `[policy.mounts]` would be `ScopeKind::ConfigRepoLayer` —
+/// layer-global scopes are NOT re-collected here: the substitution is
+/// capsule-only and global scopes stay home-scoped).
+fn replace_workload_scopes_from_layer(
+    collected: &mut crate::mount_policy::CollectedPolicy,
+    workload: &str,
+    layer: &crate::merge::Layer,
+) {
+    use crate::mount_policy::{PolicyScope, ScopeKind};
+    let source = layer
+        .source_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(&layer.name));
+    let mut scopes = Vec::new();
+    if let Some(decl) = layer.config.workloads.get(workload) {
+        if let Some(fragment) = decl.policy.mounts.clone() {
+            scopes.push(PolicyScope::new(
+                ScopeKind::Workload,
+                layer.name.clone(),
+                source.clone(),
+                fragment,
+            ));
+        }
+        // Mount rows are wholesale-replaced; only a layer that DECLARES
+        // this workload's `mounts` contributes entry policies.
+        let declares_mounts = layer
+            .raw()
+            .get("workloads")
+            .and_then(|v| v.get(workload))
+            .and_then(|v| v.as_table())
+            .is_some_and(|t| t.contains_key("mounts"));
+        if declares_mounts {
+            for mount in &decl.mounts {
+                if let Some(fragment) = mount.policy.clone() {
+                    scopes.push(
+                        PolicyScope::new(
+                            ScopeKind::MountEntry,
+                            layer.name.clone(),
+                            source.clone(),
+                            fragment,
+                        )
+                        .for_mount(mount.guest.clone()),
+                    );
+                }
+            }
+        }
+    }
+    if scopes.is_empty() {
+        collected.workloads.remove(workload);
+    } else {
+        collected.workloads.insert(workload.to_string(), scopes);
+    }
 }
 
 /// Collect policy fragments in the loader's actual order. This deliberately
@@ -3970,6 +4049,119 @@ write.deny = ["sugar-write-deny"]
             cfg.workloads["prime"].cpus,
             Some(1),
             "home-scoped content is untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// Single-file-mode `workestrate.toml` for the prime workload, with an
+    /// optional `[workloads.prime.policy.mounts.read]` fragment whose deny
+    /// entry is the given marker (home vs ref discrimination).
+    fn a5b_policy_toml(deny_marker: Option<&str>) -> String {
+        let policy = match deny_marker {
+            Some(marker) => {
+                format!("\n[workloads.prime.policy.mounts.read]\ndeny = [\"{marker}\"]\n")
+            }
+            None => String::new(),
+        };
+        format!(
+            "schema_version = 1\n\n[workloads.prime]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\ncpus = 1\n{policy}"
+        )
+    }
+
+    /// Policy re-collection reflects the substitution (2026-08-28): the
+    /// collected policy for the overridden workload must come from the
+    /// REF's declaration, not the home one — the pre-fix collection read
+    /// the pre-substitution layers, silently dropping the ref's fragment
+    /// while validate_config saw the substituted declaration.
+    #[test]
+    fn inline_override_policy_collection_uses_the_ref_fragment() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let main_toml = a5b_policy_toml(Some("home-scope"));
+        let feat_toml = a5b_policy_toml(Some("ref-scope"));
+        let (home, clone, sha_main) = a5_remote_home(
+            "a5b-policy-ref",
+            "team",
+            &[("workestrate.toml", &main_toml)],
+        );
+        a5_write_lock(&home, "team", &sha_main);
+        let sha_feat = a5_commit_branch(&clone, "feat-x", &[("workestrate.toml", &feat_toml)]);
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let _cfg = load_config()?;
+        crate::config::clear_inline_override();
+
+        let collected = crate::mount_policy::get_collected_policy()
+            .expect("collected policy set by load_config");
+        let scopes = collected
+            .workloads
+            .get("prime")
+            .expect("prime policy scopes collected");
+        assert_eq!(scopes.len(), 1, "exactly the ref's workload fragment");
+        assert_eq!(
+            scopes[0].scope_kind,
+            crate::mount_policy::ScopeKind::Workload
+        );
+        let deny = &scopes[0].fragment.read.as_ref().expect("read axis").deny;
+        assert_eq!(
+            deny[0].value, "ref-scope",
+            "the collected policy must be the REF's fragment, not the home one"
+        );
+        assert_eq!(
+            scopes[0].layer_name, "team",
+            "the scope names the substituted layer"
+        );
+        let archive = crate::config::archive_dir(&sha_feat)?;
+        assert!(
+            scopes[0].source_path.starts_with(&archive),
+            "the scope's source path is the feat-x archive's layer file: {}",
+            scopes[0].source_path.display()
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// The substituted declaration is the WHOLE workload declaration: when
+    /// the ref carries NO policy fragment, the home-collected scopes for
+    /// that workload are REMOVED rather than left to mask the substitution.
+    #[test]
+    fn inline_override_no_policy_fragment_at_ref_removes_home_scopes() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        crate::config::clear_inline_override();
+        let main_toml = a5b_policy_toml(Some("home-scope"));
+        let feat_toml = a5b_policy_toml(None);
+        let (home, clone, sha_main) = a5_remote_home(
+            "a5b-policy-none",
+            "team",
+            &[("workestrate.toml", &main_toml)],
+        );
+        a5_write_lock(&home, "team", &sha_main);
+        a5_commit_branch(&clone, "feat-x", &[("workestrate.toml", &feat_toml)]);
+
+        // Baseline: un-armed, the home fragment IS collected.
+        let _cfg = load_config()?;
+        let collected = crate::mount_policy::get_collected_policy().expect("collected policy");
+        assert!(
+            collected.workloads.contains_key("prime"),
+            "the home declaration carries a policy fragment"
+        );
+
+        crate::config::set_pending_inline_override("prime", "feat-x");
+        crate::config::arm_inline_override();
+        let _cfg = load_config()?;
+        crate::config::clear_inline_override();
+
+        let collected = crate::mount_policy::get_collected_policy()
+            .expect("collected policy set by load_config");
+        assert!(
+            !collected.workloads.contains_key("prime"),
+            "no fragment at the ref must REMOVE the home-collected scopes for prime"
         );
 
         let _ = std::fs::remove_dir_all(&home);
