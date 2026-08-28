@@ -904,7 +904,18 @@ fn pinned_layer_content_root(
     }
 
     // (2) Registry-recorded rev (written back by `config update`) — silent.
+    //     The rev is consumed as a CONTENT ADDRESS: validate before hitting
+    //     the archive store so a symbolic value (a branch/tag name recorded
+    //     where a sha belongs) errors CLEARLY instead of surfacing as a bare
+    //     archive-path rejection.
     if let Some(rev) = entry.rev.as_deref() {
+        if !crate::config::archive::is_hex_sha(rev) {
+            anyhow::bail!(
+                "config repo '{name}' records rev '{rev}', which is not a lowercase hex sha \
+                 (7..=40 chars): a symbolic ref (branch/tag) is not a content address; \
+                 re-pin with `workestrate config update {name}`",
+            );
+        }
         return crate::config::ensure_archive(&clone, rev);
     }
 
@@ -3216,6 +3227,48 @@ write.deny = ["sugar-write-deny"]
         assert!(
             !home.join("workestrate.lock").exists(),
             "registry-rev consumption is SILENT: no lock file may appear"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    /// A registry-recorded SYMBOLIC rev (a branch/tag name where a content
+    /// address belongs) errors CLEARLY before the archive store is touched:
+    /// the message names the repo, the offending rev, explains that a
+    /// symbolic ref is not a content address, and names the remediation.
+    #[test]
+    fn registry_recorded_symbolic_rev_fails_closed_with_remediation() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_ENV_KEYS);
+        let home = a5_pin_home("a5-regrev-symbolic");
+        let clone = home.join("config-repos").join("team");
+        init_git_repo(&clone, &[("workestrate.toml", &a5_marker_toml("rev-a"))]);
+        std::fs::write(
+            home.join("config.toml"),
+            a5_registry(
+                "team",
+                "https://example.invalid/a5.git",
+                Some("main"),
+                "rev = \"main\"\n",
+            ),
+        )?;
+
+        let err = load_config().expect_err("a symbolic recorded rev must fail closed");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("team"), "error must name the repo: {msg}");
+        assert!(msg.contains("main"), "error must name the rev: {msg}");
+        assert!(
+            msg.contains("symbolic ref (branch/tag) is not a content address"),
+            "error must explain the symbolic-ref case: {msg}"
+        );
+        assert!(
+            msg.contains("workestrate config update team"),
+            "error must name the remediation: {msg}"
+        );
+        assert!(
+            !home.join("workestrate.lock").exists(),
+            "the failed load must NOT write the lock"
         );
 
         let _ = std::fs::remove_dir_all(&home);

@@ -31,21 +31,28 @@ pub fn archive_store_root() -> PathBuf {
         .join("gitv3")
 }
 
+/// Content-address shape check: a lowercase hex sha of 7..=40 chars
+/// (loosely `^[0-9a-f]{7,40}$` — full shas are 40 hex; the floor admits
+/// short shas). The single validator behind [`archive_dir`] and any
+/// consumption path that must reject SYMBOLIC refs (branch/tag names are
+/// not content addresses) before touching the archive store.
+pub(crate) fn is_hex_sha(s: &str) -> bool {
+    s.len() >= 7
+        && s.len() <= 40
+        && s.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
 /// The archive dir for `sha`: `<state>/cache/gitv3/<sha>`.
 ///
-/// Fail-closed on path-unsafe input: `sha` must be a lowercase hex string
-/// of at least 7 chars (loosely `^[0-9a-f]{7,40}$` — full shas are 40 hex;
-/// the floor admits short shas). Anything else (path separators, `..`,
-/// uppercase, empty) is an error rather than a filesystem escape.
+/// Fail-closed on path-unsafe input: `sha` must satisfy [`is_hex_sha`].
+/// Anything else (path separators, `..`, uppercase, empty, a symbolic
+/// branch/tag name) is an error rather than a filesystem escape.
 pub fn archive_dir(sha: &str) -> Result<PathBuf> {
-    let valid = sha.len() >= 7
-        && sha.len() <= 40
-        && sha
-            .chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
-    if !valid {
+    if !is_hex_sha(sha) {
         anyhow::bail!(
-            "invalid archive sha '{}': expected a lowercase hex sha (7..=40 chars)",
+            "invalid archive sha '{}': expected a lowercase hex sha (7..=40 chars); \
+             a symbolic ref (branch/tag) is not a content address",
             sha
         );
     }
@@ -155,6 +162,28 @@ pub(crate) mod tests {
         let _g = EnvGuard::capture(STATE_ENV_KEYS);
         let state = pin_state("a5-root");
         assert_eq!(archive_store_root(), state.join("cache").join("gitv3"));
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// Symbolic refs (branch/tag names) are not content addresses: the
+    /// error says so explicitly (2026-08-28) so a recorded symbolic rev is
+    /// diagnosable at a glance.
+    #[test]
+    fn archive_dir_symbolic_ref_error_says_not_a_content_address() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(STATE_ENV_KEYS);
+        let state = pin_state("a5-dir-symbolic");
+        let err = archive_dir("main").expect_err("a symbolic ref must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("main"), "error names the offending rev: {msg}");
+        assert!(
+            msg.contains("lowercase hex sha (7..=40 chars)"),
+            "error states the expected shape: {msg}"
+        );
+        assert!(
+            msg.contains("symbolic ref (branch/tag) is not a content address"),
+            "error explains the symbolic-ref case: {msg}"
+        );
         let _ = std::fs::remove_dir_all(&state);
     }
 
