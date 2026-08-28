@@ -85,12 +85,26 @@ pub const OUT_PATH_HASH_PREFIX_LEN: usize = 12;
 /// pointer; the home context's pointer never flaps), else the active context
 /// name, else `None` (bare-layers mode → the two-segment tag form).
 ///
+/// The armed override ref is SLUGIFIED via
+/// [`crate::config::registry::slugify_context_candidate`] before becoming
+/// the ctx segment — the SAME slug as the context candidate for the same
+/// branch (`feat/x` → `feat-x`, `Foo#1.2` → `foo-1-2`), so raw branch names
+/// never inject illegal characters (`/`, `#`, uppercase) into image tags. A
+/// ref that slugifies to `None` (no usable chars, e.g. `###`) falls back to
+/// the active context name — the registry ladder's None→falls-through
+/// convention. With no armed override the active context name is used
+/// verbatim (context names are already legal by derivation/validation).
+///
 /// The armed override is process-global and arms only for the invocation's
 /// own workload (deps are ensured BEFORE arming — see
 /// `commands::deps` / main.rs), so no workload-name filter is applied here.
 pub fn image_tag_context() -> Option<String> {
     if let Some((_workload, config_ref)) = crate::config::inline_ref::armed_inline_override() {
-        return Some(config_ref);
+        if let Some(slug) = crate::config::registry::slugify_context_candidate(&config_ref) {
+            return Some(slug);
+        }
+        // No usable characters (e.g. `###`) → fall through to the active
+        // context name (the registry ladder's None→falls-through convention).
     }
     crate::config::active_context_name()
 }
@@ -817,6 +831,92 @@ mod tests {
             Some("feat-x"),
             "the armed override ref IS the tag context"
         );
+
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+    }
+
+    /// The armed override ref is SLUGIFIED into the tag ctx segment: branch
+    /// names with illegal image-tag characters (`/`, `#`, uppercase) yield
+    /// the same slug as the registry's context candidate; an already-legal
+    /// ref passes through unchanged.
+    #[test]
+    fn image_tag_context_slugifies_the_armed_override_ref() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+
+        for (raw, want) in [
+            ("feat/x", "feat-x"),
+            ("Foo#1.2", "foo-1-2"),
+            ("migration/tool-model", "migration-tool-model"),
+            ("feat-x", "feat-x"), // already legal → passthrough
+        ] {
+            crate::config::set_pending_inline_override("prime", raw);
+            crate::config::arm_inline_override();
+            assert_eq!(
+                image_tag_context().as_deref(),
+                Some(want),
+                "armed override {raw:?} slugifies to {want:?}"
+            );
+            crate::config::clear_inline_override();
+        }
+
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+    }
+
+    /// An armed override ref with NO usable characters (e.g. `###`) slugifies
+    /// to None and falls back to the active context name — the registry
+    /// ladder's None→falls-through convention; with no active context the
+    /// tag ctx is None.
+    #[test]
+    fn image_tag_context_unslugifiable_override_falls_back_to_active_context() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+
+        crate::config::set_pending_inline_override("prime", "###");
+        crate::config::arm_inline_override();
+        assert_eq!(
+            image_tag_context(),
+            None,
+            "### slugifies to None; no active context → None"
+        );
+
+        crate::config::set_active_context(Some(crate::config::ActiveContext {
+            name: Some("personal".to_string()),
+            layers: vec!["personal".to_string()],
+        }));
+        assert_eq!(
+            image_tag_context().as_deref(),
+            Some("personal"),
+            "### slugifies to None → falls back to the active context name"
+        );
+
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+    }
+
+    /// Consistency: the tag ctx segment under an armed override is the SAME
+    /// slug the registry derives as the context candidate for the same
+    /// branch — tag ctx and context name never diverge for a given ref.
+    #[test]
+    fn image_tag_context_matches_registry_slug_for_the_same_branch() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        crate::config::clear_inline_override();
+        crate::config::set_active_context(None);
+
+        for branch in ["feat/x", "Foo#1.2", "migration/tool-model", "feat-x"] {
+            crate::config::set_pending_inline_override("prime", branch);
+            crate::config::arm_inline_override();
+            assert_eq!(
+                image_tag_context(),
+                crate::config::registry::slugify_context_candidate(branch),
+                "tag ctx for {branch:?} equals the registry context-candidate slug"
+            );
+            crate::config::clear_inline_override();
+        }
 
         crate::config::clear_inline_override();
         crate::config::set_active_context(None);

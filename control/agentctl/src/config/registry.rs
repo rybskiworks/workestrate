@@ -406,7 +406,12 @@ pub fn set_default_context(name: &str) -> Result<()> {
 /// distinct branches slugging equal are accepted: the context name is
 /// identity-only in lenient mode; records are the identity authority (ADR
 /// 0032 addendum §Selection ladder, note 2026-08-28).
-fn slugify_context_candidate(raw: &str) -> Option<String> {
+///
+/// Also reused by `crate::images::state::image_tag_context` to slugify the
+/// armed inline-override ref into the image-tag ctx segment — the SAME slug
+/// as the context candidate for the same branch, so tag ctx and context
+/// name stay consistent for a given ref.
+pub(crate) fn slugify_context_candidate(raw: &str) -> Option<String> {
     let mut out = String::with_capacity(raw.len());
     let mut pending_dash = false;
     for c in raw.chars() {
