@@ -44,6 +44,7 @@ pub struct ImageSpec {
     /// (`ConfigRepoEntry.image_keep_last`) < THIS field. First Some wins;
     /// an explicit 0 is a hard error (the just-loaded tag always counts
     /// toward N). Enforced at load time by prune-on-load.
+    #[schemars(range(min = 1))]
     pub keep_last: Option<u32>,
 }
 
