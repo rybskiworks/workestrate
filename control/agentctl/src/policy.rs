@@ -4,6 +4,8 @@
 pub const ALLOWED_EGRESS_HOSTS: &[&str] = &[
     "openrouter.ai",
     "api.kimi.com",
+    "api.commandcode.ai",
+    "opencode.ai",
     "api.neuralwatt.com",
     "api.minimax.io",
     "github.com",
@@ -58,6 +60,8 @@ mod tests {
         for host in [
             "openrouter.ai",
             "api.kimi.com",
+            "api.commandcode.ai",
+            "opencode.ai",
             "api.neuralwatt.com",
             "api.minimax.io",
             "github.com",
