@@ -1,3 +1,15 @@
+---
+name: nix-docker-images
+description: |
+  Guide for building reproducible OCI container images with Nix's
+  pkgs.dockerTools — streamLayeredImage as the preferred default, plus
+  buildLayeredImage, buildImage, and pullImage. Covers minimal runtime
+  images, building from source, pinning base images by digest, building
+  and loading images into Docker, nixpkgs pinning, and Microsandbox
+  compatibility. Load when creating or debugging Nix-built container/OCI
+  images instead of Dockerfiles.
+---
+
 # Nix Docker Image Building
 
 ## When to use
