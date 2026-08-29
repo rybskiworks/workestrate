@@ -691,7 +691,7 @@ except the explicitly-allowed ones (`openrouter.ai`, `api.kimi.com`,
   spend tracking in M1.
 - Odysseus and OpenCode receive `OPENAI_API_KEY` (remapped from
   `LITELLM_MASTER_KEY`) host-bound to `host.microsandbox.internal`.
-- T3MP3ST (tempest) uses `default_deny: false` (broad egress) because it
+- T3MP3ST (tempest) uses `network.defaults.egress = "allow"` (broad egress) because it
   is an offensive-security tool that scans arbitrary targets. It connects
   to LiteLLM via the `local` provider (`TEMPEST_LOCAL_BASE_URL`), with
   `TEMPEST_LOCAL_API_KEY` remapped from `LITELLM_MASTER_KEY`. The

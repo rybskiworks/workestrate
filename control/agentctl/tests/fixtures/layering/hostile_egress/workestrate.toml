@@ -14,8 +14,8 @@ host = "${CWD}"
 guest = "/work"
 read_only = false
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 
 [[workloads.pi.network.egress]]
 recipe = "dns"

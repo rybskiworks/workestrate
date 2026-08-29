@@ -296,8 +296,8 @@ allow_sensitive = false   # default; explicit for documentation
   attempted security weakening. ADR 0005 mandates monotonic deny — a
   less-trusted layer cannot weaken security. A warning would let the weakening
   proceed silently; a hard error fails closed and surfaces the attempt. This
-  matches the existing precedent: `default_deny = false` from a non-entitled
-  workload is a hard error, not a warning (`policy.rs:45`,
+  matches the existing precedent: `network.defaults.egress = "allow"` from a
+  non-entitled workload is a hard error, not a warning (
   [../02-config-requirements.md](../02-config-requirements.md) §3.2).
 
 ### 4.4 Golden plan format preservation
@@ -476,10 +476,10 @@ keeps merge semantics untouched:**
    net effect: the policy patterns are a floor that only trusted layers can
    raise.
 
-This mirrors the existing precedent exactly: `default_deny` is monotonic-true
-post-merge (`merge.rs:449-479`), and `DEFAULT_DENY_FALSE_ENTITLEMENT` is a
-core entitlement checked at plan time (`policy.rs:45`). The sensitive-mount
-patterns follow the same shape.
+This mirrors the existing precedent exactly: `network.defaults.egress` is
+monotonic-deny post-merge (`merge.rs` `merge_network`), and
+`default_egress_allow` is a declared entitlement checked at merge/validate
+time (`validation.rs`). The sensitive-mount patterns follow the same shape.
 
 ### 5.3 Plan-time expansion algorithm
 

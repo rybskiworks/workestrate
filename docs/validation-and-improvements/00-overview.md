@@ -44,7 +44,7 @@ nested mount ordering. Detailed sequencing lives in
 - **5 workloads** are config-driven from
   `.workestrate/repos/personal/workestrate.toml` (359 lines): both image
   recipes, three build recipes, the secret alias pattern, and
-  `default_deny = false` entitlement (tempest).
+  `egress = "allow"` entitlement (`default_egress_allow`, tempest).
 - **`just golden-check`** covers only the 3 synthetic `config.reference`
   workloads (`example-service/agent/offensive`) — NOT the original 5.
 - **`just verify`** IS runnable in this container via `nix develop`: nix is

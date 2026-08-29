@@ -109,7 +109,7 @@ fn build_source_home(label: &str, config_repo: Option<&str>, trusted_projects: &
         git_init_repo(&repo);
         std::fs::write(
             repo.join("workestrate.toml"),
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true\n",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n",
         )
         .expect("write workestrate.toml");
         git_commit_all(&repo, "config: initial");

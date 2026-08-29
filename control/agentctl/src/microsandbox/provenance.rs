@@ -33,9 +33,13 @@
 //!    identically), the mount mode, plus the mount's policy fragment
 //!    canonically (sorted read/write entries with their final flags) when
 //!    present
-//! 9. `network` — NetworkPlan canonically: default_deny + egress / deny /
-//!    ingress rules SORTED by their canonical encoding (rule sets are
-//!    semantically unordered; domain lists inside a rule are sorted too)
+//! 9. `network` — NetworkPlan canonically: the egress default (`dd=1`/`dd=0`
+//!    — kept byte-identical to the retired `default_deny` bool so existing
+//!    instance records do not drift) + the ingress default (`id=1`/`id=0`,
+//!    appended when per-direction ingress defaults landed — a one-time hash
+//!    change vs the pre-ingress format) + egress / deny / ingress rules
+//!    SORTED by their canonical encoding (rule sets are semantically
+//!    unordered; domain lists inside a rule are sorted too)
 //!
 //! # Explicitly NOT hashed (each would churn on non-runtime edits)
 //!
@@ -309,7 +313,21 @@ fn policy_value_canonical(v: &PolicyValue<String>) -> String {
 }
 
 fn network_canonical(n: &NetworkPlan) -> String {
-    let mut s = String::from(if n.default_deny { "dd=1" } else { "dd=0" });
+    // `dd=` is the EGRESS default — kept byte-identical to the retired
+    // `default_deny` bool. `id=` is the INGRESS default, appended when the
+    // per-direction `network.defaults.ingress` key landed: two configs
+    // differing only in ingress default MUST hash differently (accepted
+    // one-time instance drift vs the pre-ingress format after upgrade).
+    let mut s = String::from(if n.egress_default_deny {
+        "dd=1"
+    } else {
+        "dd=0"
+    });
+    s.push_str(if n.ingress_default_deny {
+        " id=1"
+    } else {
+        " id=0"
+    });
 
     let mut egress: Vec<String> = n.egress_rules.iter().map(egress_rule_canonical).collect();
     egress.sort();
@@ -394,7 +412,8 @@ mod tests {
             ports: Vec::new(),
             mounts: Vec::new(),
             network: NetworkPlan {
-                default_deny: false,
+                egress_default_deny: false,
+                ingress_default_deny: false,
                 egress_rules: Vec::new(),
                 deny_rules: Vec::new(),
                 ingress_rules: Vec::new(),
@@ -727,8 +746,13 @@ mod tests {
 
         // Network edits → DIFFERENT.
         let mut dd = empty_plan();
-        dd.network.default_deny = true;
-        assert_ne!(config_hash_of_plan(&dd), base_hash, "default_deny");
+        dd.network.egress_default_deny = true;
+        assert_ne!(config_hash_of_plan(&dd), base_hash, "egress_default_deny");
+        // Two configs differing ONLY in the ingress default must hash
+        // differently (the `id=` token).
+        let mut id = empty_plan();
+        id.network.ingress_default_deny = true;
+        assert_ne!(config_hash_of_plan(&id), base_hash, "ingress_default_deny");
         let mut eg = empty_plan();
         eg.network.egress_rules = vec![EgressRule::https(&["example.com"])];
         assert_ne!(config_hash_of_plan(&eg), base_hash, "egress rule");
@@ -767,9 +791,11 @@ mod tests {
     /// The empty-plan vector: pin the exact digest so accidental
     /// serialization drift (field order, separators, encodings) fails loud.
     /// Recompute by hand ONLY alongside a deliberate ADR addendum.
+    /// (Recomputed when the `id=` ingress-default token was appended to
+    /// `network_canonical` — a deliberate one-time hash change.)
     #[test]
     fn empty_plan_vector_is_pinned() {
-        assert_eq!(config_hash_of_plan(&empty_plan()), "6f49a79fa3596a27");
+        assert_eq!(config_hash_of_plan(&empty_plan()), "df56de50cdf4435f");
     }
 
     #[test]

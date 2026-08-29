@@ -839,7 +839,7 @@ gating_file = "package-lock.json"
              [workloads.{wl_name}]\nkind = \"agent\"\n\
              image = {{ recipe = \"nix-layered\", name = \"img-{wl_name}\" }}\n\
              command = []\n\n\
-             [workloads.{wl_name}.network]\ndefault_deny = true\n"
+             [workloads.{wl_name}.network.defaults]\negress = \"deny\"\n"
         );
         std::fs::write(dir.join("workestrate.toml"), toml).unwrap();
         dir
@@ -904,7 +904,7 @@ gating_file = "package-lock.json"
              [workloads.web]\nkind = \"service\"\n\
              image = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\n\
              command = []\n\n\
-             [workloads.web.network]\ndefault_deny = true\n",
+             [workloads.web.network.defaults]\negress = \"deny\"\n",
         )?;
         std::env::set_var("WORKESTRATE_CONFIG_DIR", &dir);
 

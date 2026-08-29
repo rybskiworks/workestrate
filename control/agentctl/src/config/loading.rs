@@ -1452,7 +1452,7 @@ pub(crate) mod tests {
 
     #[test]
     fn main_layer_rejects_unknown_workload_field() {
-        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\nbogus_wl = 1\n\n[workloads.pi.network]\ndefault_deny = true";
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\nbogus_wl = 1\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
         let err = toml::from_str::<ConfigFile>(toml).unwrap_err().to_string();
         assert!(
             err.contains("unknown field `bogus_wl`"),
@@ -1462,7 +1462,7 @@ pub(crate) mod tests {
 
     #[test]
     fn main_layer_rejects_unknown_nested_image_field() {
-        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\ncommand = []\n\n[workloads.pi.image]\nrecipe = \"registry\"\nref = \"node:24\"\nbogus_img = 1\n\n[workloads.pi.network]\ndefault_deny = true";
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\ncommand = []\n\n[workloads.pi.image]\nrecipe = \"registry\"\nref = \"node:24\"\nbogus_img = 1\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
         let err = toml::from_str::<ConfigFile>(toml).unwrap_err().to_string();
         assert!(
             err.contains("unknown field `bogus_img`"),
@@ -1472,7 +1472,7 @@ pub(crate) mod tests {
 
     #[test]
     fn main_layer_rejects_unknown_env_entry_field() {
-        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[[workloads.pi.env]]\nname = \"A\"\nvalue = \"1\"\nbogus_env = 1\n\n[workloads.pi.network]\ndefault_deny = true";
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[[workloads.pi.env]]\nname = \"A\"\nvalue = \"1\"\nbogus_env = 1\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
         let err = toml::from_str::<ConfigFile>(toml).unwrap_err().to_string();
         assert!(
             err.contains("unknown field `bogus_env`"),
@@ -1667,7 +1667,7 @@ pub(crate) mod tests {
         // Merge: base (no cpus) + global (cpus=4) + configs.team (cpus=2) → cpus=2
         let base = crate::merge::Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"",
         )?;
         let mut all = vec![base];
         all.extend(layers);
@@ -1683,7 +1683,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn load_overrides_policy_violation_default_deny_false_hard_fails() -> Result<()> {
+    fn load_overrides_policy_violation_egress_allow_hard_fails() -> Result<()> {
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-ov-policy-dd-{}-{}",
             std::process::id(),
@@ -1693,31 +1693,31 @@ pub(crate) mod tests {
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&tmp)?;
-        // Override sets default_deny=false on pi (not entitled).
+        // Override sets egress="allow" on pi (not entitled).
         let path = write_overrides(
             &tmp,
-            "[global.workloads.pi.network]\ndefault_deny = false\n",
+            "[global.workloads.pi.network.defaults]\negress = \"allow\"\n",
         );
         let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
         let layers = load_overrides(&path, &[], &existing)?;
         assert_eq!(layers.len(), 1);
 
-        // Base layer has pi with default_deny=true.
+        // Base layer has pi with egress="deny".
         let base = crate::merge::Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"",
         )?;
         let mut all = vec![base];
         all.extend(layers);
         let result = crate::merge::merge_layers(&all);
         assert!(
             result.is_err(),
-            "override setting default_deny=false on non-entitled workload should hard-fail"
+            "override setting egress=\"allow\" on non-entitled workload should hard-fail"
         );
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("monotonic-true") || err.contains("entitlement"),
-            "error should mention monotonic-true or entitlement: {err}"
+            err.contains("monotonic-deny") || err.contains("entitlement"),
+            "error should mention monotonic-deny or entitlement: {err}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
@@ -1745,7 +1745,7 @@ pub(crate) mod tests {
 
         let base = crate::merge::Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"",
         )?;
         let mut all = vec![base];
         all.extend(layers);
@@ -2064,14 +2064,14 @@ pub(crate) mod tests {
     /// discriminates workloads in assertions.
     fn bare_workload(cpus: u32) -> String {
         format!(
-            "kind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\ncpus = {cpus}\n\n[network]\ndefault_deny = true\n"
+            "kind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\ncpus = {cpus}\n\n[network.defaults]\negress = \"deny\"\n"
         )
     }
 
     /// Full `[workloads.<name>]` table form of the same workload.
     fn full_workload(name: &str, cpus: u32) -> String {
         format!(
-            "[workloads.{name}]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\ncpus = {cpus}\n\n[workloads.{name}.network]\ndefault_deny = true\n"
+            "[workloads.{name}]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\ncpus = {cpus}\n\n[workloads.{name}.network.defaults]\negress = \"deny\"\n"
         )
     }
 
@@ -2216,7 +2216,7 @@ pub(crate) mod tests {
         write_repo_file(
             &repo,
             "workestrate/workloads/pi/workload.toml",
-            "kind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\ncpus = 4\n\n[network]\ndefault_deny = true\n\n[instance]\nstrategy = \"reuse\"\nlabel = \"capsule\"\n",
+            "kind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\ncpus = 4\n\n[network.defaults]\negress = \"deny\"\n\n[instance]\nstrategy = \"reuse\"\nlabel = \"capsule\"\n",
         );
         let layers = load_config_repo_layers("personal", &repo)?;
         assert_eq!(layers.len(), 2);

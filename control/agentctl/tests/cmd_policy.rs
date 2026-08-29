@@ -34,8 +34,8 @@ host = "."
 guest = "/work"
 read_only = false
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
 /// Operator-scope policy for the main fixture. The old fixture's
@@ -93,8 +93,8 @@ guest = "/data"
 read_only = false
 policy = { read.deny = ["secrets/"] }
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
 fn fixture_with(config: &str) -> (TempDir, PathBuf) {
@@ -528,8 +528,8 @@ mode = "rw"
 read.deny = ["scratch/**"]
 write.deny = [".env", "*.key"]
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
 /// Workload-scope policy with a FINAL ALLOW: rejected by the compile-time
@@ -552,8 +552,8 @@ mode = "rw"
 [workloads.svc.policy.mounts.{axis}]
 allow = [{{ pattern = "generated/**", final = true }}]
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#
     )
 }
@@ -576,8 +576,8 @@ mode = "rw"
 [workloads.svc.policy.mounts.read]
 deny = [{ pattern = ".env", final = true }]
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
 /// Old-surface vocabulary (`mask`) must be a hard unknown-field error.
@@ -592,8 +592,8 @@ kind = "service"
 image = { recipe = "registry", ref = "alpine:latest" }
 command = ["true"]
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
 #[test]

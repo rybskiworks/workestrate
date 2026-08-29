@@ -113,7 +113,7 @@ injection / egress: `7b65ad1`; `--use` overrides: `39c1694`):
       form — `7b65ad1`.
 - [x] Egress derivation — the dependent's egress gains a derived
       `tcp:<port> -> host` allow rule for the dep's `bind:port` (additive
-      only; `default_deny` is never touched) — `7b65ad1`.
+      only; the egress default is never touched) — `7b65ad1`.
 - [x] `--use <dep>@<instance>` = instance-selection override only, with hard
       plan-time errors: `--use` on a workload with no declared `depends_on`,
       `--use` naming an undeclared dep, and `--use` naming an instance that

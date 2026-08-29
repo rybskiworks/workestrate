@@ -443,7 +443,7 @@ impl Workload for ConfigWorkload {
         // ADR 0026(d): apply the depends_on resolution — injected env AFTER
         // declared env (declared wins on a name conflict; skipped inside),
         // derived egress AFTER the expanded declared rules (identical rules
-        // deduped inside). Derivation only ADDS: default_deny is untouched
+        // deduped inside). Derivation only ADDS: the egress default is untouched
         // (monotonic; FS-16 entitlement check untouched), and the derived
         // rules land in `egress_rules` so `network_plan_to_policy` consumes
         // them identically to declared egress.
@@ -487,7 +487,18 @@ impl Workload for ConfigWorkload {
             ports: self.workload.ports.clone(),
             mounts,
             network: NetworkPlan {
-                default_deny: self.workload.network.default_deny.unwrap_or(true),
+                // Absent `defaults.egress` / `defaults.ingress` = deny
+                // (fail-closed); only an explicit `"allow"` (entitlement-
+                // gated at merge and validate time) relaxes that
+                // direction's default.
+                egress_default_deny: !matches!(
+                    self.workload.network.defaults.and_then(|d| d.egress),
+                    Some(crate::config::DefaultAction::Allow)
+                ),
+                ingress_default_deny: !matches!(
+                    self.workload.network.defaults.and_then(|d| d.ingress),
+                    Some(crate::config::DefaultAction::Allow)
+                ),
                 egress_rules,
                 deny_rules: self.workload.network.deny.clone(),
                 ingress_rules: self.workload.network.ingress.clone(),
@@ -841,8 +852,8 @@ command = []
 [workloads.pi.depends_on.litellm]
 env = "LITELLM_URL"
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 
 [workloads.litellm]
 kind = "service"
@@ -853,8 +864,8 @@ command = []
 host = 4000
 guest = 4000
 
-[workloads.litellm.network]
-default_deny = true
+[workloads.litellm.network.defaults]
+egress = "deny"
 "#;
 
     /// RAII guard: point `WORKESTRATE_CONFIG_DIR` at a temp dir holding a
@@ -962,8 +973,8 @@ default_deny = true
                 .contains("  egress: tcp:4000 -> host (derived: depends_on 'litellm')"),
             "plan render must mark the derived egress; got:\n{plan}"
         );
-        // Monotonic: derivation only ADDED; default_deny untouched.
-        assert!(plan.network.default_deny);
+        // Monotonic: derivation only ADDED; the egress default is untouched.
+        assert!(plan.network.egress_default_deny);
         Ok(())
     }
 
@@ -1065,11 +1076,11 @@ default_deny = true
 
     /// Directory-mode `workloads/litellm.toml` (full form; schema_version is
     /// default.toml-only in directory mode).
-    const DIR_MODE_LITELLM_TOML: &str = "[workloads.litellm]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[[workloads.litellm.ports]]\nhost = 4000\nguest = 4000\n\n[workloads.litellm.network]\ndefault_deny = true\n";
+    const DIR_MODE_LITELLM_TOML: &str = "[workloads.litellm]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[[workloads.litellm.ports]]\nhost = 4000\nguest = 4000\n\n[workloads.litellm.network.defaults]\negress = \"deny\"\n";
 
     /// Directory-mode `workloads/prime.toml`: an agent with a REQUIRED dep on
     /// litellm.
-    const DIR_MODE_PRIME_TOML: &str = "[workloads.prime]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.prime.depends_on.litellm]\nenv = \"LITELLM_URL\"\nrequired = true\n\n[workloads.prime.network]\ndefault_deny = true\n";
+    const DIR_MODE_PRIME_TOML: &str = "[workloads.prime]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.prime.depends_on.litellm]\nenv = \"LITELLM_URL\"\nrequired = true\n\n[workloads.prime.network.defaults]\negress = \"deny\"\n";
 
     /// Write the standalone-started `litellm` record the way `build_sandbox`
     /// does (slot instance name, the given namespace).
@@ -1300,7 +1311,7 @@ default_deny = true
         let capsule_dir = capsule_root.join("workloads").join("svc");
         let base = crate::merge::Layer::from_string_with_path(
             "base#workestrate/workloads/svc.toml",
-            "schema_version = 1\n\n[workloads.svc]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"python:3.12-slim\" }\ncommand = []\n\n[[workloads.svc.mounts]]\nhost = \"base-config.yaml\"\nguest = \"/app/cfg\"\nread_only = true\n\n[[workloads.svc.seed_files]]\nsource = \"seed/s.json\"\ntarget = \"workspaces/svc-state/s.json\"\n\n[workloads.svc.network]\ndefault_deny = true",
+            "schema_version = 1\n\n[workloads.svc]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"python:3.12-slim\" }\ncommand = []\n\n[[workloads.svc.mounts]]\nhost = \"base-config.yaml\"\nguest = \"/app/cfg\"\nread_only = true\n\n[[workloads.svc.seed_files]]\nsource = \"seed/s.json\"\ntarget = \"workspaces/svc-state/s.json\"\n\n[workloads.svc.network.defaults]\negress = \"deny\"",
             Some(base_dir.join("svc.toml")),
         )?;
         let capsule = crate::merge::Layer::from_string_with_path(
@@ -1358,8 +1369,8 @@ source = "seed/settings.json"
 target = "workspaces/svc-state/settings.json"
 only_if_missing = true
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
     /// Same shape as `SEED_CONFIG_TOML` but the seed entry is a
@@ -1382,8 +1393,8 @@ source = "seed/settings.json.tpl"
 target = "workspaces/svc-state/settings.json"
 template = true
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
     /// P2.2: a glob seed entry (no `source`; validation enforces exactly one
@@ -1405,8 +1416,8 @@ guest = "/data"
 glob = "seed/**/*.json"
 target = "workspaces/svc-state/globbed"
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
     /// P2.2 template+glob variant: every matched `.tpl` file is rendered
@@ -1428,8 +1439,8 @@ glob = "seed/**/*.tpl"
 target = "workspaces/svc-state/globbed"
 template = true
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
     #[test]
@@ -1514,8 +1525,8 @@ guest = "/data"
 read_only = false
 policy = { read = { deny = ["secrets/"] } }
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
     /// F3: prepare() copies seed files from the DECLARING layer's dir
@@ -1560,8 +1571,8 @@ source = "seed/config.yaml"
 target = "app/config/config.yaml"
 template = true
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
     /// Host Bug C regression: prepare() must hard-error on a seed target
@@ -2209,8 +2220,8 @@ kind = "service"
 image = { recipe = "registry", ref = "python:3.12-slim" }
 command = ["true"]
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
 
     /// Build a ConfigWorkload directly (no config load): provenance and
@@ -2294,8 +2305,8 @@ host = "${WORKESTRATE_SVC_BUILD}"
 guest = "/app"
 read_only = true
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
         // UNDECLARED reserved default: declaring-layer-relative → no gate.
         std::env::remove_var("WORKESTRATE_SVC_BUILD");
@@ -2345,8 +2356,8 @@ kind = "agent"
 image = { recipe = "nix-layered", name = "img-pi" }
 command = []
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 "#;
         let cf: crate::config::ConfigFile = toml::from_str(toml).unwrap();
         let workload = cf.workloads.get("pi").unwrap().clone();
@@ -2455,8 +2466,8 @@ kind = "agent"
 image = { recipe = "nix-layered", name = "img-svc" }
 command = []
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
         let wl = synthetic_workload(toml, "svc");
         let plan = wl.plan();
@@ -2555,8 +2566,8 @@ host = "${CWD}"
 guest = "/work"
 read_only = false
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
         let cf: crate::config::ConfigFile = toml::from_str(toml).unwrap();
         let workload = cf.workloads.get("svc").unwrap().clone();
@@ -2622,8 +2633,8 @@ host = "${CWD}"
 guest = "/work"
 read_only = false
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
         let wl = synthetic_workload(toml, "svc");
         let plan = wl.plan();

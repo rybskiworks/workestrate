@@ -144,7 +144,7 @@ table below summarizes each workload; line citations refer to that file.
 | `mounts` | `${MSB_HOME}/sandboxes/litellm/logs` → `/var/log/litellm` (rw); `infra/litellm` → `/app/config` (ro) | 87-95 |
 | `env` (secret) | `LITELLM_MASTER_KEY` (secret=) | 67-69 |
 | `secret_env` | `OPENROUTER_API_KEY`, `KIMI_CODE_API_KEY`, `NEURALWATT_API_KEY`, `MINIMAX_CODING_API_KEY` | 71-81 |
-| `network` | `default_deny = true`; egress `dns` + `https` to provider hosts; ingress tcp/4000 local | 97-110 |
+| `network` | `[network.defaults] egress = "deny"`; egress `dns` + `https` to provider hosts; ingress tcp/4000 local | 97-110 |
 | `local_build` | none | — |
 | `seed_files` | none | — |
 
@@ -158,7 +158,7 @@ table below summarizes each workload; line citations refer to that file.
 | `mounts` | `workspaces/pi-state` → `/data` (rw); `${CWD}` → `/work` (rw) | 136-144 |
 | `env` (secret) | `LITELLM_MASTER_KEY` (secret=) | 129-131 |
 | `secret_env` | `GITHUB_TOKEN` | 133-134 |
-| `network` | `default_deny = true`; egress `agent_base`; deny `.pi.dev` | 146-153 |
+| `network` | `[network.defaults] egress = "deny"`; egress `agent_base`; deny `.pi.dev` | 146-153 |
 | `local_build` | none (image is nix-built) | — |
 | `seed_files` | `agents/pi/config/models.json` → `workspaces/pi-state/agent/models.json` (only_if_missing) | 155-158 |
 
@@ -172,7 +172,7 @@ table below summarizes each workload; line citations refer to that file.
 | `mounts` | `${WORKESTRATE_ODYSSEUS_BUILD}` → `/app` (ro); `workspaces/odysseus-state` → `/data` (rw) | 211-219 |
 | `env` (secret) | `ODYSSEUS_ADMIN_PASSWORD` (secret=), `OPENAI_API_KEY` (secret=`LITELLM_MASTER_KEY`, env delivery — v2 flip) | migrated v2 config @ `56f3557` |
 | `secret_env` | `GITHUB_TOKEN` host-bound via env-map binding (`LITELLM_AUTH` remap def removed in v2) | migrated v2 config @ `56f3557` |
-| `network` | `default_deny = true`; egress `agent_base` + `https` to huggingface.co + cdn-lfs; ingress tcp/7000 local | 221-234 |
+| `network` | `[network.defaults] egress = "deny"`; egress `agent_base` + `https` to huggingface.co + cdn-lfs; ingress tcp/7000 local | 221-234 |
 | `local_build` | `recipe = "pip-install"`, `source = "flake://odysseus"`, `requirements_file = "requirements.txt"`, `target = ".deps"`, `env_override = "WORKESTRATE_ODYSSEUS_BUILD"`, `fallback = "agents/odysseus/build"` | 241-248 |
 | `seed_files` | `agents/odysseus/config/settings.json` → `workspaces/odysseus-state/settings.json` (only_if_missing) | 236-239 |
 
@@ -186,7 +186,7 @@ table below summarizes each workload; line citations refer to that file.
 | `mounts` | `${WORKESTRATE_OPENCODE_BUILD}` → `/app` (ro); `${CWD}` → `/workspace` (rw); `agents/opencode/config/opencode.jsonc` → `/home/node/.config/opencode/opencode.jsonc` (ro); `${MSB_HOME}/sandboxes/opencode/state` → `/home/node/.local/share/opencode` (rw) | 277-295 |
 | `env` (secret) | `OPENAI_API_KEY` (secret=`LITELLM_MASTER_KEY`, env delivery — v2 flip) | migrated v2 config @ `56f3557` |
 | `secret_env` | `GITHUB_TOKEN` host-bound via env-map binding | migrated v2 config @ `56f3557` |
-| `network` | `default_deny = true`; egress `agent_base`; ingress tcp/3000 local | 297-306 |
+| `network` | `[network.defaults] egress = "deny"`; egress `agent_base`; ingress tcp/3000 local | 297-306 |
 | `local_build` | `recipe = "bun-install"`, `source = "flake://opencode"`, `gating_file = "bun.lock"`, `env_override = "WORKESTRATE_OPENCODE_BUILD"`, `fallback = "agents/opencode/build"` | 308-313 |
 | `seed_files` | none | — |
 
@@ -200,7 +200,7 @@ table below summarizes each workload; line citations refer to that file.
 | `mounts` | `workspaces/tempest-state` → `/data` (rw); `${CWD}` → `/work` (rw) | 340-348 |
 | `env` (secret) | `TEMPEST_LOCAL_API_KEY` (secret=`LITELLM_MASTER_KEY`) | 332-334 |
 | `secret_env` | none | — |
-| `network` | `default_deny = false` (tempest holds the `DEFAULT_DENY_FALSE_ENTITLEMENT`) | 350-351 |
+| `network` | `[network.defaults] egress = "allow"` (tempest declares the `default_egress_allow` entitlement) | 350-351 |
 | `local_build` | `recipe = "npm-build"`, `source = "flake://tempest"`, `gating_file = "package-lock.json"`, `env_override = "WORKESTRATE_TEMPEST_BUILD"`, `fallback = "sources/tempest/build"` | 353-358 |
 | `seed_files` | none | — |
 

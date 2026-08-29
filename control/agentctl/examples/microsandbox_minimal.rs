@@ -26,8 +26,8 @@ kind = "agent"
 image = { recipe = "registry", ref = "node:24" }
 command = []
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 
 [[workloads.pi.network.egress]]
 recipe = "dns"
@@ -61,10 +61,13 @@ fn main() -> anyhow::Result<()> {
 
     println!("workload kind  : {}", pi.kind);
     println!("cpus           : {:?}", pi.cpus);
-    println!("default_deny   : {:?}", pi.network.default_deny);
+    println!(
+        "egress default : {:?}",
+        pi.network.defaults.and_then(|d| d.egress)
+    );
     println!("egress recipes : {}", pi.network.egress.len());
 
-    // The team layer set `cpus`; the base layer set `default_deny`.
+    // The team layer set `cpus`; the base layer set the egress default.
     assert_eq!(
         provenance.get("workloads.pi.cpus").map(|s| s.as_str()),
         Some("team"),
@@ -72,10 +75,10 @@ fn main() -> anyhow::Result<()> {
     );
     assert_eq!(
         provenance
-            .get("workloads.pi.network.default_deny")
+            .get("workloads.pi.network.defaults.egress")
             .map(|s| s.as_str()),
         Some("base"),
-        "default_deny provenance should be the base layer"
+        "egress-default provenance should be the base layer"
     );
 
     // 3. Validate the merged config.

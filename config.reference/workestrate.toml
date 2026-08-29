@@ -81,8 +81,10 @@ name = "metrics"
 host = 0
 guest = 9090
 
-[workloads.example-litellm.network]
-default_deny = true
+[workloads.example-litellm.network.defaults]
+egress = "deny"
+# ingress = "deny"  # absent = deny (fail-closed); "allow" requires
+                    # entitlements = ["default_ingress_allow"]
 
 [[workloads.example-litellm.network.egress]]
 recipe = "dns"
@@ -136,8 +138,8 @@ template = true
 glob = "agents/example-service/config/glob/*.json"
 target = "workspaces/example-service-state/globbed"
 
-[workloads.example-service.network]
-default_deny = true
+[workloads.example-service.network.defaults]
+egress = "deny"
 
 [[workloads.example-service.network.egress]]
 recipe = "dns"
@@ -200,8 +202,8 @@ PORT = "9999"
 host = 9999
 guest = 9999
 
-[workloads.example-exports.network]
-default_deny = true
+[workloads.example-exports.network.defaults]
+egress = "deny"
 
 [[workloads.example-exports.network.egress]]
 recipe = "dns"
@@ -241,8 +243,8 @@ mode = "rw"
 read.deny = ["agent-scratch/**"]
 write.deny = [".env", "*.key"]
 
-[workloads.example-agent.network]
-default_deny = true
+[workloads.example-agent.network.defaults]
+egress = "deny"
 
 [[workloads.example-agent.network.egress]]
 recipe = "agent_base"
@@ -263,9 +265,9 @@ required = false
 
 [workloads.example-offensive]
 kind = "agent"
-# default_deny = false (below) requires this config-declared entitlement
-# (fail-closed: without it, merge/validate refuse default_deny = false).
-entitlements = ["default_deny_false"]
+# egress = "allow" (below) requires this config-declared entitlement
+# (fail-closed: without it, merge/validate refuse egress = "allow").
+entitlements = ["default_egress_allow"]
 image = { recipe = "nix-layered", name = "example-offensive", tag = "latest", contents = [
   "cacert",
   "busybox",
@@ -291,8 +293,8 @@ host = "workspaces/example-offensive-state"
 guest = "/data"
 mode = "rw"
 
-[workloads.example-offensive.network]
-default_deny = false
+[workloads.example-offensive.network.defaults]
+egress = "allow"
 
 [[workloads.example-offensive.network.egress]]
 recipe = "dns"

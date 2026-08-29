@@ -16,7 +16,7 @@
 //! 3. An egress allow rule (`tcp:<port> -> host`) is DERIVED for the
 //!    dependent, landing in `plan.network.egress_rules` so the same
 //!    `network_plan_to_policy` path consumes it identically to declared
-//!    egress. Derivation only ADDS — `default_deny` is never touched
+//!    egress. Derivation only ADDS — the egress default is never touched
 //!    (monotonic; FS-16 entitlement untouched).
 //!
 //! P2 namespaced ports (ADR 0026(d) namespaced-ports rule): resolution emits
@@ -727,8 +727,8 @@ command = []
 [workloads.pi.depends_on.litellm]
 env = "LITELLM_URL"
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 
 [workloads.litellm]
 kind = "service"
@@ -739,16 +739,16 @@ command = []
 host = 4000
 guest = 4000
 
-[workloads.litellm.network]
-default_deny = true
+[workloads.litellm.network.defaults]
+egress = "deny"
 
 [workloads.noports]
 kind = "service"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.noports.network]
-default_deny = true
+[workloads.noports.network.defaults]
+egress = "deny"
 "#;
         toml::from_str(toml).expect("depends_on fixture must parse")
     }

@@ -9,7 +9,7 @@ env: OPENAI_API_KEY=(redacted)
 env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'example-litellm')
 port: 127.0.0.2:8080:8080
 mount: workspaces/example-service-state:/data
-network: default_deny=true
+network: egress_default=deny ingress_default=deny
   ingress: tcp:8080 local
   egress: tcp:53 -> host
   egress: udp:53 -> host

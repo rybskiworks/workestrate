@@ -1,10 +1,5 @@
 schema_version = 1
 
-[secrets.LITELLM_MASTER_KEY]
-env_var = "LITELLM_MASTER_KEY"
-allowed_hosts = ["host.microsandbox.internal"]
-required = true
-
 [workloads.pi]
 kind = "agent"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
@@ -20,7 +15,4 @@ guest = "/work"
 read_only = false
 
 [workloads.pi.network.defaults]
-egress = "deny"
-
-[[workloads.pi.network.egress]]
-recipe = "dns"
+ingress = "allow"  # HOSTILE: pi is not entitled to ingress="allow"

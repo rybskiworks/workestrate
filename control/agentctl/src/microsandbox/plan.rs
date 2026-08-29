@@ -477,7 +477,8 @@ impl fmt::Display for EnvVar {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NetworkPlan {
-    pub default_deny: bool,
+    pub egress_default_deny: bool,
+    pub ingress_default_deny: bool,
     pub egress_rules: Vec<EgressRule>,
     pub deny_rules: Vec<DenyDomainRule>,
     pub ingress_rules: Vec<IngressRule>,
@@ -578,7 +579,20 @@ impl fmt::Display for SandboxPlan {
                 writeln!(f, "  policy_file: {}", pf.display())?;
             }
         }
-        writeln!(f, "network: default_deny={}", self.network.default_deny)?;
+        writeln!(
+            f,
+            "network: egress_default={} ingress_default={}",
+            if self.network.egress_default_deny {
+                "deny"
+            } else {
+                "allow"
+            },
+            if self.network.ingress_default_deny {
+                "deny"
+            } else {
+                "allow"
+            }
+        )?;
         for rule in &self.network.ingress_rules {
             writeln!(
                 f,
@@ -798,7 +812,8 @@ mod tests {
                 },
             ],
             network: NetworkPlan {
-                default_deny: true,
+                egress_default_deny: true,
+                ingress_default_deny: true,
                 egress_rules: vec![
                     EgressRule::litellm_proxy(),
                     EgressRule::https(&["example.com"]),
@@ -827,7 +842,7 @@ secret_env: API_KEY (value redacted, allowed: example.com, optional)
 port: 8080:80
 mount: /data:/mnt
 mount: /cfg:/etc/cfg (ro)
-network: default_deny=true
+network: egress_default=deny ingress_default=deny
   ingress: tcp:80 local
   egress: tcp:4000 -> host
   egress: tcp:443 -> example.com
@@ -853,7 +868,8 @@ network: default_deny=true
             ports,
             mounts: vec![],
             network: NetworkPlan {
-                default_deny: false,
+                egress_default_deny: false,
+                ingress_default_deny: false,
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
@@ -904,7 +920,8 @@ network: default_deny=true
             ports,
             mounts: vec![],
             network: NetworkPlan {
-                default_deny: false,
+                egress_default_deny: false,
+                ingress_default_deny: false,
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
@@ -964,7 +981,7 @@ network: default_deny=true
         let rendered = format!("{legacy}");
         assert_eq!(
             rendered,
-            "name: names\nport: 4000:4000\nnetwork: default_deny=false\n"
+            "name: names\nport: 4000:4000\nnetwork: egress_default=allow ingress_default=allow\n"
         );
         assert!(
             !rendered.contains("(auto)"),
@@ -990,7 +1007,8 @@ network: default_deny=true
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
-                default_deny: false,
+                egress_default_deny: false,
+                ingress_default_deny: false,
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
@@ -999,7 +1017,7 @@ network: default_deny=true
         };
         assert_eq!(
             format!("{plan}"),
-            "name: bare\nnetwork: default_deny=false\n"
+            "name: bare\nnetwork: egress_default=allow ingress_default=allow\n"
         );
     }
 
@@ -1103,7 +1121,8 @@ network: default_deny=true
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
-                default_deny: true,
+                egress_default_deny: true,
+                ingress_default_deny: true,
                 egress_rules: rules,
                 deny_rules: vec![],
                 ingress_rules: vec![],
@@ -1202,7 +1221,8 @@ network: default_deny=true
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
-                default_deny: false,
+                egress_default_deny: false,
+                ingress_default_deny: false,
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
@@ -1266,7 +1286,8 @@ network: default_deny=true
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
-                default_deny: false,
+                egress_default_deny: false,
+                ingress_default_deny: false,
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
@@ -1274,7 +1295,10 @@ network: default_deny=true
             instance_policy: None,
         };
         let rendered = format!("{plan}");
-        assert_eq!(rendered, "name: bare\nnetwork: default_deny=false\n");
+        assert_eq!(
+            rendered,
+            "name: bare\nnetwork: egress_default=allow ingress_default=allow\n"
+        );
         assert!(
             !rendered.contains("instance:"),
             "no policy must render no instance lines: {rendered}"

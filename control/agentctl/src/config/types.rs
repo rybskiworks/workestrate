@@ -512,15 +512,64 @@ pub struct LocalBuildConfig {
     pub fallback: Option<String>,
 }
 
-/// Per-workload network policy (`workloads.<name>.network`). `default_deny`
-/// is the egress fail-closed switch (monotonic-true across layers for
-/// non-entitled workloads); `egress` lists allowed egress recipes, `deny`
-/// explicit domain-suffix denials, and `ingress` inbound exposure rules.
+/// Default per-direction action for a workload's network policy
+/// (`[...network.defaults] egress|ingress = "allow" | "deny"`). `Deny` is
+/// the fail-closed default; `Allow` requires the workload to declare the
+/// matching `default_egress_allow` / `default_ingress_allow` entitlement
+/// (checked at merge and validate time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DefaultAction {
+    /// Fail-open: all traffic in that direction allowed unless a `deny`
+    /// rule matches.
+    Allow,
+    /// Fail-closed: all traffic in that direction denied unless a matching
+    /// recipe/rule allows it.
+    Deny,
+}
+
+/// Per-workload network defaults (`[...network.defaults]`). `egress` and
+/// `ingress` are the per-direction fail-closed switches (absent = `deny`;
+/// tightening to `deny` is always allowed across layers, relaxing to `allow`
+/// requires the workload's declared `default_egress_allow` /
+/// `default_ingress_allow` entitlement).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+pub struct NetworkDefaultsConfig {
+    pub egress: Option<DefaultAction>,
+    pub ingress: Option<DefaultAction>,
+}
+
+/// Friendly-cutover deserializer for the REMOVED `default_deny` key: any
+/// workload TOML still carrying `default_deny` hard-errors with a targeted
+/// migration message instead of a bare serde unknown-field error. Only runs
+/// when the key is present (absent hits `#[serde(default)]`).
+fn removed_default_deny<'de, D>(deserializer: D) -> Result<Option<()>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "network.default_deny was removed — use [network.defaults] egress = \"deny\" (absent = deny; \"allow\" requires entitlements = [\"default_egress_allow\"])",
+    ))
+}
+
+/// Per-workload network policy (`workloads.<name>.network`). `defaults.egress`
+/// / `defaults.ingress` are the per-direction fail-closed switches (relaxing
+/// to `allow` requires the declared `default_egress_allow` /
+/// `default_ingress_allow` entitlement); `egress` lists allowed egress
+/// recipes, `deny` explicit domain-suffix denials, and `ingress` inbound
+/// exposure rules.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
 pub struct NetworkConfig {
-    pub default_deny: Option<bool>,
+    #[serde(default, deserialize_with = "removed_default_deny", skip_serializing)]
+    #[schemars(skip)]
+    #[doc(hidden)]
+    pub default_deny: Option<()>,
+    pub defaults: Option<NetworkDefaultsConfig>,
     #[serde(default)]
     pub egress: Vec<EgressRecipeRef>,
     #[serde(default)]
@@ -1261,9 +1310,9 @@ pub struct WorkloadConfig {
     pub instance: InstancePolicy,
     /// Config-declared entitlements (`workloads.<name>.entitlements`). The
     /// closed vocabulary core understands lives in `config::validation`
-    /// (currently only `"default_deny_false"`, which permits
-    /// `network.default_deny = false` — fail-closed: setting
-    /// `default_deny = false` WITHOUT the declared entitlement is a hard
+    /// (currently only `"default_egress_allow"`, which permits
+    /// `network.defaults.egress = "allow"` — fail-closed: setting
+    /// `egress = "allow"` WITHOUT the declared entitlement is a hard
     /// error at merge and validate time). Layers merge union-style with
     /// dedup (an entitlement, once granted by any layer, cannot be revoked
     /// by a later layer).
@@ -1615,8 +1664,8 @@ kind = "agent"
 image = { recipe = "nix-layered", name = "pi", tag = "latest", binary = { recipe = "bun-compile", src = "flake://pi", entrypoint = "packages/coding-agent/dist/bun/cli.js", worker = "packages/coding-agent/src/utils/image-resize-worker.ts" } }
 command = []
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(raw).unwrap();
         let binary = config.workloads["pi"].image.binary.as_ref().unwrap();

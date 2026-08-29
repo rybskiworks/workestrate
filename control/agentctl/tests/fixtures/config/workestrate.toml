@@ -39,8 +39,8 @@ PORT = "4000"
 host = 4000
 guest = 4000
 
-[workloads.example-litellm.network]
-default_deny = true
+[workloads.example-litellm.network.defaults]
+egress = "deny"
 
 [[workloads.example-litellm.network.egress]]
 recipe = "dns"
@@ -75,8 +75,8 @@ host = "${CWD}"
 guest = "/work"
 read_only = false
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 
 [[workloads.pi.network.egress]]
 recipe = "agent_base"
@@ -124,8 +124,8 @@ host = "workspaces/odysseus-state"
 guest = "/data"
 read_only = false
 
-[workloads.odysseus.network]
-default_deny = true
+[workloads.odysseus.network.defaults]
+egress = "deny"
 
 [[workloads.odysseus.network.egress]]
 recipe = "agent_base"
@@ -192,8 +192,8 @@ host = "${MSB_HOME}/sandboxes/opencode/state"
 guest = "/home/node/.local/share/opencode"
 read_only = false
 
-[workloads.opencode.network]
-default_deny = true
+[workloads.opencode.network.defaults]
+egress = "deny"
 
 [[workloads.opencode.network.egress]]
 recipe = "agent_base"
@@ -212,8 +212,8 @@ fallback = "agents/opencode/build"
 
 [workloads.tempest]
 kind = "agent"
-# default_deny = false (below) requires this config-declared entitlement.
-entitlements = ["default_deny_false"]
+# egress = "allow" (below) requires this config-declared entitlement.
+entitlements = ["default_egress_allow"]
 image = { recipe = "nix-layered", name = "tempest", tag = "latest", contents = ["cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils"], binary = { recipe = "npm-build", src = "flake://tempest", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }, baked_files = [{ path = "root/.config/t3mp3st/config.json", content = '{"defaultProvider":"local"}' }], features = ["create_tmp"] }
 workdir = "/work"
 cpus = 2
@@ -237,8 +237,8 @@ host = "${CWD}"
 guest = "/work"
 read_only = false
 
-[workloads.tempest.network]
-default_deny = false
+[workloads.tempest.network.defaults]
+egress = "allow"
 
 [workloads.tempest.local_build]
 recipe = "npm-build"

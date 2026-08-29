@@ -67,8 +67,9 @@ required = false
 # guest = "/work"
 # read_only = false
 #
-# [workloads.my-agent.network]
-# default_deny = true
+# [workloads.my-agent.network.defaults]
+# egress = "deny"
+# ingress = "deny"  # absent = deny; "allow" requires entitlements = ["default_ingress_allow"]
 #
 # [[workloads.my-agent.network.egress]]
 # recipe = "agent_base"

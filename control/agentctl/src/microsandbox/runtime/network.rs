@@ -1,14 +1,28 @@
 use super::super::plan::{EgressTarget, NetworkPlan, Protocol, Scope};
 use anyhow::Result;
-use microsandbox::NetworkPolicy;
+use microsandbox::{NetworkAction, NetworkPolicy};
 
 /// Convert a declarative `NetworkPlan` into a Microsandbox SDK `NetworkPolicy`.
 pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
     let mut builder = NetworkPolicy::builder();
 
-    if plan.default_deny {
-        builder = builder.default_deny();
-    }
+    // Per-direction defaults. NOTE: without the explicit allow mapping the
+    // msb builder falls back to Deny, so a plan with a relaxed default
+    // (`egress = "allow"` / `ingress = "allow"`) would still enforce
+    // deny-all in that direction. Map each direction explicitly.
+    let egress_action = if plan.egress_default_deny {
+        NetworkAction::Deny
+    } else {
+        NetworkAction::Allow
+    };
+    let ingress_action = if plan.ingress_default_deny {
+        NetworkAction::Deny
+    } else {
+        NetworkAction::Allow
+    };
+    builder = builder
+        .default_egress(egress_action)
+        .default_ingress(ingress_action);
 
     for rule in &plan.ingress_rules {
         let port = rule.port;
@@ -71,8 +85,78 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
 mod tests {
     use super::network_plan_to_policy;
     use crate::config::test_support::TestConfigGuard;
-    use crate::microsandbox::plan::{EgressTarget, Protocol};
+    use crate::microsandbox::plan::{EgressTarget, NetworkPlan, Protocol};
     use crate::microsandbox::workload::{ConfigWorkload, Workload};
+
+    /// Regression: the plan's per-direction defaults must map to the SDK
+    /// builder's `default_egress`/`default_ingress` — previously neither
+    /// builder method was called and the policy silently fell back to
+    /// deny-all in BOTH directions.
+    #[test]
+    fn direction_defaults_map_to_sdk_per_direction() -> anyhow::Result<()> {
+        for egress_deny in [true, false] {
+            for ingress_deny in [true, false] {
+                let plan = NetworkPlan {
+                    egress_default_deny: egress_deny,
+                    ingress_default_deny: ingress_deny,
+                    egress_rules: vec![],
+                    deny_rules: vec![],
+                    ingress_rules: vec![],
+                };
+                let policy = network_plan_to_policy(&plan)?;
+                assert_eq!(
+                    policy.default_egress.is_allow(),
+                    !egress_deny,
+                    "egress_default_deny={egress_deny} must produce default_egress {}",
+                    if egress_deny { "deny" } else { "allow" }
+                );
+                assert_eq!(
+                    policy.default_ingress.is_allow(),
+                    !ingress_deny,
+                    "ingress_default_deny={ingress_deny} must produce default_ingress {}",
+                    if ingress_deny { "deny" } else { "allow" }
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Regression: explicit ingress allow rules survive under a deny ingress
+    /// default — the default must not swallow declared `[[network.ingress]]`
+    /// rules.
+    #[test]
+    fn ingress_allow_rule_survives_under_deny_default() -> anyhow::Result<()> {
+        let plan = NetworkPlan {
+            egress_default_deny: true,
+            ingress_default_deny: true,
+            egress_rules: vec![],
+            deny_rules: vec![],
+            ingress_rules: vec![crate::microsandbox::plan::IngressRule {
+                protocol: Protocol::Tcp,
+                port: 7000,
+                scope: crate::microsandbox::plan::Scope::Local,
+            }],
+        };
+        let policy = network_plan_to_policy(&plan)?;
+        assert!(
+            !policy.default_ingress.is_allow(),
+            "ingress default must stay deny"
+        );
+        // `Direction` is not re-exported by the SDK facade; assert on the
+        // serialized rule shape instead (snake_case direction, port range).
+        let has_ingress_allow = policy.rules.iter().any(|r| {
+            let v = serde_json::to_value(r).expect("rule serializes");
+            v["direction"] == "ingress"
+                && r.action.is_allow()
+                && r.ports.iter().any(|p| p.start == 7000)
+        });
+        assert!(
+            has_ingress_allow,
+            "policy must carry the tcp/7000 ingress allow rule; got {:?}",
+            policy.rules
+        );
+        Ok(())
+    }
 
     #[test]
     fn example_litellm_network_plan_converts_without_error() -> anyhow::Result<()> {
@@ -207,7 +291,8 @@ mod tests {
     fn pi_plan_has_expected_egress() -> anyhow::Result<()> {
         let _guard = TestConfigGuard::new();
         let plan = ConfigWorkload::new("pi")?.plan();
-        assert!(plan.network.default_deny);
+        assert!(plan.network.egress_default_deny);
+        assert!(plan.network.ingress_default_deny);
         assert_eq!(plan.network.egress_rules.len(), 4);
         assert_eq!(plan.network.egress_rules[0].protocol, Protocol::Tcp);
         assert_eq!(plan.network.egress_rules[0].port, 53);

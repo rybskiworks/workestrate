@@ -140,8 +140,8 @@ log_stop_errors = true
 host = 45871
 guest = 45871
 
-[workloads.svc-dep.network]
-default_deny = true
+[workloads.svc-dep.network.defaults]
+egress = "deny"
 
 [workloads.svc-top]
 kind = "service"
@@ -152,8 +152,8 @@ log_stop_errors = true
 [workloads.svc-top.depends_on.svc-dep]
 env = "DEP_URL"
 
-[workloads.svc-top.network]
-default_deny = true
+[workloads.svc-top.network.defaults]
+egress = "deny"
 "#;
 
 struct E2eFixture {

@@ -144,11 +144,33 @@ impl ConfigWorkload {
                 mounts_source,
             );
         }
+        let egress_source = source_of(&format!("workloads.{}.network.defaults.egress", self.name));
+        let ingress_source =
+            source_of(&format!("workloads.{}.network.defaults.ingress", self.name));
+        // One rendered line carries two independently-sourced tokens; when
+        // the layers differ, attribute each direction explicitly.
+        let network_source = if egress_source == ingress_source {
+            egress_source.to_string()
+        } else {
+            format!("{egress_source} / ingress: {ingress_source}")
+        };
         write_line(
             &mut out,
             "",
-            &format!("network: default_deny={}", plan.network.default_deny),
-            source_of(&format!("workloads.{}.network.default_deny", self.name)),
+            &format!(
+                "network: egress_default={} ingress_default={}",
+                if plan.network.egress_default_deny {
+                    "deny"
+                } else {
+                    "allow"
+                },
+                if plan.network.ingress_default_deny {
+                    "deny"
+                } else {
+                    "allow"
+                }
+            ),
+            &network_source,
         );
         let ingress_source = source_of(&format!("workloads.{}.network.ingress", self.name));
         for rule in &plan.network.ingress_rules {

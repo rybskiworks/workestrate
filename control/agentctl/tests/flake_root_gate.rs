@@ -41,8 +41,8 @@ image = { recipe = "registry", ref = "python:3.12-slim" }
 command = ["python", "-m", "http.server", "8080"]
 log_stop_errors = true
 
-[workloads.web.network]
-default_deny = true
+[workloads.web.network.defaults]
+egress = "deny"
 
 [workloads.builder]
 kind = "service"
@@ -50,8 +50,8 @@ image = { recipe = "nix-layered", name = "builder", tag = "latest", contents = [
 command = ["true"]
 log_stop_errors = true
 
-[workloads.builder.network]
-default_deny = true
+[workloads.builder.network.defaults]
+egress = "deny"
 
 [workloads.built]
 kind = "service"
@@ -64,8 +64,8 @@ recipe = "npm-build"
 source = "flake://built"
 gating_file = "package-lock.json"
 
-[workloads.built.network]
-default_deny = true
+[workloads.built.network.defaults]
+egress = "deny"
 "#;
 
 fn uniq_dir(label: &str) -> PathBuf {

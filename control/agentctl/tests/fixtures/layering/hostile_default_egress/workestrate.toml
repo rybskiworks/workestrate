@@ -14,5 +14,5 @@ host = "${CWD}"
 guest = "/work"
 read_only = false
 
-[workloads.pi.network]
-default_deny = false  # HOSTILE: pi is not entitled to default_deny=false
+[workloads.pi.network.defaults]
+egress = "allow"  # HOSTILE: pi is not entitled to egress="allow"

@@ -151,6 +151,25 @@
         }
       ]
     },
+    "DefaultAction": {
+      "description": "Default per-direction action for a workload's network policy (`[...network.defaults] egress|ingress = \"allow\" | \"deny\"`). `Deny` is the fail-closed default; `Allow` requires the workload to declare the matching `default_egress_allow` / `default_ingress_allow` entitlement (checked at merge and validate time).",
+      "oneOf": [
+        {
+          "description": "Fail-open: all traffic in that direction allowed unless a `deny` rule matches.",
+          "type": "string",
+          "enum": [
+            "allow"
+          ]
+        },
+        {
+          "description": "Fail-closed: all traffic in that direction denied unless a matching recipe/rule allows it.",
+          "type": "string",
+          "enum": [
+            "deny"
+          ]
+        }
+      ]
+    },
     "DenyDomainRule": {
       "type": "object",
       "required": [
@@ -796,13 +815,17 @@
       "additionalProperties": false
     },
     "NetworkConfig": {
-      "description": "Per-workload network policy (`workloads.<name>.network`). `default_deny` is the egress fail-closed switch (monotonic-true across layers for non-entitled workloads); `egress` lists allowed egress recipes, `deny` explicit domain-suffix denials, and `ingress` inbound exposure rules.",
+      "description": "Per-workload network policy (`workloads.<name>.network`). `defaults.egress` / `defaults.ingress` are the per-direction fail-closed switches (relaxing to `allow` requires the declared `default_egress_allow` / `default_ingress_allow` entitlement); `egress` lists allowed egress recipes, `deny` explicit domain-suffix denials, and `ingress` inbound exposure rules.",
       "type": "object",
       "properties": {
-        "default_deny": {
-          "type": [
-            "boolean",
-            "null"
+        "defaults": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkDefaultsConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "deny": {
@@ -825,6 +848,33 @@
           "items": {
             "$ref": "#/definitions/IngressRule"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "NetworkDefaultsConfig": {
+      "description": "Per-workload network defaults (`[...network.defaults]`). `egress` and `ingress` are the per-direction fail-closed switches (absent = `deny`; tightening to `deny` is always allowed across layers, relaxing to `allow` requires the workload's declared `default_egress_allow` / `default_ingress_allow` entitlement).",
+      "type": "object",
+      "properties": {
+        "egress": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DefaultAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ingress": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DefaultAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -1152,7 +1202,7 @@
           }
         },
         "entitlements": {
-          "description": "Config-declared entitlements (`workloads.<name>.entitlements`). The closed vocabulary core understands lives in `config::validation` (currently only `\"default_deny_false\"`, which permits `network.default_deny = false` — fail-closed: setting `default_deny = false` WITHOUT the declared entitlement is a hard error at merge and validate time). Layers merge union-style with dedup (an entitlement, once granted by any layer, cannot be revoked by a later layer).",
+          "description": "Config-declared entitlements (`workloads.<name>.entitlements`). The closed vocabulary core understands lives in `config::validation` (currently only `\"default_egress_allow\"`, which permits `network.defaults.egress = \"allow\"` — fail-closed: setting `egress = \"allow\"` WITHOUT the declared entitlement is a hard error at merge and validate time). Layers merge union-style with dedup (an entitlement, once granted by any layer, cannot be revoked by a later layer).",
           "default": [],
           "type": "array",
           "items": {
@@ -1237,7 +1287,7 @@
         },
         "network": {
           "default": {
-            "default_deny": null,
+            "defaults": null,
             "deny": [],
             "egress": [],
             "ingress": []

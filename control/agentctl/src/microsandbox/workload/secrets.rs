@@ -114,7 +114,7 @@ mod tests {
 
     fn defs_toml(secret_defs: &str, workload: &str) -> String {
         format!(
-            "schema_version = 1\n\n{secret_defs}\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n{workload}\n\n[workloads.pi.network]\ndefault_deny = true"
+            "schema_version = 1\n\n{secret_defs}\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n{workload}\n\n[workloads.pi.network.defaults]\negress = \"deny\""
         )
     }
 

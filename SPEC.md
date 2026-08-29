@@ -91,7 +91,7 @@ registered.
 - **OpenCode** — coding agent. Receives `OPENAI_API_KEY` (remapped from
   `LITELLM_MASTER_KEY`) host-bound to `host.microsandbox.internal`.
 - **T3MP3ST (tempest)** — offensive-security multi-agent framework. Uses
-  `default_deny: false` (broad egress) because it scans arbitrary targets;
+  `network.defaults.egress = "allow"` (broad egress) because it scans arbitrary targets;
   the microVM boundary is the containment layer. Connects to LiteLLM via
   the `local` provider (`TEMPEST_LOCAL_*` env vars; `TEMPEST_LOCAL_API_KEY`
   remapped from `LITELLM_MASTER_KEY`).
@@ -176,9 +176,9 @@ remediation. `secrets = "none"` repos are skipped silently.
 
 - **Config purity:** closed vocabulary (egress recipes, build recipes,
   image features, package names) — reviewed like core code.
-- **Policy ceiling:** `default_deny` is monotonic (once true, cannot be
-  set false by a later layer); `default_deny = false` requires the core
-  entitlement `DEFAULT_DENY_FALSE_ENTITLEMENT`; egress hosts are validated
+- **Policy ceiling:** the egress default is monotonic (relaxing
+  `[network.defaults] egress = "deny"` to `"allow"` requires the workload's
+  declared `default_egress_allow` entitlement); egress hosts are validated
   against `ALLOWED_EGRESS_HOSTS` at merge time (fail-closed);
   `deny_rules`/`egress_rules`/`secret_env` are additive-union.
 - **Trust gating:** project-layer config (`./workestrate.toml`,
@@ -190,16 +190,16 @@ remediation. `secrets = "none"` repos are skipped silently.
 
 ## Egress model
 
-Network policy uses `default_deny` with explicit allow rules for the real
-provider hosts. All other outbound traffic is blocked. Provider secrets
+Network policy defaults both egress and ingress to deny (`[network.defaults] egress =
+"deny"`, `ingress = "deny"`; absent = deny) with explicit allow rules for the real provider hosts. All other outbound traffic is blocked. Provider secrets
 are host-bound via `secret_env` so they are only visible to the LiteLLM
 microVM.
 
-T3MP3ST (tempest) is an exception: it uses `default_deny: false` (broad
+T3MP3ST (tempest) is an exception: it uses `egress = "allow"` (broad
 egress) because it is an offensive-security tool that needs to reach
 arbitrary targets for scanning. The microVM boundary itself is the
-containment layer for tempest. `default_deny: false` requires the
-`DEFAULT_DENY_FALSE_ENTITLEMENT` core entitlement.
+containment layer for tempest. `egress = "allow"` requires the workload to
+declare the `default_egress_allow` entitlement.
 
 ## Filesystem model
 

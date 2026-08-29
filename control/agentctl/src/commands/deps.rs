@@ -3085,7 +3085,7 @@ command = []
         )?;
         std::fs::write(
             workloads.join("litellm.toml"),
-            "[workloads.litellm]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.litellm.network]\ndefault_deny = true\n",
+            "[workloads.litellm]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.litellm.network.defaults]\negress = \"deny\"\n",
         )?;
         let canonical = repo.canonicalize()?;
         crate::config::register_config("personal", &canonical.to_string_lossy(), None, None)?;

@@ -68,7 +68,7 @@ fn git_source_repo(parent: &Path, name: &str) -> std::path::PathBuf {
     run_git(&dir, &["config", "user.name", "Test"]);
     std::fs::write(
         dir.join("workestrate.toml"),
-        "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true\n",
+        "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n",
     )
     .expect("write toml");
     run_git(&dir, &["add", "."]);

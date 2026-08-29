@@ -195,24 +195,29 @@ that the user didn't intend. Mitigation: `validate-config` reports all egress
 hosts; `plan --show-source` attributes each to its layer; the user reviews
 before running `up`/`exec`.
 
-## Monotonic default_deny + entitlement
+## Monotonic deny default + entitlement
 
-`default_deny` is **monotonic-true**: if any layer sets `default_deny = true`,
-the merged result is `true`. A less-trusted layer cannot set `default_deny =
-false` to weaken a more-trusted layer's policy.
+`network.defaults.egress` (and symmetrically `network.defaults.ingress`) is
+**monotonic-deny**: setting `egress = "deny"` (or leaving it absent, which
+is deny) is always allowed. A less-trusted layer cannot set
+`egress = "allow"` to weaken a more-trusted layer's policy.
 
-**Entitlement**: core defines which workloads are entitled to
-`default_deny = false`. Currently only `tempest` (offensive-security tool,
-`tempest.rs:77`). The entitlement is a core const:
+**Entitlement**: a workload may set `egress = "allow"` only when it declares
+the `default_egress_allow` entitlement (currently only `tempest`,
+offensive-security tool); likewise `ingress = "allow"` requires
+`default_ingress_allow`. The entitlement vocabulary is a core const:
 
 ```rust
-/// Core-defined entitlement: workloads allowed to use default_deny = false.
-/// All other workloads are forced to default_deny = true regardless of config.
-pub const DEFAULT_DENY_FALSE_ENTITLEMENT: &[&str] = &["tempest"];
+/// Closed entitlement vocabulary core understands; `"default_egress_allow"`
+/// permits `network.defaults.egress = "allow"`, `"default_ingress_allow"`
+/// permits `network.defaults.ingress = "allow"`.
+const ALLOWED_ENTITLEMENTS: &[&str] = &["default_egress_allow", "default_ingress_allow"];
 ```
 
-If a config layer sets `default_deny = false` for a workload not in this list,
-`validate-config` fails: "workload 'pi' is not entitled to default_deny=false."
+If a config layer sets `egress = "allow"` for a workload without the declared
+entitlement, `validate-config` fails: "workload 'pi' sets
+network.defaults.egress = \"allow\" without declaring entitlements =
+[\"default_egress_allow\"]" (analogously for `ingress`).
 
 ## Additive deny/egress unions
 
@@ -271,7 +276,8 @@ repo, it's likely unnecessary. Document the risk in the migration process.
 | Config repo not cloned | `workestrate check` reports `[MISSING] (optional)`. `plan` uses reference config. `up`/`exec` refuse. |
 | Config references unknown egress host | `validate-config` fails: "host 'evil.com' not in allowlist." `plan` fails (fail-closed). |
 | Config references unknown secret | `validate-config` fails: "secret 'FOO' not defined in secrets: section." |
-| Config sets `default_deny = false` for non-entitled workload | `validate-config` fails: "workload 'pi' not entitled to default_deny=false." |
+| Config sets `network.defaults.egress = "allow"` for non-entitled workload | `validate-config` fails: "workload 'pi' sets network.defaults.egress = \"allow\" without declaring entitlements = [\"default_egress_allow\"]". |
+| Config sets `network.defaults.ingress = "allow"` for non-entitled workload | `validate-config` fails: "workload 'pi' sets network.defaults.ingress = \"allow\" without declaring entitlements = [\"default_ingress_allow\"]". |
 | Required secret is placeholder | `apply_plan_secrets` (`runtime.rs:107-145`) refuses: "secret 'LITELLM_MASTER_KEY' is set to placeholder." |
 | Required secret is empty | `apply_plan_secrets` refuses: "required secret 'LITELLM_MASTER_KEY' is set but empty." |
 | Untrusted project has `./workestrate.toml` | Ignored (not in `[trusted_projects]`). No error (silent skip). |

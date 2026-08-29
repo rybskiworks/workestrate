@@ -339,8 +339,8 @@ host = "infra/litellm"           # config-relative path
 guest = "/app/config"
 read_only = true                 # DEPRECATED alias for mode = "ro" (kept here to exercise back-compat)
 
-[workloads.litellm.network]
-default_deny = true
+[workloads.litellm.network.defaults]
+egress = "deny"
 
 [[workloads.litellm.network.egress]]
 recipe = "dns"
@@ -381,8 +381,8 @@ host = "${CWD}"                  # resolved at runtime to current working direct
 guest = "/work"
 mode = "rw"
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 
 [[workloads.pi.network.egress]]
 recipe = "agent_base"
@@ -439,8 +439,8 @@ host = "workspaces/odysseus-state"
 guest = "/data"
 mode = "rw"
 
-[workloads.odysseus.network]
-default_deny = true
+[workloads.odysseus.network.defaults]
+egress = "deny"
 
 [[workloads.odysseus.network.egress]]
 recipe = "agent_base"
@@ -522,8 +522,8 @@ host = "${MSB_HOME}/sandboxes/opencode/state"
 guest = "/home/node/.local/share/opencode"
 mode = "rw"
 
-[workloads.opencode.network]
-default_deny = true
+[workloads.opencode.network.defaults]
+egress = "deny"
 
 [[workloads.opencode.network.egress]]
 recipe = "agent_base"
@@ -567,8 +567,8 @@ host = "${CWD}"
 guest = "/work"
 mode = "rw"
 
-[workloads.tempest.network]
-default_deny = false   # broad egress for offensive tool (core entitlement required)
+[workloads.tempest.network.defaults]
+egress = "allow"   # broad egress for offensive tool (core entitlement required)
 
 # ─── tempest local_build (devshell only; nix-built image is canonical) ─────
 
@@ -1118,7 +1118,8 @@ Merge order: `config.reference/` (base) → `work` (layer 1) → `personal`
 
 | Field type | Merge rule | Rationale |
 |---|---|---|
-| `default_deny` | **Monotonic-true**: if any layer sets `true`, the merged result is `true`. Core per-workload entitlement for `false` (only tempest). | A less-trusted layer cannot weaken a more-trusted layer's default-deny. |
+| `defaults.egress` | **Monotonic-deny**: relaxing to `"allow"` requires the workload's declared `default_egress_allow` entitlement (only tempest); tightening to `"deny"` is always allowed. | A less-trusted layer cannot weaken a more-trusted layer's deny default. |
+| `defaults.ingress` | **Monotonic-deny** (symmetric with egress): relaxing to `"allow"` requires the workload's declared `default_ingress_allow` entitlement; tightening to `"deny"` is always allowed. Absent = deny. | A less-trusted layer cannot weaken a more-trusted layer's deny default. |
 | `deny_rules` | **Additive-union** within `policy.rs` ceiling. | A less-trusted layer cannot remove a more-trusted layer's deny rule. |
 | `egress_rules` | **Additive-union** within `policy.rs` ceiling + per-recipe `allowed_hosts()` scoping. | A less-trusted layer cannot remove egress rules (only add, within ceiling). |
 | `env` bindings | **Additive-union by key** (later layers can add or re-bind env entries; an existing key is replaced in place). | A less-trusted layer cannot deprive a workload of required secrets or env wiring. |
@@ -1174,7 +1175,7 @@ reference < context layers < [global] < [configs.<name>] < trusted project < pro
 ```
 
 Each section is a ConfigFile fragment merged as a layer by the same engine
-+ security rules (monotonic `default_deny`, additive deny/egress unions,
++ security rules (monotonic deny default, additive deny/egress unions,
 `policy.rs` ceiling).
 
 #### LENIENT semantics
@@ -1185,7 +1186,8 @@ Each section is a ConfigFile fragment merged as a layer by the same engine
 | `[configs.team]` when team not in context | Skip + INFO log |
 | `[configs.team.workloads.nonexistent]` | Skip + INFO log |
 | Unknown field in matched section | Loud WARNING (probable typo) |
-| Override sets `default_deny=false` on non-entitled workload | Hard error (merge engine) |
+| Override sets `defaults.egress = "allow"` on non-entitled workload | Hard error (merge engine) |
+| Override sets `defaults.ingress = "allow"` on non-entitled workload | Hard error (merge engine) |
 | Override adds non-allowlisted egress host | Hard error (merge engine) |
 
 ### .env.local.enc

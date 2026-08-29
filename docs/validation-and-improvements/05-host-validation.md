@@ -412,7 +412,7 @@ secrets, not inside a sandbox. Therefore:
   - an allowed domain succeeds: `curl https://github.com` → 200 (the
     `agent_base` egress recipe at `workestrate.toml:149-150` permits it).
 
-  The pi egress posture is `default_deny = true` + `agent_base` recipe +
+  The pi egress posture is `[network.defaults] egress = "deny"` + `agent_base` recipe +
   `deny .pi.dev` (`workestrate.toml:146-153`).
 
 If interactive verification is not possible in a given pass, mark B11 egress

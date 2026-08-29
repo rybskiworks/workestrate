@@ -340,8 +340,8 @@ REPLACE merge.
 #### 1.3.9 `[workloads.<name>.network]` — NetworkConfig (`types.rs:123`)
 
 ```toml
-[workloads.litellm.network]
-default_deny = true
+[workloads.litellm.network.defaults]
+egress = "deny"
 
 [[workloads.litellm.network.egress]]
 recipe = "dns"
@@ -361,7 +361,8 @@ scope = "local"
 
 | Sub-field | Type | Merge rule |
 |---|---|---|
-| `default_deny` | `Option<bool>` | monotonic-true (security-aware, ADR 0005) |
+| `defaults.egress` | `Option<DefaultAction>` (`"allow"` | `"deny"`; absent = deny) | monotonic-deny (security-aware, ADR 0005) |
+| `defaults.ingress` | `Option<DefaultAction>` (`"allow"` | `"deny"`; absent = deny) | monotonic-deny (security-aware, mirrors `defaults.egress`) |
 | `egress` | `Vec<EgressRecipeRef>` | additive-union with dedup (security-aware) |
 | `deny` | `Vec<DenyDomainRule>` | additive-union (security-aware) |
 | `ingress` | `Vec<IngressRule>` | REPLACE |
@@ -452,7 +453,7 @@ The merge engine (`merge.rs`) applies field-specific rules:
 
 | Field | Merge rule | Source |
 |---|---|---|
-| `default_deny` | **Monotonic-true**: once `true`, stays `true`. `false` requires core entitlement (`DEFAULT_DENY_FALSE_ENTITLEMENT`). Entitlement is checked BEFORE monotonic-true (ADR 0020 Ruling 2). | `merge.rs` (`merge_network`) |
+| `defaults.egress` | **Monotonic-deny**: `"deny"` (or absent) is always allowed; `"allow"` requires the workload's declared `default_egress_allow` entitlement. Entitlement is checked BEFORE monotonic-deny (ADR 0020 Ruling 2). | `merge.rs` (`merge_network`) |
 | `deny` (deny_rules) | **Additive-union** within policy.rs ceiling. Cannot remove a more-trusted layer's deny rule. | `merge.rs` (`merge_network`) |
 | `egress` (egress_rules) | **Additive-union** with canonical dedup (sorted+deduped hosts for `https`) within `ALLOWED_EGRESS_HOSTS` ceiling. | `merge.rs` (`merge_network`) |
 | `secret_env` | **Removed.** The namespace is gone (§1.3.3); a layer declaring it hard-errors. | — |
@@ -462,15 +463,15 @@ The merge engine (`merge.rs`) applies field-specific rules:
 
 **Key invariants:**
 
-- A less-trusted layer **cannot** weaken `default_deny` (monotonic-true).
+- A less-trusted layer **cannot** weaken the egress deny default (monotonic-deny).
 - A less-trusted layer **cannot** remove a deny rule or egress rule (additive).
 - A less-trusted layer **cannot** deprive a workload of required secret
   BINDINGS (`env` union-by-name).
-- `default_deny = false` requires the workload name to be in
-  `DEFAULT_DENY_FALSE_ENTITLEMENT` (currently `["tempest", "example-offensive"]`,
-  `policy.rs:45`). For non-entitled workloads, the entitlement check rejects
-  `false` before monotonic-true even applies — they can never reach
-  `Some(false)`.
+- `egress = "allow"` requires the workload to declare the
+  `default_egress_allow` entitlement (currently `tempest` and
+  `example-offensive`). For non-entitled workloads, the entitlement check
+  rejects `"allow"` before monotonic-deny even applies — they can never reach
+  `Some(Allow)`.
 
 **Merge algebra (the full contract):**
 
@@ -499,7 +500,7 @@ runtime `apply_plan_secrets` (ADR 0004).
 | `ALLOWED_EGRESS_HOSTS` | Hosts config may reference in `https` egress recipes. | `policy.rs:4-15` |
 | `SECRET_HOST_BINDINGS` | Which secrets may bind to which hosts. | `policy.rs:23-31` |
 | `ALLOWED_PACKAGES` | Package vocabulary for `nix-layered` image `contents`. | `policy.rs:34-41` |
-| `DEFAULT_DENY_FALSE_ENTITLEMENT` | Workloads entitled to `default_deny = false`. | `policy.rs:45` |
+| `default_egress_allow` entitlement | Workloads entitled to `defaults.egress = "allow"` (closed vocabulary in `config::validation::ALLOWED_ENTITLEMENTS`). | `validation.rs` |
 | `GITHUB_HOSTS` | Shared by `github` recipe and `agent_base`. | `policy.rs:19` |
 
 ### 4.2 Config purity / closed vocabulary (ADR 0003)
@@ -695,11 +696,11 @@ lives at the binding site (`OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }`)
 
 | Name | Kind | Image recipe | Notes |
 |---|---|---|---|
-| `litellm` | service | `registry` (`ghcr.io/berriai/litellm:v1.89.4`) | Proxy; `default_deny = true`; egress to providers. |
+| `litellm` | service | `registry` (`ghcr.io/berriai/litellm:v1.89.4`) | Proxy; `egress = "deny"` default; egress to providers. |
 | `pi` | agent | `nix-layered` (`workestrate-pi`) | `bun-compile` binary; `agent_base` egress; deny `.pi.dev`. |
 | `odysseus` | service | `registry` (`python:3.12-slim`) | `pip-install` local_build; HF egress. |
 | `opencode` | agent | `registry` (`node:24-bookworm-slim`) | `bun-install` local_build; `agent_base` egress. |
-| `tempest` | agent | `nix-layered` (`tempest`) | `npm-build` binary; `default_deny = false` (entitled). |
+| `tempest` | agent | `nix-layered` (`tempest`) | `npm-build` binary; `egress = "allow"` (entitled). |
 
 **Secret definitions (7):**
 
@@ -726,7 +727,7 @@ is the final model, not v2.
 This deployment exercises every config surface: both image recipes, three
 build recipes, both `bound` modes (guest real-value and host-bound
 placeholder), binding-site
-remaps, `default_deny = false` entitlement (tempest), `env` with literal and
+remaps, the `default_egress_allow` entitlement (tempest), `env` with literal and
 secret bindings, mounts with `${CWD}` and `${WORKESTRATE_*_BUILD}`
 templates, `seed_files`, `local_build`, `deny` rules, `ingress`, and `https`
 egress with multiple hosts.
@@ -740,7 +741,7 @@ egress with multiple hosts.
 | 0002 | TOML config format | `workestrate.toml` is TOML (Nix `builtins.fromTOML` compat). |
 | 0003 | Config purity + closed vocabulary | No arbitrary shell; closed recipe vocabulary. |
 | 0004 | Security allowlist in policy.rs | `ALLOWED_EGRESS_HOSTS`, `SECRET_HOST_BINDINGS`, etc. |
-| 0005 | Security-aware merge | Monotonic-true `default_deny`, additive deny/egress. |
+| 0005 | Security-aware merge | Monotonic-deny `defaults.egress`, additive deny/egress. |
 | 0014 | Trust-gated project config | `[[trusted_projects]]`; `config trust/untrust`. |
 | 0018 | Secrets layering + per-repo config | Per-key value merge; two 2026-08-01 addenda: the v2 unified secret model (delivery field; remap/description deleted), then the final unified secret/env model superseding it (per-binding `bound`; `hosts`→`allowed_hosts`; `schema_version` stays 1). |
 | 0019 | Contexts + user-global overrides | `[contexts.*]`, `overrides.toml`, instance namespacing. |

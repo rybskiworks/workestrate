@@ -657,8 +657,8 @@ fn production_full_plan_render_two_layer_fixture() {
          host = \"workspaces/example-service-state\"\n\
          guest = \"/data\"\n\
          read_only = false\n\n\
-         [workloads.example-service.network]\n\
-         default_deny = true\n\n\
+         [workloads.example-service.network.defaults]\n\
+         egress = \"deny\"\n\n\
          [[workloads.example-service.network.egress]]\n\
          recipe = \"dns\"\n",
     );
@@ -691,7 +691,7 @@ fn production_full_plan_render_two_layer_fixture() {
         "env: TEAM_FLAG=on",
         "port: 9090:9090",
         "mount: workspaces/example-service-state:/data",
-        "network: default_deny=true",
+        "network: egress_default=deny ingress_default=deny",
     ] {
         assert!(
             stdout.contains(needle),

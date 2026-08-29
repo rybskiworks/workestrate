@@ -153,12 +153,12 @@ pub fn one_workload_toml(name: &str) -> String {
          kind = \"agent\"\n\
          image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
          command = []\n\n\
-         [workloads.{name}.network]\n\
-         default_deny = true\n"
+         [workloads.{name}.network.defaults]\n\
+         egress = \"deny\"\n"
     )
 }
 
-pub const MINIMAL_VALID_TOML: &str = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true";
+pub const MINIMAL_VALID_TOML: &str = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
 
 /// Minimal valid config with one workload; the caller mutates it per test.
 pub fn base_config_for_validation() -> crate::config::ConfigFile {
@@ -171,8 +171,8 @@ image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 log_stop_errors = false
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 "#;
     toml::from_str(toml).expect("base config must parse")
 }

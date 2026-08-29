@@ -33,7 +33,7 @@ A contextless reader should know two things up front:
   port: 8080:8080
   mount: workspaces/example-service-state:/data
   mount: config.reference/infra/litellm:/app/config (ro)
-  network: default_deny=true
+  network: egress_default=deny ingress_default=deny
     ingress: tcp:8080 local
     egress: tcp:53 -> host
     egress: udp:53 -> host
@@ -321,7 +321,7 @@ For each workload, compare these fields between old and new plans:
 | `secret_env` | `secret_env: NAME (value redacted, allowed: <hosts>, <required\|optional>)` | Host-bound secrets |
 | `ports` | `port: <host>:<guest>` | |
 | `mounts` | `mount: <host>:<guest>[(ro)]` | Normalize `${CWD}`/absolute paths |
-| `network.default_deny` | `network: default_deny=<bool>` | |
+| `network.defaults.egress` / `network.defaults.ingress` | `network: egress_default=<deny\|allow> ingress_default=<deny\|allow>` | |
 | `ingress_rules` | `  ingress: <proto>:<port> <scope>` | |
 | `egress_rules` | `  egress: <proto>:<port> -> <target>` | |
 | `deny_rules` | `  egress: deny domain suffix <suffix>` | |
@@ -343,7 +343,7 @@ Check each against BOTH old and new plans:
 | `odysseus_plan_has_expected_data_mount` (`network.rs:149`) | odysseus | 2 mounts; `/data` ← `workspaces/odysseus-state` (rw); `/app` ← `agents/odysseus/build` (ro); NO `/app/data` mount |
 | `odysseus_plan_uses_data_dir_env_and_drops_hardcoded_db_url` (`network.rs:173`) | odysseus | `ODYSSEUS_DATA_DIR=/data` set; `DATABASE_URL` NOT hardcoded |
 | `opencode_network_plan_converts_without_error` (`network.rs:193`) | opencode | Network plan converts to policy without error |
-| `pi_plan_has_expected_egress` (`network.rs:206`) | pi | `default_deny=true`; 4 egress rules; rule[0] tcp:53→host; exactly one tcp:443 rule → `github.com, api.github.com` |
+| `pi_plan_has_expected_egress` (`network.rs:206`) | pi | egress default is deny; 4 egress rules; rule[0] tcp:53→host; exactly one tcp:443 rule → `github.com, api.github.com` |
 | `pi_plan_redirects_config_to_data_dir` (`network.rs:238`) | pi | `PI_CODING_AGENT_DIR=/data/agent` set; `PI_OFFLINE` NOT set |
 | `pi_plan_exposes_litellm_master_key_as_env_not_host_bound` (`network.rs:258`) | pi | `LITELLM_MASTER_KEY` in `env` (secret); NOT in `secret_env` (not host-bound) |
 | `pi_plan_has_expected_mounts` (`network.rs:284`) | pi | 2 mounts; NO `/app` mount (baked into image); `/data` ← `workspaces/pi-state` (rw); `/work` (rw); NO `/workspace` mount |

@@ -102,9 +102,10 @@ const ALLOWED_FEATURES: &[&str] = &["create_tmp"];
 
 /// Allowed `workloads.{wl}.entitlements` entries. Entitlements are
 /// config-declared (no core hardcoded workload names); this is the closed
-/// vocabulary core understands. `"default_deny_false"` permits
-/// `network.default_deny = false`.
-const ALLOWED_ENTITLEMENTS: &[&str] = &["default_deny_false"];
+/// vocabulary core understands. `"default_egress_allow"` permits
+/// `network.defaults.egress = "allow"`; `"default_ingress_allow"` permits
+/// `network.defaults.ingress = "allow"`.
+const ALLOWED_ENTITLEMENTS: &[&str] = &["default_egress_allow", "default_ingress_allow"];
 
 /// Whether `name` is a syntactically valid environment-variable name:
 /// `^[A-Za-z_][A-Za-z0-9_]*$` (WP10/A11).
@@ -383,9 +384,10 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
-    // Entitlements vocabulary + the default_deny gate (fail-closed):
-    // `default_deny = false` requires the workload to DECLARE the
-    // `default_deny_false` entitlement itself — no core-hardcoded names.
+    // Entitlements vocabulary + the defaults.{egress,ingress} gates
+    // (fail-closed): `egress = "allow"` / `ingress = "allow"` require the
+    // workload to DECLARE the matching `default_egress_allow` /
+    // `default_ingress_allow` entitlement itself — no core-hardcoded names.
     for (workload_name, workload) in &config.workloads {
         for entitlement in &workload.entitlements {
             if !ALLOWED_ENTITLEMENTS.contains(&entitlement.as_str()) {
@@ -397,14 +399,27 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                 );
             }
         }
-        if workload.network.default_deny == Some(false)
+        if workload.network.defaults.and_then(|d| d.egress)
+            == Some(crate::config::DefaultAction::Allow)
             && !workload
                 .entitlements
                 .iter()
-                .any(|e| e == "default_deny_false")
+                .any(|e| e == "default_egress_allow")
         {
             anyhow::bail!(
-                "workload '{}' sets default_deny=false without declaring entitlements = [\"default_deny_false\"]",
+                "workload '{}' sets network.defaults.egress = \"allow\" without declaring entitlements = [\"default_egress_allow\"]",
+                workload_name
+            );
+        }
+        if workload.network.defaults.and_then(|d| d.ingress)
+            == Some(crate::config::DefaultAction::Allow)
+            && !workload
+                .entitlements
+                .iter()
+                .any(|e| e == "default_ingress_allow")
+        {
+            anyhow::bail!(
+                "workload '{}' sets network.defaults.ingress = \"allow\" without declaring entitlements = [\"default_ingress_allow\"]",
                 workload_name
             );
         }
@@ -766,20 +781,20 @@ pub(crate) mod tests {
              kind = \"agent\"\n\
              image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
              command = []\n\n\
-             [workloads.pi.network]\n\
-             default_deny = true\n\n\
+             [workloads.pi.network.defaults]\n\
+             egress = \"deny\"\n\n\
              [workloads.\"{boundary}\"]\n\
              kind = \"agent\"\n\
              image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
              command = []\n\n\
-             [workloads.\"{boundary}\".network]\n\
-             default_deny = true\n\n\
+             [workloads.\"{boundary}\".network.defaults]\n\
+             egress = \"deny\"\n\n\
              [workloads.example-agent-2]\n\
              kind = \"service\"\n\
              image = {{ recipe = \"registry\", ref = \"node:24\" }}\n\
              command = []\n\n\
-             [workloads.example-agent-2.network]\n\
-             default_deny = true\n"
+             [workloads.example-agent-2.network.defaults]\n\
+             egress = \"deny\"\n"
         );
         let config: ConfigFile = toml::from_str(&toml).expect("multi-workload config must parse");
         assert_eq!(config.workloads.len(), 3);
@@ -806,7 +821,7 @@ pub(crate) mod tests {
 
     #[test]
     fn validate_rejects_unknown_binary_recipe() {
-        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"pi\", binary = { recipe = \"go-build\", src = \"flake://pi\" } }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true";
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"pi\", binary = { recipe = \"go-build\", src = \"flake://pi\" } }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
         let config: ConfigFile = toml::from_str(toml).unwrap();
         let err = validate_config(&config).unwrap_err().to_string();
         assert!(
@@ -823,7 +838,7 @@ pub(crate) mod tests {
     /// must validate clean.
     #[test]
     fn validate_accepts_binary_without_worker() {
-        let toml = "schema_version = 1\n\n[workloads.prime]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"prime\", tag = \"latest\", binary = { recipe = \"bun-compile\", src = \"flake://prime\", entrypoint = \"packages/coding-agent/dist/bun/cli.js\" } }\ncommand = []\n\n[workloads.prime.network]\ndefault_deny = true";
+        let toml = "schema_version = 1\n\n[workloads.prime]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"prime\", tag = \"latest\", binary = { recipe = \"bun-compile\", src = \"flake://prime\", entrypoint = \"packages/coding-agent/dist/bun/cli.js\" } }\ncommand = []\n\n[workloads.prime.network.defaults]\negress = \"deny\"";
         let config: ConfigFile = toml::from_str(toml).unwrap();
         validate_config(&config)
             .unwrap_or_else(|e| panic!("workerless bun-compile binary should validate clean: {e}"));
@@ -833,7 +848,7 @@ pub(crate) mod tests {
     /// must validate clean.
     #[test]
     fn validate_accepts_binary_with_worker() {
-        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"pi\", tag = \"latest\", binary = { recipe = \"bun-compile\", src = \"flake://pi\", entrypoint = \"packages/coding-agent/dist/bun/cli.js\", worker = \"packages/coding-agent/src/utils/image-resize-worker.ts\" } }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true";
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"pi\", tag = \"latest\", binary = { recipe = \"bun-compile\", src = \"flake://pi\", entrypoint = \"packages/coding-agent/dist/bun/cli.js\", worker = \"packages/coding-agent/src/utils/image-resize-worker.ts\" } }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
         let config: ConfigFile = toml::from_str(toml).unwrap();
         validate_config(&config).unwrap_or_else(|e| {
             panic!("bun-compile binary with worker should validate clean: {e}")
@@ -842,7 +857,7 @@ pub(crate) mod tests {
 
     #[test]
     fn validate_rejects_unknown_local_build_recipe() {
-        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true\n\n[workloads.pi.local_build]\nrecipe = \"make\"\nsource = \"flake://pi\"";
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n\n[workloads.pi.local_build]\nrecipe = \"make\"\nsource = \"flake://pi\"";
         let config: ConfigFile = toml::from_str(toml).unwrap();
         let err = validate_config(&config).unwrap_err().to_string();
         assert!(
@@ -857,7 +872,7 @@ pub(crate) mod tests {
 
     #[test]
     fn validate_rejects_unknown_image_feature() {
-        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"pi\", features = [\"bogus\"] }\ncommand = []\n\n[workloads.pi.network]\ndefault_deny = true";
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"nix-layered\", name = \"pi\", features = [\"bogus\"] }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
         let config: ConfigFile = toml::from_str(toml).unwrap();
         let err = validate_config(&config).unwrap_err().to_string();
         assert!(
@@ -1012,7 +1027,7 @@ pub(crate) mod tests {
 
     // ---- ADR 0030 V-addendum §V1: per-dir requires a cwd-templated mount ----
 
-    const PER_DIR_NO_CWD_MOUNT_TOML: &str = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network]\ndefault_deny = true";
+    const PER_DIR_NO_CWD_MOUNT_TOML: &str = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
 
     /// `strategy = "per-dir"` with NO cwd-templated mount is a hard
     /// validation error naming the workload and the remediation.
@@ -1037,14 +1052,14 @@ pub(crate) mod tests {
     fn validate_accepts_per_dir_with_cwd_mount() {
         for host in ["${CWD}", "${CWD}/sub/dir"] {
             let toml = format!(
-                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[[workloads.pi.mounts]]\nhost = \"{host}\"\nguest = \"/work\"\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network]\ndefault_deny = true"
+                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[[workloads.pi.mounts]]\nhost = \"{host}\"\nguest = \"/work\"\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network.defaults]\negress = \"deny\""
             );
             let config: ConfigFile = toml::from_str(&toml).unwrap();
             validate_config(&config)
                 .unwrap_or_else(|e| panic!("per-dir with host '{host}' must validate: {e}"));
         }
         // A non-cwd mount (state root) does NOT satisfy the gate.
-        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[[workloads.pi.mounts]]\nhost = \"workspaces/pi-state\"\nguest = \"/state\"\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network]\ndefault_deny = true";
+        let toml = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[[workloads.pi.mounts]]\nhost = \"workspaces/pi-state\"\nguest = \"/state\"\n\n[workloads.pi.instance]\nstrategy = \"per-dir\"\n\n[workloads.pi.network.defaults]\negress = \"deny\"";
         let config: ConfigFile = toml::from_str(toml).unwrap();
         assert!(
             validate_config(&config).is_err(),
@@ -1143,8 +1158,8 @@ image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 log_stop_errors = false
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         let err = validate_config(&config).unwrap_err();
@@ -1179,8 +1194,8 @@ image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 env = { WHATEVER = { secret = "GITHUB_TOKEN_TYPO" } }
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1216,8 +1231,8 @@ kind = "agent"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.example-agent.network]
-default_deny = true
+[workloads.example-agent.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1241,8 +1256,8 @@ kind = "agent"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.example-agent.network]
-default_deny = true
+[workloads.example-agent.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         validate_config(&config).expect("allowlisted hosts must validate");
@@ -1265,15 +1280,15 @@ kind = "agent"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.example-agent.network]
-default_deny = true
+[workloads.example-agent.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         validate_config(&config).expect("secrets without env_var skip the allowed-hosts gate");
     }
 
     #[test]
-    fn validate_rejects_default_deny_false_without_declared_entitlement() {
+    fn validate_rejects_egress_allow_without_declared_entitlement() {
         let toml = r#"
 schema_version = 1
 
@@ -1282,30 +1297,69 @@ kind = "agent"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.example-offensive.network]
-default_deny = false
+[workloads.example-offensive.network.defaults]
+egress = "allow"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         let err = validate_config(&config).unwrap_err().to_string();
         assert_eq!(
             err,
-            "workload 'example-offensive' sets default_deny=false without declaring entitlements = [\"default_deny_false\"]"
+            "workload 'example-offensive' sets network.defaults.egress = \"allow\" without declaring entitlements = [\"default_egress_allow\"]"
         );
     }
 
     #[test]
-    fn validate_accepts_default_deny_false_with_declared_entitlement() {
+    fn validate_accepts_egress_allow_with_declared_entitlement() {
         let toml = r#"
 schema_version = 1
 
 [workloads.example-offensive]
 kind = "agent"
-entitlements = ["default_deny_false"]
+entitlements = ["default_egress_allow"]
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.example-offensive.network]
-default_deny = false
+[workloads.example-offensive.network.defaults]
+egress = "allow"
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        validate_config(&config).expect("declared entitlement must validate");
+    }
+
+    #[test]
+    fn validate_rejects_ingress_allow_without_declared_entitlement() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.example-offensive]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.example-offensive.network.defaults]
+ingress = "allow"
+"#;
+        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "workload 'example-offensive' sets network.defaults.ingress = \"allow\" without declaring entitlements = [\"default_ingress_allow\"]"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_ingress_allow_with_declared_entitlement() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.example-offensive]
+kind = "agent"
+entitlements = ["default_ingress_allow"]
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+command = []
+
+[workloads.example-offensive.network.defaults]
+ingress = "allow"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         validate_config(&config).expect("declared entitlement must validate");
@@ -1322,14 +1376,14 @@ entitlements = ["root_access"]
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.example-agent.network]
-default_deny = true
+[workloads.example-agent.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         let err = validate_config(&config).unwrap_err().to_string();
         assert_eq!(
             err,
-            "workload 'example-agent' entitlement 'root_access' is not a known entitlement (expected one of: default_deny_false)"
+            "workload 'example-agent' entitlement 'root_access' is not a known entitlement (expected one of: default_egress_allow, default_ingress_allow)"
         );
     }
 
@@ -1350,16 +1404,16 @@ log_stop_errors = false
 [workloads.pi.depends_on.litellm]
 env = "LITELLM_URL"
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 
 [workloads.litellm]
 kind = "service"
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
-[workloads.litellm.network]
-default_deny = true
+[workloads.litellm.network.defaults]
+egress = "deny"
 "#;
         toml::from_str(toml).expect("depends_on config must parse")
     }
@@ -1446,8 +1500,8 @@ log_stop_errors = false
 env = "LITELLM_URL"
 exports = { http = "LITELLM_HTTP_URL" }
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 
 [workloads.litellm]
 kind = "service"
@@ -1459,8 +1513,8 @@ host = 4000
 guest = 4000
 name = "http"
 
-[workloads.litellm.network]
-default_deny = true
+[workloads.litellm.network.defaults]
+egress = "deny"
 "#;
         toml::from_str(toml).expect("named-ports depends_on config must parse")
     }
@@ -1691,7 +1745,7 @@ default_deny = true
         let mut toml = String::from("schema_version = 1\n");
         for name in ["a", "b", "c"] {
             toml.push_str(&format!(
-                "\n[workloads.{name}]\nkind = \"service\"\nimage = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\ncommand = []\n\n[workloads.{name}.network]\ndefault_deny = true\n"
+                "\n[workloads.{name}]\nkind = \"service\"\nimage = {{ recipe = \"registry\", ref = \"node:24-bookworm-slim\" }}\ncommand = []\n\n[workloads.{name}.network.defaults]\negress = \"deny\"\n"
             ));
         }
         for (from, to) in edges {
@@ -1750,8 +1804,8 @@ guest = "/data"
 source = "seed/a.json"
 target = "workspaces/svc-state/a.json"
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
         toml::from_str(toml).expect("seed config must parse")
     }
@@ -1803,8 +1857,8 @@ target = "workspaces/svc-state/a.json"
 glob = "seed/**/*.env"
 target = "workspaces/svc-state/env"
 
-[workloads.svc.network]
-default_deny = true
+[workloads.svc.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).unwrap();
         validate_config(&config)
@@ -1857,8 +1911,8 @@ source = "workloads/litellm/config.yaml"
 target = "app/config/config.yaml"
 template = true
 
-[workloads.litellm.network]
-default_deny = true
+[workloads.litellm.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).unwrap();
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1983,8 +2037,8 @@ host = "state/b"
 guest = "/work"
 read_only = false
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).unwrap();
         let err = validate_config(&config).unwrap_err().to_string();
@@ -2021,8 +2075,8 @@ host = "config-repos"
 guest = "/config/config-repos"
 read_only = false
 
-[workloads.pi.network]
-default_deny = true
+[workloads.pi.network.defaults]
+egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).unwrap();
         validate_config(&config)

@@ -981,22 +981,22 @@ mod tests {
     // ---- --repo / --all-repos selector resolution (env-backed) ----
 
     /// Write a local-path config repo: flake.nix + a file-mode workestrate.toml
-    /// declaring `wl_name` (nix-layered). `default_deny_false` writes a
+    /// declaring `wl_name` (nix-layered). `default_egress_allow` writes a
     /// policy-gate-violating network (no entitlement) so the repo's standalone
     /// merge FAILS (the --all-repos skip leg).
     fn write_local_repo(
         home: &Path,
         repo: &str,
         wl_name: &str,
-        default_deny_false: bool,
+        default_egress_allow: bool,
     ) -> PathBuf {
         let dir = home.join("repos").join(repo);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("flake.nix"), "{}\n").unwrap();
-        let network = if default_deny_false {
-            "[workloads.wl.network]\ndefault_deny = false\n"
+        let network = if default_egress_allow {
+            "[workloads.wl.network.defaults]\negress = \"allow\"\n"
         } else {
-            "[workloads.wl.network]\ndefault_deny = true\n"
+            "[workloads.wl.network.defaults]\negress = \"deny\"\n"
         };
         let toml = format!(
             "schema_version = 1\n\n\
@@ -1050,7 +1050,7 @@ mod tests {
         let err = resolve_targets(BuildScope::Repo("bad"))
             .expect_err("a repo failing the policy gates hard-errors under explicit --repo");
         assert!(
-            format!("{err:#}").contains("default_deny_false"),
+            format!("{err:#}").contains("default_egress_allow"),
             "the underlying policy gate surfaces in the chain: {err:#}"
         );
 

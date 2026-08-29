@@ -653,7 +653,8 @@ mod tests {
             ports: vec![],
             mounts,
             network: NetworkPlan {
-                default_deny: true,
+                egress_default_deny: true,
+                ingress_default_deny: true,
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],

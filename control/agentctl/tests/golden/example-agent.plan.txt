@@ -8,7 +8,7 @@ env: API_KEY=(redacted)
 env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'example-litellm')
 secret_env: GITHUB_TOKEN (value redacted, allowed: github.com, api.github.com, optional)
 mount: workspaces/example-agent-state:/data
-network: default_deny=true
+network: egress_default=deny ingress_default=deny
   egress: tcp:53 -> host
   egress: udp:53 -> host
   egress: tcp:4000 -> host

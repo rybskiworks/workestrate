@@ -135,8 +135,8 @@ pub fn cmd_new(name: &str, kind: &str) -> Result<()> {
         host = \"${{CWD}}\"\n\
         guest = \"/work\"\n\
         mode = \"rw\"\n\n\
-        [workloads.{}.network]\n\
-        default_deny = true\n\n\
+        [workloads.{}.network.defaults]\n\
+        egress = \"deny\"\n\n\
         [[workloads.{}.network.egress]]\n\
         recipe = \"agent_base\"\n",
         name, kind, name, name, name

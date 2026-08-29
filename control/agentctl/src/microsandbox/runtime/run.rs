@@ -1377,7 +1377,8 @@ mod tests {
             ports: Vec::new(),
             mounts: Vec::new(),
             network: NetworkPlan {
-                default_deny: false,
+                egress_default_deny: false,
+                ingress_default_deny: false,
                 egress_rules: Vec::new(),
                 deny_rules: Vec::new(),
                 ingress_rules: Vec::new(),
@@ -1406,7 +1407,8 @@ mod tests {
             ports: Vec::new(),
             mounts: Vec::new(),
             network: NetworkPlan {
-                default_deny: false,
+                egress_default_deny: false,
+                ingress_default_deny: false,
                 egress_rules: Vec::new(),
                 deny_rules: Vec::new(),
                 ingress_rules: Vec::new(),
