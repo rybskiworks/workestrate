@@ -78,6 +78,46 @@ fn parse_started_instance(stdout: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+/// Parse the detached child PID from `... started in background (PID N). ...`.
+fn parse_background_pid(stdout: &str) -> Option<u32> {
+    let marker = "(PID ";
+    let start = stdout.find(marker)? + marker.len();
+    let rest = &stdout[start..];
+    let end = rest.find(')')?;
+    rest[..end].trim().parse().ok()
+}
+
+/// Bounded tail (last ~4 KiB) of the detached child's log for failure
+/// messages. The poll-timeout path must be self-diagnosing: a dead child
+/// (product bug) and a slow cold-store pull (test-too-tight) look identical
+/// from `ps` alone.
+fn child_log_tail(home: &std::path::Path, instance: &str) -> String {
+    let path = home
+        .join(".microsandbox")
+        .join("sandboxes")
+        .join(instance)
+        .join("workestrate.log");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return format!("<no child log at {}>", path.display());
+    };
+    const MAX: usize = 4 * 1024;
+    if content.len() <= MAX {
+        return content;
+    }
+    let mut start = content.len() - MAX;
+    while !content.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("…{}", &content[start..])
+}
+
+/// Linux `/proc` aliveness check for the detached child (the test is
+/// KVM-gated, hence Linux-only). The `up` parent has already exited, so a
+/// dead child is reaped by init and `/proc/<pid>` disappears.
+fn child_alive(pid: u32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
 /// Poll the instance registry for a record named `instance`. Returns true
 /// once `workestrate ps --json` lists it.
 fn ps_contains(home: &std::path::Path, msb_home: &std::path::Path, instance: &str) -> bool {
@@ -165,17 +205,38 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
 
     // 3. Poll `ps --json` until the child has registered the instance (the
     //    record is written after sandbox creation, which races the parent's
-    //    return). Cap at 60s; sandbox create + first boot can take a while.
-    let deadline = Instant::now() + Duration::from_secs(60);
+    //    return). The child's MSB_HOME is always fresh/empty, so the create
+    //    path PULLS python:3.12-slim (plus first-boot microsandbox assets)
+    //    before the record lands — on a cold store / congested host that can
+    //    exceed a minute, so bound at 180s. Fail FAST with the child's log
+    //    tail if the child process dies before registering: a dead child
+    //    never registers, and waiting out the bound only hides the
+    //    diagnosis (the 2026-08-29 host failure was indistinguishable
+    //    between these two modes).
+    let child_pid = parse_background_pid(&up_stdout);
+    let deadline = Instant::now() + Duration::from_secs(180);
     let mut seen = false;
     while Instant::now() < deadline {
         if ps_contains(&home, &msb_home, &instance) {
             seen = true;
             break;
         }
+        if let Some(pid) = child_pid {
+            if !child_alive(pid) {
+                panic!(
+                    "detached child (PID {pid}) exited before registering '{instance}'; \
+                     child log tail:\n{}",
+                    child_log_tail(&home, &instance)
+                );
+            }
+        }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    assert!(seen, "ps --json never listed '{instance}' within 60s");
+    assert!(
+        seen,
+        "ps --json never listed '{instance}' within 180s; child log tail:\n{}",
+        child_log_tail(&home, &instance)
+    );
 
     // 4. The registry record must carry the plan's port pair: host 4000,
     //    guest 4000. Read the raw record to assert the port pair directly
