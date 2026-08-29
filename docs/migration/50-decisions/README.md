@@ -1,6 +1,6 @@
 # ADR Index
 
-Architecture Decision Records for the workestrator tool+XDG migration.
+Architecture Decision Records for the workestrate tool+XDG migration.
 
 | ID | Title | Status | Decision (one line) |
 |---|---|---|---|

@@ -94,8 +94,9 @@ live in your personal config repo.
    ```bash
    just host-check
    ```
-4. Create or import your personal config repo (contains `workestrate.toml`,
-   `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/`):
+4. Create or import your personal config repo (contains `.env.enc`,
+   `.sops.yaml`, and the workload config — a flat `workestrate.toml` or
+   directory-mode `workestrate/` capsules):
 
    **Create a new config repo** (recommended for first-time users):
    ```bash
@@ -208,12 +209,14 @@ workestrate run -- bash -c \
   'curl -sS http://127.0.0.1:4000/v1/models \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY"' | jq
 
-# Smoke-test a chat completion (pretty-printed with jq)
+# Smoke-test a chat completion (pretty-printed with jq; <model> is an
+# org-prefixed alias from /v1/models — the old generic "coding" group was
+# removed in the 2026-08-28 model-naming migration)
 workestrate run -- bash -c \
   'curl -sS http://127.0.0.1:4000/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"coding\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
+  -d "{\"model\":\"<model>\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
 ```
 
 The `bash -c` wrapper with single quotes is required because `$LITELLM_MASTER_KEY`
@@ -225,9 +228,20 @@ These curls run on the host and reach the proxy at `127.0.0.1:4000`. From
 inside the agent sandboxes, the same proxy is reached at
 `http://host.microsandbox.internal:4000`.
 
-The proxy is configured by the active config repo's `infra/litellm/config.yaml`
-(which `include:`s `models.yaml`) and exposes coding-tier model names. Each tier
-targets a different cost/capability point:
+The proxy is configured by the active config repo's litellm capsule
+(`workestrate/workloads/litellm/config.yaml`, which `include:`s `models.yaml`)
+and exposes org-prefixed model aliases (`${LITELLM_PERSONAL_ORG}.*` and
+`${LITELLM_OPENROUTER_ORG}.*`) on `ghcr.io/berriai/litellm:v1.98.0`
+(4 CPU / 8192 MiB, timeouts 3600s, `num_retries: 3`).
+
+> **Stale below (model-naming migration, 2026-08-28).** The generic `coding`
+> model group was REMOVED when the aliases went org-prefixed (the
+> opencode/odysseus/tempest configs still reference it — known broken,
+> follow-up pending). The tier table and model-alias paragraphs below
+> describe the superseded pre-migration naming, retained as a historical
+> record.
+
+Each tier targeted a different cost/capability point:
 
 | Tier | Primary | Fallback chain | Use case |
 |---|---|---|---|
@@ -393,12 +407,12 @@ serving proxy.
 workestrate workload up litellm --new
 #    → live proxy stays on 127.0.0.1:4000; canary on 127.0.0.2:4000 (guest still :4000).
 
-# 3. Smoke-test the canary.
+# 3. Smoke-test the canary (<model> = an org-prefixed alias from /v1/models).
 workestrate run -- bash -c \
   'curl -sS http://127.0.0.2:4000/v1/chat/completions \
    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
    -H "Content-Type: application/json" \
-   -d "{\"model\":\"coding\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
+   -d "{\"model\":\"<model>\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"' | jq
 
 # 4a. Promote: stop the old singleton, start the new one on the singleton slot.
 workestrate workload down litellm                     # stop the old singleton
@@ -452,7 +466,7 @@ mechanism (`Workload::build_path()`) can still point workestrate at an
 alternate build tree. The npm/node variant (exec'ing `node
 /app/packages/coding-agent/dist/cli.js`) remains the runtime fallback if
 the bun binary misbehaves. The bun-binary path through the microVM is
-compile- and plan-verified but pending KVM runtime validation.
+host-validated on KVM (see **Runtime status (2026-08-13)** below).
 
 Note: `agents/pi/repo`, `agents/odysseus/repo`, `agents/opencode/repo`, and
 `agents/tempest/repo` must be cloned into the `agents/` directory before
@@ -472,7 +486,7 @@ LiteLLM proxy's `LITELLM_MASTER_KEY` and Odysseus's
 `ODYSSEUS_ADMIN_PASSWORD`. The authoritative security control for all agents is network
 segmentation (default-deny egress); an agent that exfiltrates the key
 can only reach the proxy (tcp/4000) and GitHub (tcp/443). Runtime
-enforcement is unverified in M1 (compile-checked only).
+enforcement is host-validated (2026-08-13; see Architecture below).
 
 The Pi sandbox plan sets `PI_OFFLINE=1` and `PI_TELEMETRY=0`, denies
 the `domain suffix .pi.dev`, mounts `agents/pi/repo` and `workspaces/pi`,
@@ -685,11 +699,11 @@ except the explicitly-allowed ones (`openrouter.ai`, `api.kimi.com`,
   are stored in the T3MP3ST conf store. `T3MP3ST_HOST` is set to
   `127.0.0.1` so the Express API server stays inside the microVM.
 
-The top-level layout (already documented in
-[`agents/README.md`](agents/README.md) and
-[`profiles/litellm.md`](profiles/litellm.md)) is: `control/agentctl/`
-(Rust CLI), `infra/litellm/` (LiteLLM config), `infra/microsandbox/`
-(SDK notes), and `agents/` (optional agent checkouts).
+The top-level layout (also documented in
+[`agents/README.md`](agents/README.md)) is: `control/agentctl/`
+(Rust CLI), `infra/microsandbox/` (SDK notes), and `agents/` (optional
+agent checkouts). LiteLLM config lives in the config repo's litellm
+capsule (`workestrate/workloads/litellm/`), not in this repo.
 
 ## Troubleshooting
 
@@ -764,7 +778,7 @@ directory (`$WORKESTRATE_HOME`) with a flat layout (ADR 0023):
 | **Home** | `$WORKESTRATE_HOME/` (default `~/.workestrate`) | Single tool home directory |
 | **Registry** | `$WORKESTRATE_HOME/config.toml` | Tool settings, config-repo registry, ordered layers, trusted projects |
 | **Overrides** | `$WORKESTRATE_HOME/overrides.toml` | User-global overrides (optional) |
-| **Config repos** | `$WORKESTRATE_HOME/config-repos/<name>/` | `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
+| **Config repos** | `$WORKESTRATE_HOME/config-repos/<name>/` | `workestrate.toml` (or directory-mode `workestrate/`), `.env.enc`, `.sops.yaml` |
 | **State** | `$WORKESTRATE_HOME/state/` | `workspaces/`, `var/` (runtime state) |
 | **Sources** | `$WORKESTRATE_HOME/sources/<name>/` | Agent source checkouts + builds |
 | **Cache** | `$WORKESTRATE_HOME/cache/` | Cache |

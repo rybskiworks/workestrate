@@ -31,8 +31,8 @@ consumed by the code; default paths are used regardless.
 
 | Artifact | Location | Notes |
 |---|---|---|
-| Per-config-repo `.env.enc` | `$WORKESTRATE_HOME/repos/<name>/.env.enc` | SOPS-encrypted; ciphertext-safe to commit in the config repo |
-| Per-config-repo `.sops.yaml` | `$WORKESTRATE_HOME/repos/<name>/.sops.yaml` | SOPS recipient config; no secrets in it |
+| Per-config-repo `.env.enc` | `$WORKESTRATE_HOME/config-repos/<name>/.env.enc` | SOPS-encrypted; ciphertext-safe to commit in the config repo |
+| Per-config-repo `.sops.yaml` | `$WORKESTRATE_HOME/config-repos/<name>/.sops.yaml` | SOPS recipient config; no secrets in it |
 | User-global secrets | `$WORKESTRATE_HOME/secrets/.env.local.enc` | Applied per-key across all contexts |
 | age private key | `~/.config/sops/age/ai-workbench-secrets.txt` (HOST) | NEVER in repo/bundle/`.workestrate/` |
 
@@ -43,7 +43,7 @@ consumed by the code; default paths are used regardless.
 ### `setup-secrets --config <name> init|update`
 
 Targets a specific config repo's `.env.enc` + `.sops.yaml` in
-`$WORKESTRATE_HOME/repos/<name>/`.
+`$WORKESTRATE_HOME/config-repos/<name>/`.
 
 ```bash
 setup-secrets --config personal init      # one-time: create .env.enc
@@ -87,12 +87,11 @@ registered config repo, or falls back to the repo root (backwards compat).
 `REQUIRED_KEYS` is read from `workestrate secrets-schema` (falls back to
 `.env.example` grep).
 
-> **LANDING (Track B):** per-repo override alignment — `setup-secrets`
-> reading per-repo `secrets_file` and `age_key_file` from the registry
-> when `--config <name>` is used — is landing in parallel via Track B.
-> Until it lands, users can set `SOPS_AGE_KEY_FILE` manually as a
-> workaround. The Rust `load_secrets()` already honors these per-repo
-> overrides; only the shell wrapper needs alignment.
+> **Landed (Track B).** `setup-secrets` reads per-repo `secrets_file` and
+> `age_key_file` overrides from the registry when `--config <name>` is used
+> (via `workestrate secrets-target <name> --json`, falling back to the
+> defaults when unavailable); the Rust `load_secrets()` honors the same
+> overrides.
 
 ## Multi-layer per-key value merge
 
