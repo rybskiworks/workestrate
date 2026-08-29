@@ -564,8 +564,12 @@ fn kvm_up_after_image_content_edit_rebuilds_before_spawn() {
     // A2: a CONTENT edit in the flake (the declared `tag` field is inert).
     // The next up must REBUILD (new outPath → new sha tag: absent record +
     // absent tag → build+load) BEFORE the spawn.
+    // E2E_FLAKE is a raw string, so the Nix `\n` escape is two literal
+    // chars on disk; the needle (and replacement) must be raw strings too,
+    // or the replace matches nothing and the edit silently no-ops (the
+    // 2026-08-29 host failure at the assert below).
     let flake = std::fs::read_to_string(fx.repo.join("flake.nix")).unwrap();
-    let edited = flake.replace("hello from svc-dep\n", "hello again from svc-dep v2\n");
+    let edited = flake.replace(r"hello from svc-dep\n", r"hello again from svc-dep v2\n");
     assert_ne!(flake, edited, "the flake edit applied");
     std::fs::write(fx.repo.join("flake.nix"), edited).unwrap();
 
