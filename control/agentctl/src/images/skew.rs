@@ -14,7 +14,7 @@
 /// Record state for a `<repo>#<tag>` key, derived by phase C (spec §3.1).
 ///
 /// A2 (ADR 0032 §Image tags): the key carries the COMPUTED content-
-/// addressed tag (`<repo>#<name:ctx:sha>`), so `Fresh` = "a record exists
+/// addressed tag (`<repo>#<name:ctx.sha>`), so `Fresh` = "a record exists
 /// under the computed key" (presence IS freshness) and `Stale` is
 /// unreachable from the ensure/build flow — stale content computes a
 /// DIFFERENT tag and keys Absent. The variant remains for the documented

@@ -1054,7 +1054,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // (unarmed, home-scoped deps) runs first, then
             // arm_inline_override(), THEN the ensure — so the ensure sees
             // the substituted config and tags/pointers under the OVERRIDE's
-            // tag context (image_tag_context: `workestrate-prime:feat-x:<sha>`,
+            // tag context (image_tag_context: `workestrate-prime:feat-x.<sha>`,
             // moving only the (name, "feat-x") pointer). With NO pending
             // override today's order stands (fail-fast preserved). The
             // decision is the pure images::ensure::ensure_after_arming; the

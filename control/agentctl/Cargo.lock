@@ -6555,6 +6555,7 @@ dependencies = [
  "glob",
  "globset",
  "microsandbox",
+ "microsandbox-image",
  "schemars",
  "serde",
  "serde_json",

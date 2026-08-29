@@ -6,6 +6,10 @@
 scope ladder + image tags DECIDED + operating model; supersedes the
 `clean --vms` verb shape in § Cleanup family — the ladder and the
 `down`/`clean` verb split below govern)
+**Amendment:** 2026-08-28 (image tag grammar fix — `name:ctx.sha` with a
+DOT ctx/sha separator supersedes the two-colon `name:ctx:sha`, which is an
+invalid docker/OCI reference, host-proven by the first real `msb load`;
+no migration needed — see § Image tags — DECIDED)
 **References:** ADR 0019 (contexts + `<context>-<workload>` namespacing),
 ADR 0021 (instance lifecycle + AI-native surfaces; `down --all` back-compat
 alias), ADR 0026 (per-instance addressing + dynamic ports), ADR 0030
@@ -44,7 +48,9 @@ Full identity form: **`<workload>@<instance>` in context `<ctx>` built from
 ### Image identity: content-hash tags + per-context alias
 
 > **Superseded by the 2026-08-24 addendum** (§ Image tags — DECIDED): the
-> tag format is `name:ctx:sha` immutable per build, and the per-context
+> tag format is `name:ctx.sha` immutable per build (AMENDED 2026-08-28 from
+> the two-colon `name:ctx:sha` — an invalid OCI reference; see the amendment
+> note in § Image tags — DECIDED), and the per-context
 > mutable alias TAG is replaced by the state-dir image record as the
 > mutable current-pointer.
 
@@ -180,7 +186,10 @@ deferred.
 
 **RESOLVED (2026-08-24, design session):**
 
-- **Tag format** — DECIDED: `name:ctx:sha` immutable per build; the
+- **Tag format** — DECIDED: `name:ctx.sha` immutable per build (AMENDED
+  2026-08-28 from `name:ctx:sha` — the two-colon form is an invalid
+  docker/OCI image reference, proven by the first real host `msb load`; see
+  the amendment note in § Image tags — DECIDED); the
   per-context mutable alias is replaced by the state-dir image record as the
   mutable current-pointer (§ Image identity, 2026-08-24 decision).
 
@@ -191,7 +200,7 @@ deferred.
   reconsidered after the host batch proves it (ADR 0030 §V5).
 - **Per-workload config-branch override UX** — AMENDED 2026-08-24
   (same-day): RESOLVED: **ONLY the inline colon syntax** `prime:feat-x`
-  (`:` = config branch, consistent with the `name:ctx:sha` image tags;
+  (`:` = config branch, consistent with the `name:ctx.sha` image tags;
   `@` = instance id; the combined form `prime:feat-x@canary` is legal);
   the `--from <ref>` flag form is DROPPED. Superseded original (retained
   as historical record): ~~RESOLVED: **BOTH forms** — the `--from <ref>`
@@ -348,7 +357,7 @@ locked rev (the stable line); branch names are opt-in freshness.
 > leading/trailing `-` trimmed, and a candidate with no usable characters
 > yields NO candidate (the ladder falls through). Context names become
 > sandbox instance-name prefixes and image-tag segments
-> (`name:ctx:sha`), so raw branch names like `migration/tool-model` are
+> (`name:ctx.sha`), so raw branch names like `migration/tool-model` are
 > never legal as-is; the defined-context lookup uses the SLUG (a context
 > named `migration-tool-model` matches a checkout of
 > `migration/tool-model`). Collisions between distinct branches slugging
@@ -380,11 +389,37 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
 
 ### Image tags — DECIDED
 
-- **Tag format: `name:ctx:sha`, immutable per build.** The earlier
+- **Tag format: `name:ctx.sha`, immutable per build** (AMENDED
+  2026-08-28 — separator changed from a second colon to a DOT; superseded
+  original, retained as historical record: ~~`name:ctx:sha`~~). The earlier
   alias-pair sketch (`name:sha-<hash>` + `:ctx` mutable alias tag) is
   replaced: the **state-dir image record is the mutable current-pointer**
   for the context — no mutable registry tags at all, so a dev build cannot
   even transiently move what prod resolves.
+
+  > **Amendment (2026-08-28) — host-proven grammar fix (host Bug B).** The
+  > originally decided `name:ctx:sha` shape is an INVALID docker/OCI image
+  > reference: the docker grammar allows exactly ONE colon (the
+  > `name:tag` separator), and the tag charset is
+  > `[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}`. The first real host load failed:
+  > `msb load failed for tag 'workestrate-prime:main:3n87p1a3ncbr':
+  > manifest parse error: invalid image reference`. The container tests
+  > never caught this because they run against FAKE store backends (fake
+  > probe/loader seams) — the invalid reference was never exercised until
+  > the first real `msb load`. The shape is amended to **`name:ctx.sha`**
+  > (DOT between ctx and sha; parse by splitting the tag portion at the
+  > LAST `.` — unambiguous because the sha segment is 12 lowercase base32
+  > chars and ctx slugs never contain dots post-slugify). The ctx-less
+  > form `name:sha` is unchanged (already legal). A legality regression
+  > test now parses every `compute_image_tag` output shape with the REAL
+  > OCI reference parser from the vendored microsandbox fork
+  > (`microsandbox_image::Reference`).
+  > **No migration is needed:** the computed tag is only ever written to
+  > the image store via `msb load`, which failed on EVERY two-colon tag —
+  > so no old-shape tag can exist in any host store, and the state-file
+  > records/pointers that reference them are advisory (spec §3.2): a stale
+  > record reads as Absent → Rebuild under the new shape, and the GC's
+  > `split_computed_tag` never matches the old shape (never a candidate).
 - **GC (RESOLVED 2026-08-24):** keep-last-N per context as a
   schema-configurable cascade — built-in default N=5 < home settings <
   config repo < workload capsule — with automatic prune-on-load of older
@@ -433,7 +468,7 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
   never migrates pins. Archive dirs are content-addressed by it:
   `<state>/cache/gitv3/<sha>/`.
 - **Grammar** (one-grammar, inline-only; no `--from` flag):
-  `name[:ref][@id]` — `:` = config branch (consistent with `name:ctx:sha`
+  `name[:ref][@id]` — `:` = config branch (consistent with `name:ctx.sha`
   image tags), `@` = instance id, combined `prime:feat-x@canary` legal.
    Bare `name@id` (no colon) is rejected, pointing at `--instance`. Id
    precedence: `--instance` > `@id` > (`--new` allocates | `:ref`-derived)
@@ -475,7 +510,7 @@ instance  <  workload  <  context (= branch)  <  config-ref  <  home (--all)  < 
 
 Landed as commit `16af715` (code + schemas + tests) and this docs commit,
 both on `migration/tool-model`. Stage 1 (`001a2ca`) landed the immutable
-`name:ctx:sha` store tags + the state-dir current-pointer; stage 2 closes
+`name:ctx.sha` store tags + the state-dir current-pointer; stage 2 closes
 A2 with the keep-last-N GC cascade (RESOLVED user decision 3). The
 mechanics below are PINNED (they are the recorded contract, verified by
 the test suite):
@@ -507,7 +542,7 @@ the test suite):
   pathological (D5-warning territory); this pin is deterministic.
 - **Migration shape = TOLERATE**: no rewrite-on-read. Legacy records stay
   under legacy keys indefinitely; GC/prune candidates must parse as
-  computed-shape `<name>:<sha>` / `<name>:<ctx>:<sha>` with a 12-char
+  computed-shape `<name>:<sha>` / `<name>:<ctx>.<sha>` with a 12-char
   lowercase-alphanumeric sha segment (`split_computed_tag`). Legacy
   declared tags (e.g. `img-pi:latest`) NEVER parse → never candidates,
   never touched. Known edge (accepted): a user-DECLARED tag that happens
@@ -551,9 +586,9 @@ the test suite):
   rule).
 - **Ensure-seam verification result**: non-override home-scoped resolution
   VERIFIED NO-GAP (see the resolved open question above); override-path
-  flow test pins `<attr>:feat-x:<sha>` tagging + only-the-override-pointer
+  flow test pins `<attr>:feat-x.<sha>` tagging + only-the-override-pointer
   movement under ARMED override; home-context flow test pins the
-  three-segment tag + `(repo, attr, Some(ctx))` pointer when an active
+  ctx-carrying tag + `(repo, attr, Some(ctx))` pointer when an active
   context is set. Skew invariant pinned from the GC side: a pruned tag
   reads `StoreTag::Gone` → §3.4 row 3 Rebuild, never an error
   ("pruned tag = rebuild-from-store on recreate"), with a
@@ -637,7 +672,7 @@ recorded contract, verified by the test suite):
   record's stamps unchanged — starting a STOPPED sandbox does not change
   its build inputs (absent prior → None, the pre-stamp posture).
 - **`image_out_hash`** = A2's computed sha segment via `split_computed_tag`
-  on the resolved `<name>[:<ctx>:]<sha>` tag — NEVER re-hashed. `None` for
+  on the resolved `<name>:<sha>` / `<name>:<ctx>.<sha>` tag — NEVER re-hashed. `None` for
   registry refs and legacy declared tags (no content hash; staleness then
   rides `config_hash` alone).
 - **ps staleness display**: additive `ConfigStaleness {recorded, current}`
@@ -727,7 +762,7 @@ recorded contract, verified by the test suite):
   artifact forms — `workestrate.log` AND the `workestrate-*` image tag — but
   the landed engine implements ONLY the log (`Evidence::ArtifactLog`).
   Deliberate: (a) the `workestrate-*` tag sketch predates the A2 tag
-  decision (tags are immutable `name:ctx:sha` — no workestrate prefix — so
+  decision (tags are immutable `name:ctx.sha` — no workestrate prefix — so
   the literal check has no referent anymore); (b) `spawn` writes
   `workestrate.log` into EVERY workestrate-created sandbox dir, so the log
   alone carries full recall over any candidate that exists to be torn down;

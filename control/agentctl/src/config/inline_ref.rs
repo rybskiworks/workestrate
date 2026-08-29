@@ -41,7 +41,7 @@
 //!
 //! [`parse_workload_selector`] splits the workload positional as
 //! `name[:config-ref][@instance]` (`:` = config branch, `@` = instance id —
-//! consistent with `name:ctx:sha` image tags). Bare `name@id` WITHOUT `:`
+//! consistent with `name:ctx.sha` image tags). Bare `name@id` WITHOUT `:`
 //! is a hard error (fail-closed, recorded design): instance ids are passed
 //! with `--instance`.
 

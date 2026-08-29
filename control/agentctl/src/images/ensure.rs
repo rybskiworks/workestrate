@@ -300,7 +300,7 @@ gating_file = "package-lock.json"
     // ---- the seam-driven ensure core ----
 
     /// Pin the A2 tag context to None for the duration of a flow test (the
-    /// computed tags asserted below are the two-segment `<name>:<sha>`
+    /// computed tags asserted below are the ctx-less `<name>:<sha>`
     /// form only when no context/override leaks from a parallel test).
     fn pin_no_tag_context() -> std::sync::MutexGuard<'static, ()> {
         let lock = ENV_TEST_LOCK.lock().unwrap();
@@ -665,14 +665,15 @@ gating_file = "package-lock.json"
     // ---- A2 stage 2 ensure-seam completion (scope item 12) ----
 
     /// NON-OVERRIDE path under an ACTIVE CONTEXT (the existing flow tests
-    /// pin ctx=None): the ensure computes the THREE-SEGMENT tag
-    /// `<attr>:<home-ctx>:<sha>` and moves the `(repo, attr, Some(ctx))`
-    /// pointer — never a two-segment tag or a ctx-less pointer while a home
-    /// context is active (ADR 0032 §Image tags:
-    /// image_tag_context = active_context_name when no override is armed).
+    /// pin ctx=None): the ensure computes the ctx-carrying tag
+    /// `<attr>:<home-ctx>.<sha>` (dot separator) and moves the
+    /// `(repo, attr, Some(ctx))` pointer — never a ctx-less tag or a
+    /// ctx-less pointer while a home context is active (ADR 0032 §Image
+    /// tags: image_tag_context = active_context_name when no override is
+    /// armed).
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
-    async fn home_context_ensure_writes_three_segment_tag_and_ctx_pointer() -> Result<()> {
+    async fn home_context_ensure_writes_ctx_tag_and_ctx_pointer() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
         crate::config::set_active_context(Some(crate::config::ActiveContext {
@@ -698,14 +699,14 @@ gating_file = "package-lock.json"
         };
         ensure_resolved(std::slice::from_ref(&target), &state_dir, false, &mut seams).await?;
 
-        let want_tag = "img-alpha:personal:aaaaaaaaaaaa";
+        let want_tag = "img-alpha:personal.aaaaaaaaaaaa";
         let state = ImagesState::load(&state_dir);
         assert_eq!(
             state
                 .lookup(&image_key("personal", want_tag))
                 .map(|r| r.tag.as_str()),
             Some(want_tag),
-            "the record keys under the THREE-SEGMENT home-context tag"
+            "the record keys under the ctx-carrying home-context tag"
         );
         assert_eq!(
             state
@@ -738,7 +739,7 @@ gating_file = "package-lock.json"
     }
 
     /// OVERRIDE path with an ARMED inline override (`alpha:feat-x`): the
-    /// ensure tags under the override context — `<attr>:feat-x:<sha>` — and
+    /// ensure tags under the override context — `<attr>:feat-x.<sha>` — and
     /// moves ONLY the `(repo, attr, "feat-x")` pointer; the home-context
     /// pointer is untouched (never flaps). This pins the reordered
     /// ensure-after-arming seam end-to-end at the ensure core level (ADR
@@ -761,7 +762,7 @@ gating_file = "package-lock.json"
         state.upsert_pointer(
             crate::images::state::pointer_key("personal", "img-alpha", Some("personal")),
             crate::images::state::PointerRecord {
-                tag: "img-alpha:personal:111111111111".to_string(),
+                tag: "img-alpha:personal.111111111111".to_string(),
                 updated_at: "2026-08-24T09:00:00Z".to_string(),
             },
         );
@@ -787,7 +788,7 @@ gating_file = "package-lock.json"
         };
         ensure_resolved(std::slice::from_ref(&target), &state_dir, false, &mut seams).await?;
 
-        let want_tag = "img-alpha:feat-x:aaaaaaaaaaaa";
+        let want_tag = "img-alpha:feat-x.aaaaaaaaaaaa";
         let state = ImagesState::load(&state_dir);
         assert_eq!(
             state
@@ -815,7 +816,7 @@ gating_file = "package-lock.json"
                     Some("personal")
                 ))
                 .map(|p| p.tag.as_str()),
-            Some("img-alpha:personal:111111111111"),
+            Some("img-alpha:personal.111111111111"),
             "the home-context pointer NEVER flaps"
         );
 

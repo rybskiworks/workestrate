@@ -30,6 +30,15 @@ toml = "0.8"
 default = ["schema"]
 schema = ["dep:schemars"]
 
+[dev-dependencies]
+# The vendored fork's image crate (patched in via .cargo/config.toml) — used
+# ONLY by the host-Bug-B regression test in images::state, which validates
+# computed store tags against the REAL docker/OCI reference parser
+# (`microsandbox_image::Reference`, re-exported from oci-client) rather than
+# a local approximation. Already in the build graph transitively via the
+# microsandbox SDK, so it adds no new packages.
+microsandbox-image = "=0.6.15"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

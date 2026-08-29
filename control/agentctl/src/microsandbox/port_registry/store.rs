@@ -1052,14 +1052,14 @@ mod tests {
             "2026-08-24T00:00:00Z",
             "default",
             None,
-            Some("img-pi:personal:aaaaaaaaaaaa"),
+            Some("img-pi:personal.aaaaaaaaaaaa"),
             None,
             None,
         )?;
         let record = find_record(&state_dir, "personal-pi")?.expect("record must exist");
         assert_eq!(
             record.image_tag.as_deref(),
-            Some("img-pi:personal:aaaaaaaaaaaa"),
+            Some("img-pi:personal.aaaaaaaaaaaa"),
             "the create-time store tag survives the save+load cycle"
         );
         // The protection-set derivation (images::gc) sees exactly this tag.
@@ -1070,7 +1070,7 @@ mod tests {
                 .collect();
         assert_eq!(
             protected,
-            std::collections::BTreeSet::from(["img-pi:personal:aaaaaaaaaaaa".to_string()])
+            std::collections::BTreeSet::from(["img-pi:personal.aaaaaaaaaaaa".to_string()])
         );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
@@ -1093,7 +1093,7 @@ mod tests {
             "2026-08-24T00:00:00Z",
             "default",
             None,
-            Some("img-pi:personal:aaaaaaaaaaaa"),
+            Some("img-pi:personal.aaaaaaaaaaaa"),
             // A3 stamps: the sha segment of the computed tag + a config hash
             // over the creating plan (values opaque to the registry).
             Some("aaaaaaaaaaaa"),

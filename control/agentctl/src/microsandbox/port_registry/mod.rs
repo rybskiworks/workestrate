@@ -58,7 +58,7 @@ pub struct SandboxInstanceRecord {
     #[serde(default)]
     pub source_dir: Option<String>,
     /// A2 (ADR 0032 §Image tags — RESOLVED user decision 3): the immutable
-    /// computed store tag (`<name>:<ctx>:<sha>`) this sandbox was CREATED
+    /// computed store tag (`<name>:<ctx>.<sha>`) this sandbox was CREATED
     /// with, recorded ONLY where the image is known at create time (the
     /// create-from-plan paths; re-start/adopt paths pass `None` — a
     /// re-adoption does not know the running tag). Feeds the keep-last-N GC
@@ -71,7 +71,7 @@ pub struct SandboxInstanceRecord {
     pub image_tag: Option<String>,
     /// A3 (ADR 0032 §Provenance stamps): the image out-path hash segment of
     /// the computed store tag the sandbox was CREATED from (the trailing sha
-    /// of a `<name>:<sha>` / `<name>:<ctx>:<sha>` tag). `None` for registry
+    /// of a `<name>:<sha>` / `<name>:<ctx>.<sha>` tag). `None` for registry
     /// refs and legacy declared tags — they have no content hash, so
     /// staleness then rides `config_hash` alone. Absent on disk = pre-stamp
     /// record (unknown-version posture): parses fine, NEVER auto-stale,

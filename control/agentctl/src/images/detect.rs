@@ -26,7 +26,7 @@
 //! [`record_state_for`] derives the [`RecordState`] half of the skew matrix.
 //! A2 (ADR 0032 §Image tags — DECIDED 2026-08-24): the freshness signal is
 //! the CONTENT-ADDRESSED tag — `nix eval --raw <flake>#<attr>.outPath`
-//! (eval-only, no build) decides the `<name>:<ctx>:<sha>` store tag BEFORE
+//! (eval-only, no build) decides the `<name>:<ctx>.<sha>` store tag BEFORE
 //! the store probe, and a record under that computed key is Fresh by
 //! construction. The drvPath eval is still recorded for provenance (spec §8)
 //! but no longer drives the decision; the outPath re-load gate (re-load only
@@ -187,7 +187,7 @@ impl DrvEvaluator for NixCliEvaluator {
 
 /// Derive the record half of the skew matrix (spec §3.4) for the
 /// A2 content-addressed tag scheme (ADR 0032 §Image tags): the caller looks
-/// up the record for the COMPUTED tag (`<repo>#<name:ctx:sha>`), so record
+/// up the record for the COMPUTED tag (`<repo>#<name:ctx.sha>`), so record
 /// PRESENCE is the freshness signal — a record under that key exists only
 /// when exactly this content was built+loaded (or D1-trusted). `Absent`
 /// when no record exists for the key (first run, changed content → a new

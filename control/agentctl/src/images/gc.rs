@@ -34,7 +34,7 @@
 //! their tags are legacy-shape and never GC candidates anyway.
 //!
 //! **Candidates are shape-checked** ([`split_computed_tag`]): only tags
-//! parsing as `<name>:<sha>` / `<name>:<ctx>:<sha>` with a 12-char
+//! parsing as `<name>:<sha>` / `<name>:<ctx>.<sha>` with a 12-char
 //! lowercase-alphanumeric sha segment are ever touched. Legacy declared
 //! tags (e.g. `img-pi:latest`) NEVER parse → never candidates, never
 //! removed. Migration shape is TOLERATE: legacy records stay under legacy
@@ -88,27 +88,40 @@ pub fn resolve_keep_last(
 }
 
 /// Split a COMPUTED content-addressed tag into `(name, ctx)` (ADR 0032
-/// §Image tags): accepts ONLY the shapes `compute_image_tag` emits —
-/// `<name>:<sha>` (ctx `None`) or `<name>:<ctx>:<sha>` — where `sha` is
-/// exactly [`OUT_PATH_HASH_PREFIX_LEN`] lowercase-alphanumeric chars.
-/// Anything else (legacy declared tags like `img-pi:latest`, empty
-/// segments, wrong-length or uppercase shas) returns `None`: legacy tags
-/// are never GC candidates and never touched.
+/// §Image tags, AMENDED 2026-08-28): accepts ONLY the shapes
+/// `compute_image_tag` emits — `<name>:<sha>` (ctx `None`) or
+/// `<name>:<ctx>.<sha>` (dot separator — the pre-amendment two-colon
+/// `<name>:<ctx>:<sha>` form is an invalid docker/OCI reference and never
+/// parses) — where `sha` is exactly [`OUT_PATH_HASH_PREFIX_LEN`]
+/// lowercase-alphanumeric chars. The name splits at the FIRST `:` (dots in
+/// a name are legal and harmless); the ctx/sha split is at the LAST `.` of
+/// the remainder, unambiguous because neither ctx (slugified — dots
+/// collapse to dashes) nor sha (base32) ever contains a dot. Anything else
+/// (legacy declared tags like `img-pi:latest`, two-colon tags, dotted ctx
+/// segments, empty segments, wrong-length or uppercase shas) returns
+/// `None`: legacy tags are never GC candidates and never touched.
 pub fn split_computed_tag(tag: &str) -> Option<(String, Option<String>)> {
-    let parts: Vec<&str> = tag.split(':').collect();
-    let (name, ctx, sha) = match parts.as_slice() {
-        [n, s] => (*n, None, *s),
-        [n, c, s] => (*n, Some(*c), *s),
-        _ => return None,
+    let (name, rest) = tag.split_once(':')?;
+    // Exactly one colon: any second colon is the pre-amendment two-colon
+    // shape (or other garbage) — invalid, never a candidate.
+    if name.is_empty() || rest.contains(':') {
+        return None;
+    }
+    let (ctx, sha) = match rest.rsplit_once('.') {
+        Some((c, s)) => (Some(c), s),
+        None => (None, rest),
     };
-    if name.is_empty() || ctx.is_some_and(str::is_empty) || !is_sha_segment(sha) {
+    // A dotted ctx can never be emitted (slugify strips dots) — reject it
+    // rather than guess at a split; empty ctx likewise.
+    if ctx.is_some_and(|c| c.is_empty() || c.contains('.')) || !is_sha_segment(sha) {
         return None;
     }
     Some((name.to_string(), ctx.map(str::to_string)))
 }
 
 /// The sha-segment predicate: exactly [`OUT_PATH_HASH_PREFIX_LEN`] chars,
-/// all ASCII lowercase alphanumeric (nix base32 alphabet).
+/// all ASCII lowercase alphanumeric (nix base32 alphabet — NEVER a dot, so
+/// the `<ctx>.<sha>` split at the LAST `.` is unambiguous).
 fn is_sha_segment(s: &str) -> bool {
     s.len() == OUT_PATH_HASH_PREFIX_LEN
         && s.bytes()
@@ -127,7 +140,7 @@ fn is_sha_segment(s: &str) -> bool {
 pub struct GroupPlan {
     /// Image name segment (the flake attr the tags were computed from).
     pub name: String,
-    /// Tag-context segment (`None` = two-segment tags).
+    /// Tag-context segment (`None` = ctx-less tags).
     pub ctx: Option<String>,
     /// Tags to prune, ordered `loaded_at` DESC then tag ASC.
     pub prune: Vec<String>,
@@ -736,13 +749,23 @@ mod tests {
             Some(("img-pi".to_string(), None))
         );
         assert_eq!(
-            split_computed_tag(&format!("img-pi:feat-x:{SHA_A}")),
+            split_computed_tag(&format!("img-pi:feat-x.{SHA_A}")),
             Some(("img-pi".to_string(), Some("feat-x".to_string())))
         );
         // digits + letters mixed, all lowercase alnum.
         assert_eq!(
             split_computed_tag("w:0123456789ab"),
             Some(("w".to_string(), None))
+        );
+        // Dots in the NAME are legal and harmless: the name splits at the
+        // FIRST colon, the ctx/sha split at the LAST dot of the remainder.
+        assert_eq!(
+            split_computed_tag(&format!("img.with.dots:feat-x.{SHA_A}")),
+            Some(("img.with.dots".to_string(), Some("feat-x".to_string())))
+        );
+        assert_eq!(
+            split_computed_tag(&format!("img.with.dots:{SHA_A}")),
+            Some(("img.with.dots".to_string(), None))
         );
     }
 
@@ -764,7 +787,29 @@ mod tests {
         assert_eq!(
             split_computed_tag("img:a:b:aaaaaaaaaaaa"),
             None,
-            "four segments"
+            "two colons (the pre-amendment name:ctx:sha shape — an invalid \
+             docker/OCI reference, host Bug B) is never a candidate"
+        );
+        assert_eq!(
+            split_computed_tag("img:ctx.aaaaaaaaaaaa:extra"),
+            None,
+            "a second colon anywhere in the tag portion is invalid"
+        );
+        assert_eq!(
+            split_computed_tag("img:.aaaaaaaaaaaa"),
+            None,
+            "empty ctx before the dot"
+        );
+        assert_eq!(
+            split_computed_tag("img:ctx."),
+            None,
+            "empty sha after the dot"
+        );
+        assert_eq!(
+            split_computed_tag("img:a.b.aaaaaaaaaaaa"),
+            None,
+            "a dotted ctx can never be emitted (slugify strips dots) — reject \
+             rather than guess the split"
         );
     }
 
@@ -918,7 +963,7 @@ mod tests {
             record("personal", &format!("img:{SHA_B}"), "2026-08-24T02:00:00Z"),
             record(
                 "personal",
-                &format!("img:feat-x:{SHA_A}"),
+                &format!("img:feat-x.{SHA_A}"),
                 "2026-08-24T03:00:00Z",
             ),
             record(
@@ -1031,7 +1076,7 @@ mod tests {
                 record("personal", &format!("img:{SHA_C}"), "2026-08-24T03:00:00Z"),
                 record(
                     "personal",
-                    &format!("prime:feat-x:{SHA_A}"),
+                    &format!("prime:feat-x.{SHA_A}"),
                     "2026-08-24T04:00:00Z",
                 ),
                 record("personal", "legacy-img:latest", "2026-08-24T05:00:00Z"),
@@ -1040,7 +1085,7 @@ mod tests {
                 "personal",
                 "prime",
                 Some("feat-x"),
-                &format!("prime:feat-x:{SHA_A}"),
+                &format!("prime:feat-x.{SHA_A}"),
             )],
         );
 
@@ -1099,7 +1144,7 @@ mod tests {
             state
                 .lookup_pointer(&pointer_key("personal", "prime", Some("feat-x")))
                 .map(|p| p.tag.as_str()),
-            Some(&format!("prime:feat-x:{SHA_A}")[..]),
+            Some(&format!("prime:feat-x.{SHA_A}")[..]),
         );
 
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -1331,7 +1376,7 @@ mod tests {
                 kept: 1,
                 pruned: vec![],
                 skipped_running: vec![],
-                already_gone: vec!["prime:feat-x:cccccccccccc".to_string()],
+                already_gone: vec!["prime:feat-x.cccccccccccc".to_string()],
                 errors: vec![],
             },
         ];
@@ -1348,7 +1393,7 @@ mod tests {
         assert_eq!(
             lines.next(),
             Some(
-                "prime:feat-x kept=1 pruned=[] skipped-running=[] gone=[prime:feat-x:cccccccccccc]"
+                "prime:feat-x kept=1 pruned=[] skipped-running=[] gone=[prime:feat-x.cccccccccccc]"
             )
         );
         assert_eq!(lines.next(), None);

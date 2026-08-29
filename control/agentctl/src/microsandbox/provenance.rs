@@ -99,14 +99,17 @@ pub fn short_hash(hash: &str) -> &str {
 
 /// The image out-path hash for a RESOLVED tag (ADR 0032 §Provenance
 /// stamps): the sha segment of a computed-shape `<name>:<sha>` /
-/// `<name>:<ctx>:<sha>` tag, `None` otherwise (registry refs and legacy
+/// `<name>:<ctx>.<sha>` tag (ADR 0032 §Image tags, AMENDED 2026-08-28 —
+/// dot separator), `None` otherwise (registry refs and legacy
 /// declared tags have no content hash — staleness then rides the config
 /// hash alone). Shape-checks via the GC's parser; NEVER re-hashes the
 /// image.
 pub fn image_out_hash_from_tag(tag: &str) -> Option<String> {
     crate::images::gc::split_computed_tag(tag)?;
-    // split_computed_tag validated that the LAST segment is the sha.
-    tag.rsplit(':').next().map(str::to_string)
+    // split_computed_tag validated the shape: the sha follows the LAST
+    // `.` (ctx form) or the LAST `:` (ctx-less form); both segments are
+    // dot/colon-free, so splitting on either is unambiguous.
+    tag.rsplit([':', '.']).next().map(str::to_string)
 }
 
 /// The config hash over the runtime-relevant view of `plan` (16-char
@@ -428,7 +431,7 @@ mod tests {
             "/home/node/work".as_bytes(),
             "/da/ta".as_bytes(),
             "/da_ta".as_bytes(),
-            "img-pi:personal:aaaaaaaaaaaa".as_bytes(),
+            "img-pi:personal.aaaaaaaaaaaa".as_bytes(),
         ] {
             assert_eq!(
                 fnv1a64(input),
@@ -458,7 +461,7 @@ mod tests {
     #[test]
     fn same_plan_hashes_identically() {
         let mut plan = empty_plan();
-        plan.image = Some("img-pi:personal:aaaaaaaaaaaa".to_string());
+        plan.image = Some("img-pi:personal.aaaaaaaaaaaa".to_string());
         plan.workdir = Some("/app".to_string());
         plan.command = vec!["run".to_string(), "--fast".to_string()];
         plan.env = vec![EnvVar::literal("B", "2"), EnvVar::literal("A", "1")];
@@ -789,12 +792,18 @@ mod tests {
         assert_eq!(
             image_out_hash_from_tag("img-pi:aaaaaaaaaaaa"),
             Some("aaaaaaaaaaaa".to_string()),
-            "two-segment computed tag"
+            "ctx-less computed tag"
         );
         assert_eq!(
-            image_out_hash_from_tag("img-pi:feat-x:bbbbbbbbbbbb"),
+            image_out_hash_from_tag("img-pi:feat-x.bbbbbbbbbbbb"),
             Some("bbbbbbbbbbbb".to_string()),
-            "three-segment computed tag"
+            "ctx-present computed tag (dot separator)"
+        );
+        // Dots in the NAME are legal: the sha still splits off the LAST dot.
+        assert_eq!(
+            image_out_hash_from_tag("img.with.dots:cccccccccccc"),
+            Some("cccccccccccc".to_string()),
+            "dotted name, ctx-less computed tag"
         );
         for legacy in [
             "img-pi:latest",
@@ -802,6 +811,8 @@ mod tests {
             "",
             "img:aaaaaaaaaaaaa",
             "img:AAAAAAAAAAAA",
+            // The pre-amendment two-colon shape (host Bug B) never parses.
+            "img-pi:feat-x:bbbbbbbbbbbb",
         ] {
             assert_eq!(
                 image_out_hash_from_tag(legacy),

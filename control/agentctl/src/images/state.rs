@@ -21,7 +21,7 @@
 //!
 //! ## A2 (ADR 0032 §Image tags — DECIDED 2026-08-24)
 //!
-//! Store tags are **immutable and content-addressed**: `<name>:<ctx>:<sha>`
+//! Store tags are **immutable and content-addressed**: `<name>:<ctx>.<sha>`
 //! when a tag context is in effect ([`image_tag_context`]), `<name>:<sha>`
 //! otherwise, where `sha` is the first [`OUT_PATH_HASH_PREFIX_LEN`] chars of
 //! the evaluated out_path's store-hash segment ([`compute_image_tag`]). No
@@ -64,7 +64,7 @@ pub fn image_locks_dir(state_dir: &Path) -> PathBuf {
 /// `personal#workestrate-pi:latest`). `repo_key` comes from
 /// [`crate::images::repo_key`]. Under A2 the `tag` segment is the COMPUTED
 /// content-addressed tag ([`compute_image_tag`], e.g.
-/// `workestrate-pi:personal:9f3a1c2e7b4d`); pre-migration records keep the
+/// `workestrate-pi:personal.9f3a1c2e7b4d`); pre-migration records keep the
 /// verbatim `name:tag` from config TOML (USER DECISION D2).
 pub fn image_key(repo_key: &str, tag: &str) -> String {
     format!("{repo_key}#{tag}")
@@ -81,15 +81,17 @@ pub const OUT_PATH_HASH_PREFIX_LEN: usize = 12;
 
 /// The tag context segment (ADR 0032 §Image tags): the ARMED inline-override
 /// config ref wins (A5 rung 3 — `prime:feat-x` builds
-/// `workestrate-prime:feat-x:<sha>` and moves ONLY the `(name, "feat-x")`
+/// `workestrate-prime:feat-x.<sha>` and moves ONLY the `(name, "feat-x")`
 /// pointer; the home context's pointer never flaps), else the active context
-/// name, else `None` (bare-layers mode → the two-segment tag form).
+/// name, else `None` (bare-layers mode → the ctx-less tag form).
 ///
 /// The armed override ref is SLUGIFIED via
 /// [`crate::config::registry::slugify_context_candidate`] before becoming
 /// the ctx segment — the SAME slug as the context candidate for the same
 /// branch (`feat/x` → `feat-x`, `Foo#1.2` → `foo-1-2`), so raw branch names
-/// never inject illegal characters (`/`, `#`, uppercase) into image tags. A
+/// never inject illegal characters (`/`, `#`, `.`, uppercase) into image
+/// tags — the ctx segment NEVER contains a dot, keeping the `<ctx>.<sha>`
+/// split (at the LAST `.`) unambiguous. A
 /// ref that slugifies to `None` (no usable chars, e.g. `###`) falls back to
 /// the active context name — the registry ladder's None→falls-through
 /// convention. With no armed override the active context name is used
@@ -120,12 +122,27 @@ pub fn store_hash_prefix(out_path: &str) -> Option<String> {
     Some(hash.chars().take(OUT_PATH_HASH_PREFIX_LEN).collect())
 }
 
-/// The immutable per-build store tag (ADR 0032 §Image tags):
-/// `<name>:<ctx>:<sha>` when a tag context is in effect, `<name>:<sha>`
-/// when `ctx` is `None`. `name` is the image name (`image.name`, verbatim
-/// flake attr); `sha` derives from the EVALUATED out_path (eval-only — no
-/// build), so unchanged inputs yield the identical tag (the
-/// content-addressed skip) and changed inputs a fresh tag.
+/// The immutable per-build store tag (ADR 0032 §Image tags, AMENDED
+/// 2026-08-28): `<name>:<ctx>.<sha>` when a tag context is in effect,
+/// `<name>:<sha>` when `ctx` is `None`. `name` is the image name
+/// (`image.name`, verbatim flake attr); `sha` derives from the EVALUATED
+/// out_path (eval-only — no build), so unchanged inputs yield the identical
+/// tag (the content-addressed skip) and changed inputs a fresh tag.
+///
+/// The separator between ctx and sha is a DOT, never a second colon: the
+/// pre-amendment `<name>:<ctx>:<sha>` form is an INVALID docker/OCI image
+/// reference (exactly one colon separates name from tag) and the first real
+/// host `msb load` of such a tag failed with `manifest parse error: invalid
+/// image reference` (host Bug B; the container tests' fake backends never
+/// exercised the parse). The dotted form parses unambiguously: the name is
+/// split at the FIRST `:` (dots in a flake-attr name are legal and
+/// harmless), the sha segment ([`OUT_PATH_HASH_PREFIX_LEN`] lowercase
+/// base32 chars) NEVER contains a dot, and the ctx segment never does
+/// either ([`crate::config::registry::slugify_context_candidate`] collapses
+/// every non-alphanumeric run — including dots — to dashes), so the tag
+/// segment splits at the LAST `.`. The whole string satisfies the docker
+/// tag grammar (`[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}`) — pinned by
+/// `compute_image_tag_output_is_a_valid_docker_reference` below.
 pub fn compute_image_tag(name: &str, ctx: Option<&str>, out_path: &str) -> Result<String> {
     let sha = store_hash_prefix(out_path).ok_or_else(|| {
         anyhow::anyhow!(
@@ -134,7 +151,7 @@ pub fn compute_image_tag(name: &str, ctx: Option<&str>, out_path: &str) -> Resul
         )
     })?;
     Ok(match ctx {
-        Some(ctx) => format!("{name}:{ctx}:{sha}"),
+        Some(ctx) => format!("{name}:{ctx}.{sha}"),
         None => format!("{name}:{sha}"),
     })
 }
@@ -649,7 +666,7 @@ mod tests {
     /// A realistic 32-char base32 store-hash segment fixture.
     const HASH32: &str = "abcdefghijklmnopqrstuvwxyz012345";
 
-    /// Tag computation (pure): `<name>:<ctx>:<sha>` with a tag context,
+    /// Tag computation (pure): `<name>:<ctx>.<sha>` with a tag context,
     /// `<name>:<sha>` without; the sha is the FIRST 12 chars of the
     /// out_path's store-hash segment.
     #[test]
@@ -657,27 +674,89 @@ mod tests {
         let out = format!("/nix/store/{HASH32}-workestrate-prime.tar.gz");
         assert_eq!(
             compute_image_tag("workestrate-prime", Some("personal"), &out).unwrap(),
-            "workestrate-prime:personal:abcdefghijkl",
-            "three-segment form under a tag context; 12-char sha slice"
+            "workestrate-prime:personal.abcdefghijkl",
+            "ctx-present form under a tag context; 12-char sha slice, dot separator"
         );
         assert_eq!(
             compute_image_tag("workestrate-prime", None, &out).unwrap(),
             "workestrate-prime:abcdefghijkl",
-            "two-segment form when no tag context is in effect"
+            "ctx-less form when no tag context is in effect"
         );
         // The name half of the store path may itself carry '-' — the hash
         // segment ends at the FIRST '-'.
         let dashed = format!("/nix/store/{HASH32}-workestrate-pi.tar.gz");
         assert_eq!(store_hash_prefix(&dashed).as_deref(), Some("abcdefghijkl"));
         // A name carrying the override ref as ctx (A5): prime:feat-x builds
-        // workestrate-prime:feat-x:<sha>.
+        // workestrate-prime:feat-x.<sha>.
         assert_eq!(
             compute_image_tag("workestrate-prime", Some("feat-x"), &out).unwrap(),
-            "workestrate-prime:feat-x:abcdefghijkl"
+            "workestrate-prime:feat-x.abcdefghijkl"
         );
         // Malformed eval output is a hard error, never a garbage tag.
         assert!(compute_image_tag("img", None, "not-a-store-path").is_err());
         assert!(compute_image_tag("img", None, "/nix/store/").is_err());
+    }
+
+    /// HOST BUG B REGRESSION (ADR 0032 §Image tags, AMENDED 2026-08-28):
+    /// every shape `compute_image_tag` can emit must be a VALID docker/OCI
+    /// image reference — validated with the REAL parser the msb backend
+    /// uses (`microsandbox_image::Reference`, re-exported from the vendored
+    /// fork's `oci-client`), not a local approximation. The pre-amendment
+    /// `<name>:<ctx>:<sha>` shape failed the first real host `msb load`
+    /// (`manifest parse error: invalid image reference`); the container
+    /// tests' fake backends never exercised the parse, which is why this
+    /// test asserts against the parser directly.
+    #[test]
+    fn compute_image_tag_output_is_a_valid_docker_reference() {
+        let out = format!("/nix/store/{HASH32}-workestrate-prime.tar.gz");
+        let long_ctx = "a".repeat(100);
+        let cases: Vec<(&str, Option<&str>)> = vec![
+            // ctx-less (bare-layers mode).
+            ("workestrate-prime", None),
+            // Plain ctx (home context name).
+            ("workestrate-prime", Some("personal")),
+            // Slugified branch ctx with dashes.
+            ("workestrate-prime", Some("migration-tool-model")),
+            ("workestrate-prime", Some("foo-1-2")),
+            // Long ctx (100 chars) — the whole tag must stay within the
+            // 128-char docker tag bound.
+            ("workestrate-prime", Some(long_ctx.as_str())),
+            // Underscores/digits (legal in both ctx slugs and the docker
+            // tag charset) and a dotted flake-attr NAME (dots in the name
+            // are legal: the name splits at the FIRST colon).
+            ("img.with.dots", Some("ctx_2")),
+            // Minimal shapes.
+            ("w", Some("x")),
+            ("w", None),
+        ];
+        for (name, ctx) in &cases {
+            let tag = compute_image_tag(name, *ctx, &out).unwrap();
+            tag.parse::<microsandbox_image::Reference>()
+                .unwrap_or_else(|e| {
+                    panic!("computed tag '{tag}' is not a valid docker/OCI reference: {e}")
+                });
+            // Exactly one colon (the name:tag separator) — the two-colon
+            // shape is the invalid form this regression pins against.
+            assert_eq!(
+                tag.matches(':').count(),
+                1,
+                "exactly one colon in '{tag}' (the pre-amendment name:ctx:sha \
+                 shape is an invalid reference)"
+            );
+            // And the emitted tag round-trips through the GC parser.
+            let (parsed_name, parsed_ctx) = crate::images::gc::split_computed_tag(&tag)
+                .unwrap_or_else(|| panic!("computed tag '{tag}' must parse as computed"));
+            assert_eq!((parsed_name.as_str(), parsed_ctx.as_deref()), (*name, *ctx));
+        }
+
+        // The pre-amendment shape itself must NOT parse — the exact host
+        // failure mode, pinned so the grammar can never regress to it.
+        assert!(
+            "workestrate-prime:main:3n87p1a3ncbr"
+                .parse::<microsandbox_image::Reference>()
+                .is_err(),
+            "the two-colon shape is an invalid docker/OCI reference (host Bug B)"
+        );
     }
 
     /// Pointer key shape: `<repo>#<name>` / `<repo>#<name>#<ctx>`.
@@ -937,14 +1016,14 @@ mod tests {
         state.upsert_pointer(
             pointer_key("personal", "workestrate-prime", Some("personal")),
             PointerRecord {
-                tag: "workestrate-prime:personal:111111111111".to_string(),
+                tag: "workestrate-prime:personal.111111111111".to_string(),
                 updated_at: "2026-08-24T10:00:00Z".to_string(),
             },
         );
         state.upsert_pointer(
             pointer_key("personal", "workestrate-prime", Some("feat-x")),
             PointerRecord {
-                tag: "workestrate-prime:feat-x:222222222222".to_string(),
+                tag: "workestrate-prime:feat-x.222222222222".to_string(),
                 updated_at: "2026-08-24T10:05:00Z".to_string(),
             },
         );
@@ -953,14 +1032,14 @@ mod tests {
         // Home context: the home-ctx pointer resolves.
         assert_eq!(
             resolve_image_tag(&state_dir, Some("personal"), "workestrate-prime", "latest"),
-            "workestrate-prime:personal:111111111111"
+            "workestrate-prime:personal.111111111111"
         );
         // Armed override: the override-ctx pointer resolves instead.
         crate::config::set_pending_inline_override("prime", "feat-x");
         crate::config::arm_inline_override();
         assert_eq!(
             resolve_image_tag(&state_dir, Some("personal"), "workestrate-prime", "latest"),
-            "workestrate-prime:feat-x:222222222222",
+            "workestrate-prime:feat-x.222222222222",
             "the armed override resolves the override-ctx pointer, not the home one"
         );
         // And the home pointer record itself is untouched (never flaps).
@@ -973,7 +1052,7 @@ mod tests {
                     Some("personal")
                 ))
                 .map(|p| p.tag.as_str()),
-            Some("workestrate-prime:personal:111111111111")
+            Some("workestrate-prime:personal.111111111111")
         );
 
         crate::config::clear_inline_override();

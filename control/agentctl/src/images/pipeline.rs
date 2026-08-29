@@ -70,7 +70,7 @@ pub struct BuildJob {
     pub attr: String,
     /// The store tag to load under. A2 (ADR 0032 §Image tags — DECIDED
     /// 2026-08-24): the caller computes the IMMUTABLE content-addressed tag
-    /// (`<name>:<ctx>:<sha>`, or `<name>:<sha>` without a tag context) from
+    /// (`<name>:<ctx>.<sha>`, or `<name>:<sha>` without a tag context) from
     /// the evaluated out_path; the capsule's declared `tag` field is no
     /// longer loaded into the store for nix-layered images.
     pub tag: String,
@@ -1066,7 +1066,7 @@ mod tests {
     async fn ctx_tagged_job_moves_only_the_ctx_pointer() -> Result<()> {
         let state_dir = unique_state_dir("pipe-ctx-pointer");
         let mut job = job_fixture();
-        job.tag = "workestrate-pi:feat-x:abcdefghijkl".to_string();
+        job.tag = "workestrate-pi:feat-x.abcdefghijkl".to_string();
         job.tag_ctx = Some("feat-x".to_string());
         // Seed a home-context pointer; it must survive the ctx build.
         let mut state = ImagesState::default();
@@ -1098,7 +1098,7 @@ mod tests {
                     Some("feat-x")
                 ))
                 .map(|p| p.tag.as_str()),
-            Some("workestrate-pi:feat-x:abcdefghijkl"),
+            Some("workestrate-pi:feat-x.abcdefghijkl"),
             "the override-ctx pointer moved to the fresh tag"
         );
         assert_eq!(

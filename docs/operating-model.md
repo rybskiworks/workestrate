@@ -171,10 +171,12 @@ instance id. **slot** = `<workload>` (no context) or `<ctx>-<workload>`;
 **instance** = the slot (singleton) or `slot@id` (parallel / per-dir /
 scoped-dep shapes).
 
-Image tags are immutable content addresses: `name:ctx:sha` per build
-(two-segment `name:sha` when no context is in play); the mutable
-current-pointer lives in the state-dir image state (`pointers` map), not
-in any registry tag, so a dev rebuild cannot move what prod resolves.
+Image tags are immutable content addresses: `name:ctx.sha` per build
+(ctx-less `name:sha` when no context is in play; the dot separator is
+ADR 0032's 2026-08-28 amendment — the two-colon form is an invalid OCI
+reference); the mutable current-pointer lives in the state-dir image
+state (`pointers` map), not in any registry tag, so a dev rebuild cannot
+move what prod resolves.
 
 Retention is keep-last-N with a cascade (first configured value wins):
 
@@ -270,7 +272,7 @@ Classification evidence per target: registry record ∨ dashed slot pattern
 (`<ctx>-<workload>`) ∨ the `workestrate.log` artifact in the sandbox dir.
 The image-tag evidence form from the original cleanup sketch is
 deliberately NOT implemented (ADR 0032 narrowing pin: tags are immutable
-`name:ctx:sha` now, and the log alone carries full recall).
+`name:ctx.sha` now, and the log alone carries full recall).
 
 Outcomes: every target goes through the hardened six-step teardown (stop →
 wait-exit → remove → unregister → policy-dir → sandbox-dir); per-target
@@ -398,7 +400,7 @@ Every major claim above, mapped to its primary code path
 | Context derivation ladder | `src/config/registry.rs` — `resolve_active_context`, `config_ref_branch_candidate`, `checkout_branch_candidate` |
 | Context-name rule + fail-closed load (G4) | `src/config/registry.rs` — `validate_context_name`, `load_registry` |
 | `WORKESTRATE_CONTEXT` read sites | `src/config/registry.rs` (resolver step a); `src/commands/config_cmd.rs` (`context current` source); `src/main.rs` (flag → env) |
-| Image tags `name:ctx:sha` + current-pointer | `src/images/state.rs` — `PointerRecord`, `pointer_key`; `src/images/gc.rs` — `split_computed_tag` |
+| Image tags `name:ctx.sha` + current-pointer | `src/images/state.rs` — `PointerRecord`, `pointer_key`; `src/images/gc.rs` — `split_computed_tag` |
 | GC cascade capsule→repo→settings→default(5) | `src/images/gc.rs` — `resolve_keep_last`, `DEFAULT_IMAGE_KEEP_LAST` |
 | Prune-on-load / manual sweep asymmetry | `src/images/build_cmd.rs` — `process_target`; `src/images/gc.rs` — `cmd_images_gc` |
 | Running-sandbox protection via record `image_tag` | `src/images/gc.rs` (protection set); `src/microsandbox/port_registry/mod.rs` — `SandboxInstanceRecord.image_tag` |

@@ -426,7 +426,7 @@ fn nix_absent_ladder(target: &BuildTarget, tag: &str, store: StoreTag) -> Result
 /// seams so tests drive fakes with a temp state dir:
 ///
 /// 1. **A2 out_path eval FIRST** (eval-only, no build — ADR 0032 §Image
-///    tags): the content-addressed tag `<name>:<ctx>:<sha>` (or
+///    tags): the content-addressed tag `<name>:<ctx>.<sha>` (or
 ///    `<name>:<sha>`) derives from the evaluated out_path, so the eval must
 ///    precede the store probe and the lock acquisition (the lock keys on
 ///    the computed tag). The eval is deterministic per flake content, so
@@ -1099,7 +1099,7 @@ mod tests {
     /// content-addressed tags (ctx is None in these tests — each flow test
     /// pins `set_active_context(None)` + `clear_inline_override()` under
     /// ENV_TEST_LOCK so no leaked process-global context can flip the tag
-    /// to the three-segment form).
+    /// to the ctx-carrying form).
     const OUT_A: &str = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-img-pi.tar.gz";
     const OUT_B: &str = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-img-pi.tar.gz";
     const TAG_A: &str = "img-pi:aaaaaaaaaaaa";
