@@ -469,7 +469,7 @@ versioned program before the guest starts.
   `0028-location-independent-execution.md` (same number, unrelated topics).
   Resolution plan: renumber this ADR → **0029** during the merge and update its
   references (spec 22, spec 21, 50-decisions/README.md, 00-index.md, STATUS,
-  NEXT-SESSION, MOUNT-MASKING-HANDOVER).
+  NEXT-SESSION).
 - **SDK seam:** the workestrate flake pin moved from `74919059` to fork rev
   `79dc8a19` containing the msb mount path policy field (Phase 3 of the
   runbook, landed 2026-08-28).

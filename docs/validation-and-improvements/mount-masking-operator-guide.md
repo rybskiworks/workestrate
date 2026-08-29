@@ -1,9 +1,7 @@
 # Mount masking — operator guide
 
 > Practical, operator-facing configuration reference for the dynamic mount
-> masking policy (spec 22). For the internal handover, see
-> [MOUNT-MASKING-HANDOVER.md](MOUNT-MASKING-HANDOVER.md); for the full spec,
-> see
+> masking policy (spec 22). For the full spec, see
 > [06-improvements/22-dynamic-mount-masking-policy.md](06-improvements/22-dynamic-mount-masking-policy.md).
 
 ## What mount masking does

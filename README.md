@@ -733,7 +733,7 @@ clone the agent repos into `agents/<name>/repo` only if you intend to run them.
   proxy are implemented and cargo-verified in-container. Runtime
   `up`/`exec`/detached-mode has been HOST-VALIDATED on a KVM host (pi/prime
   boots, litellm reachability + secret substitution, kernel env). This
-  container itself has no `/dev/kvm`; host runs happen on dblab42.
+  container itself has no `/dev/kvm`; host runs happen on a KVM host.
 - **In-memory LiteLLM.** No Postgres, no virtual keys, no persistent
   state. Agents reuse `LITELLM_MASTER_KEY` for the lifetime of the
   proxy; rotating the master key requires a `workestrate workload down litellm` followed by

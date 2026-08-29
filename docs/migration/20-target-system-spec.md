@@ -145,7 +145,7 @@ state_dir = "$WORKESTRATE_HOME/state"  # runtime state (workspaces, var; home-re
 # `workestrate config update <name>` pulls latest and updates `rev`.
 
 [configs.personal]
-url = "git@github.com:georgrybski/workestrate-config-personal.git"
+url = "git@github.com:<your-user>/workestrate-config-personal.git"  # the private personal config repo
 ref = "main"
 rev = "abc123def456789abcdef0123456789abcdef01"  # updated by `config update`
 

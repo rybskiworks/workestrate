@@ -276,7 +276,7 @@ config is used (placeholder secrets — `example-service plan` works;
 
 - **KVM runtime** — HOST-VALIDATED 2026-08-13 (pi/prime microVM boots,
   egress + secret substitution, kernel env). This container itself has no
-  `/dev/kvm`; host runs happen on dblab42. Remaining unvalidated pieces:
+  `/dev/kvm`; host runs happen on a KVM host. Remaining unvalidated pieces:
   tempest/odysseus/opencode runtime parity and the spec-21 phase-F
   multi-repo migration.
 - **HOST-NIX** — nix builds (`nix build .#workestrate`, image builds,

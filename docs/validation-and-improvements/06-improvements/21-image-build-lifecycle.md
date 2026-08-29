@@ -680,7 +680,7 @@ the `/tmp` divergence. Refactor when the socket-path pressure is revisited.
 
 - **wrk-ayz — Canonical config-flake input URL (Phase-5 decision).** The
   personal config repo's `workestrate` flake input is currently a host-absolute
-  `git+file:///home/rybski/...` path (a workaround committed during the
+  `git+file:///home/dev/...` path (a workaround committed during the
   host-boot fix pass; the prior `git+file:///home/node/...` was container-only
   and unusable on the host). The canonical fix is a pinned
   `github:georgrybski/workestrate` input, deferred to Phase 5 because it
