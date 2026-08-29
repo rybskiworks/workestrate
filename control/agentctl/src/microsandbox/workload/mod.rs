@@ -19,6 +19,7 @@ mod validate;
 pub use config::ConfigWorkload;
 pub use validate::{
     validate_env_override, validate_seed_glob, validate_seed_source, validate_seed_target,
+    validate_seed_target_coverage,
 };
 
 /// Program and args to exec inside the sandbox via exec_stream.

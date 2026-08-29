@@ -628,7 +628,7 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // sandbox-start. See `80-remediation-plan.md` WP1.
     use crate::microsandbox::{
         validate_env_override, validate_mount_guest, validate_mount_host, validate_seed_glob,
-        validate_seed_source, validate_seed_target,
+        validate_seed_source, validate_seed_target, validate_seed_target_coverage,
     };
     for (workload_name, workload) in &config.workloads {
         let mut seen_guests = std::collections::HashSet::new();
@@ -675,6 +675,16 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
             validate_seed_target(&seed.target).map_err(|e| {
                 anyhow::anyhow!(
                     "workload '{workload_name}' seed_files.target validation failed: {e}"
+                )
+            })?;
+            // Host Bug C: a seed target that no declared mount host covers
+            // silently renders on the HOST and never reaches the guest —
+            // fail closed here (defense-in-depth also in prepare()).
+            let mount_hosts: Vec<&str> = workload.mounts.iter().map(|m| m.host.as_str()).collect();
+            validate_seed_target_coverage(&seed.target, &mount_hosts).map_err(|e| {
+                anyhow::anyhow!(
+                    "workload '{workload_name}' seed_files.target '{}' mount coverage validation failed: {e}",
+                    seed.target
                 )
             })?;
         }
@@ -1721,7 +1731,8 @@ default_deny = true
     // ---- P0: seed_files source|glob exclusivity + target safety ----
 
     /// Base config with a source-only seed entry; the caller mutates it per
-    /// test.
+    /// test. The state mount exists because seed targets must be covered by
+    /// a declared mount host (host Bug C coverage rule).
     fn seed_config() -> ConfigFile {
         let toml = r#"
 schema_version = 1
@@ -1730,6 +1741,10 @@ schema_version = 1
 kind = "service"
 image = { recipe = "registry", ref = "python:3.12-slim" }
 command = []
+
+[[workloads.svc.mounts]]
+host = "workspaces/svc-state"
+guest = "/data"
 
 [[workloads.svc.seed_files]]
 source = "seed/a.json"
@@ -1776,6 +1791,10 @@ kind = "service"
 image = { recipe = "registry", ref = "python:3.12-slim" }
 command = []
 
+[[workloads.svc.mounts]]
+host = "workspaces/svc-state"
+guest = "/data"
+
 [[workloads.svc.seed_files]]
 source = "seed/a.json"
 target = "workspaces/svc-state/a.json"
@@ -1810,6 +1829,133 @@ default_deny = true
         assert!(
             err.contains("seed_files.target validation failed") && err.contains("'..'"),
             "traversal seed target must be rejected: {err}"
+        );
+    }
+
+    // ---- Host Bug C: seed target must be covered by a declared mount host ----
+
+    /// The EXACT regression test for the host bug: the litellm capsule
+    /// seeded `app/config/config.yaml` with only a `${MSB_HOME}/...` mount —
+    /// the seed silently rendered into the personal repo working tree and the
+    /// guest never saw `/app/config/config.yaml`. Must now fail closed.
+    #[test]
+    fn validate_config_rejects_litellm_shape_uncovered_seed_target() {
+        let toml = r#"
+schema_version = 1
+
+[workloads.litellm]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = []
+
+[[workloads.litellm.mounts]]
+host = "${MSB_HOME}/logs"
+guest = "/logs"
+
+[[workloads.litellm.seed_files]]
+source = "workloads/litellm/config.yaml"
+target = "app/config/config.yaml"
+template = true
+
+[workloads.litellm.network]
+default_deny = true
+"#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("app/config/config.yaml"),
+            "error must name the uncovered target: {err}"
+        );
+        assert!(
+            err.contains("mount"),
+            "error must mention mount coverage: {err}"
+        );
+    }
+
+    /// Template hosts (`${CWD}`, `${MSB_HOME}`, ...) are runtime-resolved and
+    /// can NEVER prove static coverage — they never cover a seed target.
+    #[test]
+    fn validate_config_rejects_seed_target_with_only_template_mount() {
+        let mut config = seed_config();
+        {
+            let svc = config.workloads.get_mut("svc").unwrap();
+            svc.mounts = vec![crate::microsandbox::plan::MountPlan {
+                host: "${CWD}".to_string(),
+                guest: "/work".to_string(),
+                mode: crate::microsandbox::plan::MountMode::Rw,
+                policy: None,
+                policy_file: None,
+            }];
+            svc.seed_files[0].target = "work/x.json".to_string();
+        }
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("work/x.json") && err.contains("mount"),
+            "template-only mounts must not cover a seed target: {err}"
+        );
+    }
+
+    /// Content-class coverage: a content-root-relative mount host that is a
+    /// component-wise prefix of a content-class target covers it.
+    #[test]
+    fn validate_config_accepts_content_class_seed_coverage() {
+        let mut config = seed_config();
+        {
+            let svc = config.workloads.get_mut("svc").unwrap();
+            svc.mounts = vec![crate::microsandbox::plan::MountPlan {
+                host: "workloads/svc/config".to_string(),
+                guest: "/app/config".to_string(),
+                mode: crate::microsandbox::plan::MountMode::Ro,
+                policy: None,
+                policy_file: None,
+            }];
+            svc.seed_files[0].target = "workloads/svc/config/app.json".to_string();
+        }
+        validate_config(&config).expect("content-class prefix mount must cover the target");
+    }
+
+    /// Classes must match: a state-class target (`workspaces/...`) is NOT
+    /// covered by a content-class mount host.
+    #[test]
+    fn validate_config_rejects_state_target_with_only_content_mount() {
+        let mut config = seed_config();
+        {
+            let svc = config.workloads.get_mut("svc").unwrap();
+            svc.mounts = vec![crate::microsandbox::plan::MountPlan {
+                host: "state/svc".to_string(),
+                guest: "/data".to_string(),
+                mode: crate::microsandbox::plan::MountMode::Rw,
+                policy: None,
+                policy_file: None,
+            }];
+        }
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("workspaces/svc-state/a.json") && err.contains("mount"),
+            "a content-class mount must not cover a state-class target: {err}"
+        );
+    }
+
+    /// Component-wise exactness: `workspaces/svc-state-evil` must NOT cover
+    /// `workspaces/svc-state/x.json` (string-prefix trap).
+    #[test]
+    fn validate_config_rejects_string_prefix_but_not_component_prefix_mount() {
+        let mut config = seed_config();
+        {
+            let svc = config.workloads.get_mut("svc").unwrap();
+            svc.mounts = vec![crate::microsandbox::plan::MountPlan {
+                host: "workspaces/svc-state-evil".to_string(),
+                guest: "/data".to_string(),
+                mode: crate::microsandbox::plan::MountMode::Rw,
+                policy: None,
+                policy_file: None,
+            }];
+            svc.seed_files[0].target = "workspaces/svc-state/x.json".to_string();
+        }
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("workspaces/svc-state/x.json"),
+            "a string-prefix-but-not-component-prefix mount must not cover: {err}"
         );
     }
     // ---- E0 / ADR 0028 companion: duplicate-guest guard ----

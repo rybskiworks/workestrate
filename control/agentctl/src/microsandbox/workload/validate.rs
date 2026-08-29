@@ -141,14 +141,20 @@ pub fn validate_seed_glob(pattern: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate a `seed_files.target` value. The target is the in-sandbox
-/// destination for a seeded file; it must be a plain relative path so seeding
-/// can never write outside the sandbox-visible tree.
+/// Validate a `seed_files.target` value. The target is the HOST-side render
+/// destination for a seeded file (guest-visible only through a declared
+/// mount); it must be a plain relative path so seeding can never write
+/// outside the declaring layer's content root or the state dir.
 ///
 /// Rules:
 /// 1. Reject empty.
 /// 2. Reject absolute paths (leading `/`).
 /// 3. Reject any `..` component.
+///
+/// Note: path-shape safety is necessary but NOT sufficient — the target must
+/// also be covered by a declared mount host or the seed silently renders on
+/// the host where the guest never sees it. See
+/// [`validate_seed_target_coverage`].
 pub fn validate_seed_target(target: &str) -> Result<()> {
     use std::path::{Component, Path};
     if target.is_empty() {
@@ -169,6 +175,78 @@ pub fn validate_seed_target(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate that a `seed_files.target` is COVERED by at least one declared
+/// mount host (fail-closed; closes host "Bug C").
+///
+/// Seeds are mount-backed BY DESIGN: `prepare()` renders the seed on the
+/// HOST — targets starting with `workspaces/` or `var/` resolve under the
+/// XDG state dir, anything else resolves under the declaring config layer's
+/// content root — and the file reaches the GUEST only when that host path is
+/// covered by a declared `[[mounts]]` entry. Without this check a seed
+/// targeting a non-mounted path silently renders into the host working tree
+/// and the guest never sees it (the litellm `app/config/config.yaml` bug).
+///
+/// The target is COVERED iff at least one mount host:
+/// 1. is in the same resolution class as the target: state class = starts
+///    with `workspaces/` or `var/`; content class = anything else. Classes
+///    must match (a content-class mount can never cover a state-class
+///    target and vice versa);
+/// 2. contains no `${` — template hosts (`${CWD}`, `${MSB_HOME}`,
+///    `${WORKESTRATE_*_BUILD}`, ...) are runtime-resolved and can NEVER
+///    prove static coverage, so they are skipped;
+/// 3. is non-empty, not absolute, and has no `..` component (defensive;
+///    separately validated);
+/// 4. is a COMPONENT-WISE prefix of the target (equal counts as covered).
+///    Component-wise, NOT string-prefix: `workspaces/svc-state-evil` must
+///    NOT cover `workspaces/svc-state/x.json`.
+pub fn validate_seed_target_coverage(target: &str, mount_hosts: &[&str]) -> Result<()> {
+    use std::path::{Component, Path};
+
+    let target_state_class = target.starts_with("workspaces/") || target.starts_with("var/");
+    let target_components: Vec<_> = Path::new(target).components().collect();
+
+    let covered = mount_hosts.iter().any(|host| {
+        // Template hosts are runtime-resolved: static coverage unprovable.
+        if host.contains("${") {
+            return false;
+        }
+        let host_path = Path::new(host);
+        if host.is_empty() || host_path.is_absolute() {
+            return false;
+        }
+        let host_components: Vec<_> = host_path.components().collect();
+        if host_components
+            .iter()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
+            return false;
+        }
+        // The mount host and the seed target must resolve under the SAME
+        // base (state dir vs declaring-layer content root).
+        let host_state_class = host.starts_with("workspaces/") || host.starts_with("var/");
+        if host_state_class != target_state_class {
+            return false;
+        }
+        host_components.len() <= target_components.len()
+            && host_components
+                .iter()
+                .zip(target_components.iter())
+                .all(|(h, t)| h == t)
+    });
+
+    if covered {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "seed_files.target '{target}' is not covered by any declared mount host: \
+         seed targets are rendered on the HOST (state-dir-relative for \
+         workspaces//var/ targets, otherwise declaring-layer-content-root-relative) \
+         and reach the guest ONLY through a declared mount whose host path is a \
+         component-wise prefix of the target; fix: declare a mount with \
+         host = \"workspaces/<name>-state\" (or a content-root-relative dir that \
+         is a prefix of the target) and keep the target under it"
+    )
+}
 /// Resolve mount-host template tokens (WP6(c)/A6).
 ///
 /// Matches, in precedence order:

@@ -553,6 +553,32 @@ impl Workload for ConfigWorkload {
         if self.workload.seed_files.is_empty() {
             return Ok(());
         }
+        // Host Bug C, defense-in-depth: seeds are mount-backed BY DESIGN.
+        // Before ANY filesystem write, require every seed target to be
+        // covered by a declared mount host — otherwise prepare() would
+        // silently render into the host working tree (or state dir) where
+        // the guest never sees it. Config validation enforces the same rule
+        // at load time; this guard catches any future caller that bypasses
+        // it. The check uses the RAW target (pre-instance-scoping): the
+        // scoped path stays under the same state root, so coverage of the
+        // raw target implies coverage of the scoped one.
+        let mount_hosts: Vec<&str> = self
+            .workload
+            .mounts
+            .iter()
+            .map(|m| m.host.as_str())
+            .collect();
+        for seed in &self.workload.seed_files {
+            super::validate::validate_seed_target_coverage(&seed.target, &mount_hosts).map_err(
+                |e| {
+                    anyhow::anyhow!(
+                        "workload '{}' seed_files.target '{}' mount coverage check failed: {e}",
+                        self.name,
+                        seed.target
+                    )
+                },
+            )?;
+        }
         // Content root for seed sources and non-state targets: the directory
         // of the config layer that declared this workload's seed_files
         // (spec 17). EXPLICIT FALLBACK: when no declaring layer dir is
@@ -1323,6 +1349,10 @@ host = "config.yaml"
 guest = "/app/config.yaml"
 read_only = true
 
+[[workloads.svc.mounts]]
+host = "workspaces/svc-state"
+guest = "/data"
+
 [[workloads.svc.seed_files]]
 source = "seed/settings.json"
 target = "workspaces/svc-state/settings.json"
@@ -1342,6 +1372,10 @@ schema_version = 1
 kind = "service"
 image = { recipe = "registry", ref = "python:3.12-slim" }
 command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "workspaces/svc-state"
+guest = "/data"
 
 [[workloads.svc.seed_files]]
 source = "seed/settings.json.tpl"
@@ -1363,6 +1397,10 @@ kind = "service"
 image = { recipe = "registry", ref = "python:3.12-slim" }
 command = ["true"]
 
+[[workloads.svc.mounts]]
+host = "workspaces/svc-state"
+guest = "/data"
+
 [[workloads.svc.seed_files]]
 glob = "seed/**/*.json"
 target = "workspaces/svc-state/globbed"
@@ -1380,6 +1418,10 @@ schema_version = 1
 kind = "service"
 image = { recipe = "registry", ref = "python:3.12-slim" }
 command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "workspaces/svc-state"
+guest = "/data"
 
 [[workloads.svc.seed_files]]
 glob = "seed/**/*.tpl"
@@ -1495,6 +1537,60 @@ default_deny = true
             std::fs::read_to_string(&target)?,
             "{\"seeded\":true}",
             "seed payload must come from the declaring layer's dir"
+        );
+        Ok(())
+    }
+
+    /// Host Bug C shape: a seed target (`app/config/config.yaml`) with only
+    /// a template mount (`${MSB_HOME}/logs`) — NOTHING covers the target.
+    const UNCOVERED_SEED_CONFIG_TOML: &str = r#"
+schema_version = 1
+
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["true"]
+
+[[workloads.svc.mounts]]
+host = "${MSB_HOME}/logs"
+guest = "/logs"
+
+[[workloads.svc.seed_files]]
+source = "seed/config.yaml"
+target = "app/config/config.yaml"
+template = true
+
+[workloads.svc.network]
+default_deny = true
+"#;
+
+    /// Host Bug C regression: prepare() must hard-error on a seed target
+    /// that no declared mount host covers — BEFORE writing anything to the
+    /// host (the litellm bug silently rendered into the repo working tree).
+    /// Built via `synthetic_workload` (config-load validation — which fails
+    /// closed on the same shape — is bypassed, exercising the prepare guard).
+    #[test]
+    fn prepare_hard_errors_on_uncovered_seed_target_before_writing() -> Result<()> {
+        let guard = DependsEnvGuard::new("cw-prepare-uncovered", UNCOVERED_SEED_CONFIG_TOML);
+        std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+        std::fs::write(
+            guard.config_dir().join("seed").join("config.yaml"),
+            "key: value\n",
+        )?;
+
+        let mut svc = synthetic_workload(UNCOVERED_SEED_CONFIG_TOML, "svc");
+        svc.seed_content_root = Some(guard.config_dir().to_path_buf());
+        let err = svc
+            .prepare(&empty_seed_env_view(), false, None)
+            .expect_err("an uncovered seed target must hard-error in prepare()");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("workload 'svc'") && msg.contains("app/config/config.yaml"),
+            "error must name the workload and the uncovered target: {msg}"
+        );
+        assert!(
+            !guard.config_dir().join("app").exists(),
+            "no stray host write may happen for a non-mount-backed target"
         );
         Ok(())
     }

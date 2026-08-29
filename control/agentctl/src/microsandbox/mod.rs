@@ -25,4 +25,5 @@ pub use policy_file::{
 };
 pub use workload::{
     validate_env_override, validate_seed_glob, validate_seed_source, validate_seed_target,
+    validate_seed_target_coverage,
 };

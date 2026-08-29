@@ -114,6 +114,9 @@ host = "workspaces/example-service-state"
 guest = "/data"
 mode = "rw"  # canonical access-mode field; `read_only = <bool>` is a deprecated alias
 
+# seed_files targets are rendered on the HOST and reach the guest only when a
+# declared mount host covers the target (here: workspaces/example-service-state
+# → /data); validation fails closed on an uncovered target.
 [[workloads.example-service.seed_files]]
 source = "agents/example-service/config/settings.json"
 target = "workspaces/example-service-state/settings.json"
