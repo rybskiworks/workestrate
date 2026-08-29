@@ -176,7 +176,7 @@ pub fn entry_is_local_path(entry: &ConfigRepoEntry) -> bool {
 /// resolve it against the tool home (`resolve_home_with_kind().0`).
 ///
 /// Rationale: a shared home may be mounted at different roots (container
-/// `/home/node` vs host `/home/rybski`). An absolute url breaks on the
+/// `/home/node` vs host `/home/dev`). An absolute url breaks on the
 /// other side; a relative url resolves against each side's own mount, so
 /// one registry entry works in both worlds permanently.
 pub fn local_entry_checkout_dir(entry: &ConfigRepoEntry) -> Option<std::path::PathBuf> {

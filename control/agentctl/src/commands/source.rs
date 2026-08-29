@@ -605,7 +605,7 @@ mod tests {
     "workestrate": {
       "locked": {
         "type": "git",
-        "url": "file:///home/rybski/Development/agent-workbench/workestrate",
+        "url": "file:///home/dev/Development/agent-workbench/workestrate",
         "rev": "c45494bd1ec827489422f631294b003b34ec59f5"
       }
     }
@@ -617,7 +617,7 @@ mod tests {
         let locked = locked_source_from_flake_lock(&root, "workestrate").expect("resolves");
         assert_eq!(
             locked.clone_url,
-            "file:///home/rybski/Development/agent-workbench/workestrate"
+            "file:///home/dev/Development/agent-workbench/workestrate"
         );
         assert_eq!(locked.rev, "c45494bd1ec827489422f631294b003b34ec59f5");
 

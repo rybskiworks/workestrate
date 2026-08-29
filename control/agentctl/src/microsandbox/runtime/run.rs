@@ -1311,7 +1311,7 @@ pub async fn up_service_with_spec<W: Workload>(
                     // The FS-8 grace (spawn.rs: 500ms) only catches an IMMEDIATE
                     // child exit; a replace teardown takes seconds, so a
                     // child-side teardown failure would be logged by the child
-                    // while the parent exited 0 (the dblab42 2026-08-23
+                    // while the parent exited 0 (the 2026-08-23 dev-host
                     // swallow). Run the idempotent teardown HERE so its failure
                     // is a nonzero parent exit; the child re-derives Replace
                     // (`--replace` rides detach_args) and re-runs the now no-op
