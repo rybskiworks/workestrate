@@ -7,14 +7,30 @@ use std::path::PathBuf;
 /// config-load abort, short enough to not slow down `up` noticeably.
 const SPAWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// The detached-service child log for `instance`:
+/// `<state_dir>/logs/<instance>/workestrate.log` (ADR 0032 addendum
+/// 2026-08-30). Relocated from the ephemeral msb sandbox dir
+/// (`<msb_home>/sandboxes/<name>/workestrate.log`), which every down /
+/// `--replace` teardown removes, to the workestrate-owned state dir so
+/// logs survive teardown. The RAW workestrate identity names the dir (`@`
+/// is legal in dir names; no msb-name encoding applies on this side of
+/// the SDK boundary). Callers pass validated identities (slot slugs and
+/// `validate_instance_id`-gated ids — no path separators reach here).
+pub fn detached_log_path(instance: &str) -> PathBuf {
+    crate::config::resolve_state_dir()
+        .join("logs")
+        .join(instance)
+        .join("workestrate.log")
+}
+
 pub fn spawn_detached_service(name: &str, args: &[String]) -> Result<std::process::Child> {
     let exe = std::env::current_exe()?;
-    let home = std::env::var("HOME")
-        .map(PathBuf::from)
-        .map_err(|_| anyhow::anyhow!("HOME not set"))?;
-    let log_dir = home.join(".microsandbox/sandboxes").join(name);
+    let log_path = detached_log_path(name);
+    let log_dir = log_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| anyhow::anyhow!("detached log path has no parent"))?;
     std::fs::create_dir_all(&log_dir)?;
-    let log_path = log_dir.join("workestrate.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -152,15 +168,10 @@ fn extract_last_run_error(log_path: &Path) -> Option<String> {
     }
 }
 
-/// Tail the detached service's log file.
+/// Tail the detached service's log file (the state-dir location,
+/// [`detached_log_path`] — ADR 0032 addendum 2026-08-30).
 pub async fn logs(name: &str) -> Result<()> {
-    let home = std::env::var("HOME")
-        .map(PathBuf::from)
-        .map_err(|_| anyhow::anyhow!("HOME not set"))?;
-    let path = home
-        .join(".microsandbox/sandboxes")
-        .join(name)
-        .join("workestrate.log");
+    let path = detached_log_path(name);
 
     if !path.exists() {
         anyhow::bail!(
@@ -202,14 +213,20 @@ mod tests {
     ///
     /// `--definitely-not-a-real-flag` makes the re-exec'd workestrate binary
     /// abort inside clap arg parsing (exit code 2), deterministically within
-    /// the grace period. This test mutates HOME (log-dir root) and therefore
-    /// holds ENV_TEST_LOCK like every other env-mutating test.
+    /// the grace period. This test mutates HOME (the child re-execs with
+    /// inherited env) and WORKESTRATE_STATE_DIR (the log-dir root), and
+    /// therefore holds ENV_TEST_LOCK like every other env-mutating test.
     #[test]
     fn spawn_detached_service_fails_when_child_exits_immediately() -> anyhow::Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
             crate::config::test_support::HOME_ENV_KEYS,
         );
+        // WORKESTRATE_STATE_DIR is not in HOME_ENV_KEYS; guard it manually.
+        let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
+        let state = crate::config::test_support::uniq_dir("fs8-spawn-state");
+        std::fs::create_dir_all(&state)?;
+        std::env::set_var("WORKESTRATE_STATE_DIR", &state);
 
         let home = crate::config::test_support::uniq_dir("fs8-spawn-home");
         std::fs::create_dir_all(&home)?;
@@ -239,7 +256,8 @@ mod tests {
         );
         // The log file captured the child's clap usage error.
         let log = std::fs::read_to_string(
-            home.join(".microsandbox/sandboxes")
+            state
+                .join("logs")
                 .join("fs8-immediate-fail")
                 .join("workestrate.log"),
         )?;
@@ -258,7 +276,12 @@ mod tests {
             "delimiter carries version, timestamp and pid: {log}"
         );
 
+        match prior_state {
+            Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+        }
         let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state);
         Ok(())
     }
 
@@ -353,6 +376,11 @@ mod tests {
         let _g = crate::config::test_support::EnvGuard::capture(
             crate::config::test_support::HOME_ENV_KEYS,
         );
+        // WORKESTRATE_STATE_DIR is not in HOME_ENV_KEYS; guard it manually.
+        let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
+        let state = crate::config::test_support::uniq_dir("fs8-log-state");
+        std::fs::create_dir_all(&state)?;
+        std::env::set_var("WORKESTRATE_STATE_DIR", &state);
 
         let home = crate::config::test_support::uniq_dir("fs8-log-home");
         std::fs::create_dir_all(&home)?;
@@ -363,14 +391,50 @@ mod tests {
         let args = vec!["--definitely-not-a-real-flag".to_string()];
         let _ = spawn_detached_service("fs8-log-check", &args);
         assert!(
-            home.join(".microsandbox/sandboxes")
+            state
+                .join("logs")
                 .join("fs8-log-check")
                 .join("workestrate.log")
                 .exists(),
             "log file must exist so the failure message's pointer is valid"
         );
 
+        match prior_state {
+            Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+        }
         let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state);
+        Ok(())
+    }
+
+    /// The detached log path resolves under the state dir with the RAW
+    /// identity (ADR 0032 addendum 2026-08-30 relocation).
+    #[test]
+    fn detached_log_path_uses_state_dir_and_raw_identity() -> anyhow::Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        // WORKESTRATE_STATE_DIR is not in HOME_ENV_KEYS; guard it manually.
+        let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
+        let state = crate::config::test_support::uniq_dir("detached-log-path");
+        std::env::set_var("WORKESTRATE_STATE_DIR", &state);
+
+        // A parallel identity keeps its RAW spelling: `@` is legal in dir
+        // names and no msb-name encoding applies on this side of the SDK.
+        assert_eq!(
+            detached_log_path("ctx-wl@canary"),
+            state.join("logs").join("ctx-wl@canary").join("workestrate.log")
+        );
+        // Traversal safety is enforced UPSTREAM: slots::validate_instance_id
+        // rejects separators/dots (see its tests), so a hostile name can never
+        // reach this plain join.
+        assert!(crate::microsandbox::slots::validate_instance_id("../evil").is_err());
+        assert!(crate::microsandbox::slots::validate_instance_id("a/b").is_err());
+
+        match prior_state {
+            Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
+            None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&state);
         Ok(())
     }
 }

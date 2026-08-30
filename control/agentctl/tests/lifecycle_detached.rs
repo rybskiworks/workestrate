@@ -91,10 +91,18 @@ fn parse_background_pid(stdout: &str) -> Option<u32> {
 /// messages. The poll-timeout path must be self-diagnosing: a dead child
 /// (product bug) and a slow cold-store pull (test-too-tight) look identical
 /// from `ps` alone.
+///
+/// Since the 2026-08-30 relocation (ADR 0032 addendum) the detached-child
+/// log lives in the workestrate state dir, not the ephemeral msb sandbox
+/// dir. This test's isolated home resolves the state dir to
+/// `$XDG_STATE_HOME/workestrate` (LegacyXdg home — same assumption as the
+/// `state_dir` construction below).
 fn child_log_tail(home: &std::path::Path, instance: &str) -> String {
     let path = home
-        .join(".microsandbox")
-        .join("sandboxes")
+        .join(".local")
+        .join("state")
+        .join("workestrate")
+        .join("logs")
         .join(instance)
         .join("workestrate.log");
     let Ok(content) = std::fs::read_to_string(&path) else {

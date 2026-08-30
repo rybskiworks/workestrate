@@ -269,7 +269,9 @@ Exact gates, as implemented:
   prefix (corroborating only) — never bare-name equality.
 
 Classification evidence per target: registry record ∨ dashed slot pattern
-(`<ctx>-<workload>`) ∨ the `workestrate.log` artifact in the sandbox dir.
+(`<ctx>-<workload>`) ∨ the `workestrate.log` artifact (detached-child log,
+persisted in the state dir at `logs/<instance>/workestrate.log` since
+2026-08-30 — the legacy sandbox-dir location is still probed).
 The image-tag evidence form from the original cleanup sketch is
 deliberately NOT implemented (ADR 0032 narrowing pin: tags are immutable
 `name:ctx.sha` now, and the log alone carries full recall).

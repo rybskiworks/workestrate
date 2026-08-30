@@ -819,3 +819,30 @@ recorded contract, verified by the test suite):
   flags pre-A2 home copies (machine state, outside the repo); a
   `schemas update` pass or release note belongs in A6's operating-model
   doc, not this branch.
+
+## Addendum (2026-08-30): detached-child logs relocated to the state dir
+
+The detached-service child log moves OUT of the ephemeral msb sandbox dir
+(`~/.microsandbox/sandboxes/<name>/workestrate.log`) into the workestrate
+state dir: `<state_dir>/logs/<instance>/workestrate.log`
+(`runtime::detached_log_path`). Every `down` / `--replace` teardown removes
+the whole sandbox dir (hardened-path step 6), so child logs previously
+vanished on every teardown — a debugging blind spot (handover
+2026-08-29 §4.6).
+
+- **Retention semantics change**: detached-child logs now SURVIVE
+  teardown and accumulate across runs (append-mode with the per-run
+  `===== workestrate … =====` delimiter). Rotation/size-cap is DEFERRED —
+  deliberately not built here. `clean`'s wipe list (workspaces/, var/,
+  run/) does not include `logs/`, so the logs outlive `clean` too.
+- **Down evidence stays whole (dual-path)**: `Evidence::ArtifactLog`
+  probes the NEW state-dir location FIRST, then falls back to the LEGACY
+  sandbox-dir path (old homes / logs written before this change),
+  mirroring the dual-spelling probe style. The RAW workestrate identity
+  names the state-dir dir (`@` is legal there; no msb-name encoding).
+- **`logs` verb + `up` announcement** read/announce the new location.
+- **Foreground start unchanged**: `up --foreground` still writes no log
+  file (terminal only) — separate concern, not addressed here.
+- **README drift (accepted, per convention)**: the README quickstart still
+  names the old sandbox-dir log path; docs sweeps are separate commits, so
+  the drift is recorded here rather than silently fixed.

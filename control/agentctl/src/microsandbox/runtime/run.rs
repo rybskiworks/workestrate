@@ -1328,8 +1328,10 @@ pub async fn up_service_with_spec<W: Workload>(
         let instance = spec.instance.clone();
         let child = super::spawn_detached_service(&instance, &workload.detach_args(spec))?;
         println!(
-            "Sandbox '{}' started in background (PID {}). Logs: ~/.microsandbox/sandboxes/{}/workestrate.log",
-            instance, child.id(), instance
+            "Sandbox '{}' started in background (PID {}). Logs: {}",
+            instance,
+            child.id(),
+            super::detached_log_path(&instance).display()
         );
         return Ok(());
     }

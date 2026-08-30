@@ -10,8 +10,10 @@
 //!
 //! Classification engine (§ Cleanup family rules STAND): a target is
 //! workestrate-managed iff registry record ∨ slot-name pattern
-//! (`<context>-<workload>`) ∨ artifact evidence (`workestrate.log` in the
-//! sandbox dir). Every target at every scope goes through the hardened
+//! (`<context>-<workload>`) ∨ artifact evidence (the detached-child
+//! `workestrate.log`, persisted in the state dir since 2026-08-30 — the
+//! legacy sandbox-dir location is still probed). Every target at every
+//! scope goes through the hardened
 //! teardown path ([`super::down_hardened`]); per-target outcomes are
 //! reported and ANY failure exits nonzero (§Down scope ladder).
 
@@ -65,7 +67,8 @@ pub enum Evidence {
     /// The instance's slot (parallel id stripped) carries the
     /// `<context>-<workload>` shape (contains `-`).
     SlotPattern,
-    /// The sandbox dir carries the `workestrate.log` artifact.
+    /// The instance carries the detached-child `workestrate.log` artifact
+    /// (state dir since 2026-08-30; legacy sandbox dir still probed).
     ArtifactLog,
 }
 
@@ -91,8 +94,9 @@ pub struct ManagedTarget {
 ///   is `Some(..)`; the inner `Option` carries the record's context);
 /// - [`Evidence::SlotPattern`] when the slot (parallel id stripped via
 ///   `slot_of_instance`) contains `-` — the `<ctx>-<wl>` shape;
-/// - [`Evidence::ArtifactLog`] when the sandbox dir carries
-///   `workestrate.log`.
+/// - [`Evidence::ArtifactLog`] when the instance carries the detached-child
+///   `workestrate.log` (state dir since 2026-08-30; legacy sandbox dir
+///   still probed).
 ///
 /// Conservative ∨ per the ADR: any one piece of evidence makes the target
 /// managed; pieces stack in the returned vec.
@@ -114,11 +118,27 @@ pub fn classify(
     out
 }
 
-/// The artifact-evidence file for an instance:
-/// `<msb_home>/sandboxes/<name>/workestrate.log` (ADR 0032 addendum
-/// § Cleanup family).
+/// The artifact-evidence file for an instance — PRIMARY location
+/// (ADR 0032 addendum 2026-08-30): the detached-child log now lives in
+/// the workestrate state dir (`<state_dir>/logs/<instance>/workestrate.log`)
+/// so it survives teardown; the RAW identity names the dir.
 fn artifact_log_path(instance: &str) -> std::path::PathBuf {
+    crate::microsandbox::runtime::detached_log_path(instance)
+}
+
+/// The LEGACY artifact-evidence location (pre-relocation homes):
+/// `<msb_home>/sandboxes/<name>/workestrate.log` — the ephemeral sandbox
+/// dir the log was written to before the 2026-08-30 relocation.
+fn legacy_artifact_log_path(instance: &str) -> std::path::PathBuf {
     crate::microsandbox::runtime::reconcile::sandbox_dir(instance).join("workestrate.log")
+}
+
+/// Artifact-evidence probe, DUAL-PATH (ADR 0032 addendum 2026-08-30):
+/// the NEW state-dir location first, then the LEGACY sandbox-dir fallback
+/// (old homes / logs written before the relocation) — mirroring the
+/// dual-spelling probe style of [`enumerate_targets`].
+fn artifact_log_exists(instance: &str) -> bool {
+    artifact_log_path(instance).exists() || legacy_artifact_log_path(instance).exists()
 }
 
 /// List every sandbox name currently known to the local msb, paginating
@@ -238,20 +258,21 @@ async fn enumerate_targets(
     let mut targets = Vec::with_capacity(names.len());
     for name in &names {
         let record = by_name.get(name.as_str()).copied();
-        // Artifact evidence lives in the SANDBOX DIR, whose on-disk name is
-        // the ENCODED spelling for anything created after ADR 0030's
-        // 2026-08-26 encoding addendum. A record-backed target therefore
-        // also probes its identity's encoded dir; listing-derived names
-        // keep using the listed (dir) name, as before.
+        // Artifact evidence is DUAL-PATH (ADR 0032 addendum 2026-08-30):
+        // the state-dir log (RAW identity) first, then the legacy
+        // sandbox-dir log whose on-disk name is the ENCODED spelling for
+        // anything created after ADR 0030's 2026-08-26 encoding addendum.
+        // A record-backed target therefore also probes its identity's
+        // encoded dir; listing-derived names keep using the listed (dir)
+        // name, as before.
         let artifact = match record {
             Some(r) => {
-                artifact_log_path(name).exists()
-                    || artifact_log_path(&crate::microsandbox::slots::msb_name_of_instance(
+                artifact_log_exists(name)
+                    || artifact_log_exists(&crate::microsandbox::slots::msb_name_of_instance(
                         &r.instance,
                     ))
-                    .exists()
             }
-            None => artifact_log_path(name).exists(),
+            None => artifact_log_exists(name),
         };
         let evidence = classify(name, record.map(|r| r.context.as_deref()), artifact);
         if evidence.is_empty() && !include_unmanaged {
@@ -855,6 +876,32 @@ mod tests {
         }
     }
 
+    /// RAII guard: point `WORKESTRATE_STATE_DIR` at `path` for the duration
+    /// of a test (mirror of [`MsbHomeGuard`]; restored on drop). Needed
+    /// because the artifact-evidence probe resolves the detached log via
+    /// `resolve_state_dir()`, whose env override is NOT covered by
+    /// `HOME_ENV_KEYS`.
+    struct StateDirGuard {
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl StateDirGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let prior = std::env::var_os("WORKESTRATE_STATE_DIR");
+            std::env::set_var("WORKESTRATE_STATE_DIR", path);
+            Self { prior }
+        }
+    }
+
+    impl Drop for StateDirGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
+                None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+            }
+        }
+    }
+
     /// Point MSB_HOME at a tmp dir whose `db` path is a regular FILE so the
     /// SDK's init fails (ENOTDIR): `Sandbox::list` errors → the DEGRADED
     /// dir-listing fallback runs, deterministically, without ever pinning
@@ -903,17 +950,24 @@ mod tests {
         let _msb = MsbHomeGuard::set(&msb);
 
         let state_dir = crate::config::test_support::unique_state_dir_runtime("down-scope-enum");
+        let _state = StateDirGuard::set(&state_dir);
         // Registry-only record (no sandbox dir): RegistryRecord evidence.
         write_record(&state_dir, "work-pi", Some("work"), None);
-        // Record AND sandbox dir AND log: stacked evidence, deduped.
+        // Record AND legacy sandbox dir AND log: stacked evidence, deduped.
+        // The log stays in the LEGACY sandbox dir (pre-relocation fallback).
         write_record(&state_dir, "personal-litellm", Some("personal"), None);
         let sb_dir = crate::microsandbox::runtime::reconcile::sandbox_dir("personal-litellm");
         std::fs::create_dir_all(&sb_dir)?;
         std::fs::write(sb_dir.join("workestrate.log"), b"managed\n")?;
-        // Dir-only WITH log (no record): SlotPattern + ArtifactLog.
+        // Dir-only WITH log (no record): SlotPattern + ArtifactLog. The log
+        // lives at the NEW state-dir location (post-relocation), while the
+        // sandbox DIR is still created so the degraded dir listing
+        // discovers the candidate.
         let dir_only = crate::microsandbox::runtime::reconcile::sandbox_dir("personal-agent");
         std::fs::create_dir_all(&dir_only)?;
-        std::fs::write(dir_only.join("workestrate.log"), b"managed\n")?;
+        let agent_log = state_dir.join("logs").join("personal-agent").join("workestrate.log");
+        std::fs::create_dir_all(agent_log.parent().expect("agent log parent"))?;
+        std::fs::write(&agent_log, b"managed\n")?;
         // Dir-only WITHOUT log, dashed name (no record): SlotPattern only.
         let dashed = crate::microsandbox::runtime::reconcile::sandbox_dir("team-worker");
         std::fs::create_dir_all(&dashed)?;
@@ -946,7 +1000,8 @@ mod tests {
                 Evidence::SlotPattern,
                 Evidence::ArtifactLog
             ],
-            "evidence stacks across stores for the deduped target"
+            "evidence stacks across stores for the deduped target; the artifact \
+             comes via the LEGACY sandbox-dir fallback"
         );
         let agent = managed
             .iter()
@@ -955,7 +1010,8 @@ mod tests {
         assert_eq!(agent.context, None);
         assert_eq!(
             agent.evidence,
-            vec![Evidence::SlotPattern, Evidence::ArtifactLog]
+            vec![Evidence::SlotPattern, Evidence::ArtifactLog],
+            "artifact evidence comes via the NEW state-dir log location"
         );
         let work = managed.iter().find(|t| t.instance == "work-pi").unwrap();
         assert_eq!(
@@ -991,6 +1047,7 @@ mod tests {
 
         let state_dir =
             crate::config::test_support::unique_state_dir_runtime("down-scope-source-gone");
+        let _state = StateDirGuard::set(&state_dir);
         write_record(
             &state_dir,
             "personal-mover",
@@ -1027,7 +1084,10 @@ mod tests {
     /// ONE physical target — enumerate_managed yields EXACTLY ONE target,
     /// carrying the WORKESTRATE identity (not the encoded name), with
     /// RegistryRecord + ArtifactLog evidence stacked, and context scope
-    /// selects it.
+    /// selects it. The log lives at the NEW state-dir location under the
+    /// RAW `@` identity (ADR 0032 addendum 2026-08-30) — pinning that the
+    /// state-dir probe needs no msb-name encoding — while the encoded
+    /// sandbox DIR is still created so the degraded listing dedups.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime tests
     async fn enumerate_managed_dedupes_record_against_encoded_listing_name() -> anyhow::Result<()> {
@@ -1037,9 +1097,11 @@ mod tests {
 
         let state_dir =
             crate::config::test_support::unique_state_dir_runtime("down-scope-enum-encoded");
+        let _state = StateDirGuard::set(&state_dir);
         let identity = "personal-pi@canary";
         write_record(&state_dir, identity, Some("personal"), None);
-        // The physical sandbox dir carries the ENCODED msb name.
+        // The physical sandbox dir carries the ENCODED msb name (kept for
+        // the degraded dir listing's dedup side).
         let encoded = crate::microsandbox::slots::msb_name_of_instance(identity);
         assert_ne!(
             encoded, identity,
@@ -1051,7 +1113,15 @@ mod tests {
         );
         let sb_dir = crate::microsandbox::runtime::reconcile::sandbox_dir(&encoded);
         std::fs::create_dir_all(&sb_dir)?;
-        std::fs::write(sb_dir.join("workestrate.log"), b"managed\n")?;
+        // The log itself lives at the NEW state-dir location, named by the
+        // RAW identity (`@` is legal in dir names; no encoding on this side
+        // of the SDK boundary).
+        let log_path = state_dir
+            .join("logs")
+            .join(identity)
+            .join("workestrate.log");
+        std::fs::create_dir_all(log_path.parent().expect("log parent"))?;
+        std::fs::write(&log_path, b"managed\n")?;
 
         let managed = enumerate_managed(&state_dir).await?;
         assert_eq!(
@@ -1066,7 +1136,7 @@ mod tests {
         assert!(managed[0].evidence.contains(&Evidence::RegistryRecord));
         assert!(
             managed[0].evidence.contains(&Evidence::ArtifactLog),
-            "artifact evidence is found via the record identity's encoded dir"
+            "artifact evidence is found via the RAW-identity state-dir log"
         );
 
         let picked = resolve_scope(&DownScope::Context("personal".into()), &managed);
@@ -1081,7 +1151,9 @@ mod tests {
     /// DUAL-MATCHING MUST NOT SWALLOW FOREIGN DIRS: a listing-only dir that
     /// merely LOOKS encoded (matches no record's identity or encoding)
     /// still appears — managed via its artifact evidence under home scope
-    /// and listed under everything-enumeration.
+    /// and listed under everything-enumeration. The log stays in the
+    /// LEGACY encoded sandbox dir, pinning the legacy fallback for
+    /// listing-only names.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime tests
     async fn enumerate_keeps_listing_only_encoded_looking_dirs() -> anyhow::Result<()> {
@@ -1091,6 +1163,7 @@ mod tests {
 
         let state_dir =
             crate::config::test_support::unique_state_dir_runtime("down-scope-enum-foreign");
+        let _state = StateDirGuard::set(&state_dir);
         // An unrelated record to prove matching is per-record, not global.
         write_record(&state_dir, "other-wl", Some("team"), None);
         // Foreign encoded-looking dir: no record matches its identity or

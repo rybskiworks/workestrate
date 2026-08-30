@@ -1153,8 +1153,9 @@ fn wait_until_ready(
         let remaining = deadline.saturating_duration_since(Instant::now());
         wait_for_port(ip, port, remaining).map_err(|_| {
             anyhow::anyhow!(
-                "{subject} did not become ready on {ip}:{port} within {}s; see log: ~/.microsandbox/sandboxes/{instance}/workestrate.log",
-                DEFAULT_WAIT.as_secs()
+                "{subject} did not become ready on {ip}:{port} within {}s; see log: {}/logs/{instance}/workestrate.log",
+                DEFAULT_WAIT.as_secs(),
+                state_dir.display()
             )
         })?;
     }

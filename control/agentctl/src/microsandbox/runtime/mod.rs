@@ -43,6 +43,9 @@ pub use run::{exec_agent_with_spec, up_service_with_spec};
 pub(crate) use run::resolve_plan_envs;
 pub use spawn::logs;
 pub use spawn::spawn_detached_service;
+// Crate-visible so down_scope's artifact-evidence probe reuses the ONE
+// detached-log location (ADR 0032 addendum 2026-08-30).
+pub(crate) use spawn::detached_log_path;
 pub use wait::{wait_for_port, DEFAULT_WAIT};
 
 use anyhow::Result;
