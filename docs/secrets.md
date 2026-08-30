@@ -136,15 +136,14 @@ decrypted.
 
 ## Running `workestrate` commands with secrets
 
-Inside the dev shell, `workestrate` is already on PATH. The CLI's secret
-command is `workestrate run -- <cmd>` — it decrypts `.env.enc` and runs
-`<cmd>` with the secrets injected into its environment:
+Inside the dev shell, `workestrate` is already on PATH. `workestrate
+workload up`/`exec` decrypt `.env.enc` themselves and inject the secrets:
 
 ```bash
 nix develop
-workestrate run -- workload up litellm      # service: starts detached
-workestrate run -- workload up odysseus     # service: starts detached
-workestrate run -- workload exec pi         # agent: interactive TUI attach
+workestrate workload up litellm           # service: starts detached
+workestrate workload up odysseus          # service: starts detached
+workestrate workload exec pi              # agent: interactive TUI attach
 ```
 
 `workestrate run --` always requires `.env.enc` to exist, so it is only for
@@ -165,7 +164,7 @@ workestrate run -- bash -c 'echo $LITELLM_MASTER_KEY'
 
 ## How workestrate validates secrets
 
-When you run `workestrate run -- workload up litellm`, the CLI validates that
+When you run `workestrate workload up litellm`, the CLI validates that
 `LITELLM_MASTER_KEY` and the provider keys defined in the config's secrets
 section are present. Service `up` and agent `exec` commands require
 `LITELLM_MASTER_KEY`. If a required secret is missing, the CLI prints a

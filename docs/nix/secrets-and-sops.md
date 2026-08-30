@@ -158,9 +158,9 @@ From `flake.nix`, the wrappers are `pkgs.writeShellApplication` derivations:
 | `decrypt-env` | Host | Print decrypted secrets to stdout |
 | `write-env` | Host | Write a short-lived plaintext `.env` (mode 0600) |
 
-The CLI's secret command `workestrate run -- <cmd>` decrypts `.env.enc` and
-execs `<cmd>` with the secrets in its environment — it is a CLI subcommand,
-not a flake wrapper.
+The CLI's `workestrate workload up`/`exec` commands decrypt `.env.enc`
+themselves and inject the secrets — they are CLI subcommands, not flake
+wrappers.
 
 > In a container, the age key is absent, so all of these fail closed by
 > design.
@@ -169,7 +169,7 @@ not a flake wrapper.
 #### Canonical invocation pattern
 
 ```bash
-workestrate run -- workload up litellm   # dev shell: workestrate is on PATH
+workestrate workload up litellm   # dev shell: workestrate is on PATH
 ```
 
 #### Security rules
@@ -401,7 +401,7 @@ rm .env
 
 ```shell
 # Inside the dev shell (workestrate is on PATH):
-workestrate run -- workload up litellm
+workestrate workload up litellm
 
 # Arbitrary commands with the same decrypted env (works in any shell; the
 # binary is nix-profile-installed):
