@@ -232,8 +232,7 @@ impl ConfigWorkload {
         // paths resolve against the DECLARING layer's directory, not the
         // flake project root. Mounts and seed_files merge wholesale-replace,
         // so each field has exactly one declaring layer.
-        let mount_content_root =
-            field_content_root(Some(&provenance), &layer_dirs, name, "mounts");
+        let mount_content_root = field_content_root(Some(&provenance), &layer_dirs, name, "mounts");
         let seed_content_root =
             field_content_root(Some(&provenance), &layer_dirs, name, "seed_files");
 

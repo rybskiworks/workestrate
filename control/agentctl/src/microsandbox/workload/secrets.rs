@@ -243,11 +243,17 @@ mod tests {
             ("passthrough", SecretViolationPolicy::Passthrough),
             ("block", SecretViolationPolicy::Block),
             ("block-and-log", SecretViolationPolicy::BlockAndLog),
-            ("block-and-terminate", SecretViolationPolicy::BlockAndTerminate),
+            (
+                "block-and-terminate",
+                SecretViolationPolicy::BlockAndTerminate,
+            ),
         ] {
             let layer = crate::merge::Layer::from_string(
                 "base",
-                &defs_toml(&format!("[secrets.GITHUB_TOKEN]\non_violation = \"{toml_value}\"\n"), ""),
+                &defs_toml(
+                    &format!("[secrets.GITHUB_TOKEN]\non_violation = \"{toml_value}\"\n"),
+                    "",
+                ),
             )?;
             let (config, _) = crate::merge::merge_layers(&[layer])?;
             let secrets = build_secret_definitions(&config)?;
@@ -267,7 +273,10 @@ mod tests {
             "base",
             &defs_toml("[secrets.GITHUB_TOKEN]\non_violation = \"nuke\"\n", ""),
         );
-        assert!(err.is_err(), "invalid on_violation must fail the layer parse");
+        assert!(
+            err.is_err(),
+            "invalid on_violation must fail the layer parse"
+        );
     }
 
     // ---- build_env_and_secret_env: per-binding bound dispatch ----
@@ -484,18 +493,27 @@ mod tests {
     /// origin).
     #[test]
     fn ladder_each_rung_overrides_the_previous() {
-        let home = ("home-registry", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::Block),
-            r#final: false,
-        });
-        let layer = ("team", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndLog),
-            r#final: false,
-        });
-        let workload = ("personal", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
-            r#final: false,
-        });
+        let home = (
+            "home-registry",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::Block),
+                r#final: false,
+            },
+        );
+        let layer = (
+            "team",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndLog),
+                r#final: false,
+            },
+        );
+        let workload = (
+            "personal",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+                r#final: false,
+            },
+        );
 
         // All four rungs present, nothing final: per-secret wins.
         let rungs = vec![
@@ -537,18 +555,27 @@ mod tests {
     /// capsule, and the per-secret entry are all frozen out.
     #[test]
     fn home_final_beats_config_workload_and_per_secret() {
-        let home = ("home-registry", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::Block),
-            r#final: true,
-        });
-        let layer = ("team", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndLog),
-            r#final: false,
-        });
-        let workload = ("personal", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
-            r#final: false,
-        });
+        let home = (
+            "home-registry",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::Block),
+                r#final: true,
+            },
+        );
+        let layer = (
+            "team",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndLog),
+                r#final: false,
+            },
+        );
+        let workload = (
+            "personal",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+                r#final: false,
+            },
+        );
         let rungs = vec![
             (home.0, &home.1),
             (layer.0, &layer.1),
@@ -567,18 +594,27 @@ mod tests {
     /// per-secret entry, but only after the non-final home rung applied.
     #[test]
     fn config_final_beats_workload_and_per_secret() {
-        let home = ("home-registry", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::Block),
-            r#final: false,
-        });
-        let layer = ("team", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndLog),
-            r#final: true,
-        });
-        let workload = ("personal", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
-            r#final: false,
-        });
+        let home = (
+            "home-registry",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::Block),
+                r#final: false,
+            },
+        );
+        let layer = (
+            "team",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndLog),
+                r#final: true,
+            },
+        );
+        let workload = (
+            "personal",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+                r#final: false,
+            },
+        );
         let rungs = vec![
             (home.0, &home.1),
             (layer.0, &layer.1),
@@ -597,18 +633,27 @@ mod tests {
     /// non-final home/layer rungs applied before it).
     #[test]
     fn workload_final_beats_per_secret() {
-        let home = ("home-registry", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::Block),
-            r#final: false,
-        });
-        let layer = ("team", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndLog),
-            r#final: false,
-        });
-        let workload = ("personal", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
-            r#final: true,
-        });
+        let home = (
+            "home-registry",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::Block),
+                r#final: false,
+            },
+        );
+        let layer = (
+            "team",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndLog),
+                r#final: false,
+            },
+        );
+        let workload = (
+            "personal",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+                r#final: true,
+            },
+        );
         let rungs = vec![
             (home.0, &home.1),
             (layer.0, &layer.1),
@@ -628,14 +673,20 @@ mod tests {
     /// resolved SO FAR — value AND origin stay with the rung that set them.
     #[test]
     fn final_without_value_freezes_the_resolved_value() {
-        let home = ("home-registry", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::Block),
-            r#final: false,
-        });
-        let layer = ("team", SecretsPolicyFragment {
-            on_violation: None,
-            r#final: true,
-        });
+        let home = (
+            "home-registry",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::Block),
+                r#final: false,
+            },
+        );
+        let layer = (
+            "team",
+            SecretsPolicyFragment {
+                on_violation: None,
+                r#final: true,
+            },
+        );
         let rungs = vec![(home.0, &home.1), (layer.0, &layer.1)];
         let (policy, origin) = resolve_on_violation(
             &rungs,
@@ -651,18 +702,27 @@ mod tests {
     /// when no provenance was recorded.
     #[test]
     fn per_secret_wins_when_nothing_above_is_final() {
-        let home = ("home-registry", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
-            r#final: false,
-        });
-        let layer = ("team", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndLog),
-            r#final: false,
-        });
-        let workload = ("personal", SecretsPolicyFragment {
-            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
-            r#final: false,
-        });
+        let home = (
+            "home-registry",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+                r#final: false,
+            },
+        );
+        let layer = (
+            "team",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndLog),
+                r#final: false,
+            },
+        );
+        let workload = (
+            "personal",
+            SecretsPolicyFragment {
+                on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+                r#final: false,
+            },
+        );
         let rungs = vec![
             (home.0, &home.1),
             (layer.0, &layer.1),
@@ -690,7 +750,10 @@ mod tests {
     fn per_secret_final_key_is_rejected() {
         let err = crate::merge::Layer::from_string(
             "base",
-            &defs_toml("[secrets.GITHUB_TOKEN]\non_violation = \"block\"\nfinal = true\n", ""),
+            &defs_toml(
+                "[secrets.GITHUB_TOKEN]\non_violation = \"block\"\nfinal = true\n",
+                "",
+            ),
         );
         assert!(err.is_err(), "per-secret `final` must fail the layer parse");
     }
@@ -760,7 +823,10 @@ final = true
 
         let layer = crate::merge::Layer::from_string(
             "base",
-            &defs_toml("[secrets.GITHUB_TOKEN]\non_violation = \"block-and-terminate\"\n", ""),
+            &defs_toml(
+                "[secrets.GITHUB_TOKEN]\non_violation = \"block-and-terminate\"\n",
+                "",
+            ),
         )?;
         let (config, _) = crate::merge::merge_layers(&[layer])?;
         let mut secrets = build_secret_definitions(&config)?;

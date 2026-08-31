@@ -347,7 +347,9 @@ static SECRET_POLICY_LADDER: std::sync::Mutex<Option<SecretPolicyLadder>> =
 
 /// Store the collected secret violation-policy ladder for the most recent config load.
 pub fn set_secret_policy_ladder(ladder: Option<SecretPolicyLadder>) {
-    *SECRET_POLICY_LADDER.lock().unwrap_or_else(|e| e.into_inner()) = ladder;
+    *SECRET_POLICY_LADDER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = ladder;
 }
 
 /// Clone the stored secret violation-policy ladder without consuming it.

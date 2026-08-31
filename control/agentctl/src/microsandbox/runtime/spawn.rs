@@ -422,7 +422,10 @@ mod tests {
         // names and no msb-name encoding applies on this side of the SDK.
         assert_eq!(
             detached_log_path("ctx-wl@canary"),
-            state.join("logs").join("ctx-wl@canary").join("workestrate.log")
+            state
+                .join("logs")
+                .join("ctx-wl@canary")
+                .join("workestrate.log")
         );
         // Traversal safety is enforced UPSTREAM: slots::validate_instance_id
         // rejects separators/dots (see its tests), so a hostile name can never

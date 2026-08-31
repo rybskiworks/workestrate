@@ -965,7 +965,10 @@ mod tests {
         // discovers the candidate.
         let dir_only = crate::microsandbox::runtime::reconcile::sandbox_dir("personal-agent");
         std::fs::create_dir_all(&dir_only)?;
-        let agent_log = state_dir.join("logs").join("personal-agent").join("workestrate.log");
+        let agent_log = state_dir
+            .join("logs")
+            .join("personal-agent")
+            .join("workestrate.log");
         std::fs::create_dir_all(agent_log.parent().expect("agent log parent"))?;
         std::fs::write(&agent_log, b"managed\n")?;
         // Dir-only WITHOUT log, dashed name (no record): SlotPattern only.

@@ -2906,7 +2906,10 @@ on_violation = "block-and-log"
         );
 
         // Rung 4: workload rungs keyed by workload name, stack order.
-        let pi_rungs = ladder.workloads.get("pi").expect("workload rungs collected");
+        let pi_rungs = ladder
+            .workloads
+            .get("pi")
+            .expect("workload rungs collected");
         assert_eq!(
             pi_rungs
                 .iter()

@@ -1338,7 +1338,9 @@ pub struct WorkloadConfig {
 /// Serde kebab-case yields the TOML strings `"passthrough"` | `"block"` |
 /// `"block-and-log"` | `"block-and-terminate"`, matching the SDK's
 /// `ViolationAction` naming.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum SecretViolationPolicy {
     /// Forward the placeholder unchanged to the non-allowed host (the
