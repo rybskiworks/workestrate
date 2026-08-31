@@ -223,6 +223,7 @@ fn missing_var_name(msg: &str) -> Option<&str> {
 )]
 mod tests {
     use super::*;
+    use crate::config::SecretViolationPolicy;
     use crate::microsandbox::plan::{EnvVar, HostBoundSecret, NetworkPlan, SandboxPlan};
     use std::collections::{HashMap, HashSet};
 
@@ -508,6 +509,7 @@ mod tests {
                 allowed_hosts: vec!["github.com".to_string()],
                 required: true,
                 reject_placeholder: None,
+                on_violation: SecretViolationPolicy::Passthrough,
             }],
         );
         let view = build_seed_env_view(
@@ -541,6 +543,7 @@ mod tests {
                 allowed_hosts: vec!["github.com".to_string()],
                 required: true,
                 reject_placeholder: None,
+                on_violation: SecretViolationPolicy::Passthrough,
             }],
         );
         let view = build_seed_env_view(
@@ -691,6 +694,7 @@ mod tests {
                 allowed_hosts: vec![],
                 required: true,
                 reject_placeholder: None,
+                on_violation: SecretViolationPolicy::Passthrough,
             }],
         );
         let view = build_seed_env_view(

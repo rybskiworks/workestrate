@@ -393,6 +393,7 @@ fn egress_rule_canonical(rule: &crate::microsandbox::plan::EgressRule) -> String
 )]
 mod tests {
     use super::*;
+    use crate::config::SecretViolationPolicy;
     use crate::microsandbox::plan::{
         DenyDomainRule, EgressRule, EnvVar, HostBoundSecret, IngressRule, MountMode, MountPlan,
         PortMapping, Protocol, Scope,
@@ -570,6 +571,7 @@ mod tests {
             allowed_hosts: vec!["example.com".to_string()],
             required: true,
             reject_placeholder: None,
+            on_violation: SecretViolationPolicy::Passthrough,
         };
         let mut with_a = empty_plan();
         with_a.secret_env = vec![secret("${A}")];
@@ -666,6 +668,7 @@ mod tests {
             allowed_hosts: vec![],
             required: false,
             reject_placeholder: None,
+            on_violation: SecretViolationPolicy::Passthrough,
         }];
         assert_ne!(
             config_hash_of_plan(&edited),
@@ -784,6 +787,7 @@ mod tests {
             allowed_hosts: vec![],
             required: false,
             reject_placeholder: None,
+            on_violation: SecretViolationPolicy::Passthrough,
         }];
         p
     }

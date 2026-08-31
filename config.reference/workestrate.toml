@@ -41,6 +41,7 @@ required = true
 env_var = "GITHUB_TOKEN"
 allowed_hosts = ["github.com", "api.github.com"]
 required = false
+on_violation = "passthrough"  # default; placeholder text may leave the sandbox unsubstituted — real values still only go to allowed_hosts
 
 [workloads.example-litellm]
 kind = "service"

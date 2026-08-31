@@ -1,4 +1,4 @@
-use crate::config::{Bound, ConfigFile, EnvBinding, WorkloadConfig};
+use crate::config::{Bound, ConfigFile, EnvBinding, SecretViolationPolicy, WorkloadConfig};
 use crate::microsandbox::plan::{EnvVar, HostBoundSecret};
 use crate::microsandbox::secrets::SecretDefinition;
 use anyhow::Result;
@@ -9,7 +9,8 @@ use std::collections::HashMap;
 /// Field defaults are applied HERE — post-merge only (spec 16 §5
 /// defaults-after-merge): `env_var` absent defaults `source_env_var` to the
 /// secret ID; `allowed_hosts` absent defaults to deny-all (an explicit zero
-/// allowed hosts); `required` defaults to true.
+/// allowed hosts); `required` defaults to true; `on_violation` absent
+/// defaults to passthrough.
 pub(crate) fn build_secret_definitions(
     config: &ConfigFile,
 ) -> Result<HashMap<String, SecretDefinition>> {
@@ -22,6 +23,7 @@ pub(crate) fn build_secret_definitions(
                 allowed_hosts: secret.allowed_hosts.clone().unwrap_or_default(),
                 required: secret.required.unwrap_or(true),
                 placeholder: secret.placeholder.clone(),
+                on_violation: secret.on_violation.unwrap_or_default(),
             },
         );
     }
@@ -35,8 +37,9 @@ pub(crate) fn build_secret_definitions(
 /// resolution path in runtime/run.rs applies unchanged), anything else
 /// (`None` or `Some(Bound::Host)` — the default applies here, post-merge)
 /// produces a host-bound plan secret entry keyed by the MAP KEY carrying the
-/// DEF's `allowed_hosts` / `required` / `placeholder`. An unknown secret
-/// reference is a hard error naming the binding key and the secret ID.
+/// DEF's `allowed_hosts` / `required` / `placeholder` / `on_violation`. An
+/// unknown secret reference is a hard error naming the binding key and the
+/// secret ID.
 pub(super) fn build_env_and_secret_env(
     workload: &WorkloadConfig,
     secrets: &HashMap<String, SecretDefinition>,
@@ -69,6 +72,7 @@ pub(super) fn build_env_and_secret_env(
                         allowed_hosts: def.allowed_hosts.clone(),
                         required: def.required,
                         reject_placeholder: def.placeholder.clone(),
+                        on_violation: def.on_violation,
                     }),
                 }
             }
@@ -123,7 +127,7 @@ mod tests {
     #[test]
     fn build_secret_definitions_resolves_defaults() -> Result<()> {
         // env_var absent → source_env_var = secret ID; allowed_hosts absent
-        // → deny-all; required → true.
+        // → deny-all; required → true; on_violation absent → passthrough.
         let layer =
             crate::merge::Layer::from_string("base", &defs_toml("[secrets.GITHUB_TOKEN]\n", ""))?;
         let (config, _) = crate::merge::merge_layers(&[layer])?;
@@ -135,7 +139,48 @@ mod tests {
             "omitted allowed_hosts resolve to deny-all"
         );
         assert!(def.required);
+        assert_eq!(
+            def.on_violation,
+            SecretViolationPolicy::Passthrough,
+            "omitted on_violation resolves to passthrough"
+        );
         Ok(())
+    }
+
+    /// Every kebab-case `on_violation` string parses to the matching
+    /// [`SecretViolationPolicy`] variant (the serde naming mirrors the SDK's
+    /// `ViolationAction`).
+    #[test]
+    fn on_violation_kebab_case_strings_parse_to_variants() -> Result<()> {
+        for (toml_value, expected) in [
+            ("passthrough", SecretViolationPolicy::Passthrough),
+            ("block", SecretViolationPolicy::Block),
+            ("block-and-log", SecretViolationPolicy::BlockAndLog),
+            ("block-and-terminate", SecretViolationPolicy::BlockAndTerminate),
+        ] {
+            let layer = crate::merge::Layer::from_string(
+                "base",
+                &defs_toml(&format!("[secrets.GITHUB_TOKEN]\non_violation = \"{toml_value}\"\n"), ""),
+            )?;
+            let (config, _) = crate::merge::merge_layers(&[layer])?;
+            let secrets = build_secret_definitions(&config)?;
+            assert_eq!(
+                secrets["GITHUB_TOKEN"].on_violation, expected,
+                "`{toml_value}` parses to the matching variant"
+            );
+        }
+        Ok(())
+    }
+
+    /// An unknown `on_violation` value is a parse error (the layer refuses
+    /// to load — fail-closed, no silent fallback to the default).
+    #[test]
+    fn on_violation_invalid_value_is_parse_error() {
+        let err = crate::merge::Layer::from_string(
+            "base",
+            &defs_toml("[secrets.GITHUB_TOKEN]\non_violation = \"nuke\"\n", ""),
+        );
+        assert!(err.is_err(), "invalid on_violation must fail the layer parse");
     }
 
     // ---- build_env_and_secret_env: per-binding bound dispatch ----
@@ -199,8 +244,8 @@ mod tests {
     /// A bound-less (`KEY = true` / `{ secret = "ID" }`) or explicit
     /// host-bound secret binding renders a plan secret_env entry keyed by
     /// the MAP KEY, carrying the DEF's allowed_hosts / required /
-    /// placeholder (never the binding's — `allowed_hosts` is credential
-    /// material).
+    /// placeholder / on_violation (never the binding's — `allowed_hosts` is
+    /// credential material).
     #[test]
     fn host_bound_produces_plan_secret_env_entry() -> Result<()> {
         for workload in [
@@ -211,7 +256,7 @@ mod tests {
             let layer = crate::merge::Layer::from_string(
                 "base",
                 &defs_toml(
-                    "[secrets.GITHUB_TOKEN]\nallowed_hosts = [\"github.com\"]\nrequired = false\nplaceholder = \"ghp_CHANGEME\"\n",
+                    "[secrets.GITHUB_TOKEN]\nallowed_hosts = [\"github.com\"]\nrequired = false\nplaceholder = \"ghp_CHANGEME\"\non_violation = \"block-and-terminate\"\n",
                     workload,
                 ),
             )?;
@@ -228,6 +273,11 @@ mod tests {
             assert_eq!(se.allowed_hosts, vec!["github.com".to_string()]);
             assert!(!se.required);
             assert_eq!(se.reject_placeholder.as_deref(), Some("ghp_CHANGEME"));
+            assert_eq!(
+                se.on_violation,
+                SecretViolationPolicy::BlockAndTerminate,
+                "the plan entry carries the DEF's violation policy"
+            );
         }
         Ok(())
     }

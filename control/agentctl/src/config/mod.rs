@@ -63,8 +63,8 @@ pub use types::{
     DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, EnvBinding, EnvBindings,
     EnvSecretRef, EnvVarConfig, ImageSpec, InstancePolicy, InstancePort, InstanceStrategy,
     LocalBuildConfig, NetworkConfig, NetworkDefaultsConfig, OnSkew, PolicyConfig, PortOccupiedBare,
-    PortOccupiedChain, PortOccupiedStep, Registry, RegistrySettings, SecretDefConfig, SecretsLayer,
-    SeedFileConfig, TrustedProject, WorkloadConfig,
+    PortOccupiedChain, PortOccupiedStep, Registry, RegistrySettings, SecretDefConfig,
+    SecretViolationPolicy, SecretsLayer, SeedFileConfig, TrustedProject, WorkloadConfig,
 };
 #[allow(unused_imports)]
 pub use validation::{validate_config, validate_config_name, EXPECTED_SCHEMA_VERSION};

@@ -383,6 +383,13 @@ fn merge_secret_def(
             layer_ctx.name.clone(),
         );
     }
+    if table.contains_key("on_violation") {
+        merged.on_violation = layer.on_violation;
+        provenance.insert(
+            format!("secrets.{name}.on_violation"),
+            layer_ctx.name.clone(),
+        );
+    }
 
     Ok(())
 }

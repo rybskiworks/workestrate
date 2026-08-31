@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 
+use crate::config::SecretViolationPolicy;
 use crate::microsandbox::secrets::SecretDefinition;
 use crate::mount_policy::{AxisFragment, MountsFragment};
 
@@ -426,6 +427,11 @@ pub struct HostBoundSecret {
     pub allowed_hosts: Vec<String>,
     pub required: bool,
     pub reject_placeholder: Option<String>,
+    /// Egress violation policy for traffic carrying the placeholder to a
+    /// non-allowed host. Additive serde default so plans serialized before
+    /// this field existed still parse (mirrors `EnvVar.injected_by`).
+    #[serde(default)]
+    pub on_violation: SecretViolationPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -694,6 +700,7 @@ impl HostBoundSecret {
             allowed_hosts: definition.allowed_hosts.clone(),
             required: definition.required,
             reject_placeholder: definition.placeholder.clone(),
+            on_violation: definition.on_violation,
         }
     }
 }
@@ -762,6 +769,7 @@ mod tests {
             allowed_hosts: vec!["example.com".to_string()],
             required: true,
             placeholder: Some("CHANGEME".to_string()),
+            on_violation: SecretViolationPolicy::BlockAndLog,
         }
     }
 
@@ -793,6 +801,7 @@ mod tests {
                 allowed_hosts: vec!["example.com".to_string()],
                 required: false,
                 reject_placeholder: None,
+                on_violation: SecretViolationPolicy::Passthrough,
             }],
             ports: vec![PortMapping::new(8080, 80)],
             mounts: vec![
@@ -1201,6 +1210,11 @@ network: egress_default=deny ingress_default=deny
         assert_eq!(bound.allowed_hosts, vec!["example.com".to_string()]);
         assert!(bound.required);
         assert_eq!(bound.reject_placeholder, Some("CHANGEME".to_string()));
+        assert_eq!(
+            bound.on_violation,
+            SecretViolationPolicy::BlockAndLog,
+            "the violation policy propagates from the definition"
+        );
     }
 
     // ---- ADR 0030 Phase 1: instance policy rendering ----

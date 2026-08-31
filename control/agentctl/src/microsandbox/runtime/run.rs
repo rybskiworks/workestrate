@@ -3,6 +3,7 @@ use super::super::mounts::{apply_plan_mounts, ensure_mount_sources};
 use super::super::plan::{PortMapping, SandboxPlan};
 use super::super::workload::{EntrypointSpec, SandboxCommand, Workload};
 use super::{check_occupied_or_replace, ForegroundConfig, InstanceSpec};
+use crate::config::SecretViolationPolicy;
 use anyhow::Result;
 use microsandbox::sandbox::{exec::ExecEvent, SandboxBuilder};
 use microsandbox::Sandbox;
@@ -87,6 +88,20 @@ pub(crate) fn apply_plan_secrets(
                             .value(value.clone())
                             .allow_host(host.clone())
                             .require_tls_identity(require_tls)
+                            // Per-secret violation policy: what happens when
+                            // the placeholder reaches a NON-allowed host.
+                            // Passthrough maps to all-hosts placeholder
+                            // forwarding — the proxy still only substitutes
+                            // the real value for allowed hosts (upstream
+                            // microsandbox#1354 workaround: a placeholder
+                            // quoted in a request body no longer poisons the
+                            // session).
+                            .on_violation(|v| match s.on_violation {
+                                SecretViolationPolicy::Passthrough => v.passthrough_all_hosts(true),
+                                SecretViolationPolicy::Block => v.block(),
+                                SecretViolationPolicy::BlockAndLog => v.block_and_log(),
+                                SecretViolationPolicy::BlockAndTerminate => v.block_and_terminate(),
+                            })
                     });
                 }
             }
@@ -1611,6 +1626,7 @@ mod tests {
                 allowed_hosts: vec!["host.microsandbox.internal".to_string()],
                 required: true,
                 reject_placeholder: None,
+                on_violation: SecretViolationPolicy::Passthrough,
             },
             HostBoundSecret {
                 name: "LITELLM_MASTER_KEY".to_string(),
@@ -1618,6 +1634,7 @@ mod tests {
                 allowed_hosts: vec!["openrouter.ai".to_string()],
                 required: true,
                 reject_placeholder: None,
+                on_violation: SecretViolationPolicy::Passthrough,
             },
         ]);
         let secrets = secrets_map(&[("LITELLM_MASTER_KEY", "real")]);
@@ -1630,6 +1647,35 @@ mod tests {
         assert!(!secret_requires_tls_identity("host.microsandbox.internal"));
         assert!(secret_requires_tls_identity("openrouter.ai"));
         let _ = builder;
+        Ok(())
+    }
+
+    /// Every violation policy variant wires through `SecretBuilder::
+    /// on_violation` without error. LIMITATION: the SDK's built config
+    /// internals are pub(crate), not inspectable from workestrate, so the
+    /// assertion is that the wiring call succeeds per policy (the
+    /// parse/default tests in workload/secrets.rs pin the value plumbing
+    /// from TOML → definition → plan entry).
+    #[test]
+    fn apply_plan_secrets_wires_every_violation_policy() -> Result<()> {
+        for policy in [
+            SecretViolationPolicy::Passthrough,
+            SecretViolationPolicy::Block,
+            SecretViolationPolicy::BlockAndLog,
+            SecretViolationPolicy::BlockAndTerminate,
+        ] {
+            let plan = empty_plan_with_secrets(vec![HostBoundSecret {
+                name: "GITHUB_TOKEN".to_string(),
+                value: "${GITHUB_TOKEN}".to_string(),
+                allowed_hosts: vec!["github.com".to_string()],
+                required: true,
+                reject_placeholder: None,
+                on_violation: policy,
+            }]);
+            let secrets = secrets_map(&[("GITHUB_TOKEN", "real")]);
+            let builder = apply_plan_secrets(Sandbox::builder("test"), &plan, &secrets)?;
+            let _ = builder;
+        }
         Ok(())
     }
 

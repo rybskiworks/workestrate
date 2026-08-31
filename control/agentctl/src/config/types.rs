@@ -1326,6 +1326,42 @@ pub struct WorkloadConfig {
     pub depends_on: HashMap<String, DependsOnSpec>,
 }
 
+/// Per-secret egress violation policy (`secrets.<name>.on_violation`): what
+/// the host-side network proxy does when the secret's `$MSB_<NAME>`
+/// placeholder appears in traffic to a host that is NOT in the secret's
+/// `allowed_hosts` (including request BODIES, where a quoted placeholder
+/// would otherwise poison the session — upstream microsandbox#1354).
+///
+/// The sandbox only ever sees the placeholder; the proxy substitutes the
+/// real value exclusively for allowed hosts, so every variant here governs
+/// the fate of the harmless placeholder TEXT, never the credential itself.
+/// Serde kebab-case yields the TOML strings `"passthrough"` | `"block"` |
+/// `"block-and-log"` | `"block-and-terminate"`, matching the SDK's
+/// `ViolationAction` naming.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretViolationPolicy {
+    /// Forward the placeholder unchanged to the non-allowed host (the
+    /// engine's connection is not reset). DEFAULT — safe because the proxy
+    /// never substitutes the real value for non-allowed hosts: passthrough
+    /// only permits the harmless placeholder text to leave the sandbox;
+    /// real-secret substitution still requires an allowed host + enabled
+    /// injection location. Also works around upstream microsandbox#1354,
+    /// where a placeholder quoted inside a request body (e.g. an LLM
+    /// conversation echoing `$MSB_GITHUB_TOKEN`) blocks every subsequent
+    /// request under the engine default.
+    #[default]
+    Passthrough,
+    /// Drop/reset the connection carrying the placeholder to the
+    /// non-allowed host, silently (no host-side warning).
+    Block,
+    /// Drop/reset the connection AND emit a host-side warning — the engine
+    /// default when no per-secret policy is configured in the SDK.
+    BlockAndLog,
+    /// Drop/reset the connection, log, and terminate the sandbox session.
+    BlockAndTerminate,
+}
+
 /// Definition of one named secret (`secrets.<name>` in workestrate.toml) —
 /// the final unified model (spec 16): a pure catalog of the credential's
 /// intrinsic properties. `env_var` is the host environment variable the
@@ -1333,7 +1369,9 @@ pub struct WorkloadConfig {
 /// constrains which egress hosts may receive the value by substitution
 /// (omitted → deny-all; valid regardless of binding mode); `required` makes
 /// a missing value a hard error; `placeholder` is a known-bad value to
-/// reject. Exposure mode is NOT a def property — it lives at the binding
+/// reject; `on_violation` selects the egress violation policy applied when
+/// the placeholder reaches a non-allowed host (absent → passthrough,
+/// post-merge). Exposure mode is NOT a def property — it lives at the binding
 /// site (`EnvSecretRef.bound`). The retired v1/v2 keys (`hosts`, `delivery`,
 /// `source`, `exposed_as`, `description`, stray `bound`) hard-error at parse
 /// via `deny_unknown_fields`.

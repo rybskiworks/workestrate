@@ -1,3 +1,5 @@
+use crate::config::SecretViolationPolicy;
+
 /// Resolved definition of a secret (final unified model, spec 16), built
 /// from the merged `[secrets.<NAME>]` config at load time.
 ///
@@ -20,6 +22,9 @@ pub struct SecretDefinition {
     pub required: bool,
     /// Known-bad placeholder value to reject.
     pub placeholder: Option<String>,
+    /// Violation policy for egress traffic carrying the placeholder to a
+    /// non-allowed host; defaults to passthrough.
+    pub on_violation: SecretViolationPolicy,
 }
 
 #[cfg(test)]
@@ -39,6 +44,7 @@ mod tests {
             allowed_hosts: vec!["a.com".to_string(), "b.com".to_string()],
             required: false,
             placeholder: None,
+            on_violation: SecretViolationPolicy::Passthrough,
         };
         assert_eq!(def.source_env_var, "MY_KEY");
         assert_eq!(
@@ -56,6 +62,7 @@ mod tests {
             allowed_hosts: vec![],
             required: true,
             placeholder: Some("PLACEHOLDER".to_string()),
+            on_violation: SecretViolationPolicy::BlockAndLog,
         };
         let cloned = def.clone();
         assert_eq!(cloned.source_env_var, def.source_env_var);
