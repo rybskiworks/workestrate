@@ -253,10 +253,16 @@ impl E2eFixture {
     }
 
     /// The detached child's log for `slot` (svc-dep/svc-top — no context).
+    /// Post-074fc02 the child logs to the state dir
+    /// (`<state_dir>/logs/<instance>/workestrate.log`); the fixture pins
+    /// WORKESTRATE_HOME (Env home kind), so the state dir is
+    /// `<WORKESTRATE_HOME>/state`.
     fn child_log(&self, slot: &str) -> String {
         let path = self
             .home
-            .join(".microsandbox/sandboxes")
+            .join("wk")
+            .join("state")
+            .join("logs")
             .join(slot)
             .join("workestrate.log");
         std::fs::read_to_string(path).unwrap_or_default()
