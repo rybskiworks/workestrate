@@ -16,6 +16,10 @@
       # `git ls-remote origin develop`. Moves to `develop` tracking or a
       # signed rev later per the merge runbook (signing currently deferred
       # by user).
+      # 2026-08-31: repo transferred to the rybskiworks org (georgrybski ->
+      # rybskiworks, same rev). Host relock still pending:
+      # `nix flake lock --update-input microsandbox-fork
+      # /home/rybski/Development/agent-workbench/workestrate`.
       #
       # This rev carries ALL THREE: (1) the F1 approved-root fix, (2) the
       # write.allow evaluator arm with union semantics (allow∪deny
@@ -27,7 +31,7 @@
       # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
       # wait → hard MicrosandboxError::Runtime). The transient build-time
       # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
-      url = "github:georgrybski/microsandbox/79dc8a197f2e58fadddb79ce427a204606c6c9de";
+      url = "github:rybskiworks/microsandbox/79dc8a197f2e58fadddb79ce427a204606c6c9de";
       flake = false;
     };
   };
