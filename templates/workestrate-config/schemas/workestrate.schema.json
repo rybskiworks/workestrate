@@ -6,7 +6,8 @@
   "properties": {
     "policy": {
       "default": {
-        "mounts": null
+        "mounts": null,
+        "secrets": null
       },
       "allOf": [
         {
@@ -932,6 +933,18 @@
               "type": "null"
             }
           ]
+        },
+        "secrets": {
+          "description": "Secret violation-policy ladder rung (`[policy.secrets]`). The SAME sub-shape is valid at all three policy rungs: the home registry (`Registry.policy`, operator scope), a workestrate.toml layer (config-repo-layer rung), and a workload declaration (`[workloads.<name>.policy]` — where a bare directory-mode capsule's top-level `[policy.secrets]` lands). Like `mounts`, this fragment is COLLECTED per scope, never merged (see loading.rs).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretsPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -1102,7 +1115,7 @@
       ]
     },
     "SecretDefConfig": {
-      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml) — the final unified model (spec 16): a pure catalog of the credential's intrinsic properties. `env_var` is the host environment variable the resolved value is read from (default: the secret ID); `allowed_hosts` constrains which egress hosts may receive the value by substitution (omitted → deny-all; valid regardless of binding mode); `required` makes a missing value a hard error; `placeholder` is a known-bad value to reject. Exposure mode is NOT a def property — it lives at the binding site (`EnvSecretRef.bound`). The retired v1/v2 keys (`hosts`, `delivery`, `source`, `exposed_as`, `description`, stray `bound`) hard-error at parse via `deny_unknown_fields`.",
+      "description": "Definition of one named secret (`secrets.<name>` in workestrate.toml) — the final unified model (spec 16): a pure catalog of the credential's intrinsic properties. `env_var` is the host environment variable the resolved value is read from (default: the secret ID); `allowed_hosts` constrains which egress hosts may receive the value by substitution (omitted → deny-all; valid regardless of binding mode); `required` makes a missing value a hard error; `placeholder` is a known-bad value to reject; `on_violation` selects the egress violation policy applied when the placeholder reaches a non-allowed host — the MOST SPECIFIC rung of the layered resolution (see [`SecretsPolicyFragment`]; absent → the ladder decides, resolving to passthrough when nothing higher declares). `final` is NOT available per-secret: nothing sits below a per-secret entry, so there is nothing to freeze against. Exposure mode is NOT a def property — it lives at the binding site (`EnvSecretRef.bound`). The retired v1/v2 keys (`hosts`, `delivery`, `source`, `exposed_as`, `description`, stray `bound`) hard-error at parse via `deny_unknown_fields`.",
       "type": "object",
       "properties": {
         "allowed_hosts": {
@@ -1121,6 +1134,18 @@
             "null"
           ]
         },
+        "on_violation": {
+          "description": "Per-secret violation-policy rung (ladder rung 5, the most specific). Absent -> the ladder decides (built-in passthrough when nothing higher declares). NOTE: `final` is deliberately NOT available here — nothing sits below a per-secret entry, so there is nothing to freeze against; `deny_unknown_fields` rejects it.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretViolationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "placeholder": {
           "type": [
             "string",
@@ -1131,6 +1156,63 @@
           "type": [
             "boolean",
             "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecretViolationPolicy": {
+      "description": "Per-secret egress violation policy (`secrets.<name>.on_violation`): what the host-side network proxy does when the secret's `$MSB_<NAME>` placeholder appears in traffic to a host that is NOT in the secret's `allowed_hosts` (including request BODIES, where a quoted placeholder would otherwise poison the session — upstream microsandbox#1354).\n\nThe sandbox only ever sees the placeholder; the proxy substitutes the real value exclusively for allowed hosts, so every variant here governs the fate of the harmless placeholder TEXT, never the credential itself. Serde kebab-case yields the TOML strings `\"passthrough\"` | `\"block\"` | `\"block-and-log\"` | `\"block-and-terminate\"`, matching the SDK's `ViolationAction` naming.",
+      "oneOf": [
+        {
+          "description": "Forward the placeholder unchanged to the non-allowed host (the engine's connection is not reset). DEFAULT — safe because the proxy never substitutes the real value for non-allowed hosts: passthrough only permits the harmless placeholder text to leave the sandbox; real-secret substitution still requires an allowed host + enabled injection location. Also works around upstream microsandbox#1354, where a placeholder quoted inside a request body (e.g. an LLM conversation echoing `$MSB_GITHUB_TOKEN`) blocks every subsequent request under the engine default.",
+          "type": "string",
+          "enum": [
+            "passthrough"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection carrying the placeholder to the non-allowed host, silently (no host-side warning).",
+          "type": "string",
+          "enum": [
+            "block"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection AND emit a host-side warning — the engine default when no per-secret policy is configured in the SDK.",
+          "type": "string",
+          "enum": [
+            "block-and-log"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection, log, and terminate the sandbox session.",
+          "type": "string",
+          "enum": [
+            "block-and-terminate"
+          ]
+        }
+      ]
+    },
+    "SecretsPolicyFragment": {
+      "description": "One rung of the secret violation-policy ladder (`[policy.secrets]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Resolution walks the rungs authority-ascending — built-in passthrough, then home registry (`Registry.policy.secrets` in `<home>/config.toml`, the operator scope), then each config-repo layer's `[policy.secrets]` in stack order, then the workload capsule's `[workloads.<name>.policy.secrets]` — and the per-secret `[secrets.<NAME>] on_violation` entry decides last unless a higher rung is final. This mirrors the mount-policy hierarchy (docs/mount-policy/03-hierarchy-and-precedence.md): later = more specific wins, and `final = true` is a terminal freeze that stops every lower rung (including per-secret entries) from overriding the value resolved at the freezing rung. DEVIATION from mount-policy vocabulary: `final` may appear WITHOUT `on_violation` (mount-policy rules always carry an action) — a bare final freezes whatever the higher rungs resolved so far. There is no frozen-out explain trace (mount-policy's `frozen_out`/`frozen_by`): the resolution provenance records only the deciding rung.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung — config-repo layers, workload capsules, per-secret entries — is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "on_violation": {
+          "description": "Default violation policy this rung declares for secrets (same kebab-case vocabulary as the per-secret field). Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretViolationPolicy"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -1300,7 +1382,8 @@
         },
         "policy": {
           "default": {
-            "mounts": null
+            "mounts": null,
+            "secrets": null
           },
           "allOf": [
             {

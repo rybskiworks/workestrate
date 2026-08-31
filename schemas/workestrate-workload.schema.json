@@ -126,7 +126,8 @@
     },
     "policy": {
       "default": {
-        "mounts": null
+        "mounts": null,
+        "secrets": null
       },
       "allOf": [
         {
@@ -1052,6 +1053,18 @@
               "type": "null"
             }
           ]
+        },
+        "secrets": {
+          "description": "Secret violation-policy ladder rung (`[policy.secrets]`). The SAME sub-shape is valid at all three policy rungs: the home registry (`Registry.policy`, operator scope), a workestrate.toml layer (config-repo-layer rung), and a workload declaration (`[workloads.<name>.policy]` — where a bare directory-mode capsule's top-level `[policy.secrets]` lands). Like `mounts`, this fragment is COLLECTED per scope, never merged (see loading.rs).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretsPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -1220,6 +1233,63 @@
           ]
         }
       ]
+    },
+    "SecretViolationPolicy": {
+      "description": "Per-secret egress violation policy (`secrets.<name>.on_violation`): what the host-side network proxy does when the secret's `$MSB_<NAME>` placeholder appears in traffic to a host that is NOT in the secret's `allowed_hosts` (including request BODIES, where a quoted placeholder would otherwise poison the session — upstream microsandbox#1354).\n\nThe sandbox only ever sees the placeholder; the proxy substitutes the real value exclusively for allowed hosts, so every variant here governs the fate of the harmless placeholder TEXT, never the credential itself. Serde kebab-case yields the TOML strings `\"passthrough\"` | `\"block\"` | `\"block-and-log\"` | `\"block-and-terminate\"`, matching the SDK's `ViolationAction` naming.",
+      "oneOf": [
+        {
+          "description": "Forward the placeholder unchanged to the non-allowed host (the engine's connection is not reset). DEFAULT — safe because the proxy never substitutes the real value for non-allowed hosts: passthrough only permits the harmless placeholder text to leave the sandbox; real-secret substitution still requires an allowed host + enabled injection location. Also works around upstream microsandbox#1354, where a placeholder quoted inside a request body (e.g. an LLM conversation echoing `$MSB_GITHUB_TOKEN`) blocks every subsequent request under the engine default.",
+          "type": "string",
+          "enum": [
+            "passthrough"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection carrying the placeholder to the non-allowed host, silently (no host-side warning).",
+          "type": "string",
+          "enum": [
+            "block"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection AND emit a host-side warning — the engine default when no per-secret policy is configured in the SDK.",
+          "type": "string",
+          "enum": [
+            "block-and-log"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection, log, and terminate the sandbox session.",
+          "type": "string",
+          "enum": [
+            "block-and-terminate"
+          ]
+        }
+      ]
+    },
+    "SecretsPolicyFragment": {
+      "description": "One rung of the secret violation-policy ladder (`[policy.secrets]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Resolution walks the rungs authority-ascending — built-in passthrough, then home registry (`Registry.policy.secrets` in `<home>/config.toml`, the operator scope), then each config-repo layer's `[policy.secrets]` in stack order, then the workload capsule's `[workloads.<name>.policy.secrets]` — and the per-secret `[secrets.<NAME>] on_violation` entry decides last unless a higher rung is final. This mirrors the mount-policy hierarchy (docs/mount-policy/03-hierarchy-and-precedence.md): later = more specific wins, and `final = true` is a terminal freeze that stops every lower rung (including per-secret entries) from overriding the value resolved at the freezing rung. DEVIATION from mount-policy vocabulary: `final` may appear WITHOUT `on_violation` (mount-policy rules always carry an action) — a bare final freezes whatever the higher rungs resolved so far. There is no frozen-out explain trace (mount-policy's `frozen_out`/`frozen_by`): the resolution provenance records only the deciding rung.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung — config-repo layers, workload capsules, per-secret entries — is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "on_violation": {
+          "description": "Default violation policy this rung declares for secrets (same kebab-case vocabulary as the per-secret field). Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretViolationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "SeedFileConfig": {
       "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary); it is `None` when the entry uses `glob` instead — exactly one of `source`|`glob` per entry is enforced by `config::validation`. `target` is rendered on the HOST: targets starting with `workspaces/` or `var/` resolve under the XDG state dir, anything else resolves under the declaring config layer's content root. The file is guest-visible ONLY through a declared mount whose host path is a component-wise prefix of the target (seeds are mount-backed by design); validation fails closed on an uncovered target — and `prepare()` re-checks before any write — so a seed can never silently render on the host where the guest never sees it. `only_if_missing` skips the copy when the target already exists. When `template` is true, the source TEXT is rendered as a `${VAR}` template against the workload's guest-visible env view at seed time (`$$` emits a literal `$`, so `$${FOO}` renders as `${FOO}`; map-only resolver; missing var = hard error; no process env). `glob` is a glob pattern relative to the declaring layer's content dir: `target` becomes a directory and each regular-file match seeds to `target/<rel-path>`, sorted; a glob with no matches is a hard error at seed time; mutually exclusive with `source`.",
