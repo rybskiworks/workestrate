@@ -352,9 +352,11 @@ pub fn load_config() -> Result<ConfigFile> {
             set_active_context(None);
             let layer = crate::merge::Layer::load("local", &path)?;
             let collected = collect_policy_scopes(None, std::slice::from_ref(&layer))?;
+            let ladder = collect_secret_policy_ladder(None, std::slice::from_ref(&layer));
             let layer_dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&layer));
             let (merged, provenance) = crate::merge::merge_layers(&[layer])?;
             crate::mount_policy::set_collected_policy(Some(collected));
+            crate::merge::set_secret_policy_ladder(Some(ladder));
             crate::merge::set_provenance(Some(provenance));
             crate::merge::set_layer_dirs(Some(layer_dirs));
             validate_config(&merged)?;
@@ -484,6 +486,7 @@ pub fn load_config() -> Result<ConfigFile> {
             None
         };
     let mut collected = collect_policy_scopes(registry.as_ref(), &layers)?;
+    let mut ladder = collect_secret_policy_ladder(registry.as_ref(), &layers);
     if let Some((workload, layer)) = substituted_layer {
         // The policy collection must reflect the substitution: the home
         // collection above saw the PRE-substitution declaration, which
@@ -492,8 +495,10 @@ pub fn load_config() -> Result<ConfigFile> {
         // declaration is the whole workload declaration at the ref, so its
         // policy is authoritative for this workload.
         replace_workload_scopes_from_layer(&mut collected, &workload, &layer);
+        replace_workload_secret_rungs_from_layer(&mut ladder, &workload, &layer);
     }
     crate::mount_policy::set_collected_policy(Some(collected));
+    crate::merge::set_secret_policy_ladder(Some(ladder));
     crate::merge::set_provenance(Some(provenance));
     crate::merge::set_layer_dirs(Some(layer_dirs));
     validate_config(&merged)?;
@@ -727,6 +732,35 @@ fn replace_workload_scopes_from_layer(
     }
 }
 
+/// Re-collect ONE workload's secret-policy rungs from a substituted layer,
+/// replacing whatever the home-scoped [`collect_secret_policy_ladder`] pass
+/// recorded for it (the same inline-override consistency rule as
+/// [`replace_workload_scopes_from_layer`]): the substituted declaration IS
+/// the whole workload declaration at the ref, so its `[policy.secrets]` is
+/// authoritative — a ref declaration carrying NO fragment REMOVES the
+/// home-collected rungs for that workload. Capsule-only: layer-global
+/// `[policy.secrets]` rungs stay home-scoped.
+fn replace_workload_secret_rungs_from_layer(
+    ladder: &mut crate::merge::SecretPolicyLadder,
+    workload: &str,
+    layer: &crate::merge::Layer,
+) {
+    let rung = layer
+        .config
+        .workloads
+        .get(workload)
+        .and_then(|decl| decl.policy.secrets.clone())
+        .map(|fragment| (layer.name.clone(), fragment));
+    match rung {
+        Some(rung) => {
+            ladder.workloads.insert(workload.to_string(), vec![rung]);
+        }
+        None => {
+            ladder.workloads.remove(workload);
+        }
+    }
+}
+
 /// Collect policy fragments in the loader's actual order. This deliberately
 /// reads each layer independently; no policy field is passed through
 /// `merge_layers`.
@@ -809,6 +843,41 @@ fn collect_policy_scopes(
         }
     }
     Ok(collected)
+}
+
+/// Collect the secret violation-policy ladder rungs in the loader's actual
+/// order — the secrets edition of [`collect_policy_scopes`]: fragments are
+/// collected per scope, never merged (no policy field passes through
+/// `merge_layers`), and the resolution walks them authority-ascending.
+/// Rung 2 is the home registry's `[policy.secrets]`; rung 3 is each layer's
+/// `[policy.secrets]` in stack order; rung 4 is each workload's
+/// `[workloads.<name>.policy.secrets]` in stack order (a bare
+/// directory-mode capsule's top-level `[policy.secrets]` lands there via
+/// the workload wrapper). Origins are the home-registry scope label and the
+/// declaring layer's name — the labels the resolution provenance records.
+fn collect_secret_policy_ladder(
+    registry: Option<&Registry>,
+    layers: &[crate::merge::Layer],
+) -> crate::merge::SecretPolicyLadder {
+    let mut ladder = crate::merge::SecretPolicyLadder::default();
+    if let Some(fragment) = registry.and_then(|r| r.policy.secrets.clone()) {
+        ladder.home = Some(("home-registry".to_string(), fragment));
+    }
+    for layer in layers {
+        if let Some(fragment) = layer.config.policy.secrets.clone() {
+            ladder.layers.push((layer.name.clone(), fragment));
+        }
+        for (name, workload) in &layer.config.workloads {
+            if let Some(fragment) = workload.policy.secrets.clone() {
+                ladder
+                    .workloads
+                    .entry(name.clone())
+                    .or_default()
+                    .push((layer.name.clone(), fragment));
+            }
+        }
+    }
+    ladder
 }
 
 // ---------------------------------------------------------------------------
@@ -2752,6 +2821,108 @@ deny = ["mount"]
             crate::mount_policy::ScopeKind::MountEntry
         );
         assert_eq!(read_deny(&workload[1].fragment), "mount");
+        Ok(())
+    }
+
+    /// The secret-policy ladder collection (the secrets edition of
+    /// `collect_policy_scopes`) picks up the home-registry, layer, and
+    /// workload-capsule `[policy.secrets]` rungs in loader stack order with
+    /// the origin labels the resolution provenance records: "home-registry"
+    /// for rung 2, the declaring layer's name for rungs 3-4.
+    #[test]
+    fn secret_policy_ladder_collection_preserves_home_layer_workload_order() -> Result<()> {
+        let registry = crate::config::Registry {
+            policy: crate::config::PolicyConfig {
+                secrets: Some(crate::config::SecretsPolicyFragment {
+                    on_violation: Some(crate::config::SecretViolationPolicy::Block),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let lower = crate::merge::Layer::from_string(
+            "lower",
+            r#"
+schema_version = 1
+
+[policy.secrets]
+on_violation = "block-and-log"
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.policy.secrets]
+on_violation = "block-and-terminate"
+"#,
+        )?;
+        let higher = crate::merge::Layer::from_string(
+            "higher",
+            r#"
+schema_version = 1
+
+[policy.secrets]
+on_violation = "block"
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.pi.policy.secrets]
+on_violation = "block-and-log"
+"#,
+        )?;
+        let ladder = collect_secret_policy_ladder(Some(&registry), &[lower, higher]);
+
+        // Rung 2: home registry, fixed "home-registry" origin label.
+        let (home_origin, home_fragment) = ladder.home.expect("home rung collected");
+        assert_eq!(home_origin, "home-registry");
+        assert_eq!(
+            home_fragment.on_violation,
+            Some(crate::config::SecretViolationPolicy::Block)
+        );
+        assert!(!home_fragment.r#final);
+
+        // Rung 3: layer fragments in input stack order, layer-name origins.
+        assert_eq!(
+            ladder
+                .layers
+                .iter()
+                .map(|(origin, _)| origin.as_str())
+                .collect::<Vec<_>>(),
+            vec!["lower", "higher"],
+            "layer rungs keep loader stack order"
+        );
+        assert_eq!(
+            ladder.layers[0].1.on_violation,
+            Some(crate::config::SecretViolationPolicy::BlockAndLog)
+        );
+        assert_eq!(
+            ladder.layers[1].1.on_violation,
+            Some(crate::config::SecretViolationPolicy::Block)
+        );
+
+        // Rung 4: workload rungs keyed by workload name, stack order.
+        let pi_rungs = ladder.workloads.get("pi").expect("workload rungs collected");
+        assert_eq!(
+            pi_rungs
+                .iter()
+                .map(|(origin, _)| origin.as_str())
+                .collect::<Vec<_>>(),
+            vec!["lower", "higher"],
+            "workload rungs keep loader stack order"
+        );
+        assert_eq!(
+            pi_rungs[0].1.on_violation,
+            Some(crate::config::SecretViolationPolicy::BlockAndTerminate)
+        );
+        assert_eq!(
+            pi_rungs[1].1.on_violation,
+            Some(crate::config::SecretViolationPolicy::BlockAndLog)
+        );
         Ok(())
     }
 

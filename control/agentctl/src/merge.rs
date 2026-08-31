@@ -1,4 +1,4 @@
-use crate::config::{ConfigFile, SecretDefConfig, WorkloadConfig};
+use crate::config::{ConfigFile, SecretDefConfig, SecretsPolicyFragment, WorkloadConfig};
 use crate::policy;
 use crate::recipes::EgressRecipeRef;
 use anyhow::{Context, Result};
@@ -309,6 +309,50 @@ pub fn take_secret_provenance() -> Option<Provenance> {
 /// Clone the stored secret provenance without consuming it.
 pub fn get_secret_provenance() -> Option<Provenance> {
     SECRET_PROVENANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+// ---------------------------------------------------------------------------
+// Secret violation-policy ladder process-global storage
+// ---------------------------------------------------------------------------
+//
+// The collected `[policy.secrets]` rungs for the most recent config load,
+// mirroring the mount-policy COLLECTED store (crate::mount_policy):
+// fragments are COLLECTED per scope, never merged (no policy field passes
+// through merge_layers), and the resolution walks them authority-ascending.
+// Rung 2 (home registry) + rung 3 (config-repo layers, stack order) are
+// global; rung 4 (workload capsule) is keyed by workload name. Rung 1
+// (built-in passthrough) and rung 5 (merged per-secret entries) are not
+// collected — they are constants of the resolution. Same Mutex rationale
+// as the provenance stores above (tokio multi-thread task migration).
+
+/// The collected secret violation-policy ladder rungs (rungs 2-4). Each
+/// entry carries the ORIGIN label used in resolution provenance (the
+/// home-registry scope label, or the declaring layer's name).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SecretPolicyLadder {
+    /// Rung 2: the home registry's `[policy.secrets]` (operator scope).
+    pub home: Option<(String, SecretsPolicyFragment)>,
+    /// Rung 3: each layer's `[policy.secrets]` in loader stack order.
+    pub layers: Vec<(String, SecretsPolicyFragment)>,
+    /// Rung 4: workload capsule `[policy.secrets]` rungs per workload name,
+    /// in loader stack order.
+    pub workloads: HashMap<String, Vec<(String, SecretsPolicyFragment)>>,
+}
+
+static SECRET_POLICY_LADDER: std::sync::Mutex<Option<SecretPolicyLadder>> =
+    std::sync::Mutex::new(None);
+
+/// Store the collected secret violation-policy ladder for the most recent config load.
+pub fn set_secret_policy_ladder(ladder: Option<SecretPolicyLadder>) {
+    *SECRET_POLICY_LADDER.lock().unwrap_or_else(|e| e.into_inner()) = ladder;
+}
+
+/// Clone the stored secret violation-policy ladder without consuming it.
+pub fn get_secret_policy_ladder() -> Option<SecretPolicyLadder> {
+    SECRET_POLICY_LADDER
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()

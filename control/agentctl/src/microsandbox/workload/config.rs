@@ -1,4 +1,6 @@
-use super::secrets::{build_env_and_secret_env, build_secret_definitions};
+use super::secrets::{
+    apply_secret_policy_ladder, build_env_and_secret_env, build_secret_definitions,
+};
 use super::validate::resolve_mount_host_template;
 use super::{SandboxCommand, Workload};
 use crate::config::WorkloadConfig;
@@ -178,7 +180,11 @@ impl ConfigWorkload {
         dependent_instance_id: Option<&str>,
     ) -> Result<Self> {
         let config = crate::config::load_config()?;
-        let provenance = crate::merge::take_provenance();
+        // take_provenance is always Some immediately after load_config in
+        // production; unwrap_or_default covers degenerate paths (synthetic
+        // constructions without a load) and lets the secret violation-policy
+        // ladder resolution below always run against a real map.
+        let mut provenance = crate::merge::take_provenance().unwrap_or_default();
         let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
         crate::config::validate_config(&config)?;
         let workload = config
@@ -227,9 +233,9 @@ impl ConfigWorkload {
         // flake project root. Mounts and seed_files merge wholesale-replace,
         // so each field has exactly one declaring layer.
         let mount_content_root =
-            field_content_root(provenance.as_ref(), &layer_dirs, name, "mounts");
+            field_content_root(Some(&provenance), &layer_dirs, name, "mounts");
         let seed_content_root =
-            field_content_root(provenance.as_ref(), &layer_dirs, name, "seed_files");
+            field_content_root(Some(&provenance), &layer_dirs, name, "seed_files");
 
         // ADR 0030 Phase 2 T1: the workload's declaring config-repo namespace
         // (from provenance) — the registry-record namespace its instances
@@ -237,8 +243,7 @@ impl ConfigWorkload {
         // is passed explicitly (take_provenance drained it above; a second
         // read would return None).
         let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
-        let namespace =
-            crate::commands::deps::namespace_for(provenance.as_ref(), &layer_dirs, name);
+        let namespace = crate::commands::deps::namespace_for(Some(&provenance), &layer_dirs, name);
 
         // ADR 0026(d): a declared depends_on map resolves EVERY declared dep
         // at plan time — no flag. A required-but-not-running dep refuses
@@ -255,7 +260,8 @@ impl ConfigWorkload {
             dependent_instance_id,
         )?;
 
-        let secrets = build_secret_definitions(&config)?;
+        let mut secrets = build_secret_definitions(&config)?;
+        apply_secret_policy_ladder(&mut secrets, &config, name, &mut provenance);
         let (env, secret_env) = build_env_and_secret_env(&workload, &secrets)?;
 
         Ok(Self {
@@ -263,7 +269,7 @@ impl ConfigWorkload {
             workload,
             env,
             secret_env,
-            provenance,
+            provenance: Some(provenance),
             mount_content_root,
             seed_content_root,
             depends_resolved,

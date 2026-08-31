@@ -33,6 +33,19 @@ deny = [
   "**/node_modules/.npmrc",
 ]
 
+# Secret violation-policy ladder (secrets edition of the mount-policy
+# hierarchy, docs/mount-policy/03-hierarchy-and-precedence.md): the effective
+# per-secret on_violation is resolved authority-ascending — built-in
+# passthrough < home registry config.toml [policy.secrets] (operator) <
+# this layer's [policy.secrets] < [workloads.<name>.policy.secrets] <
+# per-secret [secrets.<NAME>] on_violation. `final = true` freezes the value
+# so every lower rung (including per-secret entries) cannot override it.
+# Like [policy.mounts.read] above, this ships the NON-final default: an
+# active final here would freeze passthrough against every lower rung.
+[policy.secrets]
+on_violation = "passthrough"  # the built-in default, made explicit; also: block, block-and-log, block-and-terminate
+# final = true  # terminal freeze — lower rungs could not override
+
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
 required = true

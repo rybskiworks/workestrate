@@ -1362,6 +1362,40 @@ pub enum SecretViolationPolicy {
     BlockAndTerminate,
 }
 
+/// One rung of the secret violation-policy ladder (`[policy.secrets]`):
+/// the fragment declared at the home-registry, config-repo-layer, or
+/// workload-capsule rung. Resolution walks the rungs authority-ascending —
+/// built-in passthrough, then home registry (`Registry.policy.secrets` in
+/// `<home>/config.toml`, the operator scope), then each config-repo layer's
+/// `[policy.secrets]` in stack order, then the workload capsule's
+/// `[workloads.<name>.policy.secrets]` — and the per-secret
+/// `[secrets.<NAME>] on_violation` entry decides last unless a higher rung
+/// is final. This mirrors the mount-policy hierarchy
+/// (docs/mount-policy/03-hierarchy-and-precedence.md): later = more
+/// specific wins, and `final = true` is a terminal freeze that stops every
+/// lower rung (including per-secret entries) from overriding the value
+/// resolved at the freezing rung. DEVIATION from mount-policy vocabulary:
+/// `final` may appear WITHOUT `on_violation` (mount-policy rules always
+/// carry an action) — a bare final freezes whatever the higher rungs
+/// resolved so far. There is no frozen-out explain trace (mount-policy's
+/// `frozen_out`/`frozen_by`): the resolution provenance records only the
+/// deciding rung.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecretsPolicyFragment {
+    /// Default violation policy this rung declares for secrets (same
+    /// kebab-case vocabulary as the per-secret field). Absent = this rung
+    /// declares no value (it may still freeze with `final`).
+    #[serde(default)]
+    pub on_violation: Option<SecretViolationPolicy>,
+    /// Terminal freeze (mount-policy `final` vocabulary): when true, every
+    /// lower rung — config-repo layers, workload capsules, per-secret
+    /// entries — is frozen out and cannot override the value resolved at
+    /// this rung. Defaults to false.
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+}
+
 /// Definition of one named secret (`secrets.<name>` in workestrate.toml) —
 /// the final unified model (spec 16): a pure catalog of the credential's
 /// intrinsic properties. `env_var` is the host environment variable the
@@ -1370,11 +1404,15 @@ pub enum SecretViolationPolicy {
 /// (omitted → deny-all; valid regardless of binding mode); `required` makes
 /// a missing value a hard error; `placeholder` is a known-bad value to
 /// reject; `on_violation` selects the egress violation policy applied when
-/// the placeholder reaches a non-allowed host (absent → passthrough,
-/// post-merge). Exposure mode is NOT a def property — it lives at the binding
-/// site (`EnvSecretRef.bound`). The retired v1/v2 keys (`hosts`, `delivery`,
-/// `source`, `exposed_as`, `description`, stray `bound`) hard-error at parse
-/// via `deny_unknown_fields`.
+/// the placeholder reaches a non-allowed host — the MOST SPECIFIC rung of
+/// the layered resolution (see [`SecretsPolicyFragment`]; absent → the
+/// ladder decides, resolving to passthrough when nothing higher declares).
+/// `final` is NOT available per-secret: nothing sits below a per-secret
+/// entry, so there is nothing to freeze against. Exposure mode is NOT a def
+/// property — it lives at the binding site (`EnvSecretRef.bound`). The
+/// retired v1/v2 keys (`hosts`, `delivery`, `source`, `exposed_as`,
+/// `description`, stray `bound`) hard-error at parse via
+/// `deny_unknown_fields`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -1384,6 +1422,13 @@ pub struct SecretDefConfig {
     pub allowed_hosts: Option<Vec<String>>,
     pub required: Option<bool>,
     pub placeholder: Option<String>,
+    /// Per-secret violation-policy rung (ladder rung 5, the most specific).
+    /// Absent -> the ladder decides (built-in passthrough when nothing
+    /// higher declares). NOTE: `final` is deliberately NOT available here —
+    /// nothing sits below a per-secret entry, so there is nothing to freeze
+    /// against; `deny_unknown_fields` rejects it.
+    #[serde(default)]
+    pub on_violation: Option<SecretViolationPolicy>,
 }
 
 /// Top-level schema root of a `workestrate.toml` layer: `schema_version`
@@ -1412,6 +1457,15 @@ pub struct ConfigFile {
 pub struct PolicyConfig {
     #[serde(default)]
     pub mounts: Option<MountsFragment>,
+    /// Secret violation-policy ladder rung (`[policy.secrets]`). The SAME
+    /// sub-shape is valid at all three policy rungs: the home registry
+    /// (`Registry.policy`, operator scope), a workestrate.toml layer
+    /// (config-repo-layer rung), and a workload declaration
+    /// (`[workloads.<name>.policy]` — where a bare directory-mode capsule's
+    /// top-level `[policy.secrets]` lands). Like `mounts`, this fragment is
+    /// COLLECTED per scope, never merged (see loading.rs).
+    #[serde(default)]
+    pub secrets: Option<SecretsPolicyFragment>,
 }
 
 // ---------------------------------------------------------------------------

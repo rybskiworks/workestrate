@@ -1,8 +1,48 @@
-use crate::config::{Bound, ConfigFile, EnvBinding, SecretViolationPolicy, WorkloadConfig};
+use crate::config::{
+    Bound, ConfigFile, EnvBinding, SecretViolationPolicy, SecretsPolicyFragment, WorkloadConfig,
+};
+use crate::merge::Provenance;
 use crate::microsandbox::plan::{EnvVar, HostBoundSecret};
 use crate::microsandbox::secrets::SecretDefinition;
 use anyhow::Result;
 use std::collections::HashMap;
+
+/// Walk the secret violation-policy ladder for ONE secret and return
+/// `(effective policy, deciding-rung origin)`.
+///
+/// `rungs` are the collected rungs 2-4 in authority-ASCENDING order (home
+/// registry first, then config-repo layers in stack order, then the
+/// workload capsule's rungs). Each rung's `on_violation` (when present)
+/// becomes the effective value; `final = true` is a terminal freeze — the
+/// walk stops and every lower rung, including the per-secret entry, is
+/// frozen out (mount-policy vocabulary,
+/// docs/mount-policy/03-hierarchy-and-precedence.md). A final rung without
+/// `on_violation` freezes the value resolved so far (deviation documented
+/// on [`SecretsPolicyFragment`]). Rung 5 (the merged per-secret
+/// `on_violation`) decides last unless frozen out; absent everywhere, the
+/// built-in default (passthrough) stands.
+pub(crate) fn resolve_on_violation(
+    rungs: &[(&str, &SecretsPolicyFragment)],
+    per_secret: Option<SecretViolationPolicy>,
+    per_secret_origin: Option<&str>,
+) -> (SecretViolationPolicy, String) {
+    let mut effective = SecretViolationPolicy::Passthrough;
+    let mut origin = "built-in".to_string();
+    for (label, fragment) in rungs {
+        if let Some(value) = fragment.on_violation {
+            effective = value;
+            origin = (*label).to_string();
+        }
+        if fragment.r#final {
+            return (effective, origin);
+        }
+    }
+    if let Some(value) = per_secret {
+        effective = value;
+        origin = per_secret_origin.unwrap_or("secret-entry").to_string();
+    }
+    (effective, origin)
+}
 
 /// Resolve every merged `[secrets.<NAME>]` def into a [`SecretDefinition`].
 ///
@@ -10,7 +50,10 @@ use std::collections::HashMap;
 /// defaults-after-merge): `env_var` absent defaults `source_env_var` to the
 /// secret ID; `allowed_hosts` absent defaults to deny-all (an explicit zero
 /// allowed hosts); `required` defaults to true; `on_violation` absent
-/// defaults to passthrough.
+/// defaults to passthrough. The `on_violation` applied here is rung 5 of
+/// the secret violation-policy ladder (the per-secret entry, the most
+/// specific rung) — [`apply_secret_policy_ladder`] resolves the FULL ladder
+/// (collected rungs 2-4 above it) afterwards, overwriting these values.
 pub(crate) fn build_secret_definitions(
     config: &ConfigFile,
 ) -> Result<HashMap<String, SecretDefinition>> {
@@ -28,6 +71,50 @@ pub(crate) fn build_secret_definitions(
         );
     }
     Ok(resolved)
+}
+
+/// Overwrite each secret's violation policy with the LADDER-RESOLVED value
+/// and record the deciding rung in the merge provenance (key
+/// `secrets.<NAME>.on_violation.resolved`). Called from
+/// `ConfigWorkload::new` right after [`build_secret_definitions`]: the
+/// definitions built from the merged config carry rung 5 (the per-secret
+/// entry, defaulting to passthrough); this pass walks the collected rungs
+/// 2-4 (home registry, config-repo layers, this workload's capsule rungs —
+/// from the process-global stored at load time) above them. An empty or
+/// absent ladder degrades to the pre-ladder behavior (per-secret entry or
+/// built-in passthrough), so synthetic/test paths without a load stay
+/// correct.
+pub(crate) fn apply_secret_policy_ladder(
+    secrets: &mut HashMap<String, SecretDefinition>,
+    config: &ConfigFile,
+    workload_name: &str,
+    provenance: &mut Provenance,
+) {
+    let ladder = crate::merge::get_secret_policy_ladder().unwrap_or_default();
+    let mut rungs: Vec<(String, SecretsPolicyFragment)> = Vec::new();
+    if let Some((origin, fragment)) = &ladder.home {
+        rungs.push((origin.clone(), fragment.clone()));
+    }
+    for (origin, fragment) in &ladder.layers {
+        rungs.push((origin.clone(), fragment.clone()));
+    }
+    if let Some(workload_rungs) = ladder.workloads.get(workload_name) {
+        for (origin, fragment) in workload_rungs {
+            rungs.push((origin.clone(), fragment.clone()));
+        }
+    }
+    for (name, def) in secrets.iter_mut() {
+        let per_secret = config.secrets.get(name).and_then(|s| s.on_violation);
+        let per_secret_origin = provenance
+            .get(&format!("secrets.{name}.on_violation"))
+            .cloned();
+        let rung_refs: Vec<(&str, &SecretsPolicyFragment)> =
+            rungs.iter().map(|(o, f)| (o.as_str(), f)).collect();
+        let (policy, origin) =
+            resolve_on_violation(&rung_refs, per_secret, per_secret_origin.as_deref());
+        def.on_violation = policy;
+        provenance.insert(format!("secrets.{name}.on_violation.resolved"), origin);
+    }
 }
 
 /// Single ordered pass over the workload's env bindings (spec 16 §4):
@@ -386,5 +473,372 @@ mod tests {
     fn secret_provenance_falls_back_to_core_when_unrecorded() {
         let src = secret_line_source("SOME_KEY", "pi", None, None, "core");
         assert_eq!(src, "core");
+    }
+
+    // ---- secret violation-policy ladder: resolve_on_violation ----
+
+    /// Each authority-ascending rung overrides the previous one when no
+    /// rung is final, and the per-secret entry (rung 5) — the most specific
+    /// — decides last. Dropping later rungs exposes the intermediate
+    /// resolutions (home only → "home-registry"; home+layer → the layer's
+    /// origin).
+    #[test]
+    fn ladder_each_rung_overrides_the_previous() {
+        let home = ("home-registry", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::Block),
+            r#final: false,
+        });
+        let layer = ("team", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndLog),
+            r#final: false,
+        });
+        let workload = ("personal", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+            r#final: false,
+        });
+
+        // All four rungs present, nothing final: per-secret wins.
+        let rungs = vec![
+            (home.0, &home.1),
+            (layer.0, &layer.1),
+            (workload.0, &workload.1),
+        ];
+        let (policy, origin) = resolve_on_violation(
+            &rungs,
+            Some(SecretViolationPolicy::Passthrough),
+            Some("personal#secrets.toml"),
+        );
+        assert_eq!(policy, SecretViolationPolicy::Passthrough);
+        assert_eq!(origin, "personal#secrets.toml");
+
+        // Home rung only (no per-secret entry): the home rung decides.
+        let home_only = vec![(home.0, &home.1)];
+        let (policy, origin) = resolve_on_violation(&home_only, None, None);
+        assert_eq!(policy, SecretViolationPolicy::Block);
+        assert_eq!(origin, "home-registry");
+
+        // Home + layer (no per-secret entry): the layer's value and origin win.
+        let home_layer = vec![(home.0, &home.1), (layer.0, &layer.1)];
+        let (policy, origin) = resolve_on_violation(&home_layer, None, None);
+        assert_eq!(policy, SecretViolationPolicy::BlockAndLog);
+        assert_eq!(origin, "team");
+    }
+
+    /// Nothing declared anywhere — no rungs, no per-secret entry — resolves
+    /// to the built-in default (passthrough, origin "built-in").
+    #[test]
+    fn ladder_absent_everywhere_resolves_passthrough() {
+        let (policy, origin) = resolve_on_violation(&[], None, None);
+        assert_eq!(policy, SecretViolationPolicy::Passthrough);
+        assert_eq!(origin, "built-in");
+    }
+
+    /// A final home rung freezes the walk: config-repo layers, the workload
+    /// capsule, and the per-secret entry are all frozen out.
+    #[test]
+    fn home_final_beats_config_workload_and_per_secret() {
+        let home = ("home-registry", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::Block),
+            r#final: true,
+        });
+        let layer = ("team", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndLog),
+            r#final: false,
+        });
+        let workload = ("personal", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+            r#final: false,
+        });
+        let rungs = vec![
+            (home.0, &home.1),
+            (layer.0, &layer.1),
+            (workload.0, &workload.1),
+        ];
+        let (policy, origin) = resolve_on_violation(
+            &rungs,
+            Some(SecretViolationPolicy::BlockAndTerminate),
+            Some("personal#secrets.toml"),
+        );
+        assert_eq!(policy, SecretViolationPolicy::Block);
+        assert_eq!(origin, "home-registry");
+    }
+
+    /// A final config-repo-layer rung beats the workload capsule and the
+    /// per-secret entry, but only after the non-final home rung applied.
+    #[test]
+    fn config_final_beats_workload_and_per_secret() {
+        let home = ("home-registry", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::Block),
+            r#final: false,
+        });
+        let layer = ("team", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndLog),
+            r#final: true,
+        });
+        let workload = ("personal", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+            r#final: false,
+        });
+        let rungs = vec![
+            (home.0, &home.1),
+            (layer.0, &layer.1),
+            (workload.0, &workload.1),
+        ];
+        let (policy, origin) = resolve_on_violation(
+            &rungs,
+            Some(SecretViolationPolicy::Passthrough),
+            Some("personal#secrets.toml"),
+        );
+        assert_eq!(policy, SecretViolationPolicy::BlockAndLog);
+        assert_eq!(origin, "team");
+    }
+
+    /// A final workload-capsule rung beats the per-secret entry (and the
+    /// non-final home/layer rungs applied before it).
+    #[test]
+    fn workload_final_beats_per_secret() {
+        let home = ("home-registry", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::Block),
+            r#final: false,
+        });
+        let layer = ("team", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndLog),
+            r#final: false,
+        });
+        let workload = ("personal", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+            r#final: true,
+        });
+        let rungs = vec![
+            (home.0, &home.1),
+            (layer.0, &layer.1),
+            (workload.0, &workload.1),
+        ];
+        let (policy, origin) = resolve_on_violation(
+            &rungs,
+            Some(SecretViolationPolicy::Passthrough),
+            Some("personal#secrets.toml"),
+        );
+        assert_eq!(policy, SecretViolationPolicy::BlockAndTerminate);
+        assert_eq!(origin, "personal");
+    }
+
+    /// A final rung WITHOUT `on_violation` (the documented deviation from
+    /// mount-policy, where every rule carries an action) freezes the value
+    /// resolved SO FAR — value AND origin stay with the rung that set them.
+    #[test]
+    fn final_without_value_freezes_the_resolved_value() {
+        let home = ("home-registry", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::Block),
+            r#final: false,
+        });
+        let layer = ("team", SecretsPolicyFragment {
+            on_violation: None,
+            r#final: true,
+        });
+        let rungs = vec![(home.0, &home.1), (layer.0, &layer.1)];
+        let (policy, origin) = resolve_on_violation(
+            &rungs,
+            Some(SecretViolationPolicy::BlockAndTerminate),
+            Some("personal#secrets.toml"),
+        );
+        assert_eq!(policy, SecretViolationPolicy::Block);
+        assert_eq!(origin, "home-registry", "the freeze keeps the home origin");
+    }
+
+    /// With nothing above final, the per-secret entry wins; its origin is
+    /// the merge-provenance layer name, falling back to "secret-entry"
+    /// when no provenance was recorded.
+    #[test]
+    fn per_secret_wins_when_nothing_above_is_final() {
+        let home = ("home-registry", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+            r#final: false,
+        });
+        let layer = ("team", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndLog),
+            r#final: false,
+        });
+        let workload = ("personal", SecretsPolicyFragment {
+            on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
+            r#final: false,
+        });
+        let rungs = vec![
+            (home.0, &home.1),
+            (layer.0, &layer.1),
+            (workload.0, &workload.1),
+        ];
+        let (policy, origin) = resolve_on_violation(
+            &rungs,
+            Some(SecretViolationPolicy::Block),
+            Some("personal#secrets.toml"),
+        );
+        assert_eq!(policy, SecretViolationPolicy::Block);
+        assert_eq!(origin, "personal#secrets.toml");
+
+        let (policy, origin) =
+            resolve_on_violation(&rungs, Some(SecretViolationPolicy::Block), None);
+        assert_eq!(policy, SecretViolationPolicy::Block);
+        assert_eq!(origin, "secret-entry");
+    }
+
+    // ---- secret violation-policy ladder: schema surface ----
+
+    /// `final` is NOT available on per-secret entries (nothing sits below
+    /// them): `deny_unknown_fields` rejects the key at layer parse.
+    #[test]
+    fn per_secret_final_key_is_rejected() {
+        let err = crate::merge::Layer::from_string(
+            "base",
+            &defs_toml("[secrets.GITHUB_TOKEN]\non_violation = \"block\"\nfinal = true\n", ""),
+        );
+        assert!(err.is_err(), "per-secret `final` must fail the layer parse");
+    }
+
+    /// `[policy.secrets]` parses with the `final` rename, and an unknown
+    /// field inside the fragment is a parse error (deny_unknown_fields).
+    #[test]
+    fn policy_secrets_fragment_parses_with_final() {
+        let layer = crate::merge::Layer::from_string(
+            "base",
+            r#"
+schema_version = 1
+
+[policy.secrets]
+on_violation = "block-and-log"
+final = true
+"#,
+        )
+        .expect("the fragment parses");
+        let fragment = layer.config.policy.secrets.expect("secrets rung collected");
+        assert_eq!(
+            fragment.on_violation,
+            Some(SecretViolationPolicy::BlockAndLog)
+        );
+        assert!(fragment.r#final);
+
+        let err = crate::merge::Layer::from_string(
+            "bad-policy",
+            "schema_version = 1\n[policy.secrets]\ntypo = true\n",
+        )
+        .err()
+        .expect("unknown field must fail the layer parse")
+        .to_string();
+        assert!(
+            err.contains("unknown field"),
+            "error must name the unknown field: {err}"
+        );
+    }
+
+    // ---- secret violation-policy ladder: apply_secret_policy_ladder ----
+
+    /// End-to-end-ish: the home rung's `final` freezes out the per-secret
+    /// `block-and-terminate`, the definition carries the home value, and
+    /// the deciding rung is recorded in the merge provenance under
+    /// `secrets.<NAME>.on_violation.resolved`.
+    ///
+    /// Isolation: the ladder store is process-global, so this test holds
+    /// [`crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK`] (the
+    /// same serialization the direct provenance-store mutators use) AND
+    /// sets exactly the ladder it needs at the start — no dependence on
+    /// test execution order.
+    #[test]
+    fn apply_secret_policy_ladder_resolves_and_records_provenance() -> Result<()> {
+        let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
+            .lock()
+            .unwrap();
+        crate::merge::set_secret_policy_ladder(Some(crate::merge::SecretPolicyLadder {
+            home: Some((
+                "home-registry".to_string(),
+                SecretsPolicyFragment {
+                    on_violation: Some(SecretViolationPolicy::Block),
+                    r#final: true,
+                },
+            )),
+            ..Default::default()
+        }));
+
+        let layer = crate::merge::Layer::from_string(
+            "base",
+            &defs_toml("[secrets.GITHUB_TOKEN]\non_violation = \"block-and-terminate\"\n", ""),
+        )?;
+        let (config, _) = crate::merge::merge_layers(&[layer])?;
+        let mut secrets = build_secret_definitions(&config)?;
+        let mut provenance = crate::merge::Provenance::new();
+        provenance.insert(
+            "secrets.GITHUB_TOKEN.on_violation".to_string(),
+            "personal#secrets.toml".to_string(),
+        );
+
+        apply_secret_policy_ladder(&mut secrets, &config, "pi", &mut provenance);
+
+        assert_eq!(
+            secrets["GITHUB_TOKEN"].on_violation,
+            SecretViolationPolicy::Block,
+            "the home final froze out the per-secret block-and-terminate"
+        );
+        assert_eq!(
+            provenance
+                .get("secrets.GITHUB_TOKEN.on_violation.resolved")
+                .map(|s| s.as_str()),
+            Some("home-registry"),
+            "the deciding rung is recorded in the provenance"
+        );
+
+        crate::merge::set_secret_policy_ladder(None);
+        Ok(())
+    }
+
+    /// No stored ladder → the pre-ladder behavior: the per-secret entry
+    /// (with its merge-provenance layer origin) stands, and a secret with
+    /// no per-secret entry resolves to the built-in passthrough.
+    ///
+    /// Isolation: same process-global discipline as
+    /// `apply_secret_policy_ladder_resolves_and_records_provenance` — the
+    /// storage lock plus an explicit `None` ladder at the start.
+    #[test]
+    fn apply_secret_policy_ladder_without_ladder_keeps_merge_result() -> Result<()> {
+        let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
+            .lock()
+            .unwrap();
+        crate::merge::set_secret_policy_ladder(None);
+
+        let layer = crate::merge::Layer::from_string(
+            "base",
+            &defs_toml(
+                "[secrets.GITHUB_TOKEN]\non_violation = \"block-and-log\"\n\n[secrets.OTHER]\n",
+                "",
+            ),
+        )?;
+        let (config, mut provenance) = crate::merge::merge_layers(&[layer])?;
+        let mut secrets = build_secret_definitions(&config)?;
+
+        apply_secret_policy_ladder(&mut secrets, &config, "pi", &mut provenance);
+
+        assert_eq!(
+            secrets["GITHUB_TOKEN"].on_violation,
+            SecretViolationPolicy::BlockAndLog,
+            "the per-secret entry stands when no rungs are collected"
+        );
+        assert_eq!(
+            provenance
+                .get("secrets.GITHUB_TOKEN.on_violation.resolved")
+                .map(|s| s.as_str()),
+            Some("base"),
+            "the per-secret layer origin comes from the merge provenance key"
+        );
+        assert_eq!(
+            secrets["OTHER"].on_violation,
+            SecretViolationPolicy::Passthrough,
+            "no per-secret entry resolves to the built-in default"
+        );
+        assert_eq!(
+            provenance
+                .get("secrets.OTHER.on_violation.resolved")
+                .map(|s| s.as_str()),
+            Some("built-in"),
+        );
+
+        Ok(())
     }
 }

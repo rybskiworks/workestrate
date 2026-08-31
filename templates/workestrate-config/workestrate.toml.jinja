@@ -37,6 +37,19 @@ allowed_hosts = ["github.com", "api.github.com"]
 required = false
 # on_violation = "passthrough"   # default; also: block, block-and-log, block-and-terminate
 
+# ─── Secret violation policy (optional) ────────────────────────────────────
+# [policy.secrets] sets a DEFAULT on_violation for every secret, resolved
+# through a ladder (later = more specific wins):
+#   built-in passthrough
+#     < home registry config.toml [policy.secrets]   (operator scope)
+#     < this file's [policy.secrets]
+#     < [workloads.<name>.policy.secrets]
+#     < per-secret [secrets.<NAME>] on_violation
+# `final = true` freezes the value so lower rungs cannot override it.
+# [policy.secrets]
+# on_violation = "block-and-log"
+# final = true
+
 # ─── Workload definitions ──────────────────────────────────────────────────
 # Add [workloads.<name>] tables here. See:
 # https://github.com/georgrybski/ai-workbench/blob/main/docs/migration/20-target-system-spec.md
