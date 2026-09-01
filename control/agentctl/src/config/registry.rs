@@ -543,7 +543,7 @@ pub fn resolve_active_context() -> Result<ActiveContext> {
             return Ok(ActiveContext {
                 name: None,
                 layers: vec![],
-            })
+            });
         }
     };
     let available = || {

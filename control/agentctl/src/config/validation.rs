@@ -250,13 +250,17 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         match port {
             InstancePort::Strict(n) => {
                 if *n == 0 {
-                    anyhow::bail!("workload '{workload_name}' instance.port: strict port must be in 1..=65535 (got 0)");
+                    anyhow::bail!(
+                        "workload '{workload_name}' instance.port: strict port must be in 1..=65535 (got 0)"
+                    );
                 }
             }
             InstancePort::Auto => {}
             InstancePort::Preferred(p) => {
                 if p.preferred == 0 {
-                    anyhow::bail!("workload '{workload_name}' instance.port: preferred must be in 1..=65535 (got 0)");
+                    anyhow::bail!(
+                        "workload '{workload_name}' instance.port: preferred must be in 1..=65535 (got 0)"
+                    );
                 }
                 let Some(chain) = &p.on_occupied else {
                     continue;
@@ -267,22 +271,38 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                         continue;
                     };
                     match (&increment.limit, &increment.range) {
-                        (Some(_), Some(_)) => anyhow::bail!("workload '{workload_name}' instance.port: increment must set exactly one of limit or range"),
-                        (None, None) => anyhow::bail!("workload '{workload_name}' instance.port: increment must set exactly one of limit or range"),
+                        (Some(_), Some(_)) => anyhow::bail!(
+                            "workload '{workload_name}' instance.port: increment must set exactly one of limit or range"
+                        ),
+                        (None, None) => anyhow::bail!(
+                            "workload '{workload_name}' instance.port: increment must set exactly one of limit or range"
+                        ),
                         (Some(limit), None) => {
                             if *limit == 0 {
-                                anyhow::bail!("workload '{workload_name}' instance.port: increment limit must be >= 1");
+                                anyhow::bail!(
+                                    "workload '{workload_name}' instance.port: increment limit must be >= 1"
+                                );
                             }
                             if u32::from(p.preferred) + u32::from(*limit) > 65535 {
-                                anyhow::bail!("workload '{workload_name}' instance.port: preferred {} + limit {} exceeds 65535", p.preferred, limit);
+                                anyhow::bail!(
+                                    "workload '{workload_name}' instance.port: preferred {} + limit {} exceeds 65535",
+                                    p.preferred,
+                                    limit
+                                );
                             }
                         }
                         (None, Some((start, end))) => {
                             if *start == 0 || *end == 0 {
-                                anyhow::bail!("workload '{workload_name}' instance.port: increment range bounds must be in 1..=65535");
+                                anyhow::bail!(
+                                    "workload '{workload_name}' instance.port: increment range bounds must be in 1..=65535"
+                                );
                             }
                             if start > end {
-                                anyhow::bail!("workload '{workload_name}' instance.port: increment range START {} must be <= END {}", start, end);
+                                anyhow::bail!(
+                                    "workload '{workload_name}' instance.port: increment range START {} must be <= END {}",
+                                    start,
+                                    end
+                                );
                             }
                         }
                     }

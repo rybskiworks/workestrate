@@ -13,7 +13,8 @@
 # whole-tree copies); a plain temp dir keeps the e2e hermetic.
 {
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/a799d3e3886da994fa307f817a6bc705ae538eeb";
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};

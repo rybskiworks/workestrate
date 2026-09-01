@@ -270,7 +270,9 @@ fn load_registry_for_dir_resolution() -> Option<Registry> {
     match crate::config::load_registry() {
         Ok(registry) => registry,
         Err(e) => {
-            eprintln!("WARNING: corrupt registry ({e:#}); ignoring it and falling back to the default state/store directory. Fix or remove the registry file, or run 'workestrate config list' to diagnose.");
+            eprintln!(
+                "WARNING: corrupt registry ({e:#}); ignoring it and falling back to the default state/store directory. Fix or remove the registry file, or run 'workestrate config list' to diagnose."
+            );
             None
         }
     }

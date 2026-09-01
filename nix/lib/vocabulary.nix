@@ -2,19 +2,18 @@
 # Config declares package names as strings; this module maps them to pkgs attrs.
 # The set of allowed names is defined in policy.rs ALLOWED_PACKAGES.
 { pkgs }:
-rec
-{
+rec {
   # String name → nixpkgs derivation
   packages = {
-    cacert = pkgs.cacert;
-    busybox = pkgs.busybox;
+    inherit (pkgs) cacert;
+    inherit (pkgs) busybox;
     # bash — needed by prime's IPython `%%bash` cells (IPython's %%bash magic
     # spawns `bash` by name; busybox only provides `sh`). The coding-agent's
     # bash tool also prefers /bin/bash. Added 2026-08-13 (handover §5n).
-    bash = pkgs.bash;
+    inherit (pkgs) bash;
     fakeNss = pkgs.dockerTools.fakeNss;
-    nodejs_24 = pkgs.nodejs_24;
-    nmap = pkgs.nmap;
+    inherit (pkgs) nodejs_24;
+    inherit (pkgs) nmap;
     dnsutils = pkgs.bind.dnsutils;
     # prime-agent kernel env. The pinned nixpkgs (rev a799d3e) cannot build a
     # python311 ipykernel env (sphinx-9.1.0 dropped python3.11 support; even
@@ -22,9 +21,9 @@ rec
     # python312 env. [HOST-VERIFY] prime accepts a 3.12 kernel (ipykernel is
     # version-agnostic in practice; prime's docs say 3.11).
     python311_kernel = pkgs.python312.withPackages (ps: [ ps.ipykernel ]);
-    ripgrep = pkgs.ripgrep;
-    fd = pkgs.fd;
-    gnutar = pkgs.gnutar;
+    inherit (pkgs) ripgrep;
+    inherit (pkgs) fd;
+    inherit (pkgs) gnutar;
   };
 
   # Named shell snippets for extraCommands (closed vocabulary)
@@ -52,7 +51,8 @@ rec
   # as shell at image build time). builtins.base64Of would also close
   # this hole but is not available in Nix 2.35.1; the store-path
   # approach is equivalently bullet-proof and adds no runtime dep.
-  bakedFileToShell = { path, content }:
+  bakedFileToShell =
+    { path, content }:
     assert builtins.isString path;
     assert builtins.substring 0 1 path != "/";
     # Path traversal guard: reject any path containing a ".." component.
@@ -61,21 +61,21 @@ rec
     # guard never fired. C1 fix: use explicit `== null` so the assert
     # is actually exercised.)
     assert builtins.match ".*\\.\\..*" path == null;
-    let contentFile = builtins.toFile "baked-file-content" content; in
+    let
+      contentFile = builtins.toFile "baked-file-content" content;
+    in
     ''
       mkdir -p $(dirname ${path})
       cp ${contentFile} ${path}
     '';
 
   # Resolve a list of package name strings to derivations.
-  resolvePackages = names:
-    builtins.map (n: builtins.getAttr n packages) names;
+  resolvePackages = names: builtins.map (n: builtins.getAttr n packages) names;
 
   # Resolve a list of feature name strings to shell text.
-  resolveFeatures = names:
-    builtins.concatStringsSep "\n" (builtins.map (n: builtins.getAttr n features) names);
+  resolveFeatures =
+    names: builtins.concatStringsSep "\n" (builtins.map (n: builtins.getAttr n features) names);
 
   # Resolve a list of baked_file attrs to shell text.
-  resolveBakedFiles = files:
-    builtins.concatStringsSep "\n" (builtins.map bakedFileToShell files);
+  resolveBakedFiles = files: builtins.concatStringsSep "\n" (builtins.map bakedFileToShell files);
 }

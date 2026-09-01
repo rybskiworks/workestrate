@@ -25,15 +25,24 @@
 # layout consumer is introduced later, re-add an explicit
 # `installLayout ? "app"` param AND branch on it in installPhase — do not
 # restore the no-op.
-{ pkgs, buildNpmPackage, nodejs_24, autoPatchelfHook, stdenv, libcap_ng, lib }:
+{
+  pkgs,
+  buildNpmPackage,
+  nodejs_24,
+  autoPatchelfHook,
+  stdenv,
+  libcap_ng,
+  lib,
+}:
 
-{ src
-, npmDepsHash
-, nodeVersion ? "nodejs_24"   # config string → resolved by caller
-, dontNpmBuild ? false        # B3: skip default `npm run build` (pi root script fails offline)
-, buildPhase ? null           # B3: custom build phase (pi's 4-workspace order)
-, installPhase ? null         # B3: custom install phase (pi's monorepo layout)
-, ...
+{
+  src,
+  npmDepsHash,
+  nodeVersion ? "nodejs_24", # config string → resolved by caller
+  dontNpmBuild ? false, # B3: skip default `npm run build` (pi root script fails offline)
+  buildPhase ? null, # B3: custom build phase (pi's 4-workspace order)
+  installPhase ? null, # B3: custom install phase (pi's monorepo layout)
+  ...
 }:
 let
   # Default app-style install: reproduce the runtime tree at $out so that
@@ -52,36 +61,43 @@ let
     runHook postInstall
   '';
 in
-buildNpmPackage ({
-  pname = src.pname or "npm-build";
-  version = src.version or "0.1.0";
+buildNpmPackage (
+  {
+    pname = src.pname or "npm-build";
+    version = src.version or "0.1.0";
 
-  inherit src npmDepsHash;
+    inherit src npmDepsHash;
 
-  # Skip lifecycle scripts (husky prepare, canvas node-gyp). Defensive parity
-  # with pi.nix / tempest.nix.
-  npmFlags = [ "--ignore-scripts" ];
+    # Skip lifecycle scripts (husky prepare, canvas node-gyp). Defensive parity
+    # with pi.nix / tempest.nix.
+    npmFlags = [ "--ignore-scripts" ];
 
-  nodejs = nodejs_24;
+    nodejs = nodejs_24;
 
-  # tsgo/esbuild ship prebuilt ELF binaries; autoPatchelfHook patches their
-  # interpreter / RPATH. stdenv.cc provides libstdc++. libcap_ng is needed by
-  # gondolin's libkrun runner at runtime. pkgs.musl provides
-  # libc.musl-x86_64.so.1 + ld-musl-x86_64.so.1 for the musl-linked native
-  # node deps some workloads pull (lightningcss-linux-x64-musl,
-  # @rolldown/binding-linux-x64-musl, @biomejs/cli-linux-x64-musl, esbuild);
-  # without it auto-patchelf fails with "could not satisfy dependency
-  # libc.musl-x86_64.so.1".
-  nativeBuildInputs = [ autoPatchelfHook ];
-  buildInputs = [ stdenv.cc.cc.lib libcap_ng pkgs.musl ];
+    # tsgo/esbuild ship prebuilt ELF binaries; autoPatchelfHook patches their
+    # interpreter / RPATH. stdenv.cc provides libstdc++. libcap_ng is needed by
+    # gondolin's libkrun runner at runtime. pkgs.musl provides
+    # libc.musl-x86_64.so.1 + ld-musl-x86_64.so.1 for the musl-linked native
+    # node deps some workloads pull (lightningcss-linux-x64-musl,
+    # @rolldown/binding-linux-x64-musl, @biomejs/cli-linux-x64-musl, esbuild);
+    # without it auto-patchelf fails with "could not satisfy dependency
+    # libc.musl-x86_64.so.1".
+    nativeBuildInputs = [ autoPatchelfHook ];
+    buildInputs = [
+      stdenv.cc.cc.lib
+      libcap_ng
+      pkgs.musl
+    ];
 
-  installPhase = if installPhase != null then installPhase else defaultInstallPhase;
+    installPhase = if installPhase != null then installPhase else defaultInstallPhase;
 
-  dontStrip = true;
+    dontStrip = true;
 
-  meta = with lib; {
-    description = "npm-built application tree";
-    platforms = platforms.linux;
-  };
-} // lib.optionalAttrs dontNpmBuild { inherit dontNpmBuild; }
-  // lib.optionalAttrs (buildPhase != null) { inherit buildPhase; })
+    meta = with lib; {
+      description = "npm-built application tree";
+      platforms = platforms.linux;
+    };
+  }
+  // lib.optionalAttrs dontNpmBuild { inherit dontNpmBuild; }
+  // lib.optionalAttrs (buildPhase != null) { inherit buildPhase; }
+)

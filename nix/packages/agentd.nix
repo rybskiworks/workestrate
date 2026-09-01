@@ -29,7 +29,10 @@ pkgs.pkgsStatic.rustPlatform.buildRustPackage rec {
   };
 
   # Only build the agentd crate, not the whole workspace.
-  cargoBuildFlags = [ "-p" "microsandbox-agentd" ];
+  cargoBuildFlags = [
+    "-p"
+    "microsandbox-agentd"
+  ];
 
   doCheck = false;
 

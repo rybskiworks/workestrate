@@ -17,7 +17,12 @@ strict = true
 
 [[schemas]]
 path = "schemas/workestrate.schema.json"
-include = ["workestrate.toml", "overrides.toml", "workestrate/default.toml", "workestrate/secrets.toml"]
+include = [
+  "workestrate.toml",
+  "overrides.toml",
+  "workestrate/default.toml",
+  "workestrate/secrets.toml"
+]
 
 [[schemas]]
 path = "schemas/workestrate-workload.schema.json"

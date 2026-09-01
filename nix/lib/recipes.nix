@@ -2,29 +2,37 @@
 { pkgs }:
 let
   vocab = import ./vocabulary.nix { inherit pkgs; };
-in {
+in
+{
   build = {
     npm-build = import ./recipes/npm-build.nix {
       inherit pkgs;
-      inherit (pkgs) buildNpmPackage nodejs_24 autoPatchelfHook stdenv libcap_ng lib;
+      inherit (pkgs)
+        buildNpmPackage
+        nodejs_24
+        autoPatchelfHook
+        stdenv
+        libcap_ng
+        lib
+        ;
     };
     bun-compile = import ./recipes/bun-compile.nix {
       inherit pkgs;
-      bun = pkgs.bun;
-      stdenv = pkgs.stdenv;
-      lib = pkgs.lib;
-      removeReferencesTo = pkgs.removeReferencesTo;
+      inherit (pkgs) bun;
+      inherit (pkgs) stdenv;
+      inherit (pkgs) lib;
+      inherit (pkgs) removeReferencesTo;
     };
     pip-install = import ./recipes/pip-install.nix {
       inherit pkgs;
-      python312 = pkgs.python312;
-      stdenv = pkgs.stdenv;
+      inherit (pkgs) python312;
+      inherit (pkgs) stdenv;
     };
     bun-install = import ./recipes/bun-install.nix {
       inherit pkgs;
-      bun = pkgs.bun;
-      nodejs_24 = pkgs.nodejs_24;
-      stdenv = pkgs.stdenv;
+      inherit (pkgs) bun;
+      inherit (pkgs) nodejs_24;
+      inherit (pkgs) stdenv;
     };
   };
   image = {

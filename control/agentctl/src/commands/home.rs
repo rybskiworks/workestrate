@@ -762,7 +762,9 @@ fn print_summary(home: &Path, with_config: bool, name: &str, ensured: &[&str]) {
     println!("Installed:");
     println!("  .gitignore (store dirs + secret material untracked; *.enc committable)");
     println!("  .git/hooks/pre-commit (rejects gitlinks, store-dir paths, secret material)");
-    println!("  tombi.toml + schemas/workestrate.schema.json + schemas/workestrate-workload.schema.json (tombi TOML gates; hook runs them when tombi is present)");
+    println!(
+        "  tombi.toml + schemas/workestrate.schema.json + schemas/workestrate-workload.schema.json (tombi TOML gates; hook runs them when tombi is present)"
+    );
     if !ensured.is_empty() {
         println!();
         println!("Ensured dirs: {}", ensured.join(", "));

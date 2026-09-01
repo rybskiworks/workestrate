@@ -21,9 +21,24 @@
 # Cleanup phase 3: optional `binaryName` (default "app") and `installDir`
 # (default "bin") let config-repo image builds choose the output layout;
 # the defaults preserve the historical $out/bin/app behavior exactly.
-{ pkgs, bun, stdenv, lib, removeReferencesTo }:
+{
+  pkgs,
+  bun,
+  stdenv,
+  lib,
+  removeReferencesTo,
+}:
 
-{ src, entrypoint, worker ? null, assets ? [], binaryName ? "app", installDir ? "bin", stripSrcReferences ? true, ... }:
+{
+  src,
+  entrypoint,
+  worker ? null,
+  assets ? [ ],
+  binaryName ? "app",
+  installDir ? "bin",
+  stripSrcReferences ? true,
+  ...
+}:
 let
   # B4: generate the asset-mirroring shell. For each {from, to}:
   #   mkdir -p the destination's parent dir under $out/${installDir}
@@ -31,12 +46,12 @@ let
   # `from` is resolved against the built `src` tree (so node_modules,
   # packages/*, etc. are reachable); `to` is relative to $out/${installDir}.
   # Both are interpolated inside shell double-quotes so spaces are preserved.
-  mirrorAssets = lib.concatStringsSep "\n" (map (a:
-    ''
+  mirrorAssets = lib.concatStringsSep "\n" (
+    map (a: ''
       mkdir -p "$out/${installDir}/$(dirname "${a.to}")"
       cp -r "${src}/${a.from}" "$out/${installDir}/${a.to}"
-    ''
-  ) assets);
+    '') assets
+  );
 
   # The worker is optional: prime-agent compiles workerless (no
   # image-resize-worker); pi passes one. When `worker` is null (the flake
@@ -45,13 +60,17 @@ let
   # Note: worker is deliberately NOT interpolated into a string here — Nix
   # 2.35 errors on null-to-string coercion, so the check/arg are emitted
   # conditionally instead.
-  workerCheck = if worker == null then "" else ''
-    wk="${src}/${worker}"
-    if [ ! -f "$wk" ]; then
-      echo "error: bun worker not found: $wk" >&2
-      exit 1
-    fi
-  '';
+  workerCheck =
+    if worker == null then
+      ""
+    else
+      ''
+        wk="${src}/${worker}"
+        if [ ! -f "$wk" ]; then
+          echo "error: bun worker not found: $wk" >&2
+          exit 1
+        fi
+      '';
   workerArg = if worker == null then "" else " \"$wk\"";
   # A (fix A, handover 2026-08-11 §5b.3): whether to strip the baked store
   # reference to `src` from the compiled binary. Default true = historical
@@ -68,12 +87,14 @@ let
   # spliced after the outer indented-string dedent, so an indented value
   # would carry its own dedented indentation and corrupt the installPhase
   # byte layout.
-  stripSrcCmd = if stripSrcReferences then
-    "# Strip the store reference to the source tree (e.g. pi-0.79.10 node_modules\n"
-    + "# bloat) from the compiled binary. The bun binary is self-contained and does\n"
-    + "# not need the source tree at runtime.\n"
-    + "remove-references-to -t ${src} $out/${installDir}/${binaryName}"
-  else "";
+  stripSrcCmd =
+    if stripSrcReferences then
+      "# Strip the store reference to the source tree (e.g. pi-0.79.10 node_modules\n"
+      + "# bloat) from the compiled binary. The bun binary is self-contained and does\n"
+      + "# not need the source tree at runtime.\n"
+      + "remove-references-to -t ${src} $out/${installDir}/${binaryName}"
+    else
+      "";
 in
 stdenv.mkDerivation {
   pname = "bun-compile";
@@ -84,7 +105,10 @@ stdenv.mkDerivation {
   # file).
   dontUnpack = true;
 
-  nativeBuildInputs = [ bun removeReferencesTo ];
+  nativeBuildInputs = [
+    bun
+    removeReferencesTo
+  ];
 
   buildPhase = ''
     runHook preBuild

@@ -8,14 +8,19 @@
 # static) and assembled here. libkrunfw comes from the upstream release
 # tarball (Branch A, interim) — see CONTINGENCY below.
 
-{ pkgs, rustToolchain, agentd, microsandbox-fork }:
+{
+  pkgs,
+  rustToolchain,
+  agentd,
+  microsandbox-fork,
+}:
 
 let
   # Mirror agentctl.nix's rustPlatform pattern: fenix-pinned toolchain so the
   # nix build and the dev shell agree on the exact rustc (1.97.1, edition 2024).
   rustPlatform = pkgs.makeRustPlatform {
-    rustc = rustToolchain.rustc;
-    cargo = rustToolchain.cargo;
+    inherit (rustToolchain) rustc;
+    inherit (rustToolchain) cargo;
   };
 
   # -----------------------------------------------------------------------
@@ -71,15 +76,22 @@ rustPlatform.buildRustPackage rec {
   # MSB_AGENTD_PATH; feature trimming is a deliberate, deferred decision — do
   # not change any features.
   cargoBuildFlags = [
-    "-p" "microsandbox-cli"
+    "-p"
+    "microsandbox-cli"
     "--no-default-features"
-    "--features" "net,ssh"
+    "--features"
+    "net,ssh"
   ];
 
   # Embed the runtime search path at link time (rustc -C link-arg -> -Wl,-rpath)
   # so the msb ELF carries its dynamic deps (libcap-ng, libgcc) with no
   # patchelf and no LD_LIBRARY_PATH anywhere.
-  RUSTFLAGS = "-C link-arg=-Wl,-rpath,${pkgs.lib.makeLibraryPath [ pkgs.libcap_ng pkgs.stdenv.cc.cc.lib ]}";
+  RUSTFLAGS = "-C link-arg=-Wl,-rpath,${
+    pkgs.lib.makeLibraryPath [
+      pkgs.libcap_ng
+      pkgs.stdenv.cc.cc.lib
+    ]
+  }";
 
   nativeBuildInputs = with pkgs; [
     pkg-config

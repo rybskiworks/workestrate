@@ -10,16 +10,37 @@
 # native addon) resolves inside the image; empty default = back-compat no-op.
 { pkgs, vocab }:
 
-{ name, tag ? "latest", contents ? [], binary ? null, bakedFiles ? [], features ? [], env ? {}, extraContents ? [] }:
+{
+  name,
+  tag ? "latest",
+  contents ? [ ],
+  binary ? null,
+  bakedFiles ? [ ],
+  features ? [ ],
+  env ? { },
+  extraContents ? [ ],
+}:
 let
   contentsList = vocab.resolvePackages contents;
-  allContents = contentsList ++ extraContents ++ (if binary != null then [binary] else []);
+  allContents = contentsList ++ extraContents ++ (if binary != null then [ binary ] else [ ]);
   featureShell = vocab.resolveFeatures features;
   bakedShell = vocab.resolveBakedFiles bakedFiles;
   envList = builtins.map (n: "${n}=${env.${n}}") (builtins.attrNames env);
 in
-pkgs.dockerTools.buildLayeredImage ({
-  inherit name tag;
-  contents = allContents;
-  extraCommands = featureShell + "\n" + bakedShell;
-} // (if env == {} then {} else { config = { Env = envList; }; }))
+pkgs.dockerTools.buildLayeredImage (
+  {
+    inherit name tag;
+    contents = allContents;
+    extraCommands = featureShell + "\n" + bakedShell;
+  }
+  // (
+    if env == { } then
+      { }
+    else
+      {
+        config = {
+          Env = envList;
+        };
+      }
+  )
+)

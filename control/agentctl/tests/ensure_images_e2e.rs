@@ -406,9 +406,9 @@ fn ensure_images_parent_child_token_reload_and_batch_scope() {
         .expect("spawn workload up svc-dep --reload-images");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        stderr.contains(
-            &format!("ensure-images: {tag}: rebuild (forced) — image unchanged in store; tag already current")
-        ),
+        stderr.contains(&format!(
+            "ensure-images: {tag}: rebuild (forced) — image unchanged in store; tag already current"
+        )),
         "--reload-images flips the matrix to a forced rebuild (§5.2); stderr:\n{stderr}"
     );
 

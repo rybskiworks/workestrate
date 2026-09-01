@@ -1,8 +1,17 @@
 # pip-install recipe: installs Python deps into .deps/
 # Wraps the devshell build command for a Python service workload.
-{ pkgs, python312, stdenv }:
+{
+  pkgs,
+  python312,
+  stdenv,
+}:
 
-{ source, requirementsFile, target ? ".deps", ... }:
+{
+  source,
+  requirementsFile,
+  target ? ".deps",
+  ...
+}:
 stdenv.mkDerivation {
   pname = "pip-install";
   version = source.version or "0.1.0";

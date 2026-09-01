@@ -472,11 +472,7 @@ pub fn resolve_depends_on_full(
                                 "warning: depends_on '{}': selected record '{}' ({}) is published on the per-IP bind {}; \
                                  guest-reachability of non-127.0.0.1 loopbacks via {} is DEFERRED-PENDING-E1 \
                                  (ADR 0026(f) conservative default) — the injected address may not be reachable from the guest",
-                                dep,
-                                record.instance,
-                                selector,
-                                record.bind_ip,
-                                GUEST_HOST_ALIAS
+                                dep, record.instance, selector, record.bind_ip, GUEST_HOST_ALIAS
                             );
                         }
                         ResolvedDependency {
@@ -505,7 +501,15 @@ pub fn resolve_depends_on_full(
                         // above, warn loudly on per-IP binds and inject the
                         // same guest form.
                         if record.bind_ip != crate::microsandbox::plan::default_bind_ip() {
-                            eprintln!("warning: depends_on '{}': selected record '{}' ({}) is published on the per-IP bind {}; guest-reachability of non-127.0.0.1 loopbacks via {} is DEFERRED-PENDING-E1 (ADR 0026(f) conservative default) — the injected address for port '{}' may not be reachable from the guest", dep, record.instance, selector, record.bind_ip, GUEST_HOST_ALIAS, name);
+                            eprintln!(
+                                "warning: depends_on '{}': selected record '{}' ({}) is published on the per-IP bind {}; guest-reachability of non-127.0.0.1 loopbacks via {} is DEFERRED-PENDING-E1 (ADR 0026(f) conservative default) — the injected address for port '{}' may not be reachable from the guest",
+                                dep,
+                                record.instance,
+                                selector,
+                                record.bind_ip,
+                                GUEST_HOST_ALIAS,
+                                name
+                            );
                         }
                         ResolvedDependency {
                             dep: dep.clone(),
@@ -551,13 +555,7 @@ pub fn resolve_depends_on_full(
                                 .unwrap_or("no singleton instance is running")
                         ),
                     };
-                    declared_fallback(
-                        config,
-                        dep,
-                        &env_var,
-                        port_name.as_deref(),
-                        &reason,
-                    )?
+                    declared_fallback(config, dep, &env_var, port_name.as_deref(), &reason)?
                 }
             };
             resolved.push(resolved_one);

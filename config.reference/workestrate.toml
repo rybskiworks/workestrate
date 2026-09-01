@@ -98,7 +98,7 @@ guest = 9090
 [workloads.example-litellm.network.defaults]
 egress = "deny"
 # ingress = "deny"  # absent = deny (fail-closed); "allow" requires
-                    # entitlements = ["default_ingress_allow"]
+# entitlements = ["default_ingress_allow"]
 
 [[workloads.example-litellm.network.egress]]
 recipe = "dns"

@@ -1,6 +1,11 @@
 # bun-install recipe: installs Bun/TypeScript deps
 # Wraps the devshell build command for a Bun/TypeScript workload.
-{ pkgs, bun, nodejs_24, stdenv }:
+{
+  pkgs,
+  bun,
+  nodejs_24,
+  stdenv,
+}:
 
 { source, ... }:
 stdenv.mkDerivation {

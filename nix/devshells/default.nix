@@ -1,14 +1,15 @@
-{ pkgs
-, microsandbox
-, microsandbox-filesystem-patched
-, workestrate
-, rustToolchain
-, msb-wrapped
-, decrypt-env
-, write-env
-, setup-secrets
-, tombi
-, referenceConfig
+{
+  pkgs,
+  microsandbox,
+  microsandbox-filesystem-patched,
+  workestrate,
+  rustToolchain,
+  msb-wrapped,
+  decrypt-env,
+  write-env,
+  setup-secrets,
+  tombi,
+  referenceConfig,
 }:
 
 # Cleanup phase 3: the pi build + agents/* repo population moved to the
@@ -22,9 +23,12 @@
 let
   localBuildNames = referenceConfig.localBuilds;
 
-  recipeCmd = lb:
+  recipeCmd =
+    lb:
     if lb.recipe == "pip-install" then
-      let req = lb.requirements_file or "requirements.txt"; in
+      let
+        req = lb.requirements_file or "requirements.txt";
+      in
       ''REQ=$([ -f requirements.lock ] && echo requirements.lock || echo ${req}) && python3.12 -m pip install --only-binary=:all: --break-system-packages --target ./.deps -r "$REQ"''
     else if lb.recipe == "bun-install" then
       "HUSKY=0 bun install"
@@ -33,10 +37,15 @@ let
     else
       throw "unknown local_build recipe: ${lb.recipe}";
 
-  buildAgentCommands = builtins.concatStringsSep "\n" (map (name:
-    let lb = referenceConfig.workloads.${name}.local_build; in
-    ''_build_if_needed "${name}" "${recipeCmd lb}" "${lb.gating_file or ""}"''
-  ) localBuildNames);
+  buildAgentCommands = builtins.concatStringsSep "\n" (
+    map (
+      name:
+      let
+        lb = referenceConfig.workloads.${name}.local_build;
+      in
+      ''_build_if_needed "${name}" "${recipeCmd lb}" "${lb.gating_file or ""}"''
+    ) localBuildNames
+  );
 in
 
 pkgs.mkShell {
@@ -53,17 +62,20 @@ pkgs.mkShell {
     just
     libcap_ng
     msb-wrapped
-    nodejs_24  # Node 24: aligns with the node:24 sandbox images (agent workloads need >=23.6)
+    nodejs_24 # Node 24: aligns with the node:24 sandbox images (agent workloads need >=23.6)
     bun
     openssl
     pkg-config
     (python3.withPackages (p: [ p.pip ]))
-    (python312.withPackages (ps: [ ps.pip ps."pip-tools" ]))
+    (python312.withPackages (ps: [
+      ps.pip
+      ps."pip-tools"
+    ]))
     rustToolchain.rustc
     rustToolchain.rust-analyzer
     rustToolchain.rustfmt
     sops
-    tombi  # TOML formatter/linter/LSP (spec 15)
+    tombi # TOML formatter/linter/LSP (spec 15)
     write-env
     setup-secrets
   ];

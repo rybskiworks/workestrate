@@ -1008,8 +1008,7 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
 /// Title applied to the generated workload subschema — matches the
 /// established capsule-file convention (the previous hand-derived
 /// `schemas/workestrate-workload.schema.json` carried this exact title).
-pub(crate) const WORKLOAD_SCHEMA_TITLE: &str =
-    "workestrate workload capsule entry file (workestrate/workloads/<name>/workload.toml, bare table form)";
+pub(crate) const WORKLOAD_SCHEMA_TITLE: &str = "workestrate workload capsule entry file (workestrate/workloads/<name>/workload.toml, bare table form)";
 
 /// Generate the canonical full schema (`workestrate.toml`) and the
 /// bare-workload subschema (a workload capsule file). Both derive from the

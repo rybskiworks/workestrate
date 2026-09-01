@@ -1751,8 +1751,7 @@ mod tests {
         )?;
         let (merged, _) = merge_layers(&[base(), top])?;
         assert_eq!(
-            merged.workloads["pi"].depends_on["litellm"].on_conflict,
-            None,
+            merged.workloads["pi"].depends_on["litellm"].on_conflict, None,
             "a higher layer re-declaring the dep replaces the whole spec (on_conflict back to default)"
         );
 

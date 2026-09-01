@@ -417,7 +417,9 @@ pub fn load_config() -> Result<ConfigFile> {
                     if is_trusted_project(&cwd) {
                         layers.push(crate::merge::Layer::load("project", &project_path)?);
                     } else {
-                        eprintln!("project config ./workestrate.toml found but not trusted; run 'workestrate config trust <dir>' to trust it");
+                        eprintln!(
+                            "project config ./workestrate.toml found but not trusted; run 'workestrate config trust <dir>' to trust it"
+                        );
                     }
                 }
                 None => {

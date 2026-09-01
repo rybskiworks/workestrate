@@ -1,8 +1,9 @@
-{ pkgs
-, microsandbox
-, microsandbox-filesystem-patched
-, rustToolchain
-, rev ? "dirty"
+{
+  pkgs,
+  microsandbox,
+  microsandbox-filesystem-patched,
+  rustToolchain,
+  rev ? "dirty",
 }:
 
 let
@@ -14,14 +15,21 @@ let
   # to an entry in `control/agentctl/.gitignore` so the working-tree state
   # and the nix-source view agree.
   agentctlSrc = pkgs.lib.cleanSourceWith {
-    filter = path: type:
-      let base = baseNameOf path; in
-      !(base == "target"
-        || base == "result" || base == "result-" || base == "result-man"
-        || base == "core" || pkgs.lib.hasPrefix "core." base
+    filter =
+      path: type:
+      let
+        base = baseNameOf path;
+      in
+      !(
+        base == "target"
+        || base == "result"
+        || base == "result-"
+        || base == "result-man"
+        || base == "core"
+        || pkgs.lib.hasPrefix "core." base
         || base == "vendor"
-        || (type == "regular" && base == "config.toml"
-            && pkgs.lib.hasSuffix "/.cargo/config.toml" path));
+        || (type == "regular" && base == "config.toml" && pkgs.lib.hasSuffix "/.cargo/config.toml" path)
+      );
     src = ../../control/agentctl;
   };
 
@@ -39,17 +47,19 @@ let
   # Use the fenix-pinned toolchain so nix builds and the dev shell agree on
   # the exact rustc version (currently 1.97.1).
   rustPlatform = pkgs.makeRustPlatform {
-    rustc = rustToolchain.rustc;
-    cargo = rustToolchain.cargo;
+    inherit (rustToolchain) rustc;
+    inherit (rustToolchain) cargo;
   };
 in
-(rustPlatform.buildRustPackage {
+rustPlatform.buildRustPackage {
   pname = "workestrate";
   version = "0.1.0";
 
   inherit src;
 
-  env = { WORKESTRATE_REV = rev; };
+  env = {
+    WORKESTRATE_REV = rev;
+  };
 
   # The composite src root contains control/agentctl + schemas/ (see above);
   # the crate builds from the agentctl subtree.
@@ -132,4 +142,3 @@ in
     mainProgram = "workestrate";
   };
 }
-)

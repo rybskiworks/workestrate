@@ -7,28 +7,33 @@
 # on every eval). Callers may still pass an explicit configDir pointing at
 # a directory containing workestrate.toml. The filter ensures only the
 # TOML file is included; the directory name bounds the store path.
-{ configDir ?
-    builtins.path {
-      path = ../../config.reference;
-      filter = path: _type: baseNameOf path == "workestrate.toml";
-      name = "workestrate-config-reference";
-    } }:
+{
+  configDir ? builtins.path {
+    path = ../../config.reference;
+    filter = path: _type: baseNameOf path == "workestrate.toml";
+    name = "workestrate-config-reference";
+  },
+}:
 let
   configPath = "${configDir}/workestrate.toml";
   raw = builtins.fromTOML (builtins.readFile configPath);
-in {
-  secrets = raw.secrets or {};
-  workloads = raw.workloads or {};
-  workloadNames = builtins.attrNames (raw.workloads or {});
+in
+{
+  secrets = raw.secrets or { };
+  workloads = raw.workloads or { };
+  workloadNames = builtins.attrNames (raw.workloads or { });
 
   # Workloads with image.recipe = "nix-layered"
-  nixLayeredImages = builtins.filter (name:
-    let wl = raw.workloads.${name}; in
+  nixLayeredImages = builtins.filter (
+    name:
+    let
+      wl = raw.workloads.${name};
+    in
     (wl.image.recipe or "") == "nix-layered"
-  ) (builtins.attrNames (raw.workloads or {}));
+  ) (builtins.attrNames (raw.workloads or { }));
 
   # Workloads with local_build defined
-  localBuilds = builtins.filter (name:
-    raw.workloads.${name} ? local_build
-  ) (builtins.attrNames (raw.workloads or {}));
+  localBuilds = builtins.filter (name: raw.workloads.${name} ? local_build) (
+    builtins.attrNames (raw.workloads or { })
+  );
 }

@@ -990,8 +990,7 @@ mod tests {
             .get(layer_name)
             .expect("content root recorded for the flat workload layer");
         assert_eq!(
-            content_root,
-            wks,
+            content_root, wks,
             "flat-file content root must be the directory-mode root <repo>/workestrate/, not workloads/"
         );
 
