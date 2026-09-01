@@ -780,7 +780,7 @@
       },
       "locked": {
         "lastModified": 1788285532,
-        "narHash": "sha256-t28S994XYDZmSFLXflTc2x3avejirF1SFZ/JDGqwMK8=",
+        "narHash": "sha256-guDFHPfJrIAKnmU7kqtoRinFQYNyx3Ob5diBft4740s=",
         "owner": "rybskiworks",
         "repo": "nix-tooling",
         "rev": "2a5796179339a2322e3d01f599e82e3322c8ad4b",
