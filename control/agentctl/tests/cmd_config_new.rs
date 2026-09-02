@@ -523,6 +523,26 @@ fn config_new_hook_content_mentions_tombi() {
         "hook must record the required tombi version:\n{}",
         content
     );
+    assert!(
+        content.contains("TOMBI_REQUIRED=\"1.2.5\""),
+        "hook must pin TOMBI_REQUIRED to 1.2.5:\n{}",
+        content
+    );
+    assert!(
+        content.contains("tombi_version=\"$(tombi --version | awk '{print $2}')\""),
+        "hook must extract tombi version via awk:\n{}",
+        content
+    );
+    assert!(
+        content.contains("tombi version mismatch: found $tombi_version, required $TOMBI_REQUIRED"),
+        "hook must guard tombi version mismatch with hook-specific message:\n{}",
+        content
+    );
+    assert!(
+        content.contains("cargo install tombi --version $TOMBI_REQUIRED"),
+        "hook version-mismatch message must suggest cargo install:\n{}",
+        content
+    );
 }
 
 /// Locate `tombi` on PATH (which-style lookup).

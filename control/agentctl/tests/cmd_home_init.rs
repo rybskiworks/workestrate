@@ -131,6 +131,27 @@ fn init_creates_structure_gitignore_and_hook() {
         "hook must run the tombi lint gate with --error-on-warnings:\n{}",
         hook_content
     );
+    assert!(
+        hook_content.contains("TOMBI_REQUIRED=\"1.2.5\""),
+        "hook must pin TOMBI_REQUIRED to 1.2.5:\n{}",
+        hook_content
+    );
+    assert!(
+        hook_content.contains("tombi_version=\"$(tombi --version | awk '{print $2}')\""),
+        "hook must extract tombi version via awk:\n{}",
+        hook_content
+    );
+    assert!(
+        hook_content
+            .contains("tombi version mismatch: found $tombi_version, required $TOMBI_REQUIRED"),
+        "hook must guard tombi version mismatch with hook-specific message:\n{}",
+        hook_content
+    );
+    assert!(
+        hook_content.contains("cargo install tombi --version $TOMBI_REQUIRED"),
+        "hook version-mismatch message must suggest cargo install:\n{}",
+        hook_content
+    );
 
     // tombi toolchain files: home tombi.toml + vendored schemas (spec 15).
     let tombi_toml = std::fs::read_to_string(store.join("tombi.toml")).expect("read tombi.toml");
