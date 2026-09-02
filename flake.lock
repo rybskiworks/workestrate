@@ -431,17 +431,17 @@
     "microsandbox-fork": {
       "flake": false,
       "locked": {
-        "lastModified": 1787721096,
-        "narHash": "sha256-p1Ezx/liGWQOIrqLBB2vqLP9AG8pt19MtQea6NSSaEk=",
+        "lastModified": 1788372053,
+        "narHash": "sha256-Mptr2Jwk3hI/IpBd+i4FyOrznKh5hdk/od7Mu3lABH0=",
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "79dc8a197f2e58fadddb79ce427a204606c6c9de",
+        "rev": "78fb3ed12623526ad02f5999047c12953013c395",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "79dc8a197f2e58fadddb79ce427a204606c6c9de",
+        "rev": "78fb3ed12623526ad02f5999047c12953013c395",
         "type": "github"
       }
     },

@@ -1,8 +1,8 @@
 # microsandbox fork source — the ENTIRE fork workspace, used to patch ALL
 # microsandbox-* crates via [patch.crates-io] in the agentctl build and dev shell.
 #
-# The fork (rev 79dc8a19, pinned via the `microsandbox-fork` flake input —
-# the merged-develop validated rev) is a 0.6.15 workspace. Vendoring just
+# The fork (rev 78fb3ed1, pinned via the `microsandbox-fork` flake input —
+# the merged-develop validated rev) is a 0.6.16 workspace. Vendoring just
 # crates/filesystem broke because
 # its Cargo.toml uses *.workspace = true inheritance — there was no workspace
 # root in the vendor directory. Vendoring the ENTIRE fork preserves the
@@ -18,7 +18,7 @@
 
 stdenv.mkDerivation rec {
   pname = "microsandbox-filesystem-patched";
-  version = "0.6.15";
+  version = "0.6.16";
 
   src = microsandbox-fork;
 

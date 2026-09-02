@@ -16,7 +16,7 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 glob = "0.3.4"
 globset = "0.4"
-microsandbox = { version = "=0.6.15", features = ["net"] }
+microsandbox = { version = "=0.6.16", features = ["net"] }
 
 schemars = { version = "0.8", optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -37,7 +37,7 @@ schema = ["dep:schemars"]
 # (`microsandbox_image::Reference`, re-exported from oci-client) rather than
 # a local approximation. Already in the build graph transitively via the
 # microsandbox SDK, so it adds no new packages.
-microsandbox-image = "=0.6.15"
+microsandbox-image = "=0.6.16"
 
 [profile.release]
 opt-level = 3

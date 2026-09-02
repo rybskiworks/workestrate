@@ -1,7 +1,7 @@
 # agentd — guest init/agent daemon for microsandbox microVMs.
 #
 # Built as a static musl binary from the user's fork source, pinned via the
-# `microsandbox-fork` flake input at validated rev 79dc8a19.
+# `microsandbox-fork` flake input at validated rev 78fb3ed1.
 # agentd runs INSIDE the guest microVM, not on the host — a static musl binary
 # has no library deps and works with any guest rootfs (alpine/musl or glibc).
 #
@@ -16,7 +16,7 @@
 
 pkgs.pkgsStatic.rustPlatform.buildRustPackage rec {
   pname = "microsandbox-agentd";
-  version = "0.6.15";
+  version = "0.6.16";
 
   src = microsandbox-fork;
 
