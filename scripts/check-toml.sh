@@ -11,7 +11,7 @@
 # TOMBI_OFFLINE=true pins offline mode: no remote schema-catalog fetches.
 #
 # Wired into `just tombi-check` and `just verify`; the devshell provides
-# tombi 1.2.5 (nix/packages/tombi.nix).
+# tombi 1.2.5 (nix-tooling/packages/tombi.nix via inputs.tooling).
 
 set -euo pipefail
 

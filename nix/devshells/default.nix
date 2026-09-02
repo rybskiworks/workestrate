@@ -1,3 +1,4 @@
+# superseded by flake.nix devenv.shells.default
 {
   pkgs,
   microsandbox,

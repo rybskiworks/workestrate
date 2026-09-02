@@ -378,7 +378,7 @@
             inherit rustToolchain agentd;
             inherit (inputs) microsandbox-fork;
           };
-          tombi = pkgs.callPackage ./nix/packages/tombi.nix { };
+          tombi = inputs.tooling.packages.${system}.tombi;
           microsandbox-filesystem-patched =
             pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix
               { inherit (inputs) microsandbox-fork; };
@@ -580,6 +580,7 @@
           };
 
           # Devenv shell: dogfoods tooling modules + workestrate-specific packages and shellHook
+          # NOTE: devenv-test uses IFD (import source); first eval on a fresh store must warm it via `nix build .#packages.x86_64-linux.devenv-test`, then `nix flake check --no-build` is fine.
           devenv.shells.default = {
             devenv.root =
               let
