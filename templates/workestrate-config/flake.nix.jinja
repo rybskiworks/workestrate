@@ -77,31 +77,45 @@
   inputs = {
     workestrate.url = "{{ core_flake_url }}";
     nixpkgs.follows = "workestrate/nixpkgs";
+    flake-parts.url = "github:hercules-ci/flake-parts/9d0d87172c374f89da73c1cfe6d81ae62feac1f1";
+    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
+    devenv.url = "github:cachix/devenv/97135e80b6e432f41f84f72383e1b8147f33ef0c";
+    devenv.inputs.nixpkgs.follows = "nixpkgs";
+    tooling.url = "github:rybskiworks/nix-tooling/2a5796179339a2322e3d01f599e82e3322c8ad4b";
+    tooling.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, workestrate, nixpkgs }:
-    let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-      config = builtins.fromTOML (builtins.readFile ./workestrate.toml);
-      workestrate-cli = workestrate.packages.${system}.workestrate;
-    in {
-      # Build this repo's nix-layered images using core's exported recipes.
-      # Output packages are keyed by each workload's image.name.
-      packages.${system} = workestrate.lib.${system}.buildImagesFromConfig {
-        inherit pkgs config;
-        # Map `flake://<name>` binary.src URIs to inputs/built trees here.
-        # Valid empty only when no binary.src uses `flake://`.
-        sources = { };
-      };
+  outputs = inputs@{ flake-parts, workestrate, nixpkgs, ... }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [ inputs.devenv.flakeModule ];
+      systems = [ "x86_64-linux" ];
+      perSystem = { config, system, ... }:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          cfg = builtins.fromTOML (builtins.readFile ./workestrate.toml);
+          workestrate-cli = workestrate.packages.${system}.workestrate;
+        in {
+          packages.${system} = workestrate.lib.${system}.buildImagesFromConfig {
+            inherit pkgs;
+            config = cfg;
+            # Map `flake://<name>` binary.src URIs to inputs/built trees here.
+            # Valid empty only when no binary.src uses `flake://`.
+            sources = { };
+          };
 
-      # Config-repo CI: validate against core's schema
-      checks.${system} = workestrate.lib.${system}.checks.validateConfig {
-        inherit pkgs;
-        # The arg is `workestrate` (the agentctl CLI package); bound via a
-        # let-alias to avoid shadowing the `workestrate` flake input.
-        workestrate = workestrate-cli;
-        config = builtins.readFile ./workestrate.toml;
-      };
+          checks.${system} = workestrate.lib.${system}.checks.validateConfig {
+            inherit pkgs;
+            # The arg is `workestrate` (the agentctl CLI package); bound via a
+            # let-alias to avoid shadowing the `workestrate` flake input.
+            workestrate = workestrate-cli;
+            config = builtins.readFile ./workestrate.toml;
+          };
+
+          devenv.shells.default.imports = [
+            tooling.devenvModules.base
+            tooling.devenvModules.nix
+            tooling.devenvModules.toml
+          ];
+        };
     };
 }
