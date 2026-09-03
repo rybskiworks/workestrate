@@ -88,7 +88,7 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
             protocol: rule.protocol,
         });
     }
-    // Sort by: host first, then specificity desc, then port-scoped (Some) before any-port, then deny before allow
+    // Sort by: host first, then specificity desc, then port-scoped (Some) before any-port, then deny before allow — carve-out wins per ADR §6; identical-coverage ties resolve deny-first (fail-closed)
     ordered.sort_by(|a, b| {
         let a_is_host = matches!(a, OrderedItem::Host { .. });
         let b_is_host = matches!(b, OrderedItem::Host { .. });
@@ -110,6 +110,7 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
             }
         }
         // Domain items: compute specificity and port/action ranks
+        // AllowDomain is always port-scoped (port required) so rank 1; DenyDomain rank 1 if port-scoped else 0 — this achieves carve-out semantics where narrower coverage sorts first.
         let (a_spec, a_len, a_port_rank, a_is_deny) = match a {
             OrderedItem::AllowDomain { domain, port: _, protocol: _ } => {
                 let (rank, len) = domain_specificity_rank(domain);
@@ -143,17 +144,11 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
             std::cmp::Ordering::Equal => {},
             other => return other,
         }
-        // Port-scoped before any-port
+        // narrower coverage (port-scoped) sorts before broader (any-port) at equal domain specificity — carve-out wins per ADR §6; identical-coverage ties resolve deny-first (fail-closed)
         match b_port_rank.cmp(&a_port_rank) {
             std::cmp::Ordering::Equal => {},
             other => return other,
         }
-        // Deny before Allow at equal specificity+port
-        match a_is_deny.cmp(&b_is_deny) {
-            std::cmp::Ordering::Equal => {},
-            other => return other, // true (deny) < false (allow) so deny first because true < false? Actually bool true > false, we want deny first. So reverse.
-        }
-        // Tie-break: deny before allow explicitly
         if a_is_deny != b_is_deny {
             return if a_is_deny { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
         }
@@ -699,6 +694,163 @@ mod tests {
         // Port-scoped deny .evil.com:443 should be before any-port deny .tracker.io
         let tracker_pos = positions.iter().position(|(d, _, _)| d.contains("tracker.io")).unwrap();
         assert!(deny_pos < tracker_pos, "port-scoped deny should be before any-port deny");
+        Ok(())
+    }
+
+    #[test]
+    fn identical_coverage_tie_deny_before_allow() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::{DenyDomainRule, EgressRule, EgressTarget, NetworkPlan};
+        // T1: identical coverage tie — same domain exact evil.com, same port 443 tcp,
+        // deny and allow at equal specificity+port must resolve deny-first (fail-closed)
+        let plan = NetworkPlan {
+            egress_default_deny: true,
+            ingress_default_deny: true,
+            egress_rules: vec![EgressRule {
+                protocol: Protocol::Tcp,
+                port: 443,
+                target: EgressTarget::Domains(vec!["evil.com".to_string()]),
+                derived_from: None,
+            }],
+            deny_rules: vec![DenyDomainRule {
+                domain_suffix: "evil.com".to_string(),
+                port: Some(443),
+                protocol: Some(Protocol::Tcp),
+            }],
+            ingress_rules: vec![],
+        };
+        let policy = network_plan_to_policy(&plan)?;
+        assert_eq!(policy.rules.len(), 2, "expected deny + allow");
+        // Order must be deny before allow at identical coverage
+        assert!(
+            policy.rules[0].action.is_deny(),
+            "first rule must be deny, got {:?} {:?}",
+            policy.rules[0].action,
+            serde_json::to_value(&policy.rules[0]).unwrap()
+        );
+        assert!(
+            policy.rules[1].action.is_allow(),
+            "second rule must be allow, got {:?}",
+            policy.rules[1].action
+        );
+        // Both target same domain; verify via serde shape
+        for r in &policy.rules {
+            let v = serde_json::to_value(r).unwrap();
+            assert!(
+                v["destination"]["domain"] == "evil.com" || v["destination"]["domain_suffix"] == "evil.com",
+                "both rules must target evil.com, got {}",
+                v["destination"]
+            );
+            assert!(r.ports.iter().any(|p| p.start == 443), "port 443, got {:?}", r.ports);
+        }
+        // Explicit position check via serde for robustness
+        let vals: Vec<serde_json::Value> = policy.rules.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
+        assert!(vals[0]["destination"]["domain"] == "evil.com" || vals[0]["destination"]["domain_suffix"] == "evil.com");
+        assert!(vals[1]["destination"]["domain"] == "evil.com" || vals[1]["destination"]["domain_suffix"] == "evil.com");
+        Ok(())
+    }
+
+    #[test]
+    fn carve_out_exact_before_suffix() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::{DenyDomainRule, EgressRule, EgressTarget, NetworkPlan};
+        // T2: carve-out — exact api.evil.com allow (rank 2) must sort before suffix .evil.com deny (rank 1)
+        // at equal port, specificity wins over deny-first
+        let plan = NetworkPlan {
+            egress_default_deny: true,
+            ingress_default_deny: true,
+            egress_rules: vec![EgressRule {
+                protocol: Protocol::Tcp,
+                port: 443,
+                target: EgressTarget::Domains(vec!["api.evil.com".to_string()]),
+                derived_from: None,
+            }],
+            deny_rules: vec![DenyDomainRule {
+                domain_suffix: ".evil.com".to_string(),
+                port: Some(443),
+                protocol: Some(Protocol::Tcp),
+            }],
+            ingress_rules: vec![],
+        };
+        let policy = network_plan_to_policy(&plan)?;
+        assert_eq!(policy.rules.len(), 2);
+        let v0 = serde_json::to_value(&policy.rules[0]).unwrap();
+        let v1 = serde_json::to_value(&policy.rules[1]).unwrap();
+        // First must be allow exact api.evil.com
+        assert!(policy.rules[0].action.is_allow(), "exact allow must be first, got deny");
+        assert_eq!(v0["destination"]["domain"], "api.evil.com");
+        // Second must be deny suffix evil.com
+        assert!(policy.rules[1].action.is_deny(), "suffix deny must be second");
+        assert_eq!(v1["destination"]["domain_suffix"], "evil.com");
+        Ok(())
+    }
+
+    #[test]
+    fn port_carve_out_scoped_before_any_port() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::{DenyDomainRule, EgressRule, EgressTarget, NetworkPlan};
+        // T3: port carve-out — at equal domain specificity (.evil.com suffix), port-scoped allow :443 (rank1) sorts before any-port deny (rank0)
+        let plan = NetworkPlan {
+            egress_default_deny: true,
+            ingress_default_deny: true,
+            egress_rules: vec![EgressRule {
+                protocol: Protocol::Tcp,
+                port: 443,
+                target: EgressTarget::Domains(vec![".evil.com".to_string()]),
+                derived_from: None,
+            }],
+            deny_rules: vec![DenyDomainRule {
+                domain_suffix: ".evil.com".to_string(),
+                port: None,
+                protocol: None,
+            }],
+            ingress_rules: vec![],
+        };
+        let policy = network_plan_to_policy(&plan)?;
+        assert_eq!(policy.rules.len(), 2);
+        let v0 = serde_json::to_value(&policy.rules[0]).unwrap();
+        let v1 = serde_json::to_value(&policy.rules[1]).unwrap();
+        // Allow must be first (narrower coverage carve-out)
+        assert!(policy.rules[0].action.is_allow(), "port-scoped allow must be first");
+        assert_eq!(v0["destination"]["domain_suffix"], "evil.com");
+        assert!(policy.rules[0].ports.iter().any(|p| p.start == 443));
+        // Deny any-port must be second (broader)
+        assert!(policy.rules[1].action.is_deny(), "any-port deny must be second");
+        assert_eq!(v1["destination"]["domain_suffix"], "evil.com");
+        assert!(policy.rules[1].ports.is_empty(), "any-port deny should have no port filter, got {:?}", policy.rules[1].ports);
+        Ok(())
+    }
+
+    #[test]
+    fn port_scoped_deny_before_broader_allow() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::{DenyDomainRule, EgressRule, EgressTarget, NetworkPlan};
+        // T4: port-scoped deny evil.com:443 vs broader allow evil.com:80 (same exact specificity, both port-scoped rank1)
+        // identical-coverage tie resolves deny-first even though allow port 80 < deny port 443 numerically
+        let plan = NetworkPlan {
+            egress_default_deny: true,
+            ingress_default_deny: true,
+            egress_rules: vec![EgressRule {
+                protocol: Protocol::Tcp,
+                port: 80,
+                target: EgressTarget::Domains(vec!["evil.com".to_string()]),
+                derived_from: None,
+            }],
+            deny_rules: vec![DenyDomainRule {
+                domain_suffix: "evil.com".to_string(),
+                port: Some(443),
+                protocol: Some(Protocol::Tcp),
+            }],
+            ingress_rules: vec![],
+        };
+        let policy = network_plan_to_policy(&plan)?;
+        assert_eq!(policy.rules.len(), 2);
+        let v0 = serde_json::to_value(&policy.rules[0]).unwrap();
+        let v1 = serde_json::to_value(&policy.rules[1]).unwrap();
+        // Deny :443 must be first (deny-first tie at identical coverage, overriding numeric port order)
+        assert!(policy.rules[0].action.is_deny(), "deny :443 must be first, got allow");
+        assert_eq!(v0["destination"]["domain"], "evil.com");
+        assert!(policy.rules[0].ports.iter().any(|p| p.start == 443));
+        // Allow :80 second
+        assert!(policy.rules[1].action.is_allow(), "allow :80 must be second");
+        assert_eq!(v1["destination"]["domain"], "evil.com");
+        assert!(policy.rules[1].ports.iter().any(|p| p.start == 80));
         Ok(())
     }
 }
