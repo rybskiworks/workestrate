@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # host-provision.sh — in-flake host provisioner for the workestrate tool.
 #
+# This script is the ONLY supported install path for the nix-installed
+# `workestrate` binary. Do not `nix profile install` by hand outside this
+# script except via the explicit remediation commands it prints.
+#
 # One idempotent command that:
 #   A. runs scripts/host-check.sh,
 #   B. syncs the nix-profile-installed `workestrate` binary to the current
@@ -92,6 +96,9 @@ fi
 rm -f "$build_log"
 
 set +e
+# Refresh the shell's command hash so `command -v` below cannot resolve a
+# stale pre-install path (same refresh as after install in do_install).
+hash -r 2>/dev/null || true
 got=$(readlink -f "$(command -v workestrate 2>/dev/null)" 2>/dev/null)
 got_exit=$?
 set -e
@@ -169,6 +176,141 @@ if [[ -n "$got" ]] && [[ -x "$got" ]]; then
     installed_rev="${ver_out##*-}"
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# Step B+ — provision-check asserts (P1/P2/P3). Read-only: they run in BOTH
+# modes (including --check-only) and NEVER install anything — every FAIL
+# names the exact remediation command instead.
+# ---------------------------------------------------------------------------
+log "Step B+: provision-check asserts (P1/P2/P3, read-only)"
+p1_status="UNKNOWN"
+p2_status="UNKNOWN"
+p3_status="UNKNOWN"
+
+# --- P1: profile singularity — exactly one `workestrate` entry in
+# `nix profile list`. The output shape differs between nix 2.23.3 (multiline
+# `Name:`/`Flake:` form, one `Name:` line per entry) and 2.35.1 (indexed
+# one-line-per-entry form), so count entry-start lines per detected shape and
+# assert the total is exactly 1.
+set +e
+profile_list_out=$(nix profile list 2>/dev/null)
+profile_list_exit=$?
+set -e
+if [[ "$profile_list_exit" -ne 0 ]]; then
+  p1_status="FAIL"
+  fail "P1 singularity: \`nix profile list\` failed (exit $profile_list_exit) — cannot verify the profile entry. Remediation: on a nix-capable host run \`nix profile remove workestrate\` then \`nix profile install .#workestrate\` (or add --force to reinstall)"
+else
+  set +e
+  if printf '%s\n' "$profile_list_out" | grep -qE '^Name: '; then
+    # nix 2.23.3 multiline shape: one `Name:` line per entry.
+    p1_count=$(printf '%s\n' "$profile_list_out" | grep -cE '^Name:.*workestrate' || true)
+  else
+    # nix 2.35.1 indexed shape: one line per entry.
+    p1_count=$(printf '%s\n' "$profile_list_out" | grep -c 'workestrate' || true)
+  fi
+  set -e
+  # grep -c prints 0 on no match; normalize a missing/empty capture to 0.
+  p1_count="${p1_count:-0}"
+  if [[ "$p1_count" -eq 1 ]]; then
+    p1_status="OK"
+    log "P1 singularity OK (exactly one workestrate entry in nix profile list)"
+  else
+    p1_status="FAIL"
+    fail "P1 singularity: expected exactly 1 workestrate entry in \`nix profile list\`, got $p1_count. Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\` (or \`nix profile install .#workestrate --force\`)"
+  fi
+fi
+
+# --- P2: version identity — store-path want-vs-got (already computed as
+# $want/$got) PLUS `workestrate --version` vs the git shortRev
+# (inputs.self.shortRev semantics: `git rev-parse --short HEAD`, the
+# WORKESTRATE_REV value baked at build). WARN (not FAIL) when the tree is
+# dirty (`git status --porcelain` non-empty), since the baked rev then
+# legitimately reads "dirty".
+p2_fail=0
+if [[ -z "$want" ]] || [[ -z "$got" ]]; then
+  p2_fail=1
+  fail "P2 version identity: cannot compare store paths (want=${want:-<none>} got=${got:-<none>}). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
+elif [[ "$got" != "$want/bin/workestrate" ]]; then
+  p2_fail=1
+  fail "P2 version identity: store-path mismatch (want=$want/bin/workestrate got=$got). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
+else
+  log "P2 store-path identity OK ($got)"
+fi
+set +e
+expected_rev=$(git rev-parse --short HEAD 2>/dev/null || echo "UNKNOWN")
+tree_porcelain=$(git status --porcelain 2>/dev/null || true)
+set -e
+if [[ "$installed_rev" == "UNKNOWN" ]]; then
+  p2_fail=1
+  fail "P2 version identity: installed binary reports no baked rev (\`workestrate --version\` has no -<rev> suffix; git shortRev is $expected_rev). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
+elif [[ -n "$tree_porcelain" ]]; then
+  warn "P2 version identity: tree is dirty — baked rev $installed_rev vs git shortRev $expected_rev is unreliable (WARN, not FAIL)"
+  if [[ "$p2_fail" -eq 0 ]]; then p2_status="WARN"; fi
+elif [[ "$installed_rev" != "$expected_rev" ]]; then
+  p2_fail=1
+  fail "P2 version identity: baked-rev mismatch (installed $installed_rev vs git shortRev $expected_rev). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
+else
+  log "P2 baked-rev identity OK ($installed_rev)"
+fi
+if [[ "$p2_fail" -eq 1 ]]; then
+  p2_status="FAIL"
+elif [[ "$p2_status" != "WARN" ]]; then
+  p2_status="OK"
+fi
+
+# --- P3: triple liveness — baked MSB_PATH live (the wrapper's --set MSB_PATH
+# target from nix/packages/agentctl.nix exists + executable) + `msb --version`
+# runs + `agentd` present (baked MSB_AGENTD_PATH path exists, or `agentd`
+# resolvable on PATH). Each FAIL names the exact remediation.
+p3_fail=0
+# The nix wrapper (--set MSB_PATH/MSB_AGENTD_PATH in nix/packages/agentctl.nix)
+# bakes absolute store paths into the installed $got script, either as
+# `export MSB_PATH="..."` lines or bare store references — try the precise
+# export form first, then fall back to the store-path shape.
+set +e
+baked_msb=$(grep -oE 'MSB_PATH="[^"]+"' "$got" 2>/dev/null | head -n1 | cut -d'"' -f2 || true)
+if [[ -z "${baked_msb:-}" ]]; then
+  baked_msb=$(grep -oE '/nix/store/[^" ]*bin/msb' "$got" 2>/dev/null | head -n1 || true)
+fi
+baked_agentd=$(grep -oE 'MSB_AGENTD_PATH="[^"]+"' "$got" 2>/dev/null | head -n1 | cut -d'"' -f2 || true)
+if [[ -z "${baked_agentd:-}" ]]; then
+  baked_agentd=$(grep -oE '/nix/store/[^" ]*libexec/agentd' "$got" 2>/dev/null | head -n1 || true)
+fi
+set -e
+if [[ -z "${baked_msb:-}" ]]; then
+  p3_fail=1
+  fail "P3 msb liveness: no baked MSB_PATH found in the installed wrapper (${got:-<none>}). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
+elif [[ ! -x "$baked_msb" ]]; then
+  p3_fail=1
+  fail "P3 msb liveness: baked MSB_PATH target missing/not executable ($baked_msb). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\` (and re-enter \`nix develop\` if the store path was garbage-collected)"
+else
+  log "P3 baked MSB_PATH live ($baked_msb)"
+  set +e
+  msb_ver_out=$("$baked_msb" --version 2>&1 | head -n1 || true)
+  "$baked_msb" --version >/dev/null 2>&1
+  msb_ver_exit=$?
+  set -e
+  if [[ "$msb_ver_exit" -ne 0 ]]; then
+    p3_fail=1
+    fail "P3 msb liveness: \`$baked_msb --version\` failed (exit $msb_ver_exit): ${msb_ver_out:-<no output>}. Remediation: re-enter \`nix develop\`, and if it persists \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
+  else
+    log "P3 msb --version OK (${msb_ver_out:-ok})"
+  fi
+fi
+if [[ -n "${baked_agentd:-}" ]] && [[ -e "$baked_agentd" ]]; then
+  log "P3 agentd present (baked MSB_AGENTD_PATH $baked_agentd)"
+else
+  set +e
+  agentd_which=$(command -v agentd 2>/dev/null || true)
+  set -e
+  if [[ -n "${agentd_which:-}" ]]; then
+    log "P3 agentd present (resolvable on PATH: $agentd_which)"
+  else
+    p3_fail=1
+    fail "P3 msb liveness: agentd missing (no baked MSB_AGENTD_PATH in ${got:-<none>} and \`agentd\` not on PATH). Remediation: re-enter \`nix develop\`, then \`nix profile remove workestrate\` + \`nix profile install .#workestrate\`"
+  fi
+fi
+if [[ "$p3_fail" -eq 1 ]]; then p3_status="FAIL"; else p3_status="OK"; fi
 
 # ---------------------------------------------------------------------------
 # Step B½ — MSB home migration (best-effort, never fails provisioning)
@@ -299,6 +441,12 @@ printf "  %-14s %-8s %s\n" "home" "$row_home" ""
 count "$row_home"
 printf "  %-14s %-8s %s\n" "config_repos" "$row_config_repos" ""
 count "$row_config_repos"
+printf "  %-14s %-8s %s\n" "singularity" "$p1_status" "(P1: exactly one workestrate profile entry)"
+count "$p1_status"
+printf "  %-14s %-8s %s\n" "version" "$p2_status" "(P2: store-path + baked-rev identity)"
+count "$p2_status"
+printf "  %-14s %-8s %s\n" "msb-live" "$p3_status" "(P3: MSB_PATH + msb --version + agentd)"
+count "$p3_status"
 
 echo
 if [[ "$tbl_fail" -eq 0 ]]; then

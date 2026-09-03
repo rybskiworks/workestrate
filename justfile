@@ -153,6 +153,11 @@ host-check:
 host-provision:
     ./scripts/host-provision.sh
 
+# Read-only provisioning check: asserts profile singularity, version
+# identity, and msb/agentd liveness. Never installs anything.
+provision-check:
+    ./scripts/host-provision.sh --check-only
+
 # Bootstrap or update encrypted secrets
 setup-secrets *args:
     nix develop -c setup-secrets {{args}}
