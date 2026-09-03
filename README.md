@@ -718,12 +718,10 @@ capsule (`workestrate/workloads/litellm/`), not in this repo.
   kernel modules, add your user to the `kvm` group, log out and back in,
   and confirm virtualization is enabled in firmware. `just host-check`
   surfaces all of these.
-- **Stale `~/.microsandbox`.** Safe to delete. The dev shell uses a
-  persistent cache at `$HOME/.cache/ai-workbench-msb` for `cargo check`/
-  `build.rs` and also cleans up legacy per-shell tmpfs dirs from earlier
-  versions; `nix build .#workestrate` instead runs the Nix-store `msb`
-  directly and the wrapper sets `MSB_HOME="$HOME/.microsandbox"`. The old
-  `~/.microsandbox/bin/msb` path is no longer used at runtime.
+- **Canonical `~/.microsandbox` is LIVE (do NOT delete).** It is the
+  SDK runtime home; `$HOME/.cache/ai-workbench-msb` is staging-only for
+  offline `cargo check`/`build.rs`. On any skew, run
+  `./scripts/migrate-msb-home.sh`.
 - **Port 4000 already in use.** Another process is bound to the
   LiteLLM port. Stop it, or change the proxy port in the sandbox plan
   and update any agent configuration that points at `:4000`.
