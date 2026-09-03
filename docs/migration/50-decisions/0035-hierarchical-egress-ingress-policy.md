@@ -83,8 +83,8 @@ Axis entries live as **array-of-tables under the polarity table**:
 New idiom for allow-all (least specific rank, see §5):
 
 ```toml
-[[policy.egress.allow]]  all = true         # or with final:
-[[policy.egress.allow]]  all = true  final = true
+[policy.egress.allow]  all = true         # or with final:
+[policy.egress.allow]  all = true  final = true
 ```
 
 ### 3.3 Entry fields
@@ -97,7 +97,7 @@ New idiom for allow-all (least specific rank, see §5):
 | `ingress.allow.port` | `[[policy.ingress.allow.port]]` | `ports: u16[]` | `protocol = "tcp"`, `scope` (see §3.4 vocabulary), `final` | ingress is **port-only, peer-source-scoped** — domain rules rejected (see §3.4) |
 | `ingress.deny.port` | `[[policy.ingress.deny.port]]` | `ports: u16[]` | `protocol`, `scope`, `final` | deny counterpart; `scope` vocabulary same as allow |
 | `*_deny.all` | `[[policy.egress.deny]]` / `[[policy.ingress.deny]]` | `all = true` | `final` | deny-all |
-| `*_allow.all` | `[[policy.egress.allow]]` / `[[policy.ingress.allow]]` | `all = true` | `final` | allow-all (least specific) |
+| `*_allow.all` | `[policy.egress.allow]` / `[policy.ingress.allow]` | `all = true` | `final` | allow-all (least specific) |
 
 **Port asymmetry rationale (intentional):**
 
@@ -365,7 +365,7 @@ scope = "local"   # or "private"/"public"/"any" per §3.4
 
 ```toml
 [workloads.smoke.policy.egress.allow]
-[[workloads.smoke.policy.egress.allow]]
+[workloads.smoke.policy.egress.allow]
 all = true            # egress allow-all (least specific; see §5 rank)
 # no ingress — defaults to deny (fail-closed)
 ```
@@ -585,7 +585,7 @@ on_conflict = "warn"   # ingress-deny ladder has its own choice, independently s
 | `[[network.egress]] recipe = "agent_base"` (= dns+litellm_proxy+github) | Expand to the three rows above: dns host-bridge at config layer + github domain allow at config layer + gateway per-workload where litellm is the listener |
 | `[[network.deny]] domain_suffix="tracker.io"` | `[[policy.egress.deny.domain]] domains=[".tracker.io"]` (port omitted = all ports; optionally `port=443` for port-scoped) |
 | `[[network.ingress]] protocol="tcp" port=4000 scope="local"` | `[[policy.ingress.allow.port]] ports=[4000] protocol="tcp" scope="local"` — now peer-source group (§3.4), not bind |
-| `(implicit) allow-all` (via `defaults.egress="allow"`+entitlement) | `[[policy.egress.allow]] all=true` (+ optionally `final=true`) — least specific rank, explicit |
+| `(implicit) allow-all` (via `defaults.egress="allow"`+entitlement) | `[policy.egress.allow] all=true` (+ optionally `final=true`) — least specific rank, explicit |
 
 No compat aliases. Unknown `recipe` keys are hard `deny_unknown_fields` errors (see §10).
 
@@ -600,7 +600,7 @@ No compat aliases. Unknown `recipe` keys are hard `deny_unknown_fields` errors (
 | `odysseus` | workload-specific egress | agent runner |
 | `tempo_buddy` | workload-specific `api.tempo.io:443` + `github.com:443` | the blocked case — now a TOML edit |
 | `opencode` | workload-specific `opencode.ai:443` + github + anthropic | editor agent |
-| `smoke` | `[[policy.egress.allow]] all=true` + no ingress | test fixture — allow-all least-specific |
+| `smoke` | `[policy.egress.allow] all=true` + no ingress | test fixture — allow-all least-specific |
 | `duelbits/pi,prime,litellm` | same placement as personal counterparts | second config repo |
 | `config.reference` 5 examples (`example-litellm`, `example-service`, etc.) | `example-litellm` keeps per-workload ingress 4000 `local`; others keep dns + github-style egress | synthetic fixture; not a real deployment |
 | `templates/workestrate-config` jinja | rewritten to emit new syntax | template |
@@ -799,7 +799,7 @@ No KVM required. All gates are cargo-verifiable; golden plans pin the output.
 | cross-rung same coverage opposite polarity, neither final | #9 | deny wins (fail-closed) |
 | same coverage same polarity cross-rung | #10 | no-op, provenance records both |
 | workload allow .a.evil.com vs home deny .evil.com (suffix vs suffix, longer suffix) | #6 longer wins, but frozen → deny | frozen deny when home final |
-| `[[policy.egress.allow]] all=true` vs suffix deny | #6 all least specific → suffix wins unfrozen | allow-all does not shadow suffix |
+| `[policy.egress.allow] all=true` vs suffix deny | #6 all least specific → suffix wins unfrozen | allow-all does not shadow suffix |
 | deny domain port omitted vs port-scoped allow same domain same port | #5/#6 + #19 + §5A.4 compiler order | port-scoped allow wins unfrozen at that port; other ports denied; compiler emits port-scoped deny before allow |
 | port-scoped deny `port=443` vs port-agnostic deny + allow `port=443` | #19 / §5A.4 | port-scoped deny ordered before port-agnostic; most specific wins |
 | entitlements allow + home deny-final | #13 | deny hierarchy seals even entitled workload |

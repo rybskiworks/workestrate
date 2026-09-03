@@ -29,8 +29,9 @@ command = []
 [workloads.pi.network.defaults]
 egress = "deny"
 
-[[workloads.pi.network.egress]]
-recipe = "dns"
+[[workloads.pi.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 "#;
 
 /// A team override layer: bumps `cpus` to 2 and adds a GitHub egress recipe.
@@ -42,8 +43,10 @@ schema_version = 1
 [workloads.pi]
 cpus = 2
 
-[[workloads.pi.network.egress]]
-recipe = "github"
+[[workloads.pi.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
 "#;
 
 fn main() -> anyhow::Result<()> {
@@ -65,7 +68,7 @@ fn main() -> anyhow::Result<()> {
         "egress default : {:?}",
         pi.network.defaults.and_then(|d| d.egress)
     );
-    println!("egress recipes : {}", pi.network.egress.len());
+    println!("egress policy  : {:?}", pi.policy.egress);
 
     // The team layer set `cpus`; the base layer set the egress default.
     assert_eq!(

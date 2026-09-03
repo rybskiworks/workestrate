@@ -60,12 +60,14 @@ pub use trust::{is_trusted_project, trust_project, untrust_project};
 #[allow(unused_imports)]
 pub use types::{
     BakedFileSpec, BinarySpec, Bound, ConfigFile, ConfigRepoEntry, ConflictStep, Context,
-    DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, EnvBinding, EnvBindings,
-    EnvSecretRef, EnvVarConfig, ImageSpec, InstancePolicy, InstancePort, InstanceStrategy,
-    LocalBuildConfig, NetworkConfig, NetworkDefaultsConfig, OnSkew, PolicyConfig, PortOccupiedBare,
-    PortOccupiedChain, PortOccupiedStep, Registry, RegistrySettings, SecretDefConfig,
-    SecretViolationPolicy, SecretsLayer, SecretsPolicyFragment, SeedFileConfig, TrustedProject,
-    WorkloadConfig,
+    DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, DomainEntry, EgressAllowTable,
+    EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef, EnvVarConfig,
+    HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable, IngressDenyTable,
+    IngressPolicyFragment, InstancePolicy, InstancePort, InstanceStrategy, LocalBuildConfig,
+    NetworkConfig, NetworkDefaultsConfig, OnConflict, OnSkew, PolicyConfig, PortEntry,
+    PortOccupiedBare, PortOccupiedChain, PortOccupiedStep, Registry, RegistrySettings,
+    SecretDefConfig, SecretViolationPolicy, SecretsLayer, SecretsPolicyFragment, SeedFileConfig,
+    TrustedProject, WorkloadConfig,
 };
 #[allow(unused_imports)]
 pub use validation::{validate_config, validate_config_name, EXPECTED_SCHEMA_VERSION};

@@ -100,12 +100,13 @@ egress = "deny"
 # ingress = "deny"  # absent = deny (fail-closed); "allow" requires
 # entitlements = ["default_ingress_allow"]
 
-[[workloads.example-litellm.network.egress]]
-recipe = "dns"
+[[workloads.example-litellm.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.example-litellm.network.ingress]]
+[[workloads.example-litellm.policy.ingress.allow.port]]
+ports = [4000]
 protocol = "tcp"
-port = 4000
 scope = "local"
 
 [workloads.example-service]
@@ -155,16 +156,18 @@ target = "workspaces/example-service-state/globbed"
 [workloads.example-service.network.defaults]
 egress = "deny"
 
-[[workloads.example-service.network.egress]]
-recipe = "dns"
+[[workloads.example-service.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.example-service.network.egress]]
-recipe = "https"
-hosts = ["github.com", "api.github.com"]
-
-[[workloads.example-service.network.ingress]]
+[[workloads.example-service.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
 protocol = "tcp"
-port = 8080
+
+[[workloads.example-service.policy.ingress.allow.port]]
+ports = [8080]
+protocol = "tcp"
 scope = "local"
 
 # required = false (here and on the other example workloads below) because
@@ -219,8 +222,9 @@ guest = 9999
 [workloads.example-exports.network.defaults]
 egress = "deny"
 
-[[workloads.example-exports.network.egress]]
-recipe = "dns"
+[[workloads.example-exports.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
 [workloads.example-exports.depends_on.example-litellm]
 exports = { api = "LITELLM_API_URL" }
@@ -260,11 +264,21 @@ write.deny = [".env", "*.key"]
 [workloads.example-agent.network.defaults]
 egress = "deny"
 
-[[workloads.example-agent.network.egress]]
-recipe = "agent_base"
+[[workloads.example-agent.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.example-agent.network.deny]]
-domain_suffix = ".example.dev"
+[[workloads.example-agent.policy.egress.allow.host]]
+ports = [4000]
+protocols = ["tcp"]
+
+[[workloads.example-agent.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[[workloads.example-agent.policy.egress.deny.domain]]
+domains = [".example.dev"]
 
 [workloads.example-agent.local_build]
 recipe = "npm-build"
@@ -310,19 +324,14 @@ mode = "rw"
 [workloads.example-offensive.network.defaults]
 egress = "allow"
 
-[[workloads.example-offensive.network.egress]]
-recipe = "dns"
+[[workloads.example-offensive.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.example-offensive.network.egress]]
-recipe = "https"
-hosts = [
-  "openrouter.ai",
-  "api.kimi.com",
-  "api.neuralwatt.com",
-  "api.minimax.io",
-  "github.com",
-  "api.github.com"
-]
+[[workloads.example-offensive.policy.egress.allow.domain]]
+domains = ["openrouter.ai", "api.kimi.com", "api.neuralwatt.com", "api.minimax.io", "github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
 
 [workloads.example-offensive.local_build]
 recipe = "npm-build"

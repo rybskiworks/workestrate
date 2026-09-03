@@ -15,9 +15,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::microsandbox::plan::{DenyDomainRule, IngressRule, MountPlan, PortMapping};
+use crate::microsandbox::plan::{MountPlan, PortMapping};
 use crate::mount_policy::MountsFragment;
-use crate::recipes::EgressRecipeRef;
 
 /// How to obtain the sandbox image for a workload (`image = { ... }` inline
 /// table in workestrate.toml). `recipe` selects the acquisition strategy
@@ -551,16 +550,47 @@ where
 {
     let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
     Err(serde::de::Error::custom(
-        "network.default_deny was removed — use [network.defaults] egress = \"deny\" (absent = deny; \"allow\" requires entitlements = [\"default_egress_allow\"])",
+        "network.default_deny was removed — use [network.defaults] egress = \"deny\" (absent = deny; \"allow\" requires entitlements = [\"default_egress_allow\"]) — see ADR 0035 (docs/migration/50-decisions/0035-hierarchical-egress-ingress-policy.md) for rationale and migration",
+    ))
+}
+
+fn removed_network_egress<'de, D>(deserializer: D) -> Result<Option<()>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "network.egress was removed — use [[policy.egress.allow.domain]] domains=[\"example.com\"] port=443 protocol=\"tcp\" — see ADR 0035 (docs/migration/50-decisions/0035-hierarchical-egress-ingress-policy.md) for rationale and migration",
+    ))
+}
+
+fn removed_network_deny<'de, D>(deserializer: D) -> Result<Option<()>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "network.deny was removed — use [[policy.egress.deny.domain]] domains=[\".tracker.io\"] (or port=443 for port-scoped) — see ADR 0035 (docs/migration/50-decisions/0035-hierarchical-egress-ingress-policy.md) for rationale and migration",
+    ))
+}
+
+fn removed_network_ingress<'de, D>(deserializer: D) -> Result<Option<()>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "network.ingress was removed — use [[policy.ingress.allow.port]] ports=[4000] protocol=\"tcp\" scope=\"local\" (peer-source group, §3.4) — see ADR 0035 (docs/migration/50-decisions/0035-hierarchical-egress-ingress-policy.md) for rationale and migration",
     ))
 }
 
 /// Per-workload network policy (`workloads.<name>.network`). `defaults.egress`
 /// / `defaults.ingress` are the per-direction fail-closed switches (relaxing
 /// to `allow` requires the declared `default_egress_allow` /
-/// `default_ingress_allow` entitlement); `egress` lists allowed egress
-/// recipes, `deny` explicit domain-suffix denials, and `ingress` inbound
-/// exposure rules.
+/// `default_ingress_allow` entitlement). The rule surface has migrated to
+/// hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035;
+/// `network.egress` / `network.deny` / `network.ingress` are removed and
+/// hard-error with ADR-citing messages.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -570,12 +600,18 @@ pub struct NetworkConfig {
     #[doc(hidden)]
     pub default_deny: Option<()>,
     pub defaults: Option<NetworkDefaultsConfig>,
-    #[serde(default)]
-    pub egress: Vec<EgressRecipeRef>,
-    #[serde(default)]
-    pub deny: Vec<DenyDomainRule>,
-    #[serde(default)]
-    pub ingress: Vec<IngressRule>,
+    #[serde(default, deserialize_with = "removed_network_egress", skip_serializing)]
+    #[schemars(skip)]
+    #[doc(hidden)]
+    pub egress: Option<()>,
+    #[serde(default, deserialize_with = "removed_network_deny", skip_serializing)]
+    #[schemars(skip)]
+    #[doc(hidden)]
+    pub deny: Option<()>,
+    #[serde(default, deserialize_with = "removed_network_ingress", skip_serializing)]
+    #[schemars(skip)]
+    #[doc(hidden)]
+    pub ingress: Option<()>,
 }
 
 /// One step in a conflict chain (ADR 0030 addendum 2). A disposition a
@@ -1468,6 +1504,184 @@ pub struct PolicyConfig {
     /// COLLECTED per scope, never merged (see loading.rs).
     #[serde(default)]
     pub secrets: Option<SecretsPolicyFragment>,
+    /// Hierarchical egress policy fragment (`[policy.egress]`). Collected per
+    /// rung (home registry, config layers, workload) and compiled by the
+    /// network policy engine (ADR 0035). Each polarity table (`allow`/`deny`)
+    /// carries `all` / `final` and array-of-tables entries.
+    #[serde(default)]
+    pub egress: Option<EgressPolicyFragment>,
+    /// Hierarchical ingress policy fragment (`[policy.ingress]`). Collected per
+    /// rung and compiled by the network policy engine (ADR 0035). Ingress is
+    /// port-only with peer-source scope vocabulary (§3.4).
+    #[serde(default)]
+    pub ingress: Option<IngressPolicyFragment>,
+    /// IDNA handling policy (`[policy.idna]`). Ladder with `final` sealing,
+    /// default `reject` (ADR 0035 §3.5). Resolved before domain validation.
+    #[serde(default)]
+    pub idna: Option<IdnaPolicyFragment>,
+}
+
+/// Conflict handling for a frozen rung (ADR 0035 §8). Per-ladder granular:
+/// egress vs ingress ladders have independent `on_conflict`; each polarity
+/// table overridable; `final` seals the choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnConflict {
+    #[default]
+    Ignore,
+    Warn,
+    Fail,
+}
+
+/// IDNA mode for `policy.idna` (ADR 0035 §3.5). `reject` is the built-in
+/// default (hard error on non-ASCII); `uts46` enables strict ToASCII
+/// conversion via the `idna` crate with `unicode-security` confusable warnings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdnaMode {
+    #[default]
+    Reject,
+    #[serde(rename = "uts46")]
+    Uts46,
+}
+
+/// `policy.idna` fragment — flag-gated IDNA mode (ladder, default-off).
+/// Collected like other `policy.*` fragments, never via `merge.rs`; resolved
+/// before domain validation (gate 1 early, before coverage/specificity).
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdnaPolicyFragment {
+    #[serde(default)]
+    pub mode: Option<IdnaMode>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+}
+
+/// `policy.egress` fragment — hierarchical egress policy (ADR 0035 §3.2).
+/// Collected per rung; `on_conflict` and `final` at fragment level control
+/// the egress ladder's conflict handling and sealing.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EgressPolicyFragment {
+    #[serde(default)]
+    pub on_conflict: Option<OnConflict>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+    #[serde(default)]
+    pub allow: Option<EgressAllowTable>,
+    #[serde(default)]
+    pub deny: Option<EgressDenyTable>,
+}
+
+/// `policy.egress.allow` table — egress allow polarity (ADR 0035 §3.2).
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EgressAllowTable {
+    #[serde(default)]
+    pub all: Option<bool>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+    #[serde(default)]
+    pub domain: Vec<DomainEntry>,
+    #[serde(default)]
+    pub host: Vec<HostEntry>,
+}
+
+/// `policy.egress.deny` table — egress deny polarity (ADR 0035 §3.2).
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EgressDenyTable {
+    #[serde(default)]
+    pub all: Option<bool>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+    #[serde(default)]
+    pub domain: Vec<DomainEntry>,
+}
+
+/// One egress domain entry — `[[policy.egress.allow.domain]]` or
+/// `[[policy.egress.deny.domain]]`. `port` is REQUIRED on allow, OPTIONAL
+/// on deny (omitted = all ports, deny-only). Validated by the policy
+/// compiler.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DomainEntry {
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+}
+
+/// One egress host entry — `[[policy.egress.allow.host]]`.
+/// Host-bridge (DNS + litellm proxy); `host` is the msb host bridge.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HostEntry {
+    #[serde(default)]
+    pub ports: Vec<u16>,
+    #[serde(default)]
+    pub protocols: Vec<String>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+}
+
+/// `policy.ingress` fragment — hierarchical ingress policy (ADR 0035 §3.4).
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IngressPolicyFragment {
+    #[serde(default)]
+    pub on_conflict: Option<OnConflict>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+    #[serde(default)]
+    pub allow: Option<IngressAllowTable>,
+    #[serde(default)]
+    pub deny: Option<IngressDenyTable>,
+}
+
+/// `policy.ingress.allow` table — ingress allow polarity.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IngressAllowTable {
+    #[serde(default)]
+    pub all: Option<bool>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+    #[serde(default)]
+    pub port: Vec<PortEntry>,
+}
+
+/// `policy.ingress.deny` table — ingress deny polarity.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IngressDenyTable {
+    #[serde(default)]
+    pub all: Option<bool>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+    #[serde(default)]
+    pub port: Vec<PortEntry>,
+}
+
+/// One ingress port entry — `[[policy.ingress.allow.port]]` or
+/// `[[policy.ingress.deny.port]]`. `protocol` is `"tcp"` only v1
+/// (`"udp"` validation error "not supported v1, tcp/local only"), `scope`
+/// is `"local"` only v1.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PortEntry {
+    #[serde(default)]
+    pub ports: Vec<u16>,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
 }
 
 // ---------------------------------------------------------------------------

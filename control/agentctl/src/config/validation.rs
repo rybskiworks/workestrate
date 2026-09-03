@@ -9,7 +9,6 @@ use crate::config::types::{
     InstancePort, InstanceStrategy, ParameterizedIncrement, PortOccupiedStep,
 };
 use crate::policy;
-use crate::recipes::EgressRecipeRef;
 
 // ---------------------------------------------------------------------------
 // workestrate.toml schema
@@ -227,18 +226,6 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                 }
             }
         }
-        // Defensive: egress recipe names are already constrained to the known
-        // EgressRecipeRef variants by TOML deserialization (serde tagged
-        // enum); this match documents the closed set.
-        for egress in &workload.network.egress {
-            match egress {
-                EgressRecipeRef::Dns
-                | EgressRecipeRef::LitellmProxy
-                | EgressRecipeRef::Github
-                | EgressRecipeRef::AgentBase
-                | EgressRecipeRef::Https { .. } => {}
-            }
-        }
     }
 
     // ADR 0030 Phase 1: per-workload instance policy port bounds (the closed
@@ -333,44 +320,6 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                  strategy.",
                 workload_name
             );
-        }
-    }
-
-    // Egress hosts in https recipes must be in ALLOWED_EGRESS_HOSTS.
-    for (workload_name, workload) in &config.workloads {
-        for egress in &workload.network.egress {
-            if let EgressRecipeRef::Https { hosts } = egress {
-                for host in hosts {
-                    if !policy::ALLOWED_EGRESS_HOSTS.contains(&host.as_str()) {
-                        anyhow::bail!(
-                            "workload '{}' egress host '{}' is not in the core egress allowlist",
-                            workload_name,
-                            host
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    // Secret-declared egress hosts must come from the core egress allowlist
-    // (fail-closed, generic: there is no core per-secret table — any
-    // config-declared secret may bind hosts, but only allowlisted ones).
-    // Secrets WITHOUT `env_var` are skipped: they are never read from the
-    // host environment, so their `allowed_hosts` cannot route a host-env
-    // value anywhere (the declaration may still be used by other binding
-    // modes; gating preserved from the retired core binding table).
-    for (secret_name, secret) in &config.secrets {
-        if secret.env_var.is_some() {
-            for host in secret.allowed_hosts.as_deref().unwrap_or(&[]) {
-                if !policy::ALLOWED_EGRESS_HOSTS.contains(&host.as_str()) {
-                    anyhow::bail!(
-                        "secret '{}' allowed_hosts entry '{}' is not in the core egress allowlist",
-                        secret_name,
-                        host
-                    );
-                }
-            }
         }
     }
 
@@ -1255,11 +1204,8 @@ command = []
 egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
-        let err = validate_config(&config).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "secret 'MY_KEY' allowed_hosts entry 'evil.example.com' is not in the core egress allowlist"
-        );
+        // ADR 0035: secret allowed_hosts no longer validated against hardcoded allowlist — any host is allowed
+        validate_config(&config).expect("secret with any allowed_hosts should now validate (allowlist removed per ADR 0035)");
     }
 
     #[test]

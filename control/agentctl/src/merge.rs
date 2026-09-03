@@ -1,6 +1,7 @@
-use crate::config::{ConfigFile, SecretDefConfig, SecretsPolicyFragment, WorkloadConfig};
-use crate::policy;
-use crate::recipes::EgressRecipeRef;
+use crate::config::{
+    ConfigFile, EgressPolicyFragment, IdnaPolicyFragment, IngressPolicyFragment, SecretDefConfig,
+    SecretsPolicyFragment, WorkloadConfig,
+};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -361,6 +362,54 @@ pub fn get_secret_policy_ladder() -> Option<SecretPolicyLadder> {
 }
 
 // ---------------------------------------------------------------------------
+// Network policy ladder process-global storage (ADR 0035)
+// ---------------------------------------------------------------------------
+//
+// The collected `[policy.egress]` / `[policy.ingress]` / `[policy.idna]`
+// rungs for the most recent config load, mirroring the secret-policy ladder:
+// fragments are COLLECTED per scope, never merged (no policy field passes
+// through merge_layers), and the resolution walks them authority-ascending.
+// Rung 1 is home-registry, rung 2 is config layers in stack order, rung 3 is
+// workload capsule per workload name. Same Mutex rationale as above.
+
+/// The collected network policy ladder rungs (ADR 0035). Each entry carries
+/// the ORIGIN label used in resolution provenance (home-registry scope label,
+/// or the declaring layer's name).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NetworkPolicyLadder {
+    /// Egress ladder: home, layers, workloads.
+    pub egress_home: Option<(String, EgressPolicyFragment)>,
+    pub egress_layers: Vec<(String, EgressPolicyFragment)>,
+    pub egress_workloads: HashMap<String, Vec<(String, EgressPolicyFragment)>>,
+    /// Ingress ladder.
+    pub ingress_home: Option<(String, IngressPolicyFragment)>,
+    pub ingress_layers: Vec<(String, IngressPolicyFragment)>,
+    pub ingress_workloads: HashMap<String, Vec<(String, IngressPolicyFragment)>>,
+    /// IDNA ladder.
+    pub idna_home: Option<(String, IdnaPolicyFragment)>,
+    pub idna_layers: Vec<(String, IdnaPolicyFragment)>,
+    pub idna_workloads: HashMap<String, Vec<(String, IdnaPolicyFragment)>>,
+}
+
+static NETWORK_POLICY_LADDER: std::sync::Mutex<Option<NetworkPolicyLadder>> =
+    std::sync::Mutex::new(None);
+
+/// Store the collected network policy ladder for the most recent config load.
+pub fn set_network_policy_ladder(ladder: Option<NetworkPolicyLadder>) {
+    *NETWORK_POLICY_LADDER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = ladder;
+}
+
+/// Clone the stored network policy ladder without consuming it.
+pub fn get_network_policy_ladder() -> Option<NetworkPolicyLadder> {
+    NETWORK_POLICY_LADDER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+// ---------------------------------------------------------------------------
 // Merge helpers
 // ---------------------------------------------------------------------------
 
@@ -621,22 +670,6 @@ fn merge_workload(
     Ok(())
 }
 
-/// Canonical dedup key for an egress recipe (FS-24). Two recipes are "the
-/// same" when their canonical keys match: for `Https{hosts}` the key is the
-/// SORTED + deduped host list (so `a,b` ≡ `b,a`); every other recipe variant
-/// is its own key verbatim.
-fn canonical_egress_key(recipe: &EgressRecipeRef) -> EgressRecipeRef {
-    match recipe {
-        EgressRecipeRef::Https { hosts } => {
-            let mut hosts = hosts.clone();
-            hosts.sort();
-            hosts.dedup();
-            EgressRecipeRef::Https { hosts }
-        }
-        other => other.clone(),
-    }
-}
-
 fn merge_network(
     merged: &mut crate::config::NetworkConfig,
     layer: &crate::config::NetworkConfig,
@@ -712,73 +745,6 @@ fn merge_network(
         );
     }
 
-    if raw_network.contains_key("egress") {
-        for recipe in &layer.egress {
-            if let EgressRecipeRef::Https { hosts } = recipe {
-                for host in hosts {
-                    if !policy::ALLOWED_EGRESS_HOSTS.contains(&host.as_str()) {
-                        anyhow::bail!(
-                            "layer '{}' egress host '{}' for workload '{}' is not in the core egress allowlist",
-                            layer_ctx.name,
-                            host,
-                            name
-                        );
-                    }
-                }
-            }
-            // FS-24: dedup against a CANONICAL KEY (sorted+deduped hosts for
-            // Https) so `a,b` and `b,a` collapse — previously order-sensitive
-            // PartialEq let both through. The merged list keeps the FIRST
-            // declaration's recipe verbatim (declared host order is the
-            // rendered plan order, pinned by the golden plans).
-            let key = canonical_egress_key(recipe);
-            let idx = match merged
-                .egress
-                .iter()
-                .position(|r| canonical_egress_key(r) == key)
-            {
-                Some(i) => i,
-                None => {
-                    merged.egress.push(recipe.clone());
-                    merged.egress.len().saturating_sub(1)
-                }
-            };
-            // FS-24: provenance updates on EVERY declaration (mirroring the
-            // FN-3 last-layer-wins pattern), not only on first insert — the
-            // index addresses the slot in the merged list, so a duplicate
-            // declaration re-attributes that slot's provenance to the
-            // later-declaring layer.
-            provenance.insert(
-                format!("workloads.{name}.network.egress.{idx}"),
-                layer_ctx.name.clone(),
-            );
-        }
-    }
-
-    if raw_network.contains_key("deny") {
-        for rule in &layer.deny {
-            if !merged
-                .deny
-                .iter()
-                .any(|r| r.domain_suffix == rule.domain_suffix)
-            {
-                merged.deny.push(rule.clone());
-                provenance.insert(
-                    format!("workloads.{name}.network.deny.{}", rule.domain_suffix),
-                    layer_ctx.name.clone(),
-                );
-            }
-        }
-    }
-
-    if raw_network.contains_key("ingress") {
-        merged.ingress = layer.ingress.clone();
-        provenance.insert(
-            format!("workloads.{name}.network.ingress"),
-            layer_ctx.name.clone(),
-        );
-    }
-
     Ok(())
 }
 
@@ -826,29 +792,7 @@ mod tests {
             Some(crate::config::DefaultAction::Deny)
         );
 
-        let egress_names: Vec<String> = pi
-            .network
-            .egress
-            .iter()
-            .map(|r| match r {
-                EgressRecipeRef::Dns => "dns".to_string(),
-                EgressRecipeRef::LitellmProxy => "litellm_proxy".to_string(),
-                EgressRecipeRef::Github => "github".to_string(),
-                EgressRecipeRef::AgentBase => "agent_base".to_string(),
-                EgressRecipeRef::Https { hosts } => format!("https:{}", hosts.join(",")),
-            })
-            .collect();
-        assert!(egress_names.contains(&"dns".to_string()));
-        assert!(egress_names.contains(&"github".to_string()));
 
-        let deny_suffixes: Vec<&str> = pi
-            .network
-            .deny
-            .iter()
-            .map(|r| r.domain_suffix.as_str())
-            .collect();
-        assert!(deny_suffixes.contains(&".evil.com"));
-        assert!(deny_suffixes.contains(&".tracker.io"));
 
         assert_eq!(
             provenance.get("workloads.pi.cpus"),
@@ -901,100 +845,11 @@ mod tests {
         Ok(())
     }
 
-    // ---- FS-24: Https{hosts} egress dedup is order-insensitive; provenance updates on every declaration ----
+    // FS-24 tests removed (egress recipes removed per ADR 0035)
 
-    fn https_layer(name: &str, hosts: &str) -> Result<Layer> {
-        let toml = format!(
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n\n[[workloads.pi.network.egress]]\nrecipe = \"https\"\nhosts = {hosts}\n"
-        );
-        Layer::from_string(name, &toml)
-    }
 
-    /// FS-24: `a,b` and `b,a` are the SAME Https recipe — the merged list
-    /// must contain exactly one canonicalized (sorted) entry.
-    #[test]
-    fn https_egress_dedup_is_order_insensitive() -> Result<()> {
-        let base = https_layer("base", r#"["openrouter.ai", "github.com"]"#)?;
-        let later = https_layer("later", r#"["github.com", "openrouter.ai"]"#)?;
+    // deny/egress union tests removed (per ADR 0035)
 
-        let (merged, _provenance) = merge_layers(&[base, later])?;
-        let pi = merged.workloads.get("pi").unwrap();
-        let https_recipes: Vec<_> = pi
-            .network
-            .egress
-            .iter()
-            .filter(|r| matches!(r, EgressRecipeRef::Https { .. }))
-            .collect();
-        assert_eq!(
-            https_recipes.len(),
-            1,
-            "order-permuted Https hosts must dedup to one entry: {:?}",
-            pi.network.egress
-        );
-        match https_recipes[0] {
-            EgressRecipeRef::Https { hosts } => {
-                assert_eq!(
-                    hosts,
-                    &vec!["openrouter.ai".to_string(), "github.com".to_string()],
-                    "the merged entry keeps the FIRST declaration's host order \
-                     (dedup canonicalizes only the comparison key, not the output)"
-                );
-            }
-            other => {
-                return Err(anyhow::anyhow!("expected Https recipe, got {other:?}"));
-            }
-        }
-        Ok(())
-    }
-
-    /// FS-24: provenance moves to the LATER declaring layer even when the
-    /// recipe is a duplicate (mirrors FN-3 last-layer-wins), rather than
-    /// sticking with the first declarer inside the dedup guard.
-    #[test]
-    fn https_egress_provenance_updates_on_duplicate_declaration() -> Result<()> {
-        let base = https_layer("base", r#"["openrouter.ai", "github.com"]"#)?;
-        let later = https_layer("later", r#"["github.com", "openrouter.ai"]"#)?;
-
-        let (_merged, provenance) = merge_layers(&[base, later])?;
-        assert_eq!(
-            provenance
-                .get("workloads.pi.network.egress.0")
-                .map(|s| s.as_str()),
-            Some("later"),
-            "duplicate declaration must re-attribute provenance to the later layer"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn deny_union_across_layers() -> Result<()> {
-        let team = load_fixture("team", "team");
-        let personal = load_fixture("personal", "personal");
-
-        let (merged, _) = merge_layers(&[team, personal])?;
-        let pi = merged.workloads.get("pi").unwrap();
-        let suffixes: Vec<&str> = pi
-            .network
-            .deny
-            .iter()
-            .map(|r| r.domain_suffix.as_str())
-            .collect();
-        assert!(suffixes.contains(&".evil.com"));
-        assert!(suffixes.contains(&".tracker.io"));
-        Ok(())
-    }
-
-    #[test]
-    fn egress_union_across_layers() -> Result<()> {
-        let base = load_fixture("base", "base");
-        let team = load_fixture("team", "team");
-
-        let (merged, _) = merge_layers(&[base, team])?;
-        let pi = merged.workloads.get("pi").unwrap();
-        assert!(pi.network.egress.contains(&EgressRecipeRef::Dns));
-        assert!(pi.network.egress.contains(&EgressRecipeRef::Github));
-        Ok(())
-    }
 
     #[test]
     fn egress_default_allow_requires_entitlement_monotonic_deny() {
@@ -1088,18 +943,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn egress_ceiling_blocks_unknown_host() {
-        let hostile = load_fixture("hostile_egress", "hostile_egress");
+    // egress_ceiling test removed (allowlist removed per ADR 0035)
 
-        let err = merge_layers(&[hostile]).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("allowlist"),
-            "error should mention allowlist: {msg}"
-        );
-        assert!(msg.contains("evil.com"), "error should mention host: {msg}");
-    }
 
     #[test]
     fn single_layer_parity() -> Result<()> {
@@ -1107,7 +952,18 @@ mod tests {
         let direct: ConfigFile = toml::from_str(&std::fs::read_to_string(fixture("base"))?)?;
 
         let (merged, _) = merge_layers(&[base])?;
-        assert_eq!(merged, direct);
+        // Policy is collected via ladder, not merged — so direct and merged differ on policy; compare everything else
+        let mut direct_no_policy = direct.clone();
+        let mut merged_no_policy = merged.clone();
+        for wl in direct_no_policy.workloads.values_mut() {
+            wl.policy = Default::default();
+        }
+        direct_no_policy.policy = Default::default();
+        for wl in merged_no_policy.workloads.values_mut() {
+            wl.policy = Default::default();
+        }
+        merged_no_policy.policy = Default::default();
+        assert_eq!(merged_no_policy, direct_no_policy);
         Ok(())
     }
 

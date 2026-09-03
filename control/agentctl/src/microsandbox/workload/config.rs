@@ -6,7 +6,7 @@ use super::{SandboxCommand, Workload};
 use crate::config::WorkloadConfig;
 use crate::microsandbox::env::{render_seed_text, SeedEnvView};
 use crate::microsandbox::plan::{
-    EgressRule, EnvVar, HostBoundSecret, MountPlan, NetworkPlan, SandboxPlan,
+    EnvVar, HostBoundSecret, MountPlan, SandboxPlan,
 };
 use anyhow::Result;
 use std::path::PathBuf;
@@ -436,18 +436,31 @@ impl Workload for ConfigWorkload {
         }
     }
 
+    #[allow(clippy::panic)]
     fn plan(&self) -> SandboxPlan {
-        let egress_rules: Vec<EgressRule> = self
-            .workload
-            .network
-            .egress
-            .iter()
-            .flat_map(crate::recipes::EgressRecipeRef::expand)
-            .collect();
+        // ADR 0035: hierarchical policy compilation replaces recipe expansion.
+        // The ladder is collected at load time (home > layers > workload) and
+        // stored process-global. We compile it here per-workload.
+        let ladder = crate::merge::get_network_policy_ladder().unwrap_or_default();
+        let mut network_plan = match crate::policy::network_policy::compile_network_plan(
+            &ladder,
+            &self.name,
+            &self.workload,
+        ) {
+            Ok(plan) => plan,
+            Err(e) => {
+                // For on_conflict=fail and validation errors, plan must fail.
+                // The Workload trait's plan() is infallible, so we panic with the
+                // structured error — callers that need to handle the error
+                // should call the compiler directly.
+                panic!("network policy compilation failed for workload '{}': {e}", self.name);
+            }
+        };
+        let egress_rules = network_plan.egress_rules.clone();
 
         // ADR 0026(d): apply the depends_on resolution — injected env AFTER
         // declared env (declared wins on a name conflict; skipped inside),
-        // derived egress AFTER the expanded declared rules (identical rules
+        // derived egress AFTER the compiled declared rules (identical rules
         // deduped inside). Derivation only ADDS: the egress default is untouched
         // (monotonic; FS-16 entitlement check untouched), and the derived
         // rules land in `egress_rules` so `network_plan_to_policy` consumes
@@ -461,6 +474,8 @@ impl Workload for ConfigWorkload {
         env.extend(injected_env);
         let mut egress_rules = egress_rules;
         egress_rules.extend(derived_egress);
+        // Update the network plan with derived egress
+        network_plan.egress_rules = egress_rules;
 
         let mut mounts = self.workload.mounts.clone();
         // WP6(c)/A6: a configured local_build.env_override is ALSO honored as
@@ -491,23 +506,7 @@ impl Workload for ConfigWorkload {
             secret_env: self.secret_env.clone(),
             ports: self.workload.ports.clone(),
             mounts,
-            network: NetworkPlan {
-                // Absent `defaults.egress` / `defaults.ingress` = deny
-                // (fail-closed); only an explicit `"allow"` (entitlement-
-                // gated at merge and validate time) relaxes that
-                // direction's default.
-                egress_default_deny: !matches!(
-                    self.workload.network.defaults.and_then(|d| d.egress),
-                    Some(crate::config::DefaultAction::Allow)
-                ),
-                ingress_default_deny: !matches!(
-                    self.workload.network.defaults.and_then(|d| d.ingress),
-                    Some(crate::config::DefaultAction::Allow)
-                ),
-                egress_rules,
-                deny_rules: self.workload.network.deny.clone(),
-                ingress_rules: self.workload.network.ingress.clone(),
-            },
+            network: network_plan,
             instance_policy: (self.workload.instance != Default::default())
                 .then(|| self.workload.instance.clone()),
         }

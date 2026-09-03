@@ -137,9 +137,17 @@ pub fn cmd_new(name: &str, kind: &str) -> Result<()> {
         mode = \"rw\"\n\n\
         [workloads.{}.network.defaults]\n\
         egress = \"deny\"\n\n\
-        [[workloads.{}.network.egress]]\n\
-        recipe = \"agent_base\"\n",
-        name, kind, name, name, name
+        [[workloads.{}.policy.egress.allow.host]]\n\
+        ports = [53]\n\
+        protocols = [\"tcp\", \"udp\"]\n\
+        [[workloads.{}.policy.egress.allow.host]]\n\
+        ports = [4000]\n\
+        protocols = [\"tcp\"]\n\
+        [[workloads.{}.policy.egress.allow.domain]]\n\
+        domains = [\"github.com\", \"api.github.com\"]\n\
+        port = 443\n\
+        protocol = \"tcp\"\n",
+        name, kind, name, name, name, name, name
     );
 
     // Write the TOML entry atomically (FS-17): read the current content,

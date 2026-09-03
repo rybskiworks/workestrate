@@ -22,5 +22,6 @@ read_only = false
 [workloads.pi.network.defaults]
 egress = "deny"
 
-[[workloads.pi.network.egress]]
-recipe = "dns"
+[[workloads.pi.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]

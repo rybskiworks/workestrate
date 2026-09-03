@@ -353,10 +353,12 @@ pub fn load_config() -> Result<ConfigFile> {
             let layer = crate::merge::Layer::load("local", &path)?;
             let collected = collect_policy_scopes(None, std::slice::from_ref(&layer))?;
             let ladder = collect_secret_policy_ladder(None, std::slice::from_ref(&layer));
+            let network_ladder = collect_network_policy_ladder(None, std::slice::from_ref(&layer));
             let layer_dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&layer));
             let (merged, provenance) = crate::merge::merge_layers(&[layer])?;
             crate::mount_policy::set_collected_policy(Some(collected));
             crate::merge::set_secret_policy_ladder(Some(ladder));
+            crate::merge::set_network_policy_ladder(Some(network_ladder));
             crate::merge::set_provenance(Some(provenance));
             crate::merge::set_layer_dirs(Some(layer_dirs));
             validate_config(&merged)?;
@@ -489,6 +491,7 @@ pub fn load_config() -> Result<ConfigFile> {
         };
     let mut collected = collect_policy_scopes(registry.as_ref(), &layers)?;
     let mut ladder = collect_secret_policy_ladder(registry.as_ref(), &layers);
+    let mut network_ladder = collect_network_policy_ladder(registry.as_ref(), &layers);
     if let Some((workload, layer)) = substituted_layer {
         // The policy collection must reflect the substitution: the home
         // collection above saw the PRE-substitution declaration, which
@@ -498,9 +501,11 @@ pub fn load_config() -> Result<ConfigFile> {
         // policy is authoritative for this workload.
         replace_workload_scopes_from_layer(&mut collected, &workload, &layer);
         replace_workload_secret_rungs_from_layer(&mut ladder, &workload, &layer);
+        replace_workload_network_rungs_from_layer(&mut network_ladder, &workload, &layer);
     }
     crate::mount_policy::set_collected_policy(Some(collected));
     crate::merge::set_secret_policy_ladder(Some(ladder));
+    crate::merge::set_network_policy_ladder(Some(network_ladder));
     crate::merge::set_provenance(Some(provenance));
     crate::merge::set_layer_dirs(Some(layer_dirs));
     validate_config(&merged)?;
@@ -880,6 +885,110 @@ fn collect_secret_policy_ladder(
         }
     }
     ladder
+}
+
+/// Collect the network policy ladder rungs in the loader's actual order —
+/// the network edition of [`collect_secret_policy_ladder`]: fragments are
+/// collected per scope, never merged, and the resolution walks them
+/// authority-ascending. Rung 1 is home-registry, rung 2 is config layers in
+/// stack order, rung 3 is workload capsules per workload name.
+fn collect_network_policy_ladder(
+    registry: Option<&Registry>,
+    layers: &[crate::merge::Layer],
+) -> crate::merge::NetworkPolicyLadder {
+    let mut ladder = crate::merge::NetworkPolicyLadder::default();
+    if let Some(registry) = registry {
+        if let Some(fragment) = registry.policy.egress.clone() {
+            ladder.egress_home = Some(("home-registry".to_string(), fragment));
+        }
+        if let Some(fragment) = registry.policy.ingress.clone() {
+            ladder.ingress_home = Some(("home-registry".to_string(), fragment));
+        }
+        if let Some(fragment) = registry.policy.idna.clone() {
+            ladder.idna_home = Some(("home-registry".to_string(), fragment));
+        }
+    }
+    for layer in layers {
+        if let Some(fragment) = layer.config.policy.egress.clone() {
+            ladder.egress_layers.push((layer.name.clone(), fragment));
+        }
+        if let Some(fragment) = layer.config.policy.ingress.clone() {
+            ladder.ingress_layers.push((layer.name.clone(), fragment));
+        }
+        if let Some(fragment) = layer.config.policy.idna.clone() {
+            ladder.idna_layers.push((layer.name.clone(), fragment));
+        }
+        for (name, workload) in &layer.config.workloads {
+            if let Some(fragment) = workload.policy.egress.clone() {
+                ladder
+                    .egress_workloads
+                    .entry(name.clone())
+                    .or_default()
+                    .push((layer.name.clone(), fragment));
+            }
+            if let Some(fragment) = workload.policy.ingress.clone() {
+                ladder
+                    .ingress_workloads
+                    .entry(name.clone())
+                    .or_default()
+                    .push((layer.name.clone(), fragment));
+            }
+            if let Some(fragment) = workload.policy.idna.clone() {
+                ladder
+                    .idna_workloads
+                    .entry(name.clone())
+                    .or_default()
+                    .push((layer.name.clone(), fragment));
+            }
+        }
+    }
+    ladder
+}
+
+/// Re-collect ONE workload's network policy rungs from a substituted layer,
+/// replacing whatever the home-scoped [`collect_network_policy_ladder`] pass
+/// recorded for it. Capsule-only: layer-global rungs stay home-scoped.
+fn replace_workload_network_rungs_from_layer(
+    ladder: &mut crate::merge::NetworkPolicyLadder,
+    workload: &str,
+    layer: &crate::merge::Layer,
+) {
+    if let Some(fragment) = layer
+        .config
+        .workloads
+        .get(workload)
+        .and_then(|decl| decl.policy.egress.clone())
+    {
+        ladder
+            .egress_workloads
+            .insert(workload.to_string(), vec![(layer.name.clone(), fragment)]);
+    } else {
+        ladder.egress_workloads.remove(workload);
+    }
+    if let Some(fragment) = layer
+        .config
+        .workloads
+        .get(workload)
+        .and_then(|decl| decl.policy.ingress.clone())
+    {
+        ladder
+            .ingress_workloads
+            .insert(workload.to_string(), vec![(layer.name.clone(), fragment)]);
+    } else {
+        ladder.ingress_workloads.remove(workload);
+    }
+    if let Some(fragment) = layer
+        .config
+        .workloads
+        .get(workload)
+        .and_then(|decl| decl.policy.idna.clone())
+    {
+        ladder
+            .idna_workloads
+            .insert(workload.to_string(), vec![(layer.name.clone(), fragment)]);
+    } else {
+        ladder.idna_workloads.remove(workload);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1805,34 +1914,25 @@ pub(crate) mod tests {
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&tmp)?;
-        // Override adds a non-allowlisted egress host.
+        // Override adds an old network.egress recipe — now hard-errors with ADR citation (ADR 0035).
         let path = write_overrides(
             &tmp,
             "[[global.workloads.pi.network.egress]]\nrecipe = \"https\"\nhosts = [\"evil.com\"]\n",
         );
         let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
-        let layers = load_overrides(&path, &[], &existing)?;
-        assert_eq!(layers.len(), 1);
-
-        let base = crate::merge::Layer::from_string(
-            "base",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"",
-        )?;
-        let mut all = vec![base];
-        all.extend(layers);
-        let result = crate::merge::merge_layers(&all);
+        let result = load_overrides(&path, &[], &existing);
         assert!(
             result.is_err(),
-            "override with non-allowlisted egress host should hard-fail"
+            "override with old recipe syntax should hard-fail with ADR citation (removed syntax)"
         );
-        let err = result.unwrap_err().to_string();
+        let err = result.err().unwrap().to_string();
         assert!(
-            err.contains("allowlist"),
-            "error should mention allowlist: {err}"
+            err.contains("network.egress was removed"),
+            "error should mention removed network.egress: {err}"
         );
         assert!(
-            err.contains("evil.com"),
-            "error should mention the host: {err}"
+            err.contains("see ADR 0035"),
+            "error should cite ADR 0035: {err}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())

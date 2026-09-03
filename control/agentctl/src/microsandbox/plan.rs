@@ -748,7 +748,7 @@ impl EgressRule {
     pub fn agent_base() -> Vec<Self> {
         let mut rules = Self::dns();
         rules.push(Self::litellm_proxy());
-        rules.push(Self::https(crate::policy::GITHUB_HOSTS));
+        rules.push(Self::https(&["github.com", "api.github.com"]));
         rules
     }
 }
@@ -1196,7 +1196,7 @@ network: egress_default=deny ingress_default=deny
         let rules = EgressRule::agent_base();
         assert_eq!(rules.len(), 4);
         assert_eq!(rules[2], EgressRule::litellm_proxy());
-        assert_eq!(rules[3], EgressRule::https(crate::policy::GITHUB_HOSTS));
+        assert_eq!(rules[3], EgressRule::https(&["github.com", "api.github.com"]));
     }
 
     // ---- HostBoundSecret ----

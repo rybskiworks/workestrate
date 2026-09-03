@@ -659,8 +659,9 @@ fn production_full_plan_render_two_layer_fixture() {
          read_only = false\n\n\
          [workloads.example-service.network.defaults]\n\
          egress = \"deny\"\n\n\
-         [[workloads.example-service.network.egress]]\n\
-         recipe = \"dns\"\n",
+         [[workloads.example-service.policy.egress.allow.host]]\n\
+         ports = [53]\n\
+         protocols = [\"tcp\", \"udp\"]\n",
     );
     // Team: resources, an extra env var, an https egress recipe.
     env.write_layer(
@@ -672,9 +673,10 @@ fn production_full_plan_render_two_layer_fixture() {
          [[workloads.example-service.env]]\n\
          name = \"TEAM_FLAG\"\n\
          value = \"on\"\n\n\
-         [[workloads.example-service.network.egress]]\n\
-         recipe = \"https\"\n\
-         hosts = [\"github.com\"]\n",
+         [[workloads.example-service.policy.egress.allow.domain]]\n\
+         domains = [\"github.com\"]\n\
+         port = 443\n\
+         protocol = \"tcp\"\n",
     );
 
     let out = env.run(env.cmd().args(["example-service", "plan"]));

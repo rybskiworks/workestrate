@@ -17,9 +17,11 @@ read_only = false
 [workloads.pi.network.defaults]
 egress = "deny"
 
-[[workloads.pi.network.egress]]
-recipe = "dns"
+[[workloads.pi.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.pi.network.egress]]
-recipe = "https"
-hosts = ["evil.com"]  # HOSTILE: evil.com is not in ALLOWED_EGRESS_HOSTS
+[[workloads.pi.policy.egress.allow.domain]]
+domains = ["evil.com"]
+port = 443
+protocol = "tcp"  # HOSTILE: evil.com is not in ALLOWED_EGRESS_HOSTS

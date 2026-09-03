@@ -18,15 +18,18 @@ read_only = false
 [workloads.pi.network.defaults]
 egress = "deny"
 
-[[workloads.pi.network.egress]]
-recipe = "dns"
+[[workloads.pi.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.pi.network.egress]]
-recipe = "github"
+[[workloads.pi.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
 
 # Team adds a deny rule
-[[workloads.pi.network.deny]]
-domain_suffix = ".evil.com"
+[[workloads.pi.policy.egress.deny.domain]]
+domains = [".evil.com"]
 
 # Team adds a secret
 [secrets.GITHUB_TOKEN]
