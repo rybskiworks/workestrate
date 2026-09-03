@@ -89,8 +89,31 @@ required = false
 # egress = "deny"
 # ingress = "deny"  # absent = deny; "allow" requires entitlements = ["default_ingress_allow"]
 #
-# [[workloads.my-agent.network.egress]]
-# recipe = "agent_base"
+# [[workloads.my-agent.policy.egress.allow.host]]
+# ports = [53]
+# protocols = ["tcp", "udp"]
+# final = false
+#
+# [[workloads.my-agent.policy.egress.allow.host]]
+# ports = [4000]
+# protocols = ["tcp"]
+# final = false
+#
+# [[workloads.my-agent.policy.egress.allow.domain]]
+# domains = ["github.com", "api.github.com"]
+# port = 443
+# protocol = "tcp"
+# final = false
+#
+# [[workloads.my-agent.policy.egress.deny.domain]]
+# domains = [".example.com"]
+# final = false
+#
+# [[workloads.my-agent.policy.ingress.allow.port]]
+# ports = [8080]
+# protocol = "tcp"
+# scope = "local"
+# final = false
 
 # ─── Mount policy (spec 22) ────────────────────────────────────────────────
 # Optional [policy.mounts] block (global) and per-mount `policy = { ... }`
