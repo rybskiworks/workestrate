@@ -122,6 +122,8 @@ do_install() {
     return 1
   fi
   log "nix profile install .#workestrate OK"
+  # Refresh the shell's command hash so the fresh binary resolves immediately.
+  hash -r
   return 0
 }
 
@@ -167,6 +169,32 @@ if [[ -n "$got" ]] && [[ -x "$got" ]]; then
     installed_rev="${ver_out##*-}"
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# Step B½ — MSB home migration (best-effort, never fails provisioning)
+# ---------------------------------------------------------------------------
+log "Step B½: msb home migration (best-effort)"
+set +e
+if [[ -x "$REPO/scripts/migrate-msb-home.sh" ]]; then
+  mig_check_out=$("$REPO/scripts/migrate-msb-home.sh" --check-only 2>&1)
+  mig_check_status=$?
+  if [[ "$mig_check_status" -eq 1 ]]; then
+    if [[ "$CHECK_ONLY" -eq 1 ]]; then
+      warn "msb homes need migration (--check-only: not migrating): $mig_check_out"
+      echo "[host-provision] run ./scripts/migrate-msb-home.sh to migrate"
+    else
+      log "legacy msb home needs migration; running migrate-msb-home.sh (best-effort)"
+      "$REPO/scripts/migrate-msb-home.sh" 2>&1 || warn "msb home migration failed; 'workestrate doctor' will flag it"
+    fi
+  elif [[ "$mig_check_status" -eq 0 ]]; then
+    log "msb homes already converged (nothing to do)"
+  else
+    warn "msb home migration check errored (status=$mig_check_status): $mig_check_out"
+  fi
+else
+  log "migrate-msb-home.sh not present or not executable; skipping msb home migration"
+fi
+set -e
 
 # ---------------------------------------------------------------------------
 # Step C — workestrate doctor (echo verbatim)

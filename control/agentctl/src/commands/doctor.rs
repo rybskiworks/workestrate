@@ -141,12 +141,163 @@ pub fn doctor_check_age_key_file() -> DoctorCheck {
 
 pub fn doctor_check_msb() -> DoctorCheck {
     let bin = msb_binary();
-    match probe_version(&bin) {
-        Some(version) => DoctorCheck::new("msb", "OK", version),
-        None => DoctorCheck::new("msb", "FAIL", format!("'{}' not reachable", bin))
+    let home = resolve_msb_home();
+    let version = match probe_version(&bin) {
+        Some(v) => v,
+        None => {
+            return DoctorCheck::new(
+                "msb",
+                "FAIL",
+                format!("MSB_HOME={} '{}' not reachable", home.display(), bin),
+            )
             .with_remediation(
                 "Ensure msb is installed; run 'nix develop' or check MSB_HOME/MSB_PATH",
+            )
+        }
+    };
+    // Downgrade probe first: a canonical DB newer than the msb binary is a
+    // hard FAIL (it beats any skew WARN below).
+    if let Some(fail) = check_msb_store_downgrade(&bin, &home, &version) {
+        return fail;
+    }
+    let legacy_db = legacy_msb_home().join("db").join("msb.db");
+    let canonical_db = home.join("db").join("msb.db");
+    match msb_home_skew_status(&legacy_db, &canonical_db) {
+        MsbHomeSkew::Skewed => DoctorCheck::new(
+            "msb",
+            "WARN",
+            format!(
+                "{}; MSB homes skewed: legacy {} exists alongside canonical {}",
+                msb_ok_message(&home, &version),
+                legacy_db.display(),
+                canonical_db.display()
             ),
+        )
+        .with_remediation(
+            "Run 'scripts/migrate-msb-home.sh --check-only' then without flags to migrate",
+        ),
+        MsbHomeSkew::Unmigrated => DoctorCheck::new(
+            "msb",
+            "WARN",
+            format!(
+                "{}; legacy MSB home {} exists but canonical {} is missing (unmigrated)",
+                msb_ok_message(&home, &version),
+                legacy_db.display(),
+                canonical_db.display()
+            ),
+        )
+        .with_remediation(
+            "Run 'scripts/migrate-msb-home.sh --check-only' then without flags to migrate",
+        ),
+        MsbHomeSkew::Clean => DoctorCheck::new("msb", "OK", msb_ok_message(&home, &version)),
+    }
+}
+
+/// Resolve the canonical msb home: non-empty `MSB_HOME` verbatim (empty
+/// treated as unset), else `$HOME/.microsandbox`, else `./.microsandbox`.
+/// Mirrors `microsandbox_utils::resolve_home` (the SDK default).
+pub fn resolve_msb_home() -> PathBuf {
+    if let Some(path) = std::env::var_os("MSB_HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(path);
+    }
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".microsandbox")
+}
+
+/// The legacy pre-convergence devshell home (`$HOME/.cache/ai-workbench-msb`).
+pub fn legacy_msb_home() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".cache")
+        .join("ai-workbench-msb")
+}
+
+/// The OK/WARN message core: resolved home plus the probed msb version.
+pub fn msb_ok_message(home: &Path, version: &str) -> String {
+    format!("MSB_HOME={} {}", home.display(), version)
+}
+
+/// Skew verdict for the legacy-vs-canonical msb homes (pure core).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MsbHomeSkew {
+    /// Canonical only (or neither home has a DB yet) — nothing to do.
+    Clean,
+    /// Only the legacy DB exists — unmigrated.
+    Unmigrated,
+    /// Both DBs exist — migration needed / divergence risk.
+    Skewed,
+}
+
+/// Pure skew classifier over DB-file existence (unit-testable without the
+/// filesystem).
+pub fn classify_msb_home_skew(legacy_db_exists: bool, canonical_db_exists: bool) -> MsbHomeSkew {
+    match (legacy_db_exists, canonical_db_exists) {
+        (true, true) => MsbHomeSkew::Skewed,
+        (true, false) => MsbHomeSkew::Unmigrated,
+        _ => MsbHomeSkew::Clean,
+    }
+}
+
+/// Path-taking skew wrapper: stats both `db/msb.db` files. When the resolved
+/// canonical home IS the legacy path (custom MSB_HOME edge), there is no
+/// second home to skew against → Clean.
+pub fn msb_home_skew_status(legacy_db: &Path, canonical_db: &Path) -> MsbHomeSkew {
+    if legacy_db == canonical_db {
+        return MsbHomeSkew::Clean;
+    }
+    classify_msb_home_skew(legacy_db.is_file(), canonical_db.is_file())
+}
+
+/// Pure downgrade classifier over combined msb store-command output
+/// (case-insensitive): true when the output indicates the store DB is newer
+/// than the msb binary understands.
+pub fn classify_msb_store_error(output: &str) -> bool {
+    let lower = output.to_lowercase();
+    [
+        "downgrade",
+        "newer",
+        "unsupported schema",
+        "migration",
+        "database version",
+    ]
+    .iter()
+    .any(|pat| lower.contains(pat))
+}
+
+/// Downgrade probe: run `<bin> list`; a failing run whose output matches
+/// [`classify_msb_store_error`] becomes a FAIL check (DB newer than binary).
+/// Success or any non-matching failure yields `None` (no verdict).
+fn check_msb_store_downgrade(bin: &str, home: &Path, version: &str) -> Option<DoctorCheck> {
+    let out = std::process::Command::new(bin).arg("list").output().ok()?;
+    if out.status.success() {
+        return None;
+    }
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if classify_msb_store_error(&combined) {
+        Some(
+            DoctorCheck::new(
+                "msb",
+                "FAIL",
+                format!(
+                    "{}; msb store error indicates the DB is newer than the binary: {}",
+                    msb_ok_message(home, version),
+                    combined.trim().lines().next().unwrap_or("").trim(),
+                ),
+            )
+            .with_remediation(
+                "DB newer than msb binary; downgrade msb or restore backup; \
+                 see 'scripts/migrate-msb-home.sh --rollback <ts>'",
+            ),
+        )
+    } else {
+        None
     }
 }
 
@@ -596,5 +747,138 @@ mod tests {
         assert_eq!(check.status, "WARN");
         assert!(check.message.contains("could not be read"), "{check:?}");
         assert!(check.remediation.is_some());
+    }
+
+    // ---- MSB_HOME convergence (Step 1): skew + downgrade + message ----
+
+    /// Downgrade classifier: matches schema/newer/migration signals
+    /// case-insensitively, ignores unrelated failures.
+    #[test]
+    fn store_error_classifier_matches_downgrade_signals() {
+        for signal in [
+            "database version 7 is newer than supported (max 5)",
+            "DOWNGRADE detected: store schema unsupported",
+            "unsupported schema version 9",
+            "migration required before open",
+            "Error: Database Version mismatch",
+        ] {
+            assert!(
+                classify_msb_store_error(signal),
+                "must match downgrade signal: {signal}"
+            );
+        }
+        for benign in [
+            "",
+            "connection refused",
+            "no such file or directory",
+            "permission denied",
+            "No sandboxes found.",
+        ] {
+            assert!(
+                !classify_msb_store_error(benign),
+                "must not match benign output: {benign}"
+            );
+        }
+    }
+
+    /// Pure skew classifier over DB-file existence.
+    #[test]
+    fn skew_classifier_covers_all_existence_combos() {
+        assert_eq!(
+            classify_msb_home_skew(true, true),
+            MsbHomeSkew::Skewed,
+            "both DBs → skewed"
+        );
+        assert_eq!(
+            classify_msb_home_skew(true, false),
+            MsbHomeSkew::Unmigrated,
+            "legacy only → unmigrated"
+        );
+        assert_eq!(
+            classify_msb_home_skew(false, true),
+            MsbHomeSkew::Clean,
+            "canonical only → clean"
+        );
+        assert_eq!(
+            classify_msb_home_skew(false, false),
+            MsbHomeSkew::Clean,
+            "neither → clean (fresh)"
+        );
+    }
+
+    /// Path-taking skew wrapper: same-path edge is Clean; real skew and
+    /// unmigrated layouts are detected via temp dirs.
+    #[test]
+    fn skew_status_reads_db_files() {
+        let base = std::env::temp_dir().join(format!(
+            "workestrate-doctor-skew-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        let legacy_db = base.join("legacy").join("db").join("msb.db");
+        let canon_db = base.join("canon").join("db").join("msb.db");
+        // Same path → Clean even when the file exists.
+        std::fs::create_dir_all(legacy_db.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_db, b"db").unwrap();
+        assert_eq!(
+            msb_home_skew_status(&legacy_db, &legacy_db),
+            MsbHomeSkew::Clean
+        );
+        // Legacy only → Unmigrated.
+        assert_eq!(
+            msb_home_skew_status(&legacy_db, &canon_db),
+            MsbHomeSkew::Unmigrated
+        );
+        // Both → Skewed.
+        std::fs::create_dir_all(canon_db.parent().unwrap()).unwrap();
+        std::fs::write(&canon_db, b"db").unwrap();
+        assert_eq!(
+            msb_home_skew_status(&legacy_db, &canon_db),
+            MsbHomeSkew::Skewed
+        );
+        // Canonical only → Clean.
+        std::fs::remove_file(&legacy_db).unwrap();
+        assert_eq!(
+            msb_home_skew_status(&legacy_db, &canon_db),
+            MsbHomeSkew::Clean
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The OK message carries both the resolved MSB_HOME and the probed
+    /// msb version; resolve_msb_home honors non-empty MSB_HOME and treats
+    /// empty as unset (SDK resolve_home mirror).
+    #[test]
+    fn msb_message_carries_home_and_version() {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = crate::config::test_support::EnvGuard::capture(&["MSB_HOME", "HOME"]);
+        let fake_home = crate::config::test_support::uniq_dir("doctor-msb-home");
+        std::env::set_var("HOME", &fake_home);
+        std::env::remove_var("MSB_HOME");
+        assert_eq!(
+            resolve_msb_home(),
+            fake_home.join(".microsandbox"),
+            "unset MSB_HOME → $HOME/.microsandbox"
+        );
+        std::env::set_var("MSB_HOME", "");
+        assert_eq!(
+            resolve_msb_home(),
+            fake_home.join(".microsandbox"),
+            "empty MSB_HOME → treated as unset"
+        );
+        let custom = crate::config::test_support::uniq_dir("doctor-msb-custom");
+        std::env::set_var("MSB_HOME", &custom);
+        assert_eq!(resolve_msb_home(), custom, "set MSB_HOME → verbatim");
+        let msg = msb_ok_message(&custom, "msb 0.6.16");
+        assert!(msg.contains(&custom.display().to_string()), "{msg}");
+        assert!(msg.contains("msb 0.6.16"), "{msg}");
+        assert_eq!(
+            legacy_msb_home(),
+            fake_home.join(".cache").join("ai-workbench-msb"),
+            "legacy home is anchored at $HOME/.cache"
+        );
     }
 }

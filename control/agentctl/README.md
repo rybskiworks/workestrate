@@ -58,7 +58,7 @@ build artifacts out of the nix store view.
 
 - **Default location:** `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target`
 - Set automatically by:
-  - the Nix dev shell (`nix/devshells/default.nix` shellHook), and
+  - the Nix dev shell (`flake.nix` `devenv.shells.default` `enterShell`), and
   - every cargo recipe in the top-level `justfile`
     (`export CARGO_TARGET_DIR :=` at the top of the file).
 - A legacy in-tree `control/agentctl/target/`, if present, is still ignored

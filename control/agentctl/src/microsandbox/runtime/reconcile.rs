@@ -62,9 +62,11 @@ pub struct ReconcileFacts {
 
 /// Resolve the msb home dir (`$MSB_HOME` or `~/.microsandbox`), mirroring
 /// `microsandbox_utils::resolve_home` so the dir check matches the msb
-/// create gate exactly.
+/// create gate exactly: a non-empty `MSB_HOME` is used verbatim, an empty
+/// value is treated as unset, else `$HOME/.microsandbox`, else
+/// `./.microsandbox`.
 pub fn msb_home() -> PathBuf {
-    if let Some(path) = std::env::var_os("MSB_HOME") {
+    if let Some(path) = std::env::var_os("MSB_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(path);
     }
     std::env::var("HOME")
@@ -455,7 +457,7 @@ pub fn decide_step(
 )]
 mod tests {
     use super::*;
-    use crate::config::test_support::ENV_TEST_LOCK;
+    use crate::config::test_support::{EnvGuard, ENV_TEST_LOCK};
     use crate::microsandbox::plan::PortMapping;
 
     /// Build a minimal record for fact fixtures (only the fields the
@@ -985,6 +987,71 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ---- msb_home: SDK resolve_home mirror (non-empty verbatim) ----
+
+    /// A set non-empty MSB_HOME is used verbatim.
+    #[test]
+    fn msb_home_set_is_verbatim() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
+        let custom = std::env::temp_dir().join(format!(
+            "workestrate-reconcile-msb-home-set-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::env::set_var("MSB_HOME", &custom);
+        assert_eq!(msb_home(), custom);
+    }
+
+    /// An empty MSB_HOME is treated as unset (falls back to $HOME).
+    #[test]
+    fn msb_home_empty_falls_back_to_home() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
+        let fake_home = std::env::temp_dir().join(format!(
+            "workestrate-reconcile-msb-home-empty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::env::set_var("HOME", &fake_home);
+        std::env::set_var("MSB_HOME", "");
+        let via_empty = msb_home();
+        std::env::remove_var("MSB_HOME");
+        let via_unset = msb_home();
+        assert_eq!(via_empty, via_unset);
+        assert_eq!(via_empty, fake_home.join(".microsandbox"));
+    }
+
+    /// Unset MSB_HOME falls back to $HOME/.microsandbox (or ./.microsandbox
+    /// when HOME is also unset).
+    #[test]
+    fn msb_home_unset_uses_home_fallback() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
+        let fake_home = std::env::temp_dir().join(format!(
+            "workestrate-reconcile-msb-home-unset-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::env::remove_var("MSB_HOME");
+        std::env::set_var("HOME", &fake_home);
+        assert_eq!(msb_home(), fake_home.join(".microsandbox"));
+        std::env::remove_var("HOME");
+        assert_eq!(
+            msb_home(),
+            std::path::PathBuf::from(".").join(".microsandbox")
+        );
     }
 
     // ---- stale-record GC (prune_stale_records / prune_by_verdicts) ----

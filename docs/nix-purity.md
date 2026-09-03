@@ -75,7 +75,7 @@ every evaluation regardless of whether the build runs.
    `~/.cache/ai-workbench/agentctl-target`), so cargo artifacts never
    become part of the nix source closure.
 
-> **Confirmed:** the canonical `CARGO_TARGET_DIR` is `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target` (default `~/.cache/ai-workbench/agentctl-target` when `XDG_CACHE_HOME` is unset). It is exported by the Nix devshell shellHook (`nix/devshells/default.nix`) and by the top-level `justfile` (`export CARGO_TARGET_DIR := ...` evaluated at just-parse time), so both `nix develop` sessions and bare `just` invocations relocate cargo artifacts out of the source tree.
+> **Confirmed:** the canonical `CARGO_TARGET_DIR` is `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target` (default `~/.cache/ai-workbench/agentctl-target` when `XDG_CACHE_HOME` is unset). It is exported by the Nix devshell `enterShell` (`flake.nix` `devenv.shells.default`) and by the top-level `justfile` (`export CARGO_TARGET_DIR := ...` evaluated at just-parse time), so both `nix develop` sessions and bare `just` invocations relocate cargo artifacts out of the source tree.
 
 ## Why: the 29GB-per-eval incident
 

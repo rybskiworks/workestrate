@@ -1,16 +1,41 @@
-# Runtime provisioning — MSB homes, wrapper contract, schema flow
+# Runtime provisioning — MSB home, wrapper contract, schema flow
 
-> **Companion to ADR 0035.** This doc owns the three MSB homes, the wrapper contract, the env override matrix, and the schema distribution flow. ADR 0035 owns the network policy ladder.
+> **Companion to ADR 0035.** This doc owns the canonical MSB home, the wrapper contract, the env override matrix, and the schema distribution flow. ADR 0035 owns the network policy ladder.
 
-## Three MSB homes (msb three-homes)
+## Canonical MSB home (single home)
 
-msb (microsandbox) discovers its home via `MSB_HOME`. workestrate stages three distinct homes depending on lifecycle phase — only one is active per invocation.
+msb (microsandbox) discovers its home via `MSB_HOME`, resolved per
+`microsandbox_utils::resolve_home`: **non-empty `MSB_HOME` verbatim** (empty
+treated as unset), else **`$HOME/.microsandbox`**, else `./.microsandbox`.
+workestrate converges every flow on that default — there is exactly ONE
+runtime home:
 
 | # | Home | Path | When active | Purpose |
 |---|------|------|-------------|---------|
-| 1 | **devshell cache** | `$HOME/.cache/ai-workbench-msb` (`_msb_home` in `nix/devshells/default.nix`) | `nix develop` shellHook | Offline `cargo check` builds — `cargo` runs without network by pointing at a staged `msb`/`libkrunfw.so*` cache. Ephemeral per-shell (`ai-workbench-msb-$$`). |
-| 2 | **msb-wrapped persistent** | `$HOME/.microsandbox` (`~/.microsandbox`) | Runtime (`wrapProgram --run 'export MSB_HOME="$HOME/.microsandbox"'` in `nix/packages/agentctl.nix:133-135`) | **Canonical runtime home** — cache, db, state, `sandboxes/`. The SDK (`msb` crate) requires a stable `MSB_HOME` at `workestrate workload up/exec/...` time. Shell expansion at wrapper execution time (not build time). |
-| 3 | **build TMPDIR** | `$TMPDIR/.microsandbox` (`export MSB_HOME=$TMPDIR/.microsandbox` in `nix/packages/agentctl.nix:111`) | `nix build .#workestrate` preBuild | Hermetic build — the fork's `build.rs` finds `msb` + `agentd` via `MSB_HOME`/`MSB_AGENTD_PATH` without network downloads. Wiped after build. |
+| 1 | **canonical runtime** | `$HOME/.microsandbox` (`~/.microsandbox`) | Runtime (guarded `wrapProgram --run` in `nix/packages/agentctl.nix` postInstall + `msb-wrapped` in `flake.nix`) | **The only runtime home** — cache, db, state, `sandboxes/`. The guard (`if [ -z "${MSB_HOME:-}" ]; ...`) defaults unset AND empty to the canonical home while honoring an explicit non-empty caller override. `--set-default` would NOT handle the empty-string case, hence the explicit guard. Shell expansion at wrapper execution time (not build time). |
+
+Build-time-only staging (NOT homes — no msb state ever lands here):
+
+- **devshell staging** (`_msb_home="$HOME/.cache/ai-workbench-msb"` in
+  `flake.nix` `devenv.shells.default` `enterShell`) — stages the `msb`
+  binary + `libkrunfw.so*` symlinks/copies so offline `cargo check` builds
+  find the runtime without network. The devshell deliberately does **not**
+  export `MSB_HOME`/`MSB_PATH` (no second runtime home); it exports only
+  `MSB_AGENTD_PATH` (musl static `agentd`, needed by the fork's filesystem
+  crate `build.rs` prebuilt branch) plus `CARGO_TARGET_DIR`, the vendor
+  link, and agent builds.
+- **nix build TMPDIR** (`export MSB_HOME=$TMPDIR/.microsandbox` in
+  `nix/packages/agentctl.nix:111` preBuild) — hermetic build: the fork's
+  `build.rs` finds `msb` + `agentd` via `MSB_HOME`/`MSB_AGENTD_PATH`
+  without network downloads. Wiped after build.
+
+Pre-convergence hosts may still carry state under the legacy devshell path
+(`$HOME/.cache/ai-workbench-msb/db/msb.db`): `scripts/migrate-msb-home.sh`
+migrates it to the canonical home (newest-DB-wins, timestamped backups,
+`--check-only`/`--dry-run`/`--rollback <ts>`), `workestrate doctor` (the
+`msb` check) flags skew/unmigrated/downgrade states, and
+`scripts/host-provision.sh` runs the migration best-effort between binary
+sync and doctor.
 
 Additional override: `MSB_AGENTD_PATH = ${microsandbox}/libexec/agentd` (musl static `agentd`) satisfies the fork's filesystem crate `build.rs` prebuilt branch (`nix/packages/agentctl.nix:117`).
 
@@ -21,19 +46,22 @@ The `agentctl.nix` wrapper (built `workestrate` binary, currently `0.1.0`) bakes
 ```nix
 wrapProgram $out/bin/workestrate \
   --set MSB_PATH "${microsandbox}/bin/msb" \
+  --set MSB_AGENTD_PATH "${microsandbox}/libexec/agentd" \
   --prefix PATH : ${pkgs.sops}/bin \
-  --run 'export MSB_HOME="$HOME/.microsandbox"'
+  --run 'if [ -z "${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox"; fi'
 ```
 
 - **`--set MSB_PATH`** — baked `0.6.16` `msb` binary path (`nix/packages/microsandbox.nix:54`, fork rev `78fb3ed1`). The SDK spawns `MSB_PATH`; it must be a live-resize-capable `msb` (linux `libkrunfw.so.5.6.1` from the `v0.6.8` release tarball, `nix/packages/microsandbox.nix` Branch A).
-- **`--run MSB_HOME`** — conditional export: `export MSB_HOME="$HOME/.microsandbox"` runs at wrapper execution time so `$HOME` expands per-user (not per-build). The devshell's ephemeral `_msb_home` and the build's `$TMPDIR/.microsandbox` are **not** baked here.
+- **`--set MSB_AGENTD_PATH`** — baked musl static `agentd` path for the fork's filesystem crate prebuilt branch.
+- **`--run MSB_HOME`** — guarded default: honors an explicit non-empty `MSB_HOME` override while defaulting unset AND empty to `$HOME/.microsandbox` at wrapper execution time so `$HOME` expands per-user (not per-build). Neither the devshell staging dir nor the build `$TMPDIR/.microsandbox` is baked here.
 - **`--prefix PATH : sops`** — `sops` binary for `workestrate secrets` (ADR 0034).
 
-The devshell (`nix/devshells/default.nix:130-131`) mirrors this for offline checks:
+The devshell (`flake.nix` `devenv.shells.default` `enterShell`) stages the
+same runtime for offline builds but exports **only** `MSB_AGENTD_PATH`:
 
 ```bash
-export MSB_HOME="$_msb_home"   # /run/user/*/ai-workbench-msb-$$ or $HOME/.cache/ai-workbench-msb
-export MSB_PATH="$_msb_home/bin/msb"
+_msb_home="$HOME/.cache/ai-workbench-msb"   # build-time staging only, NOT a runtime home
+mkdir -p "$_msb_home/bin" "$_msb_home/lib"  # no rm -rf of live dirs, no MSB_HOME/MSB_PATH exports
 export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
 ```
 
@@ -41,10 +69,10 @@ export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
 
 | Env var | Set by | Precedence | Effect |
 |---------|--------|------------|--------|
-| `MSB_HOME` | wrapper `--run` / devshell shellHook / build preBuild | **build preBuild > devshell > wrapper** (only one active per phase) | Where msb reads/writes cache, db, `sandboxes/` |
-| `MSB_PATH` | wrapper `--set` / devshell shellHook | Explicit path to `msb` binary; `cargo` build.rs and SDK use it | Must point at the pinned `0.6.16` binary |
-| `MSB_AGENTD_PATH` | build preBuild / devshell shellHook | Guest init binary path | Fork's `build.rs` prebuilt branch; musl static `agentd` |
-| `WORKESTRATE_HOME` / `--home` | user / `workestrate --home` flag | `--home` flag > `WORKESTRATE_HOME` env > `~/.workestrate` | Tool home (registry `config.toml`, `PolicyConfig`); orthogonal to MSB homes |
+| `MSB_HOME` | caller env, else wrapper `--run` guard | non-empty `MSB_HOME` > `$HOME/.microsandbox` > `./.microsandbox` (SDK `resolve_home`; empty treated as unset) | Where msb reads/writes cache, db, `sandboxes/` — the single canonical home |
+| `MSB_PATH` | wrapper `--set` | Explicit path to `msb` binary; `cargo` build.rs and SDK use it | Must point at the pinned `0.6.16` binary |
+| `MSB_AGENTD_PATH` | wrapper `--set` / build preBuild / devshell `enterShell` | Guest init binary path | Fork's `build.rs` prebuilt branch; musl static `agentd` |
+| `WORKESTRATE_HOME` / `--home` | user / `workestrate --home` flag | `--home` flag > `WORKESTRATE_HOME` env > `~/.workestrate` | Tool home (registry `config.toml`, `PolicyConfig`); orthogonal to the MSB home |
 | `HOME` | user / OS | Expands at wrapper execution time for `MSB_HOME=$HOME/.microsandbox` | Must not be baked at nix build time |
 
 ## Schema flow (Rust types → committed schema → distribution)
@@ -88,5 +116,5 @@ Run `tombi format` / `tombi lint` (or `nix fmt`) — the ADR 0035 policy example
 - **ADR 0035** — `docs/migration/50-decisions/0035-hierarchical-egress-ingress-policy.md` (network ladder).
 - **ADR 0029/0031 + mount-policy docs** — precedent for collect-and-compile + `deny_unknown_fields`.
 - **ADR 0034** — secrets ladder precedent for rungs + provenance.
-- **`nix/packages/agentctl.nix:111-135`** — authoritative wrapper contract.
-- **`nix/devshells/default.nix:130-131`** — devshell MSB staging.
+- **`nix/packages/agentctl.nix:111-136`** — authoritative wrapper contract.
+- **`flake.nix` (`msb-wrapped` + `devenv.shells.default` `enterShell`)** — msb wrapper guard + devshell MSB staging.

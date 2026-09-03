@@ -39,13 +39,13 @@ pub const MOUNT_POLICY_DIR_NAME: &str = "mount-policy";
 /// Resolve the microsandbox home directory.
 ///
 /// Mirror of `microsandbox_utils::resolve_home` (fork
-/// `crates/utils/lib/lib.rs`): `MSB_HOME` verbatim, else
-/// `$HOME/.microsandbox`, else `./.microsandbox`. The nix wrapper
-/// force-sets `MSB_HOME=$HOME/.microsandbox` at runtime
-/// (`nix/packages/agentctl.nix` postInstall), so this mirrors the SDK's
-/// home in every supported flow.
+/// `crates/utils/lib/lib.rs`): non-empty `MSB_HOME` verbatim (empty treated
+/// as unset), else `$HOME/.microsandbox`, else `./.microsandbox`. The nix
+/// wrapper defaults unset/empty `MSB_HOME` to `$HOME/.microsandbox` at
+/// runtime (`nix/packages/agentctl.nix` postInstall), so this mirrors the
+/// SDK's home in every supported flow.
 fn msb_home() -> PathBuf {
-    if let Some(path) = std::env::var_os("MSB_HOME") {
+    if let Some(path) = std::env::var_os("MSB_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(path);
     }
     std::env::var_os("HOME")
@@ -274,5 +274,46 @@ mod tests {
                 "guest {guest}: {rel:?}"
             );
         }
+    }
+
+    // ---- msb_home: SDK resolve_home mirror (non-empty verbatim) ----
+
+    /// A set non-empty MSB_HOME is used verbatim.
+    #[test]
+    fn msb_home_set_is_verbatim() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
+        let custom = uniq_dir("policy-msb-home-set");
+        std::env::set_var("MSB_HOME", &custom);
+        assert_eq!(msb_home(), custom);
+    }
+
+    /// An empty MSB_HOME is treated as unset (falls back to $HOME).
+    #[test]
+    fn msb_home_empty_falls_back_to_home() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
+        let fake_home = uniq_dir("policy-msb-home-empty");
+        std::env::set_var("HOME", &fake_home);
+        std::env::set_var("MSB_HOME", "");
+        let via_empty = msb_home();
+        std::env::remove_var("MSB_HOME");
+        let via_unset = msb_home();
+        assert_eq!(via_empty, via_unset);
+        assert_eq!(via_empty, fake_home.join(".microsandbox"));
+    }
+
+    /// Unset MSB_HOME falls back to $HOME/.microsandbox (or ./.microsandbox
+    /// when HOME is also unset).
+    #[test]
+    fn msb_home_unset_uses_home_fallback() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
+        let fake_home = uniq_dir("policy-msb-home-unset");
+        std::env::remove_var("MSB_HOME");
+        std::env::set_var("HOME", &fake_home);
+        assert_eq!(msb_home(), fake_home.join(".microsandbox"));
+        std::env::remove_var("HOME");
+        assert_eq!(msb_home(), PathBuf::from(".").join(".microsandbox"));
     }
 }
