@@ -338,17 +338,30 @@ fn network_canonical(n: &NetworkPlan) -> String {
         s.push_str(&r);
     }
 
-    let mut denies: Vec<&str> = n
+    // FIX2/FIX3: deny canonical includes port/protocol so port-scoped vs
+    // port-agnostic denies hash differently; without port stays legacy string.
+    let mut denies: Vec<String> = n
         .deny_rules
         .iter()
-        .map(|d| d.domain_suffix.as_str())
+        .map(|d| {
+            let mut s = d.domain_suffix.clone();
+            if let Some(p) = d.port {
+                s.push(':');
+                s.push_str(&p.to_string());
+            }
+            if let Some(proto) = d.protocol {
+                s.push(':');
+                s.push_str(&proto.to_string());
+            }
+            s
+        })
         .collect();
     denies.sort();
     s.push(UNIT);
     s.push_str("dn");
     for d in denies {
         s.push(UNIT);
-        s.push_str(d);
+        s.push_str(&d);
     }
 
     let mut ingress: Vec<String> = n
@@ -760,9 +773,7 @@ mod tests {
         eg.network.egress_rules = vec![EgressRule::https(&["example.com"])];
         assert_ne!(config_hash_of_plan(&eg), base_hash, "egress rule");
         let mut dn = empty_plan();
-        dn.network.deny_rules = vec![DenyDomainRule {
-            domain_suffix: ".evil".to_string(),
-        }];
+        dn.network.deny_rules = vec![DenyDomainRule::suffix(".evil")];
         assert_ne!(config_hash_of_plan(&dn), base_hash, "deny rule");
         let mut ing = empty_plan();
         ing.network.ingress_rules = vec![IngressRule {

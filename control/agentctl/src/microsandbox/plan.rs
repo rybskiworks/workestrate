@@ -503,10 +503,46 @@ pub struct EgressRule {
     pub derived_from: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DenyDomainRule {
     pub domain_suffix: String,
+    /// Port-scoped deny: `Some(port)` = only that port, `None` = all ports
+    /// (fail-closed). Port-agnostic denies are the legacy form; port-scoped
+    /// carries the explicit port from `[[policy.egress.deny.domain]] port = N`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// Protocol for port-scoped denies. `None` = any protocol (legacy
+    /// port-agnostic emits without a preceding `.tcp()`/`.udp()`). Compiler
+    /// sets `Some(Protocol::Tcp)` by default (egress domain policy is tcp-only
+    /// v1); runtime branches per `Some`/`None` to preserve SDK builder
+    /// semantics. Additive serde default so old JSON without this field parses
+    /// as `None` and legacy golden JSON (no port/protocol) stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<Protocol>,
+}
+
+impl DenyDomainRule {
+    /// Convenience for legacy port-agnostic deny suffix (no port/protocol).
+    pub fn suffix(suffix: impl Into<String>) -> Self {
+        Self {
+            domain_suffix: suffix.into(),
+            port: None,
+            protocol: None,
+        }
+    }
+    /// Port-scoped deny.
+    pub fn suffix_with_port(
+        suffix: impl Into<String>,
+        port: u16,
+        protocol: Protocol,
+    ) -> Self {
+        Self {
+            domain_suffix: suffix.into(),
+            port: Some(port),
+            protocol: Some(protocol),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -625,7 +661,27 @@ impl fmt::Display for SandboxPlan {
             }
         }
         for rule in &self.network.deny_rules {
-            writeln!(f, "  egress: deny domain suffix {}", rule.domain_suffix)?;
+            // FIX2: port-scoped deny rendering — legacy line stays byte-identical
+            // when port/protocol are None (golden invariant). When port is Some,
+            // show `suffix:port` and optionally `(proto)` so plan inspection
+            // visibly preserves the port wiring.
+            if let Some(port) = rule.port {
+                if let Some(proto) = rule.protocol {
+                    writeln!(
+                        f,
+                        "  egress: deny domain suffix {}:{} ({})",
+                        rule.domain_suffix, port, proto
+                    )?;
+                } else {
+                    writeln!(
+                        f,
+                        "  egress: deny domain suffix {}:{}",
+                        rule.domain_suffix, port
+                    )?;
+                }
+            } else {
+                writeln!(f, "  egress: deny domain suffix {}", rule.domain_suffix)?;
+            }
         }
         if let Some(policy) = &self.instance_policy {
             writeln!(f, "instance: strategy={}", policy.strategy)?;
@@ -827,9 +883,7 @@ mod tests {
                     EgressRule::litellm_proxy(),
                     EgressRule::https(&["example.com"]),
                 ],
-                deny_rules: vec![DenyDomainRule {
-                    domain_suffix: ".evil".to_string(),
-                }],
+                deny_rules: vec![DenyDomainRule::suffix(".evil")],
                 ingress_rules: vec![IngressRule {
                     protocol: Protocol::Tcp,
                     port: 80,

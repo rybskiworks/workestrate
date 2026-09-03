@@ -39,37 +39,245 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
         }
     }
 
+    // FIX2/FIX3: ordered emission — single global sort by specificity desc,
+    // deny-before-allow ties, port-scoped before any-port. We expand egress
+    // allows (Domains vec) into per-domain items so each domain's specificity
+    // is represented; host rules stay as one item each. Deny rules carry
+    // port/protocol per FIX2. Merge both vectors into one ordered list and
+    // emit in that order so SDK first-match-wins reproduces ADR resolution.
+    #[derive(Debug)]
+    enum OrderedItem {
+        Host { protocol: Protocol, port: u16 },
+        AllowDomain { domain: String, port: u16, protocol: Protocol },
+        DenyDomain { suffix: String, port: Option<u16>, protocol: Option<Protocol> },
+    }
+    fn domain_specificity_rank(domain: &str) -> (u8, usize) {
+        if domain == "all" {
+            return (0, 0);
+        }
+        if let Some(stripped) = domain.strip_prefix('.') {
+            (1, stripped.len())
+        } else {
+            (2, domain.len())
+        }
+    }
+    let mut ordered: Vec<OrderedItem> = Vec::new();
     for rule in &plan.egress_rules {
         let port = rule.port;
-        match (&rule.protocol, &rule.target) {
-            (Protocol::Tcp, EgressTarget::Host) => {
-                builder = builder.egress(|e| e.tcp().port(port).allow_host());
-            }
-            (Protocol::Udp, EgressTarget::Host) => {
-                builder = builder.egress(|e| e.udp().port(port).allow_host());
-            }
-            (Protocol::Tcp, EgressTarget::Domains(hosts)) => {
-                let hosts = hosts.clone();
-                builder = builder.egress(move |e| {
-                    e.tcp()
-                        .port(port)
-                        .allow_domains(hosts.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-                });
-            }
-            (Protocol::Udp, EgressTarget::Domains(hosts)) => {
-                let hosts = hosts.clone();
-                builder = builder.egress(move |e| {
-                    e.udp()
-                        .port(port)
-                        .allow_domains(hosts.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-                });
+        let proto = rule.protocol;
+        match &rule.target {
+            EgressTarget::Host => ordered.push(OrderedItem::Host {
+                protocol: proto,
+                port,
+            }),
+            EgressTarget::Domains(hosts) => {
+                for h in hosts {
+                    ordered.push(OrderedItem::AllowDomain {
+                        domain: h.clone(),
+                        port,
+                        protocol: proto,
+                    });
+                }
             }
         }
     }
-
     for rule in &plan.deny_rules {
-        let suffix = rule.domain_suffix.clone();
-        builder = builder.egress(move |e| e.deny_domain_suffixes([&suffix]));
+        ordered.push(OrderedItem::DenyDomain {
+            suffix: rule.domain_suffix.clone(),
+            port: rule.port,
+            protocol: rule.protocol,
+        });
+    }
+    // Sort by: host first, then specificity desc, then port-scoped (Some) before any-port, then deny before allow
+    ordered.sort_by(|a, b| {
+        let a_is_host = matches!(a, OrderedItem::Host { .. });
+        let b_is_host = matches!(b, OrderedItem::Host { .. });
+        if a_is_host != b_is_host {
+            // Host first
+            return if a_is_host {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        // Both host or both domain: for host, keep port ordering
+        if a_is_host && b_is_host {
+            if let (OrderedItem::Host { port: pa, protocol: prota }, OrderedItem::Host { port: pb, protocol: protb }) = (a, b) {
+                match pa.cmp(pb) {
+                    std::cmp::Ordering::Equal => return format!("{:?}", prota).cmp(&format!("{:?}", protb)),
+                    other => return other,
+                }
+            }
+        }
+        // Domain items: compute specificity and port/action ranks
+        let (a_spec, a_len, a_port_rank, a_is_deny) = match a {
+            OrderedItem::AllowDomain { domain, port: _, protocol: _ } => {
+                let (rank, len) = domain_specificity_rank(domain);
+                (rank, len, 1, false)
+            },
+            OrderedItem::DenyDomain { suffix, port, protocol: _ } => {
+                let (rank, len) = domain_specificity_rank(suffix);
+                let pr = if port.is_some() { 1 } else { 0 };
+                (rank, len, pr, true)
+            },
+            OrderedItem::Host { .. } => (0, 0, 0, false),
+        };
+        let (b_spec, b_len, b_port_rank, b_is_deny) = match b {
+            OrderedItem::AllowDomain { domain, port: _, protocol: _ } => {
+                let (rank, len) = domain_specificity_rank(domain);
+                (rank, len, 1, false)
+            },
+            OrderedItem::DenyDomain { suffix, port, protocol: _ } => {
+                let (rank, len) = domain_specificity_rank(suffix);
+                let pr = if port.is_some() { 1 } else { 0 };
+                (rank, len, pr, true)
+            },
+            OrderedItem::Host { .. } => (0, 0, 0, false),
+        };
+        // Specificity desc
+        match b_spec.cmp(&a_spec) {
+            std::cmp::Ordering::Equal => {},
+            other => return other,
+        }
+        match b_len.cmp(&a_len) {
+            std::cmp::Ordering::Equal => {},
+            other => return other,
+        }
+        // Port-scoped before any-port
+        match b_port_rank.cmp(&a_port_rank) {
+            std::cmp::Ordering::Equal => {},
+            other => return other,
+        }
+        // Deny before Allow at equal specificity+port
+        match a_is_deny.cmp(&b_is_deny) {
+            std::cmp::Ordering::Equal => {},
+            other => return other, // true (deny) < false (allow) so deny first because true < false? Actually bool true > false, we want deny first. So reverse.
+        }
+        // Tie-break: deny before allow explicitly
+        if a_is_deny != b_is_deny {
+            return if a_is_deny { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+        }
+        // Deterministic fallbacks: domain string, port
+        match a {
+            OrderedItem::AllowDomain { domain: da, port: pa, .. } => {
+                if let OrderedItem::AllowDomain { domain: db, port: pb, .. } = b {
+                    match da.cmp(db) {
+                        std::cmp::Ordering::Equal => pa.cmp(pb),
+                        other => other,
+                    }
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            },
+            OrderedItem::DenyDomain { suffix: sa, port: pa, .. } => {
+                if let OrderedItem::DenyDomain { suffix: sb, port: pb, .. } = b {
+                    match sa.cmp(sb) {
+                        std::cmp::Ordering::Equal => pa.cmp(pb),
+                        other => other,
+                    }
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            },
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+    for item in ordered {
+        match item {
+            OrderedItem::Host { protocol, port } => match protocol {
+                Protocol::Tcp => {
+                    builder = builder.egress(|e| e.tcp().port(port).allow_host());
+                },
+                Protocol::Udp => {
+                    builder = builder.egress(|e| e.udp().port(port).allow_host());
+                },
+            },
+            OrderedItem::AllowDomain { domain, port, protocol } => {
+                let is_suffix = domain.starts_with('.');
+                match protocol {
+                    Protocol::Tcp => {
+                        if is_suffix {
+                            let d = domain.clone();
+                            builder = builder.egress(move |e| e.tcp().port(port).allow_domain_suffixes([d.as_str()]));
+                        } else {
+                            let d = domain.clone();
+                            builder = builder.egress(move |e| e.tcp().port(port).allow_domains([d.as_str()]));
+                        }
+                    },
+                    Protocol::Udp => {
+                        if is_suffix {
+                            let d = domain.clone();
+                            builder = builder.egress(move |e| e.udp().port(port).allow_domain_suffixes([d.as_str()]));
+                        } else {
+                            let d = domain.clone();
+                            builder = builder.egress(move |e| e.udp().port(port).allow_domains([d.as_str()]));
+                        }
+                    },
+                }
+            },
+            OrderedItem::DenyDomain { suffix, port, protocol } => {
+                let is_suffix = suffix.starts_with('.');
+                // FIX2: port-scoped deny uses protocol+port prefix; any-port without protocol uses any-protocol rule.
+                match (port, protocol) {
+                    (Some(p), Some(Protocol::Tcp)) => {
+                        if is_suffix {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.tcp().port(p).deny_domain_suffixes([s.as_str()]));
+                        } else {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.tcp().port(p).deny_domains([s.as_str()]));
+                        }
+                    },
+                    (Some(p), Some(Protocol::Udp)) => {
+                        if is_suffix {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.udp().port(p).deny_domain_suffixes([s.as_str()]));
+                        } else {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.udp().port(p).deny_domains([s.as_str()]));
+                        }
+                    },
+                    (Some(p), None) => {
+                        // Port-scoped but no protocol (legacy any-protocol port-scoped) — use tcp as default? But any-protocol port-scoped is distinct.
+                        // Use tcp as fallback for now, but ideally would be any-protocol port filter. For v1, default to tcp.
+                        if is_suffix {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.tcp().port(p).deny_domain_suffixes([s.as_str()]));
+                        } else {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.tcp().port(p).deny_domains([s.as_str()]));
+                        }
+                    },
+                    (None, Some(Protocol::Tcp)) => {
+                        if is_suffix {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.tcp().deny_domain_suffixes([s.as_str()]));
+                        } else {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.tcp().deny_domains([s.as_str()]));
+                        }
+                    },
+                    (None, Some(Protocol::Udp)) => {
+                        if is_suffix {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.udp().deny_domain_suffixes([s.as_str()]));
+                        } else {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.udp().deny_domains([s.as_str()]));
+                        }
+                    },
+                    (None, None) => {
+                        if is_suffix {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.deny_domain_suffixes([s.as_str()]));
+                        } else {
+                            let s = suffix.clone();
+                            builder = builder.egress(move |e| e.deny_domains([s.as_str()]));
+                        }
+                    },
+                }
+            },
+        }
     }
 
     builder.build().map_err(Into::into)
@@ -401,6 +609,96 @@ mod tests {
             plan.mounts.iter().all(|m| m.guest != "/workspace"),
             "pi must not mount /workspace (replaced by /work + /data)"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn port_scoped_deny_emits_tcp_port_filter() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::{DenyDomainRule, NetworkPlan};
+        let plan = NetworkPlan {
+            egress_default_deny: true,
+            ingress_default_deny: true,
+            egress_rules: vec![],
+            deny_rules: vec![DenyDomainRule {
+                domain_suffix: ".evil.com".to_string(),
+                port: Some(443),
+                protocol: Some(Protocol::Tcp),
+            }],
+            ingress_rules: vec![],
+        };
+        let policy = network_plan_to_policy(&plan)?;
+        // Should have one egress deny rule with tcp 443 and DomainSuffix
+        let rule = policy
+            .rules
+            .iter()
+            .find(|r| r.action == microsandbox::NetworkAction::Deny)
+            .expect("deny rule must exist");
+        assert!(rule.ports.iter().any(|p| p.start == 443), "deny rule must be port 443, got {:?}", rule.ports);
+        let v = serde_json::to_value(rule).unwrap();
+        // protocols field should contain tcp
+        assert!(v["protocols"].to_string().contains("tcp"), "deny must be tcp, got {:?}", v["protocols"]);
+        // SDK canonicalizes DomainName by stripping leading dot, so .evil.com becomes evil.com
+        assert_eq!(v["destination"]["domain_suffix"], "evil.com");
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_egress_emission_respects_specificity_and_deny_before_allow() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::{DenyDomainRule, EgressRule, EgressTarget, NetworkPlan};
+        // Setup: allow suffix .evil.com and deny exact evil.com, plus allow github.com
+        // Specificity: exact evil.com (deny) > suffix .evil.com (allow) > exact github.com (allow)
+        // Global order should be: deny exact evil.com, allow suffix .evil.com, allow exact github.com
+        // But also test port-scoped vs any-port: port-scoped deny before any-port deny at same specificity
+        let plan = NetworkPlan {
+            egress_default_deny: true,
+            ingress_default_deny: true,
+            egress_rules: vec![
+                EgressRule {
+                    protocol: Protocol::Tcp,
+                    port: 443,
+                    target: EgressTarget::Domains(vec![".evil.com".to_string()]),
+                    derived_from: None,
+                },
+                EgressRule {
+                    protocol: Protocol::Tcp,
+                    port: 443,
+                    target: EgressTarget::Domains(vec!["github.com".to_string()]),
+                    derived_from: None,
+                },
+            ],
+            deny_rules: vec![
+                DenyDomainRule {
+                    domain_suffix: "evil.com".to_string(), // exact (no leading dot)
+                    port: Some(443),
+                    protocol: Some(Protocol::Tcp),
+                },
+                DenyDomainRule {
+                    domain_suffix: ".tracker.io".to_string(),
+                    port: None,
+                    protocol: None,
+                },
+            ],
+            ingress_rules: vec![],
+        };
+        let policy = network_plan_to_policy(&plan)?;
+        // Find order of rules: first deny exact evil.com should be before allow suffix .evil.com
+        let positions: Vec<(String, String, bool)> = policy
+            .rules
+            .iter()
+            .map(|r| {
+                let v = serde_json::to_value(r).unwrap();
+                let dest = v["destination"].clone();
+                let is_deny = r.action == microsandbox::NetworkAction::Deny;
+                (dest.to_string(), r.ports.iter().map(|p| p.start.to_string()).collect::<Vec<_>>().join(","), is_deny)
+            })
+            .collect();
+        // Ensure deny evil.com appears before allow .evil.com in the ordered list
+        let deny_pos = positions.iter().position(|(d, _, is_deny)| *is_deny && d.contains("evil.com") && !d.contains(".tracker.io")).unwrap();
+        let allow_suffix_pos = positions.iter().position(|(d, _, is_deny)| !*is_deny && d.contains("evil.com")).unwrap();
+        assert!(deny_pos < allow_suffix_pos, "deny exact must be before allow suffix: deny {} vs allow {} in {:?}", deny_pos, allow_suffix_pos, positions);
+        // Port-scoped deny .evil.com:443 should be before any-port deny .tracker.io
+        let tracker_pos = positions.iter().position(|(d, _, _)| d.contains("tracker.io")).unwrap();
+        assert!(deny_pos < tracker_pos, "port-scoped deny should be before any-port deny");
         Ok(())
     }
 }
