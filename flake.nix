@@ -391,8 +391,10 @@
 
           msb-wrapped = pkgs.runCommand "msb-wrapped" { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
             mkdir -p $out/bin
+            # Guarded MSB_HOME default: honors an explicit non-empty
+            # MSB_HOME override; --set-default would not handle empty.
             makeWrapper ${microsandbox}/bin/msb $out/bin/msb \
-              --run 'export MSB_HOME="$HOME/.microsandbox"'
+              --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox"; fi'
           '';
 
           decrypt-env = pkgs.writeShellApplication {
@@ -632,9 +634,15 @@
               echo "msb version: $(msb --version 2>/dev/null || echo 'not available')"
               echo "secrets workflow: docs/secrets.md"
 
-              # Stage Microsandbox runtime for offline cargo check.
+              # Build-time-only MSB staging for offline cargo check (NOT a
+              # second runtime home). The canonical runtime home is
+              # $HOME/.microsandbox (the SDK default; see the workestrate +
+              # msb-wrapped --run guards). This block only stages the msb
+              # binary + libkrunfw libs under the legacy cache path so
+              # build.rs finds them offline; it deliberately does NOT export
+              # MSB_HOME/MSB_PATH, so msb state always lands in the canonical
+              # home. Only MSB_AGENTD_PATH is exported (build.rs needs it).
               _msb_home="$HOME/.cache/ai-workbench-msb"
-              rm -rf "$_msb_home/bin" "$_msb_home/lib"
               mkdir -p "$_msb_home/bin" "$_msb_home/lib"
               for _old in /run/user/*/ai-workbench-msb-*; do
                 if [ -e "$_old" ]; then
@@ -656,8 +664,6 @@
               done
               export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
               mkdir -p "$CARGO_TARGET_DIR"
-              export MSB_HOME="$_msb_home"
-              export MSB_PATH="$_msb_home/bin/msb"
               export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
 
               _tool_repo_root() {

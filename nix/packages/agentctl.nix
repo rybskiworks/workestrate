@@ -124,15 +124,19 @@ rustPlatform.buildRustPackage {
   '';
 
   postInstall = ''
-    # Force MSB_HOME to a persistent path at runtime. The dev shell sets a
-    # temporary MSB_HOME (e.g. /run/user/1000/ai-workbench-msb-$$) for offline
-    # cargo check builds only. At runtime, the SDK needs a stable MSB_HOME
-    # (~/.microsandbox) for cache/db/state. Using --run ensures shell expansion
-    # of $HOME happens at wrapper execution time, not at build time.
+    # Canonical MSB home: $HOME/.microsandbox (the SDK default from
+    # microsandbox_utils::resolve_home: non-empty MSB_HOME verbatim, else
+    # $HOME/.microsandbox, else ./.microsandbox). The guarded --run below
+    # honors an explicit caller override (including a non-empty MSB_HOME)
+    # while defaulting unset AND empty to the canonical home. --set-default
+    # would NOT handle the empty-string case (it only fires when unset), so
+    # the explicit `[ -z ... ]` guard is required. Shell expansion of $HOME
+    # happens at wrapper execution time, not at build time.
     wrapProgram $out/bin/workestrate \
       --set MSB_PATH "${microsandbox}/bin/msb" \
+      --set MSB_AGENTD_PATH "${microsandbox}/libexec/agentd" \
       --prefix PATH : ${pkgs.sops}/bin \
-      --run 'export MSB_HOME="$HOME/.microsandbox"'
+      --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox"; fi'
   '';
 
   doCheck = false;
