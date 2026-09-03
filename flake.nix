@@ -590,6 +590,37 @@
               in
               if pwd != "" then pwd else toString ./.;
 
+            # Redirect devenv task/state/cache dirs out of the repo tree into
+            # a $HOME-namespaced cache dir ($HOME/.cache/devenv/workestrate).
+            # Verified against the PINNED devenv source (rev 97135e80 per
+            # flake.lock node `devenv`): src/modules/top-level.nix defines
+            # only devenv.{root,dotfile,state,runtime,tmpdir,profile} (all
+            # internal), and src/modules/tasks.nix wires tasks' --cache-dir
+            # to devenv.dotfile — there is NO separate task/state/cache-dir
+            # knob, so redirecting dotfile+state moves the task cache + state
+            # too. devenv.runtime already lives outside the repo
+            # ($XDG_RUNTIME_DIR, else /tmp, hashed per dotfile) and keeps its
+            # default here. getEnv HOME idiom mirrors devenv.root above
+            # (pure-eval safe: empty HOME falls back in-tree, which stays
+            # gitignored via .devenv/).
+            devenv.dotfile =
+              let
+                home = builtins.getEnv "HOME";
+                # Throw-fallback for the missing upstream knob: pinned devenv
+                # 97135e80 exposes no dedicated task-cache-dir option. If a
+                # future edit needs one, recover via `--override-input
+                # devenv-root path:<dir>` (see inputs.devenv-root) or a
+                # devenv pin bump — never by silently ignoring the skew.
+                # Lazily bound (unreferenced) so `nix flake check` stays green.
+                _cacheDirFallback = throw "workestrate: pinned devenv 97135e80 has no task-cache-dir option; recover with `--override-input devenv-root path:<dir>` or a devenv pin bump";
+              in
+              if home != "" then home + "/.cache/devenv/workestrate/.devenv" else toString ./. + "/.devenv";
+            devenv.state =
+              let
+                home = builtins.getEnv "HOME";
+              in
+              if home != "" then home + "/.cache/devenv/workestrate/.devenv/state" else toString ./. + "/.devenv/state";
+
             imports = [
               inputs.tooling.devenvModules.base
               inputs.tooling.devenvModules.nix
