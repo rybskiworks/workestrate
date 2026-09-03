@@ -4,11 +4,18 @@
 # that invoke cargo inherit this env automatically.
 export CARGO_TARGET_DIR := `echo "${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
 
+# Lock-guard: pre-resolution fork-pin check for control/agentctl/Cargo.lock
+# (A1 no-registry-source, A2 ==X pins from Cargo.toml, A3 smoltcp vs fork).
+# A broken lock breaks cargo resolution itself, so this bash+python3 script
+# runs BEFORE any cargo recipe. Wired FIRST in the `verify` chain.
+lock-guard:
+    ./scripts/check-cargo-lock.sh
+
 # Verify the host rustc major.minor matches the fenix-pinned toolchain.
 # Parses the RUST_TOOLCHAIN_VERSION marker from flake.nix (not hardcoded
 # here) so the check stays in sync with the flake input automatically.
-# Wired into `verify` as the FIRST gate — a toolchain mismatch invalidates
-# all downstream cargo results.
+# Wired into `verify` as the SECOND gate (after lock-guard) — a toolchain
+# mismatch invalidates all downstream cargo results.
 toolchain-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -43,7 +50,7 @@ spec-examples:
 
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # golden-check, schema drift, lock-file stability, AND nix-purity lint.
-verify: toolchain-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
+verify: lock-guard toolchain-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
