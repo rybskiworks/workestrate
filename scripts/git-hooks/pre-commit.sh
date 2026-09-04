@@ -5,11 +5,12 @@
 # Installed copy: .git/hooks/pre-commit (per-clone state, NOT tracked).
 # Reinstall after cloning:
 #   cp scripts/git-hooks/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
-# CAUTION: entering the devenv shell runs git-hooks.nix's installer, which
-# moves this fallback to .git/hooks/pre-commit.legacy and installs a
-# store-path'd generated hook (dangles after GC; no secret gate). Re-run the
-# cp above after shell entry, or disable auto-install via
-# git-hooks.install.enable = false in the shell config (config follow-up).
+# CAUTION: entering the devenv shell no longer clobbers this fallback —
+# nix-tooling's devenvModules/base.nix sets `git-hooks.install.enable =
+# false`. The following applies only if a consumer re-enables installation:
+# git-hooks.nix's installer would then move this fallback to
+# .git/hooks/pre-commit.legacy and install a store-path'd generated hook
+# (dangles after GC; no secret gate) — re-run the cp above after shell entry.
 #
 # Background: a previous `prek install` wrote a shim that exec'd a hardcoded
 # nix-store prek binary against a generated .pre-commit-config.yaml. Nix
@@ -32,6 +33,11 @@
 
 label="$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null)"
 [ -n "$label" ] || label="repo"
+# Intentionally hardcoded: this shim stays self-contained for agents/hosts
+# without nix. Canonical version source: nix-tooling share/tombi-version
+# (single-sourced by packages/tombi.nix). Drift vs canonical is NOT yet
+# checked by check-tombi-sync.sh (it only compares tombi.toml rules against
+# share/tombi-format.toml) — host follow-up.
 TOMBI_REQUIRED="1.2.5"
 fail=0
 
