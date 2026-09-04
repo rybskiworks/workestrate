@@ -28,7 +28,7 @@ CI should follow these rules.
 - Crawl file: `docs/nix/.crawl/63-nix-command-develop.md`
   — https://nix.dev/manual/nix/2.34/command-ref/new-cli/nix3-develop
 - Project file: `justfile` — `verify` and `verify-full` recipes, `lint-nix`,
-  `store-audit`, `store-delta-check`
+  `store-audit`
 - Project file: `SPEC.md` — HOST-NIX gate definition, milestone M5 (CI/CD)
 - Project file: `docs/nix-purity.md` — enforcement context (`just lint-nix`,
   store-growth model)
@@ -147,9 +147,11 @@ organization secrets. [crawl 34]
 | Test | `nix build .#checks.x86_64-linux.validateConfig` | Run flake checks |
 | Full | `just verify-full` | All gates + nix build |
 
-`just verify` runs: `toolchain-check`, `check` (fmt + clippy + cargo check),
-`test`, `spec-examples`, `litellm-check`, `golden-check`, `schema-check`,
-`scaffold-check`, `lint-nix`, `store-audit`, plus
+`just verify` runs: `lock-guard`, `toolchain-check`, `versions-check`,
+`check` (fmt + clippy + cargo check), `test`, `spec-examples`,
+`tombi-check`, `golden-check`, `schema-check`, `schema-sync-check`,
+`scaffold-check`, `lint-nix`, `store-audit` (informational — never gates),
+then the recipe body (`_verify-inner`) adds the lock-stability check
 `git diff --exit-code HEAD -- control/agentctl/Cargo.lock`. And
 `just verify-full` = `verify` + `nix build .#workestrate`. (Source: justfile.)
 
@@ -176,8 +178,7 @@ already inside the devshell they re-exec `nix develop --override-input
 devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate" -c
 just _<name>-inner` (generate-schema: same override, `-c cargo run ...`).
 Bare `nix develop` is not a supported entry — it fails pure eval on the
-`devenv.root != ""` assertion. litellm-check's nix fallback (the config
-repos' justfile) also carries the override.
+`devenv.root != ""` assertion.
 
 (Source: justfile.)
 
@@ -249,18 +250,16 @@ container has none.
 
 **What runs in-container** (no nix needed): `cargo` commands (via the
 relocated `CARGO_TARGET_DIR`), `just check`, `just test`, `just lint-nix`
-(bash static guard), `just litellm-check` (python3 fallback),
-`just golden-check`, `just schema-check`, `just scaffold-check`,
-`just store-audit` (skips when nix absent). Essentially all of
-`just verify` EXCEPT the nix build step.
+(bash static guard), `just golden-check`, `just schema-check`,
+`just scaffold-check`, `just store-audit` (skips when nix absent).
+Essentially all of `just verify` EXCEPT the nix build step.
 
 **What requires HOST-NIX**: `nix build .#workestrate`,
 `nix build .#workestrator`,
 `nix build .#checks.x86_64-linux.validateConfig`, `nix flake check` (needs
 nix), `just shell` (devshell entry), `just verify-full` (adds `nix build`),
 `just generate-schema` (re-execs `nix develop` with the devenv-root
-override), `just update-hashes` (uses
-`nix run`/`nix build`), `just store-delta-check` (uses `nix eval`).
+override).
 
 **HOST-KVM** (separate gate): runtime microVM execution (`up`/`exec`/`logs`)
 requires `/dev/kvm`; the container has none. This is distinct from
@@ -285,9 +284,6 @@ automated updates." — CI/CD is a future milestone. No
 `.github/workflows/` CI config exists yet in the repo; this doc is the
 design reference for when CI is wired.
 
-`just store-delta-check` is a periodic host/CI check (NOT wired into
-`verify`) that measures `/nix/store` growth from one pure eval. (justfile.)
-
 ### nix build --no-link --print-out-paths — CI-friendly build output
 
 - `--no-link`: do not create a `./result` symlink (avoids clutter in CI,
@@ -298,8 +294,10 @@ design reference for when CI is wired.
 - Combined: `nix build .#workestrate --no-link --print-out-paths` — the
   canonical CI build invocation.
 
-The justfile uses `--no-link` in `just update-hashes`:
-`nix build .#opencode-built --no-link`. (Source: justfile.)
+The justfile itself does not use `--no-link` — `verify-full` runs a plain
+`nix build .#workestrate`; the `--no-link --print-out-paths` form above is
+the recommended CI invocation, not current justfile usage. (Source:
+justfile.)
 
 ### nix flake archive --json — CI artifact publishing
 
@@ -334,8 +332,8 @@ Contrast with `nix build ... --print-out-paths` (single output) vs
    derivations every run. [crawl 34]
 10. Run `just lint-nix` (the static purity guard) in CI — it catches
     `--impure`, unfiltered `builtins.path`, etc. (justfile, nix-purity.md)
-11. Run `just store-audit` and `just store-delta-check` periodically on a
-    nix-capable host or in CI to catch store-growth regressions. (justfile)
+11. Run `just store-audit` periodically on a nix-capable host or in CI to
+    catch store-growth regressions. (justfile)
 12. For self-hosted binary caches, use `nix-serve` (or
     `nix-serve-ng`/`attic`) behind nginx with a generated signing key pair.
     [crawl 19]
@@ -356,8 +354,7 @@ Contrast with `nix build ... --print-out-paths` (single output) vs
       [crawl 34]
 - [ ] Self-hosted cache uses a signing key pair (private + public)? [crawl 19]
 - [ ] `just shell -c` / devenv-root-override form used for non-interactive devshell commands (no bare `nix develop`)?
-- [ ] Store-growth checks (`store-audit`, `store-delta-check`) run
-      periodically?
+- [ ] Store-growth check (`store-audit`) runs periodically?
 
 ## Implementation checklist
 
@@ -378,8 +375,7 @@ Contrast with `nix build ... --print-out-paths` (single output) vs
 - [ ] Add `# HOST-GATE:` comments to any step that requires a nix-capable
       host.
 - [ ] Wire `just lint-nix` into the CI lint stage.
-- [ ] Wire `just store-audit` / `just store-delta-check` into a
-      periodic/scheduled job.
+- [ ] Wire `just store-audit` into a periodic/scheduled job.
 - [ ] Pin nixpkgs in the workflow
       (`nix_path: nixpkgs=channel:nixos-unstable` or a flake input).
       [crawl 34]
@@ -421,10 +417,8 @@ Contrast with `nix build ... --print-out-paths` (single output) vs
   (justfile)
 - `just lint-nix` — static purity guard (`scripts/check-nix-paths.sh`).
   (justfile, nix-purity.md)
-- `just store-audit` — top-20 store paths + source-path gate (skips when
-  nix absent). (justfile)
-- `just store-delta-check` — periodic `/nix/store` growth assertion
-  (HOST-NIX, not in `verify`). (justfile)
+- `just store-audit` — top-20 store paths + source-path warning
+  (informational, never gates; skips when nix absent). (justfile)
 
 > **HOST-GATE:** This container has no nix. The `nix flake check`,
 > `nix build`, and `nix develop` commands below are documented Nix
