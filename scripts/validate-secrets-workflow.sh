@@ -10,9 +10,9 @@
 #   1 — one or more checks failed, or a wrapper invocation failed
 #
 # Usage:
-#   nix develop -c scripts/validate-secrets-workflow.sh
+#   just validate-secrets   (or: nix develop --override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate" -c scripts/validate-secrets-workflow.sh)
 #
-# Note: This script must be run from inside the dev shell (or via nix develop -c).
+# Note: This script must be run via `just validate-secrets` or with the devenv-root override.
 #       All work happens in an isolated temp directory; no repo files are modified.
 
 set -euo pipefail
@@ -98,13 +98,13 @@ UPDATE_LITELLM="sk-test-updated-master-key-CHANGED-xyz"
 log "working directory: $WORKDIR"
 log "repo root: $REPO_ROOT"
 
-# Copy .sops.yaml and .env.example to workdir so setup-secrets.sh can find
-# them via its repo-root detection (.sops.yaml marker). Copy the script
-# too so its BASH_SOURCE points at a path under $WORKDIR (this is the
-# path the script is invoked with in real use, not the nix-store copy).
+# Copy the script into the workdir so its BASH_SOURCE points at a path under
+# $WORKDIR (this is the path the script is invoked with in real use, not the
+# nix-store copy). The tool repo root carries NO .sops.yaml/.env.example
+# (those are config-repo artifacts the scaffold generates — the old cp of
+# $REPO_ROOT/.sops.yaml/.env.example died under set -e), so render
+# scaffold-true fixtures here instead.
 mkdir -p "$WORKDIR/scripts"
-cp "$REPO_ROOT/.sops.yaml" "$WORKDIR/.sops.yaml"
-cp "$REPO_ROOT/.env.example" "$WORKDIR/.env.example"
 cp "$REPO_ROOT/scripts/setup-secrets.sh" "$WORKDIR/scripts/setup-secrets.sh"
 chmod +x "$WORKDIR/scripts/setup-secrets.sh"
 
@@ -116,10 +116,65 @@ chmod 600 "$WORKDIR/keys/age.txt"
 TEST_PUBKEY="$(age-keygen -y "$WORKDIR/keys/age.txt")"
 log "generated test age key: $TEST_PUBKEY"
 
-# Rewrite .sops.yaml to use the test public key
-sed -i "s|&repo_secrets_v1 .*|\&repo_secrets_v1 $TEST_PUBKEY|" "$WORKDIR/.sops.yaml"
+# Render .sops.yaml from the scaffold template (single-recipient form —
+# exactly what `workestrate config new` writes) with the test recipient.
+sed -e "s|{{ config_name }}|validate|g" \
+    -e "s|{{ age_recipient }}|$TEST_PUBKEY|g" \
+    "$REPO_ROOT/control/agentctl/src/scaffold/template/.sops.yaml.tpl" > "$WORKDIR/.sops.yaml"
+log "rendered .sops.yaml from scaffold template with test recipient"
 
-log "rewrote .sops.yaml with test recipient"
+# Fixture .env.example: same KEY= schema shape the scaffold generates,
+# limited to the keys exercised below (setup-secrets.sh falls back to this
+# file for REQUIRED_KEYS only if `workestrate secrets-schema` fails; with the
+# fixture workestrate.toml exported below, the binary path wins — the fixture
+# keeps the script hermetic either way).
+cat > "$WORKDIR/.env.example" <<'EOF'
+# validate-secrets-workflow fixture (not a repo artifact).
+GITHUB_TOKEN=
+KIMI_CODE_API_KEY=
+LITELLM_MASTER_KEY=
+MINIMAX_CODING_API_KEY=
+NEURALWATT_API_KEY=
+ODYSSEUS_ADMIN_PASSWORD=
+OPENROUTER_API_KEY=
+EOF
+
+# Fixture workestrate.toml (schema_version + secrets catalog — the shape the
+# scaffold generates). Exported as WORKESTRATE_CONFIG_DIR below, this gives
+# `workestrate secrets-schema` a deterministic key set AND makes Phase 6's
+# `workestrate run -- env` decrypt THIS workdir's .env.enc (single dev layer,
+# never the user's real home).
+cat > "$WORKDIR/workestrate.toml" <<'EOF'
+schema_version = 1
+
+[secrets.GITHUB_TOKEN]
+env_var = "GITHUB_TOKEN"
+required = false
+
+[secrets.KIMI_CODE_API_KEY]
+env_var = "KIMI_CODE_API_KEY"
+required = false
+
+[secrets.LITELLM_MASTER_KEY]
+env_var = "LITELLM_MASTER_KEY"
+required = false
+
+[secrets.MINIMAX_CODING_API_KEY]
+env_var = "MINIMAX_CODING_API_KEY"
+required = false
+
+[secrets.NEURALWATT_API_KEY]
+env_var = "NEURALWATT_API_KEY"
+required = false
+
+[secrets.ODYSSEUS_ADMIN_PASSWORD]
+env_var = "ODYSSEUS_ADMIN_PASSWORD"
+required = false
+
+[secrets.OPENROUTER_API_KEY]
+env_var = "OPENROUTER_API_KEY"
+required = false
+EOF
 
 # Export env for init
 export SOPS_AGE_KEY_FILE="$WORKDIR/keys/age.txt"
@@ -132,6 +187,7 @@ export NEURALWATT_API_KEY="$INIT_NEURALWATT"
 export MINIMAX_CODING_API_KEY="$INIT_MINIMAX"
 export GITHUB_TOKEN="$INIT_GITHUB"
 export ODYSSEUS_ADMIN_PASSWORD="$INIT_ODYSSEUS"
+export WORKESTRATE_CONFIG_DIR="$WORKDIR"
 unset HISTFILE
 
 redact() {
@@ -144,11 +200,16 @@ redact() {
   done
 }
 
-# Helper to run nix develop -c from repo root but execute in workdir
+# Helper to run nix develop -c from repo root but execute in workdir. The
+# devenv-root override (worktree abs path in a root file) is required: bare
+# `nix develop` cannot resolve devenv.root under pure eval.
 run_in_workdir() {
   local cmd
   printf -v cmd 'cd %q && %s' "$WORKDIR" "$1"
-  (cd "$REPO_ROOT" && nix develop -c bash -c "$cmd")
+  local root_dir="$HOME/.cache/workestrate/devenv-root"
+  mkdir -p "$root_dir"
+  printf '%s' "$REPO_ROOT" > "$root_dir/workestrate"
+  (cd "$REPO_ROOT" && nix develop --override-input devenv-root "file+file://$root_dir/workestrate" -c bash -c "$cmd")
 }
 
 # PHASE 1: init
