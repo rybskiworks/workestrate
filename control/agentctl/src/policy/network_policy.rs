@@ -1303,7 +1303,7 @@ pub fn compile_network_plan(
     workload_name: &str,
     workload: &crate::config::WorkloadConfig,
 ) -> Result<crate::microsandbox::plan::NetworkPlan> {
-    // Baseline from workload.network.defaults (entitlement-gated allow)
+    // Baseline from workload.network.defaults (explicit allow stands alone)
     let baseline_egress_deny = !matches!(
         workload.network.defaults.and_then(|d| d.egress),
         Some(crate::config::DefaultAction::Allow)

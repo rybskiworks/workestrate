@@ -69,7 +69,7 @@ required = false
 #
 # [workloads.my-agent.network.defaults]
 # egress = "deny"
-# ingress = "deny"  # absent = deny; "allow" requires entitlements = ["default_ingress_allow"]
+# ingress = "deny"  # absent = deny; explicit "allow" stands alone
 #
 # [[workloads.my-agent.network.egress]]
 # recipe = "agent_base"

@@ -97,8 +97,7 @@ guest = 9090
 
 [workloads.example-litellm.network.defaults]
 egress = "deny"
-# ingress = "deny"  # absent = deny (fail-closed); "allow" requires
-# entitlements = ["default_ingress_allow"]
+# ingress = "deny"  # absent = deny (fail-closed); explicit "allow" stands alone
 
 [[workloads.example-litellm.policy.egress.allow.host]]
 ports = [53]
@@ -293,9 +292,8 @@ required = false
 
 [workloads.example-offensive]
 kind = "agent"
-# egress = "allow" (below) requires this config-declared entitlement
-# (fail-closed: without it, merge/validate refuse egress = "allow").
-entitlements = ["default_egress_allow"]
+# egress = "allow" (below) stands alone (absent = deny; explicit allow needs
+# no gate — home `final` seals still veto).
 image = { recipe = "nix-layered", name = "example-offensive", tag = "latest", contents = [
   "cacert",
   "busybox",

@@ -633,34 +633,16 @@ fn merge_workload(
         provenance.insert(format!("workloads.{name}.instance"), layer_ctx.name.clone());
     }
 
-    if table.contains_key("entitlements") {
-        // Entitlements merge union-style with dedup (mirroring the egress
-        // union semantics): once any layer grants an entitlement it cannot
-        // be revoked by a later layer. Grant-only is the fail-closed-safe
-        // direction for a security gate.
-        for entitlement in &layer.entitlements {
-            if !merged.entitlements.contains(entitlement) {
-                merged.entitlements.push(entitlement.clone());
-            }
-        }
-        provenance.insert(
-            format!("workloads.{name}.entitlements"),
-            layer_ctx.name.clone(),
-        );
-    }
-
     if table.contains_key("network") {
         let raw_network = table.get("network").and_then(|v| v.as_table());
-        // The egress/ingress="allow" gates are config-declared (no
-        // core-hardcoded workload names): the merged entitlements above
-        // already include THIS layer's declarations, so a layer may declare
-        // the entitlement and `defaults.{egress,ingress} = "allow"` side by
-        // side.
+        // Explicit `defaults.{egress,ingress} = "allow"` stands alone: the
+        // winning (most-specific) layer wins; home `final` seals veto via
+        // the policy ladder. Monotonic-deny-upward is gone by design
+        // (2026-09-04, entitlements removal).
         merge_network(
             &mut merged.network,
             &layer.network,
             name,
-            &merged.entitlements,
             layer_ctx,
             raw_network,
             provenance,
@@ -674,7 +656,6 @@ fn merge_network(
     merged: &mut crate::config::NetworkConfig,
     layer: &crate::config::NetworkConfig,
     name: &str,
-    entitlements: &[String],
     layer_ctx: &Layer,
     raw_network: Option<&toml::map::Map<String, toml::Value>>,
     provenance: &mut Provenance,
@@ -683,33 +664,12 @@ fn merge_network(
         return Ok(());
     };
 
-    // Union-merged entitlements (already include THIS layer's declarations).
-    let entitled = entitlements.iter().any(|e| e == "default_egress_allow");
-    let ingress_entitled = entitlements.iter().any(|e| e == "default_ingress_allow");
-
     let raw_defaults = raw_network.get("defaults").and_then(|v| v.as_table());
     if raw_defaults.is_some_and(|d| d.contains_key("egress")) {
-        match layer.defaults.and_then(|d| d.egress) {
-            Some(crate::config::DefaultAction::Allow) => {
-                // WP3/A4: entitlement is checked BEFORE the monotonic-deny
-                // invariant. Only workloads that DECLARE the
-                // `default_egress_allow` entitlement
-                // (`workloads.<name>.entitlements`) may hold or relax to
-                // `egress = "allow"`; for them the monotonic-deny invariant
-                // does NOT apply (the declared entitlement is the explicit
-                // opt-out from `egress = "deny"`). Non-entitled workloads
-                // can never reach `Allow` at all -- the bail below upholds
-                // the monotonic-deny invariant as defense-in-depth.
-                if !entitled {
-                    anyhow::bail!(
-                        "workload '{}' sets network.defaults.egress = \"allow\" without declaring entitlements = [\"default_egress_allow\"]",
-                        name
-                    );
-                }
-            }
-            // `Deny` (tightening) is always allowed across layers.
-            Some(crate::config::DefaultAction::Deny) | None => {}
-        }
+        // No gate: an explicit `allow` at the winning layer wins
+        // (last-wins per precedence); `deny` (tightening) is always
+        // allowed. Monotonic-deny-upward is gone by design (2026-09-04,
+        // entitlements removal — replaced by final seals + review + plan NOTE).
         // Field-wise merge: assigning only the `egress` field preserves any
         // `ingress` default set by another layer (and vice versa below).
         let mut defaults = merged.defaults.unwrap_or_default();
@@ -723,18 +683,7 @@ fn merge_network(
     }
 
     if raw_defaults.is_some_and(|d| d.contains_key("ingress")) {
-        // Mirror of the egress gate above: relaxing (or holding)
-        // `ingress = "allow"` requires the union-merged
-        // `default_ingress_allow` entitlement, checked BEFORE applying;
-        // tightening to `deny` is always allowed.
-        if layer.defaults.and_then(|d| d.ingress) == Some(crate::config::DefaultAction::Allow)
-            && !ingress_entitled
-        {
-            anyhow::bail!(
-                "workload '{}' sets network.defaults.ingress = \"allow\" without declaring entitlements = [\"default_ingress_allow\"]",
-                name
-            );
-        }
+        // Mirror of the egress rule above: no gate, last-wins.
         let mut defaults = merged.defaults.unwrap_or_default();
         defaults.ingress = layer.defaults.and_then(|d| d.ingress);
         merged.defaults =
@@ -852,33 +801,52 @@ mod tests {
 
 
     #[test]
-    fn egress_default_allow_requires_entitlement_monotonic_deny() {
-        // WP3/A4: after the entitlement-before-monotonic-deny reorder, a
-        // non-entitled workload (pi) attempting to relax `"deny" -> "allow"`
-        // bails at the entitlement check. The monotonic-deny invariant is
-        // upheld for non-entitled workloads by that entitlement check (they
-        // can never reach `Some(Allow)` at all).
-        let base = load_fixture("base", "base");
+    fn egress_default_allow_stands_alone() {
+        // Entitlements removed 2026-09-04: an explicit `egress = "allow"`
+        // stands alone — the hostile fixture (pi, no magic word) now merges
+        // cleanly with last-wins precedence.
         let hostile = load_fixture("hostile_default_egress", "hostile_default_egress");
 
-        let err = merge_layers(&[base, hostile]).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("entitlement"),
-            "non-entitled pi should bail at the entitlement check: {msg}"
+        let (merged, provenance) = merge_layers(&[hostile]).expect("allow stands alone");
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.network.defaults.and_then(|d| d.egress),
+            Some(crate::config::DefaultAction::Allow)
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.network.defaults.egress"),
+            Some(&"hostile_default_egress".to_string())
         );
     }
 
     #[test]
-    fn entitled_workload_relaxes_egress_default_to_allow() -> Result<()> {
-        // WP3/A4 regression (the headline test): a three-layer stack where
-        // base sets example-offensive egress="deny" AND declares the
-        // `default_egress_allow` entitlement, mid keeps deny, top sets allow.
-        // Because the entitlement is declared, the top layer must win -- the
-        // monotonic-deny check must NOT fire for an entitled workload.
+    fn egress_default_allow_stands_alone_over_deny_base() {
+        // A higher layer relaxing `"deny" -> "allow"` wins outright — no
+        // precondition, no monotonic-deny-upward (gone by design).
+        let base = load_fixture("base", "base");
+        let hostile = load_fixture("hostile_default_egress", "hostile_default_egress");
+
+        let (merged, provenance) = merge_layers(&[base, hostile]).expect("allow wins");
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.network.defaults.and_then(|d| d.egress),
+            Some(crate::config::DefaultAction::Allow),
+            "relaxing deny->allow from the winning layer must stick"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.network.defaults.egress"),
+            Some(&"hostile_default_egress".to_string())
+        );
+    }
+
+    #[test]
+    fn workload_relaxes_egress_default_to_allow() -> Result<()> {
+        // Headline precedence test: a three-layer stack where base sets
+        // example-offensive egress="deny", mid keeps deny, top sets allow.
+        // The top layer wins — no entitlement declaration needed.
         let base = Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.example-offensive]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\nentitlements = [\"default_egress_allow\"]\n\n[workloads.example-offensive.network.defaults]\negress = \"deny\"",
+            "schema_version = 1\n\n[workloads.example-offensive]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.example-offensive.network.defaults]\negress = \"deny\"",
         )?;
         let mid = Layer::from_string(
             "mid",
@@ -894,7 +862,7 @@ mod tests {
         assert_eq!(
             offensive.network.defaults.and_then(|d| d.egress),
             Some(crate::config::DefaultAction::Allow),
-            "entitled workload should relax deny->allow from the top layer"
+            "workload should relax deny->allow from the top layer"
         );
         assert_eq!(
             provenance.get("workloads.example-offensive.network.defaults.egress"),
@@ -905,42 +873,29 @@ mod tests {
     }
 
     #[test]
-    fn non_entitled_workload_cannot_relax_egress_default_to_allow() {
-        // WP3/A4 regression: a non-entitled workload (pi) can never reach
-        // `egress = "allow"`, even via a three-layer stack that first
-        // sets deny then attempts to relax to allow. The entitlement check
-        // (now first) bails at the top layer.
+    fn workload_tightens_egress_default_to_deny() -> Result<()> {
+        // Precedence holds both directions: base allow, top deny → deny wins.
         let base = Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\negress = \"deny\"",
-        ).unwrap();
-        let mid = Layer::from_string(
-            "mid",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\negress = \"deny\"",
-        ).unwrap();
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\negress = \"allow\"",
+        )?;
         let top = Layer::from_string(
             "top",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\negress = \"allow\"",
-        ).unwrap();
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\negress = \"deny\"",
+        )?;
 
-        let err = merge_layers(&[base, mid, top]).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("entitlement"),
-            "non-entitled pi should bail at the entitlement check: {msg}"
+        let (merged, provenance) = merge_layers(&[base, top])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.network.defaults.and_then(|d| d.egress),
+            Some(crate::config::DefaultAction::Deny),
+            "tightening allow->deny from the top layer must stick"
         );
-    }
-
-    #[test]
-    fn egress_default_allow_requires_entitlement() {
-        let hostile = load_fixture("hostile_default_egress", "hostile_default_egress");
-
-        let err = merge_layers(&[hostile]).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("entitlement"),
-            "error should mention entitlement: {msg}"
+        assert_eq!(
+            provenance.get("workloads.pi.network.defaults.egress"),
+            Some(&"top".to_string())
         );
+        Ok(())
     }
 
     // egress_ceiling test removed (allowlist removed per ADR 0035)
@@ -1052,10 +1007,11 @@ mod tests {
     }
 
     #[test]
-    fn declared_entitlement_default_egress_allow_ok() -> Result<()> {
+    fn single_layer_allow_egress_ok() -> Result<()> {
+        // Single layer with explicit `egress = "allow"` merges cleanly.
         let base = Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.example-offensive]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\nentitlements = [\"default_egress_allow\"]\n\n[workloads.example-offensive.network.defaults]\negress = \"allow\"",
+            "schema_version = 1\n\n[workloads.example-offensive]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.example-offensive.network.defaults]\negress = \"allow\"",
         )?;
 
         let (merged, _) = merge_layers(&[base])?;
@@ -1067,48 +1023,48 @@ mod tests {
         Ok(())
     }
 
-    // ---- ingress default: symmetric mirror of the egress gate ----
+    // ---- ingress default: symmetric mirror of the egress rule ----
 
     #[test]
-    fn ingress_default_allow_requires_entitlement() {
+    fn ingress_default_allow_stands_alone() {
+        // Entitlements removed 2026-09-04: explicit `ingress = "allow"`
+        // stands alone (mirrors the egress rule).
         let hostile = load_fixture("hostile_default_ingress", "hostile_default_ingress");
 
-        let err = merge_layers(&[hostile]).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("entitlement"),
-            "error should mention entitlement: {msg}"
+        let (merged, provenance) = merge_layers(&[hostile]).expect("allow stands alone");
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.network.defaults.and_then(|d| d.ingress),
+            Some(crate::config::DefaultAction::Allow)
         );
-        assert!(
-            msg.contains("default_ingress_allow"),
-            "error should name the ingress entitlement: {msg}"
+        assert_eq!(
+            provenance.get("workloads.pi.network.defaults.ingress"),
+            Some(&"hostile_default_ingress".to_string())
         );
     }
 
     #[test]
-    fn ingress_default_allow_requires_entitlement_monotonic_deny() {
-        // A non-entitled workload (pi) attempting to relax `"deny" -> "allow"`
-        // on the ingress default bails at the entitlement check (mirroring
-        // the egress WP3/A4 gate).
+    fn ingress_default_allow_stands_alone_over_deny_base() {
+        // A higher layer relaxing `"deny" -> "allow"` on ingress wins
+        // outright (mirrors the egress WP3/A4 shape, minus the gate).
         let base = load_fixture("base", "base");
         let hostile = load_fixture("hostile_default_ingress", "hostile_default_ingress");
 
-        let err = merge_layers(&[base, hostile]).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("entitlement"),
-            "non-entitled pi should bail at the entitlement check: {msg}"
+        let (merged, _) = merge_layers(&[base, hostile]).expect("allow wins");
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.network.defaults.and_then(|d| d.ingress),
+            Some(crate::config::DefaultAction::Allow)
         );
     }
 
     #[test]
-    fn entitled_workload_relaxes_ingress_default_to_allow() -> Result<()> {
-        // Mirror of the egress headline test: base sets ingress="deny" AND
-        // declares the `default_ingress_allow` entitlement, mid keeps deny,
-        // top sets allow — the top layer must win.
+    fn workload_relaxes_ingress_default_to_allow() -> Result<()> {
+        // Mirror of the egress headline test: base sets ingress="deny",
+        // mid keeps deny, top sets allow — the top layer wins.
         let base = Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.example-offensive]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\nentitlements = [\"default_ingress_allow\"]\n\n[workloads.example-offensive.network.defaults]\ningress = \"deny\"",
+            "schema_version = 1\n\n[workloads.example-offensive]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.example-offensive.network.defaults]\ningress = \"deny\"",
         )?;
         let mid = Layer::from_string(
             "mid",
@@ -1124,7 +1080,7 @@ mod tests {
         assert_eq!(
             offensive.network.defaults.and_then(|d| d.ingress),
             Some(crate::config::DefaultAction::Allow),
-            "entitled workload should relax deny->allow from the top layer"
+            "workload should relax deny->allow from the top layer"
         );
         assert_eq!(
             provenance.get("workloads.example-offensive.network.defaults.ingress"),
@@ -1135,29 +1091,37 @@ mod tests {
     }
 
     #[test]
-    fn non_entitled_workload_cannot_relax_ingress_default_to_allow() {
+    fn workload_tightens_ingress_default_to_deny() -> Result<()> {
+        // Precedence holds both directions: base allow, top deny → deny wins.
         let base = Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\ningress = \"deny\"",
-        ).unwrap();
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\ningress = \"allow\"",
+        )?;
         let top = Layer::from_string(
             "top",
-            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\ningress = \"allow\"",
-        ).unwrap();
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.pi.network.defaults]\ningress = \"deny\"",
+        )?;
 
-        let err = merge_layers(&[base, top]).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("entitlement"),
-            "non-entitled pi should bail at the entitlement check: {msg}"
+        let (merged, provenance) = merge_layers(&[base, top])?;
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.network.defaults.and_then(|d| d.ingress),
+            Some(crate::config::DefaultAction::Deny),
+            "tightening allow->deny from the top layer must stick"
         );
+        assert_eq!(
+            provenance.get("workloads.pi.network.defaults.ingress"),
+            Some(&"top".to_string())
+        );
+        Ok(())
     }
 
     #[test]
-    fn declared_entitlement_default_ingress_allow_ok() -> Result<()> {
+    fn single_layer_allow_ingress_ok() -> Result<()> {
+        // Single layer with explicit `ingress = "allow"` merges cleanly.
         let base = Layer::from_string(
             "base",
-            "schema_version = 1\n\n[workloads.example-offensive]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\nentitlements = [\"default_ingress_allow\"]\n\n[workloads.example-offensive.network.defaults]\ningress = \"allow\"",
+            "schema_version = 1\n\n[workloads.example-offensive]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\nlog_stop_errors = false\n\n[workloads.example-offensive.network.defaults]\ningress = \"allow\"",
         )?;
 
         let (merged, _) = merge_layers(&[base])?;

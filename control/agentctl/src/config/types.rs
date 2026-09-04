@@ -513,9 +513,8 @@ pub struct LocalBuildConfig {
 
 /// Default per-direction action for a workload's network policy
 /// (`[...network.defaults] egress|ingress = "allow" | "deny"`). `Deny` is
-/// the fail-closed default; `Allow` requires the workload to declare the
-/// matching `default_egress_allow` / `default_ingress_allow` entitlement
-/// (checked at merge and validate time).
+/// the fail-closed default; `Allow` is an explicit opt-in that stands alone
+/// (absent = deny; home `final` seals still veto).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DefaultAction {
@@ -529,9 +528,7 @@ pub enum DefaultAction {
 
 /// Per-workload network defaults (`[...network.defaults]`). `egress` and
 /// `ingress` are the per-direction fail-closed switches (absent = `deny`;
-/// tightening to `deny` is always allowed across layers, relaxing to `allow`
-/// requires the workload's declared `default_egress_allow` /
-/// `default_ingress_allow` entitlement).
+/// explicit `allow` stands alone; home `final` seals still veto).
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -550,7 +547,7 @@ where
 {
     let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
     Err(serde::de::Error::custom(
-        "network.default_deny was removed — use [network.defaults] egress = \"deny\" (absent = deny; \"allow\" requires entitlements = [\"default_egress_allow\"]) — see ADR 0035 (docs/migration/50-decisions/0035-hierarchical-egress-ingress-policy.md) for rationale and migration",
+        "network.default_deny was removed — use [network.defaults] egress = \"deny\" (absent = deny; explicit allow stands alone) — see ADR 0035 (docs/migration/50-decisions/0035-hierarchical-egress-ingress-policy.md) for rationale and migration",
     ))
 }
 
@@ -585,9 +582,8 @@ where
 }
 
 /// Per-workload network policy (`workloads.<name>.network`). `defaults.egress`
-/// / `defaults.ingress` are the per-direction fail-closed switches (relaxing
-/// to `allow` requires the declared `default_egress_allow` /
-/// `default_ingress_allow` entitlement). The rule surface has migrated to
+/// / `defaults.ingress` are the per-direction fail-closed switches (absent =
+/// deny; explicit `allow` stands alone, home `final` seals still veto). The rule surface has migrated to
 /// hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035;
 /// `network.egress` / `network.deny` / `network.ingress` are removed and
 /// hard-error with ADR-citing messages.
@@ -1344,16 +1340,6 @@ pub struct WorkloadConfig {
     /// semantics land in Phases 2–3.
     #[serde(default)]
     pub instance: InstancePolicy,
-    /// Config-declared entitlements (`workloads.<name>.entitlements`). The
-    /// closed vocabulary core understands lives in `config::validation`
-    /// (currently only `"default_egress_allow"`, which permits
-    /// `network.defaults.egress = "allow"` — fail-closed: setting
-    /// `egress = "allow"` WITHOUT the declared entitlement is a hard
-    /// error at merge and validate time). Layers merge union-style with
-    /// dedup (an entitlement, once granted by any layer, cannot be revoked
-    /// by a later layer).
-    #[serde(default)]
-    pub entitlements: Vec<String>,
     /// Dependency declarations (`workloads.<name>.depends_on.<dep>`; ADR
     /// 0026(d)): each entry names another workload whose address is resolved
     /// from the port registry and injected as the declared env var at plan

@@ -99,13 +99,6 @@ const ALLOWED_BUILD_RECIPES: &[&str] = &["npm-build", "bun-compile", "pip-instal
 /// owned file set).
 const ALLOWED_FEATURES: &[&str] = &["create_tmp"];
 
-/// Allowed `workloads.{wl}.entitlements` entries. Entitlements are
-/// config-declared (no core hardcoded workload names); this is the closed
-/// vocabulary core understands. `"default_egress_allow"` permits
-/// `network.defaults.egress = "allow"`; `"default_ingress_allow"` permits
-/// `network.defaults.ingress = "allow"`.
-const ALLOWED_ENTITLEMENTS: &[&str] = &["default_egress_allow", "default_ingress_allow"];
-
 /// Whether `name` is a syntactically valid environment-variable name:
 /// `^[A-Za-z_][A-Za-z0-9_]*$` (WP10/A11).
 ///
@@ -353,46 +346,11 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
-    // Entitlements vocabulary + the defaults.{egress,ingress} gates
-    // (fail-closed): `egress = "allow"` / `ingress = "allow"` require the
-    // workload to DECLARE the matching `default_egress_allow` /
-    // `default_ingress_allow` entitlement itself — no core-hardcoded names.
-    for (workload_name, workload) in &config.workloads {
-        for entitlement in &workload.entitlements {
-            if !ALLOWED_ENTITLEMENTS.contains(&entitlement.as_str()) {
-                anyhow::bail!(
-                    "workload '{}' entitlement '{}' is not a known entitlement (expected one of: {})",
-                    workload_name,
-                    entitlement,
-                    ALLOWED_ENTITLEMENTS.join(", ")
-                );
-            }
-        }
-        if workload.network.defaults.and_then(|d| d.egress)
-            == Some(crate::config::DefaultAction::Allow)
-            && !workload
-                .entitlements
-                .iter()
-                .any(|e| e == "default_egress_allow")
-        {
-            anyhow::bail!(
-                "workload '{}' sets network.defaults.egress = \"allow\" without declaring entitlements = [\"default_egress_allow\"]",
-                workload_name
-            );
-        }
-        if workload.network.defaults.and_then(|d| d.ingress)
-            == Some(crate::config::DefaultAction::Allow)
-            && !workload
-                .entitlements
-                .iter()
-                .any(|e| e == "default_ingress_allow")
-        {
-            anyhow::bail!(
-                "workload '{}' sets network.defaults.ingress = \"allow\" without declaring entitlements = [\"default_ingress_allow\"]",
-                workload_name
-            );
-        }
-    }
+    // Network defaults are fail-closed by convention (absent = deny) but
+    // need no validation gate: an explicit `egress = "allow"` /
+    // `ingress = "allow"` stands alone (entitlements mechanism removed
+    // 2026-09-04 — pre-release, final seals + review + plan NOTE suffice).
+    // Home `final` seals still veto via the policy ladder (untouched).
 
     // Secret references must be defined in the secrets section.
     for (workload_name, workload) in &config.workloads {
@@ -1184,7 +1142,7 @@ egress = "deny"
         }
     }
 
-    // ---- Generic secret allowed-hosts + declared entitlements (phase 4) ----
+    // ---- Generic secret allowed-hosts (phase 4) ----
 
     #[test]
     fn validate_rejects_secret_allowed_host_outside_core_egress_allowlist() {
@@ -1254,7 +1212,9 @@ egress = "deny"
     }
 
     #[test]
-    fn validate_rejects_egress_allow_without_declared_entitlement() {
+    fn validate_accepts_egress_allow_standalone() {
+        // Entitlements removed 2026-09-04: explicit `egress = "allow"` stands
+        // alone, no magic word needed.
         let toml = r#"
 schema_version = 1
 
@@ -1267,33 +1227,13 @@ command = []
 egress = "allow"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
-        let err = validate_config(&config).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "workload 'example-offensive' sets network.defaults.egress = \"allow\" without declaring entitlements = [\"default_egress_allow\"]"
-        );
+        validate_config(&config).expect("standalone egress allow must validate");
     }
 
     #[test]
-    fn validate_accepts_egress_allow_with_declared_entitlement() {
-        let toml = r#"
-schema_version = 1
-
-[workloads.example-offensive]
-kind = "agent"
-entitlements = ["default_egress_allow"]
-image = { recipe = "registry", ref = "node:24-bookworm-slim" }
-command = []
-
-[workloads.example-offensive.network.defaults]
-egress = "allow"
-"#;
-        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
-        validate_config(&config).expect("declared entitlement must validate");
-    }
-
-    #[test]
-    fn validate_rejects_ingress_allow_without_declared_entitlement() {
+    fn validate_accepts_ingress_allow_standalone() {
+        // Entitlements removed 2026-09-04: explicit `ingress = "allow"`
+        // stands alone, no magic word needed.
         let toml = r#"
 schema_version = 1
 
@@ -1306,50 +1246,29 @@ command = []
 ingress = "allow"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
-        let err = validate_config(&config).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "workload 'example-offensive' sets network.defaults.ingress = \"allow\" without declaring entitlements = [\"default_ingress_allow\"]"
-        );
+        validate_config(&config).expect("standalone ingress allow must validate");
     }
 
     #[test]
-    fn validate_accepts_ingress_allow_with_declared_entitlement() {
-        let toml = r#"
-schema_version = 1
-
-[workloads.example-offensive]
-kind = "agent"
-entitlements = ["default_ingress_allow"]
-image = { recipe = "registry", ref = "node:24-bookworm-slim" }
-command = []
-
-[workloads.example-offensive.network.defaults]
-ingress = "allow"
-"#;
-        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
-        validate_config(&config).expect("declared entitlement must validate");
-    }
-
-    #[test]
-    fn validate_rejects_unknown_entitlement() {
+    fn validate_rejects_unknown_entitlements_key() {
+        // Free-enforcer property: the removed `entitlements` key is now an
+        // unknown field and fails at parse time via `deny_unknown_fields`.
         let toml = r#"
 schema_version = 1
 
 [workloads.example-agent]
 kind = "agent"
-entitlements = ["root_access"]
+entitlements = ["default_egress_allow"]
 image = { recipe = "registry", ref = "node:24-bookworm-slim" }
 command = []
 
 [workloads.example-agent.network.defaults]
 egress = "deny"
 "#;
-        let config: ConfigFile = toml::from_str(toml).expect("config must parse");
-        let err = validate_config(&config).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "workload 'example-agent' entitlement 'root_access' is not a known entitlement (expected one of: default_egress_allow, default_ingress_allow)"
+        let err = toml::from_str::<ConfigFile>(toml).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown field") && err.contains("entitlements"),
+            "removed entitlements key must fail as unknown field, got: {err}"
         );
     }
 

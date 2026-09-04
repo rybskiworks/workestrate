@@ -17,7 +17,7 @@
 //!    dependent, landing in `plan.network.egress_rules` so the same
 //!    `network_plan_to_policy` path consumes it identically to declared
 //!    egress. Derivation only ADDS — the egress default is never touched
-//!    (monotonic; FS-16 entitlement untouched).
+//!    (precedence-resolved; explicit allow stands alone).
 //!
 //! P2 namespaced ports (ADR 0026(d) namespaced-ports rule): resolution emits
 //! ONE request per injected var — the `env` request targets the PRIMARY port

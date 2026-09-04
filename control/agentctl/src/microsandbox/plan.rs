@@ -635,6 +635,24 @@ impl fmt::Display for SandboxPlan {
                 "allow"
             }
         )?;
+        // Entitlements removed 2026-09-04: a relaxed default has no gate
+        // beyond the explicit declaration (+ home `final` seals), so `plan`
+        // renders a loud per-workload NOTE per relaxed direction — the
+        // grep-able review surface replacing the old magic-word check.
+        if !self.network.egress_default_deny {
+            writeln!(
+                f,
+                "NOTE: workload '{}' runs relaxed defaults (egress=allow)",
+                self.name
+            )?;
+        }
+        if !self.network.ingress_default_deny {
+            writeln!(
+                f,
+                "NOTE: workload '{}' runs relaxed defaults (ingress=allow)",
+                self.name
+            )?;
+        }
         for rule in &self.network.ingress_rules {
             writeln!(
                 f,
@@ -1039,12 +1057,13 @@ network: egress_default=deny ingress_default=deny
         );
 
         // Legacy unnamed non-auto stays byte-identical AND the named/auto
-        // formats never leak into it.
+        // formats never leak into it — plus the relaxed-default NOTEs (both
+        // defaults are allow here).
         let legacy = base(vec![PortMapping::new(4000, 4000)]);
         let rendered = format!("{legacy}");
         assert_eq!(
             rendered,
-            "name: names\nport: 4000:4000\nnetwork: egress_default=allow ingress_default=allow\n"
+            "name: names\nport: 4000:4000\nnetwork: egress_default=allow ingress_default=allow\nNOTE: workload 'names' runs relaxed defaults (egress=allow)\nNOTE: workload 'names' runs relaxed defaults (ingress=allow)\n"
         );
         assert!(
             !rendered.contains("(auto)"),
@@ -1080,8 +1099,52 @@ network: egress_default=deny ingress_default=deny
         };
         assert_eq!(
             format!("{plan}"),
-            "name: bare\nnetwork: egress_default=allow ingress_default=allow\n"
+            "name: bare\nnetwork: egress_default=allow ingress_default=allow\nNOTE: workload 'bare' runs relaxed defaults (egress=allow)\nNOTE: workload 'bare' runs relaxed defaults (ingress=allow)\n"
         );
+    }
+
+    #[test]
+    fn plan_display_emits_relaxed_default_notes_per_direction() {
+        let base = |egress_deny: bool, ingress_deny: bool| SandboxPlan {
+            name: "demo".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports: vec![],
+            mounts: vec![],
+            network: NetworkPlan {
+                egress_default_deny: egress_deny,
+                ingress_default_deny: ingress_deny,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+            },
+            instance_policy: None,
+        };
+        // Both relaxed → both NOTEs.
+        let plan = base(false, false);
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains("NOTE: workload 'demo' runs relaxed defaults (egress=allow)\n"),
+            "egress NOTE missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("NOTE: workload 'demo' runs relaxed defaults (ingress=allow)\n"),
+            "ingress NOTE missing: {rendered}"
+        );
+        // Egress relaxed only → egress NOTE alone.
+        let plan = base(false, true);
+        let rendered = format!("{plan}");
+        assert!(rendered.contains("(egress=allow)"), "egress NOTE missing: {rendered}");
+        assert!(!rendered.contains("(ingress=allow)"), "ingress NOTE must not fire: {rendered}");
+        // Both deny → silent.
+        let plan = base(true, true);
+        let rendered = format!("{plan}");
+        assert!(!rendered.contains("NOTE:"), "deny/deny must render no NOTE: {rendered}");
     }
 
     #[test]
@@ -1365,7 +1428,7 @@ network: egress_default=deny ingress_default=deny
         let rendered = format!("{plan}");
         assert_eq!(
             rendered,
-            "name: bare\nnetwork: egress_default=allow ingress_default=allow\n"
+            "name: bare\nnetwork: egress_default=allow ingress_default=allow\nNOTE: workload 'bare' runs relaxed defaults (egress=allow)\nNOTE: workload 'bare' runs relaxed defaults (ingress=allow)\n"
         );
         assert!(
             !rendered.contains("instance:"),

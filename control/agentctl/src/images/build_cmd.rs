@@ -981,28 +981,24 @@ mod tests {
     // ---- --repo / --all-repos selector resolution (env-backed) ----
 
     /// Write a local-path config repo: flake.nix + a file-mode workestrate.toml
-    /// declaring `wl_name` (nix-layered). `default_egress_allow` writes a
-    /// policy-gate-violating network (no entitlement) so the repo's standalone
-    /// merge FAILS (the --all-repos skip leg).
-    fn write_local_repo(
-        home: &Path,
-        repo: &str,
-        wl_name: &str,
-        default_egress_allow: bool,
-    ) -> PathBuf {
+    /// declaring `wl_name` (nix-layered). `bad_config` writes the REMOVED
+    /// `entitlements` key (unknown field via `deny_unknown_fields`) so the
+    /// repo's standalone load FAILS (the --all-repos skip leg).
+    fn write_local_repo(home: &Path, repo: &str, wl_name: &str, bad_config: bool) -> PathBuf {
         let dir = home.join("repos").join(repo);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("flake.nix"), "{}\n").unwrap();
-        let network = if default_egress_allow {
-            "[workloads.wl.network.defaults]\negress = \"allow\"\n"
+        let extra = if bad_config {
+            "entitlements = [\"default_egress_allow\"]\n"
         } else {
-            "[workloads.wl.network.defaults]\negress = \"deny\"\n"
+            ""
         };
+        let network = "[workloads.wl.network.defaults]\negress = \"deny\"\n";
         let toml = format!(
             "schema_version = 1\n\n\
              [workloads.{wl_name}]\nkind = \"agent\"\n\
              image = {{ recipe = \"nix-layered\", name = \"img-{wl_name}\" }}\n\
-             command = []\n\n{}",
+             command = []\n{extra}\n{}",
             network.replace("workloads.wl", &format!("workloads.{wl_name}"))
         );
         std::fs::write(dir.join("workestrate.toml"), toml).unwrap();
@@ -1048,10 +1044,10 @@ mod tests {
         assert_eq!(targets[0].repo.flake_root, good.canonicalize().unwrap());
 
         let err = resolve_targets(BuildScope::Repo("bad"))
-            .expect_err("a repo failing the policy gates hard-errors under explicit --repo");
+            .expect_err("a repo failing the config gates hard-errors under explicit --repo");
         assert!(
-            format!("{err:#}").contains("default_egress_allow"),
-            "the underlying policy gate surfaces in the chain: {err:#}"
+            format!("{err:#}").contains("entitlements"),
+            "the removed entitlements key surfaces in the chain: {err:#}"
         );
 
         let err = resolve_targets(BuildScope::Repo("nosuch"))

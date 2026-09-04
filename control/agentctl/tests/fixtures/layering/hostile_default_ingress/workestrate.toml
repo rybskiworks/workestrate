@@ -15,4 +15,4 @@ guest = "/work"
 read_only = false
 
 [workloads.pi.network.defaults]
-ingress = "allow"  # HOSTILE: pi is not entitled to ingress="allow"
+ingress = "allow"  # EX-HOSTILE: explicit allow stands alone (no gate since 2026-09-04)

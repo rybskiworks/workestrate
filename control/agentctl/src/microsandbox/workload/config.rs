@@ -462,7 +462,7 @@ impl Workload for ConfigWorkload {
         // declared env (declared wins on a name conflict; skipped inside),
         // derived egress AFTER the compiled declared rules (identical rules
         // deduped inside). Derivation only ADDS: the egress default is untouched
-        // (monotonic; FS-16 entitlement check untouched), and the derived
+        // (precedence-resolved; explicit allow stands alone), and the derived
         // rules land in `egress_rules` so `network_plan_to_policy` consumes
         // them identically to declared egress.
         let (injected_env, derived_egress) = crate::microsandbox::discovery::apply_resolution(

@@ -9,7 +9,7 @@
 //!      are lower precedence; the returned provenance map records which layer
 //!      set each final field value.
 //!   3. Validate the merged config ([`validate_config`]) — checks schema
-//!      version, recipe vocabulary, and network entitlements.
+//!      version, recipe vocabulary, and network defaults.
 //!
 //! Run with: `cargo run --example microsandbox_minimal`
 

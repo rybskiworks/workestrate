@@ -1863,7 +1863,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn load_overrides_policy_violation_egress_allow_hard_fails() -> Result<()> {
+    fn load_overrides_egress_allow_stands_alone() -> Result<()> {
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-ov-policy-dd-{}-{}",
             std::process::id(),
@@ -1873,7 +1873,9 @@ pub(crate) mod tests {
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&tmp)?;
-        // Override sets egress="allow" on pi (not entitled).
+        // Override sets egress="allow" on pi. Entitlements removed
+        // 2026-09-04: explicit allow stands alone, so the override wins by
+        // precedence (home `final` seals still veto via the policy ladder).
         let path = write_overrides(
             &tmp,
             "[global.workloads.pi.network.defaults]\negress = \"allow\"\n",
@@ -1889,15 +1891,12 @@ pub(crate) mod tests {
         )?;
         let mut all = vec![base];
         all.extend(layers);
-        let result = crate::merge::merge_layers(&all);
-        assert!(
-            result.is_err(),
-            "override setting egress=\"allow\" on non-entitled workload should hard-fail"
-        );
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("monotonic-deny") || err.contains("entitlement"),
-            "error should mention monotonic-deny or entitlement: {err}"
+        let (merged, _) = crate::merge::merge_layers(&all).expect("override allow stands alone");
+        let pi = merged.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.network.defaults.and_then(|d| d.egress),
+            Some(crate::config::DefaultAction::Allow),
+            "override egress=\"allow\" wins by precedence (relaxed default is plan-NOTE visible)"
         );
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())

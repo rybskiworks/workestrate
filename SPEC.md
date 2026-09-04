@@ -176,9 +176,8 @@ remediation. `secrets = "none"` repos are skipped silently.
 
 - **Config purity:** closed vocabulary (egress recipes, build recipes,
   image features, package names) — reviewed like core code.
-- **Policy ceiling:** the egress default is monotonic (relaxing
-  `[network.defaults] egress = "deny"` to `"allow"` requires the workload's
-  declared `default_egress_allow` entitlement); egress hosts are validated
+- **Policy ceiling:** explicit `[network.defaults] egress/ingress = "allow"`
+  stands alone (absent = deny; home `final` seals still veto); egress hosts are validated
   against `ALLOWED_EGRESS_HOSTS` at merge time (fail-closed);
   `deny_rules`/`egress_rules`/`secret_env` are additive-union.
 - **Trust gating:** project-layer config (`./workestrate.toml`,
@@ -198,8 +197,8 @@ microVM.
 T3MP3ST (tempest) is an exception: it uses `egress = "allow"` (broad
 egress) because it is an offensive-security tool that needs to reach
 arbitrary targets for scanning. The microVM boundary itself is the
-containment layer for tempest. `egress = "allow"` requires the workload to
-declare the `default_egress_allow` entitlement.
+containment layer for tempest. `egress = "allow"` stands alone with no gate
+(home `final` seals still veto).
 
 ## Filesystem model
 
