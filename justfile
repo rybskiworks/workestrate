@@ -502,21 +502,25 @@ gc:
     nix-collect-garbage --delete-old
     nix store optimise
 
-# Store audit: top-20 report (informational) + BLOCKING source-path gate.
-# Reports the top-20 store paths by closure size, then fails (exit 1) if any
-# *ai-workbench*-source path exceeds 50 MB closure size — the impure
-# path-style copy probe, now enforced by scripts/store-audit.py
-# --fail-if-source-over. Wired into `verify` as the FINAL step.
-# Non-blocking only when nix or python3 is unavailable, or when
-# `nix path-info` itself fails (daemon/DB errors degrade to a note, exit 0) —
-# the gate fails ONLY on actual oversized source paths. This is the passive
-# complement to the active `lint-nix`.
+# Store audit: top-20 report + INFORMATIONAL local-copy scan (always exit 0).
+# Reports the top-20 store paths by closure size, then warns (stderr, exit 0)
+# when any attributable local path-style input copy
+# (<hash>-{workestrate,personal,duelbits,nix-tooling}[-source]) exceeds
+# 50 MB closure size — scripts/store-audit.py --warn-if-source-over. The old
+# blocking *ai-workbench*-source gate is retired: the naming era is obsolete
+# and git+file *-source copies are name-indistinguishable from legitimate
+# github ones (nixpkgs) — see the store-audit.py docstring; the real defense
+# is the github-input swap (host-pending) + the active `lint-nix`. Wired
+# into `verify` as the FINAL step.
+# Skips (exit 0) when nix or python3 is unavailable, or when `nix path-info`
+# itself fails (daemon/DB errors degrade to a note) — the passive complement
+# to the active `lint-nix`.
 store-audit:
     #!/usr/bin/env bash
     # NOTE: deliberately NO `set -e` — daemon/DB/parse failures MUST NOT
     # fail the verify gate. `set -uo pipefail` catches unset-variable bugs
-    # + surfaces pipe failures via `$?` without aborting. The python exit
-    # code (1 on oversized source paths) is what propagates out of the recipe.
+    # + surfaces pipe failures via `$?` without aborting. The python scan is
+    # informational (always exits 0); only the SKIP branches above exit early.
     set -uo pipefail
     if ! command -v nix >/dev/null 2>&1; then
         echo "store-audit: SKIP (nix not on PATH — run on a nix-capable host for the audit)"
@@ -528,7 +532,7 @@ store-audit:
     fi
     echo "=== store-audit: top-20 store paths by closure size ==="
     # Capture once; a daemon / DB failure degrades to an informational note
-    # rather than aborting the recipe. The report + source-path gate logic
+    # rather than aborting the recipe. The report + source-path scan logic
     # lives in scripts/store-audit.py (stdlib-only) — kept out of the
     # justfile because just's parser choked on the inline python.
     path_info=$(nix path-info --all --json 2>/dev/null || true)
@@ -536,7 +540,7 @@ store-audit:
         echo "(nix path-info failed unexpectedly — non-blocking)"
         exit 0
     fi
-    echo "$path_info" | python3 scripts/store-audit.py --fail-if-source-over 50
+    echo "$path_info" | python3 scripts/store-audit.py --warn-if-source-over 50
 
 # Lint nix code for purity violations: --impure flags, builtins.getFlake
 # with toString, bare builtins.path (no filter), cleanSourceWith without

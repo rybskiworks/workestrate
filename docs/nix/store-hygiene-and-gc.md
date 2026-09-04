@@ -161,8 +161,8 @@ This is the operational quick-reference for agents running nix tasks on this rep
 
 | # | Pattern | What it does | Safe alternative | Guard |
 |---|---|---|---|---|
-| a | Impure/path-mode flake eval: `nix eval --impure`, `builtins.getFlake (toString ./.)`, unfiltered `builtins.path { path = ./.; }` / `src = ./.` | Copies the raw working tree (gitignored `target/` 16–28G, `agents/*/build`, `.workestrate/`) into the store — up to ~35G per invocation; content-addressed so every dirty edit produces a new path | Native flake refs `nix eval .#attr` (git-filtered, ~12M) or filtered `builtins.path { path = ./subdir; filter = ...; }` | `just lint-nix` (checks 1–4); `just store-audit` flags `*-source` paths |
-| b | GC-root leaks: `result` symlinks, `/tmp/*.tar.gz` out-links, `nix profile install` | Pins closures forever — unreachable paths survive GC | `--no-link --print-out-paths` (no `result` symlink); `just gc` to collect | `just store-audit` (flags `*-source` paths); manual inspection |
+| a | Impure/path-mode flake eval: `nix eval --impure`, `builtins.getFlake (toString ./.)`, unfiltered `builtins.path { path = ./.; }` / `src = ./.` | Copies the raw working tree (gitignored `target/` 16–28G, `agents/*/build`, `.workestrate/`) into the store — up to ~35G per invocation; content-addressed so every dirty edit produces a new path | Native flake refs `nix eval .#attr` (git-filtered, ~12M) or filtered `builtins.path { path = ./subdir; filter = ...; }` | `just lint-nix` (checks 1–4); `just store-audit` warns on local path-style copies (informational) |
+| b | GC-root leaks: `result` symlinks, `/tmp/*.tar.gz` out-links, `nix profile install` | Pins closures forever — unreachable paths survive GC | `--no-link --print-out-paths` (no `result` symlink); `just gc` to collect | `just store-audit` (warns on local path-style copies — informational); manual inspection |
 | c | `nix flake update` on rolling nixpkgs | Multi-GB rebuild — new nixpkgs revision pulls new toolchain/closure | Update deliberately (never in CI); run `just gc` after | Operational discipline (no static guard) |
 | d | `buildLayeredImage` for new images | 0.5–1G tarballs materialized in the store | `streamLayeredImage` (streams to stdout, no store path) — documented default in `docs/nix-purity.md` | Operational discipline (`docs/nix-purity.md` recipe patterns) |
 | e | Per-edit churn: `nix develop` after edits | ~50–100MB per unique source state (content-addressed copies accumulate) | `auto-optimise-store` + `just gc` cadence | `just store-audit` (top-20 report); `just gc` |
@@ -192,16 +192,18 @@ The project ships `scripts/store-audit.py`, invoked via `just store-audit`.
 What it does (verbatim from the script docstring):
 > "Reads `nix path-info --all --json` output from stdin and prints the top-20 store paths by closure size." [audit]
 
-With `--fail-if-source-over <MB>` (verbatim from the script docstring):
-> "the script additionally scans every path whose name contains `ai-workbench` AND ends with `-source` (the impure path-style copy probe). If any such path's closure size exceeds the given threshold (in MiB, 1 MB = 1_000_000 bytes), the oversized paths are printed to stderr and the script exits 1 — turning the previously passive probe into a blocking gate." [audit]
+With `--warn-if-source-over <MB>` (verbatim from the script docstring):
+> "the script additionally scans for attributable LOCAL flake-input copies: paths whose basename is a 32-char store hash plus one of the known local input names (workestrate, personal, duelbits, nix-tooling), optionally suffixed `-source` ... is printed to stderr as a WARN — the flag is INFORMATIONAL and the script always exits 0." [audit]
+
+Why the old blocking `*ai-workbench*-source` gate was retired: the naming era is obsolete (the repo was renamed), and nix names git/tarball flake-input copies `<hash>-source` regardless of provenance — a local `git+file:///.../workestrate` copy is indistinguishable BY NAME from a legitimate `github:nixpkgs` copy, so no static name pattern can gate local copies without hitting nixpkgs (~GB, legit). The real defense is the github-input swap (host-pending) plus the active `lint-nix` gate; the top-20 report still surfaces oversized `-source` paths for human triage.
 
 Non-blocking on input problems (verbatim):
-> "on any read/parse failure it prints an informational note and exits 0 — the gate fails only on actual oversized source paths, never on missing/malformed input." [audit]
+> "on any read/parse failure it prints an informational note and exits 0." [audit]
 
 The `just store-audit` recipe (from the justfile):
-- Reports the top-20 store paths by closure size via `nix path-info --all --json` piped to `scripts/store-audit.py --fail-if-source-over 50`.
-- Fails (exit 1) if any `*ai-workbench*-source` path exceeds 50 MB closure size — the impure path-style copy probe.
-- Non-blocking when nix or python3 is unavailable, or when `nix path-info` itself fails (daemon/DB errors degrade to a note, exit 0).
+- Reports the top-20 store paths by closure size via `nix path-info --all --json` piped to `scripts/store-audit.py --warn-if-source-over 50`.
+- Warns (stderr; always exit 0 — informational) when any attributable local path-style copy exceeds 50 MB closure size.
+- Skips (exit 0) when nix or python3 is unavailable, or when `nix path-info` itself fails (daemon/DB errors degrade to a note).
 - Wired into `just verify` as the FINAL step (V2 landed). [usage]
 
 `just store-delta-check` (V3) exists as a recipe but is NOT yet wired into `verify` — it is a periodic host/CI check that measures `/nix/store` growth from one pure eval (`nix eval .#packages.x86_64-linux.pi-image.drvPath`) and fails on new source-path copies exceeding the 50M criterion. [usage]
@@ -211,11 +213,11 @@ Manual usage:
 # Top-20 report only (non-blocking)
 nix path-info --all --json | python3 scripts/store-audit.py
 
-# Top-20 report + blocking source-path gate (50 MB threshold)
-nix path-info --all --json | python3 scripts/store-audit.py --fail-if-source-over 50
+# Top-20 report + informational local-copy scan (50 MB threshold; exit 0)
+nix path-info --all --json | python3 scripts/store-audit.py --warn-if-source-over 50
 ```
 
-The `*-source` probe: non-empty `*-source` output referencing `ai-workbench` indicates an unbounded source copy that should be bounded by a `cleanSourceWith` filter. [purity]
+The local-copy scan: `<hash>-workestrate`-style basenames come from `path:`-era inputs. git+file copies land as generic `<hash>-source` and cannot be told apart from legitimate github copies by name — triage those via the top-20 report. [purity]
 
 ## Project hygiene recipes
 
@@ -275,7 +277,7 @@ From the accumulation report:
 ## Best practices
 
 1. **Run `just gc` regularly.** Collects unreachable paths and deduplicates content-addressed copies. This is the primary hygiene cadence. [purity]
-2. **Run `just store-audit` when the store feels large.** Reports the top-20 paths by closure size and flags unbounded `*-source` copies. [purity]
+2. **Run `just store-audit` when the store feels large.** Reports the top-20 paths by closure size and warns (informationally) on oversized local path-style copies; oversized `*-source` paths surface in the report for human triage. Real defense: github-input swap (host-pending) + `just lint-nix`. [purity]
 3. **Clean up stale `result*` symlinks.** Remove `result*` symlinks and `/tmp/*.tar.gz` out-links when done with a build — they pin closures forever. Use `--no-link --print-out-paths` instead of bare `nix build` to avoid creating `result` symlinks. [usage]
 4. **Delete old profile generations.** Run `nix-env --delete-generations old` (or `nix-collect-garbage -d`) before GC — old generations keep packages alive and prevent collection. [61]
 5. **Keep the devshell gcroot pin fresh.** Re-pin after `flake.lock` changes (fenix/nixpkgs bumps), else the pinned closure goes stale. [acc]
