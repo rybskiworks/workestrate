@@ -186,7 +186,7 @@ nix build .#workestrate --no-link --print-out-paths   # build the CLI, print sto
 just verify                                           # local pre-merge gate (all non-nix gates)
 just verify-full                                      # verify + nix build .#workestrate (HOST-NIX)
 just lint-nix                                         # static purity guard
-just store-audit                                      # top-20 store paths + source-path gate
+just store-audit                                      # top-20 store paths + source-path warning (informational)
 ```
 
 ## Common Mistakes

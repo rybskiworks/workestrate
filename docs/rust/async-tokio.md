@@ -838,5 +838,5 @@ Each repository should document:
 
 ## Related skills
 
-- `nix-usage` — for the Rust toolchain and `nix develop` workflow used by this repository.
+- `nix-usage` — for the Rust toolchain and `just shell` devshell workflow used by this repository.
 - There are no async-specific skills in the current registry. Repository-specific Rust validation or testing skills may live under `.agents/skills/` (for example, `nix-usage` for the dev shell).

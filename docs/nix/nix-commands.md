@@ -400,7 +400,7 @@ Flags shared across commands:
 5. Run full verification: `just verify` (includes `lint-nix` + `store-audit`).
 6. Collect garbage: `just gc` (`nix-collect-garbage --delete-old` +
    `nix store optimise`).
-7. Audit the store: `just store-audit` (top-20 paths + source-path gate).
+7. Audit the store: `just store-audit` (top-20 paths + source-path warning; informational).
 
 ## Validation hooks
 
@@ -536,7 +536,7 @@ nix hash to-sri sha256-...
   `just lint-nix`), no `nix fmt`, `.#workestrate` as the only package output,
   `just shell` as the only devshell entry point (it wraps `nix develop` with
   the devenv-root override), `just gc` for store hygiene,
-  `just store-audit` as a blocking gate in `just verify`.
+  `just store-audit` as an informational report within `just verify` (never gates).
 - Other repos may: configure `nix fmt` with a formatter (e.g., `nixfmt` or
   `alejandra`), have a `.#default` output, use `nix profile install` for
   persistent tooling, or allow `--impure` in specific eval contexts (not

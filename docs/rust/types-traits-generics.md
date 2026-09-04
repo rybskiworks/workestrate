@@ -1041,5 +1041,5 @@ Each repository should make and document the following decisions:
 
 ## Related skills
 
-- `nix-usage` — for the Rust toolchain and `nix develop` workflow used by this repository.
+- `nix-usage` — for the Rust toolchain and `just shell` devshell workflow used by this repository.
 - There are no Rust-type-system-specific skills in the current registry. Repository-specific Rust validation skills may be added under `.agents/skills/` in the future and should reference this document.
