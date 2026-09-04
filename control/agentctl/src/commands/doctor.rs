@@ -107,12 +107,13 @@ pub fn doctor_check_kvm() -> DoctorCheck {
 /// (`microsandbox::nested::read_nested_probe`): OK = /dev/kvm accessible +
 /// vmx|svm flag + nested parameter affirmatively enabled; WARN = KVM works
 /// but nested is disabled/unknown; FAIL = no /dev/kvm. Each carries
-/// remediation. The trailing pin note records which fork rev carries the
-/// Track 1 VMM flag — honestly marked INERT until the Phase 2 firmware
-/// rebuild lands (plan D6: no "nested works" claim until Track 3).
+/// remediation. The trailing pin note records what the pinned fork rev
+/// actually carries (the mount-policy stack) — the Track 1 nested_virt VMM
+/// port is PENDING on an unpushed branch and becomes active only when the
+/// pin advances (plan D6: no "nested works" claim until Track 3).
 pub fn doctor_check_nested_virt() -> DoctorCheck {
     const PIN_NOTE: &str =
-        "fork rev 78fb3ed1 carries the Track 1 VMM nested_virt flag (inert until the Phase 2 libkrunfw rebuild w/ CONFIG_KVM lands)";
+        "fork rev 78fb3ed1 carries the mount-policy stack; the nested_virt VMM port (b2c672c8) is pending on an unpushed branch and becomes active when the pin advances";
     const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
          sudo usermod -aG kvm $USER (re-login); guest nesting additionally needs the host \
          kvm_intel/kvm_amd nested parameter at Y (sudo modprobe kvm_intel nested=1)";
@@ -999,10 +1000,11 @@ mod tests {
             check.message.contains("78fb3ed1"),
             "every verdict carries the fork pin note: {check:?}"
         );
-        // Honest Phase 1 strings: the VMM flag is inert until fw lands.
+        // Honest pin strings: the pin carries the mount-policy stack; the
+        // nested port is pending, not carried — no nested-works claim.
         assert!(
-            check.message.contains("inert until the Phase 2"),
-            "pin note states Phase honesty: {check:?}"
+            check.message.contains("pending on an unpushed branch"),
+            "pin note states fork honesty: {check:?}"
         );
         if check.status != "OK" {
             assert!(

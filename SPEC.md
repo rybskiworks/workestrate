@@ -50,9 +50,11 @@ override (`Workload::build_path()`) can point the CLI at any built tree.
 
 MicroVM runtime. SDK version 0.6.16 with the `net` feature, source-built
 from the user's fork via the pinned `microsandbox-fork` flake input at
-validated rev 78fb3ed1, which carries the Track 1 `nested_virt(true)` VMM
-flag (Phase-1-inert: the guest kernel firmware still lacks `CONFIG_KVM`,
-so no nested-works claim until the Phase 2 firmware rebuild lands).
+validated rev 78fb3ed1, which carries the mount-policy stack (the Track 1
+`nested_virt(true)` VMM port — fork commit b2c672c8 — is pending on an
+unpushed local branch and becomes active when the pin advances; the guest
+kernel firmware additionally still lacks `CONFIG_KVM`, so no nested-works
+claim until the Phase 2 firmware rebuild lands).
 Provides
 `Sandbox`, `SandboxBuilder`, `NetworkPolicy`, and builder methods for
 images, resources, ports, env vars, volumes, and network rules. Async-only,
