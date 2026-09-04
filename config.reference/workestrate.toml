@@ -46,6 +46,13 @@ deny = [
 on_violation = "passthrough"  # the built-in default, made explicit; also: block, block-and-log, block-and-terminate
 # final = true  # terminal freeze — lower rungs could not override
 
+# Nested-virtualization operator seal (ADR 0036, optional, restrict-only):
+# the home fragment grants/restricts via allow_nested + final (final seals,
+# never enables; absent fragment = no restriction).
+# [policy.virtualization]
+# allow_nested = true
+# final = false  # true + allow_nested = false = fleet-wide ban
+
 [secrets.LITELLM_MASTER_KEY]
 env_var = "LITELLM_MASTER_KEY"
 required = true
@@ -72,6 +79,10 @@ log_stop_errors = true
 # on_conflict = ["reuse", "start", "replace"]
 # port = { preferred = 4000, on_occupied = ["increment", "auto"] }
 # label = "dev"
+# Nested virtualization (ADR 0036; COMMENTED — absent table = off, the
+# current behavior, so only the example-nested capsule below declares it):
+# [workloads.example-litellm.virtualization]
+# nested = "require"  # "require" | "prefer" | "off"; default "off"
 [workloads.example-litellm.env]
 PORT = "4000"
 
@@ -341,3 +352,34 @@ fallback = "agents/example-offensive/build"
 [workloads.example-offensive.depends_on.example-litellm]
 env = "LITELLM_ADDR"
 required = false
+
+# Nested-virtualization example capsule (ADR 0036): the only reference
+# workload that ASKS for nesting. require = fail-closed at up without host
+# nested KVM (plan warns, never fails); prefer would degrade instead, off
+# (absent) is current behavior. Additive: golden plans cover the three
+# workloads above, so this capsule never churns them.
+[workloads.example-nested]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 1
+memory_mib = 256
+command = ["python", "-m", "http.server", "9998"]
+log_stop_errors = true
+
+[workloads.example-nested.virtualization]
+nested = "require"
+
+[workloads.example-nested.env]
+PORT = "9998"
+
+[[workloads.example-nested.ports]]
+host = 9998
+guest = 9998
+
+[workloads.example-nested.network.defaults]
+egress = "deny"
+
+[[workloads.example-nested.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]

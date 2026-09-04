@@ -114,6 +114,16 @@ required = false
 # protocol = "tcp"
 # scope = "local"
 # final = false
+#
+# Nested virtualization (ADR 0036; COMMENTED — absent table = off, current
+# behavior): require fails closed at up without host nested KVM, prefer
+# degrades machine-readably, off ignores. Home [policy.virtualization]
+# (allow_nested + final) seals.
+# [workloads.my-agent.virtualization]
+# nested = "require"  # "require" | "prefer" | "off"; default "off"
+# # [policy.virtualization]  # home-registry operator seal (restrict-only)
+# # allow_nested = true
+# # final = false
 
 # ─── Mount policy (spec 22) ────────────────────────────────────────────────
 # Optional [policy.mounts] block (global) and per-mount `policy = { ... }`

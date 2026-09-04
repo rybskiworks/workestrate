@@ -32,7 +32,13 @@ annotates per-field provenance with layer names. `up`/`exec` target a slot
 `--instance <id>`/`--new` start a parallel canary on its own per-instance
 loopback IP `127.0.0.N`). Declared ports publish per instance; `host = 0`
 ports (and `--port-auto`) probe a free port at boot (`--port-offset` was
-removed pre-release, ADR 0026).
+removed pre-release, ADR 0026). Workloads may opt in to nested
+virtualization per workload via inline `workloads.<name>.virtualization`
+`nested` (`require`|`prefer`|`off`, default `off`; absent means off —
+current behavior, no device expectation); `prefer` degrades
+machine-readably, `require` refuses fail-closed at `up`, and the home
+`[policy.virtualization]` seal (`allow_nested` + `final`) still vetoes
+(ADR 0036).
 
 `apps.default` runs the workestrate CLI directly. Workload image builds
 live in the config repo flake (cleanup phase 3), which consumes the tool
@@ -44,10 +50,15 @@ override (`Workload::build_path()`) can point the CLI at any built tree.
 
 MicroVM runtime. SDK version 0.6.16 with the `net` feature, source-built
 from the user's fork via the pinned `microsandbox-fork` flake input at
-validated rev 78fb3ed1. Provides
+validated rev 78fb3ed1, which carries the Track 1 `nested_virt(true)` VMM
+flag (Phase-1-inert: the guest kernel firmware still lacks `CONFIG_KVM`,
+so no nested-works claim until the Phase 2 firmware rebuild lands).
+Provides
 `Sandbox`, `SandboxBuilder`, `NetworkPolicy`, and builder methods for
 images, resources, ports, env vars, volumes, and network rules. Async-only,
 requires Tokio. Runtime execution requires a host with `/dev/kvm`.
+`nested=off` (the default) withholds the guest device promise — it does
+not remove CPU capability (ADR 0036).
 
 ### LiteLLM
 
