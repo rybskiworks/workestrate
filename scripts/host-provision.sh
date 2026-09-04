@@ -312,6 +312,27 @@ else
 fi
 if [[ "$p3_fail" -eq 1 ]]; then p3_status="FAIL"; else p3_status="OK"; fi
 
+# --- P3 detail (best-effort, never fails): `workestrate versions` quadruple
+# (Phase-0 observability). Read-only; any failure degrades to a warn and
+# NEVER increments ERRORS. Output is capped (head -30) and prefixed.
+versions_msb_token=""
+versions_fork_token=""
+set +e
+if [[ -n "${got:-}" ]] && [[ -x "$got" ]]; then
+  versions_out=$("$got" versions 2>&1 | head -n 30)
+  versions_exit=${PIPESTATUS[0]:-0}
+  if [[ "$versions_exit" -eq 0 ]] && [[ -n "$versions_out" ]]; then
+    echo "$versions_out" | while IFS= read -r line; do echo "[host-provision] versions: $line"; done
+    versions_msb_token=$(echo "$versions_out" | grep -E '^msb:' | head -n1 | cut -c1-120 || true)
+    versions_fork_token=$(echo "$versions_out" | grep -E '^fork-rev-pin:' | grep -Eo '[0-9a-f]{8,40}' | head -n1 || true)
+  else
+    warn "workestrate versions unavailable (exit $versions_exit) — run \`workestrate versions\` on the host for the quadruple"
+  fi
+else
+  warn "workestrate binary unavailable — skipping versions detail"
+fi
+set -e
+
 # ---------------------------------------------------------------------------
 # Step B½ — MSB home migration (best-effort, never fails provisioning)
 # ---------------------------------------------------------------------------
@@ -443,9 +464,17 @@ printf "  %-14s %-8s %s\n" "config_repos" "$row_config_repos" ""
 count "$row_config_repos"
 printf "  %-14s %-8s %s\n" "singularity" "$p1_status" "(P1: exactly one workestrate profile entry)"
 count "$p1_status"
-printf "  %-14s %-8s %s\n" "version" "$p2_status" "(P2: store-path + baked-rev identity)"
+p2_detail="(P2: store-path + baked-rev identity)"
+if [[ -n "${versions_fork_token:-}" ]]; then
+  p2_detail="(P2: store-path + baked-rev identity fork=${versions_fork_token})"
+fi
+printf "  %-14s %-8s %s\n" "version" "$p2_status" "$p2_detail"
 count "$p2_status"
-printf "  %-14s %-8s %s\n" "msb-live" "$p3_status" "(P3: MSB_PATH + msb --version + agentd)"
+msb_live_detail="(P3: MSB_PATH + msb --version + agentd)"
+if [[ -n "${versions_msb_token:-}" ]]; then
+  msb_live_detail="(P3: MSB_PATH + msb --version + agentd ${versions_msb_token})"
+fi
+printf "  %-14s %-8s %s\n" "msb-live" "$p3_status" "$msb_live_detail"
 count "$p3_status"
 
 echo
