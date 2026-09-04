@@ -27,6 +27,7 @@ use workestrate::commands::migrate::cmd_migrate_home;
 use workestrate::commands::schemas::cmd_schemas;
 use workestrate::commands::secrets_target::{cmd_secrets_schema, cmd_secrets_target};
 use workestrate::commands::source::cmd_source;
+use workestrate::commands::versions::cmd_versions;
 use workestrate::microsandbox::workload::ConfigWorkload;
 
 #[derive(Parser)]
@@ -223,6 +224,14 @@ enum Commands {
     /// Diagnose environment and tool health (KVM, nix, sops, age, msb, config repos).
     /// Use the global --json flag for machine-readable output.
     Doctor,
+    /// Print the Phase-0 observability quadruple (workestrate/msb/agentd/
+    /// libkrunfw versions plus the db-schema marker and fork-rev pin).
+    /// Accepts --json both globally and per-command.
+    Versions {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage agent source checkouts
     Source {
         #[command(subcommand)]
@@ -879,6 +888,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::Schemas { action } => cmd_schemas(action),
         Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
         Commands::Doctor => cmd_doctor(cli.json),
+        Commands::Versions { json } => cmd_versions(cli.json || *json),
         Commands::Source { action } => cmd_source(action).await,
         Commands::MigrateHome {
             from,
@@ -1218,6 +1228,7 @@ mod tests {
             "schemas",
             "secrets-target",
             "doctor",
+            "versions",
             "clean",
             "context",
             "source",

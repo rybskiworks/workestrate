@@ -13,3 +13,4 @@ pub mod schemas;
 
 pub mod secrets_target;
 pub mod source;
+pub mod versions;
