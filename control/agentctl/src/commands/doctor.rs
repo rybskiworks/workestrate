@@ -506,10 +506,11 @@ pub fn doctor_check_config_repos() -> Result<DoctorCheck> {
 /// copies never break the tool — validate-config uses the Rust types; only
 /// editor/tombi UX is affected), never FAIL.
 pub fn doctor_check_schemas() -> Result<DoctorCheck> {
-    let (full, workload) = crate::commands::diagnostics::generate_schema_pair()?;
-    let artifacts: [(&str, &str); 2] = [
+    let (full, workload, registry) = crate::commands::diagnostics::generate_schema_triple()?;
+    let artifacts: [(&str, &str); 3] = [
         ("workestrate.schema.json", full.as_str()),
         ("workestrate-workload.schema.json", workload.as_str()),
+        ("registry.schema.json", registry.as_str()),
     ];
     let targets = crate::commands::schemas::schema_targets(None)?;
     let mut entries: Vec<serde_json::Value> = Vec::new();

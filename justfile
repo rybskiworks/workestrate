@@ -72,29 +72,34 @@ golden-check:
           || (echo "golden mismatch for $name; run 'just golden-generate' to update" && exit 1); \
     done
 
-# Regenerate the canonical JSON Schema for workestrate.toml from the
+# Regenerate the canonical JSON Schemas for workestrate.toml from the
 # schemars-derived ConfigFile, plus the bare-workload subschema derived from
-# WorkloadConfig. Writes to schemas/workestrate.schema.json and
-# schemas/workestrate-workload.schema.json. Run on a nix-capable host (the
+# WorkloadConfig, plus the tool-home registry schema derived from Registry.
+# Writes to schemas/workestrate.schema.json,
+# schemas/workestrate-workload.schema.json, and schemas/registry.schema.json.
+# Run on a nix-capable host (the
 # dev shell's RUSTFLAGS → libcap-ng OUT lib dir is required to build the
 # aws-lc-rs / parking_lot_core native crates).
 # After regenerating, run `just schema-sync-check` (CI gate; exits 1 when a
-# consumer copy is stale) and `workestrate schemas update` to distribute BOTH
-# artifacts (full + workload subschema) to the copier template
+# consumer copy is stale) and `workestrate schemas update` to distribute all
+# three artifacts (full + workload subschema + registry schema) to the copier template
 # (templates/workestrate-config/schemas/), tool home (schemas/), and each
 # registered config repo that carries a schemas/ dir.
 generate-schema:
     #!/usr/bin/env bash
     set -euo pipefail
-    nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json --output-workload schemas/workestrate-workload.schema.json
+    nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json --output-workload schemas/workestrate-workload.schema.json --output-registry schemas/registry.schema.json
     echo "schema written to schemas/workestrate.schema.json"
     echo "workload schema written to schemas/workestrate-workload.schema.json"
+    echo "registry schema written to schemas/registry.schema.json"
 
-# CI drift guard for schemas/workestrate.schema.json (ADR 0021 §8).
-# Invokes control/agentctl/tests/schema_drift.rs, which runs the built
-# `workestrate generate-schema` and diffs against the committed file.
+# CI drift guard for schemas/workestrate.schema.json,
+# schemas/workestrate-workload.schema.json, and schemas/registry.schema.json
+# (ADR 0021 §8). Invokes control/agentctl/tests/schema_drift.rs (all three
+# artifacts) plus the workload-only control/agentctl/tests/schema_subschema_drift.rs.
 schema-check:
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_drift
+    cargo test --manifest-path control/agentctl/Cargo.toml --test schema_subschema_drift
 
 # CI drift guard for the consumer schema copies (schemas/ at templates/,
 # tool home, and registered config repos). Exits 1 when any consumer copy

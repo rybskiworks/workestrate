@@ -27,12 +27,13 @@ id_rsa*
 ";
 
 /// tombi configuration written into the home repo (spec 15 §2.3). The
-/// `[[schemas]]` section carries two mappings: the full schema
+/// `[[schemas]]` section carries three mappings: the full schema
 /// (`workestrate.schema.json`) lints the single-file `workestrate.toml` plus
 /// the directory-mode full-file entries `default.toml`/`secrets.toml`; the
 /// workload subschema (`workestrate-workload.schema.json`) lints capsule
-/// files under `workestrate/workloads/`. `config.toml` + `overrides.toml`
-/// are format-only. Store dirs and the lock stay excluded.
+/// files under `workestrate/workloads/`; the registry schema
+/// (`registry.schema.json`) lints the home `config.toml`. `overrides.toml`
+/// stays format-only. Store dirs and the lock stay excluded.
 const HOME_TOMBI_TOML: &str = r#"# tombi configuration for the workestrate tool home.
 # tombi 1.2.5+ — see https://tombi-toml.github.io/tombi/
 
@@ -57,6 +58,10 @@ include = ["config-repos/*/workestrate.toml", "config-repos/*/workestrate/defaul
 [[schemas]]
 path = "schemas/workestrate-workload.schema.json"
 include = ["config-repos/*/workestrate/workloads/**/*.toml"]
+
+[[schemas]]
+path = "schemas/registry.schema.json"
+include = ["config.toml"]
 
 [files]
 include = [
@@ -84,6 +89,11 @@ const HOME_SCHEMA_JSON: &str = include_str!("../../../../schemas/workestrate.sch
 /// scaffold copy (`src/scaffold/mod.rs`) — home.rs sits at the same depth.
 const HOME_SCHEMA_WORKLOAD_JSON: &str =
     include_str!("../../../../schemas/workestrate-workload.schema.json");
+
+/// Vendored JSON Schema for the tool-home registry (`config.toml`),
+/// embedded at compile time so the home's tombi schema lint works offline.
+/// Same relative path as the scaffold copy (`src/scaffold/mod.rs`).
+const HOME_SCHEMA_REGISTRY_JSON: &str = include_str!("../../../../schemas/registry.schema.json");
 
 /// Pre-commit hook installed into the home repo: rejects embedded git repos
 /// (gitlinks, mode 160000), store-dir paths, and secret material. Kept as a
@@ -191,6 +201,10 @@ pub fn cmd_home_init(config_url: Option<&str>, name: &str) -> Result<()> {
         home.join("schemas")
             .join("workestrate-workload.schema.json"),
         HOME_SCHEMA_WORKLOAD_JSON,
+    )?;
+    std::fs::write(
+        home.join("schemas").join("registry.schema.json"),
+        HOME_SCHEMA_REGISTRY_JSON,
     )?;
 
     // 6. Pre-commit hook (executable on unix).
@@ -766,7 +780,7 @@ fn print_summary(home: &Path, with_config: bool, name: &str, ensured: &[&str]) {
     println!("  .gitignore (store dirs + secret material untracked; *.enc committable)");
     println!("  .git/hooks/pre-commit (rejects gitlinks, store-dir paths, secret material)");
     println!(
-        "  tombi.toml + schemas/workestrate.schema.json + schemas/workestrate-workload.schema.json (tombi TOML gates; hook runs them when tombi is present)"
+        "  tombi.toml + schemas/workestrate.schema.json + schemas/workestrate-workload.schema.json + schemas/registry.schema.json (tombi TOML gates; hook runs them when tombi is present)"
     );
     if !ensured.is_empty() {
         println!();

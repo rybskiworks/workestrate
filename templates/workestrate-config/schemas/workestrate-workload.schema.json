@@ -113,10 +113,7 @@
     },
     "network": {
       "default": {
-        "defaults": null,
-        "deny": [],
-        "egress": [],
-        "ingress": []
+        "defaults": null
       },
       "allOf": [
         {
@@ -126,6 +123,9 @@
     },
     "policy": {
       "default": {
+        "egress": null,
+        "idna": null,
+        "ingress": null,
         "mounts": null,
         "secrets": null
       },
@@ -291,17 +291,6 @@
         }
       ]
     },
-    "DenyDomainRule": {
-      "type": "object",
-      "required": [
-        "domain_suffix"
-      ],
-      "properties": {
-        "domain_suffix": {
-          "type": "string"
-        }
-      }
-    },
     "DepConflict": {
       "description": "Schemars-boundary-only helper for the `on_conflict` field shape (ADR 0030 addendum 2): the field accepts EITHER a scalar string (back-compat, d452575) OR an ordered list of strings. Never constructed/deserialized — `DepConflict`'s custom deserializer normalizes both forms at parse time.",
       "anyOf": [
@@ -375,88 +364,140 @@
       },
       "additionalProperties": false
     },
-    "EgressRecipeRef": {
-      "description": "Egress recipe reference as declared in config.\n\nConfig may only reference named recipes; each is expanded by core into the concrete `EgressRule`s it represents.",
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "recipe"
-          ],
-          "properties": {
-            "recipe": {
-              "type": "string",
-              "enum": [
-                "dns"
-              ]
-            }
+    "DomainEntry": {
+      "description": "One egress domain entry — `[[policy.egress.allow.domain]]` or `[[policy.egress.deny.domain]]`. `port` is REQUIRED on allow, OPTIONAL on deny (omitted = all ports, deny-only). Validated by the policy compiler.",
+      "type": "object",
+      "properties": {
+        "domains": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         },
-        {
-          "description": "TCP 4000 to the host bridge — the OSS litellm proxy's default port (https://github.com/BerriAI/litellm). This is legitimate generic tool vocabulary (like a `postgres` recipe would be): it encodes no personal models, hosts, or credentials, only the upstream project's well-known default. `agent_base` embeds it, so any workload using `agent_base` assumes a host-reachable litellm proxy on port 4000.",
-          "type": "object",
-          "required": [
-            "recipe"
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "port": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
           ],
-          "properties": {
-            "recipe": {
-              "type": "string",
-              "enum": [
-                "litellm_proxy"
-              ]
-            }
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "protocol": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressAllowTable": {
+      "description": "`policy.egress.allow` table — egress allow polarity (ADR 0035 §3.2).",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "domain": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DomainEntry"
           }
         },
-        {
-          "type": "object",
-          "required": [
-            "recipe"
-          ],
-          "properties": {
-            "recipe": {
-              "type": "string",
-              "enum": [
-                "github"
-              ]
-            }
-          }
+        "final": {
+          "default": false,
+          "type": "boolean"
         },
-        {
-          "type": "object",
-          "required": [
-            "recipe"
-          ],
-          "properties": {
-            "recipe": {
-              "type": "string",
-              "enum": [
-                "agent_base"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "hosts",
-            "recipe"
-          ],
-          "properties": {
-            "hosts": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "recipe": {
-              "type": "string",
-              "enum": [
-                "https"
-              ]
-            }
+        "host": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HostEntry"
           }
         }
-      ]
+      },
+      "additionalProperties": false
+    },
+    "EgressDenyTable": {
+      "description": "`policy.egress.deny` table — egress deny polarity (ADR 0035 §3.2).",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "domain": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DomainEntry"
+          }
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressPolicyFragment": {
+      "description": "`policy.egress` fragment — hierarchical egress policy (ADR 0035 §3.2). Collected per rung; `on_conflict` and `final` at fragment level control the egress ladder's conflict handling and sealing.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressAllowTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deny": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressDenyTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "on_conflict": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OnConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "EnvBinding": {
       "description": "Serde/schemars-boundary-only helper for the `env` map value forms (specs 14/16): a bare string `\"value\"` is a literal value, a bare `true` the same-name host-bound sugar, an inline table `{ secret = \"NAME\", bound = \"guest\" }` a secret reference. This enum is NEVER stored — it backs the schemars rendering of [`EnvBinding`] (the map value in the env map), so the generated schema shows all value forms (`string | boolean | { secret?, bound? }`).",
@@ -532,6 +573,63 @@
           "type": [
             "string",
             "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostEntry": {
+      "description": "One egress host entry — `[[policy.egress.allow.host]]`. Host-bridge (DNS + litellm proxy); `host` is the msb host bridge.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ports": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          }
+        },
+        "protocols": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IdnaMode": {
+      "description": "IDNA mode for `policy.idna` (ADR 0035 §3.5). `reject` is the built-in default (hard error on non-ASCII); `uts46` enables strict ToASCII conversion via the `idna` crate with `unicode-security` confusable warnings.",
+      "type": "string",
+      "enum": [
+        "reject",
+        "uts46"
+      ]
+    },
+    "IdnaPolicyFragment": {
+      "description": "`policy.idna` fragment — flag-gated IDNA mode (ladder, default-off). Collected like other `policy.*` fragments, never via `merge.rs`; resolved before domain validation (gate 1 early, before coverage/specificity).",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mode": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IdnaMode"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -651,26 +749,99 @@
       },
       "additionalProperties": false
     },
-    "IngressRule": {
+    "IngressAllowTable": {
+      "description": "`policy.ingress.allow` table — ingress allow polarity.",
       "type": "object",
-      "required": [
-        "port",
-        "protocol",
-        "scope"
-      ],
       "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
         "port": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "protocol": {
-          "$ref": "#/definitions/Protocol"
-        },
-        "scope": {
-          "$ref": "#/definitions/Scope"
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortEntry"
+          }
         }
-      }
+      },
+      "additionalProperties": false
+    },
+    "IngressDenyTable": {
+      "description": "`policy.ingress.deny` table — ingress deny polarity.",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "port": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IngressPolicyFragment": {
+      "description": "`policy.ingress` fragment — hierarchical ingress policy (ADR 0035 §3.4).",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressAllowTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deny": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressDenyTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "on_conflict": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OnConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "InstancePolicy": {
       "description": "`[workloads.<name>.instance]` — the per-workload instance policy (ADR 0030 §4.1): the instance model the workload defaults to, the conflict chain when the target slot is occupied, the port strategy, and an optional display label. Absent = current behavior. NOTE: named `InstancePolicy` (not \"InstanceSpec\") to avoid colliding with the runtime `InstanceSpec`.",
@@ -936,7 +1107,7 @@
       "additionalProperties": false
     },
     "NetworkConfig": {
-      "description": "Per-workload network policy (`workloads.<name>.network`). `defaults.egress` / `defaults.ingress` are the per-direction fail-closed switches (relaxing to `allow` requires the declared `default_egress_allow` / `default_ingress_allow` entitlement); `egress` lists allowed egress recipes, `deny` explicit domain-suffix denials, and `ingress` inbound exposure rules.",
+      "description": "Per-workload network policy (`workloads.<name>.network`). `defaults.egress` / `defaults.ingress` are the per-direction fail-closed switches (relaxing to `allow` requires the declared `default_egress_allow` / `default_ingress_allow` entitlement). The rule surface has migrated to hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035; `network.egress` / `network.deny` / `network.ingress` are removed and hard-error with ADR-citing messages.",
       "type": "object",
       "properties": {
         "defaults": {
@@ -948,27 +1119,6 @@
               "type": "null"
             }
           ]
-        },
-        "deny": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/DenyDomainRule"
-          }
-        },
-        "egress": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/EgressRecipeRef"
-          }
-        },
-        "ingress": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/IngressRule"
-          }
         }
       },
       "additionalProperties": false
@@ -999,6 +1149,15 @@
         }
       },
       "additionalProperties": false
+    },
+    "OnConflict": {
+      "description": "Conflict handling for a frozen rung (ADR 0035 §8). Per-ladder granular: egress vs ingress ladders have independent `on_conflict`; each polarity table overridable; `final` seals the choice.",
+      "type": "string",
+      "enum": [
+        "ignore",
+        "warn",
+        "fail"
+      ]
     },
     "OnSkew": {
       "description": "The `instance.on_skew` divergence policy knob (ADR 0030 V-addendum §V4): what to do when the current build inputs diverge from a RUNNING instance's recorded provenance stamps. `Warn` is the default (divergence is common and usually benign; silent reuse hides real drift; auto-replace destroys instances the operator may want).",
@@ -1043,6 +1202,42 @@
       "description": "A policy namespace. Keeping the `mounts` table nested makes the config surface match `[policy.mounts]` while leaving policy fragments outside the ordinary merge algebra.",
       "type": "object",
       "properties": {
+        "egress": {
+          "description": "Hierarchical egress policy fragment (`[policy.egress]`). Collected per rung (home registry, config layers, workload) and compiled by the network policy engine (ADR 0035). Each polarity table (`allow`/`deny`) carries `all` / `final` and array-of-tables entries.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "idna": {
+          "description": "IDNA handling policy (`[policy.idna]`). Ladder with `final` sealing, default `reject` (ADR 0035 §3.5). Resolved before domain validation.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IdnaPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ingress": {
+          "description": "Hierarchical ingress policy fragment (`[policy.ingress]`). Collected per rung and compiled by the network policy engine (ADR 0035). Ingress is port-only with peer-source scope vocabulary (§3.4).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mounts": {
           "default": null,
           "anyOf": [
@@ -1102,6 +1297,40 @@
       "enum": [
         "auto"
       ]
+    },
+    "PortEntry": {
+      "description": "One ingress port entry — `[[policy.ingress.allow.port]]` or `[[policy.ingress.deny.port]]`. `protocol` is `\"tcp\"` only v1 (`\"udp\"` validation error \"not supported v1, tcp/local only\"), `scope` is `\"local\"` only v1.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ports": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          }
+        },
+        "protocol": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "PortMapping": {
       "type": "object",
@@ -1207,32 +1436,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "Protocol": {
-      "description": "Network protocol for ingress/egress rules.",
-      "type": "string",
-      "enum": [
-        "tcp",
-        "udp"
-      ]
-    },
-    "Scope": {
-      "description": "Network scope for ingress rules.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "local"
-          ]
-        },
-        {
-          "description": "Public ingress (not yet used by any workload).",
-          "type": "string",
-          "enum": [
-            "public"
-          ]
-        }
-      ]
     },
     "SecretViolationPolicy": {
       "description": "Per-secret egress violation policy (`secrets.<name>.on_violation`): what the host-side network proxy does when the secret's `$MSB_<NAME>` placeholder appears in traffic to a host that is NOT in the secret's `allowed_hosts` (including request BODIES, where a quoted placeholder would otherwise poison the session — upstream microsandbox#1354).\n\nThe sandbox only ever sees the placeholder; the proxy substitutes the real value exclusively for allowed hosts, so every variant here governs the fate of the harmless placeholder TEXT, never the credential itself. Serde kebab-case yields the TOML strings `\"passthrough\"` | `\"block\"` | `\"block-and-log\"` | `\"block-and-terminate\"`, matching the SDK's `ViolationAction` naming.",

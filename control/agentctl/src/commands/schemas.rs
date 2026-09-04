@@ -47,16 +47,17 @@ pub fn cmd_schemas(action: SchemasAction) -> Result<()> {
 }
 
 /// `workestrate schemas update [--repo <name>] [--check]`: distribute the
-/// generated schema pair to every known consumer location (idempotently).
+/// generated schema triple to every known consumer location (idempotently).
 pub fn cmd_schemas_update(repo: Option<&str>, check: bool) -> Result<()> {
     // Generate the artifacts from the single source of truth (the same
-    // `generate_schema_pair` the schema drift guard uses). The returned
+    // `generate_schema_triple` the schema drift guard uses). The returned
     // Strings must stay alive for the whole function; the artifacts array
     // borrows them as &str.
-    let (full, workload) = crate::commands::diagnostics::generate_schema_pair()?;
-    let artifacts: [(&str, &str); 2] = [
+    let (full, workload, registry) = crate::commands::diagnostics::generate_schema_triple()?;
+    let artifacts: [(&str, &str); 3] = [
         ("workestrate.schema.json", full.as_str()),
         ("workestrate-workload.schema.json", workload.as_str()),
+        ("registry.schema.json", registry.as_str()),
     ];
 
     // Collect the consumer target dirs (in target order) via the shared

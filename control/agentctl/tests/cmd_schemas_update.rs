@@ -79,7 +79,7 @@ fn update_writes_both_schemas_into_home() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Both artifacts exist in <store>/schemas/.
+    // All three artifacts exist in <store>/schemas/.
     let full = std::fs::read_to_string(store.join("schemas").join("workestrate.schema.json"))
         .expect("read full schema");
     assert!(
@@ -95,6 +95,12 @@ fn update_writes_both_schemas_into_home() {
     assert!(
         workload.contains("workload capsule entry file"),
         "workload schema must carry the capsule title; got:\n{workload}"
+    );
+    let registry = std::fs::read_to_string(store.join("schemas").join("registry.schema.json"))
+        .expect("read registry schema");
+    assert!(
+        registry.contains("Registry") || registry.contains("\"$schema\""),
+        "registry schema must look like a JSON Schema document; got:\n{registry}"
     );
     // The stale file was replaced (no longer the hand-written marker).
     assert!(
@@ -142,8 +148,8 @@ fn update_is_idempotent_second_run_all_skipped() {
     let stdout = String::from_utf8_lossy(&second.stdout);
     assert_eq!(
         stdout.matches("(unchanged)").count(),
-        2,
-        "second run must skip BOTH files; got:\n{stdout}"
+        3,
+        "second run must skip ALL THREE files; got:\n{stdout}"
     );
     assert!(
         !stdout.contains("wrote"),
@@ -276,6 +282,14 @@ fn update_repo_target_writes_only_that_repo() {
         std::fs::read_to_string(committed_schema("workestrate-workload.schema.json"))
             .expect("read committed workload schema"),
         "repo workload schema must match the real schema byte-for-byte"
+    );
+    let registry = std::fs::read_to_string(repo.join("schemas").join("registry.schema.json"))
+        .expect("read repo registry schema");
+    assert_eq!(
+        registry,
+        std::fs::read_to_string(committed_schema("registry.schema.json"))
+            .expect("read committed registry schema"),
+        "repo registry schema must match the real schema byte-for-byte"
     );
 
     // --repo scoping: the HOME target was NOT written (no <store>/schemas/).

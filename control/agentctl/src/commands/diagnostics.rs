@@ -1010,9 +1010,10 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
 /// `schemas/workestrate-workload.schema.json` carried this exact title).
 pub(crate) const WORKLOAD_SCHEMA_TITLE: &str = "workestrate workload capsule entry file (workestrate/workloads/<name>/workload.toml, bare table form)";
 
-/// Generate the canonical full schema (`workestrate.toml`) and the
-/// bare-workload subschema (a workload capsule file). Both derive from the
-/// same schemars-annotated config types — the single source of truth
+/// Generate the canonical full schema (`workestrate.toml`), the
+/// bare-workload subschema (a workload capsule file), and the tool-home
+/// registry schema (`config.toml`). All three derive from the same
+/// schemars-annotated config types — the single source of truth
 /// (ADR 0021 §8); the subschema replaces the previous hand-derived jq rule.
 pub(crate) fn generate_schema_pair() -> Result<(String, String)> {
     // Full schema: schemars-derived ConfigFile (identical to the historical
@@ -1042,14 +1043,32 @@ pub(crate) fn generate_schema_pair() -> Result<(String, String)> {
     Ok((full, workload))
 }
 
+/// Generate the tool-home registry schema (`config.toml`) from the
+/// schemars-annotated `Registry` type (single source of truth, ADR 0021 §8).
+pub(crate) fn generate_registry_schema() -> Result<String> {
+    let schema = schemars::schema_for!(crate::config::Registry);
+    Ok(serde_json::to_string_pretty(&schema)?)
+}
+
+/// Generate all three schema artifacts (full + workload + registry).
+pub(crate) fn generate_schema_triple() -> Result<(String, String, String)> {
+    let (full, workload) = generate_schema_pair()?;
+    let registry = generate_registry_schema()?;
+    Ok((full, workload, registry))
+}
+
 pub fn cmd_generate_schema(
     out: Option<&std::path::Path>,
     out_workload: Option<&std::path::Path>,
+    out_registry: Option<&std::path::Path>,
 ) -> Result<()> {
     if out_workload.is_some() && out.is_none() {
         anyhow::bail!("--output-workload requires --output");
     }
-    let (full, workload) = generate_schema_pair()?;
+    if out_registry.is_some() && out.is_none() {
+        anyhow::bail!("--output-registry requires --output");
+    }
+    let (full, workload, registry) = generate_schema_triple()?;
     match out {
         Some(p) => {
             if let Some(parent) = p.parent() {
@@ -1066,6 +1085,13 @@ pub fn cmd_generate_schema(
         }
         std::fs::write(p, format!("{}\n", workload))?;
         println!("wrote workload schema to {}", p.display());
+    }
+    if let Some(p) = out_registry {
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(p, format!("{}\n", registry))?;
+        println!("wrote registry schema to {}", p.display());
     }
     Ok(())
 }

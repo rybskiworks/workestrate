@@ -22,3 +22,7 @@ include = ["workestrate.toml", "overrides.toml", "workestrate/default.toml", "wo
 [[schemas]]
 path = "schemas/workestrate-workload.schema.json"
 include = ["workestrate/workloads/**/*.toml"]
+
+[[schemas]]
+path = "schemas/registry.schema.json"
+include = ["config.toml"]

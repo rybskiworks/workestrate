@@ -178,8 +178,13 @@ fn init_creates_structure_gitignore_and_hook() {
         tombi_toml
     );
     assert!(
-        tombi_toml.matches("[[schemas]]").count() == 2,
-        "home tombi.toml must carry two [[schemas]] mappings (full + workload subschema):\n{}",
+        tombi_toml.contains("schemas/registry.schema.json"),
+        "home tombi.toml must reference the registry schema:\n{}",
+        tombi_toml
+    );
+    assert!(
+        tombi_toml.matches("[[schemas]]").count() == 3,
+        "home tombi.toml must carry three [[schemas]] mappings (full + workload subschema + registry):\n{}",
         tombi_toml
     );
     let schema = std::fs::read_to_string(store.join("schemas").join("workestrate.schema.json"))
@@ -197,6 +202,14 @@ fn init_creates_structure_gitignore_and_hook() {
     assert!(
         workload_schema.contains("workload capsule entry file"),
         "vendored workload subschema must carry the custom capsule title"
+    );
+    let registry_schema = std::fs::read_to_string(
+        store.join("schemas").join("registry.schema.json"),
+    )
+    .expect("read vendored registry schema");
+    assert!(
+        registry_schema.contains("Registry") || registry_schema.contains("\"$schema\""),
+        "vendored registry schema must look like a JSON Schema document"
     );
 }
 

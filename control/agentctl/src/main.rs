@@ -178,6 +178,10 @@ enum Commands {
         /// same post-processing that matched the previous hand-derived file.
         #[arg(long, value_name = "PATH")]
         output_workload: Option<std::path::PathBuf>,
+        /// Also write the tool-home registry schema to this path (requires
+        /// --output). The registry schema is derived from the Registry type.
+        #[arg(long, value_name = "PATH")]
+        output_registry: Option<std::path::PathBuf>,
     },
     /// Manage config repositories and trusted projects
     Config {
@@ -190,7 +194,7 @@ enum Commands {
         action: HomeAction,
     },
     /// Manage the generated JSON Schema artifacts (workestrate.schema.json +
-    /// workestrate-workload.schema.json) at every consumer location.
+    /// workestrate-workload.schema.json + registry.schema.json) at every consumer location.
     Schemas {
         #[command(subcommand)]
         action: SchemasAction,
@@ -810,7 +814,12 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::GenerateSchema {
             output,
             output_workload,
-        } => cmd_generate_schema(output.as_deref(), output_workload.as_deref()),
+            output_registry,
+        } => cmd_generate_schema(
+            output.as_deref(),
+            output_workload.as_deref(),
+            output_registry.as_deref(),
+        ),
         Commands::Config { action } => match action {
             ConfigAction::List => {
                 if cli.json {
