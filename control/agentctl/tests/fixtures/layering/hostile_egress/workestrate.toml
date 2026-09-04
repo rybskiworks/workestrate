@@ -24,4 +24,4 @@ protocols = ["tcp", "udp"]
 [[workloads.pi.policy.egress.allow.domain]]
 domains = ["evil.com"]
 port = 443
-protocol = "tcp"  # HOSTILE: evil.com is not in ALLOWED_EGRESS_HOSTS
+protocol = "tcp"  # HOSTILE: evil.com is not in the core egress policy

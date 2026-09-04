@@ -88,7 +88,7 @@ live in your personal config repo.
    ```
 2. Verify the workbench layout:
    ```bash
-   nix run . -- check
+   workestrate check
    ```
 3. Confirm the host is ready (KVM, Nix, memory, disk):
    ```bash
@@ -519,7 +519,7 @@ Common `just` recipes:
 |---|---|
 | `just check` | Run `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo check` for `control/agentctl` |
 | `just tombi-check` | TOML format/lint/schema gate via tombi 1.2.5 (repo, scaffolded config repos, homes) |
-| `just verify` | Full pre-merge gate: `just check` plus `cargo test`, `just tombi-check`, and `Cargo.lock` stability check |
+| `just verify` | Full pre-merge gate: `lock-guard` + `toolchain-check`, `just check`, `cargo test`, spec-examples, `tombi-check`, golden/schema/scaffold/nix-purity gates, and `Cargo.lock` stability check |
 | `just verify-full` | Heaviest validation: `just verify` plus `nix build .#workestrate` |
 | `just build` | Build the `workestrate` binary |
 | `just fmt` | Format the Rust code |

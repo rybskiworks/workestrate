@@ -14,12 +14,16 @@ lock-guard:
 # Verify the host rustc major.minor matches the fenix-pinned toolchain.
 # Parses the RUST_TOOLCHAIN_VERSION marker from flake.nix (not hardcoded
 # here) so the check stays in sync with the flake input automatically.
+# The marker MUST trail the live `rustToolchain = inputs.fenix...` line —
+# grepping it there (instead of any standalone comment) keeps the check
+# fail-closed: if the marker ever drifts off the evaluated line, this
+# recipe errors instead of comparing against a stale comment.
 # Wired into `verify` as the SECOND gate (after lock-guard) — a toolchain
 # mismatch invalidates all downstream cargo results.
 toolchain-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    expected=$(grep -oP 'RUST_TOOLCHAIN_VERSION = "\K[^"]+' flake.nix)
+    expected=$(grep 'rustToolchain = inputs.fenix' flake.nix | grep -oP 'RUST_TOOLCHAIN_VERSION = "\K[^"]+')
     if [ -z "$expected" ]; then
         echo "ERROR: could not parse RUST_TOOLCHAIN_VERSION from flake.nix" >&2
         exit 1

@@ -9,7 +9,7 @@ schema_version = 1
 # ─── Secret definitions ────────────────────────────────────────────────────
 # These define the schema for your encrypted secrets (.env.enc) — a pure
 # catalog of each credential's intrinsic properties. `allowed_hosts` entries
-# must come from the core egress allowlist (policy.rs ALLOWED_EGRESS_HOSTS);
+# must come from the core egress allowlist (policy/network_policy.rs);
 # there is no core per-secret table — any secret you declare may bind
 # allowlisted hosts.
 #

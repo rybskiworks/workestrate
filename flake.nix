@@ -73,11 +73,11 @@
     };
 
     nix2container = {
-      url = "github:nlewo/nix2container";
+      url = "github:nlewo/nix2container/76be9608a7f4d6c985d28b0e7be903ae2547df3e";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    mk-shell-bin.url = "github:rrbutani/nix-mk-shell-bin";
+    mk-shell-bin.url = "github:rrbutani/nix-mk-shell-bin/ff5d8bd4d68a347be5042e2f16caee391cd75887";
 
     devenv-root = {
       url = "file+file:///dev/null";
@@ -243,8 +243,10 @@
           };
 
           # Pinned Rust toolchain via fenix (must agree with nix-tooling's pin).
-          # RUST_TOOLCHAIN_VERSION = "1.97"
-          rustToolchain = inputs.fenix.packages.${system}.stable;
+          # NOTE: the RUST_TOOLCHAIN_VERSION marker trails the live
+          # `rustToolchain` line on purpose — toolchain-check greps it there,
+          # so the marker cannot silently drift onto a dead line.
+          rustToolchain = inputs.fenix.packages.${system}.stable; # RUST_TOOLCHAIN_VERSION = "1.97"
 
           referenceConfig = import ./nix/lib/config.nix { };
 

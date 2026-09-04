@@ -568,7 +568,7 @@ guest = "/work"
 mode = "rw"
 
 [workloads.tempest.network.defaults]
-egress = "allow"   # broad egress for offensive tool (core entitlement required)
+egress = "allow"   # broad egress for offensive tool (stands alone — no entitlement needed)
 
 # ─── tempest local_build (devshell only; nix-built image is canonical) ─────
 
@@ -653,7 +653,7 @@ new full-config example, omit the skip marker and include
 | `litellm_proxy` | (none) | TCP port 4000 to host | `plan.rs:285-291` `EgressRule::litellm_proxy()` |
 | `github` | (none) | TCP 443 to [github.com, api.github.com] | `plan.rs:302` |
 | `agent_base` | (none) | Composite: dns + litellm_proxy + github | `plan.rs:299-304` `EgressRule::agent_base()` |
-| `https` | `hosts: Vec<String>` | TCP 443 to declared hosts (validated against `ALLOWED_EGRESS_HOSTS`) | `plan.rs:292-298` `EgressRule::https()` |
+| `https` | `hosts: Vec<String>` | TCP 443 to declared hosts (validated by the core egress policy in `policy/network_policy.rs`) | `plan.rs:292-298` `EgressRule::https()` |
 
 ### Build recipes (nix functions, `nix/lib/recipes/`)
 
@@ -1118,10 +1118,10 @@ Merge order: `config.reference/` (base) → `work` (layer 1) → `personal`
 
 | Field type | Merge rule | Rationale |
 |---|---|---|
-| `defaults.egress` | **Monotonic-deny**: relaxing to `"allow"` requires the workload's declared `default_egress_allow` entitlement (only tempest); tightening to `"deny"` is always allowed. | A less-trusted layer cannot weaken a more-trusted layer's deny default. |
-| `defaults.ingress` | **Monotonic-deny** (symmetric with egress): relaxing to `"allow"` requires the workload's declared `default_ingress_allow` entitlement; tightening to `"deny"` is always allowed. Absent = deny. | A less-trusted layer cannot weaken a more-trusted layer's deny default. |
-| `deny_rules` | **Additive-union** within `policy.rs` ceiling. | A less-trusted layer cannot remove a more-trusted layer's deny rule. |
-| `egress_rules` | **Additive-union** within `policy.rs` ceiling + per-recipe `allowed_hosts()` scoping. | A less-trusted layer cannot remove egress rules (only add, within ceiling). |
+| `defaults.egress` | **Last-wins**: an explicit `"allow"` stands alone (no entitlement); home `final` seals veto via the policy ladder. Tightening to `"deny"` is always allowed. | A less-trusted layer cannot weaken a more-trusted layer's deny default once sealed. |
+| `defaults.ingress` | **Last-wins** (symmetric with egress): an explicit `"allow"` stands alone (no entitlement); home `final` seals veto via the policy ladder. Tightening to `"deny"` is always allowed. Absent = deny. | A less-trusted layer cannot weaken a more-trusted layer's deny default once sealed. |
+| `deny_rules` | **Additive-union** within the `policy/network_policy.rs` ceiling. | A less-trusted layer cannot remove a more-trusted layer's deny rule. |
+| `egress_rules` | **Additive-union** within the `policy/network_policy.rs` ceiling + per-recipe `allowed_hosts()` scoping. | A less-trusted layer cannot remove egress rules (only add, within ceiling). |
 | `env` bindings | **Additive-union by key** (later layers can add or re-bind env entries; an existing key is replaced in place). | A less-trusted layer cannot deprive a workload of required secrets or env wiring. |
 | All other fields (scalars, maps, lists) | **RFC 7396 JSON Merge Patch**: last-wins scalars, deep-merge maps, replace lists, `null` deletes. | Standard merge for non-security fields. |
 
