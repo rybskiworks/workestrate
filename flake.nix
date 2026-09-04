@@ -13,18 +13,18 @@
     };
 
     microsandbox-fork = {
-      # Pinned fork rev 78fb3ed12623526ad02f5999047c12953013c395 — the merge
-      # of fix/stop-process-exit-wait onto develop (0-conflict --no-ff merge
+      # Pinned fork rev b2c672c8e1d59826063cd5ca4493abfb7f38b3bc — the
+      # nested-virtualization port (feat/nested-virt-port, pushed to origin)
+      # on top of 78fb3ed12623526ad02f5999047c12953013c395, the merge of
+      # fix/stop-process-exit-wait onto develop (0-conflict --no-ff merge
       # on top of 205a7b95), verified pushed to origin via
-      # `git ls-remote origin develop`. Moves to `develop` tracking or a
+      # `git ls-remote origin`. Moves to `develop` tracking or a
       # signed rev later per the merge runbook (signing currently deferred
       # by user).
       # 2026-08-31: repo transferred to the rybskiworks org (georgrybski ->
-      # rybskiworks, same rev). Host relock still pending:
-      # `nix flake lock --update-input microsandbox-fork
-      # /home/rybski/Development/agent-workbench/workestrate`.
+      # rybskiworks, same rev).
       #
-      # This rev carries ALL THREE: (1) the F1 approved-root fix, (2) the
+      # The 78fb3ed base carries ALL THREE: (1) the F1 approved-root fix, (2) the
       # write.allow evaluator arm with union semantics (allow∪deny
       # authority-ascending, deny-before-allow within scope, last non-frozen
       # match wins, default Allow, terminal freeze both directions, protect
@@ -34,17 +34,17 @@
       # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
       # wait → hard MicrosandboxError::Runtime). The transient build-time
       # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
-      url = "github:rybskiworks/microsandbox/78fb3ed12623526ad02f5999047c12953013c395";
+      url = "github:rybskiworks/microsandbox/b2c672c8e1d59826063cd5ca4493abfb7f38b3bc";
       flake = false;
     };
 
-    # Shared tooling: github:rybskiworks/nix-tooling pinned to 2a57961.
+    # Shared tooling: github:rybskiworks/nix-tooling pinned to 18f8b85.
     # For local development use `--override-input tooling path:../nix-tooling`.
     # Follows discipline: share consumer's nixpkgs, but don't override owned pins (fenix/tombi).
     # Therefore we set `tooling.inputs.nixpkgs.follows = "nixpkgs"` but do NOT set
     # `tooling.inputs.fenix.follows` — tooling owns the rust toolchain version.
     tooling = {
-      url = "github:rybskiworks/nix-tooling/2a5796179339a2322e3d01f599e82e3322c8ad4b";
+      url = "github:rybskiworks/nix-tooling/18f8b85f6777240a0ecef4e93ebee69313802aed";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 

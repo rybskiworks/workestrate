@@ -431,17 +431,17 @@
     "microsandbox-fork": {
       "flake": false,
       "locked": {
-        "lastModified": 1788372053,
-        "narHash": "sha256-Mptr2Jwk3hI/IpBd+i4FyOrznKh5hdk/od7Mu3lABH0=",
+        "lastModified": 1788522484,
+        "narHash": "sha256-jrXRWIkdUEmT8RmU6DE+mTziLAb6Cu+uzz/Jus+5s7I=",
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "78fb3ed12623526ad02f5999047c12953013c395",
+        "rev": "b2c672c8e1d59826063cd5ca4493abfb7f38b3bc",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "78fb3ed12623526ad02f5999047c12953013c395",
+        "rev": "b2c672c8e1d59826063cd5ca4493abfb7f38b3bc",
         "type": "github"
       }
     },
@@ -457,21 +457,7 @@
       "original": {
         "owner": "rrbutani",
         "repo": "nix-mk-shell-bin",
-        "type": "github"
-      }
-    },
-    "mk-shell-bin_2": {
-      "locked": {
-        "lastModified": 1677004959,
-        "narHash": "sha256-/uEkr1UkJrh11vD02aqufCxtbF5YnhRTIKlx5kyvf+I=",
-        "owner": "rrbutani",
-        "repo": "nix-mk-shell-bin",
         "rev": "ff5d8bd4d68a347be5042e2f16caee391cd75887",
-        "type": "github"
-      },
-      "original": {
-        "owner": "rrbutani",
-        "repo": "nix-mk-shell-bin",
         "type": "github"
       }
     },
@@ -532,27 +518,7 @@
       "original": {
         "owner": "nlewo",
         "repo": "nix2container",
-        "type": "github"
-      }
-    },
-    "nix2container_2": {
-      "inputs": {
-        "nixpkgs": [
-          "tooling",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1775487831,
-        "narHash": "sha256-2lguQpLPQaxpQCJjXhmEEAfabwsAhkP29Z7fgLzHARA=",
-        "owner": "nlewo",
-        "repo": "nix2container",
         "rev": "76be9608a7f4d6c985d28b0e7be903ae2547df3e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nlewo",
-        "repo": "nix2container",
         "type": "github"
       }
     },
@@ -771,25 +737,23 @@
         "fenix": "fenix_2",
         "flake-parts": "flake-parts_2",
         "git-hooks": "git-hooks_2",
-        "mk-shell-bin": "mk-shell-bin_2",
-        "nix2container": "nix2container_2",
         "nixpkgs": [
           "nixpkgs"
         ],
         "treefmt-nix": "treefmt-nix_3"
       },
       "locked": {
-        "lastModified": 1788285532,
-        "narHash": "sha256-guDFHPfJrIAKnmU7kqtoRinFQYNyx3Ob5diBft4740s=",
+        "lastModified": 1788554028,
+        "narHash": "sha256-U2ZXEsLl29j0aIaunEIwLAAOy/sQkWv2a6TOYwOT6Jo=",
         "owner": "rybskiworks",
         "repo": "nix-tooling",
-        "rev": "2a5796179339a2322e3d01f599e82e3322c8ad4b",
+        "rev": "18f8b85f6777240a0ecef4e93ebee69313802aed",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "nix-tooling",
-        "rev": "2a5796179339a2322e3d01f599e82e3322c8ad4b",
+        "rev": "18f8b85f6777240a0ecef4e93ebee69313802aed",
         "type": "github"
       }
     },

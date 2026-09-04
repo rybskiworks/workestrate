@@ -108,12 +108,13 @@ pub fn doctor_check_kvm() -> DoctorCheck {
 /// vmx|svm flag + nested parameter affirmatively enabled; WARN = KVM works
 /// but nested is disabled/unknown; FAIL = no /dev/kvm. Each carries
 /// remediation. The trailing pin note records what the pinned fork rev
-/// actually carries (the mount-policy stack) — the Track 1 nested_virt VMM
-/// port is PENDING on an unpushed branch and becomes active only when the
-/// pin advances (plan D6: no "nested works" claim until Track 3).
+/// actually carries (the mount-policy stack plus the Track 1 nested_virt
+/// VMM flag, pin b2c672c8) — nested stays inert until the Phase 2 firmware
+/// (libkrunfw CONFIG_KVM) lands (plan D6: no "nested works" claim until
+/// Track 3).
 pub fn doctor_check_nested_virt() -> DoctorCheck {
     const PIN_NOTE: &str =
-        "fork rev 78fb3ed1 carries the mount-policy stack; the nested_virt VMM port (b2c672c8) is pending on an unpushed branch and becomes active when the pin advances";
+        "pin b2c672c8 carries the mount-policy stack and the nested_virt VMM flag; nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
     const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
          sudo usermod -aG kvm $USER (re-login); guest nesting additionally needs the host \
          kvm_intel/kvm_amd nested parameter at Y (sudo modprobe kvm_intel nested=1)";
@@ -997,14 +998,15 @@ mod tests {
             check
         );
         assert!(
-            check.message.contains("78fb3ed1"),
+            check.message.contains("b2c672c8"),
             "every verdict carries the fork pin note: {check:?}"
         );
-        // Honest pin strings: the pin carries the mount-policy stack; the
-        // nested port is pending, not carried — no nested-works claim.
+        // Honest pin strings: the pin carries the mount-policy stack + the
+        // VMM flag, but nested is inert until firmware — no nested-works
+        // claim.
         assert!(
-            check.message.contains("pending on an unpushed branch"),
-            "pin note states fork honesty: {check:?}"
+            check.message.contains("inert until firmware"),
+            "pin note states firmware honesty: {check:?}"
         );
         if check.status != "OK" {
             assert!(

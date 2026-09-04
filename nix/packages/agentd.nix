@@ -1,7 +1,7 @@
 # agentd — guest init/agent daemon for microsandbox microVMs.
 #
 # Built as a static musl binary from the user's fork source, pinned via the
-# `microsandbox-fork` flake input at validated rev 78fb3ed1.
+# `microsandbox-fork` flake input at validated rev b2c672c8.
 # agentd runs INSIDE the guest microVM, not on the host — a static musl binary
 # has no library deps and works with any guest rootfs (alpine/musl or glibc).
 #
