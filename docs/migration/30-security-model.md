@@ -8,7 +8,7 @@ is untrusted data; the compiled tool (core) is trusted.**
 
 This is the same model as Terraform (HCL is untrusted; providers are trusted)
 and Kustomize (overlays are untrusted; the base + strategic merge is the
-contract). Config can come from arbitrary paths/repos; the allowlist is checked
+contract). Config can come from arbitrary paths/repos; the core ceilings are checked
 against the loaded config's contents, not its provenance.
 
 The JSON Schema files (`schemas/workestrate.schema.json` +
@@ -32,7 +32,7 @@ All executable logic = named, versioned, reviewable recipes in core.
 | `local_build.recipe = <named>` + parameters | Arbitrary build commands |
 | `baked_files: [{ path, content }]` (string content only) | Baked files with executable content or templating that evaluates code |
 | `seed_files: [{ source\|glob, target, only_if_missing, template }]` (template = true renders `${VAR}` from the guest-visible env view: host-bound → `$MSB_<binding key>` placeholder, guest-bound → real value, defined-but-unbound secret → hard error; no process env) | Arbitrary file operations |
-| `egress: [{ recipe, hosts? }]` (recipe from core vocabulary) | Custom egress rules not expressible as recipes |
+| `[policy.egress]` / `[policy.ingress]` rule tables (host/domain scopes, `final` seals) | Rules outside the schema'd rule vocabulary; removal/weakening of a sealed rule |
 | `env` map bindings: `KEY = true` (host-bound placeholder), `{ secret = "ID" }` (rename), `{ bound = "guest" }` (real value, verifier opt-in) | Inline secret values |
 
 **Escape hatch**: if a workload needs custom logic not expressible with the
@@ -58,7 +58,6 @@ versioned). Config references it by name.
 
 | Category | Items | Location |
 |---|---|---|
-| Egress recipes | `dns`, `litellm_proxy`, `github`, `agent_base`, `https` | Rust enum in `recipes.rs` |
 | Build recipes | `npm-build`, `bun-compile`, `pip-install`, `bun-install` | Nix functions in `nix/lib/recipes/` |
 | Image recipes | `registry`, `nix-layered` | Nix functions in `nix/lib/recipes/` |
 | Features | `create_tmp` | `nix/lib/vocabulary.nix` |
@@ -76,58 +75,30 @@ it becomes a dumping ground of one-off recipes that are effectively
 config-as-code, defeating the purity principle. Mitigation: the review process
 + audits.
 
-## policy.rs ceiling + per-recipe scoping
+## Core ceilings
 
-### Data structures (sketched)
+What config cannot exceed:
 
-```rust
-// policy.rs
-
-/// Core-defined allowlist of egress hosts. Config may only reference hosts
-/// from this set. Enforced at validate-config, plan (fail-closed), and
-/// runtime apply_plan_secrets.
-pub const ALLOWED_EGRESS_HOSTS: &[&str] = &[
-    "openrouter.ai", "api.kimi.com", "api.neuralwatt.com", "api.minimax.io",
-    "github.com", "api.github.com",
-    "huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co",
-    "host.microsandbox.internal",
-];
-
-/// Core-defined secret→host binding allowlist. Each secret may only bind
-/// to listed hosts. Replaces the const SecretDefinition hosts field
-/// (config-side rename: `allowed_hosts`).
-pub const SECRET_HOST_BINDINGS: &[(&str, &[&str])] = &[
-    ("LITELLM_MASTER_KEY",        &["host.microsandbox.internal"]),
-    ("OPENROUTER_API_KEY",        &["openrouter.ai"]),
-    ("KIMI_CODE_API_KEY",         &["api.kimi.com"]),
-    ("NEURALWATT_API_KEY",        &["api.neuralwatt.com"]),
-    ("MINIMAX_CODING_API_KEY",    &["api.minimax.io"]),
-    ("GITHUB_TOKEN",              &["github.com", "api.github.com"]),
-    ("ODYSSEUS_ADMIN_PASSWORD",   &[]),  // internal, no egress binding
-];
-
-/// Core-defined package vocabulary for nix-layered images.
-pub const ALLOWED_PACKAGES: &[&str] = &[
-    "cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils",
-];
-
-/// Per-recipe allowed_hosts scoping: recipes that accept `hosts` parameter
-/// validate against ALLOWED_EGRESS_HOSTS. Recipes without host params
-/// (dns, litellm_proxy, github, agent_base) are fully fixed in core.
-/// The `https` recipe takes `hosts: Vec<String>` validated against the allowlist.
-```
-
-### Per-recipe scoping
-
-- `dns`, `litellm_proxy`, `github`, `agent_base`: no host parameters; fully
-  fixed in core. Config references by name only.
-- `https`: takes `hosts: Vec<String>`; each host validated against
-  `ALLOWED_EGRESS_HOSTS`. If a host is not in the allowlist, `validate-config`
-  fails with: "host 'evil.com' is not in the core egress allowlist."
-- Each secret's bindable hosts are fixed in `SECRET_HOST_BINDINGS`. Config
-  declares which secrets to use; core validates the binding.
-
-### `bound` on env bindings + `allowed_hosts` as credential policy
+- **Package allowlist**: `policy::ALLOWED_PACKAGES` (the one surviving core
+  const allowlist) gates package names in nix-layered images, enforced at
+  `validate-config`.
+- **Closed recipe vocabulary**: image recipes (`registry`, `nix-layered`),
+  build recipes (`npm-build`, `bun-compile`, `pip-install`, `bun-install`),
+  and features are named core code; config references them by name only.
+- **Hierarchical policy rules**: egress/ingress control is the
+  `policy.egress` / `policy.ingress` ladder (specificity + `final` seals).
+  The former core egress-host allowlist (`ALLOWED_EGRESS_HOSTS`) and the
+  egress-recipe vocabulary were removed (ADR 0035) — an unsealed rule can
+  be added by any layer the trust model loads, but a `final` seal in a
+  more-trusted rung cannot be undone by less-trusted layers; relaxed
+  defaults surface as loud plan NOTEs (see "Relaxed network defaults"
+  below).
+- **Secret bindings**: `apply_plan_secrets` substitutes the real value only
+  for each secret's `allowed_hosts`; placeholder/required checks gate the
+  rest. The definition-side `allowed_hosts` list is the credential policy —
+  since ADR 0035 it is no longer validated against a hardcoded core
+  binding allowlist (the former `SECRET_HOST_BINDINGS` const is gone), so
+  it is reviewable in the capsule, not core-gated.
 
 Secret definitions are a pure catalog of intrinsic credential properties;
 exposure is declared per workload at the binding site via `bound` on the env
@@ -135,20 +106,17 @@ binding. `bound = "guest"` injects the REAL secret value into the guest
 (verifier opt-in — for workloads like litellm/odysseus that verify their
 callers); the default `bound = "host"` injects a placeholder (the guest sees
 a non-secret marker; the host-side rewrite substitutes the real value only
-for allowlisted hosts). The definition-side `allowed_hosts` list (renamed
-from the old SecretDefinition `hosts` field) is the credential policy: it
-caps which egress hosts' rewrites may substitute the real value, validated
-against `SECRET_HOST_BINDINGS` at all three enforcement points below.
+for `allowed_hosts`).
 
 ## Enforcement points (three-layer defense)
 
 | Point | When | What it checks | Failure behavior |
 |---|---|---|---|
-| `workestrate validate-config` | Pre-flight (user-invoked or CI) | All egress hosts against `ALLOWED_EGRESS_HOSTS`; all secret bindings against `SECRET_HOST_BINDINGS`; all package names against `ALLOWED_PACKAGES`; schema validity; cross-references (secret refs exist, mount sources exist, port conflicts) | Exits non-zero with clear error citing the allowlist |
-| `workestrate workload plan <name>` | Pre-flight (fail-closed) | Same checks as validate-config, plus: required secrets present (or placeholder); mount sources exist; seed sources exist | Fails with error citing the violated invariant |
+| `workestrate validate-config` | Pre-flight (user-invoked or CI) | All package names against `ALLOWED_PACKAGES`; policy rule well-formedness; schema validity; cross-references (secret refs exist, mount sources exist, port conflicts) | Exits non-zero with clear error citing the allowlist |
+| `workestrate workload plan <name>` | Pre-flight (fail-closed) | Same checks as validate-config, plus: required secrets present (or placeholder); mount sources exist; seed sources exist; per-direction relaxed-default NOTEs | Fails with error citing the violated invariant |
 
 > *Implemented 2026-08-03 (commit `c6a6b47`): the plan-time mount/seed existence preflight is now real — a missing read-only mount source or seed source fails at `plan` before any KVM/runtime work (the failure-1 doubling signal). `validate-config` runs the same check warn-only (synthetic/reference configs may legitimately lack the files). See `microsandbox::mounts::preflight_existence`.*
-| `apply_plan_secrets` (`runtime.rs:107-145`) | Runtime (before sandbox start) | Each secret's `allowed_hosts` against `SECRET_HOST_BINDINGS`; `reject_if_placeholder` (`runtime.rs:10-22`); required secrets non-empty | Refuses to start sandbox; clear error |
+| `apply_plan_secrets` (`microsandbox/runtime/run.rs`) | Runtime (before sandbox start) | Template resolution against the merged secrets map; each secret's `allowed_hosts` drive per-host substitution entries (placeholder forwarded elsewhere); `reject_if_placeholder`; required secrets non-empty | Refuses to start sandbox; clear error |
 
 ## Trust gating — `[trusted_projects]`
 
@@ -173,9 +141,9 @@ egress or rebinds secrets. The user `cd`s into it and runs `workestrate workload
 exec pi`.
 
 **Without trust gating**: the malicious config is loaded as a project layer.
-**Mitigation**: the project layer is bounded by the policy.rs ceiling (same as
-all layers). The attacker cannot exceed `ALLOWED_EGRESS_HOSTS` or
-`SECRET_HOST_BINDINGS`. Additionally, trust gating means the malicious
+**Mitigation**: the project layer is bounded by the same core ceilings as
+every layer (package allowlist, closed recipe vocabulary), and it cannot undo
+a home `final` policy seal. Additionally, trust gating means the malicious
 `./workestrate.toml` is **not loaded at all** unless the user explicitly
 trusted the project directory. This is the `direnv allow` model.
 
@@ -184,16 +152,16 @@ trusted the project directory. This is the `direnv allow` model.
 An attacker publishes a config repo with a `workestrate.toml` that widens
 egress. The user adds it via `workestrate config add <url> team`.
 
-**Bounded by**: the policy.rs ceiling. The attacker's config can reference
-egress hosts, but only from `ALLOWED_EGRESS_HOSTS`. The attacker can rebind
-secrets, but only to hosts in `SECRET_HOST_BINDINGS`. The attacker cannot
-execute arbitrary code (purity invariant). The attacker cannot supply
-`extraCommands` or nix expressions.
+**Bounded by**: the core ceilings. The attacker's config can add policy
+rules, but cannot exceed the package allowlist, cannot use unlisted recipes,
+cannot undo a home `final` seal, and cannot execute arbitrary code (purity
+invariant — no `extraCommands`, no nix expressions).
 
-**Residual risk**: the attacker can add new egress hosts (from the allowlist)
-that the user didn't intend. Mitigation: `validate-config` reports all egress
-hosts; `plan --show-source` attributes each to its layer; the user reviews
-before running `up`/`exec`.
+**Residual risk**: the attacker can add unsealed egress rules (the core
+egress-host allowlist is gone) or widen a secret's `allowed_hosts` that the
+user didn't intend. Mitigation: `plan` output + provenance attribute every
+rule to its layer; `just` review before `up`/`exec`; home `final` seals
+veto the directions that matter.
 
 ## Relaxed network defaults — entitlements removed; seals + review are the veto
 
@@ -274,12 +242,12 @@ repo, it's likely unnecessary. Document the risk in the migration process.
 |---|---|
 | No config repos registered (fresh install) | Falls back to `config.reference/` (placeholder secrets). `plan`/`check`/`validate-config` work. `up`/`exec` refuse (placeholder secrets rejected by `reject_if_placeholder`, `runtime.rs:10-22`). |
 | Config repo not cloned | `workestrate check` reports `[MISSING] (optional)`. `plan` uses reference config. `up`/`exec` refuse. |
-| Config references unknown egress host | `validate-config` fails: "host 'evil.com' not in allowlist." `plan` fails (fail-closed). |
+| Config uses the removed `network.egress` / `network.deny` / `network.ingress` fields | Parse fails with an ADR-citing message pointing to the hierarchical `policy.*` surface. |
 | Config references unknown secret | `validate-config` fails: "secret 'FOO' not defined in secrets: section." |
 | Config sets the removed `entitlements = [...]` key | Parse fails: "unknown field `entitlements`" (`deny_unknown_fields`) — mechanism removed 2026-09-04. |
 | Config sets `network.defaults.egress`/`ingress = "allow"` | Accepted — no declaration gate; `plan` prints a relaxed-defaults NOTE per direction; home `final` policy seals still veto via the ladder. |
-| Required secret is placeholder | `apply_plan_secrets` (`runtime.rs:107-145`) refuses: "secret 'LITELLM_MASTER_KEY' is set to placeholder." |
-| Required secret is empty | `apply_plan_secrets` refuses: "required secret 'LITELLM_MASTER_KEY' is set but empty." |
+| Required secret is placeholder | `apply_plan_secrets` (`microsandbox/runtime/run.rs`) refuses: "secret 'LITELLM_MASTER_KEY' is set to placeholder." |
+| Required secret is empty | `apply_plan_secrets` (`microsandbox/runtime/run.rs`) refuses: "required secret 'LITELLM_MASTER_KEY' is set but empty." |
 | Untrusted project has `./workestrate.toml` | Ignored (not in `[trusted_projects]`). No error (silent skip). |
 
 ## Current vs migrated trust boundaries
@@ -288,9 +256,9 @@ repo, it's likely unnecessary. Document the risk in the migration process.
 |---|---|---|
 | Config source | Rust code (compiled) | TOML files (data) |
 | Trust boundary | Compile-time (Rust review) | Runtime (policy.rs allowlist) |
-| Egress hosts | Hardcoded in `workloads/*.rs` | Declared in config, validated against `ALLOWED_EGRESS_HOSTS` |
-| Secret bindings | `secrets.rs` const | Declared in config, validated against `SECRET_HOST_BINDINGS` |
-| Network policy | `plan.rs:270-305` helpers | `recipes.rs` enum, expanded by core |
+| Egress hosts | Hardcoded in `workloads/*.rs` | Declared as hierarchical `policy.egress`/`policy.ingress` rules + `final` seals (core host allowlist removed) |
+| Secret bindings | `secrets.rs` const | Declared in config (`allowed_hosts`); core binding allowlist removed — review + runtime host-scoped substitution |
+| Network policy | `plan.rs` helpers | Hierarchical policy engine in `policy/` + `plan` (recipe enum removed) |
 | Image contents | `pi-image.nix`, `tempest-image.nix` | `nix/lib/vocabulary.nix` + `buildWorkloadImage` |
 | Extra shell in images | `extraCommands` in nix files | `baked_files` + `features` (declarative, no arbitrary shell) |
 | Config repo trust | N/A (no config repos) | Bounded by allowlist; provenance irrelevant to enforcement |
