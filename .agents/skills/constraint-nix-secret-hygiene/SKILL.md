@@ -98,7 +98,7 @@ pkgs.writeShellApplication {
 
 Correct: never embed the key in the derivation. Use `with-secrets` to inject
 `LITELLM_MASTER_KEY` into the child process env at runtime:
-`nix develop -c with-secrets nix run . -- litellm up`. The derivation text
+`just shell -c with-secrets nix run . -- litellm up`. The derivation text
 stays secret-free; the key is read from the environment only when the child
 process starts, so it never enters `/nix/store`.
 
@@ -127,7 +127,7 @@ the store path and is permanently readable by anyone with store access.
 nix run . -- litellm up --master-key "sk-abc123..."
 ```
 
-Correct: `nix develop -c with-secrets nix run . -- litellm up` —
+Correct: `just shell -c with-secrets nix run . -- litellm up` —
 `with-secrets` injects `LITELLM_MASTER_KEY` into the child env without
 exposing it on the command line. The key never appears in `ps`,
 `/proc/<pid>/cmdline`, or shell history.
@@ -150,7 +150,7 @@ instead of failing loudly.
 grep -rn "sk-\|api_key\|password\|token" *.nix nix/ flake.nix   # no secret literals
 just lint-nix                                                    # static purity guard
 just validate-secrets                                            # hermetic secrets lifecycle test
-nix develop -c decrypt-env                                       # prints decrypted .env.enc to stdout
+just shell -c decrypt-env                                        # prints decrypted .env.enc to stdout
 stat -c '%a' ~/.config/sops/age/ai-workbench-secrets.txt        # must be 600
 ```
 

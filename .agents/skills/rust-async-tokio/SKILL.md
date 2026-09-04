@@ -197,4 +197,4 @@ RUSTFLAGS="--cfg tokio_unstable" cargo run   # then attach tokio-console
 
 - `docs/rust/async-tokio.md` — full reference, examples, upstream citations.
 - `docs/rust/{error-handling,ownership-lifetimes,testing}.md` — adjacent topics.
-- `nix-usage` skill — Rust toolchain / `nix develop` for this repo.
+- `nix-usage` skill — Rust toolchain / `just shell` for this repo.

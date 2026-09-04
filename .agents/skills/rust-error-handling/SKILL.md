@@ -190,5 +190,5 @@ Error-relevant clippy lints (enable per repo policy): `clippy::unwrap_used`,
 
 ## Related Skills
 
-- `nix-usage` — Rust toolchain and `nix develop` workflows for running the
+- `nix-usage` — Rust toolchain and `just shell` workflows for running the
   verification commands above.

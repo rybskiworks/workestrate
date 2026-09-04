@@ -96,10 +96,11 @@ cd /home/node/Development/agent-workbench/workestrate
 nix flake check --no-build
 
 # Dev shell tools
-nix develop -c cargo --version
-nix develop -c rustc --version
-nix develop -c gcc --version
-nix develop -c just --version
+just shell
+just shell -c cargo --version
+just shell -c rustc --version
+just shell -c gcc --version
+just shell -c just --version
 
 # Package build
 nix build .#workestrate
@@ -110,7 +111,8 @@ nix build .#workestrate
 
 Current outputs:
 
-- `devShells.x86_64-linux.default` — `nix develop`
+- `devShells.x86_64-linux.default` — enter via `just shell` (wraps `nix
+  develop` with the devenv-root override)
 - `packages.x86_64-linux.workestrate` — `nix build .#workestrate`
 
 There is NO `packages.default`, NO `nix fmt`, and NO `nix run .#default`.
@@ -120,6 +122,12 @@ its packages list provides `cargo`, `clippy`, `rustc`, `rustfmt`,
 `rust-analyzer`, `gcc`, `just`, `pkg-config`, `git`, `libcap_ng`, `openssl`,
 `sops`, `age`, `tombi`, `jq`, `curl`, `nodejs_24`, `bun`, python3/3.12, plus
 `msb-wrapped` and `workestrate`.
+
+Devshell entry is `just shell`: the flake declares a `devenv-root`
+placeholder input and `just shell` passes `--override-input devenv-root
+"file+file://<worktree>"` — pure eval needs it; bare `nix develop` is not a
+supported entry (fails the `devenv.root != ""` assertion, or silently falls
+back to PWD when impure). Guarded `just` recipes self-enshell the same way.
 
 Lock file inputs (root; revs as currently locked in `flake.lock` — re-read
 the lock before citing, pins move with deliberate updates):
@@ -270,8 +278,8 @@ of gitignored `target/` alone.
 
 ## Anti-patterns
 
-- **NO bare `cargo` or `rustc`** — always use `nix develop` or
-  `nix develop -c ...`.
+- **NO bare `cargo` or `rustc`** — always use `just shell` or
+  `just shell -c ...`.
 - **NO `apt-get` / `dpkg`** — add packages to the devenv packages list in
   `flake.nix`.
 - **NO `rustup`** — the toolchain comes from Nix.
@@ -299,9 +307,9 @@ of gitignored `target/` alone.
 | `nix: command not found` | PATH missing Nix profile | `export PATH=$HOME/.nix-profile/bin:$PATH` |
 | `~/.nix-profile/bin/...` not found | Dangling profile symlink | Run the profile repair (above) |
 | `Path 'X' is not tracked by Git` | Untracked source file | `git add X` |
-| `linking with '.../.toolchain/...'` failed | Ran cargo outside `nix develop` | Use `nix develop -c cargo ...` |
+| `linking with '.../.toolchain/...'` failed | Ran cargo outside `just shell` | Use `just shell -c cargo ...` |
 | `error: 'packages.x86_64-linux.default' is not a flake output` | Used `.#default` | Use `.#workestrate`; there is no default |
-| `cargo: command not found` / `gcc: command not found` | Outside dev shell | Run inside `nix develop` |
-| `msb: command not found` | Outside the dev shell and no profile install | Use `nix develop` (ships `msb-wrapped`) or `just host-provision`; `MSB_PATH` overrides the resolved binary |
+| `cargo: command not found` / `gcc: command not found` | Outside dev shell | Run inside `just shell` |
+| `msb: command not found` | Outside the dev shell and no profile install | Use `just shell` (ships `msb-wrapped`) or `just host-provision`; `MSB_PATH` overrides the resolved binary |
 | Build error mentioning `$HOME/.microsandbox/bin` | build.rs writing outside sandbox | Set `HOME=$TMPDIR` (derivation already does this) |
 | Store grows ~1GB/min during edits | Impure source filter copying target/ or agents/*/build | Run `just gc` + `just store-audit`; fix the source filter per docs/nix-purity.md |

@@ -142,8 +142,8 @@ nix log .#<name>                  # view build log
 nix log $(nix path-info .#<name>) # view log via path-info
 nix-prefetch-url --unpack <url> --type sha256   # prefetch a source hash
 nix run nixpkgs#prefetch-npm-deps -- <package-lock.json>  # npmDepsHash
-nix develop                        # enter dev shell for interactive phase debug
-# In dev shell: export out=$(pwd)/out; phases="buildPhase" genericBuild
+nix develop .#<name>               # enter a package derivation's build env for phase debug
+# In that env: export out=$(pwd)/out; phases="buildPhase" genericBuild
 ```
 
 ## Anti-patterns

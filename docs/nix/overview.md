@@ -193,9 +193,9 @@ skill). Specifically:
 - **Reproducible images.** Docker images are built via
   `dockerTools.streamLayeredImage` / `buildLayeredImage`, producing
   content-addressed tarballs loaded into Microsandbox.
-- **Reproducible dev shells.** `nix develop` produces a shell with all tools
-  (Rust, Node, Bun, Python, sops, msb) at pinned versions, so every contributor
-  has the same environment.
+- **Reproducible dev shells.** `nix develop` (enter via `just shell`) produces
+  a shell with all tools (Rust, Node, Bun, Python, sops, msb) at pinned
+  versions, so every contributor has the same environment.
 - **Purity enforcement.** `just lint-nix` (via `scripts/check-nix-paths.sh`)
   statically guards against the impurity patterns that caused the 29 GB store
   incident.
@@ -246,7 +246,7 @@ how to build and reproduce that code. The corpora are complementary:
 
 ## Implementation checklist
 - [ ] Confirm `nix --version` works and PATH includes `~/.nix-profile/bin`.
-- [ ] Confirm `nix develop` produces a shell with the expected tools.
+- [ ] Confirm `just shell` produces a shell with the expected tools.
 - [ ] Confirm `nix build .#<name>` succeeds for the target package.
 - [ ] Confirm `just lint-nix` passes (the static purity guard).
 - [ ] Confirm `flake.lock` is committed.
@@ -258,7 +258,8 @@ how to build and reproduce that code. The corpora are complementary:
 - `nix flake check` — validates flake structure and runs checks.
 - `nix build .#<name>` — builds a package; success confirms the derivation is
   eval-pure and build-pure.
-- `nix develop` — enters the dev shell; success confirms the shell derivation
+- `just shell` — enters the dev shell (wraps `nix develop` with the
+  devenv-root override); success confirms the shell derivation
   evaluates.
 - `just lint-nix` — runs `scripts/check-nix-paths.sh`, the static purity guard
   that catches forbidden patterns (`--impure`, unfiltered `builtins.path`,
@@ -305,7 +306,7 @@ The workestrator project's entry points (from `flake.nix`):
 
 ```bash
 # Enter the dev shell (all tools pinned)
-nix develop
+just shell
 
 # Build the workestrate binary
 nix build .#workestrate

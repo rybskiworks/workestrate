@@ -83,7 +83,7 @@ eval-only.
 - The project's `workestrate` Rust package sets `doCheck = false` (tests
   need a running Microsandbox daemon); tests run via `just` recipes
   instead.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).
 - `nix flake check --no-build` is the eval-only variant: it evaluates all
   outputs but skips building checks. Use it as a fast pre-check before the
   full `nix flake check` when only `flake.nix` structure changed.

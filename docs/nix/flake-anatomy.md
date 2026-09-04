@@ -356,7 +356,8 @@ in practice.
 - `nix flake show` — lists all outputs (confirms the attr tree).
 - `nix build .#<attr>` — builds an output (dry-run via `--dry-run`).
 - `nix flake update --dry-run` — preview lock changes without writing.
-- `nix develop` — enters the devShell (smoke test that the shell evaluates).
+- `just shell` — enters the devShell (smoke test that the shell evaluates;
+  wraps `nix develop` with the devenv-root override).
 
 ## Examples
 

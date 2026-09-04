@@ -305,7 +305,7 @@ canonical entry is a single command:
 just shell
 ```
 
-for an interactive shell, or `nix develop -c <cmd>` for a one-shot command
+for an interactive shell, or `just shell -c <cmd>` for a one-shot command
 (crawl 63). Additionally, every toolchain-consuming `just` recipe is
 self-enshelling: it re-execs itself via `nix develop` with the `devenv-root`
 input overridden (worktree path in a root file under
@@ -416,9 +416,11 @@ Shape of the live definition:
    (crawl 63).
 8. Use `--pure`/`--impure` deliberately; omit `--pure` for dev, add for
    CI/isolation (crawl 06).
-9. Enter via `nix develop` (`nix develop -c <cmd>` non-interactive); in
-    workestrate, `just` recipes self-enshell via `$WORKESTRATE_DEVSHELL`, so
-    no direnv is needed (crawl 36 background only).
+9. In this repo enter via `just shell` (`just shell -c <cmd>`
+   non-interactive); bare `nix develop` fails pure eval on the
+   `devenv.root` assertion (the override is wired in `just shell`); `just`
+   recipes self-enshell via `$WORKESTRATE_DEVSHELL`, so no direnv is needed
+   (crawl 36 background only).
 10. Relocate large build outputs (e.g. `CARGO_TARGET_DIR`) out of the source
     tree in `shellHook`.
 11. Use `inputsFrom` to inherit build dependencies from existing derivations
@@ -438,7 +440,7 @@ Shape of the live definition:
 - [ ] Untracked files `git add -N`'d before eval?
 - [ ] No `.envrc`/direnv — toolchain `just` recipes self-enshell via `$WORKESTRATE_DEVSHELL`?
 - [ ] `inputsFrom` used to inherit deps from existing derivations where applicable?
-- [ ] `nix develop -c` used for non-interactive commands?
+- [ ] `just shell -c` used for non-interactive commands?
 - [ ] `--pure`/`--impure` chosen deliberately, not by accident?
 
 ## Implementation checklist
@@ -459,11 +461,11 @@ Shape of the live definition:
 ## Runtime / debugging checklist
 
 - [ ] `just shell` enters the shell (check prompt changes).
-- [ ] `nix develop -c <tool> --version` verifies tools are available.
+- [ ] `just shell -c <tool> --version` verifies tools are available.
 - [ ] `nix flake check --no-build --override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate"` validates flake outputs.
 - [ ] `nix develop --impure` only when mutable paths needed.
 - [ ] `shellHook` errors: check stderr on shell entry.
-- [ ] Missing packages: `nix develop -c which <tool>` to verify PATH.
+- [ ] Missing packages: `just shell -c which <tool>` to verify PATH.
 - [ ] Store growth: `nix-collect-garbage` after devshell changes.
 - [ ] Untracked-file errors: `git add -N <file>` then retry.
 - [ ] Stale `flake.lock`: `nix flake update` (not deprecated `--update-input`).
@@ -471,8 +473,8 @@ Shape of the live definition:
 ## Validation hooks
 
 - `nix flake check --no-build` — validates flake structure.
-- `nix develop -c <tool> --version` — verifies tool availability.
-- `nix develop` — enters shell; check `shellHook` output.
+- `just shell -c <tool> --version` — verifies tool availability.
+- `just shell` — enters shell; check `shellHook` output.
 - `nix build .#devShells.<system>.default` — builds the devshell derivation
   (useful for CI).
 

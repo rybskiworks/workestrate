@@ -55,5 +55,5 @@ To validate a specific target, add `--target erlang` or `--target javascript`.
   to validate both targets.
 - `gleam test` runs `gleeunit` by default; ensure `gleeunit` is a dev dependency
   in `gleam.toml`.
-- Run inside `nix develop` (see `nix-usage` skill) so the correct Gleam toolchain
+- Run inside `just shell` (see `nix-usage` skill) so the correct Gleam toolchain
   is used.

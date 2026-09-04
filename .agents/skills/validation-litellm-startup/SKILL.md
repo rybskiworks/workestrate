@@ -39,7 +39,7 @@ kill $PROXY_PID 2>/dev/null
 cat /tmp/litellm-startup.log
 ```
 
-Or via Docker (when not running inside `nix develop`):
+Or via Docker (when not running inside the devshell (`just shell`)):
 
 ```bash
 docker run --rm -d --name litellm-test -p 4000:4000 \
@@ -74,10 +74,10 @@ docker stop litellm-test
 ## Notes
 
 - Requires the `litellm` binary (installed via `pip install litellm` or
-  available inside `nix develop`) OR the LiteLLM Docker image.
+  available inside the devshell (`just shell`)) OR the LiteLLM Docker image.
 - In this environment there is no KVM, so the Docker-based path is
   `not_fully_checkable` here. Prefer the `litellm` CLI path inside
-  `nix develop`, or run this gate on a KVM-capable host.
+  the devshell (`just shell`), or run this gate on a KVM-capable host.
 - The proxy needs `LITELLM_MASTER_KEY` (and all provider API keys referenced via
   `os.environ/`) injected into the runtime environment; static validation
   cannot confirm they are present — this gate does.

@@ -525,7 +525,7 @@ nix build .#checks.x86_64-linux.<name>.driverInteractive
 Run derivation tests in a dev shell:
 
 ```bash
-nix develop
+just shell
 cd "$(mktemp -d)"
 export out=$(pwd)/out
 phases="unpackPhase patchPhase configurePhase buildPhase checkPhase" genericBuild

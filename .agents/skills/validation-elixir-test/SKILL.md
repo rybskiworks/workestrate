@@ -58,4 +58,4 @@ Run `mix test` for the test suite; add `--cover` when coverage is required.
   surface races.
 - For a single file: `mix test path/to/file_test.exs`; for a single test:
   `mix test path/to/file_test.exs:line`.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).

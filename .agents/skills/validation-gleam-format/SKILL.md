@@ -50,4 +50,4 @@ gleam format --check
   `gleam format --check` to confirm.
 - The compiler enforces `snake_case`/`PascalCase`; `gleam format` enforces the
   remaining layout.
-- Run inside `nix develop` (see `nix-usage` skill) so the correct `gleam` is used.
+- Run inside `just shell` (see `nix-usage` skill) so the correct `gleam` is used.

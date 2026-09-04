@@ -19,8 +19,9 @@ commands for inspecting build logs and derivations, the tracing primitives
 failure modes and guards wired into the `just` task runner.
 
 Intended audience: agents and contributors debugging `nix build`, `nix eval`,
-or `nix develop` failures on this flake. Every contributor who hits a Nix
-error is expected to consult this document before guessing at a fix.
+or devshell-entry (`just shell`) failures on this flake. Every contributor
+who hits a Nix error is expected to consult this document before guessing at
+a fix.
 
 Cross-references:
 
@@ -408,9 +409,9 @@ The following table is reproduced verbatim from the nix-usage skill [usage]:
 | `nix: command not found` | PATH missing Nix profile | `export PATH=$HOME/.nix-profile/bin:$PATH` |
 | `~/.nix-profile/bin/...` not found | Dangling profile symlink | Run the profile repair (above) |
 | `Path 'X' is not tracked by Git` | Untracked source file | `git add X` |
-| `linking with '.../.toolchain/...'` failed | Ran cargo outside `nix develop` | Use `nix develop -c cargo ...` |
+| `linking with '.../.toolchain/...'` failed | Ran cargo outside `just shell` | Use `just shell -c cargo ...` |
 | `error: 'packages.x86_64-linux.default' is not a flake output` | Used `.#default` | Use `.#workestrate`; there is no default |
-| `cargo: command not found` / `gcc: command not found` | Outside dev shell | Run inside `nix develop` |
+| `cargo: command not found` / `gcc: command not found` | Outside dev shell | Run inside `just shell` |
 | `msb: command not found` at runtime | SDK has not downloaded it yet | First use downloads it; check network or pre-stage |
 | Build error mentioning `$HOME/.microsandbox/bin` | build.rs writing outside sandbox | Set `HOME=$TMPDIR` (derivation already does this) |
 | Store grows ~1GB/min during edits | Impure source filter copying target/ or agents/*/build | Run `just gc` + `just store-audit`; fix the source filter per docs/nix-purity.md |
@@ -479,7 +480,7 @@ bloat.
 
 - [ ] Is the full error message captured (file, line, column)?
 - [ ] Was `nix log` used to view the build log?
-- [ ] Was `nix develop` used to reproduce interactively?
+- [ ] Was `nix develop .#<name>` used to reproduce interactively?
 - [ ] Are new files `git add`-ed before eval?
 - [ ] Is `--impure` avoided?
 - [ ] Was `just lint-nix` run?
@@ -610,7 +611,7 @@ just gc
   balloons the store). [usage]
 - Forgetting to `git add` new files before `nix build`/`nix eval`. [usage]
 - Manually guessing FOD hashes instead of using `just update-hashes`. [purity]
-- Running `cargo`/`gcc` outside `nix develop`. [usage]
+- Running `cargo`/`gcc` outside the devshell (`just shell`). [usage]
 - Using `nix build .#default` (there is no default output). [usage]
 - Ignoring store growth during debugging (each impure eval copies the
   working tree). [purity]

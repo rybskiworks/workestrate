@@ -447,7 +447,7 @@ nix run nixpkgs#prefetch-npm-deps -- <package-lock.json>
 Interactive phase debugging in a dev shell:
 
 ```bash
-nix develop                          # enter dev shell
+just shell                           # enter dev shell
 cd "$(mktemp -d)"
 export out=$(pwd)/out
 phases="unpackPhase patchPhase" genericBuild   # run early phases

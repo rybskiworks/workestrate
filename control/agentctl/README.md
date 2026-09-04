@@ -19,9 +19,9 @@ Control plane CLI for the AI workbench.
 
 ## Build
 
-Inside the Nix dev shell:
+Inside the Nix dev shell (run `just shell` from the repo root):
 ```bash
-nix develop
+just shell
 cargo build --release
 ```
 
@@ -30,7 +30,7 @@ Or with just:
 just build
 ```
 
-Hermetic nix build (no `nix develop` needed to run):
+Hermetic nix build (no devshell needed to run):
 
 ```bash
 nix build .#workestrate
@@ -45,9 +45,9 @@ microsandbox store from the config repo.
 ## Development
 
 ```bash
-nix develop -c cargo check
-nix develop -c cargo clippy -- -D warnings
-nix develop -c cargo fmt -- --check
+just shell -c cargo check
+just shell -c cargo clippy -- -D warnings
+just shell -c cargo fmt -- --check
 ```
 
 ## Build artifact location (`CARGO_TARGET_DIR`)

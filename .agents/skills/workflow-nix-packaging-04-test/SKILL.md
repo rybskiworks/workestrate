@@ -38,7 +38,7 @@ and output checks are required.
      `package.json` (or `.deps/` for Python) are present at the expected
      paths.
 5. Test in devshell: if the package was added to `nix/devshells/default.nix`,
-   run `nix develop -c <tool> --version` to confirm it is on PATH.
+   run `just shell -c <tool> --version` to confirm it is on PATH.
 6. If the derivation has a `checkPhase` (test suite), ensure `doCheck = true`
    and run `nix build .#<name>` (check runs during build) or add a
    `checks.${system}.<name>` entry.

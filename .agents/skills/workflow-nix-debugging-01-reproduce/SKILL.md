@@ -22,7 +22,7 @@ Reproduce the issue reliably and capture the exact command, input, environment, 
 1. Reproduce the issue reliably. Capture:
    - the exact command that triggers the defect (`nix build .#<name>`, `nix eval .#<attr>`, `nix develop .#<name>`, `nix flake check`, etc.);
    - the input that triggers it (flake output name, attribute path, system);
-   - the environment (Nix version, flake state, working directory, whether inside `nix develop`, `HOME`/`TMPDIR` settings, git tracking state of new files);
+   - the environment (Nix version, flake state, working directory, whether inside the devshell (`just shell`), `HOME`/`TMPDIR` settings, git tracking state of new files);
    - the full error message (eval error with file/line/column, build failure with exit code, hash mismatch with expected/got hashes, or wrong-output observation).
 2. If the issue cannot be reproduced, record what is known and what reproduction attempts were made. Do NOT proceed to a fix on an unreproducible report. Set `outcome: fail` and `blockers: ["issue not reproduced"]` in the handoff.
 3. Apply `constraint-nix-scope-discipline`: this phase is reproduction only. Do not start fixing adjacent issues observed while reproducing; record them as follow-ups.

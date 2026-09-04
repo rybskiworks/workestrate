@@ -10,7 +10,7 @@
 
 ```bash
 # Enter the dev shell
-nix develop
+just shell
 
 # Run all code quality checks
 just check
@@ -55,11 +55,12 @@ nix flake lock --update-input odysseus
 
 ### `cargo: command not found`
 
-You are outside the Nix dev shell. Either run `nix develop` first, or prefix commands with `nix develop -c`:
+You are outside the Nix dev shell. Either run `just shell` first, or use the
+one-shot form `just shell -c`:
 
 ```bash
-nix develop -c cargo check
-nix develop -c just check
+just shell -c cargo check
+just shell -c just check
 ```
 
 ### `nix build .#workestrate` fails

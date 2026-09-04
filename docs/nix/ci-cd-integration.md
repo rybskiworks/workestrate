@@ -162,21 +162,22 @@ steps within a job.
 Contrast with `nix shell nixpkgs#<pkg>` (temporary, per-command) and
 `nix develop -c <cmd>` (devshell-scoped).
 
-### nix develop -c — running commands in devshell
+### `just shell -c` — running commands in devshell
 
-`nix develop -c <command>` runs a command non-interactively in the devshell
-environment. From crawl 63:
+`just shell -c <command>` runs a command non-interactively in the devshell
+environment (it wraps `nix develop -c <command>` with the devenv-root
+override). From crawl 63:
 
 > "Instead of starting an interactive shell, start the specified command and
 > arguments." [crawl 63]
 
-The justfile uses this pattern extensively:
-
-- `nix develop -c python3` (litellm-check fallback)
-- `nix develop -c cargo run` (generate-schema)
-- `nix develop -c load-images`
-- `nix develop -c setup-secrets`
-- `nix develop -c scripts/validate-secrets-workflow.sh`
+The justfile's guarded recipes self-enshell with the same mechanism: when not
+already inside the devshell they re-exec `nix develop --override-input
+devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate" -c
+just _<name>-inner` (generate-schema: same override, `-c cargo run ...`).
+Bare `nix develop` is not a supported entry — it fails pure eval on the
+`devenv.root != ""` assertion. litellm-check's nix fallback (the config
+repos' justfile) also carries the override.
 
 (Source: justfile.)
 
@@ -256,8 +257,9 @@ relocated `CARGO_TARGET_DIR`), `just check`, `just test`, `just lint-nix`
 **What requires HOST-NIX**: `nix build .#workestrate`,
 `nix build .#workestrator`,
 `nix build .#checks.x86_64-linux.validateConfig`, `nix flake check` (needs
-nix), `nix develop`, `just verify-full` (adds `nix build`),
-`just generate-schema` (uses `nix develop -c`), `just update-hashes` (uses
+nix), `just shell` (devshell entry), `just verify-full` (adds `nix build`),
+`just generate-schema` (re-execs `nix develop` with the devenv-root
+override), `just update-hashes` (uses
 `nix run`/`nix build`), `just store-delta-check` (uses `nix eval`).
 
 **HOST-KVM** (separate gate): runtime microVM execution (`up`/`exec`/`logs`)
@@ -323,8 +325,9 @@ Contrast with `nix build ... --print-out-paths` (single output) vs
    (adds `nix build .#workestrate`) on a nix-capable host.
 6. Mark HOST-NIX-gated commands with `# HOST-GATE:` comments — the
    container has no nix. (derivations-and-builds.md convention.)
-7. Use `nix develop -c <cmd>` for non-interactive devshell commands in
-   CI/scripts. [crawl 63]
+7. Use `just shell -c <cmd>` (or the `--override-input devenv-root` form) for
+   non-interactive devshell commands in CI/scripts; bare `nix develop` fails
+   pure eval on the `devenv.root` assertion. [crawl 63]
 8. Use `nix profile install nixpkgs#<pkg>` for persistent tool installation
    within a CI job; `nix shell` for ephemeral.
 9. Cache `/nix/store` via GitHub Actions cache or Cachix to avoid rebuilding
@@ -352,7 +355,7 @@ Contrast with `nix build ... --print-out-paths` (single output) vs
 - [ ] Binary cache secrets stored as GitHub repo/org secrets (not in-repo)?
       [crawl 34]
 - [ ] Self-hosted cache uses a signing key pair (private + public)? [crawl 19]
-- [ ] `nix develop -c` used for non-interactive devshell commands?
+- [ ] `just shell -c` / devenv-root-override form used for non-interactive devshell commands (no bare `nix develop`)?
 - [ ] Store-growth checks (`store-audit`, `store-delta-check`) run
       periodically?
 
@@ -394,7 +397,7 @@ Contrast with `nix build ... --print-out-paths` (single output) vs
       devshell tools are installed; check `CARGO_TARGET_DIR` is relocated.
 - [ ] Store growth in CI: run `just store-audit` on a self-hosted runner;
       check for `*-source` paths. (nix-purity.md)
-- [ ] `nix develop -c <cmd>` fails: ensure the flake is in a git-clean state
+- [ ] `just shell -c <cmd>` fails: ensure the flake is in a git-clean state
       (`git add -N` new files).
 - [ ] Self-hosted cache unreachable: `curl http://cache/nix-cache-info`
       should return `StoreDir: /nix/store`. [crawl 19]
@@ -484,7 +487,7 @@ jobs:
         authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix flake check --no-build
     - run: nix build .#workestrate --no-link --print-out-paths
-    - run: nix develop -c just verify
+    - run: just verify   # guarded recipes self-enshell with the devenv-root override
 ```
 
 Note: this is the target pattern for milestone M5; no
@@ -566,18 +569,23 @@ nix build .#checks.x86_64-linux.validateConfig --no-link --print-out-paths
 nix build .#workestrate --no-link --print-out-paths | cachix push mycache
 ```
 
-### nix develop -c in CI/scripts (workestrator justfile patterns)
+### Devshell entry in CI/scripts (workestrator justfile patterns)
+
+Guarded recipes self-enshell when `WORKESTRATE_DEVSHELL` is unset; users and
+CI just run `just verify`. Verbatim justfile lines (`_devenv_root_file` is
+`$HOME/.cache/workestrate/devenv-root/workestrate`, holding the worktree
+path):
 
 ```bash
-# Run a command in the devshell non-interactively
-nix develop -c just verify
+# verify recipe guard — re-exec the inner recipe inside the devshell
+exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _verify-inner
 
-# Generate the JSON schema (requires devshell RUSTFLAGS)
-nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml -- generate-schema --output schemas/workestrate.schema.json
-
-# Load workload images
-nix develop -c load-images
+# generate-schema — cargo run with the same override (requires devshell RUSTFLAGS)
+nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json --output-workload schemas/workestrate-workload.schema.json --output-registry schemas/registry.schema.json
 ```
+
+For ad-hoc non-interactive devshell commands use `just shell -c <cmd>` (the
+`shell` recipe wires the same override).
 
 (Source: justfile.)
 

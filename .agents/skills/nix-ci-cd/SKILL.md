@@ -56,7 +56,7 @@ jobs:
         authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix flake check --no-build
     - run: nix build .#workestrate --no-link --print-out-paths
-    - run: nix develop -c just verify
+    - run: just verify   # guarded recipes self-enshell with the devenv-root override
 ```
 
 ## nix flake check in CI
@@ -110,7 +110,8 @@ all of `just verify` EXCEPT the nix build step.
 
 **Requires HOST-NIX**: `nix build .#workestrate`, `nix build .#workestrator`,
 `nix build .#checks.x86_64-linux.validateConfig`, `nix flake check`,
-`nix develop`, `just verify-full`, `just generate-schema` (uses `nix develop -c`),
+`just shell` (devshell entry), `just verify-full`, `just generate-schema`
+(re-execs `nix develop` with the devenv-root override),
 `just update-hashes` (uses `nix run`/`nix build`), `just store-delta-check`
 (uses `nix eval`).
 
@@ -127,13 +128,18 @@ requires `/dev/kvm`; the container has none. Distinct from HOST-NIX.
 - **Self-hosted runners** — runners with a persistent `/nix/store` avoid
   re-downloading; pair with `auto-optimise-store` and periodic `nix-collect-garbage`.
 
-## nix develop -c in CI
+## Non-interactive devshell commands in CI
 
-`nix develop -c <command>` runs a command non-interactively in the devshell
-environment. The justfile uses this pattern extensively:
-`nix develop -c cargo run` (generate-schema), `nix develop -c load-images`,
-`nix develop -c setup-secrets`. For persistent tool installation within a CI
-job, use `nix profile install nixpkgs#<pkg>`; for ephemeral, `nix shell nixpkgs#<pkg>`.
+`just shell -c <command>` runs a command non-interactively in the devshell
+environment (it wraps `nix develop` with the devenv-root override). The
+justfile's guarded recipes self-enshell: when not already inside the devshell
+they re-exec `nix develop --override-input devenv-root
+"file+file://$HOME/.cache/workestrate/devenv-root/workestrate" -c
+just _<name>-inner`; generate-schema runs `cargo run` with that same
+override. Bare `nix develop` is not a supported entry (fails the
+`devenv.root != ""` assertion under pure eval). For persistent tool
+installation within a CI job, use `nix profile install nixpkgs#<pkg>`; for
+ephemeral, `nix shell nixpkgs#<pkg>`.
 
 ## Practical Rules
 
@@ -143,7 +149,9 @@ job, use `nix profile install nixpkgs#<pkg>`; for ephemeral, `nix shell nixpkgs#
 4. Build outputs with `nix build .#<name> --no-link --print-out-paths` for CI-friendly output.
 5. Run `just verify` as the local pre-merge gate; `just verify-full` (adds `nix build`) on a nix-capable host.
 6. Mark HOST-NIX-gated commands with `# HOST-GATE:` comments — the container has no nix.
-7. Use `nix develop -c <cmd>` for non-interactive devshell commands in CI/scripts.
+7. Use `just shell -c <cmd>` (or the `--override-input devenv-root` form) for
+   non-interactive devshell commands in CI/scripts; bare `nix develop` fails
+   pure eval on the `devenv.root` assertion.
 8. Use `nix profile install nixpkgs#<pkg>` for persistent tool installation; `nix shell` for ephemeral.
 9. Cache `/nix/store` via GitHub Actions cache or Cachix to avoid rebuilding every run.
 10. Run `just lint-nix` (the static purity guard) in CI — catches `--impure`, unfiltered `builtins.path`.
@@ -162,7 +170,7 @@ job, use `nix profile install nixpkgs#<pkg>`; for ephemeral, `nix shell nixpkgs#
 - [ ] `just lint-nix` (purity guard) runs in CI.
 - [ ] Binary cache secrets stored as GitHub repo/org secrets (not in-repo).
 - [ ] Self-hosted cache uses a signing key pair (private + public).
-- [ ] `nix develop -c` used for non-interactive devshell commands.
+- [ ] `just shell -c` / devenv-root-override form used for non-interactive devshell commands (no bare `nix develop`).
 - [ ] Store-growth checks (`store-audit`, `store-delta-check`) run periodically.
 
 ## Validation Commands

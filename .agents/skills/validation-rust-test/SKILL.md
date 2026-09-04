@@ -58,4 +58,4 @@ Run both commands; the second gives a separate doctest signal.
   `constraint-rust-unsafe-safety`).
 - For flaky/timing tests, run with `-- --test-threads=1` or repeat with
   `-- --test-threads=1 --count=10` to surface races.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).

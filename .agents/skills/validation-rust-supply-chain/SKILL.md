@@ -64,5 +64,5 @@ Run both commands. If `cargo deny` is not configured, run `cargo audit` alone
   advisories` separately to also check advisories via deny.
 - This gate does not cover dependency selection strategy — for guidance on
   choosing crates, see the `rust-cargo-and-deps` operational skill.
-- Run inside `nix develop` (see `nix-usage` skill); `cargo-audit` /
+- Run inside `just shell` (see `nix-usage` skill); `cargo-audit` /
   `cargo-deny` may need to be installed in the dev shell.

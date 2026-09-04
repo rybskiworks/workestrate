@@ -53,5 +53,5 @@ gleam check
   compiled artifacts or to validate a specific target.
 - The compiler enforces `snake_case`/`PascalCase` and exhaustiveness; most
   other conventions are review-enforced (see `constraint-gleam-conventions`).
-- Run inside `nix develop` (see `nix-usage` skill) so the correct Gleam toolchain
+- Run inside `just shell` (see `nix-usage` skill) so the correct Gleam toolchain
   is used.

@@ -133,12 +133,12 @@ Run a bash shell that provides the build environment of a derivation.
 **Project usage:**
 
 ```bash
-nix develop                       # enter the default devshell
-nix develop -c cargo --version     # run a command in the devshell
+just shell                         # enter the default devshell
+just shell -c cargo --version      # run a command in the devshell
 ```
 
 The devshell provides `cargo`, `clippy`, `gcc`, `just`, `pkg-config`, `rustc`,
-`rustfmt`. **NEVER** use bare `cargo` or `rustc` — always `nix develop -c ...`.
+`rustfmt`. **NEVER** use bare `cargo` or `rustc` — always `just shell -c ...`.
 
 ### nix run
 
@@ -362,7 +362,7 @@ Flags shared across commands:
 2. **NEVER** use `nix fmt` — the project does not configure a formatter.
 3. **NEVER** use `nix build .#default` — there is no such output. Use
    `.#workestrate`.
-4. **NEVER** use bare `cargo` or `rustc` — always `nix develop -c ...`.
+4. **NEVER** use bare `cargo` or `rustc` — always `just shell -c ...`.
 5. **NEVER** run `nix flake update` in CI — it pulls a multi-GB nixpkgs closure.
    Update deliberately, then run `just gc`.
 6. Stage new files (`git add -N`) before eval — untracked files are invisible to
@@ -384,13 +384,14 @@ Flags shared across commands:
 3. Are `result*` symlinks cleaned up after builds?
 4. Is `nix flake update` run deliberately (never in CI)?
 5. Is `just lint-nix` passing?
-6. Is `just store-audit` passing (no oversized `*-source` paths)?
-7. Are cargo/rustc invocations wrapped in `nix develop -c`?
+6. Was `just store-audit` reviewed (informational top-20 report; never gates)?
+7. Are cargo/rustc invocations wrapped in `just shell -c`?
 8. Is the correct output used (`.#workestrate`, not `.#default`)?
 
 ## Implementation checklist
 
-1. Enter the devshell: `nix develop` (or `nix develop -c <cmd>` for one-shot).
+1. Enter the devshell: `just shell` (or `just shell -c <cmd>` for one-shot;
+   it wires the devenv-root override).
 2. Build the package: `nix build .#workestrate` then
    `./result/bin/workestrate --version`.
 3. Validate the flake: `nix flake check --no-build`.
@@ -412,10 +413,10 @@ nix shell nixpkgs#hello -c hello
 nix flake check --no-build
 
 # Dev shell tools
-nix develop -c cargo --version
-nix develop -c rustc --version
-nix develop -c gcc --version
-nix develop -c just --version
+just shell -c cargo --version
+just shell -c rustc --version
+just shell -c gcc --version
+just shell -c just --version
 
 # Package build
 nix build .#workestrate
@@ -457,11 +458,11 @@ nix build .#workestrate --no-link --print-out-paths
 nix build nixpkgs#hello
 ./result/bin/hello
 
-# nix develop — enter the devshell
-nix develop
+# just shell — enter the devshell (wraps `nix develop --override-input devenv-root ...`)
+just shell
 
-# nix develop — run a single command
-nix develop -c cargo build
+# just shell — run a single command
+just shell -c cargo build
 
 # nix run — run a nixpkgs package
 nix run nixpkgs#vim -- --help
@@ -510,7 +511,7 @@ nix hash to-sri sha256-...
 3. **Running `nix flake update` in CI** — pulls a multi-GB nixpkgs closure.
    Update deliberately only.
 4. **Using bare `cargo`/`rustc`** — outside the devshell, the toolchain is
-   missing. Always use `nix develop -c cargo ...`.
+   missing. Always use `just shell -c cargo ...`.
 5. **Leaving `result*` symlinks** — they pin closures forever, surviving GC.
    Use `--no-link --print-out-paths` in scripts, or clean up after.
 6. **Forgetting to `git add` new files** — untracked files are invisible to `.#`
@@ -533,7 +534,8 @@ nix hash to-sri sha256-...
 
 - This project (ai-workbench) enforces: no `--impure` (active guard via
   `just lint-nix`), no `nix fmt`, `.#workestrate` as the only package output,
-  `nix develop` as the only devshell entry point, `just gc` for store hygiene,
+  `just shell` as the only devshell entry point (it wraps `nix develop` with
+  the devenv-root override), `just gc` for store hygiene,
   `just store-audit` as a blocking gate in `just verify`.
 - Other repos may: configure `nix fmt` with a formatter (e.g., `nixfmt` or
   `alejandra`), have a `.#default` output, use `nix profile install` for
@@ -550,5 +552,5 @@ nix hash to-sri sha256-...
 ## Related skills
 
 - `nix-usage` — project-specific Nix flake, dev shell, and toolchain reference
-- `workflow-rust-implementation-*` — Rust implementation workflows (use `nix develop -c cargo`)
-- `workflow-rust-validation-*` — Rust validation workflows (use `nix develop` for toolchain)
+- `workflow-rust-implementation-*` — Rust implementation workflows (use `just shell -c cargo`)
+- `workflow-rust-validation-*` — Rust validation workflows (use `just shell` for toolchain)

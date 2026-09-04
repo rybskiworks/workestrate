@@ -105,6 +105,6 @@ directly for `follows` and `narHash` presence.
   --rebuild` (reproducibility check).
 - CVE scanning: Nix has no built-in CVE scanner; `vulnix` scans a store
   closure against the NVD database.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).
 - Related docs: `docs/nix/supply-chain-security.md`,
   `docs/nix/validation.md`.

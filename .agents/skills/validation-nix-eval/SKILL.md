@@ -76,7 +76,7 @@ attribute tree.
   Use `validation-nix-test` to build derivations.
 - For the project's `checks.validateConfig`, eval confirms the attribute
   exists; building it is covered by `validation-nix-test`.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).
 - `nix eval` forces evaluation lazily — only the requested attribute is
   forced, not its dependencies. To force deep evaluation of an entire
   attribute set, use `nix eval .#packages.x86_64-linux --apply
