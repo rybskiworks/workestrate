@@ -178,8 +178,8 @@ log() { echo "[setup-secrets] $*" >&2; }
 fail() { echo "[setup-secrets] error: $*" >&2; exit 1; }
 
 require_tools() {
-  command -v age-keygen >/dev/null 2>&1 || fail "age-keygen not found; run inside 'nix develop'"
-  command -v sops >/dev/null 2>&1 || fail "sops not found; run inside 'nix develop'"
+  command -v age-keygen >/dev/null 2>&1 || fail "age-keygen not found; run inside 'just shell'"
+  command -v sops >/dev/null 2>&1 || fail "sops not found; run inside 'just shell'"
 }
 
 ensure_key() {
