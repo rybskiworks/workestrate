@@ -13,8 +13,8 @@ use workestrate::commands::config_cmd::{
 };
 use workestrate::commands::deps::{auto_start_dependencies, cmd_workload_up_all};
 use workestrate::commands::diagnostics::{
-    cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_instances, cmd_ps, cmd_run,
-    cmd_validate_config, cmd_workloads,
+    cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_instances, cmd_msb, cmd_ps,
+    cmd_run, cmd_validate_config, cmd_workloads,
 };
 use workestrate::commands::doctor::cmd_doctor;
 use workestrate::commands::home::cmd_home;
@@ -102,6 +102,22 @@ enum Commands {
         /// Command and arguments (after --)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 1..)]
         command: Vec<String>,
+    },
+    // Locked-`--` spike decision (ADR 0036 D4): a per-subcommand
+    // `external_subcommand` field (which would fire only after `msb` matches,
+    // so no verb-first/legacy-shim conflict) was considered to allow
+    // `workestrate msb ps` without `--`, but it is NOT adopted: help/JSON/
+    // completion cleanliness is unverifiable without a toolchain, so the
+    // plan D4 fallback locks form (b) — the explicit `--` passthrough below,
+    // matching the `Run` precedent.
+    /// Passthrough to the msb binary: `workestrate msb -- <args>` forwards
+    /// <args> verbatim to msb. `workestrate completions` covers wrapper
+    /// flags only, never inner msb args (static-only; full dynamic
+    /// completion needs a fork-side `completion` port, then delegation).
+    Msb {
+        /// msb arguments (after --)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 1..)]
+        args: Vec<String>,
     },
     /// Validate active config against schema and policy allowlists
     ValidateConfig,
@@ -255,15 +271,16 @@ enum Commands {
 /// Pre-scan argv for a global `--json` flag so ANY error (including clap
 /// parse errors, which call process::exit before `cli.json` is available) can
 /// be formatted as the JSON envelope. Scanning stops at the first `--`
-/// separator or at the `run` subcommand: `run` captures all trailing args
-/// verbatim as the command payload, so a payload `--json` (e.g.
-/// `workestrate run -- somecmd --json`) must not enable JSON mode.
+/// separator or at the `run`/`msb` subcommand: both capture all trailing args
+/// verbatim as the payload, so a payload `--json` (e.g.
+/// `workestrate run -- somecmd --json`, `workestrate msb -- foo --json`)
+/// must not enable JSON mode.
 fn json_mode_from_args(args: &[String]) -> bool {
     for a in args.iter().skip(1) {
         if a == "--json" {
             return true;
         }
-        if a == "--" || a == "run" {
+        if a == "--" || a == "run" || a == "msb" {
             break;
         }
     }
@@ -785,6 +802,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             Ok(())
         }
         Commands::Run { command } => cmd_run(&command),
+        Commands::Msb { args } => cmd_msb(&args),
         Commands::ValidateConfig => cmd_validate_config(),
         Commands::SecretsSchema => cmd_secrets_schema(),
         Commands::GenerateEnvExample { output } => cmd_generate_env_example(output.as_deref()),
@@ -1191,6 +1209,7 @@ mod tests {
             "new",
             "completions",
             "run",
+            "msb",
             "validate-config",
             "secrets-schema",
             "generate-env-example",
@@ -2531,6 +2550,42 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert!(!json_mode_from_args(&args));
+    }
+
+    #[test]
+    fn json_pre_scan_ignores_payload_json_after_msb_separator() {
+        // `workestrate msb -- foo --json` — a standalone --json in the msb
+        // payload (after `--`) must NOT enable JSON mode (ADR 0036 D4: msb
+        // is a stop-word like run).
+        let args: Vec<String> = ["workestrate", "msb", "--", "foo", "--json"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            !json_mode_from_args(&args),
+            "payload --json after `msb --` must not enable JSON mode"
+        );
+    }
+
+    #[test]
+    fn json_pre_scan_ignores_payload_json_after_msb_no_separator() {
+        // `workestrate msb foo --json` (no `--`): msb captures --json as payload.
+        let args: Vec<String> = ["workestrate", "msb", "foo", "--json"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(!json_mode_from_args(&args));
+    }
+
+    #[test]
+    fn msb_passthrough_captures_hyphen_args_after_separator() {
+        // Locked-`--` form (ADR 0036 D4): inner msb flags ride after `--`.
+        let cli = Cli::try_parse_from(["workestrate", "msb", "--", "sandbox", "list", "--json"])
+            .expect("msb passthrough must parse hyphen args after --");
+        match cli.command {
+            Commands::Msb { args } => assert_eq!(args, vec!["sandbox", "list", "--json"]),
+            _ => panic!("expected Commands::Msb"),
+        }
     }
 
     #[test]

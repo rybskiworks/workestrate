@@ -1179,6 +1179,34 @@ pub fn cmd_run(command: &[String]) -> Result<()> {
     }
 }
 
+/// Passthrough to the msb binary (ADR 0036 D4): `workestrate msb -- <args>`
+/// forwards <args> verbatim to [`crate::commands::doctor::msb_binary`]
+/// (`MSB_PATH` when set, else `msb` on PATH), mirroring [`cmd_run`]'s exec
+/// precedent but WITHOUT secrets (no env loading — msb needs none). Like
+/// `cmd_run`, this `exec(2)` REPLACES the workestrate process on unix, so
+/// interactive/pty use behaves as if msb were invoked directly.
+pub fn cmd_msb(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        anyhow::bail!("no msb args specified. Usage: workestrate msb -- <args...>");
+    }
+    let bin = crate::commands::doctor::msb_binary();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&bin).args(args).exec();
+        // exec() only returns on failure.
+        anyhow::bail!("failed to exec '{bin}': {err}");
+    }
+    #[cfg(not(unix))]
+    {
+        let status = std::process::Command::new(&bin).args(args).status()?;
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
