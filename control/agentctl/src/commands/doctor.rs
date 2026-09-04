@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::commands::versions::{MSB_VERSION_PIN, collect_versions};
 use crate::config;
 use crate::images::state::{ImageRecord, ImagesState};
 use crate::scaffold;
@@ -247,6 +248,43 @@ pub fn doctor_check_msb() -> DoctorCheck {
             "Run 'scripts/migrate-msb-home.sh --check-only' then without flags to migrate",
         ),
         MsbHomeSkew::Clean => DoctorCheck::new("msb", "OK", msb_ok_message(&home, &version)),
+    }
+}
+
+/// Pure version-match classifier (Phase-0 observability): true when the
+/// probed version string contains the baked pin (case-insensitive).
+/// Canonical logic lives in
+/// [`crate::commands::versions::classify_version_match`]; this wrapper keeps
+/// the doctor check vocabulary local.
+pub fn classify_version_match(baked_pin: &str, probed: &str) -> bool {
+    crate::commands::versions::classify_version_match(baked_pin, probed)
+}
+
+/// `version_compare` check (Phase-0 observability): the baked
+/// [`MSB_VERSION_PIN`] against `probe_version(&msb_binary())`. OK on match;
+/// FAIL on mismatch or unreachable msb, with remediation naming
+/// `workestrate versions` plus the nix reinstall pair.
+pub fn doctor_check_version_compare() -> DoctorCheck {
+    const REMEDIATION: &str = "Run `workestrate versions` for the full quadruple, then reinstall: `nix profile remove workestrate` then `nix profile install .#workestrate`";
+    let bin = msb_binary();
+    match probe_version(&bin) {
+        Some(v) if classify_version_match(MSB_VERSION_PIN, &v) => DoctorCheck::new(
+            "version_compare",
+            "OK",
+            format!("msb {v} matches pin {MSB_VERSION_PIN}"),
+        ),
+        Some(v) => DoctorCheck::new(
+            "version_compare",
+            "FAIL",
+            format!("msb {v} does not match pin {MSB_VERSION_PIN} (via '{bin}')"),
+        )
+        .with_remediation(REMEDIATION),
+        None => DoctorCheck::new(
+            "version_compare",
+            "FAIL",
+            format!("'{bin}' not reachable; cannot compare against pin {MSB_VERSION_PIN}"),
+        )
+        .with_remediation(REMEDIATION),
     }
 }
 
@@ -637,6 +675,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
         ),
         doctor_check_age_key_file(),
         doctor_check_msb(),
+        doctor_check_version_compare(),
         doctor_check_home(),
         doctor_check_config_repos()?,
         doctor_check_schemas()?,
@@ -654,6 +693,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
         let body = serde_json::json!({
             "checks": checks,
             "overall": overall,
+            "versions": collect_versions(),
         });
         println!("{}", serde_json::to_string_pretty(&body)?);
     } else {
@@ -968,6 +1008,46 @@ mod tests {
             assert!(
                 check.remediation.as_deref().unwrap_or("").contains("modprobe"),
                 "non-OK carries remediation: {check:?}"
+            );
+        }
+    }
+
+    // ---- version_compare check (Phase-0 observability) ----
+
+    /// The pure classifier: case-insensitive contains of the baked pin.
+    #[test]
+    fn version_match_classifier_is_case_insensitive_contains() {
+        assert!(classify_version_match("0.6.16", "msb 0.6.16"));
+        assert!(classify_version_match("0.6.16", "MSB 0.6.16"));
+        assert!(!classify_version_match("0.6.16", "msb 0.5.6"));
+        assert!(!classify_version_match("0.6.16", "unavailable"));
+        assert!(!classify_version_match("", "msb 0.6.16"));
+        assert!(!classify_version_match("0.6.16", ""));
+    }
+
+    /// The check reads the LIVE msb probe, so the test pins SHAPE only
+    /// (host-independent): the name, the closed status vocabulary, and the
+    /// remediation naming `workestrate versions` + the reinstall pair on
+    /// every FAIL verdict.
+    #[test]
+    fn version_compare_check_shape_is_host_independent() {
+        let check = doctor_check_version_compare();
+        assert_eq!(check.name, "version_compare");
+        assert!(
+            ["OK", "FAIL"].contains(&check.status),
+            "closed status vocabulary (never WARN): {:?}",
+            check
+        );
+        if check.status == "FAIL" {
+            let remediation = check.remediation.expect("FAIL carries remediation");
+            assert!(
+                remediation.contains("workestrate versions"),
+                "remediation names the quadruple command: {remediation}"
+            );
+            assert!(
+                remediation.contains("nix profile remove workestrate")
+                    && remediation.contains("nix profile install .#workestrate"),
+                "remediation names the reinstall pair: {remediation}"
             );
         }
     }
