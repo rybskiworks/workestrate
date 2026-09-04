@@ -120,7 +120,9 @@ fn init_creates_structure_gitignore_and_hook() {
         "hook must reject store-dir paths:\n{}",
         hook_content
     );
-    // tombi gates (spec 15): optional block, runs when tombi is on PATH.
+    // tombi gates (spec 15): best-effort block — absent or version-mismatched
+    // tombi must skip with an audible stderr echo, never hard-fail (matching
+    // the fleet shims; exactness is enforced by `nix flake check`).
     assert!(
         hook_content.contains("tombi format --check"),
         "hook must run the tombi format gate:\n{}",
@@ -142,14 +144,20 @@ fn init_creates_structure_gitignore_and_hook() {
         hook_content
     );
     assert!(
-        hook_content
-            .contains("tombi version mismatch: found $tombi_version, required $TOMBI_REQUIRED"),
-        "hook must guard tombi version mismatch with hook-specific message:\n{}",
+        hook_content.contains(
+            "home pre-commit: tombi version mismatch (found '${tombi_version:-unknown}', want $TOMBI_REQUIRED); skipping tombi gates"
+        ),
+        "hook must announce a tombi version mismatch as an audible skip:\n{}",
         hook_content
     );
     assert!(
-        hook_content.contains("cargo install tombi --version $TOMBI_REQUIRED"),
-        "hook version-mismatch message must suggest cargo install:\n{}",
+        hook_content.contains("home pre-commit: tombi not found; skipping tombi gates"),
+        "hook must announce a missing tombi as an audible skip:\n{}",
+        hook_content
+    );
+    assert!(
+        !hook_content.contains("cargo install tombi"),
+        "hook must not hard-fail with a cargo-install suggestion on version mismatch:\n{}",
         hook_content
     );
 
@@ -312,6 +320,91 @@ fn hook_rejects_gitlink() {
     assert!(
         stderr.contains("embedded") || stderr.contains("gitlink") || stderr.contains("160000"),
         "hook stderr should mention the gitlink/embedded path; got:\n{}",
+        stderr
+    );
+}
+
+/// Behavioral (spec 15 degradation): the hook must exit 0 with an audible
+/// stderr echo when tombi is ABSENT or version-MISMATCHED — the tombi gates
+/// skip, they never brick a commit. (tombi present + matching is host-nix
+/// territory and not asserted here.)
+#[test]
+fn hook_skips_tombi_gates_audibly_when_absent_or_mismatched() {
+    let home = IsolatedHome::new("cmd-home-init");
+    let store = home.dir.join(".workestrate");
+
+    let out = home
+        .cmd()
+        .env("WORKESTRATE_HOME", &store)
+        .args(["home", "init"])
+        .output()
+        .expect("invoke home init");
+    assert!(
+        out.status.success(),
+        "home init failed: stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let hook = store.join(".git").join("hooks").join("pre-commit");
+
+    // Case absent: PATH points at an empty temp dir so `command -v tombi`
+    // fails inside the hook (git/grep/awk are missing too — the guards then
+    // see an empty index and pass vacuously, same trick as
+    // config_new_hook_behavioral). Must warn and exit 0.
+    let empty_path = TempDir::new("cmd-home-init-empty-path");
+    let out = Command::new("/bin/sh")
+        .arg(&hook)
+        .current_dir(&store)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("PATH", empty_path.path())
+        .output()
+        .expect("run pre-commit hook (tombi absent)");
+    assert!(
+        out.status.success(),
+        "hook must exit 0 when tombi is absent; stdout=\n{}\nstderr=\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tombi not found; skipping tombi gates"),
+        "hook stderr must note the skipped tombi gates; got:\n{}",
+        stderr
+    );
+
+    // Case mismatch: a fake `tombi` printing a wrong version shadows the
+    // real one (dir prepended to the host PATH so git/awk still resolve);
+    // the hook must skip with an audible echo and still exit 0.
+    let fake_bin = TempDir::new("cmd-home-init-fake-tombi");
+    let fake_tombi = fake_bin.path().join("tombi");
+    std::fs::write(&fake_tombi, "#!/bin/sh\necho 'tombi 0.0.0-fake'\n").expect("write fake tombi");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_tombi, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake tombi");
+    }
+    let path_with_fake = format!(
+        "{}:{}",
+        fake_bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = Command::new("/bin/sh")
+        .arg(&hook)
+        .current_dir(&store)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("PATH", &path_with_fake)
+        .output()
+        .expect("run pre-commit hook (tombi mismatched)");
+    assert!(
+        out.status.success(),
+        "hook must exit 0 on a tombi version mismatch; stdout=\n{}\nstderr=\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tombi version mismatch") && stderr.contains("skipping tombi gates"),
+        "hook stderr must note the mismatch skip; got:\n{}",
         stderr
     );
 }

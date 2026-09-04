@@ -96,8 +96,11 @@ const HOME_SCHEMA_WORKLOAD_JSON: &str =
 const HOME_SCHEMA_REGISTRY_JSON: &str = include_str!("../../../../schemas/registry.schema.json");
 
 /// Pre-commit hook installed into the home repo: rejects embedded git repos
-/// (gitlinks, mode 160000), store-dir paths, and secret material. Kept as a
-/// const so tests can assert on the canonical content.
+/// (gitlinks, mode 160000), store-dir paths, and secret material. The tombi
+/// TOML gates are best-effort: absent or version-mismatched tombi skips them
+/// with an audible stderr echo (never a hard fail), matching the fleet shims;
+/// exactness is enforced by `nix flake check`. Kept as a const so tests can
+/// assert on the canonical content.
 const HOME_PRE_COMMIT_HOOK: &str = r#"#!/bin/sh
 # Installed by `workestrate home init` — guards the workestrate home repo.
 # Rejects embedded git repos (gitlinks, mode 160000), store-dir paths, and
@@ -121,13 +124,19 @@ if printf '%s\n' "$staged" | grep -qE '(^|/)([^/]*\.agekey|age\.txt|[^/]*\.pem|i
     fail=1
 fi
 [ "$fail" -eq 0 ] || exit 1
-# tombi TOML gates (optional — skipped when tombi is absent).
+# tombi TOML gates (best-effort — skipped with an audible echo when tombi is
+# absent or version-mismatched; exactness is enforced by `nix flake check`).
 TOMBI_REQUIRED="1.2.5"
 if command -v tombi >/dev/null 2>&1; then
     tombi_version="$(tombi --version | awk '{print $2}')"
-    if [ "$tombi_version" != "$TOMBI_REQUIRED" ]; then echo "tombi version mismatch: found $tombi_version, required $TOMBI_REQUIRED (run within nix develop or cargo install tombi --version $TOMBI_REQUIRED)" >&2; exit 1; fi
-    tombi format --check || exit 1
-    tombi lint --error-on-warnings || exit 1
+    if [ "$tombi_version" != "$TOMBI_REQUIRED" ]; then
+        echo "home pre-commit: tombi version mismatch (found '${tombi_version:-unknown}', want $TOMBI_REQUIRED); skipping tombi gates" >&2
+    else
+        tombi format --check || exit 1
+        tombi lint --error-on-warnings || exit 1
+    fi
+else
+    echo "home pre-commit: tombi not found; skipping tombi gates" >&2
 fi
 exit 0
 "#;
