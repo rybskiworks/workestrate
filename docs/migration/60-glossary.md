@@ -105,8 +105,11 @@ the security boundary for a sandboxing tool (ADR 0003).
 
 **Policy ceiling**
 The core-defined allowlist (`policy.rs`) that config cannot exceed. Comprises
-`ALLOWED_EGRESS_HOSTS`, `SECRET_HOST_BINDINGS`, `ALLOWED_PACKAGES`, and
-`DEFAULT_DENY_FALSE_ENTITLEMENT`. Enforced at `validate-config` (pre-flight),
+`ALLOWED_PACKAGES` (the former `DEFAULT_DENY_FALSE_ENTITLEMENT` gate was
+removed 2026-09-04 together with the entitlements mechanism; the
+`ALLOWED_EGRESS_HOSTS` and `SECRET_HOST_BINDINGS` ceilings were retired
+earlier — the latter in the pre-0035 secret-binding cleanup, the former by
+the ADR 0035 hierarchical policy engine). Enforced at `validate-config` (pre-flight),
 `plan` (fail-closed), and `apply_plan_secrets` (runtime). Config source
 provenance is irrelevant — the ceiling is checked against contents, not
 origin (ADR 0004).

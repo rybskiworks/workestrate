@@ -195,38 +195,38 @@ that the user didn't intend. Mitigation: `validate-config` reports all egress
 hosts; `plan --show-source` attributes each to its layer; the user reviews
 before running `up`/`exec`.
 
-## Monotonic deny default + entitlement
+## Relaxed network defaults — entitlements removed; seals + review are the veto
 
-`network.defaults.egress` (and symmetrically `network.defaults.ingress`) is
-**monotonic-deny**: setting `egress = "deny"` (or leaving it absent, which
-is deny) is always allowed. A less-trusted layer cannot set
-`egress = "allow"` to weaken a more-trusted layer's policy.
+The `entitlements` mechanism was **removed 2026-09-04** (pre-release): the
+vocabulary, the core const, and the validate/merge gate are gone. Today:
 
-**Entitlement**: a workload may set `egress = "allow"` only when it declares
-the `default_egress_allow` entitlement (currently only `tempest`,
-offensive-security tool); likewise `ingress = "allow"` requires
-`default_ingress_allow`. The entitlement vocabulary is a core const:
+- `network.defaults.egress = "allow"` / `network.defaults.ingress = "allow"`
+  is an explicit declaration that **stands alone** — no entitlement key is
+  consulted; there is no core allowlist of entitled workloads.
+- Setting the removed `entitlements` key in any config layer is a hard parse
+  error: `deny_unknown_fields` rejects it as an unknown field.
+- Fail-closed by convention is unchanged: **absent = deny**.
 
-```rust
-/// Closed entitlement vocabulary core understands; `"default_egress_allow"`
-/// permits `network.defaults.egress = "allow"`, `"default_ingress_allow"`
-/// permits `network.defaults.ingress = "allow"`.
-const ALLOWED_ENTITLEMENTS: &[&str] = &["default_egress_allow", "default_ingress_allow"];
-```
+The veto against a hostile layer relaxing a default is not a declaration
+gate; it is:
 
-If a config layer sets `egress = "allow"` for a workload without the declared
-entitlement, `validate-config` fails: "workload 'pi' sets
-network.defaults.egress = \"allow\" without declaring entitlements =
-[\"default_egress_allow\"]" (analogously for `ingress`).
+1. **Home `final` seals on the policy rules** (`policy.egress` /
+   `policy.ingress` ladder): a sealed deny in a more-trusted rung cannot be
+   undone by any less-trusted layer, whatever that layer declares in
+   `network.defaults`.
+2. **Review surface**: `workestrate workload plan` prints a loud per-workload
+   NOTE for every relaxed direction
+   (`NOTE: workload '<name>' runs relaxed defaults (egress=allow)`) — the
+   grep-able review surface that replaced the old magic-word check.
 
-## Additive deny/egress unions
+## Hierarchical policy rules (rule surface)
 
-- `deny_rules`: additive-union across layers. A layer can add deny rules but
-  cannot remove them. A less-trusted layer cannot un-deny a domain that a
-  more-trusted layer denied.
-- `egress_rules`: additive-union across layers, within the `policy.rs` ceiling
-  + per-recipe `allowed_hosts()` scoping. A layer can add egress rules (from
-  the allowlist) but cannot remove them.
+The rule surface is the `policy.egress` / `policy.ingress` hierarchy
+(specificity ladder + `final` seals). The former flat `deny_rules` /
+`egress_rules` additive unions are gone — configs that still use those
+fields hard-error at parse with ADR-citing messages. A sealed (`final`) rule
+cannot be weakened by a less-trusted layer; unsealed rules resolve through
+the ladder.
 
 ## Nix-store boundary
 
@@ -276,8 +276,8 @@ repo, it's likely unnecessary. Document the risk in the migration process.
 | Config repo not cloned | `workestrate check` reports `[MISSING] (optional)`. `plan` uses reference config. `up`/`exec` refuse. |
 | Config references unknown egress host | `validate-config` fails: "host 'evil.com' not in allowlist." `plan` fails (fail-closed). |
 | Config references unknown secret | `validate-config` fails: "secret 'FOO' not defined in secrets: section." |
-| Config sets `network.defaults.egress = "allow"` for non-entitled workload | `validate-config` fails: "workload 'pi' sets network.defaults.egress = \"allow\" without declaring entitlements = [\"default_egress_allow\"]". |
-| Config sets `network.defaults.ingress = "allow"` for non-entitled workload | `validate-config` fails: "workload 'pi' sets network.defaults.ingress = \"allow\" without declaring entitlements = [\"default_ingress_allow\"]". |
+| Config sets the removed `entitlements = [...]` key | Parse fails: "unknown field `entitlements`" (`deny_unknown_fields`) — mechanism removed 2026-09-04. |
+| Config sets `network.defaults.egress`/`ingress = "allow"` | Accepted — no declaration gate; `plan` prints a relaxed-defaults NOTE per direction; home `final` policy seals still veto via the ladder. |
 | Required secret is placeholder | `apply_plan_secrets` (`runtime.rs:107-145`) refuses: "secret 'LITELLM_MASTER_KEY' is set to placeholder." |
 | Required secret is empty | `apply_plan_secrets` refuses: "required secret 'LITELLM_MASTER_KEY' is set but empty." |
 | Untrusted project has `./workestrate.toml` | Ignored (not in `[trusted_projects]`). No error (silent skip). |
