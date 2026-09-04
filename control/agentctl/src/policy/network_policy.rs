@@ -928,15 +928,23 @@ pub fn compile_egress(
     })
 }
 
+/// E1: single source of truth for the synthetic `[network.defaults]` rung
+/// origin label. Exact-match only — suffix matching could mis-demote a
+/// real layer named with the same tail.
+fn synthetic_defaults_origin(workload_name: &str) -> String {
+    format!("workload:{workload_name} [network.defaults]")
+}
+
 fn origin_rank(ladder: &NetworkPolicyLadder, workload_name: &str, origin: &str) -> usize {
     if origin == "home-registry" {
         return 0;
     }
-    // E1: the synthetic `[network.defaults]` rung (`workload:<name>
-    // [network.defaults]`) is the LOWEST authority — below every real rung
-    // and below the unknown-origin fallback (1000). Registered explicitly so
-    // the synthetic label can never mis-order if it reaches a rank compare.
-    if origin.ends_with(" [network.defaults]") {
+    // E1: the synthetic `[network.defaults]` rung is the LOWEST authority —
+    // below every real rung and below the unknown-origin fallback (1000).
+    // Registered explicitly so the synthetic label can never mis-order if it
+    // reaches a rank compare; matched EXACTLY via the shared constructor
+    // `synthetic_defaults_origin` (never by suffix).
+    if origin == synthetic_defaults_origin(workload_name) {
         return 9000;
     }
     for (idx, (name, _)) in ladder.egress_layers.iter().enumerate() {
@@ -1405,7 +1413,7 @@ pub fn compile_network_plan(
         workload.network.defaults.and_then(|d| d.ingress),
         Some(crate::config::DefaultAction::Allow)
     );
-    let defaults_origin = format!("workload:{workload_name} [network.defaults]");
+    let defaults_origin = synthetic_defaults_origin(workload_name);
 
     // FIX1: compute effective allow_all per axis and apply on_conflict handling.
     // E1: the synthetic defaults rung rides the same walk; its seal conflict
