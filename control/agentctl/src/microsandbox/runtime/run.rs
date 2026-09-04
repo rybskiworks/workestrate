@@ -772,6 +772,29 @@ fn apply_current_view_mutations<W: Workload>(plan: &mut SandboxPlan, workload: &
 
 /// Prepare, resolve, and create the sandbox plus the foreground config used
 /// to run the workload's real command.
+/// ADR 0036 §4 pre-create gate evaluation (pure given the `probe`):
+/// `build_sandbox` passes the live `read_nested_probe()` immediately before
+/// `builder.create()`; unit tests pass mocked probes. Off skips silently
+/// (legacy workloads never touch this path); otherwise the shared
+/// `nested_up_decision` applies — `prefer` degrades, `require` refuses
+/// fail-closed, a home-final seal refuses either ask.
+fn check_nested_up_gate<W: Workload + ?Sized>(
+    workload: &W,
+    probe: &crate::microsandbox::nested::NestedProbe,
+) -> Result<()> {
+    use crate::microsandbox::nested::nested_up_decision;
+    let resolution = workload.virtualization_resolution();
+    if resolution.effective == crate::config::NestedMode::Off {
+        return Ok(());
+    }
+    nested_up_decision(
+        workload.name(),
+        resolution.effective,
+        probe,
+        resolution.frozen_by.as_deref(),
+    )
+}
+
 pub(crate) async fn build_sandbox<W: Workload>(
     workload: &W,
     spec: &InstanceSpec,
@@ -1106,6 +1129,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
     } else {
         builder
     };
+    // ADR 0036 §4: fail-closed nested-virt pre-create gate. Evaluated HERE —
+    // after the policy-file write + `ensure_mount_sources`, immediately
+    // before `builder.create()` — so a refusal leaves NO partial sandbox
+    // behind (no create was attempted, no record written). `prefer` never
+    // refuses (it degrades; the degrade is already in the plan provenance);
+    // `off` skips silently. The decision shares
+    // `microsandbox::nested::nested_up_decision` with the `plan` warn path
+    // so warn and refuse can never disagree.
+    check_nested_up_gate(workload, &crate::microsandbox::nested::read_nested_probe())?;
     let sandbox = builder.create().await?;
 
     let created_at = super::time::current_rfc3339_utc();
@@ -1381,6 +1413,107 @@ mod tests {
     use crate::config::test_support::unique_state_dir;
     use crate::microsandbox::plan::{EnvVar, HostBoundSecret, NetworkPlan};
 
+    // ---- ADR 0036: pre-create gate via mocked probes (no host I/O) ----
+
+    /// Fake workload carrying only a nested ask (+ optional frozen seal):
+    /// the gate under test resolves through the workload's own
+    /// `virtualization_resolution`, exactly like `build_sandbox`.
+    #[derive(Debug)]
+    struct NestedGateWorkload {
+        ask: Option<crate::config::NestedMode>,
+        frozen_by: Option<String>,
+    }
+
+    impl Workload for NestedGateWorkload {
+        fn name(&self) -> &str {
+            "kvm-job"
+        }
+        fn plan(&self) -> SandboxPlan {
+            empty_plan_with_env(Vec::new())
+        }
+        fn exec(&self) -> SandboxCommand {
+            SandboxCommand::with_args("", &[])
+        }
+        fn virtualization_nested(&self) -> Option<crate::config::NestedMode> {
+            self.ask
+        }
+        fn virtualization_resolution(
+            &self,
+        ) -> crate::microsandbox::nested::VirtualizationResolution {
+            crate::microsandbox::nested::VirtualizationResolution {
+                effective: self.ask.unwrap_or(crate::config::NestedMode::Off),
+                allowed: self.frozen_by.is_none(),
+                frozen_out: self.frozen_by.is_some(),
+                frozen_by: self.frozen_by.clone(),
+                origin: "personal".to_string(),
+                sealed: self.frozen_by.is_some(),
+            }
+        }
+    }
+
+    /// Legacy workloads (no ask) skip the gate on EVERY probe — the gate is
+    /// a no-op unless a workload opts in with an explicit nested≠off.
+    #[test]
+    fn nested_gate_skips_off_workloads() {
+        use crate::microsandbox::nested::NestedProbe;
+        let wl = NestedGateWorkload {
+            ask: None,
+            frozen_by: None,
+        };
+        for probe in [NestedProbe::absent(), NestedProbe::full()] {
+            check_nested_up_gate(&wl, &probe)
+                .unwrap_or_else(|e| panic!("off must skip the gate: {e}"));
+        }
+    }
+
+    /// Require refuses fail-closed on a lacking host with the exact
+    /// plan-§4 shape, passes on a full host; prefer never refuses.
+    #[test]
+    fn nested_gate_require_refuses_prefer_degrades() {
+        use crate::config::NestedMode;
+        use crate::microsandbox::nested::NestedProbe;
+        let require = NestedGateWorkload {
+            ask: Some(NestedMode::Require),
+            frozen_by: None,
+        };
+        let err = check_nested_up_gate(&require, &NestedProbe::absent())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("workload 'kvm-job' requires KVM")
+                && err.contains("virtualization.nested=\"require\"")
+                && err.contains("ADR 0036 §4")
+                && err.contains("hint:"),
+            "refusal carries the exact error shape: {err}"
+        );
+        check_nested_up_gate(&require, &NestedProbe::full())
+            .unwrap_or_else(|e| panic!("require on a full host passes: {e}"));
+        let prefer = NestedGateWorkload {
+            ask: Some(NestedMode::Prefer),
+            frozen_by: None,
+        };
+        check_nested_up_gate(&prefer, &NestedProbe::absent())
+            .unwrap_or_else(|e| panic!("prefer never refuses: {e}"));
+    }
+
+    /// A home-final seal refuses even on a full host, citing the seal.
+    #[test]
+    fn nested_gate_seal_refuses_on_full_host() {
+        use crate::config::NestedMode;
+        use crate::microsandbox::nested::NestedProbe;
+        let sealed = NestedGateWorkload {
+            ask: Some(NestedMode::Require),
+            frozen_by: Some("home-registry".to_string()),
+        };
+        let err = check_nested_up_gate(&sealed, &NestedProbe::full())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("seal forbids it") && err.contains("home-registry"),
+            "seal refusal cites the seal: {err}"
+        );
+    }
+
     fn empty_plan_with_env(env: Vec<EnvVar>) -> SandboxPlan {
         SandboxPlan {
             name: "test".to_string(),
@@ -1401,6 +1534,7 @@ mod tests {
                 ingress_rules: Vec::new(),
             },
             instance_policy: None,
+            virtualization: None,
         }
     }
 
@@ -1431,6 +1565,7 @@ mod tests {
                 ingress_rules: Vec::new(),
             },
             instance_policy: None,
+            virtualization: None,
         }
     }
 

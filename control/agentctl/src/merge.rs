@@ -1,6 +1,6 @@
 use crate::config::{
     ConfigFile, EgressPolicyFragment, IdnaPolicyFragment, IngressPolicyFragment, SecretDefConfig,
-    SecretsPolicyFragment, WorkloadConfig,
+    SecretsPolicyFragment, VirtualizationPolicyFragment, WorkloadConfig,
 };
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -410,6 +410,53 @@ pub fn get_network_policy_ladder() -> Option<NetworkPolicyLadder> {
 }
 
 // ---------------------------------------------------------------------------
+// Nested-virtualization policy ladder process-global storage (ADR 0036)
+// ---------------------------------------------------------------------------
+//
+// The collected `[policy.virtualization]` seal fragments for the most recent
+// config load, mirroring the secret-policy ladder: fragments are COLLECTED
+// per scope, never merged (no policy field passes through merge_layers),
+// and the resolution walks them authority-ascending. Rung 1 is
+// home-registry, rung 2 is config layers in stack order, rung 3 is workload
+// capsules (`[workloads.<name>.policy.virtualization]`) per workload name.
+// The workload's `[workloads.<name>.virtualization]` ASK is not a policy
+// fragment — it merges whole-unit in `merge_workload` and is resolved
+// against this ladder by `crate::microsandbox::nested::resolve_for_workload`.
+// Same Mutex rationale as above.
+
+/// The collected nested-virtualization seal ladder rungs (ADR 0036). Each
+/// entry carries the ORIGIN label used in resolution provenance
+/// (home-registry scope label, or the declaring layer's name).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VirtualizationLadder {
+    /// Rung 1: the home registry's `[policy.virtualization]` (operator scope).
+    pub home: Option<(String, VirtualizationPolicyFragment)>,
+    /// Rung 2: each layer's `[policy.virtualization]` in loader stack order.
+    pub layers: Vec<(String, VirtualizationPolicyFragment)>,
+    /// Rung 3: workload capsule `[policy.virtualization]` rungs per workload
+    /// name, in loader stack order.
+    pub workloads: HashMap<String, Vec<(String, VirtualizationPolicyFragment)>>,
+}
+
+static VIRTUALIZATION_LADDER: std::sync::Mutex<Option<VirtualizationLadder>> =
+    std::sync::Mutex::new(None);
+
+/// Store the collected virtualization seal ladder for the most recent config load.
+pub fn set_virtualization_ladder(ladder: Option<VirtualizationLadder>) {
+    *VIRTUALIZATION_LADDER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = ladder;
+}
+
+/// Clone the stored virtualization seal ladder without consuming it.
+pub fn get_virtualization_ladder() -> Option<VirtualizationLadder> {
+    VIRTUALIZATION_LADDER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+// ---------------------------------------------------------------------------
 // Merge helpers
 // ---------------------------------------------------------------------------
 
@@ -631,6 +678,19 @@ fn merge_workload(
         // independent; across layers there is NO per-field merge.
         merged.instance = layer.instance.clone();
         provenance.insert(format!("workloads.{name}.instance"), layer_ctx.name.clone());
+    }
+
+    if table.contains_key("virtualization") {
+        // ADR 0036 §3: the virtualization ask is ONE unit — a higher layer
+        // re-declaring [workloads.<name>.virtualization] replaces the WHOLE
+        // table (last layer wins), the same whole-spec reset semantics the
+        // instance block applies. The home `[policy.virtualization]` seal is
+        // NOT merged here — it is collected via the virtualization ladder.
+        merged.virtualization = layer.virtualization.clone();
+        provenance.insert(
+            format!("workloads.{name}.virtualization"),
+            layer_ctx.name.clone(),
+        );
     }
 
     if table.contains_key("network") {
@@ -1670,6 +1730,70 @@ mod tests {
             "an absent instance block must preserve the lower layer's policy"
         );
         assert_eq!(instance.label.as_deref(), Some("dev"));
+        Ok(())
+    }
+
+    // ---- ADR 0036: the virtualization ask merges whole-unit ----
+
+    /// A higher layer re-declaring `[workloads.<name>.virtualization]`
+    /// replaces the WHOLE table (last layer wins) and the merge provenance
+    /// names it — the same whole-unit semantics as the instance block.
+    #[test]
+    fn virtualization_block_merges_whole_unit_last_layer_wins() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"prefer\"",
+        )?;
+        let top = Layer::from_string(
+            "top",
+            "schema_version = 1\n\n[workloads.pi]\n\n[workloads.pi.virtualization]\nnested = \"require\"",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, top])?;
+        assert_eq!(
+            merged.workloads["pi"].virtualization,
+            Some(crate::config::VirtualizationConfig {
+                nested: Some(crate::config::NestedMode::Require)
+            }),
+            "the top layer's ask wins wholesale"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.virtualization"),
+            Some(&"top".to_string()),
+            "whole-block provenance names the last declaring layer"
+        );
+        Ok(())
+    }
+
+    /// A higher layer that does NOT re-declare the virtualization table
+    /// leaves the lower layer's ask untouched; a config with no ask
+    /// anywhere merges to `None` (omitted → Off).
+    #[test]
+    fn virtualization_block_absent_preserves_lower_layer() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"",
+        )?;
+        let top = Layer::from_string("top", "schema_version = 1\n\n[workloads.pi]\ncommand = []")?;
+
+        let (merged, _) = merge_layers(&[base, top])?;
+        assert_eq!(
+            merged.workloads["pi"].virtualization,
+            Some(crate::config::VirtualizationConfig {
+                nested: Some(crate::config::NestedMode::Require)
+            }),
+            "an absent virtualization table must preserve the lower layer's ask"
+        );
+
+        let bare = Layer::from_string(
+            "bare",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []",
+        )?;
+        let (merged, _) = merge_layers(&[bare])?;
+        assert_eq!(
+            merged.workloads["pi"].virtualization, None,
+            "no ask anywhere merges to None (omitted → Off)"
+        );
         Ok(())
     }
 }

@@ -660,6 +660,7 @@ mod tests {
                 ingress_rules: vec![],
             },
             instance_policy: None,
+            virtualization: None,
         }
     }
 

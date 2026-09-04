@@ -100,6 +100,63 @@ pub fn doctor_check_kvm() -> DoctorCheck {
     }
 }
 
+/// Nested-virtualization inventory (ADR 0036 §4): additive next to the
+/// verbatim `dev_kvm` check above (which is NEVER renamed — external
+/// tooling greps for it). Reads the shared advisory probe
+/// (`microsandbox::nested::read_nested_probe`): OK = /dev/kvm accessible +
+/// vmx|svm flag + nested parameter affirmatively enabled; WARN = KVM works
+/// but nested is disabled/unknown; FAIL = no /dev/kvm. Each carries
+/// remediation. The trailing pin note records which fork rev carries the
+/// Track 1 VMM flag — honestly marked INERT until the Phase 2 firmware
+/// rebuild lands (plan D6: no "nested works" claim until Track 3).
+pub fn doctor_check_nested_virt() -> DoctorCheck {
+    const PIN_NOTE: &str =
+        "fork rev 78fb3ed1 carries the Track 1 VMM nested_virt flag (inert until the Phase 2 libkrunfw rebuild w/ CONFIG_KVM lands)";
+    const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
+         sudo usermod -aG kvm $USER (re-login); guest nesting additionally needs the host \
+         kvm_intel/kvm_amd nested parameter at Y (sudo modprobe kvm_intel nested=1)";
+    let probe = crate::microsandbox::nested::read_nested_probe();
+    if !probe.kvm_present {
+        return DoctorCheck::new(
+            "nested_virt",
+            "FAIL",
+            format!("no /dev/kvm; {PIN_NOTE}"),
+        )
+        .with_remediation(REMEDIATION);
+    }
+    if !probe.kvm_accessible {
+        // WARN, not FAIL (matches `dev_kvm` severity: fixable perms, and a
+        // plain `up` without a nested ask is unaffected) — but the message
+        // is explicit that every nested ask refuses until fixed.
+        return DoctorCheck::new(
+            "nested_virt",
+            "WARN",
+            format!("host /dev/kvm exists but not accessible (nested asks refuse); {PIN_NOTE}"),
+        )
+        .with_remediation(REMEDIATION);
+    }
+    match (probe.cpu_flag, probe.nested_param) {
+        (true, Some(true)) => DoctorCheck::new(
+            "nested_virt",
+            "OK",
+            format!("kvm + vmx/svm + nested=Y; {PIN_NOTE}"),
+        ),
+        (_, nested) => {
+            let detail = match nested {
+                Some(false) => "nested=N (disabled)",
+                _ => "nested param unknown",
+            };
+            let cpu = if probe.cpu_flag { "vmx/svm" } else { "no vmx/svm flag" };
+            DoctorCheck::new(
+                "nested_virt",
+                "WARN",
+                format!("kvm ok ({cpu}), {detail}; {PIN_NOTE}"),
+            )
+            .with_remediation(REMEDIATION)
+        }
+    }
+}
+
 pub fn doctor_check_tool(name: &'static str, bin: &str, remediation: &str) -> DoctorCheck {
     match probe_version(bin) {
         Some(version) => DoctorCheck::new(name, "OK", version),
@@ -560,6 +617,7 @@ pub fn doctor_check_schemas() -> Result<DoctorCheck> {
 pub fn cmd_doctor(json: bool) -> Result<()> {
     let checks = vec![
         doctor_check_kvm(),
+        doctor_check_nested_virt(),
         doctor_check_tool(
             "nix",
             "nix",
@@ -881,5 +939,36 @@ mod tests {
             fake_home.join(".cache").join("ai-workbench-msb"),
             "legacy home is anchored at $HOME/.cache"
         );
+    }
+
+    // ---- nested_virt inventory check (ADR 0036 §4) ----
+
+    /// The check reads the LIVE host probe, so the test pins SHAPE only
+    /// (host-independent): the name, the closed status vocabulary, the pin
+    /// note in every message, and remediation on every non-OK verdict.
+    #[test]
+    fn nested_virt_check_shape_is_host_independent() {
+        let check = doctor_check_nested_virt();
+        assert_eq!(check.name, "nested_virt");
+        assert!(
+            ["OK", "WARN", "FAIL"].contains(&check.status),
+            "closed status vocabulary: {:?}",
+            check
+        );
+        assert!(
+            check.message.contains("78fb3ed1"),
+            "every verdict carries the fork pin note: {check:?}"
+        );
+        // Honest Phase 1 strings: the VMM flag is inert until fw lands.
+        assert!(
+            check.message.contains("inert until the Phase 2"),
+            "pin note states Phase honesty: {check:?}"
+        );
+        if check.status != "OK" {
+            assert!(
+                check.remediation.as_deref().unwrap_or("").contains("modprobe"),
+                "non-OK carries remediation: {check:?}"
+            );
+        }
     }
 }

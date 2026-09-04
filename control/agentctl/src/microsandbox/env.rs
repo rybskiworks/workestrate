@@ -254,6 +254,7 @@ mod tests {
                 ingress_rules: Vec::new(),
             },
             instance_policy: None,
+            virtualization: None,
         }
     }
 

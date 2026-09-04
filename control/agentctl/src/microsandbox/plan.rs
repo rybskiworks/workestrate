@@ -90,6 +90,38 @@ pub struct SandboxPlan {
     /// legacy plan JSON parses cleanly and legacy output stays byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_policy: Option<crate::config::InstancePolicy>,
+    /// The workload's nested-virtualization posture (ADR 0036 §3/D7), when
+    /// the workload asks for anything but off. `None` = off/absent — current
+    /// behavior, silent, so legacy plan JSON stays byte-identical. `Some`
+    /// carries the machine-readable degraded/frozen state (`prefer` degrade
+    /// is never stderr-only). Explicitly NOT part of the config hash
+    /// (`provenance::config_hash_of_plan` — orchestration policy, not a
+    /// sandbox build input, same rationale as `instance_policy`); `up`
+    /// re-resolves at gate time, so no record write is needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtualization: Option<VirtualizationPlan>,
+}
+
+/// Machine-readable nested-virtualization provenance for ONE plan
+/// (ADR 0036 §3/D7): the effective ask plus the degraded/frozen state.
+/// Rendered by the plan display ONLY when present (off stays silent).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct VirtualizationPlan {
+    /// Effective ask (`require` | `prefer`; off is never recorded).
+    pub nested: crate::config::NestedMode,
+    /// `prefer` (or a soft-gapped `require`) running without the device.
+    #[serde(default)]
+    pub degraded: bool,
+    /// A home-final seal denied the ask (plan reports, up refuses).
+    #[serde(default)]
+    pub frozen_out: bool,
+    /// Origin label of the denying/sealing rung, when frozen out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_by: Option<String>,
+    /// Merge-provenance label of the rung that declared the ask.
+    #[serde(default)]
+    pub origin: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -714,6 +746,19 @@ impl fmt::Display for SandboxPlan {
                 writeln!(f, "instance: label={label}")?;
             }
         }
+        // ADR 0036 §3: the nested-virt posture renders ONLY when the workload
+        // asks for it (`virtualization: None` = off stays silent, so legacy
+        // plan output — including every golden — is byte-identical).
+        if let Some(virt) = &self.virtualization {
+            let mut line = format!("virtualization: nested={}", virt.nested);
+            if virt.frozen_out {
+                let sealed_by = virt.frozen_by.as_deref().unwrap_or("home");
+                line.push_str(&format!(" (frozen_out by {sealed_by}; up will refuse)"));
+            } else if virt.degraded {
+                line.push_str(" (degraded: host lacks nested KVM; running without /dev/kvm)");
+            }
+            writeln!(f, "{line}")?;
+        }
         Ok(())
     }
 }
@@ -909,6 +954,7 @@ mod tests {
                 }],
             },
             instance_policy: None,
+            virtualization: None,
         };
         let expected = "\
 name: demo
@@ -956,6 +1002,7 @@ network: egress_default=deny ingress_default=deny
                 ingress_rules: vec![],
             },
             instance_policy: None,
+            virtualization: None,
         };
 
         // Non-default bind → three-field line with the bind IP.
@@ -1008,6 +1055,7 @@ network: egress_default=deny ingress_default=deny
                 ingress_rules: vec![],
             },
             instance_policy: None,
+            virtualization: None,
         };
 
         // Named port on the default bind → `port: <name>:<host>:<guest>`.
@@ -1096,6 +1144,7 @@ network: egress_default=deny ingress_default=deny
                 ingress_rules: vec![],
             },
             instance_policy: None,
+            virtualization: None,
         };
         assert_eq!(
             format!("{plan}"),
@@ -1124,6 +1173,7 @@ network: egress_default=deny ingress_default=deny
                 ingress_rules: vec![],
             },
             instance_policy: None,
+            virtualization: None,
         };
         // Both relaxed → both NOTEs.
         let plan = base(false, false);
@@ -1254,6 +1304,7 @@ network: egress_default=deny ingress_default=deny
                 ingress_rules: vec![],
             },
             instance_policy: None,
+            virtualization: None,
         };
         let rendered = format!(
             "{}",
@@ -1381,6 +1432,7 @@ network: egress_default=deny ingress_default=deny
                 on_skew: None,
                 label: Some("dev".to_string()),
             }),
+            virtualization: None,
         };
         let rendered = format!("{plan}");
         assert!(
@@ -1424,6 +1476,7 @@ network: egress_default=deny ingress_default=deny
                 ingress_rules: vec![],
             },
             instance_policy: None,
+            virtualization: None,
         };
         let rendered = format!("{plan}");
         assert_eq!(
@@ -1433,6 +1486,81 @@ network: egress_default=deny ingress_default=deny
         assert!(
             !rendered.contains("instance:"),
             "no policy must render no instance lines: {rendered}"
+        );
+    }
+
+    /// A plan with `virtualization: None` renders NO `virtualization:` line
+    /// and stays byte-identical to the legacy render (off is silent — the
+    /// golden invariant). `Some` renders the ask plus degraded/frozen state.
+    #[test]
+    fn plan_display_virtualization_renders_only_when_asked() {
+        let base = || SandboxPlan {
+            name: "kvm-job".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports: vec![],
+            mounts: vec![],
+            network: NetworkPlan {
+                egress_default_deny: true,
+                ingress_default_deny: true,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+            },
+            instance_policy: None,
+            virtualization: None,
+        };
+        let rendered = format!("{}", base());
+        assert!(
+            !rendered.contains("virtualization:"),
+            "off must stay silent: {rendered}"
+        );
+        // require, host OK: bare ask line.
+        let mut plan = base();
+        plan.virtualization = Some(VirtualizationPlan {
+            nested: crate::config::NestedMode::Require,
+            degraded: false,
+            frozen_out: false,
+            frozen_by: None,
+            origin: "personal".to_string(),
+        });
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains("virtualization: nested=require\n"),
+            "require line: {rendered}"
+        );
+        // prefer degraded: machine-readable degraded marker.
+        let mut plan = base();
+        plan.virtualization = Some(VirtualizationPlan {
+            nested: crate::config::NestedMode::Prefer,
+            degraded: true,
+            frozen_out: false,
+            frozen_by: None,
+            origin: "personal".to_string(),
+        });
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains("virtualization: nested=prefer (degraded:"),
+            "degraded line: {rendered}"
+        );
+        // frozen seal: names the sealing rung.
+        let mut plan = base();
+        plan.virtualization = Some(VirtualizationPlan {
+            nested: crate::config::NestedMode::Require,
+            degraded: false,
+            frozen_out: true,
+            frozen_by: Some("home-registry".to_string()),
+            origin: "personal".to_string(),
+        });
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains("virtualization: nested=require (frozen_out by home-registry;"),
+            "frozen line: {rendered}"
         );
     }
 }

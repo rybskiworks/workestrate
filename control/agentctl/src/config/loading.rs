@@ -354,11 +354,13 @@ pub fn load_config() -> Result<ConfigFile> {
             let collected = collect_policy_scopes(None, std::slice::from_ref(&layer))?;
             let ladder = collect_secret_policy_ladder(None, std::slice::from_ref(&layer));
             let network_ladder = collect_network_policy_ladder(None, std::slice::from_ref(&layer));
+            let virt_ladder = collect_virtualization_ladder(None, std::slice::from_ref(&layer));
             let layer_dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&layer));
             let (merged, provenance) = crate::merge::merge_layers(&[layer])?;
             crate::mount_policy::set_collected_policy(Some(collected));
             crate::merge::set_secret_policy_ladder(Some(ladder));
             crate::merge::set_network_policy_ladder(Some(network_ladder));
+            crate::merge::set_virtualization_ladder(Some(virt_ladder));
             crate::merge::set_provenance(Some(provenance));
             crate::merge::set_layer_dirs(Some(layer_dirs));
             validate_config(&merged)?;
@@ -492,6 +494,7 @@ pub fn load_config() -> Result<ConfigFile> {
     let mut collected = collect_policy_scopes(registry.as_ref(), &layers)?;
     let mut ladder = collect_secret_policy_ladder(registry.as_ref(), &layers);
     let mut network_ladder = collect_network_policy_ladder(registry.as_ref(), &layers);
+    let mut virt_ladder = collect_virtualization_ladder(registry.as_ref(), &layers);
     if let Some((workload, layer)) = substituted_layer {
         // The policy collection must reflect the substitution: the home
         // collection above saw the PRE-substitution declaration, which
@@ -502,10 +505,12 @@ pub fn load_config() -> Result<ConfigFile> {
         replace_workload_scopes_from_layer(&mut collected, &workload, &layer);
         replace_workload_secret_rungs_from_layer(&mut ladder, &workload, &layer);
         replace_workload_network_rungs_from_layer(&mut network_ladder, &workload, &layer);
+        replace_workload_virtualization_rungs_from_layer(&mut virt_ladder, &workload, &layer);
     }
     crate::mount_policy::set_collected_policy(Some(collected));
     crate::merge::set_secret_policy_ladder(Some(ladder));
     crate::merge::set_network_policy_ladder(Some(network_ladder));
+    crate::merge::set_virtualization_ladder(Some(virt_ladder));
     crate::merge::set_provenance(Some(provenance));
     crate::merge::set_layer_dirs(Some(layer_dirs));
     validate_config(&merged)?;
@@ -988,6 +993,74 @@ fn replace_workload_network_rungs_from_layer(
             .insert(workload.to_string(), vec![(layer.name.clone(), fragment)]);
     } else {
         ladder.idna_workloads.remove(workload);
+    }
+}
+
+/// Collect the nested-virtualization seal ladder rungs in the loader's
+/// actual order (ADR 0036 §5) — the virtualization edition of
+/// [`collect_secret_policy_ladder`]: `[policy.virtualization]` fragments are
+/// collected per scope, never merged, and the resolution walks them
+/// authority-ascending. Rung 1 is the home registry's fragment (operator
+/// seal); rung 2 is each layer's fragment in stack order; rung 3 is each
+/// workload's `[workloads.<name>.policy.virtualization]` in stack order (a
+/// bare directory-mode capsule's top-level `[policy.virtualization]` lands
+/// there via the workload wrapper). The workload's
+/// `[workloads.<name>.virtualization]` ASK is not a fragment — it merges
+/// whole-unit in `merge_layers` and is resolved against this ladder by
+/// `crate::microsandbox::nested::resolve_for_workload`.
+fn collect_virtualization_ladder(
+    registry: Option<&Registry>,
+    layers: &[crate::merge::Layer],
+) -> crate::merge::VirtualizationLadder {
+    let mut ladder = crate::merge::VirtualizationLadder::default();
+    if let Some(fragment) = registry.and_then(|r| r.policy.virtualization.clone()) {
+        ladder.home = Some(("home-registry".to_string(), fragment));
+    }
+    for layer in layers {
+        if let Some(fragment) = layer.config.policy.virtualization.clone() {
+            ladder.layers.push((layer.name.clone(), fragment));
+        }
+        for (name, workload) in &layer.config.workloads {
+            if let Some(fragment) = workload.policy.virtualization.clone() {
+                ladder
+                    .workloads
+                    .entry(name.clone())
+                    .or_default()
+                    .push((layer.name.clone(), fragment));
+            }
+        }
+    }
+    ladder
+}
+
+/// Re-collect ONE workload's virtualization seal rungs from a substituted
+/// layer, replacing whatever the home-scoped
+/// [`collect_virtualization_ladder`] pass recorded for it (the same
+/// inline-override consistency rule as
+/// [`replace_workload_secret_rungs_from_layer`]): the substituted
+/// declaration IS the whole workload declaration at the ref, so its
+/// `[policy.virtualization]` is authoritative — a ref declaration carrying
+/// NO fragment REMOVES the home-collected rungs for that workload.
+/// Capsule-only: layer-global `[policy.virtualization]` rungs stay
+/// home-scoped.
+fn replace_workload_virtualization_rungs_from_layer(
+    ladder: &mut crate::merge::VirtualizationLadder,
+    workload: &str,
+    layer: &crate::merge::Layer,
+) {
+    let rung = layer
+        .config
+        .workloads
+        .get(workload)
+        .and_then(|decl| decl.policy.virtualization.clone())
+        .map(|fragment| (layer.name.clone(), fragment));
+    match rung {
+        Some(rung) => {
+            ladder.workloads.insert(workload.to_string(), vec![rung]);
+        }
+        None => {
+            ladder.workloads.remove(workload);
+        }
     }
 }
 
@@ -4494,6 +4567,80 @@ write.deny = ["sugar-write-deny"]
         );
 
         let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    // ---- ADR 0036: virtualization seal collection (collect, never merge) ----
+
+    /// The seal ladder collects home-registry → layers → workload capsules
+    /// in loader order, carrying origin labels; fragments never pass through
+    /// `merge_layers` (no policy field does).
+    #[test]
+    fn collect_virtualization_ladder_orders_rungs() {
+        let mut registry = Registry::default();
+        registry.policy.virtualization =
+            Some(crate::config::VirtualizationPolicyFragment {
+                allow_nested: Some(false),
+                r#final: false,
+            });
+        let layer = crate::merge::Layer::from_string(
+            "personal",
+            "schema_version = 1\n\n[policy.virtualization]\nallow_nested = true\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"\n\n[workloads.pi.policy.virtualization]\nallow_nested = true\n",
+        )
+        .unwrap();
+        let ladder = collect_virtualization_ladder(Some(&registry), &[layer]);
+        assert_eq!(
+            ladder.home.as_ref().map(|(o, _)| o.as_str()),
+            Some("home-registry"),
+            "rung 1 is the home registry"
+        );
+        assert_eq!(ladder.layers.len(), 1, "rung 2 is the layer fragment");
+        assert_eq!(ladder.layers[0].0, "personal");
+        assert_eq!(
+            ladder.workloads.get("pi").map(|v| v.len()),
+            Some(1),
+            "rung 3 is the workload capsule fragment"
+        );
+        // The ASK is not a fragment: it merged into the layer config, not
+        // the ladder.
+        assert_eq!(ladder.workloads["pi"][0].1.allow_nested, Some(true));
+    }
+
+    /// Overrides stay lenient AND keep the new keys: `virtualization` (new)
+    /// and `instance` (bundled WORKLOAD_FIELDS fix) survive stripping
+    /// instead of warning as typos.
+    #[test]
+    fn overrides_keep_virtualization_and_instance_keys() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "workestrate-ov-virt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp)?;
+        let path = write_overrides(
+            &tmp,
+            "[global.workloads.pi]\ncpus = 4\n\n[global.workloads.pi.virtualization]\nnested = \"prefer\"\n\n[global.workloads.pi.instance]\nstrategy = \"parallel\"\n",
+        );
+        let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
+        let layers = load_overrides(&path, &[], &existing)?;
+        assert_eq!(layers.len(), 1);
+        let pi = layers[0].config.workloads.get("pi").unwrap();
+        assert_eq!(
+            pi.virtualization
+                .as_ref()
+                .and_then(|v| v.nested),
+            Some(crate::config::NestedMode::Prefer),
+            "virtualization ask survives override stripping"
+        );
+        assert_eq!(
+            pi.instance.strategy,
+            crate::config::InstanceStrategy::Parallel,
+            "instance block survives override stripping (bundled fix)"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
     }
 }

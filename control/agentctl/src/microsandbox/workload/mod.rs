@@ -108,6 +108,27 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         None
     }
 
+    /// The workload's nested-virtualization ASK (ADR 0036 §3): the
+    /// `[workloads.<name>.virtualization]` table's `nested` value (`None` =
+    /// table/key omitted → Off, current behavior). Default Off (synthetic
+    /// workloads); ConfigWorkload overrides from the merged declaration.
+    fn virtualization_nested(&self) -> Option<crate::config::NestedMode> {
+        None
+    }
+
+    /// The workload's resolved nested-virt posture: the ASK above against
+    /// the collected home `[policy.virtualization]` seal ladder (pure,
+    /// infallible — absent ladder degrades to the ask alone). Default: the
+    /// ask alone with no restriction. `plan()` and the `up` pre-create gate
+    /// share this so warn and refuse can never disagree.
+    fn virtualization_resolution(&self) -> crate::microsandbox::nested::VirtualizationResolution {
+        crate::microsandbox::nested::resolve_virtualization(
+            self.virtualization_nested(),
+            "declared",
+            &[],
+        )
+    }
+
     /// Format the plan with a `[source]` annotation for each field.
     fn show_source(&self) -> String {
         self.plan().to_string()

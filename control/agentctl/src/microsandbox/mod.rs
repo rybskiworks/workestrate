@@ -2,6 +2,7 @@ pub mod depgraph;
 pub mod discovery;
 mod env;
 pub(crate) mod mounts;
+pub mod nested;
 pub mod plan;
 pub mod policy_file;
 pub mod port_registry;

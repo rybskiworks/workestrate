@@ -55,6 +55,10 @@
 //!   namespace — identity/registry metadata, not build inputs;
 //! - **`instance_policy`** — orchestration policy (conflict chain, port
 //!   strategy, on_skew), not a sandbox build input;
+//! - **`virtualization`** (ADR 0036 plan provenance) — orchestration policy
+//!   (nested ask + degraded/frozen state), not a sandbox build input; the
+//!   machine-readable record rides the plan JSON, and `up` re-resolves at
+//!   gate time, so no record write is needed;
 //! - **env metadata beyond `NAME=value`** (`is_secret`,
 //!   `reject_placeholder`, `injected_by`, `injected_port`) and **secret
 //!   metadata beyond names** (`allowed_hosts`, `required`,
@@ -433,6 +437,7 @@ mod tests {
                 ingress_rules: Vec::new(),
             },
             instance_policy: None,
+            virtualization: None,
         }
     }
 
@@ -557,6 +562,21 @@ mod tests {
             config_hash_of_plan(&policy),
             config_hash_of_plan(&base),
             "instance_policy is orchestration policy, not a build input"
+        );
+
+        // virtualization provenance (ADR 0036 orchestration posture) → SAME.
+        let mut virt = empty_plan();
+        virt.virtualization = Some(crate::microsandbox::plan::VirtualizationPlan {
+            nested: crate::config::NestedMode::Require,
+            degraded: false,
+            frozen_out: false,
+            frozen_by: None,
+            origin: "personal".to_string(),
+        });
+        assert_eq!(
+            config_hash_of_plan(&virt),
+            config_hash_of_plan(&base),
+            "virtualization is orchestration policy, not a build input"
         );
 
         // Late-bound policy_file token → SAME.

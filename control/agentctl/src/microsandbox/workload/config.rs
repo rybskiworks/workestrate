@@ -424,6 +424,78 @@ impl ConfigWorkload {
     }
 }
 
+/// Short host-gap phrase for the ADR 0036 `plan` warn line (the FIRST
+/// applicable gap, most-actionable first). Advisory only — the `up` gate
+/// owns the exact refusal text.
+fn describe_nested_gap(probe: &crate::microsandbox::nested::NestedProbe) -> &'static str {
+    if !probe.arch_supported {
+        "a supported arch (Linux x86_64)"
+    } else if !probe.kvm_present {
+        "/dev/kvm"
+    } else if !probe.kvm_accessible {
+        "accessible /dev/kvm (permission denied)"
+    } else if probe.nested_param == Some(false) {
+        "enabled CPU nested virtualization (kvm_intel/kvm_amd nested parameter is N)"
+    } else {
+        "fully-enabled nested KVM (cpu flag or nested parameter)"
+    }
+}
+
+/// ADR 0036 §4 plan half (resolve + warn, never fail): ONE workload's
+/// nested-virt ASK (via the shared [`Workload::virtualization_resolution`])
+/// against the home seal ladder plus the ADVISORY host `probe` (production
+/// passes `read_nested_probe()`; tests inject mocked probes — no host I/O
+/// in the test matrix). A `require`
+/// the host (or seal) cannot satisfy warns naming provenance ("plan
+/// continues; up will refuse"); an unsatisfiable `prefer` (or a soft-gapped
+/// `require` the gate still passes) notes + records machine-readable
+/// degrade (D7); off returns None silently. Infallible by construction:
+/// resolution is pure and the probe degrades every read to absent/unknown —
+/// `plan()` (itself infallible) maps nothing to failure here, only to
+/// warn-degrade, so this path can never panic on the nested half.
+fn plan_virtualization_for<W: super::Workload + ?Sized>(
+    workload: &W,
+    probe: &crate::microsandbox::nested::NestedProbe,
+) -> Option<crate::microsandbox::plan::VirtualizationPlan> {
+    use crate::config::NestedMode;
+    use crate::microsandbox::nested::{host_offers_nested, nested_up_decision};
+    let resolution = workload.virtualization_resolution();
+    if resolution.effective == NestedMode::Off {
+        return None;
+    }
+    let frozen_by = resolution.frozen_by.as_deref();
+    let refused =
+        nested_up_decision(workload.name(), resolution.effective, probe, frozen_by).is_err();
+    if refused {
+        if let Some(sealed_by) = frozen_by {
+                eprintln!(
+                    "warning: workload '{}' virtualization.nested=\"{}\" is frozen out by the home [policy.virtualization] seal '{}' (ask from '{}'); plan continues; up will refuse — see ADR 0036 §4",
+                    workload.name(), resolution.effective, sealed_by, resolution.origin
+                );
+        } else {
+                eprintln!(
+                    "warning: workload '{}' requires nested virtualization (virtualization.nested=\"{}\" from '{}') but this host lacks {}: plan continues; up will refuse — see ADR 0036 §4",
+                    workload.name(),
+                    resolution.effective,
+                    resolution.origin,
+                    describe_nested_gap(probe),
+                );
+        }
+    } else if !host_offers_nested(probe) {
+        eprintln!(
+            "note: workload '{}' virtualization.nested=\"{}\" degrades: host lacks nested KVM; running without /dev/kvm (ask from '{}')",
+            workload.name(), resolution.effective, resolution.origin
+        );
+    }
+    Some(crate::microsandbox::plan::VirtualizationPlan {
+        nested: resolution.effective,
+        degraded: !refused && !host_offers_nested(probe),
+        frozen_out: resolution.frozen_out,
+        frozen_by: resolution.frozen_by.clone(),
+        origin: resolution.origin.clone(),
+    })
+}
+
 impl Workload for ConfigWorkload {
     fn name(&self) -> &str {
         &self.name
@@ -509,6 +581,13 @@ impl Workload for ConfigWorkload {
             network: network_plan,
             instance_policy: (self.workload.instance != Default::default())
                 .then(|| self.workload.instance.clone()),
+            // ADR 0036 §4: resolve + warn, never fail (portable). Off stays
+            // None (silent, legacy plan JSON byte-identical); an ask records
+            // the machine-readable posture (D7 degraded flag included).
+            virtualization: plan_virtualization_for(
+                self,
+                &crate::microsandbox::nested::read_nested_probe(),
+            ),
         }
     }
 
@@ -546,6 +625,26 @@ impl Workload for ConfigWorkload {
 
     fn instance_on_skew(&self) -> Option<crate::config::OnSkew> {
         self.workload.instance.on_skew
+    }
+
+    fn virtualization_nested(&self) -> Option<crate::config::NestedMode> {
+        self.workload.virtualization.as_ref().and_then(|v| v.nested)
+    }
+
+    fn virtualization_resolution(
+        &self,
+    ) -> crate::microsandbox::nested::VirtualizationResolution {
+        let key = format!("workloads.{}.virtualization", self.name);
+        let origin = self
+            .provenance
+            .as_ref()
+            .and_then(|p| p.get(&key))
+            .map(String::as_str);
+        crate::microsandbox::nested::resolve_for_workload(
+            &self.name,
+            self.virtualization_nested(),
+            origin,
+        )
     }
 
     fn exec(&self) -> SandboxCommand {
@@ -777,6 +876,144 @@ mod tests {
     use super::*;
     use crate::config::test_support::TestConfigGuard;
     use crate::microsandbox::plan::EgressTarget;
+
+    // ---- ADR 0036: plan warn/degrade via mocked probes (no host I/O) ----
+
+    /// Minimal fake workload carrying only a nested ask: the plan half
+    /// resolves it against the process-global ladder exactly like
+    /// ConfigWorkload (same shared `virtualization_resolution` default
+    /// shape — the ask plus `resolve_for_workload`).
+    #[derive(Debug)]
+    struct NestedFake {
+        ask: Option<crate::config::NestedMode>,
+    }
+
+    impl super::super::Workload for NestedFake {
+        fn name(&self) -> &str {
+            "kvm-job"
+        }
+        fn plan(&self) -> crate::microsandbox::plan::SandboxPlan {
+            panic!("plan half is tested via plan_virtualization_for")
+        }
+        fn exec(&self) -> super::super::SandboxCommand {
+            super::super::SandboxCommand::with_args("", &[])
+        }
+        fn virtualization_nested(&self) -> Option<crate::config::NestedMode> {
+            self.ask
+        }
+        fn virtualization_resolution(
+            &self,
+        ) -> crate::microsandbox::nested::VirtualizationResolution {
+            crate::microsandbox::nested::resolve_for_workload("kvm-job", self.ask, Some("personal"))
+        }
+    }
+
+    /// Off stays None (silent) on every probe — legacy plans unchanged.
+    #[test]
+    fn plan_virtualization_off_is_silent() {
+        let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
+            .lock()
+            .unwrap();
+        crate::merge::set_virtualization_ladder(None);
+        let wl = NestedFake { ask: None };
+        for probe in [
+            crate::microsandbox::nested::NestedProbe::absent(),
+            crate::microsandbox::nested::NestedProbe::full(),
+        ] {
+            assert_eq!(plan_virtualization_for(&wl, &probe), None);
+        }
+        crate::merge::set_virtualization_ladder(None);
+    }
+
+    /// Require + full host: recorded, not degraded, not frozen. Require +
+    /// absent host: recorded with warn-degrade semantics (refused, not
+    /// degraded — up will refuse, never silently degrade a require).
+    #[test]
+    fn plan_virtualization_require_warns_but_never_fails() {
+        let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
+            .lock()
+            .unwrap();
+        crate::merge::set_virtualization_ladder(None);
+        let wl = NestedFake {
+            ask: Some(crate::config::NestedMode::Require),
+        };
+        let full = plan_virtualization_for(
+            &wl,
+            &crate::microsandbox::nested::NestedProbe::full(),
+        )
+        .expect("require must record a posture");
+        assert_eq!(full.nested, crate::config::NestedMode::Require);
+        assert!(!full.degraded);
+        assert!(!full.frozen_out);
+        assert_eq!(full.origin, "personal");
+        let missing = plan_virtualization_for(
+            &wl,
+            &crate::microsandbox::nested::NestedProbe::absent(),
+        )
+        .expect("require on a lacking host still returns a plan (never fails)");
+        assert!(!missing.degraded, "a refused require is not a degrade");
+        assert!(!missing.frozen_out);
+        crate::merge::set_virtualization_ladder(None);
+    }
+
+    /// Prefer + absent host: machine-readable degrade (D7). Prefer + full
+    /// host: recorded, not degraded.
+    #[test]
+    fn plan_virtualization_prefer_degrades_machine_readable() {
+        let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
+            .lock()
+            .unwrap();
+        crate::merge::set_virtualization_ladder(None);
+        let wl = NestedFake {
+            ask: Some(crate::config::NestedMode::Prefer),
+        };
+        let degraded = plan_virtualization_for(
+            &wl,
+            &crate::microsandbox::nested::NestedProbe::absent(),
+        )
+        .expect("prefer must record a posture");
+        assert!(degraded.degraded);
+        assert!(!degraded.frozen_out);
+        let ok = plan_virtualization_for(
+            &wl,
+            &crate::microsandbox::nested::NestedProbe::full(),
+        )
+        .expect("prefer must record a posture");
+        assert!(!ok.degraded);
+        crate::merge::set_virtualization_ladder(None);
+    }
+
+    /// Home-final ban: the plan records frozen_out + frozen_by provenance
+    /// (the seal test — validate passes per-rung-legal, plan reports, up
+    /// refuses via the shared decision).
+    #[test]
+    fn plan_virtualization_home_final_freezes_provenance() {
+        let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
+            .lock()
+            .unwrap();
+        crate::merge::set_virtualization_ladder(Some(crate::merge::VirtualizationLadder {
+            home: Some((
+                "home-registry".to_string(),
+                crate::config::VirtualizationPolicyFragment {
+                    allow_nested: Some(false),
+                    r#final: true,
+                },
+            )),
+            ..Default::default()
+        }));
+        let wl = NestedFake {
+            ask: Some(crate::config::NestedMode::Require),
+        };
+        let frozen = plan_virtualization_for(
+            &wl,
+            &crate::microsandbox::nested::NestedProbe::full(),
+        )
+        .expect("frozen require still returns a plan (never fails)");
+        assert!(frozen.frozen_out);
+        assert_eq!(frozen.frozen_by.as_deref(), Some("home-registry"));
+        assert!(!frozen.degraded, "a refused seal is not a degrade");
+        crate::merge::set_virtualization_ladder(None);
+    }
 
     #[test]
     fn build_path_reads_per_agent_env_override() -> Result<()> {

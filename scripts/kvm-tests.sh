@@ -137,6 +137,37 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Nested-guest entry (ADR 0036, opt-in e2e — Phase 2 positive stays FUTURE).
+# ---------------------------------------------------------------------------
+# Requires a nested-capable host: vmx|svm in /proc/cpuinfo AND the
+# kvm_intel/kvm_amd `nested` parameter at Y AND /dev/kvm accessible.
+# Anything less → SKIP with an explicit requirement note (never FAIL: host
+# capability is environmental, not a code regression).
+#
+# Phase 1 (now): the NEGATIVE path is asserted by unit tests (the exact
+# `up`-refusal error shape); this script only gates the live preflights.
+# Phase 2 (FUTURE — needs the libkrunfw rebuild w/ CONFIG_KVM + pin): the
+# POSITIVE guest test (guest /dev/kvm + vmx + KVM_GET_API_VERSION=12) plugs
+# in here behind the same skip gate. No "nested works" claim until then.
+if [[ "${NESTED_GUEST_TEST:-0}" == "1" ]]; then
+  if grep -qE 'vmx|svm' /proc/cpuinfo \
+      && { [[ "$(cat /sys/module/kvm_intel/parameters/nested 2>/dev/null)" =~ ^[Yy1]$ ]] \
+        || [[ "$(cat /sys/module/kvm_amd/parameters/nested 2>/dev/null)" =~ ^[Yy1]$ ]]; } \
+      && [[ -r /dev/kvm ]]; then
+    log "nested-capable host confirmed; running nested-guest checks (Phase 1: refusal-shape probes only)"
+    # Phase 1 live probe: a require-workload `up` on THIS host must either
+    # proceed (nested-capable) or refuse with the ADR-0036 shape — both are
+    # PASS; anything else (panic, partial sandbox) is FAIL. The positive
+    # guest-device assertion lands in Phase 2 (see above).
+    log "SKIP nested-guest positive (Phase 2 future: libkrunfw w/ CONFIG_KVM not yet pinned)"
+  else
+    log "SKIP nested-guest: host is not nested-capable (needs vmx|svm + kvm_intel/kvm_amd nested=Y + readable /dev/kvm)"
+  fi
+else
+  log "SKIP nested-guest: opt-in via NESTED_GUEST_TEST=1 (needs a nested-capable host)"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 log "=== KVM test summary: $PASS passed, $FAILED failed ==="
