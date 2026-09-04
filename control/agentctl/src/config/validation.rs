@@ -352,6 +352,18 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // 2026-09-04 — pre-release, final seals + review + plan NOTE suffice).
     // Home `final` seals still veto via the policy ladder (untouched).
 
+    // ADR 0036 §4 (nested virtualization): validate-config is STATIC
+    // COHERENCE ONLY — no host I/O. The closed `nested` vocabulary
+    // ("off"|"prefer"|"require") is enforced at PARSE time (`NestedMode`
+    // serde enum + `deny_unknown_fields` on `VirtualizationConfig` /
+    // `VirtualizationPolicyFragment`, so typos and stray keys hard-error
+    // before this function ever runs), exactly like the image/binary
+    // recipe vocabularies above are enforced here only because they are
+    // plain strings. Cross-rung freeze (home-final vs workload ask) is
+    // PLAN-time, not a validate error: per-rung-legal configs validate
+    // clean, `plan` reports `frozen_out` provenance, `up` refuses. Hence
+    // there is deliberately NO virtualization refusal arm below.
+
     // Secret references must be defined in the secrets section.
     for (workload_name, workload) in &config.workloads {
         for (env_name, binding) in workload.env.iter() {
@@ -2578,5 +2590,47 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
             toml::from_str::<ConfigFile>(toml).is_err(),
             "out-of-u16 range bounds must be a parse error"
         );
+    }
+
+    // ---- ADR 0036: virtualization is static-coherent by construction ----
+
+    /// Every per-rung-legal virtualization shape validates clean — including
+    /// the cross-rung freeze (home-final ban + workload require): freeze is
+    /// plan-time (`frozen_out`), NOT a validate error (ADR 0036 §4).
+    #[test]
+    fn validate_accepts_virtualization_shapes() {
+        for toml in [
+            // require ask, no home seal.
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"\n",
+            // prefer ask.
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"prefer\"\n",
+            // explicit off.
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"off\"\n",
+            // home-final ban + workload require: per-rung legal, validates
+            // clean (plan reports frozen_out, up refuses).
+            "schema_version = 1\n\n[policy.virtualization]\nallow_nested = false\nfinal = true\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"\n",
+            // home grant + workload ask.
+            "schema_version = 1\n\n[policy.virtualization]\nallow_nested = true\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"prefer\"\n",
+        ] {
+            let config: ConfigFile = toml::from_str(toml).unwrap();
+            validate_config(&config)
+                .unwrap_or_else(|e| panic!("legal virtualization shape must pass: {e}"));
+        }
+    }
+
+    /// Typo/unknown-variant fixtures fail at PARSE with the closed-vocab
+    /// error (ADR 0036 §4) — validate-config never sees them.
+    #[test]
+    fn validate_virtualization_typos_are_parse_errors() {
+        for toml in [
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"on\"\n",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"\nrequire_device = true\n",
+        ] {
+            let err = toml::from_str::<ConfigFile>(toml).unwrap_err().to_string();
+            assert!(
+                err.contains("unknown variant") || err.contains("unknown field"),
+                "virtualization typo must fail closed-vocab at parse (ADR 0036): {err}"
+            );
+        }
     }
 }

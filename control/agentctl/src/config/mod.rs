@@ -64,10 +64,10 @@ pub use types::{
     EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef, EnvVarConfig,
     HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable, IngressDenyTable,
     IngressPolicyFragment, InstancePolicy, InstancePort, InstanceStrategy, LocalBuildConfig,
-    NetworkConfig, NetworkDefaultsConfig, OnConflict, OnSkew, PolicyConfig, PortEntry,
+    NetworkConfig, NetworkDefaultsConfig, NestedMode, OnConflict, OnSkew, PolicyConfig, PortEntry,
     PortOccupiedBare, PortOccupiedChain, PortOccupiedStep, Registry, RegistrySettings,
     SecretDefConfig, SecretViolationPolicy, SecretsLayer, SecretsPolicyFragment, SeedFileConfig,
-    TrustedProject, WorkloadConfig,
+    TrustedProject, VirtualizationConfig, VirtualizationPolicyFragment, WorkloadConfig,
 };
 #[allow(unused_imports)]
 pub use validation::{validate_config, validate_config_name, EXPECTED_SCHEMA_VERSION};

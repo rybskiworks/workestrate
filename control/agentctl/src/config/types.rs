@@ -1301,6 +1301,91 @@ pub struct DependsOnSpec {
     pub instance: Option<DepInstanceMode>,
 }
 
+/// Nested-virtualization demand of ONE workload (ADR 0036 §3): the flat
+/// per-workload `[workloads.<name>.virtualization]` table with its single
+/// tri-state `nested` key (`"require"` | `"prefer"` | `"off"`, default
+/// `"off"`; an absent table — or an absent key — means off, i.e. current
+/// behavior with no device expectation and no gate beyond an explicit
+/// `nested≠off` plus the home-final seal).
+///
+/// The tri-state IS the conflict policy (no generic `on_conflict` field —
+/// a second knob could contradict the first): `require` fails closed at
+/// `up`, `prefer` warns at `plan` and degrades without the device (never
+/// refuses), `off` ignores. `require` demands the whole unit (guest
+/// /dev/kvm + VT-x/AMD-V together — the VMM yields both as one); there is
+/// deliberately NO `require_device` split (the old device-without-nested
+/// hole is closed BY DELETION) and NO backend namespacing (KVM is the only
+/// backend on this Linux-microVM arch; a second backend needs its own plan
+/// amendment). Non-Linux/x86_64 + `require` fails closed; `plan` stays
+/// portable (resolve + warn, never fail).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum NestedMode {
+    /// Current behavior: no device expectation, no checks.
+    #[default]
+    Off,
+    /// Use nested virt when the host offers it, else degrade without the
+    /// device (warn at `plan`, machine-readable degraded flag, never
+    /// refuse at `up`).
+    Prefer,
+    /// Guest must have /dev/kvm + VT-x/AMD-V; absent/unreadable (or CPU
+    /// nested disabled, or a home-final ban) → fail-closed refusal at `up`.
+    Require,
+}
+
+impl fmt::Display for NestedMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Off => "off",
+            Self::Prefer => "prefer",
+            Self::Require => "require",
+        };
+        f.write_str(s)
+    }
+}
+
+/// `[workloads.<name>.virtualization]` — the workload's nested-virt ASK
+/// (ADR 0036 §3, ask-vs-grant: the workload asks with strength
+/// require|prefer|off, like firewall allow-rules; home grants/restricts via
+/// [`VirtualizationPolicyFragment`]). `None` (absent table) = omitted → Off.
+/// An explicit `nested≠off` stands alone — no entitlement gate (the
+/// entitlements mechanism was removed 2026-09-04; review + home-final
+/// suffice). Merges whole-unit like [`InstancePolicy`]: a higher layer
+/// re-declaring the table replaces it wholesale.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VirtualizationConfig {
+    /// Tri-state demand; `None` = key omitted → Off (current behavior).
+    #[serde(default)]
+    pub nested: Option<NestedMode>,
+}
+
+/// `[policy.virtualization]` fragment — the HOME-registry operator seal
+/// (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final`
+/// seals. Collected per scope (home registry → config layers → workload
+/// capsule), NEVER merged — the same collect-never-merge idiom as the
+/// secrets/egress ladders. `final` seals, never enables: a freeze at
+/// `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban);
+/// `true` grants nothing by itself (the workload still needs an explicit
+/// `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is
+/// plan-time (`frozen_out` provenance; `up` refuses), NOT a
+/// validate-config error (validate stays static, no host I/O).
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VirtualizationPolicyFragment {
+    /// Operator grant/restriction for nested virt at this rung. `None` =
+    /// this rung declares no value (it may still freeze with `final`).
+    #[serde(default)]
+    pub allow_nested: Option<bool>,
+    /// Terminal freeze (mount-policy `final` vocabulary): when true, every
+    /// lower rung is frozen out and cannot override the value resolved at
+    /// this rung. Defaults to false.
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
+}
+
 /// A single workload definition (`workloads.<name>` in workestrate.toml).
 /// `kind` is `"agent"` (interactive TUI attach) or `"service"` (headless,
 /// detached by default); the remaining fields describe the image, resources,
@@ -1340,6 +1425,13 @@ pub struct WorkloadConfig {
     /// semantics land in Phases 2–3.
     #[serde(default)]
     pub instance: InstancePolicy,
+    /// Per-workload nested-virtualization ask
+    /// (`[workloads.<name>.virtualization]`; ADR 0036 §3). `None` (absent
+    /// table) = off — current behavior, no device expectation, no checks.
+    /// Merges whole-unit (last layer wins); the home `[policy.virtualization]`
+    /// seal is collected via the ladder, never merged.
+    #[serde(default)]
+    pub virtualization: Option<VirtualizationConfig>,
     /// Dependency declarations (`workloads.<name>.depends_on.<dep>`; ADR
     /// 0026(d)): each entry names another workload whose address is resolved
     /// from the port registry and injected as the declared env var at plan
@@ -1505,6 +1597,12 @@ pub struct PolicyConfig {
     /// default `reject` (ADR 0035 §3.5). Resolved before domain validation.
     #[serde(default)]
     pub idna: Option<IdnaPolicyFragment>,
+    /// Nested-virtualization operator seal (`[policy.virtualization]`; ADR
+    /// 0036 §3). Collected per scope (home registry, config layers,
+    /// workload capsule), never merged — the same idiom as the
+    /// secrets/egress ladders. `final` seals a denial, never enables.
+    #[serde(default)]
+    pub virtualization: Option<VirtualizationPolicyFragment>,
 }
 
 /// Conflict handling for a frozen rung (ADR 0035 §8). Per-ladder granular:
@@ -1795,6 +1893,8 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
     "local_build",
     "network",
     "policy",
+    "instance",
+    "virtualization",
     "depends_on",
 ];
 
@@ -3743,6 +3843,150 @@ strategy = "per-dir"
         assert_eq!(
             reparsed.workloads["pi"].instance.on_skew,
             Some(OnSkew::ReuseSilently)
+        );
+    }
+
+    // ---- ADR 0036: flat virtualization.nested tri-state + home seal ----
+
+    /// Each nested value parses; the absent-table and absent-key cases are
+    /// `None` (omitted → Off at decision time). Display strings match the
+    /// config vocabulary; the default is Off.
+    #[test]
+    fn nested_mode_variants_parse_and_default_off() {
+        for (value, expected) in [
+            ("off", NestedMode::Off),
+            ("prefer", NestedMode::Prefer),
+            ("require", NestedMode::Require),
+        ] {
+            let raw = format!(
+                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"{value}\"\n"
+            );
+            let config: ConfigFile = toml::from_str(&raw)
+                .unwrap_or_else(|e| panic!("nested = \"{value}\" must parse: {e}"));
+            assert_eq!(
+                config.workloads["pi"].virtualization,
+                Some(VirtualizationConfig {
+                    nested: Some(expected)
+                }),
+                "nested = \"{value}\""
+            );
+        }
+        // Absent table → None (omitted → Off).
+        let raw = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n";
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(config.workloads["pi"].virtualization, None);
+        // Absent key (empty table) → Some with nested None (omitted → Off).
+        let raw = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\n";
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.workloads["pi"].virtualization,
+            Some(VirtualizationConfig { nested: None })
+        );
+        assert_eq!(NestedMode::Off.to_string(), "off");
+        assert_eq!(NestedMode::Prefer.to_string(), "prefer");
+        assert_eq!(NestedMode::Require.to_string(), "require");
+        assert_eq!(NestedMode::default(), NestedMode::Off);
+    }
+
+    /// Unknown nested values and typos are rejected by serde's closed
+    /// vocabulary (citing the ADR surface in the test message, not the
+    /// error — the error itself is serde's unknown-variant text).
+    #[test]
+    fn nested_mode_unknown_value_rejected() {
+        for bad in ["on", "yes", "REQUIRE", "required", "preferr"] {
+            let raw = format!(
+                "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"{bad}\"\n"
+            );
+            let err = toml::from_str::<ConfigFile>(&raw).unwrap_err().to_string();
+            assert!(
+                err.contains("unknown variant"),
+                "unknown nested value '{bad}' must fail closed-vocab (ADR 0036): {err}"
+            );
+        }
+    }
+
+    /// Stray keys inside `[workloads.<name>.virtualization]` hard-error via
+    /// `deny_unknown_fields` — the deleted `require_device` shape must NOT
+    /// parse (the hole is closed by deletion, ADR 0036 §3).
+    #[test]
+    fn virtualization_unknown_field_rejected() {
+        for raw in [
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"\nrequire_device = true\n",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnestd = \"require\"\n",
+        ] {
+            let err = toml::from_str::<ConfigFile>(raw).unwrap_err().to_string();
+            assert!(
+                err.contains("unknown field"),
+                "stray virtualization key must fail: {err}"
+            );
+        }
+    }
+
+    /// The home `[policy.virtualization]` seal fragment parses; `final`
+    /// defaults to false; stray keys (a nested_virtualization entitlement
+    /// remnant, a require_device) hard-error.
+    #[test]
+    fn virtualization_policy_fragment_parses_and_seals() {
+        let raw = "schema_version = 1\n\n[policy.virtualization]\nallow_nested = false\nfinal = true\n";
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.policy.virtualization,
+            Some(VirtualizationPolicyFragment {
+                allow_nested: Some(false),
+                r#final: true,
+            })
+        );
+        // Absent policy section → None (no restriction).
+        let raw = "schema_version = 1\n";
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(config.policy.virtualization, None);
+        // `final` defaults to false.
+        let raw = "schema_version = 1\n\n[policy.virtualization]\nallow_nested = true\n";
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        assert_eq!(
+            config.policy.virtualization,
+            Some(VirtualizationPolicyFragment {
+                allow_nested: Some(true),
+                r#final: false,
+            })
+        );
+        // Stray keys hard-error.
+        let raw = "schema_version = 1\n\n[policy.virtualization]\nallow_nested = true\nnested_virtualization = true\n";
+        let err = toml::from_str::<ConfigFile>(raw).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown field"),
+            "entitlement remnant must fail: {err}"
+        );
+    }
+
+    /// `WORKLOAD_FIELDS` covers the override-lenient surface: both the new
+    /// `virtualization` key and the previously-missing `instance` key
+    /// (bundled fix — `InstancePolicy` exists but the key was absent, so
+    /// overrides on `instance` warned as typos).
+    #[test]
+    fn workload_fields_covers_virtualization_and_instance() {
+        assert!(
+            WORKLOAD_FIELDS.contains(&"virtualization"),
+            "WORKLOAD_FIELDS must list virtualization: {WORKLOAD_FIELDS:?}"
+        );
+        assert!(
+            WORKLOAD_FIELDS.contains(&"instance"),
+            "WORKLOAD_FIELDS must list instance: {WORKLOAD_FIELDS:?}"
+        );
+    }
+
+    /// An explicit nested value survives a serialize/deserialize round-trip.
+    #[test]
+    fn virtualization_round_trips() {
+        let raw = "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"\n";
+        let config: ConfigFile = toml::from_str(raw).unwrap();
+        let serialized = toml::to_string(&config).unwrap();
+        let reparsed: ConfigFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            reparsed.workloads["pi"].virtualization,
+            Some(VirtualizationConfig {
+                nested: Some(NestedMode::Require)
+            })
         );
     }
 }
