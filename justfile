@@ -15,8 +15,9 @@ shell *args:
     set -euo pipefail
     _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
     mkdir -p "$_devenv_root_dir"
-    _devenv_root_file="$_devenv_root_dir/workestrate"
-    printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+    _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+    printf '%s' "$_repo_root" > "$_devenv_root_file"
     exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" {{args}}
 
 # Lock-guard: pre-resolution fork-pin check for control/agentctl/Cargo.lock
@@ -87,8 +88,9 @@ _check-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _check-inner
     fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
@@ -110,8 +112,9 @@ _spec-examples-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _spec-examples-inner
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test spec_examples_parse
@@ -131,8 +134,9 @@ _verify-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _verify-inner
     fi
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
@@ -155,8 +159,9 @@ _golden-generate-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _golden-generate-inner
     fi
     @for name in example-service example-agent example-offensive; do \
@@ -178,8 +183,9 @@ _golden-check-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _golden-check-inner
     fi
     @for name in example-service example-agent example-offensive; do \
@@ -206,8 +212,9 @@ generate-schema:
     set -euo pipefail
     _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
     mkdir -p "$_devenv_root_dir"
-    _devenv_root_file="$_devenv_root_dir/workestrate"
-    printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+    _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+    printf '%s' "$_repo_root" > "$_devenv_root_file"
     nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json --output-workload schemas/workestrate-workload.schema.json --output-registry schemas/registry.schema.json
     echo "schema written to schemas/workestrate.schema.json"
     echo "workload schema written to schemas/workestrate-workload.schema.json"
@@ -230,8 +237,9 @@ _schema-check-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _schema-check-inner
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_drift
@@ -253,8 +261,9 @@ _schema-sync-check-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _schema-sync-check-inner
     fi
     cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- schemas update --check
@@ -277,8 +286,9 @@ _scaffold-check-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _scaffold-check-inner
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test scaffold_template
@@ -296,8 +306,9 @@ _build-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _build-inner
     fi
     cargo build --release --manifest-path control/agentctl/Cargo.toml
@@ -315,8 +326,9 @@ _fmt-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _fmt-inner
     fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml
@@ -335,8 +347,9 @@ _fmt-check-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _fmt-check-inner
     fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
@@ -355,8 +368,9 @@ _clippy-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _clippy-inner
     fi
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
@@ -375,8 +389,9 @@ _test-inner *args:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _test-inner {{args}}
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml {{args}}
@@ -401,8 +416,9 @@ _workestrate-inner *args:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _workestrate-inner {{args}}
     fi
     cargo run --manifest-path control/agentctl/Cargo.toml -- {{args}}
@@ -420,8 +436,9 @@ _plan-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _plan-inner
     fi
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-service plan
@@ -449,8 +466,9 @@ setup-secrets *args:
     set -euo pipefail
     _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
     mkdir -p "$_devenv_root_dir"
-    _devenv_root_file="$_devenv_root_dir/workestrate"
-    printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+    _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+    printf '%s' "$_repo_root" > "$_devenv_root_file"
     exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c setup-secrets {{args}}
 
 # Validate the full secrets workflow (non-interactive, uses test values)
@@ -459,8 +477,9 @@ validate-secrets:
     set -euo pipefail
     _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
     mkdir -p "$_devenv_root_dir"
-    _devenv_root_file="$_devenv_root_dir/workestrate"
-    printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+    _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+    printf '%s' "$_repo_root" > "$_devenv_root_file"
     exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c scripts/validate-secrets-workflow.sh
 
 # Replace the Nix-managed vendor symlink with a writable copy for local editing
@@ -565,8 +584,9 @@ _tombi-check-inner:
         # input with a file holding this worktree's abs path (see `shell`).
         _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
         mkdir -p "$_devenv_root_dir"
-        _devenv_root_file="$_devenv_root_dir/workestrate"
-        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _tombi-check-inner
     fi
     ./scripts/check-toml.sh

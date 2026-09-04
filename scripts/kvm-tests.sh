@@ -32,7 +32,7 @@ cd "$REPO"
 # holding this worktree's abs path (same mechanism as the justfile guards).
 DEVENV_ROOT_DIR="$HOME/.cache/workestrate/devenv-root"
 mkdir -p "$DEVENV_ROOT_DIR"
-DEVENV_ROOT_FILE="$DEVENV_ROOT_DIR/workestrate"
+DEVENV_ROOT_FILE="$DEVENV_ROOT_DIR/$(printf '%s' "$REPO" | sha256sum | cut -c1-12)"
 printf '%s' "$REPO" > "$DEVENV_ROOT_FILE"
 DEVENV_OVERRIDE=(--override-input devenv-root "file+file://$DEVENV_ROOT_FILE")
 

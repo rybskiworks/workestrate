@@ -10,7 +10,7 @@
 #   1 — one or more checks failed, or a wrapper invocation failed
 #
 # Usage:
-#   just validate-secrets   (or: nix develop --override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate" -c scripts/validate-secrets-workflow.sh)
+#   just validate-secrets   (or: nix develop --override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/<sha256-of-worktree-path-12>" -c scripts/validate-secrets-workflow.sh)
 #
 # Note: This script must be run via `just validate-secrets` or with the devenv-root override.
 #       All work happens in an isolated temp directory; no repo files are modified.
@@ -208,8 +208,9 @@ run_in_workdir() {
   printf -v cmd 'cd %q && %s' "$WORKDIR" "$1"
   local root_dir="$HOME/.cache/workestrate/devenv-root"
   mkdir -p "$root_dir"
-  printf '%s' "$REPO_ROOT" > "$root_dir/workestrate"
-  (cd "$REPO_ROOT" && nix develop --override-input devenv-root "file+file://$root_dir/workestrate" -c bash -c "$cmd")
+  local root_file="$root_dir/$(printf '%s' "$REPO_ROOT" | sha256sum | cut -c1-12)"
+  printf '%s' "$REPO_ROOT" > "$root_file"
+  (cd "$REPO_ROOT" && nix develop --override-input devenv-root "file+file://$root_file" -c bash -c "$cmd")
 }
 
 # PHASE 1: init
