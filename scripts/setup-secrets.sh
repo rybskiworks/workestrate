@@ -155,6 +155,7 @@ fi
 
 : "${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/ai-workbench-secrets.txt}"
 export SOPS_AGE_KEY_FILE
+KEY_DIR="$(dirname "$SOPS_AGE_KEY_FILE")"
 
 SOPS_CONFIG=".sops.yaml"
 SCHEMA_FILE=".env.example"
