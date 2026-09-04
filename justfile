@@ -60,6 +60,16 @@ versions-check:
     ./scripts/check-msb-versions.sh
 
 check:
+    @just _check-inner
+[private]
+_check-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _check-inner
+    fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
     cargo check --manifest-path control/agentctl/Cargo.toml
@@ -67,11 +77,31 @@ check:
 # Parse every fenced toml block in docs/migration/20-target-system-spec.md
 # against the ConfigFile schema shape (WP4 / D1 standing guard).
 spec-examples:
+    @just _spec-examples-inner
+[private]
+_spec-examples-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _spec-examples-inner
+    fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test spec_examples_parse
 
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # golden-check, schema drift, lock-file stability, AND nix-purity lint.
 verify: lock-guard toolchain-check versions-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
+    @just _verify-inner
+[private]
+_verify-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _verify-inner
+    fi
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
@@ -80,6 +110,16 @@ verify-full: verify
 
 # Generate golden plan files for all workloads
 golden-generate:
+    @just _golden-generate-inner
+[private]
+_golden-generate-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _golden-generate-inner
+    fi
     @for name in example-service example-agent example-offensive; do \
         WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
           > control/agentctl/tests/golden/$name.plan.txt; \
@@ -87,6 +127,16 @@ golden-generate:
 
 # Check golden plan parity
 golden-check:
+    @just _golden-check-inner
+[private]
+_golden-check-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _golden-check-inner
+    fi
     @for name in example-service example-agent example-offensive; do \
         WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
           | diff - control/agentctl/tests/golden/$name.plan.txt \
@@ -119,6 +169,16 @@ generate-schema:
 # (ADR 0021 §8). Invokes control/agentctl/tests/schema_drift.rs (all three
 # artifacts) plus the workload-only control/agentctl/tests/schema_subschema_drift.rs.
 schema-check:
+    @just _schema-check-inner
+[private]
+_schema-check-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _schema-check-inner
+    fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_drift
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_subschema_drift
 
@@ -126,6 +186,16 @@ schema-check:
 # tool home, and registered config repos). Exits 1 when any consumer copy
 # is stale or missing; run `workestrate schemas update` to refresh.
 schema-sync-check:
+    @just _schema-sync-check-inner
+[private]
+_schema-sync-check-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _schema-sync-check-inner
+    fi
     cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- schemas update --check
 
 # CI drift guard for the `workestrate config new` scaffold. Invokes
@@ -134,25 +204,85 @@ schema-sync-check:
 # output, and (when `copier` is available) enforces byte-parity with the
 # copier template's minimal-personal render + copier-update interop.
 scaffold-check:
+    @just _scaffold-check-inner
+[private]
+_scaffold-check-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _scaffold-check-inner
+    fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test scaffold_template
 
 build:
+    @just _build-inner
+[private]
+_build-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _build-inner
+    fi
     cargo build --release --manifest-path control/agentctl/Cargo.toml
 
 fmt:
+    @just _fmt-inner
+[private]
+_fmt-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _fmt-inner
+    fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml
 
 # Check formatting without modifying files
 fmt-check:
+    @just _fmt-check-inner
+[private]
+_fmt-check-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _fmt-check-inner
+    fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
 
 # Run Clippy with -D warnings (standalone)
 clippy:
+    @just _clippy-inner
+[private]
+_clippy-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _clippy-inner
+    fi
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
 
 # Run unit tests
-test:
-    cargo test --manifest-path control/agentctl/Cargo.toml
+test *args:
+    @just _test-inner {{args}}
+[private]
+_test-inner *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _test-inner {{args}}
+    fi
+    cargo test --manifest-path control/agentctl/Cargo.toml {{args}}
 
 # Run the three ignored KVM tests (lifecycle_detached, flake_root_gate,
 # ensure_images_e2e) via the encapsulated entry point. HOST-KVM only:
@@ -162,9 +292,29 @@ kvm-tests:
     ./scripts/kvm-tests.sh
 
 workestrate *args:
+    @just _workestrate-inner {{args}}
+[private]
+_workestrate-inner *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _workestrate-inner {{args}}
+    fi
     cargo run --manifest-path control/agentctl/Cargo.toml -- {{args}}
 
 plan:
+    @just _plan-inner
+[private]
+_plan-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _plan-inner
+    fi
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-service plan
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-agent plan
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-offensive plan
@@ -278,4 +428,14 @@ lint-nix:
 # config.reference/workestrate.toml) via scripts/check-toml.sh.
 # Wired into `verify`.
 tombi-check:
+    @just _tombi-check-inner
+[private]
+_tombi-check-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        exec nix develop -c just _tombi-check-inner
+    fi
     ./scripts/check-toml.sh

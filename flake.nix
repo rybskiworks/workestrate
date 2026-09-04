@@ -698,6 +698,7 @@
               export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
               mkdir -p "$CARGO_TARGET_DIR"
               export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
+              export WORKESTRATE_DEVSHELL=1
 
               _tool_repo_root() {
                 local root

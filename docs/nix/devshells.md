@@ -298,23 +298,24 @@ version, shorthand `channel:nixos-22.11`.
 
 ### direnv integration
 
-From crawl 36:
-
-> "Instead of manually activating the environment for each project, you can
-> reload a declarative shell every time you enter the project's directory or
-> change the `shell.nix` inside it."
-
-Setup (crawl 36):
+Workestrate does NOT use direnv — there is no `.envrc` in this repo. The
+canonical entry is a single command:
 
 ```shell
-# For shell.nix projects
-echo "use nix" > .envrc && direnv allow
-
-# For flake projects
-echo "use flake" > .envrc && direnv allow
+nix develop
 ```
 
-direnv auto-reloads on `shell.nix` changes (crawl 36).
+for an interactive shell, or `nix develop -c <cmd>` for a one-shot command
+(crawl 63). Additionally, every toolchain-consuming `just` recipe is
+self-enshelling: it re-execs itself via `nix develop -c` when
+`$WORKESTRATE_DEVSHELL` (exported by the devshell `enterShell`) is unset, so
+a bare `just <recipe>` from a plain host shell just works — no direnv, no
+`.envrc`, no `direnv allow`.
+
+(Background, retained for reference: crawl 36 describes direnv
+auto-reloading a declarative shell on directory entry — `use nix` /
+`use flake` + `direnv allow`, auto-reloading on `shell.nix` changes. That
+pattern is intentionally not used here.)
 
 ### Devshell purity
 
@@ -402,7 +403,9 @@ The devshell takes 17 arguments passed from `flake.nix`.
    (crawl 63).
 8. Use `--pure`/`--impure` deliberately; omit `--pure` for dev, add for
    CI/isolation (crawl 06).
-9. Use direnv + `use flake` for automatic environment activation (crawl 36).
+9. Enter via `nix develop` (`nix develop -c <cmd>` non-interactive); in
+    workestrate, `just` recipes self-enshell via `$WORKESTRATE_DEVSHELL`, so
+    no direnv is needed (crawl 36 background only).
 10. Relocate large build outputs (e.g. `CARGO_TARGET_DIR`) out of the source
     tree in `shellHook`.
 11. Use `inputsFrom` to inherit build dependencies from existing derivations
@@ -420,7 +423,7 @@ The devshell takes 17 arguments passed from `flake.nix`.
 - [ ] Large build outputs relocated out of source tree?
 - [ ] `shellHook` functions unset after use?
 - [ ] Untracked files `git add -N`'d before eval?
-- [ ] direnv `.envrc` uses `use flake` for flake projects?
+- [ ] No `.envrc`/direnv — toolchain `just` recipes self-enshell via `$WORKESTRATE_DEVSHELL`?
 - [ ] `inputsFrom` used to inherit deps from existing derivations where applicable?
 - [ ] `nix develop -c` used for non-interactive commands?
 - [ ] `--pure`/`--impure` chosen deliberately, not by accident?
@@ -437,7 +440,7 @@ The devshell takes 17 arguments passed from `flake.nix`.
 - [ ] For multi-system: use `flake-utils.lib.eachDefaultSystem`.
 - [ ] Relocate large build outputs (`CARGO_TARGET_DIR`) in `shellHook`.
 - [ ] `unset -f` any helper functions defined in `shellHook`.
-- [ ] Add `.envrc` with `use flake` if using direnv.
+- [ ] Do NOT add `.envrc` — recipes auto-enter via `nix develop` (self-enshelling).
 - [ ] `git add -N` new files before first `nix develop`.
 
 ## Runtime / debugging checklist
@@ -579,15 +582,16 @@ pkgs.mkShell {
 }
 ```
 
-### direnv .envrc
+### Shell entry (no direnv)
 
 ```shell
-# For shell.nix projects
-echo "use nix" > .envrc && direnv allow
-
-# For flake projects
-echo "use flake" > .envrc && direnv allow
+nix develop            # interactive shell
+nix develop -c <cmd>   # one-shot command in the devshell
 ```
+
+Bare `just <recipe>` also works from a plain host shell: toolchain recipes
+self-enshell (`nix develop -c just _<recipe>-inner`) when
+`$WORKESTRATE_DEVSHELL` is unset. No `.envrc`, no `direnv allow`.
 
 ### Workestrator devshell excerpt (shellHook — CARGO_TARGET_DIR relocation)
 
