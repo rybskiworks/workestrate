@@ -515,24 +515,44 @@ and does not fail.
 
 Common `just` recipes:
 
+Cargo-backed recipes are **self-enshelling**: invoked from a plain host shell
+they re-exec themselves inside `nix develop` (guarded by
+`$WORKESTRATE_DEVSHELL`); this repo uses no direnv and has no `.envrc`.
+
 | Recipe | What it does |
 |---|---|
+| `just lock-guard` | Pre-resolution fork-pin check of `control/agentctl/Cargo.lock` (no-registry-source, `==X` pins, smoltcp-vs-fork); first gate of `verify` |
+| `just toolchain-check` | Host `rustc` major.minor vs the fenix-pinned toolchain (version parsed from the `flake.nix` marker) |
+| `just versions-check` | msb version (0.6.16) and fork-rev pins agree across nix packages, `Cargo.toml`, `versions.rs`, `flake.nix`, `flake.lock` |
 | `just check` | Run `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo check` for `control/agentctl` |
-| `just tombi-check` | TOML format/lint/schema gate via tombi 1.2.5 (repo, scaffolded config repos, homes) |
-| `just verify` | Full pre-merge gate: `lock-guard` + `toolchain-check`, `just check`, `cargo test`, spec-examples, `tombi-check`, golden/schema/scaffold/nix-purity gates, and `Cargo.lock` stability check |
+| `just spec-examples` | Parse every fenced toml block in `docs/migration/20-target-system-spec.md` against the `ConfigFile` schema |
+| `just verify` | Full pre-merge gate: `lock-guard`, `toolchain-check`, `versions-check`, `check`, `test`, `spec-examples`, `tombi-check`, golden/schema/schema-sync/scaffold checks, `lint-nix`, `store-audit`, plus the `Cargo.lock` stability step |
 | `just verify-full` | Heaviest validation: `just verify` plus `nix build .#workestrate` |
-| `just build` | Build the `workestrate` binary |
+| `just golden-generate` | Generate golden plan files for `example-service`, `example-agent`, `example-offensive` |
+| `just golden-check` | Check golden plan parity (run `just golden-generate` on mismatch) |
+| `just generate-schema` | Regenerate the canonical, workload, and registry JSON Schemas from the schemars-derived types into `schemas/` |
+| `just schema-check` | CI drift guard for the committed `schemas/*.schema.json` artifacts |
+| `just schema-sync-check` | Drift guard for the consumer schema copies (scaffold template, tool home, registered config repos) |
+| `just scaffold-check` | Drift guard for the `workestrate config new` scaffold (render, `validate-config`, copier byte-parity) |
+| `just build` | Release build of the `workestrate` binary (`cargo build --release`) |
 | `just fmt` | Format the Rust code |
 | `just fmt-check` | Check formatting without modifying files |
-| `just clippy` | Run Clippy with `-D warnings` |
-| `just test` | Run unit tests for `control/agentctl` |
+| `just clippy` | Run Clippy with `-D warnings` (standalone) |
+| `just test` | Run unit tests for `control/agentctl` (extra args pass through to `cargo test`) |
+| `just kvm-tests` | Run the three ignored KVM tests host-side via `scripts/kvm-tests.sh` (preflights `/dev/kvm`, serial, PASS/FAIL summary) |
 | `just workestrate …` | Run `cargo run --manifest-path control/agentctl/Cargo.toml -- …` (e.g. `just workestrate workload plan litellm`) |
 | `just plan` | Run synthetic workload plans (`example-service`, `example-agent`, `example-offensive`) via `cargo run` |
 | `just host-check` | Verify KVM, Nix, memory, and disk prerequisites |
+| `just host-provision` | Sync the nix-profile `workestrate` binary to the current tree, then host-check + `workestrate doctor` and a readiness verdict (idempotent) |
+| `just provision-check` | Read-only provisioning check: profile singularity, version identity, msb/agentd liveness; never installs |
+| `just setup-secrets init` | Bootstrap or update encrypted secrets from the dev shell |
 | `just validate-secrets` | Exercise the SOPS/age workflow against ephemeral test values |
-| `just setup-secrets init` | Run `setup-secrets init` from the dev shell |
-| `just vendor-unlock` | Replace the vendor symlink with a writable copy of the patched Microsandbox crate |
-| `just vendor-lock` | Remove the vendor copy so the dev shell recreates the symlink |
+| `just vendor-unlock` | Replace the Nix-managed vendor symlink with a writable copy of the patched Microsandbox crate |
+| `just vendor-lock` | Remove the local vendor copy so `nix develop` recreates the symlink |
+| `just gc` | `nix-collect-garbage --delete-old` + `nix store optimise` (anti-accumulation maintenance) |
+| `just store-audit` | Top-20 store paths by closure size + blocking `*ai-workbench*-source` >50 MB gate (final step of `verify`; non-blocking skip when nix/python3 are absent) |
+| `just lint-nix` | Lint nix code for purity violations (`scripts/check-nix-paths.sh`; wired into `verify`) |
+| `just tombi-check` | TOML format/lint/schema gate via tombi (repo, scaffolded config repos, homes) |
 
 > **Nix note:** New files must be `git add`-ed before `nix build` or `nix develop`
 > will see them. Nix flakes only include git-tracked files in the source tree.

@@ -4,7 +4,7 @@ description: |
   Reference for the ai-workbench Nix flake, dev shell, Rust toolchain, and
   Microsandbox runtime. Load when users ask about `nix develop`, `nix build`,
   `nix flake check`, `nix run`, flake outputs, Nix PATH issues, building
-  `workestrate`, or why `msb` is downloaded at runtime. Does NOT cover general
+  `workestrate`, or how `msb` is provided in this repo. Does NOT cover general
   Nix tutorials.
 ---
 
@@ -18,11 +18,12 @@ tools, and the Rust toolchain come from the flake. If Nix is broken, fix it.
 Load this skill when:
 
 - Running or explaining `nix develop`, `nix build`, `nix flake check`, or
-  `nix run` inside `/home/node/Development/ai-workbench/`.
+  `nix run` inside `/home/node/Development/agent-workbench/workestrate/`.
 - Diagnosing Nix PATH/profile issues (`nix: command not found`, dangling
   `~/.nix-profile`, missing `~/.nix-profile/bin/...`).
 - Building `workestrate` (`nix build .#workestrate`).
-- Explaining that `msb` is downloaded at runtime by the Microsandbox SDK.
+- Explaining how `msb` is provided (Nix-pinned `msb-wrapped` in the dev
+  shell; `MSB_PATH` baked into the binary).
 - Modifying `flake.nix`, `flake.lock`, or files under `nix/`.
 
 ## Corpus References
@@ -57,7 +58,7 @@ detail, upstream source URLs, and crawl ledgers.
 
 ## Project Context
 
-- **Project root**: `/home/node/Development/ai-workbench/`
+- **Project root**: `/home/node/Development/agent-workbench/workestrate/`
 - **Container**: Debian 12, single Docker container
 - **User**: `node` (uid 1000), no `sudo`, no root
 - **Source**: Rust `workestrate` lives in `control/agentctl/`
@@ -91,7 +92,7 @@ nix --version
 nix shell nixpkgs#hello -c hello
 
 # Flake
-cd /home/node/Development/ai-workbench
+cd /home/node/Development/agent-workbench/workestrate
 nix flake check --no-build
 
 # Dev shell tools
@@ -114,19 +115,31 @@ Current outputs:
 
 There is NO `packages.default`, NO `nix fmt`, and NO `nix run .#default`.
 
-The dev shell (`nix/devshells/default.nix`) provides `cargo`, `clippy`,
-`gcc`, `just`, `pkg-config`, `rustc`, `rustfmt` in `nativeBuildInputs`,
-plus `git`, `libcap_ng`, and `openssl` in `buildInputs`.
+The dev shell is a devenv config defined inline in `flake.nix` (perSystem);
+its packages list provides `cargo`, `clippy`, `rustc`, `rustfmt`,
+`rust-analyzer`, `gcc`, `just`, `pkg-config`, `git`, `libcap_ng`, `openssl`,
+`sops`, `age`, `tombi`, `jq`, `curl`, `nodejs_24`, `bun`, python3/3.12, plus
+`msb-wrapped` and `workestrate`.
 
-Lock file inputs:
+Lock file inputs (root; revs as currently locked in `flake.lock` — re-read
+the lock before citing, pins move with deliberate updates):
 
-- `nixpkgs` (github:NixOS/nixpkgs/nixos-unstable)
-- `pi` (github:georgrybski/pi, `flake=false`)
-- `odysseus` (github:georgrybski/odysseus, `flake=false`)
+- `nixpkgs` — `github:NixOS/nixpkgs` @ `a799d3e3886da994fa307f817a6bc705ae538eeb`
+- `fenix` — `github:nix-community/fenix` @ `fa09e6473a0dfd673e6cb9a37741aec513b4bb2a` (owned toolchain pin; its `nixpkgs` follows ours)
+- `microsandbox-fork` — `github:rybskiworks/microsandbox` @ `78fb3ed12623526ad02f5999047c12953013c395`
+- `tooling` — `github:rybskiworks/nix-tooling` @ `2a5796179339a2322e3d01f599e82e3322c8ad4b` (shared devenv modules; its `nixpkgs` follows ours)
+- `devenv` — `github:cachix/devenv` @ `97135e80b6e432f41f84f72383e1b8147f33ef0c`
+- `flake-parts` — `github:hercules-ci/flake-parts` @ `9d0d87172c374f89da73c1cfe6d81ae62feac1f1`
+- `git-hooks` — `github:cachix/git-hooks.nix` @ `27555e2624241fb116b49095df4caaee85a25691`
+- `mk-shell-bin` — `github:rrbutani/nix-mk-shell-bin` @ `ff5d8bd4d68a347be5042e2f16caee391cd75887`
+- `nix2container` — `github:nlewo/nix2container` @ `76be9608a7f4d6c985d28b0e7be903ae2547df3e`
+- `treefmt-nix` — `github:numtide/treefmt-nix` @ `27b3b12a8e6375f28ebe122f07d230ca5459bbfa`
+- `devenv-root` — `file:///dev/null` placeholder (devenv root-file thunk)
 
-`agents/pi/` is an optional gitignored local override; `workestrate check`
-reports it `[MISSING]` if absent. The locked `pi` input is what
-`nix build .#workestrate` actually uses.
+There are NO `pi`/`odysseus` flake inputs in this repo. `agents/<name>/repo`
+directories are optional gitignored local overrides (`workestrate check`
+reports them `[MISSING]`); agent sources are pinned in the config repos' own
+flakes, not here.
 
 Update the lock only deliberately:
 
@@ -146,8 +159,10 @@ CI should NOT run `nix flake update`.
   `result-`.
 - **Microsandbox build.rs**: writes to `$HOME/.microsandbox/bin`. The
   derivation sets `HOME=$TMPDIR`. Outside the Nix sandbox, do the same.
-- **Runtime daemon**: `msb` and the kernel image are NOT bundled in the
-  Nix closure. The Microsandbox Rust SDK downloads them on first use.
+- **Runtime daemon**: `msb` is Nix-provided — the `microsandbox` package
+  builds it (pinned 0.6.16 at the fork rev above); the dev shell ships
+  `msb-wrapped` and the `agentctl` derivation bakes `MSB_PATH` to the store
+  binary. No runtime binary download.
 
 ## Store hygiene
 
@@ -235,13 +250,12 @@ of gitignored `target/` alone.
   referencing `ai-workbench` (impure-path probe). Skips with a one-line
   note when nix is unavailable.
 
-  > **Status (Track 1):** V2 has landed — store-audit runs with
-  > `--fail-if-source-over 50` and is wired into `just verify`
-  > (justfile:71,291), so `verify` now fails when `*-source` paths
-  > exceed the 50M threshold. V3 (`just store-delta-check`, justfile:299)
-  > exists as a recipe but is NOT yet wired into `verify` — it is a
-  > periodic host/CI check that fails on new source-path copies
-  > exceeding the <50M criterion from the remediation spec.
+  > **Status (Track 1):** the source-path gate runs with
+  > `--fail-if-source-over 50` and `just store-audit` is wired into
+  > `just verify` as the final step, so `verify` fails when `ai-workbench`
+  > `*-source` paths exceed the 50M threshold (non-blocking skip when nix
+  > or python3 is unavailable). The earlier V3 `store-delta-check` recipe
+  > no longer exists in the justfile.
 
 - **`just gc`** — `nix-collect-garbage --delete-old` + `nix store
   optimise` (dedupe). Reclaims unreachable paths and deduplicates
@@ -258,14 +272,15 @@ of gitignored `target/` alone.
 
 - **NO bare `cargo` or `rustc`** — always use `nix develop` or
   `nix develop -c ...`.
-- **NO `apt-get` / `dpkg`** — add packages to `nix/devshells/default.nix`.
+- **NO `apt-get` / `dpkg`** — add packages to the devenv packages list in
+  `flake.nix`.
 - **NO `rustup`** — the toolchain comes from Nix.
 - **NO bypassing the flake** because it is slow or seems broken — diagnose
   and fix.
 - **NO `nix fmt`** — the project does not configure a formatter.
 - **NO `nix build .#default`** — there is no such output.
-- **NO expecting `msb` in the closure** — it is downloaded at runtime by the
-  SDK.
+- **NO hand-downloading `msb` binaries** — it is Nix-provided
+  (`msb-wrapped` in the dev shell; host profile via `just host-provision`).
 
 ## Known Limitations
 
@@ -273,8 +288,9 @@ of gitignored `target/` alone.
   run `nix doctor`.
 - No `sudo`; system-wide changes are impossible.
 - Pre-populated `/nix/store`.
-- "Git tree is dirty" warnings are benign because `flake.nix` and `nix/`
-  are uncommitted.
+- **Git-filtered sources**: `nix build .` sees only git-tracked files;
+  untracked work is invisible until `git add -N` (see Flake hygiene).
+  Dirty-worktree warnings are benign.
 
 ## Failure Modes
 
@@ -286,6 +302,6 @@ of gitignored `target/` alone.
 | `linking with '.../.toolchain/...'` failed | Ran cargo outside `nix develop` | Use `nix develop -c cargo ...` |
 | `error: 'packages.x86_64-linux.default' is not a flake output` | Used `.#default` | Use `.#workestrate`; there is no default |
 | `cargo: command not found` / `gcc: command not found` | Outside dev shell | Run inside `nix develop` |
-| `msb: command not found` at runtime | SDK has not downloaded it yet | First use downloads it; check network or pre-stage |
+| `msb: command not found` | Outside the dev shell and no profile install | Use `nix develop` (ships `msb-wrapped`) or `just host-provision`; `MSB_PATH` overrides the resolved binary |
 | Build error mentioning `$HOME/.microsandbox/bin` | build.rs writing outside sandbox | Set `HOME=$TMPDIR` (derivation already does this) |
 | Store grows ~1GB/min during edits | Impure source filter copying target/ or agents/*/build | Run `just gc` + `just store-audit`; fix the source filter per docs/nix-purity.md |

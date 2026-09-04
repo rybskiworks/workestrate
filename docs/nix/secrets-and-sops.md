@@ -24,8 +24,10 @@ the world-readable Nix store or in plaintext at rest.
 - Project file: `docs/secrets.md` — the project's secrets documentation (PRIMARY SOURCE)
 - Project file: `flake.nix` — SOPS integration (`decrypt-env`, `write-env`,
   `setup-secrets` packages)
-- Project file: `.envrc` — direnv integration and `WORKESTRATE_HOME`
-- Project file: `nix/devshells/default.nix` — `sops` and `age` in devshell
+- `README.md` — dev-shell entry: `nix develop` or the self-enshelling `just`
+  recipes (direnv and `.envrc` were removed from this repo; `$WORKESTRATE_HOME`
+  is resolved by the CLI, not the shell)
+- Project file: `flake.nix` — dev-shell (devenv config in `perSystem`) packages: `sops`, `age`, `tombi`, …
 - External: https://github.com/getsops/sops — SOPS (Secrets OPerationS)
 - External: https://age-encryption.org/ — age encryption
 - External: https://github.com/Mic92/sops-nix — sops-nix NixOS module
@@ -302,7 +304,7 @@ is hermetic and safe to run in CI.
 
 ## Implementation checklist
 
-- [ ] Install `sops` and `age` in the devshell (`nix/devshells/default.nix`).
+- [ ] Install `sops` and `age` in the dev shell (`flake.nix` devenv packages list).
 - [ ] Add `decrypt-env`, `write-env`, `setup-secrets` as flake packages
       (`flake.nix`).
 - [ ] Create `.sops.yaml` with creation rules mapping `.env.enc` to the age
@@ -536,5 +538,4 @@ age.secrets.my-api-key = {
 [5] [Nix best practices](https://nix.dev/guides/best-practices.html)
 [6] [ai-workbench secrets documentation](../secrets.md)
 [7] [ai-workbench flake.nix](../../flake.nix)
-[8] [ai-workbench .envrc](../../.envrc)
-[9] [ai-workbench devshell](../../nix/devshells/default.nix)
+[8] [ai-workbench devshell (flake.nix devenv config)](../../flake.nix)
