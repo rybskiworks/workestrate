@@ -51,6 +51,14 @@ toolchain-check:
     fi
     echo "OK: rustc $actual matches pinned toolchain"
 
+# Phase-0 observability pin check: the hand-maintained msb version pin
+# ("0.6.16") and fork rev pin must agree across the nix packages,
+# control/agentctl/Cargo.toml, control/agentctl/src/commands/versions.rs,
+# flake.nix, and flake.lock. Bash+python3 only (no cargo/nix), runs in <1s.
+# Wired into `verify` after toolchain-check.
+versions-check:
+    ./scripts/check-msb-versions.sh
+
 check:
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
@@ -63,7 +71,7 @@ spec-examples:
 
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # golden-check, schema drift, lock-file stability, AND nix-purity lint.
-verify: lock-guard toolchain-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
+verify: lock-guard toolchain-check versions-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build
