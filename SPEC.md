@@ -191,6 +191,9 @@ remediation. `secrets = "none"` repos are skipped silently.
   stands alone (absent = deny; home `final` seals still veto); egress hosts are validated
   against `ALLOWED_EGRESS_HOSTS` at merge time (fail-closed);
   `deny_rules`/`egress_rules`/`secret_env` are additive-union.
+  A relaxed `[network.defaults]` flip rides the ladder freeze walk as a
+  synthetic lowest-rung allow-all, so a home (or layer) covering final deny
+  seals it and the default stays deny (coarse FIX1 parity).
 - **Trust gating:** project-layer config (`./workestrate.toml`,
   `./workestrate.local.toml`) is only loaded if cwd is in
   `[trusted_projects]`. Untrusted discovery prints a one-time warning and
@@ -209,7 +212,8 @@ T3MP3ST (tempest) is an exception: it uses `egress = "allow"` (broad
 egress) because it is an offensive-security tool that needs to reach
 arbitrary targets for scanning. The microVM boundary itself is the
 containment layer for tempest. `egress = "allow"` stands alone with no gate
-(home `final` seals still veto).
+(home `final` seals still veto). The seal walks the defaults axis too: a
+covering home final deny freezes the relaxed default (sealed ⇒ deny stands).
 
 ## Filesystem model
 

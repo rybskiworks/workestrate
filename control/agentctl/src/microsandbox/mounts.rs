@@ -658,6 +658,8 @@ mod tests {
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,

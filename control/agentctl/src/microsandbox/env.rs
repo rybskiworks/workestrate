@@ -252,6 +252,8 @@ mod tests {
                 egress_rules: Vec::new(),
                 deny_rules: Vec::new(),
                 ingress_rules: Vec::new(),
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,

@@ -351,6 +351,11 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // `ingress = "allow"` stands alone (entitlements mechanism removed
     // 2026-09-04 — pre-release, final seals + review + plan NOTE suffice).
     // Home `final` seals still veto via the policy ladder (untouched).
+    // E1 (2026-09-04): the effective `[network.defaults]` allow now rides the
+    // ladder freeze walk as a synthetic lowest-rung allow-all, so a higher-rung
+    // covering final deny (home `deny.all=true final=true`; coarse FIX1 parity)
+    // seals the flip per `on_conflict` — sealed ⇒ deny stands, unsealed ⇒
+    // unchanged; the workload's own final deny does not self-freeze.
 
     // ADR 0036 §4 (nested virtualization): validate-config is STATIC
     // COHERENCE ONLY — no host I/O. The closed `nested` vocabulary

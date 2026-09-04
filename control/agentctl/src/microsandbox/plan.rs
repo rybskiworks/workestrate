@@ -520,6 +520,34 @@ pub struct NetworkPlan {
     pub egress_rules: Vec<EgressRule>,
     pub deny_rules: Vec<DenyDomainRule>,
     pub ingress_rules: Vec<IngressRule>,
+    /// E1 (ADR 0035 defaults-axis seal): the `[network.defaults]` egress
+    /// flip was frozen by a higher-rung covering final deny — the default
+    /// stays deny despite the relaxed declaration. `None` = no seal;
+    /// additive serde default, skipped when absent so legacy plan JSON and
+    /// every golden stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_defaults_seal: Option<DefaultsSeal>,
+    /// Symmetric ingress counterpart of `egress_defaults_seal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress_defaults_seal: Option<DefaultsSeal>,
+}
+
+/// E1 (ADR 0035) defaults-axis seal provenance for ONE direction: a
+/// relaxed `[network.defaults]` flip fed into the ladder freeze walk as a
+/// synthetic lowest-rung allow-all and frozen by a higher-rung covering
+/// final deny. Same `frozen_out`/`frozen_by` model as secrets/mount/virt;
+/// rendered by the plan display ONLY when sealed. Explicitly NOT part of
+/// `config_hash_of_plan` (the hand-rolled canonical bytes never read these
+/// fields — orchestration provenance, same rationale as `virtualization`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DefaultsSeal {
+    /// The `[network.defaults]` flip was frozen out (default stays deny).
+    #[serde(default)]
+    pub frozen_out: bool,
+    /// Origin label of the sealing rung (covering final deny), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -667,10 +695,33 @@ impl fmt::Display for SandboxPlan {
                 "allow"
             }
         )?;
+        // E1 defaults-axis seal: a relaxed `[network.defaults]` flip frozen
+        // by a higher-rung covering final deny renders a loud FROZEN line
+        // (provenance frozen_out/frozen_by, same model as secrets/mount/
+        // virt) so the review surface shows WHY the default stayed deny.
+        if let Some(seal) = &self.network.egress_defaults_seal {
+            let sealed_by = seal.frozen_by.as_deref().unwrap_or("home");
+            writeln!(
+                f,
+                "NOTE: workload '{}' [network.defaults] egress=allow frozen_out by {} (sealed; egress_default stays deny)",
+                self.name, sealed_by
+            )?;
+        }
+        if let Some(seal) = &self.network.ingress_defaults_seal {
+            let sealed_by = seal.frozen_by.as_deref().unwrap_or("home");
+            writeln!(
+                f,
+                "NOTE: workload '{}' [network.defaults] ingress=allow frozen_out by {} (sealed; ingress_default stays deny)",
+                self.name, sealed_by
+            )?;
+        }
         // Entitlements removed 2026-09-04: a relaxed default has no gate
-        // beyond the explicit declaration (+ home `final` seals), so `plan`
-        // renders a loud per-workload NOTE per relaxed direction — the
-        // grep-able review surface replacing the old magic-word check.
+        // beyond the explicit declaration — and home `final` seals DO veto
+        // (E1: the flip rides the ladder freeze walk as a synthetic lowest-
+        // rung allow-all; sealed renders the FROZEN line above and the
+        // relaxed NOTE below stays off), so `plan` renders a loud
+        // per-workload NOTE per relaxed direction — the grep-able review
+        // surface replacing the old magic-word check.
         if !self.network.egress_default_deny {
             writeln!(
                 f,
@@ -952,6 +1003,8 @@ mod tests {
                     port: 80,
                     scope: Scope::Local,
                 }],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,
@@ -1000,6 +1053,8 @@ network: egress_default=deny ingress_default=deny
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,
@@ -1053,6 +1108,8 @@ network: egress_default=deny ingress_default=deny
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,
@@ -1142,6 +1199,8 @@ network: egress_default=deny ingress_default=deny
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,
@@ -1171,6 +1230,8 @@ network: egress_default=deny ingress_default=deny
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,
@@ -1302,6 +1363,8 @@ network: egress_default=deny ingress_default=deny
                 egress_rules: rules,
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,
@@ -1408,6 +1471,8 @@ network: egress_default=deny ingress_default=deny
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: Some(crate::config::InstancePolicy {
                 strategy: crate::config::InstanceStrategy::Parallel,
@@ -1474,6 +1539,8 @@ network: egress_default=deny ingress_default=deny
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,
@@ -1511,6 +1578,8 @@ network: egress_default=deny ingress_default=deny
                 egress_rules: vec![],
                 deny_rules: vec![],
                 ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
             },
             instance_policy: None,
             virtualization: None,
@@ -1561,6 +1630,69 @@ network: egress_default=deny ingress_default=deny
         assert!(
             rendered.contains("virtualization: nested=require (frozen_out by home-registry;"),
             "frozen line: {rendered}"
+        );
+    }
+
+    /// E1 defaults-axis seal: `None` seals render NO frozen line (the
+    /// relaxed NOTE is a separate surface; legacy renders and every golden
+    /// stay byte-identical); a sealed direction renders the frozen line
+    /// naming the sealing origin (frozen_out/frozen_by model, same as virt).
+    #[test]
+    fn plan_display_network_defaults_seal_renders_frozen_line() {
+        let base = || SandboxPlan {
+            name: "pi".to_string(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            ports: vec![],
+            mounts: vec![],
+            network: NetworkPlan {
+                egress_default_deny: true,
+                ingress_default_deny: true,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
+            },
+            instance_policy: None,
+            virtualization: None,
+        };
+        // Unsealed: no frozen line anywhere (byte-identical legacy render).
+        let rendered = format!("{}", base());
+        assert!(
+            !rendered.contains("frozen_out"),
+            "no seal must render no frozen line: {rendered}"
+        );
+        // Sealed egress: the line names the axis and the sealing origin.
+        let mut plan = base();
+        plan.network.egress_defaults_seal = Some(DefaultsSeal {
+            frozen_out: true,
+            frozen_by: Some("home-registry".to_string()),
+        });
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains(
+                "NOTE: workload 'pi' [network.defaults] egress=allow frozen_out by home-registry"
+            ),
+            "egress frozen line: {rendered}"
+        );
+        // Sealed ingress: symmetric.
+        let mut plan = base();
+        plan.network.ingress_defaults_seal = Some(DefaultsSeal {
+            frozen_out: true,
+            frozen_by: Some("home-registry".to_string()),
+        });
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains(
+                "NOTE: workload 'pi' [network.defaults] ingress=allow frozen_out by home-registry"
+            ),
+            "ingress frozen line: {rendered}"
         );
     }
 }

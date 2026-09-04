@@ -305,6 +305,8 @@ mod tests {
                     egress_rules: vec![],
                     deny_rules: vec![],
                     ingress_rules: vec![],
+                    egress_defaults_seal: None,
+                    ingress_defaults_seal: None,
                 };
                 let policy = network_plan_to_policy(&plan)?;
                 assert_eq!(
@@ -339,6 +341,8 @@ mod tests {
                 port: 7000,
                 scope: crate::microsandbox::plan::Scope::Local,
             }],
+            egress_defaults_seal: None,
+            ingress_defaults_seal: None,
         };
         let policy = network_plan_to_policy(&plan)?;
         assert!(
@@ -620,6 +624,8 @@ mod tests {
                 protocol: Some(Protocol::Tcp),
             }],
             ingress_rules: vec![],
+            egress_defaults_seal: None,
+            ingress_defaults_seal: None,
         };
         let policy = network_plan_to_policy(&plan)?;
         // Should have one egress deny rule with tcp 443 and DomainSuffix
@@ -674,6 +680,8 @@ mod tests {
                 },
             ],
             ingress_rules: vec![],
+            egress_defaults_seal: None,
+            ingress_defaults_seal: None,
         };
         let policy = network_plan_to_policy(&plan)?;
         // Find order of rules: first deny exact evil.com should be before allow suffix .evil.com
@@ -717,6 +725,8 @@ mod tests {
                 protocol: Some(Protocol::Tcp),
             }],
             ingress_rules: vec![],
+            egress_defaults_seal: None,
+            ingress_defaults_seal: None,
         };
         let policy = network_plan_to_policy(&plan)?;
         assert_eq!(policy.rules.len(), 2, "expected deny + allow");
@@ -769,6 +779,8 @@ mod tests {
                 protocol: Some(Protocol::Tcp),
             }],
             ingress_rules: vec![],
+            egress_defaults_seal: None,
+            ingress_defaults_seal: None,
         };
         let policy = network_plan_to_policy(&plan)?;
         assert_eq!(policy.rules.len(), 2);
@@ -802,6 +814,8 @@ mod tests {
                 protocol: None,
             }],
             ingress_rules: vec![],
+            egress_defaults_seal: None,
+            ingress_defaults_seal: None,
         };
         let policy = network_plan_to_policy(&plan)?;
         assert_eq!(policy.rules.len(), 2);
@@ -838,6 +852,8 @@ mod tests {
                 protocol: Some(Protocol::Tcp),
             }],
             ingress_rules: vec![],
+            egress_defaults_seal: None,
+            ingress_defaults_seal: None,
         };
         let policy = network_plan_to_policy(&plan)?;
         assert_eq!(policy.rules.len(), 2);
