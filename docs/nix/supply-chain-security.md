@@ -261,7 +261,7 @@ including references, sizes, and derivation paths. The project's
 `just store-audit` recipe uses this to detect oversized source copies:
 
 ```bash
-nix path-info --all --json | python3 scripts/store-audit.py --fail-if-source-over 50
+nix path-info --all --json | python3 scripts/store-audit.py --warn-if-source-over 50
 ```
 
 ### Rebuilding and repairing

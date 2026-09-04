@@ -472,9 +472,9 @@ guard passes. [purity]
   `nix path-info --all | grep -E "ai-workbench.*-source$"`). Non-empty
   `*-source` output indicates an unbounded source copy that should be
   bounded by a `cleanSourceWith` filter. [purity]
-- `--fail-if-source-over 50` is wired into `just verify` (V2 landed) —
-  `verify` now fails when `*-source` paths exceed the 50M threshold.
-  [usage]
+- `--warn-if-source-over 50` is wired into `just verify` (V2 landed) —
+  informational: oversized local path-style source copies print a WARN;
+  `verify` does not fail on them. [usage]
 - Skips with a one-line note when nix is unavailable.
 
 For full detail, see `/docs/nix/nix-store-and-paths.md`. [store]

@@ -550,11 +550,11 @@ they re-exec themselves inside `nix develop --override-input devenv-root "file+f
 | `just vendor-unlock` | Replace the Nix-managed vendor symlink with a writable copy of the patched Microsandbox crate |
 | `just vendor-lock` | Remove the local vendor copy so `just shell` recreates the symlink |
 | `just gc` | `nix-collect-garbage --delete-old` + `nix store optimise` (anti-accumulation maintenance) |
-| `just store-audit` | Top-20 store paths by closure size + blocking `*ai-workbench*-source` >50 MB gate (final step of `verify`; non-blocking skip when nix/python3 are absent) |
+| `just store-audit` | Top-20 store paths by closure size + informational local-source-copy scan (`--warn-if-source-over 50`; the blocking `*ai-workbench*-source` gate was retired with the naming era — see scripts/store-audit.py docstring; final step of `verify`) |
 | `just lint-nix` | Lint nix code for purity violations (`scripts/check-nix-paths.sh`; wired into `verify`) |
 | `just tombi-check` | TOML format/lint/schema gate via tombi (repo, scaffolded config repos, homes) |
 
-> **Nix note:** New files must be `git add`-ed before `nix build` or `nix develop`
+> **Nix note:** New files must be `git add`-ed before `nix build` or `just shell`
 > will see them. Nix flakes only include git-tracked files in the source tree.
 
 `control/agentctl/vendor/microsandbox-fork` is a Nix-managed

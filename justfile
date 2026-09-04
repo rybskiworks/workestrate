@@ -478,7 +478,7 @@ vendor-unlock:
     chmod -R u+w "$link"
     echo "Unlocked $link for editing"
 
-# Remove local vendor edits; the Nix-managed symlink will be recreated by nix develop
+# Remove local vendor edits; the Nix-managed symlink will be recreated by just shell
 vendor-lock:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -492,7 +492,7 @@ vendor-lock:
         exit 1
     fi
     rm -rf "$link"
-    echo "Removed $link. Run 'nix develop' to recreate the Nix-managed symlink."
+    echo "Removed $link. Run 'just shell' to recreate the Nix-managed symlink."
 
 # Collect nix store garbage and optimise (dedupe) the store. Run periodically
 # to reclaim disk from old generations / orphaned paths. Anti-accumulation

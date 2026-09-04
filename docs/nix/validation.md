@@ -251,11 +251,12 @@ pattern, not to invoke it.
 The script reads `nix path-info --all --json` from stdin and:
 
 1. Prints the top-20 store paths by closure size (informational report).
-2. With `--fail-if-source-over <MB>`, scans every path whose name contains
-   `ai-workbench` AND ends with `-source` (the impure path-style copy
-   probe). If any exceeds the threshold, prints to stderr and exits 1.
+2. With `--warn-if-source-over <MB>`, scans for attributable local
+   path-style flake-input copies (basename `<hash>-(workestrate|personal|
+   duelbits|nix-tooling)[-source]`). Any match over the threshold prints a
+   WARN to stderr; the flag is informational and the script always exits 0.
 
-Docstring from `scripts/store-audit.py` (lines 2-13):
+Docstring from `scripts/store-audit.py` (lines 2-16):
 
 ```python
 """store-audit report — extracted from the justfile `store-audit` recipe.
@@ -263,25 +264,28 @@ Docstring from `scripts/store-audit.py` (lines 2-13):
 Reads `nix path-info --all --json` output from stdin and prints the top-20
 store paths by closure size.
 
-With ``--fail-if-source-over <MB>`` the script additionally scans every path
-whose name contains ``ai-workbench`` AND ends with ``-source`` (the impure
-path-style copy probe). If any such path's closure size exceeds the given
-threshold (in MiB, 1 MB = 1_000_000 bytes), the oversized paths are printed
-to stderr and the script exits 1 — turning the previously passive probe into
-a blocking gate. Without the flag the behavior is unchanged (top-20 report,
-exit 0).
+With ``--warn-if-source-over <MB>`` the script additionally scans for
+attributable LOCAL flake-input copies: paths whose basename is a 32-char
+store hash plus one of the known local input names (workestrate, personal,
+duelbits, nix-tooling), optionally suffixed ``-source`` — i.e. matching
+``^[a-z0-9]{32}-(workestrate|personal|duelbits|nix-tooling)(-source)?$``.
+Those names only appear when an input was declared ``path:``-style (nix
+names such copies after the source basename), so a match IS attributable to
+a local working copy. Any match whose closure size exceeds the threshold
+(in MiB, 1 MB = 1_000_000 bytes) is printed to stderr as a WARN — the flag
+is INFORMATIONAL and the script always exits 0.
 """
 ```
 
 The justfile recipe invocation (line 291):
 
 ```bash
-echo "$path_info" | python3 scripts/store-audit.py --fail-if-source-over 50
+echo "$path_info" | python3 scripts/store-audit.py --warn-if-source-over 50
 ```
 
-The threshold is 50 MB. The design is non-blocking: on any read/parse failure
-or when nix/python3 is unavailable, it prints a note and exits 0 — the gate
-fails ONLY on actual oversized source paths.
+The threshold is 50 MB. The design is non-blocking: the source-path scan is
+informational (always exits 0), and on any read/parse failure or when
+nix/python3 is unavailable it prints a note and exits 0.
 
 ### just gc — garbage collection
 

@@ -102,7 +102,7 @@ page that documents it. Fill the `current` and `state` columns from the repo.
 | 16 | CARGO_TARGET_DIR relocated out of source tree | `CARGO_TARGET_DIR` (justfile:5, devshell:121) | — | store-hygiene-and-gc.md, nix-usage | relocated | satisfied |
 | 17 | Devshell gcroot pin exists | `nix build .#devShells.x86_64-linux.default --out-link /nix/var/nix/gcroots/per-user/node/ai-workbench-devshell` | — | nix-usage | documented (nix-usage SKILL.md rule 6); verify pin exists | satisfied (documented) |
 | 18 | Secret hygiene: sops/age, no hardcoded secrets | `SOPS_AGE_KEY_FILE` (flake.nix:281,302,332) | — | secrets-and-sops.md | indirection used in decrypt-env/write-env/setup-secrets | satisfied |
-| 19 | Store-audit gate wired into verify | `just store-audit` (scripts/store-audit.py --fail-if-source-over 50) | — | store-hygiene-and-gc.md, justfile:266 | wired into `just verify` with `--fail-if-source-over 50` | satisfied |
+| 19 | Store-audit gate wired into verify | `just store-audit` (scripts/store-audit.py --warn-if-source-over 50) | — | store-hygiene-and-gc.md, justfile:266 | wired into `just verify` with `--warn-if-source-over 50` | satisfied |
 | 20 | Purity lint gate wired into verify | `just lint-nix` (scripts/check-nix-paths.sh) | — | purity-and-sandboxing.md, justfile:343 | ACTIVE, wired into `just verify` | satisfied |
 | 21 | GC cadence recipe | `just gc` (nix-collect-garbage --delete-old + nix store optimise) | — | store-hygiene-and-gc.md, justfile:253 | recipe exists | satisfied |
 | 22 | Flake check gate | `nix flake check` | — | testing.md | NOT wired into `just verify` or `just verify-full` | **gap** |

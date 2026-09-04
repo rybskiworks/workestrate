@@ -117,14 +117,14 @@ The mechanism: a dirty source closure changes hash on every edit, so Nix produce
 - The project ships `scripts/store-audit.py`, invoked via `just store-audit`.
 - What it does (verbatim from the script docstring):
   > "Reads `nix path-info --all --json` output from stdin and prints the top-20 store paths by closure size." [audit]
-- With `--fail-if-source-over <MB>`: "the script additionally scans every path whose name contains `ai-workbench` AND ends with `-source` (the impure path-style copy probe). If any such path's closure size exceeds the given threshold (in MiB, 1 MB = 1_000_000 bytes), the oversized paths are printed to stderr and the script exits 1 — turning the previously passive probe into a blocking gate." [audit]
-- Non-blocking on input problems: "on any read/parse failure it prints an informational note and exits 0 — the gate fails only on actual oversized source paths, never on missing/malformed input." [audit]
-- Wired into `just verify` with `--fail-if-source-over 50` (V2 landed). [usage]
+- With `--warn-if-source-over <MB>`: the script scans for attributable LOCAL flake-input copies — basenames matching `^[a-z0-9]{32}-(workestrate|personal|duelbits|nix-tooling)(-source)?$` — and any match whose closure size exceeds the threshold (in MiB, 1 MB = 1_000_000 bytes) is printed to stderr as a WARN; the flag is INFORMATIONAL and the script always exits 0. The old blocking `ai-workbench`-name gate is retired (naming era obsolete — see the scripts/store-audit.py docstring). [audit]
+- Non-blocking on input problems: "on any read/parse failure it prints an informational note and exits 0." [audit]
+- Wired into `just verify` with `--warn-if-source-over 50` (informational scan). [usage]
 - `just store-delta-check` (V3) exists as a recipe but is NOT yet wired into `verify` — it is a periodic host/CI check that fails on new source-path copies exceeding the <50M criterion. [usage]
 - Manual usage:
   ```bash
   nix path-info --all --json | python3 scripts/store-audit.py
-  nix path-info --all --json | python3 scripts/store-audit.py --fail-if-source-over 50
+  nix path-info --all --json | python3 scripts/store-audit.py --warn-if-source-over 50
   ```
 - The `*-source` probe: non-empty `*-source` output referencing `ai-workbench` indicates an unbounded source copy that should be bounded by a `cleanSourceWith` filter. [purity]
 

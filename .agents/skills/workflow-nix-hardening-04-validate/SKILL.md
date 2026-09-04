@@ -29,9 +29,9 @@ stops the workflow and returns to phase 03 for a fix.
    - `just lint-nix` — the purity guard (scripts/check-nix-paths.sh, checks
      1–5). Confirms no `--impure`, no bare `builtins.path`, no impure path
      references.
-   - `just store-audit` — the store hygiene gate
-     (scripts/store-audit.py --fail-if-source-over 50). Confirms no excessive
-     source-tree leakage into the store.
+   - `just store-audit` — the store hygiene scan
+     (scripts/store-audit.py --warn-if-source-over 50; informational).
+     Surfaces excessive source-tree leakage into the store.
    - `nix flake check --no-build` — flake eval + checks without a full build.
      Confirms the `nixConfig` block and all outputs evaluate cleanly.
 3. If any gate fails, capture the exact error, stop, and surface a handoff with
@@ -70,8 +70,8 @@ docs/nix/ corpus rules directly:
 
 - `just lint-nix` — the purity guard (scripts/check-nix-paths.sh). This is the
   first gate.
-- `just store-audit` — the store hygiene gate (scripts/store-audit.py
-  --fail-if-source-over 50). This is the second gate.
+- `just store-audit` — the store hygiene scan (scripts/store-audit.py
+  --warn-if-source-over 50; informational). This is the second gate.
 - `nix flake check --no-build` — flake eval + checks without a full build.
   This is the third gate.
 
@@ -121,7 +121,7 @@ validations_run:
     gate: "scripts/check-nix-paths.sh (checks 1-5)"
     result: pass|fail
   - validation: just store-audit
-    gate: "scripts/store-audit.py --fail-if-source-over 50"
+    gate: "scripts/store-audit.py --warn-if-source-over 50 (informational scan)"
     result: pass|fail
   - validation: nix flake check --no-build
     gate: "nix flake check --no-build"

@@ -180,14 +180,14 @@ rejected as a known-bad secret with a dedicated error.
 ## Inspecting secrets
 
 ```bash
-nix develop -c decrypt-env          # prints decrypted .env.enc to stdout
+just shell -c decrypt-env           # prints decrypted .env.enc to stdout
 ```
 
 ## Fallback: short-lived plaintext .env
 
 If a tool needs a literal `.env` file:
 ```bash
-nix develop -c write-env            # writes .env with mode 0600
+just shell -c write-env              # writes .env with mode 0600
 # ... do work ...
 rm .env
 ```
@@ -221,7 +221,7 @@ repo's `.env.enc`.
 ```bash
 just validate-secrets
 # or:
-nix develop -c scripts/validate-secrets-workflow.sh
+nix develop --override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate" -c scripts/validate-secrets-workflow.sh
 ```
 
 The script:

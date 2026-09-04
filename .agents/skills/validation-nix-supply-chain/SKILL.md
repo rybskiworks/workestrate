@@ -38,7 +38,7 @@ git diff flake.lock
 
 `nix flake metadata` lists every input with rev/narHash/lastModified;
 `just store-audit` runs `nix path-info --all --json | python3
-scripts/store-audit.py --fail-if-source-over 50`; inspect `flake.lock`
+scripts/store-audit.py --warn-if-source-over 50`; inspect `flake.lock`
 directly for `follows` and `narHash` presence.
 
 ## Pass criteria

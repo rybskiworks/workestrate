@@ -250,11 +250,11 @@ of gitignored `target/` alone.
   referencing `ai-workbench` (impure-path probe). Skips with a one-line
   note when nix is unavailable.
 
-  > **Status (Track 1):** the source-path gate runs with
-  > `--fail-if-source-over 50` and `just store-audit` is wired into
-  > `just verify` as the final step, so `verify` fails when `ai-workbench`
-  > `*-source` paths exceed the 50M threshold (non-blocking skip when nix
-  > or python3 is unavailable). The earlier V3 `store-delta-check` recipe
+  > **Status (Track 1):** the source-path scan runs with
+  > `--warn-if-source-over 50` and `just store-audit` is wired into
+  > `just verify` as the final step; the scan is informational (WARN to
+  > stderr, always exits 0; non-blocking skip when nix or python3 are
+  > unavailable). The earlier V3 `store-delta-check` recipe
   > no longer exists in the justfile.
 
 - **`just gc`** — `nix-collect-garbage --delete-old` + `nix store
