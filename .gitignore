@@ -49,3 +49,7 @@ control/agentctl/vendor/
 # devenv task/state/cache runtime dirs (flake.nix redirects these to
 # $HOME/.cache/devenv/workestrate; the in-tree fallback stays ignored)
 .devenv/
+
+# prek/pre-commit generated state (devenv-managed; never commit — a committed
+# copy referencing store paths dangles after nix GC)
+/.pre-commit-config.yaml

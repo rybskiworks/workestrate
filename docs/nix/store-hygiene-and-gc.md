@@ -241,6 +241,10 @@ rm /nix/var/nix/gcroots/per-user/node/ai-workbench-devshell
 nix-collect-garbage -d
 ```
 
+### Git hooks vs GC (pre-commit shims)
+
+A previous `prek install` wrote `.git/hooks/pre-commit` shims that exec'd a hardcoded store-path prek binary against a generated `.pre-commit-config.yaml`. GC deleted both, so every commit failed unless passed `--no-verify`. The fix: `.git/hooks/pre-commit` is now a pure-sh shim (canonical tracked copy `scripts/git-hooks/pre-commit.sh`; reinstall with `cp scripts/git-hooks/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`) that never references store paths — secret-material greps always run, while tombi/prek gates skip with a message when the toolchain is absent. The generated `.pre-commit-config.yaml` is gitignored and never committed. Inside a devenv shell the declared `git-hooks.hooks.*` (via the nix-tooling devenv modules) enforce with the pinned toolchain; hook exactness otherwise comes from `nix flake check` / CI, not the commit gate.
+
 ### Disk-pressure tradeoffs
 
 The overlay is ~95-96% full with non-nix data (411G used / 22G avail of 456G). A permanent 5-7G devshell pin consumes roughly a quarter to a third of the currently-free space. Accepted because: (a) without the pin every post-GC session re-downloads the same 5-7G anyway; (b) the pin is the only mechanism that makes `nix develop` survivable across `nix-collect-garbage -d`. [acc]
