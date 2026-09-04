@@ -584,44 +584,29 @@
           };
 
           # Devenv shell: dogfoods tooling modules + workestrate-specific packages and shellHook
-          # NOTE: devenv-test uses IFD (import source); first eval on a fresh store must warm it via `nix build .#packages.x86_64-linux.devenv-test`, then `nix flake check --no-build` is fine.
+          # NOTE: devenv-test uses IFD (import source); first eval on a fresh store must warm it via `nix build .#packages.x86_64-linux.devenv-test`, then `nix flake check --no-build` is fine — pure eval also needs `--override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate"` (or the shell must be warmed via an entry point that passes it).
           devenv.shells.default = {
-            devenv.root =
-              let
-                pwd = builtins.getEnv "PWD";
-              in
-              if pwd != "" then pwd else toString ./.;
-
-            # Redirect devenv task/state/cache dirs out of the repo tree into
-            # a $HOME-namespaced cache dir ($HOME/.cache/devenv/workestrate).
-            # Verified against the PINNED devenv source (rev 97135e80 per
-            # flake.lock node `devenv`): src/modules/top-level.nix defines
-            # only devenv.{root,dotfile,state,runtime,tmpdir,profile} (all
-            # internal), and src/modules/tasks.nix wires tasks' --cache-dir
-            # to devenv.dotfile — there is NO separate task/state/cache-dir
-            # knob, so redirecting dotfile+state moves the task cache + state
-            # too. devenv.runtime already lives outside the repo
-            # ($XDG_RUNTIME_DIR, else /tmp, hashed per dotfile) and keeps its
-            # default here. getEnv HOME idiom mirrors devenv.root above
-            # (pure-eval safe: empty HOME falls back in-tree, which stays
-            # gitignored via .devenv/).
-            devenv.dotfile =
-              let
-                home = builtins.getEnv "HOME";
-                # Throw-fallback for the missing upstream knob: pinned devenv
-                # 97135e80 exposes no dedicated task-cache-dir option. If a
-                # future edit needs one, recover via `--override-input
-                # devenv-root path:<dir>` (see inputs.devenv-root) or a
-                # devenv pin bump — never by silently ignoring the skew.
-                # Lazily bound (unreferenced) so `nix flake check` stays green.
-                _cacheDirFallback = throw "workestrate: pinned devenv 97135e80 has no task-cache-dir option; recover with `--override-input devenv-root path:<dir>` or a devenv pin bump";
-              in
-              if home != "" then home + "/.cache/devenv/workestrate/.devenv" else toString ./. + "/.devenv";
-            devenv.state =
-              let
-                home = builtins.getEnv "HOME";
-              in
-              if home != "" then home + "/.cache/devenv/workestrate/.devenv/state" else toString ./. + "/.devenv/state";
+            # devenv.root is intentionally NOT set here. The auto-imported
+            # readDevenvRoot module (inputs.devenv.flakeModule) sets it from
+            # the `devenv-root` input placeholder (see inputs above;
+            # --override-input never touches flake.lock). Entry points pass
+            #   --override-input devenv-root "file+file://<rootfile>"
+            # where <rootfile> holds the worktree abs path — the `shell`
+            # recipe, the self-enshelling just guards, and
+            # scripts/kvm-tests.sh write
+            # $HOME/.cache/workestrate/devenv-root/workestrate. Impure eval
+            # falls back to devenv's mkDefault (getEnv PWD). Pure eval
+            # WITHOUT the override fails devenv's `devenv.root != ""`
+            # assertion by design — the old store-path fallback put
+            # dotfile/state into a read-only /nix/store copy (enterShell
+            # mkdir: Permission denied). Dotfile/state keep devenv defaults:
+            # dotfile = <root>/.devenv (gitignored in-tree), state =
+            # <dotfile>/state. NOTE (pinned devenv 97135e80): tasks.nix
+            # wires the task cache to devenv.dotfile — there is NO separate
+            # task-cache-dir knob — so the cache lives in <worktree>/.devenv
+            # too. The old $HOME-cache dotfile redirect was pure-eval-inert
+            # (getEnv HOME == "" under pure eval) and is removed with the
+            # root fallback.
 
             imports = [
               inputs.tooling.devenvModules.base
@@ -774,7 +759,7 @@
                   else
                     rm -rf "$build_dir"
                     echo "workestrate: WARNING: $name build failed; the agent may not work" >&2
-                    echo "workestrate: You can retry: rm -rf agents/$name/build && nix develop" >&2
+                    echo "workestrate: You can retry: rm -rf agents/$name/build && just shell" >&2
                   fi
                 }
                 ${buildAgentCommands}

@@ -27,6 +27,15 @@ set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 
+# Pure-eval devenv root: bare `nix develop` cannot see PWD, so every devshell
+# entry here overrides the flake's devenv-root placeholder input with a file
+# holding this worktree's abs path (same mechanism as the justfile guards).
+DEVENV_ROOT_DIR="$HOME/.cache/workestrate/devenv-root"
+mkdir -p "$DEVENV_ROOT_DIR"
+DEVENV_ROOT_FILE="$DEVENV_ROOT_DIR/workestrate"
+printf '%s' "$REPO" > "$DEVENV_ROOT_FILE"
+DEVENV_OVERRIDE=(--override-input devenv-root "file+file://$DEVENV_ROOT_FILE")
+
 ERRORS=0
 
 log() { echo "[kvm-tests] $*"; }
@@ -113,14 +122,14 @@ PASS=0
 FAILED=0
 
 if run_test lifecycle_detached \
-    nix develop -c bash -c 'cargo test --manifest-path control/agentctl/Cargo.toml --test lifecycle_detached -- --ignored --nocapture'; then
+    nix develop "${DEVENV_OVERRIDE[@]}" -c bash -c 'cargo test --manifest-path control/agentctl/Cargo.toml --test lifecycle_detached -- --ignored --nocapture'; then
   PASS=$((PASS+1))
 else
   FAILED=$((FAILED+1))
 fi
 
 if run_test flake_root_gate \
-    nix develop -c bash -c 'cargo test --manifest-path control/agentctl/Cargo.toml --test flake_root_gate -- --ignored --nocapture'; then
+    nix develop "${DEVENV_OVERRIDE[@]}" -c bash -c 'cargo test --manifest-path control/agentctl/Cargo.toml --test flake_root_gate -- --ignored --nocapture'; then
   PASS=$((PASS+1))
 else
   FAILED=$((FAILED+1))
@@ -130,7 +139,7 @@ fi
 # command (the devshell shellHook overwrites MSB_PATH with its staged msb).
 # The test builds its own fixture image, so no preloaded image is required.
 if run_test ensure_images_e2e \
-    nix develop -c bash -c "MSB_PATH=$MSB_PATH cargo test --manifest-path control/agentctl/Cargo.toml --test ensure_images_e2e -- --ignored --nocapture"; then
+    nix develop "${DEVENV_OVERRIDE[@]}" -c bash -c "MSB_PATH=$MSB_PATH cargo test --manifest-path control/agentctl/Cargo.toml --test ensure_images_e2e -- --ignored --nocapture"; then
   PASS=$((PASS+1))
 else
   FAILED=$((FAILED+1))

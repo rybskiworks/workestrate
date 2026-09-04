@@ -5,12 +5,12 @@ set +H
 # setup-secrets — bootstrap or update ai-workbench encrypted secrets.
 #
 # Usage:
-#   nix develop -c setup-secrets init
-#   nix develop -c setup-secrets update
-#   nix develop -c setup-secrets --config <name> init
-#   nix develop -c setup-secrets --config <name> update
-#   nix develop -c setup-secrets --global init
-#   nix develop -c setup-secrets --global update
+#   just setup-secrets init
+#   just setup-secrets update
+#   just setup-secrets --config <name> init
+#   just setup-secrets --config <name> update
+#   just setup-secrets --global init
+#   just setup-secrets --global update
 #
 # Secrets can be supplied via environment variables or interactive prompts.
 # Command-line argument support is intentionally omitted to avoid leaking
@@ -28,12 +28,12 @@ while [ "$#" -gt 0 ]; do
 setup-secrets — bootstrap or update ai-workbench encrypted secrets.
 
 Usage:
-  nix develop -c setup-secrets init
-  nix develop -c setup-secrets update
-  nix develop -c setup-secrets --config <name> init
-  nix develop -c setup-secrets --config <name> update
-  nix develop -c setup-secrets --global init
-  nix develop -c setup-secrets --global update
+  just setup-secrets init
+  just setup-secrets update
+  just setup-secrets --config <name> init
+  just setup-secrets --config <name> update
+  just setup-secrets --global init
+  just setup-secrets --global update
 
 Secrets can be supplied via environment variables or interactive prompts.
 Command-line argument support is intentionally omitted to avoid leaking
@@ -674,7 +674,7 @@ cmd_init() {
   fi
 
   init_via_editor
-  log "done. If you use direnv, ensure you've run 'direnv allow'; otherwise use 'nix develop'."
+  log "done. If you use direnv, ensure you've run 'direnv allow'; otherwise use 'just shell'."
   log "You can now run: workestrate workload up litellm"
 }
 

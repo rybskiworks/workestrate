@@ -24,7 +24,7 @@ the world-readable Nix store or in plaintext at rest.
 - Project file: `docs/secrets.md` — the project's secrets documentation (PRIMARY SOURCE)
 - Project file: `flake.nix` — SOPS integration (`decrypt-env`, `write-env`,
   `setup-secrets` packages)
-- `README.md` — dev-shell entry: `nix develop` or the self-enshelling `just`
+- `README.md` — dev-shell entry: `just shell` or the self-enshelling `just`
   recipes (direnv and `.envrc` were removed from this repo; `$WORKESTRATE_HOME`
   is resolved by the CLI, not the shell)
 - Project file: `flake.nix` — dev-shell (devenv config in `perSystem`) packages: `sops`, `age`, `tombi`, …
@@ -333,10 +333,10 @@ is hermetic and safe to run in CI.
 
 - `just validate-secrets` — hermetic lifecycle test (setup → decrypt →
   update → write-env → `workestrate run -- env` → `workestrate --help`).
-- `nix develop -c decrypt-env` — prints decrypted `.env.enc` to stdout.
+- `just shell -c decrypt-env` — prints decrypted `.env.enc` to stdout.
 - `workestrate run -- bash -c 'echo $LITELLM_MASTER_KEY'` — verifies
   injection.
-- `nix develop -c write-env && stat -c '%a' .env` — verifies mode 0600.
+- `just shell -c write-env && stat -c '%a' .env` — verifies mode 0600.
 
 > "A non-interactive validation script exercises the full secrets lifecycle
 > (`setup-secrets init` → `decrypt-env` → `setup-secrets update` →
@@ -367,7 +367,7 @@ creation_rules:
 ### Initialize secrets (interactive)
 
 ```shell
-nix develop -c setup-secrets --config personal init
+just setup-secrets --config personal init
 ```
 
 ### Initialize secrets (non-interactive via env vars)
@@ -376,25 +376,25 @@ nix develop -c setup-secrets --config personal init
 export LITELLM_MASTER_KEY="sk-..."
 export OPENROUTER_API_KEY="sk-or-..."
 # ... all 7 keys ...
-nix develop -c setup-secrets --config personal init
+just setup-secrets --config personal init
 ```
 
 ### Update secrets
 
 ```shell
-nix develop -c setup-secrets --config personal update
+just setup-secrets --config personal update
 ```
 
 ### Decrypt to stdout
 
 ```shell
-nix develop -c decrypt-env
+just shell -c decrypt-env
 ```
 
 ### Write a short-lived plaintext .env
 
 ```shell
-nix develop -c write-env
+just shell -c write-env
 # ... do work ...
 rm .env
 ```

@@ -282,7 +282,7 @@ if [[ -z "${baked_msb:-}" ]]; then
   fail "P3 msb liveness: no baked MSB_PATH found in the installed wrapper (${got:-<none>}). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
 elif [[ ! -x "$baked_msb" ]]; then
   p3_fail=1
-  fail "P3 msb liveness: baked MSB_PATH target missing/not executable ($baked_msb). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\` (and re-enter \`nix develop\` if the store path was garbage-collected)"
+  fail "P3 msb liveness: baked MSB_PATH target missing/not executable ($baked_msb). Remediation: \`nix profile remove workestrate\` then \`nix profile install .#workestrate\` (and re-enter \`just shell\` if the store path was garbage-collected)"
 else
   log "P3 baked MSB_PATH live ($baked_msb)"
   set +e
@@ -292,7 +292,7 @@ else
   set -e
   if [[ "$msb_ver_exit" -ne 0 ]]; then
     p3_fail=1
-    fail "P3 msb liveness: \`$baked_msb --version\` failed (exit $msb_ver_exit): ${msb_ver_out:-<no output>}. Remediation: re-enter \`nix develop\`, and if it persists \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
+    fail "P3 msb liveness: \`$baked_msb --version\` failed (exit $msb_ver_exit): ${msb_ver_out:-<no output>}. Remediation: re-enter \`just shell\`, and if it persists \`nix profile remove workestrate\` then \`nix profile install .#workestrate\`"
   else
     log "P3 msb --version OK (${msb_ver_out:-ok})"
   fi
@@ -307,7 +307,7 @@ else
     log "P3 agentd present (resolvable on PATH: $agentd_which)"
   else
     p3_fail=1
-    fail "P3 msb liveness: agentd missing (no baked MSB_AGENTD_PATH in ${got:-<none>} and \`agentd\` not on PATH). Remediation: re-enter \`nix develop\`, then \`nix profile remove workestrate\` + \`nix profile install .#workestrate\`"
+    fail "P3 msb liveness: agentd missing (no baked MSB_AGENTD_PATH in ${got:-<none>} and \`agentd\` not on PATH). Remediation: re-enter \`just shell\`, then \`nix profile remove workestrate\` + \`nix profile install .#workestrate\`"
   fi
 fi
 if [[ "$p3_fail" -eq 1 ]]; then p3_status="FAIL"; else p3_status="OK"; fi

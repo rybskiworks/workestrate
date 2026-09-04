@@ -22,7 +22,7 @@ TOMBI_REQUIRED="1.2.5"
 
 if ! command -v tombi >/dev/null 2>&1; then
     echo "FAIL: tombi not found on PATH." >&2
-    echo "      Run inside the dev shell: nix develop -c just tombi-check" >&2
+    echo "      Run from a plain shell: just tombi-check (self-enshelling)" >&2
     exit 1
 fi
 
@@ -32,7 +32,7 @@ tombi_version="$(tombi --version | awk '{print $2}')"
 if [ "$tombi_version" != "$TOMBI_REQUIRED" ]; then
     echo "FAIL: tombi version mismatch: got '${tombi_version}', require '${TOMBI_REQUIRED}'." >&2
     echo "      The repo tombi.toml uses 1.x config keys ([files] include/exclude);" >&2
-    echo "      run inside the dev shell: nix develop -c just tombi-check" >&2
+    echo "      run from a plain shell: just tombi-check (self-enshelling)" >&2
     exit 1
 fi
 
@@ -40,7 +40,7 @@ export TOMBI_OFFLINE=true
 
 if ! tombi format --check; then
     echo "FAIL: tombi format --check reported diffs." >&2
-    echo "      Run 'nix develop -c tombi format' at the repo root and commit the result." >&2
+    echo "      Run 'just shell -c \"tombi format\"' at the repo root and commit the result." >&2
     exit 1
 fi
 

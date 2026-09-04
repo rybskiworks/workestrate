@@ -4,6 +4,21 @@
 # that invoke cargo inherit this env automatically.
 export CARGO_TARGET_DIR := `echo "${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
 
+# Enter the devenv shell interactively from a plain host shell. Writes the
+# devenv-root override file (this worktree's abs path) and passes
+# --override-input devenv-root so PURE eval resolves devenv.root to the
+# worktree: dotfile/state land in the gitignored in-tree .devenv/, not a
+# read-only store copy (bare `nix develop` cannot see PWD under pure eval).
+# Extra args pass through, e.g. `just shell -c <cmd>` for one-shot commands.
+shell *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+    mkdir -p "$_devenv_root_dir"
+    _devenv_root_file="$_devenv_root_dir/workestrate"
+    printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" {{args}}
+
 # Lock-guard: pre-resolution fork-pin check for control/agentctl/Cargo.lock
 # (A1 no-registry-source, A2 ==X pins from Cargo.toml, A3 smoltcp vs fork).
 # A broken lock breaks cargo resolution itself, so this bash+python3 script
@@ -46,7 +61,7 @@ toolchain-check:
     echo "actual (host):         rustc $actual"
     if [ "$actual" != "$expected" ]; then
         echo "FAIL: rustc major.minor mismatch — expected $expected, got $actual" >&2
-        echo "Run 'nix develop' to enter the pinned toolchain shell." >&2
+        echo "Run 'just shell' to enter the pinned toolchain shell." >&2
         exit 1
     fi
     echo "OK: rustc $actual matches pinned toolchain"
@@ -68,7 +83,13 @@ _check-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _check-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _check-inner
     fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
@@ -85,7 +106,13 @@ _spec-examples-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _spec-examples-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _spec-examples-inner
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test spec_examples_parse
 
@@ -100,7 +127,13 @@ _verify-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _verify-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _verify-inner
     fi
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
@@ -118,7 +151,13 @@ _golden-generate-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _golden-generate-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _golden-generate-inner
     fi
     @for name in example-service example-agent example-offensive; do \
         WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
@@ -135,7 +174,13 @@ _golden-check-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _golden-check-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _golden-check-inner
     fi
     @for name in example-service example-agent example-offensive; do \
         WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
@@ -159,7 +204,11 @@ _golden-check-inner:
 generate-schema:
     #!/usr/bin/env bash
     set -euo pipefail
-    nix develop -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json --output-workload schemas/workestrate-workload.schema.json --output-registry schemas/registry.schema.json
+    _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+    mkdir -p "$_devenv_root_dir"
+    _devenv_root_file="$_devenv_root_dir/workestrate"
+    printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+    nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- generate-schema --output schemas/workestrate.schema.json --output-workload schemas/workestrate-workload.schema.json --output-registry schemas/registry.schema.json
     echo "schema written to schemas/workestrate.schema.json"
     echo "workload schema written to schemas/workestrate-workload.schema.json"
     echo "registry schema written to schemas/registry.schema.json"
@@ -177,7 +226,13 @@ _schema-check-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _schema-check-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _schema-check-inner
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_drift
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_subschema_drift
@@ -194,7 +249,13 @@ _schema-sync-check-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _schema-sync-check-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _schema-sync-check-inner
     fi
     cargo run --manifest-path control/agentctl/Cargo.toml --quiet -- schemas update --check
 
@@ -212,7 +273,13 @@ _scaffold-check-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _scaffold-check-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _scaffold-check-inner
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test scaffold_template
 
@@ -225,7 +292,13 @@ _build-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _build-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _build-inner
     fi
     cargo build --release --manifest-path control/agentctl/Cargo.toml
 
@@ -238,7 +311,13 @@ _fmt-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _fmt-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _fmt-inner
     fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml
 
@@ -252,7 +331,13 @@ _fmt-check-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _fmt-check-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _fmt-check-inner
     fi
     cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
 
@@ -266,7 +351,13 @@ _clippy-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _clippy-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _clippy-inner
     fi
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
 
@@ -280,7 +371,13 @@ _test-inner *args:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _test-inner {{args}}
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _test-inner {{args}}
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml {{args}}
 
@@ -300,7 +397,13 @@ _workestrate-inner *args:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _workestrate-inner {{args}}
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _workestrate-inner {{args}}
     fi
     cargo run --manifest-path control/agentctl/Cargo.toml -- {{args}}
 
@@ -313,7 +416,13 @@ _plan-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _plan-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _plan-inner
     fi
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-service plan
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-agent plan
@@ -336,11 +445,23 @@ provision-check:
 
 # Bootstrap or update encrypted secrets
 setup-secrets *args:
-    nix develop -c setup-secrets {{args}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+    mkdir -p "$_devenv_root_dir"
+    _devenv_root_file="$_devenv_root_dir/workestrate"
+    printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c setup-secrets {{args}}
 
 # Validate the full secrets workflow (non-interactive, uses test values)
 validate-secrets:
-    nix develop -c scripts/validate-secrets-workflow.sh
+    #!/usr/bin/env bash
+    set -euo pipefail
+    _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+    mkdir -p "$_devenv_root_dir"
+    _devenv_root_file="$_devenv_root_dir/workestrate"
+    printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c scripts/validate-secrets-workflow.sh
 
 # Replace the Nix-managed vendor symlink with a writable copy for local editing
 vendor-unlock:
@@ -436,6 +557,12 @@ _tombi-check-inner:
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
         if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
         export _WS_REENTERED=1
-        exec nix develop -c just _tombi-check-inner
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _devenv_root_file="$_devenv_root_dir/workestrate"
+        printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _tombi-check-inner
     fi
     ./scripts/check-toml.sh

@@ -50,7 +50,7 @@ FIX = (
     "cause: bare `cargo ...` run outside the devshell rewrote "
     "control/agentctl/Cargo.lock without the [patch.crates-io] fork table, "
     "so crates.io copies replaced the fork pins\n"
-    "fix: enter `nix develop`, then run `cargo update -w` inside the devshell "
+    "fix: enter `just shell`, then run `cargo update -w` inside the devshell "
     "ONLY, re-run ./scripts/check-cargo-lock.sh, and review the diff "
     "(`git diff control/agentctl/Cargo.lock`)"
 )
@@ -137,7 +137,7 @@ except (OSError, KeyError) as e:
     vendor_req = None
     notes.append(
         f"SKIP A3 requirement check: vendor manifest absent ({vendor_path}: {e}) — "
-        "fresh clone without `nix develop` ever run; A1/A2 still enforced"
+        "fresh clone without `just shell` (or any guarded recipe) ever run; A1/A2 still enforced"
     )
 
 if vendor_live:
@@ -169,7 +169,7 @@ else:
     else:
         notes.append(
             f"A3 OK (fallback): lock smoltcp {lock_smoltcp} matches 0.14.x; "
-            "re-run inside `nix develop` once the vendor symlink exists "
+            "re-run inside `just shell` once the vendor symlink exists "
             "for the authoritative fork-requirement check"
         )
 

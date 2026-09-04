@@ -140,7 +140,7 @@ Inside the dev shell, `workestrate` is already on PATH. `workestrate
 workload up`/`exec` decrypt `.env.enc` themselves and inject the secrets:
 
 ```bash
-nix develop
+just shell
 workestrate workload up litellm           # service: starts detached
 workestrate workload up odysseus          # service: starts detached
 workestrate workload exec pi              # agent: interactive TUI attach

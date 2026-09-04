@@ -81,11 +81,11 @@ live in your personal config repo.
    personal config repo's flake — not this repo — via the lib recipes this
    flake exports (`lib.buildImagesFromConfig`); load them into the
    microsandbox store from the config repo.
-   ```bash
-   git clone <repo-url> workestrate
-   cd workestrate
-   nix develop
-   ```
+    ```bash
+    git clone <repo-url> workestrate
+    cd workestrate
+    just shell
+    ```
 2. Verify the workbench layout:
    ```bash
    workestrate check
@@ -516,7 +516,7 @@ and does not fail.
 Common `just` recipes:
 
 Cargo-backed recipes are **self-enshelling**: invoked from a plain host shell
-they re-exec themselves inside `nix develop` (guarded by
+they re-exec themselves inside `nix develop --override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate"` (guarded by
 `$WORKESTRATE_DEVSHELL`); this repo uses no direnv and has no `.envrc`.
 
 | Recipe | What it does |
@@ -548,7 +548,7 @@ they re-exec themselves inside `nix develop` (guarded by
 | `just setup-secrets init` | Bootstrap or update encrypted secrets from the dev shell |
 | `just validate-secrets` | Exercise the SOPS/age workflow against ephemeral test values |
 | `just vendor-unlock` | Replace the Nix-managed vendor symlink with a writable copy of the patched Microsandbox crate |
-| `just vendor-lock` | Remove the local vendor copy so `nix develop` recreates the symlink |
+| `just vendor-lock` | Remove the local vendor copy so `just shell` recreates the symlink |
 | `just gc` | `nix-collect-garbage --delete-old` + `nix store optimise` (anti-accumulation maintenance) |
 | `just store-audit` | Top-20 store paths by closure size + blocking `*ai-workbench*-source` >50 MB gate (final step of `verify`; non-blocking skip when nix/python3 are absent) |
 | `just lint-nix` | Lint nix code for purity violations (`scripts/check-nix-paths.sh`; wired into `verify`) |
@@ -562,7 +562,7 @@ symlink to `${microsandbox-filesystem-patched}` from the flake. The dev
 shell hook refreshes it on every entry. To inspect or temporarily
 modify the patched source, run `just vendor-unlock` (this expands the
 symlink into a real directory you can edit, with `chmod -R u+w`).
-Run `just vendor-lock` to delete the directory; the next `nix develop`
+Run `just vendor-lock` to delete the directory; the next `just shell`
 recreates the symlink from the flake input.
 
 ## Git hooks
@@ -755,7 +755,7 @@ capsule (`workestrate/workloads/litellm/`), not in this repo.
 - **Dangling vendor symlink.** If
   `control/agentctl/vendor/microsandbox-fork` points
   nowhere (for example after a `nix store` GC), re-enter the dev
-  shell (`exit` then `nix develop`) or run `just vendor-unlock` to
+  shell (`exit` then `just shell`) or run `just vendor-unlock` to
   materialise a real copy, then `just vendor-lock` to put the symlink
   back.
 - **`[MISSING] (optional)` for `agents/pi/repo` / `agents/odysseus/repo` / `agents/opencode/repo` / `agents/tempest/repo`.** This

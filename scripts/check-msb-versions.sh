@@ -55,7 +55,7 @@ FIX = (
     "  nix/packages/microsandbox.nix, nix/packages/agentd.nix,\n"
     "  nix/packages/microsandbox-filesystem-patched.nix (version = \"X\"),\n"
     "  control/agentctl/Cargo.toml (=X pins, then `cargo update -w` inside "
-    "`nix develop` ONLY),\n"
+    "`just shell` ONLY),\n"
     "  control/agentctl/src/commands/versions.rs (MSB_VERSION_PIN),\n"
     "  flake.nix + flake.lock (fork rev, via "
     "`nix flake lock --update-input microsandbox-fork` on a nix-capable host)"

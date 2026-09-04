@@ -302,12 +302,14 @@ Workestrate does NOT use direnv — there is no `.envrc` in this repo. The
 canonical entry is a single command:
 
 ```shell
-nix develop
+just shell
 ```
 
 for an interactive shell, or `nix develop -c <cmd>` for a one-shot command
 (crawl 63). Additionally, every toolchain-consuming `just` recipe is
-self-enshelling: it re-execs itself via `nix develop -c` when
+self-enshelling: it re-execs itself via `nix develop` with the `devenv-root`
+input overridden (worktree path in a root file under
+$HOME/.cache/workestrate/devenv-root/) when
 `$WORKESTRATE_DEVSHELL` (exported by the devshell `enterShell`) is unset, so
 a bare `just <recipe>` from a plain host shell just works — no direnv, no
 `.envrc`, no `direnv allow`.
@@ -361,12 +363,15 @@ flake.nix:56–64) generates `devShells.x86_64-linux.default` from it.
 
 Shape of the live definition:
 
-- `devenv.root` (flake.nix:589–593): pure-eval fallback — `$PWD` when set,
-  else `toString ./.`.
-- `devenv.dotfile` / `devenv.state` (flake.nix:608–624): devenv's dotfile,
-  task cache, and state dirs are redirected out of the repo tree into
-  `$HOME/.cache/devenv/workestrate/.devenv[/state]` when `$HOME` is set;
-  in-tree `.devenv/` (gitignored) otherwise.
+- `devenv.root`: NOT set in the flake. The auto-imported readDevenvRoot
+  module derives it from the `devenv-root` input placeholder; entry points
+  pass `--override-input devenv-root "file+file://<rootfile>"` (the root
+  file under `$HOME/.cache/workestrate/devenv-root/` holds the worktree abs
+  path), so pure eval resolves `devenv.root` to the worktree. Impure eval
+  falls back to devenv's `mkDefault` (`$PWD`).
+- `devenv.dotfile` / `devenv.state`: devenv defaults — dotfile =
+  `<root>/.devenv` (gitignored in-tree; the task cache lives here too on
+  the pinned devenv), state = `<dotfile>/state`.
 - `imports` (flake.nix:626–631): the shared tooling modules
   `inputs.tooling.devenvModules.{base,nix,toml,rust}`.
 - `packages` (flake.nix:633–662): fenix stable Rust toolchain
@@ -448,14 +453,14 @@ Shape of the live definition:
 - [ ] For multi-system: use `flake-utils.lib.eachDefaultSystem`.
 - [ ] Relocate large build outputs (`CARGO_TARGET_DIR`) in `shellHook`.
 - [ ] `unset -f` any helper functions defined in `shellHook`.
-- [ ] Do NOT add `.envrc` — recipes auto-enter via `nix develop` (self-enshelling).
+- [ ] Do NOT add `.envrc` — recipes auto-enter via `nix develop` + the devenv-root override (self-enshelling; `just shell` for interactive entry).
 - [ ] `git add -N` new files before first `nix develop`.
 
 ## Runtime / debugging checklist
 
-- [ ] `nix develop` enters the shell (check prompt changes).
+- [ ] `just shell` enters the shell (check prompt changes).
 - [ ] `nix develop -c <tool> --version` verifies tools are available.
-- [ ] `nix flake check --no-build` validates flake outputs.
+- [ ] `nix flake check --no-build --override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate"` validates flake outputs.
 - [ ] `nix develop --impure` only when mutable paths needed.
 - [ ] `shellHook` errors: check stderr on shell entry.
 - [ ] Missing packages: `nix develop -c which <tool>` to verify PATH.
@@ -593,12 +598,13 @@ pkgs.mkShell {
 ### Shell entry (no direnv)
 
 ```shell
-nix develop            # interactive shell
-nix develop -c <cmd>   # one-shot command in the devshell
+just shell             # interactive shell
+just shell -c <cmd>    # one-shot command in the devshell
 ```
 
 Bare `just <recipe>` also works from a plain host shell: toolchain recipes
-self-enshell (`nix develop -c just _<recipe>-inner`) when
+self-enshell (re-exec via `nix develop --override-input devenv-root ... -c
+just _<recipe>-inner`) when
 `$WORKESTRATE_DEVSHELL` is unset. No `.envrc`, no `direnv allow`.
 
 ### Workestrator devshell excerpt (enterShell — CARGO_TARGET_DIR relocation)
