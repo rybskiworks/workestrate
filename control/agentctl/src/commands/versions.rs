@@ -231,12 +231,15 @@ pub fn resolve_libkrunfw(search_dir: &str) -> String {
 /// Read-only DB schema marker for a msb store DB path: the newest
 /// `seaql_migrations` name via `sqlite3` when available (`mig:<name>`), else
 /// the file mtime (`mtime:<secs>`), else `"unavailable ..."` for a missing
-/// DB. NEVER writes or migrates.
+/// DB. The DB is opened with `sqlite3 -readonly` so the probe can never
+/// write, migrate, or create; the query is a plain SELECT and the `is_file`
+/// precheck prevents creation.
 pub fn db_schema_marker(db: &Path) -> String {
     if !db.is_file() {
         return "unavailable (no DB)".to_string();
     }
     let out = std::process::Command::new("sqlite3")
+        .arg("-readonly")
         .arg(db)
         .arg("SELECT name FROM seaql_migrations ORDER BY name DESC LIMIT 1;")
         .output();
