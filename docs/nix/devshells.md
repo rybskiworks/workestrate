@@ -36,8 +36,8 @@ up, modify, or debug Nix devshells should follow these rules.
   — https://nix.dev/manual/nix/2.34/command-ref/new-cli/nix3-run
 - Crawl file: `docs/nix/.crawl/67-nixpkgs-mkShell.md`
   — https://nixos.org/manual/nixpkgs/stable/#sec-mkShell
-- Project file: `nix/devshells/default.nix` — the workestrator devshell (real-world example)
-- Project file: `flake.nix` — flake outputs and devShells definition
+- Project file: `flake.nix` — flake outputs and `devenv.shells.default`
+  (flake.nix:588–787) — the workestrator devenv shell (real-world example)
 
 ## Core guidance
 
@@ -348,43 +348,51 @@ flake-utils.lib.eachDefaultSystem (system:
   })
 ```
 
-The workestrator flake uses a single hardcoded system
-(`system = "x86_64-linux"`) instead — this is a project-specific decision
+The workestrator flake uses a single system (`systems = [ "x86_64-linux" ]`,
+flake.nix:97, via flake-parts) instead — this is a project-specific decision
 (see `flake.nix`).
 
 ### Real-world example: the workestrator devshell
 
-Source: `nix/devshells/default.nix` (276 lines) and `flake.nix`.
+Source: `flake.nix` — `devenv.shells.default` (flake.nix:588–787). The
+shell is a devenv (flake-parts) module config rather than a standalone
+`mkShell` file; devenv's flake-parts module (devenv input pinned at
+flake.nix:56–64) generates `devShells.x86_64-linux.default` from it.
 
-The devshell is defined at `devShells.${system}.default` in `flake.nix`.
+Shape of the live definition:
 
-Packages include: fenix Rust toolchain (`cargo`, `clippy`, `rustc`,
-`rust-analyzer`, `rustfmt`), `nodejs_24`, `bun`, `python312`, `sops`, `age`,
-`gcc`, `git`, `jq`, `just`, `openssl`, `pkg-config`, `curl`, `libcap_ng`.
-
-Also includes project-specific derivations: `workestrate`, `msb-wrapped`,
-`decrypt-env`, `write-env`, `setup-secrets`, `load-images`.
-
-`shellHook` performs:
-
-1. **Microsandbox runtime staging** — stages the `msb` binary and `libkrunfw`
-   to `$HOME/.cache/ai-workbench-msb` (persistent home cache instead of
-   per-shell tmpfs to avoid "No space left on device").
-2. **CARGO_TARGET_DIR relocation** —
-   `export CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
-   — relocates the cargo target dir out of the source tree to keep the repo
-   small (~5–25 GB clean build).
-3. **Vendor symlink** — creates
-   `control/agentctl/vendor/microsandbox-filesystem-0.5.6` symlink to the
-   patched filesystem derivation.
-4. **Agent repo population** — copies `pi`, `odysseus`, `opencode`, `tempest`
-   from flake inputs into `agents/<name>/repo` (writable copies, not
-   symlinks).
-5. **Agent builds** — config-driven `_build_if_needed` for each workload with
-   a `local_build` recipe (`pip-install`, `bun-install`, `npm-build`).
-6. **Workload image check** — verifies `msb` images are loaded.
-
-The devshell takes 17 arguments passed from `flake.nix`.
+- `devenv.root` (flake.nix:589–593): pure-eval fallback — `$PWD` when set,
+  else `toString ./.`.
+- `devenv.dotfile` / `devenv.state` (flake.nix:608–624): devenv's dotfile,
+  task cache, and state dirs are redirected out of the repo tree into
+  `$HOME/.cache/devenv/workestrate/.devenv[/state]` when `$HOME` is set;
+  in-tree `.devenv/` (gitignored) otherwise.
+- `imports` (flake.nix:626–631): the shared tooling modules
+  `inputs.tooling.devenvModules.{base,nix,toml,rust}`.
+- `packages` (flake.nix:633–662): fenix stable Rust toolchain
+  (`rustToolchain.cargo`/`clippy`/`rustc`/`rust-analyzer`/`rustfmt`;
+  `rustToolchain = inputs.fenix.packages.${system}.stable` at
+  flake.nix:249), `nodejs_24`, `bun`, `python3`/`python312`, `sops`, `age`,
+  `tombi`, `gcc`, `git`, `jq`, `just`, `openssl`, `pkg-config`, `curl`,
+  `libcap_ng`, plus project-specific derivations `workestrate`,
+  `msb-wrapped`, `decrypt-env`, `write-env`, `setup-secrets`.
+- `enterShell` (flake.nix:665–786) — the devenv equivalent of `shellHook` —
+  performs:
+  1. **Microsandbox build-time staging** — stages the `msb` binary and
+     `libkrunfw` libs under `$HOME/.cache/ai-workbench-msb` (persistent
+     home cache instead of per-shell tmpfs; build-time only — the canonical
+     msb runtime home stays `$HOME/.microsandbox`).
+  2. **CARGO_TARGET_DIR relocation** —
+     `export CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
+     — keeps the ~5–25 GB clean-build target dir out of the source tree.
+  3. **Devshell marker** — exports `WORKESTRATE_DEVSHELL=1` (drives the
+     self-enshelling `just` recipes) and `MSB_AGENTD_PATH`.
+  4. **Vendor symlink** — `control/agentctl/vendor/microsandbox-fork` → the
+     patched filesystem derivation (stale links refreshed).
+  5. **Agent builds** — config-driven `_build_if_needed` for each workload
+     with a `local_build` recipe (`pip-install`, `bun-install`,
+     `npm-build`); the calls are generated at flake.nix:478–487.
+  6. **Cleanup** — helper functions removed with `unset -f` after use.
 
 ## Practical rules
 
@@ -593,47 +601,48 @@ Bare `just <recipe>` also works from a plain host shell: toolchain recipes
 self-enshell (`nix develop -c just _<recipe>-inner`) when
 `$WORKESTRATE_DEVSHELL` is unset. No `.envrc`, no `direnv allow`.
 
-### Workestrator devshell excerpt (shellHook — CARGO_TARGET_DIR relocation)
+### Workestrator devshell excerpt (enterShell — CARGO_TARGET_DIR relocation)
 
 ```nix
-# From nix/devshells/default.nix (workestrator project)
-shellHook = ''
-  # Relocate cargo's target dir out of the source tree to keep the
-  # repo small (a clean `cargo build` is ~5-25 GB) and to prevent
-  # accidental commits / store copies.
-  export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
-  mkdir -p "$CARGO_TARGET_DIR"
-'';
+# From flake.nix:698–699, devenv.shells.default.enterShell (workestrator project)
+export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
+mkdir -p "$CARGO_TARGET_DIR"
 ```
 
 ### Workestrator devshell excerpt (packages)
 
 ```nix
-# From nix/devshells/default.nix (workestrator project)
-pkgs.mkShell {
-  packages = with pkgs; [
-    age
-    workestrate
-    rustToolchain.cargo
-    rustToolchain.clippy
-    rustToolchain.rustc
-    rustToolchain.rust-analyzer
-    rustToolchain.rustfmt
-    nodejs_24
-    bun
-    (python312.withPackages (ps: [ ps.pip ps."pip-tools" ]))
-    sops
-    gcc
-    git
-    jq
-    just
-    openssl
-    pkg-config
-    curl
-    libcap_ng
-    # ... project-specific derivations
-  ];
-}
+# From flake.nix:633–662, devenv.shells.default (workestrator project)
+packages = with pkgs; [
+  age
+  workestrate
+  rustToolchain.cargo
+  rustToolchain.clippy
+  curl
+  decrypt-env
+  gcc
+  git
+  jq
+  just
+  libcap_ng
+  msb-wrapped
+  nodejs_24
+  bun
+  openssl
+  pkg-config
+  (python3.withPackages (p: [ p.pip ]))
+  (python312.withPackages (ps: [
+    ps.pip
+    ps."pip-tools"
+  ]))
+  rustToolchain.rustc
+  rustToolchain.rust-analyzer
+  rustToolchain.rustfmt
+  sops
+  tombi
+  write-env
+  setup-secrets
+];
 ```
 
 ## Common mistakes
