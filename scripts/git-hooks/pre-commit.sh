@@ -5,6 +5,11 @@
 # Installed copy: .git/hooks/pre-commit (per-clone state, NOT tracked).
 # Reinstall after cloning:
 #   cp scripts/git-hooks/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# CAUTION: entering the devenv shell runs git-hooks.nix's installer, which
+# moves this fallback to .git/hooks/pre-commit.legacy and installs a
+# store-path'd generated hook (dangles after GC; no secret gate). Re-run the
+# cp above after shell entry, or disable auto-install via
+# git-hooks.install.enable = false in the shell config (config follow-up).
 #
 # Background: a previous `prek install` wrote a shim that exec'd a hardcoded
 # nix-store prek binary against a generated .pre-commit-config.yaml. Nix

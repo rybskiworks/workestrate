@@ -545,6 +545,13 @@ symlink into a real directory you can edit, with `chmod -R u+w`).
 Run `just vendor-lock` to delete the directory; the next `nix develop`
 recreates the symlink from the flake input.
 
+## Git hooks
+
+Fresh clones have no hooks; install the pure-sh fallback with
+`cp scripts/git-hooks/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`.
+Entering the devenv shell replaces it with the generated hook (moved to `pre-commit.legacy`) —
+see `docs/nix/store-hygiene-and-gc.md` §"Git hooks vs GC".
+
 ## Nix build integration
 
 Workload image builds live in the **config repo**, not the tool repo
