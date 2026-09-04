@@ -770,8 +770,6 @@ fn apply_current_view_mutations<W: Workload>(plan: &mut SandboxPlan, workload: &
     plan.name = instance.to_string();
 }
 
-/// Prepare, resolve, and create the sandbox plus the foreground config used
-/// to run the workload's real command.
 /// ADR 0036 §4 pre-create gate evaluation (pure given the `probe`):
 /// `build_sandbox` passes the live `read_nested_probe()` immediately before
 /// `builder.create()`; unit tests pass mocked probes. Off skips silently
@@ -795,6 +793,8 @@ fn check_nested_up_gate<W: Workload + ?Sized>(
     )
 }
 
+/// Prepare, resolve, and create the sandbox plus the foreground config used
+/// to run the workload's real command.
 pub(crate) async fn build_sandbox<W: Workload>(
     workload: &W,
     spec: &InstanceSpec,
