@@ -534,13 +534,15 @@ fn config_new_hook_content_mentions_tombi() {
         content
     );
     assert!(
-        content.contains("tombi version mismatch: found $tombi_version, required $TOMBI_REQUIRED"),
-        "hook must guard tombi version mismatch with hook-specific message:\n{}",
+        content.contains(
+            "pre-commit: tombi version mismatch (found '${tombi_version:-unknown}', want $TOMBI_REQUIRED); skipping tombi checks"
+        ),
+        "hook must announce a tombi version mismatch as an audible skip:\n{}",
         content
     );
     assert!(
-        content.contains("cargo install tombi --version $TOMBI_REQUIRED"),
-        "hook version-mismatch message must suggest cargo install:\n{}",
+        !content.contains("cargo install tombi"),
+        "hook must not hard-fail with a cargo-install suggestion on version mismatch:\n{}",
         content
     );
 }

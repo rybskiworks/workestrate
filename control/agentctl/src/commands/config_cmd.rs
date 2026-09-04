@@ -24,9 +24,7 @@ if ! command -v tombi >/dev/null 2>&1; then
     exit 0
 fi
 tombi_version="$(tombi --version | awk '{print $2}')"
-if [ "$tombi_version" != "$TOMBI_REQUIRED" ]; then echo "tombi version mismatch: found $tombi_version, required $TOMBI_REQUIRED (run within nix develop or cargo install tombi --version $TOMBI_REQUIRED)" >&2; exit 1; fi
-tombi format --check || exit 1
-tombi lint --error-on-warnings || exit 1
+if [ "$tombi_version" != "$TOMBI_REQUIRED" ]; then echo "pre-commit: tombi version mismatch (found '${tombi_version:-unknown}', want $TOMBI_REQUIRED); skipping tombi checks" >&2; else tombi format --check || exit 1; tombi lint --error-on-warnings || exit 1; fi
 "#;
 
 /// Write the pre-commit hook into `<dest>/.git/hooks/pre-commit` and mark it
