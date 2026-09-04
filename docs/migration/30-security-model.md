@@ -240,7 +240,7 @@ repo, it's likely unnecessary. Document the risk in the migration process.
 
 | Scenario | Behavior |
 |---|---|
-| No config repos registered (fresh install) | Falls back to `config.reference/` (placeholder secrets). `plan`/`check`/`validate-config` work. `up`/`exec` refuse (placeholder secrets rejected by `reject_if_placeholder`, `runtime.rs:10-22`). |
+| No config repos registered (fresh install) | Falls back to `config.reference/` (placeholder secrets). `plan`/`check`/`validate-config` work. `up`/`exec` refuse (placeholder secrets rejected by `reject_if_placeholder`, `microsandbox/runtime/run.rs`). |
 | Config repo not cloned | `workestrate check` reports `[MISSING] (optional)`. `plan` uses reference config. `up`/`exec` refuse. |
 | Config uses the removed `network.egress` / `network.deny` / `network.ingress` fields | Parse fails with an ADR-citing message pointing to the hierarchical `policy.*` surface. |
 | Config references unknown secret | `validate-config` fails: "secret 'FOO' not defined in secrets: section." |
@@ -255,10 +255,10 @@ repo, it's likely unnecessary. Document the risk in the migration process.
 | Aspect | Current (M1) | Migrated |
 |---|---|---|
 | Config source | Rust code (compiled) | TOML files (data) |
-| Trust boundary | Compile-time (Rust review) | Runtime (policy.rs allowlist) |
+| Trust boundary | Compile-time (Rust review) | Runtime (core ceilings: package allowlist + policy seals) |
 | Egress hosts | Hardcoded in `workloads/*.rs` | Declared as hierarchical `policy.egress`/`policy.ingress` rules + `final` seals (core host allowlist removed) |
 | Secret bindings | `secrets.rs` const | Declared in config (`allowed_hosts`); core binding allowlist removed — review + runtime host-scoped substitution |
 | Network policy | `plan.rs` helpers | Hierarchical policy engine in `policy/` + `plan` (recipe enum removed) |
 | Image contents | `pi-image.nix`, `tempest-image.nix` | `nix/lib/vocabulary.nix` + `buildWorkloadImage` |
 | Extra shell in images | `extraCommands` in nix files | `baked_files` + `features` (declarative, no arbitrary shell) |
-| Config repo trust | N/A (no config repos) | Bounded by allowlist; provenance irrelevant to enforcement |
+| Config repo trust | N/A (no config repos) | Bounded by core ceilings (see "Core ceilings"); provenance irrelevant to enforcement |
