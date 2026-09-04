@@ -91,6 +91,10 @@ allow = ["scratch/**"]
 > protect only. The recipe above only denies today; the `scratch/**` corner
 > activates when the pin moves to the fork's union semantics. Details: gap 5 in
 > [01-runtime-semantics.md](./01-runtime-semantics.md).
+>
+> **Historical note (2026-09-04):** the inert-`write.allow` caveat above
+> records fork rev `3bd051bf`. The live pin is `78fb3ed1` (`flake.nix`:15-37,
+> union semantics native). Full rewrite is a follow-up.
 
 **Mount-row sugar:** the four dotted keys can sit directly on a
 `[[workloads.<name>.mounts]]` row; they are normalized at parse time INTO the

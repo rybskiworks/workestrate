@@ -658,9 +658,9 @@ Reload your shell (or `source` the completion file) afterwards.
                      Upstream LLM providers (OpenRouter, Kimi, Neuralwatt, MiniMax)
 ```
 
-- The Microsandbox SDK is pinned to `microsandbox = "=0.6.15"` with the
+- The Microsandbox SDK is pinned to `microsandbox = "=0.6.16"` with the
   `net` feature. The `microsandbox-filesystem` crate comes from the user's
-  fork via the pinned `microsandbox-fork` flake input at validated rev 79dc8a19.
+  fork via the pinned `microsandbox-fork` flake input at validated rev 78fb3ed1.
 - The pi microVM runs a **bun standalone binary** (`/app/bin/pi`, built by
   the config repo flake via the `bun-compile` lib recipe) with the Bun
   runtime embedded — no node/bun needed inside the pi sandbox. Prime (same

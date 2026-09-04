@@ -50,6 +50,10 @@ the union semantics (known gap 5 in
 [01-runtime-semantics.md](./01-runtime-semantics.md)). Authoring it now is
 safe: it compiles, validates, and shows in `explain`/`preview`.
 
+> **Historical note (2026-09-04):** the inert-`write.allow` caveat above
+> records fork rev `3bd051bf`. The live pin is `78fb3ed1` (`flake.nix`:15-37,
+> union semantics native). Full rewrite is a follow-up.
+
 ## Recipe 3: sealed credential (protect tier)
 
 **Goal:** `agent/auth.json` is hidden AND untouchable, and no repo or

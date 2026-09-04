@@ -12,10 +12,10 @@ timestamp: 2026-07-24T02:00:00Z
 ## Purpose
 
 This document is the canonical reference for supply chain security in the
-ai-workbench flake. It covers flake lock file auditing, reproducible builds,
+workestrate flake. It covers flake lock file auditing, reproducible builds,
 CVE scanning, dependency review, fixed-output derivation (FOD) integrity,
 source verification, the Nix trust model, and the project's concrete supply
-chain (six flake inputs and their lock entries). Every contributor who adds,
+ chain (eleven flake inputs and their lock entries). Every contributor who adds,
 updates, or reviews a flake input, a `fetchFromGitHub`/`fetchurl` call, or a
 FOD `outputHash` should read this first.
 
@@ -464,33 +464,46 @@ substituter and signature configuration reference.
 
 ## The project's supply chain
 
-The ai-workbench flake declares six top-level inputs. Five are GitHub sources
-pinned by `flake.lock`; one (`fenix`) is a flake that follows `nixpkgs`.
+The workestrate flake declares eleven top-level inputs: ten GitHub sources
+pinned by `flake.lock`, plus `devenv-root` (`file:///dev/null`, non-GitHub).
+`fenix`, `tooling`, `devenv`, `treefmt-nix`, `git-hooks`, and `nix2container`
+reuse the root `nixpkgs` via `inputs.nixpkgs.follows` (`devenv` additionally
+follows `git-hooks`/`flake-parts`); `flake-parts` follows `nixpkgs-lib`.
 
 | Input | URL | Flake? | Pinned rev (from `flake.lock`) | narHash (prefix) |
 |-------|-----|--------|-------------------------------|------------------|
-| `nixpkgs` | `github:NixOS/nixpkgs/nixos-unstable` | yes | `a799d3e3...` | `sha256-3av0pIjl...` |
-| `pi` | `github:georgrybski/pi` | no | `371adcf3...` | `sha256-p1PWFs+j...` |
-| `odysseus` | `github:georgrybski/odysseus` | no | `fc8e6366...` | `sha256-N8xjCkYB...` |
-| `opencode` | `github:georgrybski/opencode` | no | `cfddb240...` | `sha256-Tubr+Hqe...` |
-| `tempest` | `github:georgrybski/T3MP3ST` | no | `ae32cf50...` | `sha256-IHIxcol2...` |
+| `nixpkgs` | `github:NixOS/nixpkgs` | yes | `a799d3e3...` | `sha256-3av0pIjl...` |
 | `fenix` | `github:nix-community/fenix` | yes (`follows` nixpkgs) | `fa09e647...` | `sha256-qsmQMPL+...` |
+| `microsandbox-fork` | `github:rybskiworks/microsandbox` | no (`flake = false`) | `78fb3ed1...` | `sha256-Mptr2Jwk...` |
+| `tooling` | `github:rybskiworks/nix-tooling` | yes (`follows` nixpkgs) | `2a579617...` | `sha256-guDFHPfJ...` |
+| `flake-parts` | `github:hercules-ci/flake-parts` | yes | `9d0d8717...` | `sha256-onL0VLf9...` |
+| `devenv` | `github:cachix/devenv` | yes | `97135e80...` | `sha256-zxEb+L6m...` |
+| `treefmt-nix` | `github:numtide/treefmt-nix` | yes | `27b3b12a8...` | `sha256-WSFCsDSE...` |
+| `git-hooks` | `github:cachix/git-hooks.nix` | yes | `27555e26...` | `sha256-nt+lUqYV...` |
+| `nix2container` | `github:nlewo/nix2container` | yes | `76be9608...` | `sha256-2lguQpLP...` |
+| `mk-shell-bin` | `github:rrbutani/nix-mk-shell-bin` | yes | `ff5d8bd4...` | `sha256-/uEkr1UkJ...` |
+| `devenv-root` | `file:///dev/null` | no (`flake = false`) | — | `sha256-d6xi4mKd...` |
 
 Plus one transitive input: `rust-analyzer-src`
 (`github:rust-lang/rust-analyzer` nightly, `1174734d...`), pulled by `fenix`.
 
 ### Trust posture
 
-- **`nixpkgs`** — the NixOS/nixpkgs repository, pinned to `nixos-unstable`.
+- **`nixpkgs`** — the NixOS/nixpkgs repository, pinned to rev `a799d3e3`.
   Trust derives from the ofBorg/Hydra review pipeline. For production, pin to
   a tested stable release (`nixos-26.05`).
-- **`pi`, `odysseus`, `opencode`, `tempest`** — forks under
-  `github:georgrybski`. These are non-flake source trees (`flake = false`)
-  consumed via `callPackage`. Trust derives from the fork owner's review of
-  upstream; the `narHash` in `flake.lock` pins the exact tree.
+- **`microsandbox-fork`, `tooling`** — sources under
+  `github:rybskiworks` (org moved from `georgrybski` 2026-08-31).
+  `microsandbox-fork` is a non-flake source tree (`flake = false`) consumed
+  via `callPackage`/vendoring; `tooling` is the shared nix-tooling flake.
+  Trust derives from the fork owner's review of upstream; the `narHash` in
+  `flake.lock` pins the exact tree.
 - **`fenix`** — `github:nix-community/fenix`, a flake providing the pinned
   Rust toolchain. `inputs.nixpkgs.follows = "nixpkgs"` ensures it reuses the
   root nixpkgs, avoiding a second nixpkgs revision in the closure.
+- **`flake-parts`, `devenv`, `treefmt-nix`, `git-hooks`, `nix2container`,
+  `mk-shell-bin`** — community flakes (dev shell, formatting, git hooks,
+  image building), each pinned by exact rev + `narHash` in `flake.lock`.
 
 ### FOD hash verification workflow: `just update-hashes`
 

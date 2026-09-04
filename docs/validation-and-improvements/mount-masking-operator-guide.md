@@ -25,6 +25,11 @@ treats `write.allow` as **inert** — write admission at this pin is
 write.deny-only (see "The write axis" below). There is no KVM
 in this container, so runtime enforcement is also unverified here.
 
+> **Historical note (2026-09-04):** the `3bd051bf` pin and inert-`write.allow`
+> caveat above record that fork rev. The live `microsandbox-fork` pin is
+> `78fb3ed1` (`flake.nix`:15-37, union write.allow semantics native). Full
+> rewrite is a follow-up.
+
 ## Configuring `[policy.mounts]`
 
 A fragment is a TOML table named `[policy.mounts]` (or
@@ -160,6 +165,11 @@ evaluator (`control/agentctl/src/mount_policy/program.rs` `decide_write`)
 intentionally keeps the PINNED runtime's semantics and must be ported to the
 union semantics at re-pin time (see the `microsandbox-fork` input comment in
 `flake.nix`).
+
+> **Historical note (2026-09-04):** the inert-`write.allow` caveat and the
+> deny-wins mirror description above record fork rev `3bd051bf`. The live pin
+> is `78fb3ed1` (`flake.nix`:15-37, union semantics native) and the mirror
+> already implements it (`program.rs:304-317`). Full rewrite is a follow-up.
 
 ## CLI: `workestrate policy mounts`
 

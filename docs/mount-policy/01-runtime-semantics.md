@@ -261,6 +261,13 @@ fixed; do not design policy that depends on them being closed.
    flagged as the "Activation caveat" in the
    [operator guide](../validation-and-improvements/mount-masking-operator-guide.md)).
 
+> **Historical note (2026-09-04):** gap 5 above records the evaluator at fork
+> rev `3bd051bf` (`write.allow` inert, deny-wins mirror). The live
+> `microsandbox-fork` pin is `78fb3ed1` (`flake.nix`:15-37), which carries the
+> write.allow arm with union semantics natively, and the mirror already
+> implements it (`control/agentctl/src/mount_policy/program.rs:304-317`).
+> Full rewrite of gap 5 is a follow-up.
+
 ## Accepted trade-offs
 
 Documented in spec 22 §16

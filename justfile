@@ -17,13 +17,22 @@ lock-guard:
 # The marker MUST trail the live `rustToolchain = inputs.fenix...` line —
 # grepping it there (instead of any standalone comment) keeps the check
 # fail-closed: if the marker ever drifts off the evaluated line, this
-# recipe errors instead of comparing against a stale comment.
+# recipe errors instead of comparing against a stale comment. The grep anchors
+# the marker comment to the live line and fails closed on zero or multiple
+# hits (unanchored match or bare -oP extraction would silently accept drift
+# or duplicates).
 # Wired into `verify` as the SECOND gate (after lock-guard) — a toolchain
 # mismatch invalidates all downstream cargo results.
 toolchain-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    expected=$(grep 'rustToolchain = inputs.fenix' flake.nix | grep -oP 'RUST_TOOLCHAIN_VERSION = "\K[^"]+')
+    matches=$(grep 'rustToolchain = inputs\.fenix.*# RUST_TOOLCHAIN_VERSION = "' flake.nix || true)
+    hits=$(printf '%s\n' "$matches" | grep -c 'RUST_TOOLCHAIN_VERSION' || true)
+    if [ "$hits" -ne 1 ]; then
+        echo "ERROR: expected exactly 1 RUST_TOOLCHAIN_VERSION marker on the live rustToolchain line (found $hits)" >&2
+        exit 1
+    fi
+    expected=$(printf '%s\n' "$matches" | grep -oP '# RUST_TOOLCHAIN_VERSION = "\K[^"]+')
     if [ -z "$expected" ]; then
         echo "ERROR: could not parse RUST_TOOLCHAIN_VERSION from flake.nix" >&2
         exit 1

@@ -112,6 +112,13 @@ or unsupported version and unknown fields (fork
 
 ## The approved-root story (be precise, this bites)
 
+> **Historical note (2026-09-04):** this section records the loader/patch
+> story at fork rev `3bd051bf`. The live `microsandbox-fork` pin is
+> `78fb3ed1` (`flake.nix`:15-37), which carries the approved-root fix
+> natively — the transient `nix/patches/mount-policy-approved-root.patch` is
+> dropped (no `nix/patches/` dir remains). The `flake.nix:12-29` line ref and
+> the `9040f2c4` branch note below describe the old pin.
+
 - **At the pinned fork rev `3bd051bf`**, the loader's approved root is
   `<sandbox runtime>/mount-policy` (fork `crates/runtime/lib/vm.rs:1537` at
   that rev).
@@ -142,6 +149,13 @@ allow can never lift an already-matched deny at :385-392). Fork `develop`'s
 deny-before-allow within a scope and last-non-frozen-match-wins relaxation.
 Porting the mirror to the union semantics at re-pin time is a recorded
 follow-up (handovers/2026-08-13-mount-merge-readiness.md §9o step 2).
+
+> **Historical note (2026-09-04):** the deny-wins mirror description above
+> records the tool/fork state at fork rev `3bd051bf`. The live pin is
+> `78fb3ed1` (`flake.nix`:15-37, union write.allow semantics native), and the
+> mirror already implements the union semantics
+> (`control/agentctl/src/mount_policy/program.rs:304-317`). Full rewrite of
+> this section is a follow-up.
 
 ## File:line map of every hop
 
