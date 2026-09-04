@@ -126,6 +126,7 @@ fi
 [ "$fail" -eq 0 ] || exit 1
 # tombi TOML gates (best-effort — skipped with an audible echo when tombi is
 # absent or version-mismatched; exactness is enforced by `nix flake check`).
+# Canonical hooks note: workestrate docs/nix/store-hygiene-and-gc.md §"Git hooks vs GC"
 TOMBI_REQUIRED="1.2.5"
 if command -v tombi >/dev/null 2>&1; then
     tombi_version="$(tombi --version | awk '{print $2}')"
