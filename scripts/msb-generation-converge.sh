@@ -54,7 +54,10 @@
 #     untouched — it IS the rollback.
 #   - The current symlink flips ONLY after a verified converge.
 #   - GC keeps exactly {current target, newest other generation carrying
-#     .booted-ok}; liveness probes fail-closed (probe error -> KEEP).
+#     .booted-ok}; liveness probes fail-closed (probe error -> KEEP). The
+#     migration SOURCE of a converge that just flipped (including a freshly
+#     absorbed 'legacy' generation) is exempt from THAT run's sweep — it is
+#     the rollback — and becomes eligible on the next successful converge.
 
 set -euo pipefail
 
@@ -331,9 +334,13 @@ converge_to_baked() {
 
 # GC sweep: keep EXACTLY {current target, newest other gen carrying
 # .booted-ok}; everything else is probed fail-closed before removal. Only
-# reached after the flip completed (or when already converged), so the
-# migration source can never be collected by an incomplete converge.
+# reached after the flip completed (or when already converged), so an
+# incomplete converge never collects anything. $1 (optional) is the basename
+# of the migration SOURCE generation of the converge that just flipped: it
+# is exempt from THIS run's sweep (it IS the rollback) and becomes eligible
+# on the next successful converge.
 gc_sweep() {
+  local source_keep="${1:-}"
   local cur_target="" keep_cur="" keep_booted="" newest_ts=0
   cur_target=$(readlink -f "$CURRENT" 2>/dev/null || true)
   [[ -n "$cur_target" ]] && keep_cur=$(basename "$cur_target")
@@ -350,6 +357,10 @@ gc_sweep() {
   for g in "${gens[@]}"; do
     base=$(basename "$g")
     if [[ "$base" == "$keep_cur" ]]; then
+      continue
+    fi
+    if [[ -n "$source_keep" && "$base" == "$source_keep" ]]; then
+      log "GC: migration source $base kept this run (rollback); eligible for GC on the next successful converge"
       continue
     fi
     if [[ -n "$keep_booted" && "$base" == "$keep_booted" ]]; then
@@ -518,7 +529,7 @@ do_converge() {
     log "previous generation '$cur_gen' left untouched (it IS the rollback): rollback = re-run converge after reinstalling the previous wrapper generation, or manually repoint 'current'"
   fi
 
-  gc_sweep
+  gc_sweep "$cur_gen"
   log "converge complete: ${cur_gen:-<fresh>} -> $KEY"
 }
 
