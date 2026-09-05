@@ -1,0 +1,84 @@
+# ci.yml — PR quality gates for workestrate.
+#
+# Design: map the justfile gate tiers to CI checks without drifting from
+# local gates — everything drives through `just`. The recipes self-enshell
+# and write the devenv-root override file from the worktree themselves
+# (justfile `shell`/`verify` guards), so no --override-input plumbing is
+# needed in CI: `just verify` on a fresh runner is transparent.
+#
+# PR-required (this workflow):
+#   verify — `just verify` = lock-guard, versions-check, toolchain-check,
+#     check (cargo fmt --check / clippy -D warnings / cargo check), test,
+#     spec-examples, tombi-check, golden-check, schema-check,
+#     schema-sync-check, scaffold-check, lint-nix, store-audit, and the
+#     Cargo.lock stability diff.
+#   build — `nix build .#workestrate` (host-side nix command, env-agnostic
+#     per the justfile verify-full recipe; no devenv-root override needed).
+#
+# Deferred by design (follow-ups, not POC scope):
+#   - `nix flake check` (treefmt nixfmt/statix/deadnix + tombiCheck +
+#     validateConfig) — needs devenv-test IFD warm-up on a fresh store;
+#     slots into a nightly job. Local hook tier-1 covers these linters
+#     until then; lint-nix + tombi-check already run in `verify`.
+#   - kvm-tests / prime-smoke — KVM gates; slot into a self-hosted runner
+#     (dblab42, labels [self-hosted, linux, kvm]), post-merge or nightly.
+#   - Real binary cache — org cachix decision pending. magic-nix-cache
+#     below is the zero-config stopgap and is continue-on-error so a cache
+#     outage (its GitHub cache API is reverse-engineered) never blocks a
+#     merge; it is unpinnable (@main, no releases), same hardening item as
+#     SHA-pinning all actions below (tags are mutable).
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - migration/tool-model
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (quality-gate chain)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Warm Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+        continue-on-error: true
+      - name: Install just
+        run: nix profile install nixpkgs#just
+      - name: just verify
+        run: just verify
+
+  build:
+    name: build (nix build .#workestrate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Warm Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+        continue-on-error: true
+      - name: nix build .#workestrate
+        run: nix build -L .#workestrate
