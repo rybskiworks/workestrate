@@ -200,7 +200,9 @@ pub fn generation_key_of_path(path: &Path) -> Option<String> {
 /// would make the mismatch check dead code.
 pub fn generation_key_of_resolved_home(path: &Path) -> Option<(PathBuf, String)> {
     let canonical = path.canonicalize().ok()?;
-    let name = canonical.file_name()?.to_str()?;
+    // Bind the OWNED key string first — a `&str` borrow of `canonical`
+    // must not be live when `canonical` moves into the return tuple.
+    let name = canonical.file_name()?.to_str()?.to_string();
     let is_key = name.len() == GENERATION_KEY_LEN
         && name.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9'));
     if !is_key {
@@ -214,7 +216,7 @@ pub fn generation_key_of_resolved_home(path: &Path) -> Option<(PathBuf, String)>
     if !under_generations {
         return None;
     }
-    Some((canonical, name.to_string()))
+    Some((canonical, name))
 }
 
 /// Enumerate `<root>/generations/`: `(valid keys, debris names)`. A VALID

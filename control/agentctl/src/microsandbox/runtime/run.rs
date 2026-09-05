@@ -809,7 +809,7 @@ fn check_generation_up_gate() -> Result<Option<PathBuf>> {
             }
         }
         gen::HomeResolution::Explicit(path) => match gen::generation_key_of_resolved_home(&path) {
-            Some((gen_dir, key)) if key != baked => anyhow::bail!(
+            Some((_, key)) if key != baked => anyhow::bail!(
                 "refusing up: MSB_HOME resolves to generation '{key}' but the baked msb \
                  is generation '{baked}'; run ./scripts/host-provision.sh (generation converge)"
             ),
