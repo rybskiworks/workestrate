@@ -56,7 +56,7 @@ use anyhow::Result;
 
 use crate::images::detect::StoreProbe;
 use crate::images::skew::StoreTag;
-use crate::images::state::{image_key, ImageRecord, ImagesState, Provenance, RepoIdentity};
+use crate::images::state::{ImageRecord, ImagesState, Provenance, RepoIdentity, image_key};
 
 /// Everything the phase-D pipeline needs, assembled by the phase-C build
 /// verb inside the per-tag lock.

@@ -5,7 +5,7 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::config::paths::{base_registry_path, expand_tilde};
-use crate::config::{load_registry, Registry, TrustedProject};
+use crate::config::{Registry, TrustedProject, load_registry};
 
 /// Base-registry trust check; reads the base registry directly to avoid
 /// recursing through [`registry_path`] → [`resolve_home_with_kind`]. The

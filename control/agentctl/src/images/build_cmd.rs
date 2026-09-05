@@ -36,19 +36,19 @@ use anyhow::{Context, Result};
 
 use crate::config::{ConfigFile, ConfigRepoEntry};
 use crate::images::detect::{
-    record_state_for, DrvEvalError, DrvEvaluator, MsbStoreProbe, NixCliEvaluator, StoreProbe,
+    DrvEvalError, DrvEvaluator, MsbStoreProbe, NixCliEvaluator, StoreProbe, record_state_for,
 };
 use crate::images::gc;
 use crate::images::lock::ImageTagLock;
 use crate::images::pipeline::{
-    run_build_pipeline, BuildJob, ImageBuilder, ImageLoader, ImageRemover, LoadAction,
-    MsbCliLoader, MsbCliRemover, NixCliBuilder, PipelineOutcome,
+    BuildJob, ImageBuilder, ImageLoader, ImageRemover, LoadAction, MsbCliLoader, MsbCliRemover,
+    NixCliBuilder, PipelineOutcome, run_build_pipeline,
 };
 use crate::images::repo_key::{registered_repo_checkouts, repo_identity_for, repo_key_for};
-use crate::images::skew::{decide_skew, RecordState, SkewDecision, StoreTag};
+use crate::images::skew::{RecordState, SkewDecision, StoreTag, decide_skew};
 use crate::images::state::{
-    compute_image_tag, image_key, image_tag_context, pointer_key, ImageRecord, ImagesState,
-    PointerRecord, Provenance, RepoIdentity,
+    ImageRecord, ImagesState, PointerRecord, Provenance, RepoIdentity, compute_image_tag,
+    image_key, image_tag_context, pointer_key,
 };
 use crate::merge::Provenance as MergeProvenance;
 
@@ -819,7 +819,7 @@ mod tests {
     use super::*;
     use crate::config::test_support::unique_state_dir;
     use crate::images::detect::StoreUnreachable;
-    use crate::images::state::{images_state_path, IMAGES_STATE_VERSION};
+    use crate::images::state::{IMAGES_STATE_VERSION, images_state_path};
 
     // ---- fixtures ----
 
@@ -946,11 +946,13 @@ mod tests {
             select_eligible(&config, &provenance, &layer_dirs, &[], None).unwrap();
         assert!(targets.is_empty());
         match &skips[..] {
-            [SelectSkip::NoFlakeRoot {
-                workload,
-                repo_key,
-                declaring_dir: dir,
-            }] => {
+            [
+                SelectSkip::NoFlakeRoot {
+                    workload,
+                    repo_key,
+                    declaring_dir: dir,
+                },
+            ] => {
                 assert_eq!(workload, "pi");
                 assert_eq!(
                     repo_key,

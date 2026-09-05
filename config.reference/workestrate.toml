@@ -338,7 +338,14 @@ ports = [53]
 protocols = ["tcp", "udp"]
 
 [[workloads.example-offensive.policy.egress.allow.domain]]
-domains = ["openrouter.ai", "api.kimi.com", "api.neuralwatt.com", "api.minimax.io", "github.com", "api.github.com"]
+domains = [
+  "openrouter.ai",
+  "api.kimi.com",
+  "api.neuralwatt.com",
+  "api.minimax.io",
+  "github.com",
+  "api.github.com"
+]
 port = 443
 protocol = "tcp"
 

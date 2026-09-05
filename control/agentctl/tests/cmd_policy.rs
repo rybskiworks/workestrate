@@ -441,21 +441,25 @@ fn explain_per_mount_no_cross_mount_rules_in_matches() {
     assert!(out.status.success(), "{}", stderr(&out));
     let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(doc["decision"], "masked");
-    assert!(doc["matches"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|m| m["pattern"] == "shared-secret"));
+    assert!(
+        doc["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["pattern"] == "shared-secret")
+    );
 
     let out = explain_mount(&dir, "/data", "node_modules/deps/lib.js", true);
     assert!(out.status.success(), "{}", stderr(&out));
     let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(doc["decision"], "visible");
-    assert!(!doc["matches"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|m| m["pattern"] == "node_modules/"));
+    assert!(
+        !doc["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["pattern"] == "node_modules/")
+    );
 }
 
 #[test]

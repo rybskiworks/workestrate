@@ -47,9 +47,20 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
     // emit in that order so SDK first-match-wins reproduces ADR resolution.
     #[derive(Debug)]
     enum OrderedItem {
-        Host { protocol: Protocol, port: u16 },
-        AllowDomain { domain: String, port: u16, protocol: Protocol },
-        DenyDomain { suffix: String, port: Option<u16>, protocol: Option<Protocol> },
+        Host {
+            protocol: Protocol,
+            port: u16,
+        },
+        AllowDomain {
+            domain: String,
+            port: u16,
+            protocol: Protocol,
+        },
+        DenyDomain {
+            suffix: String,
+            port: Option<u16>,
+            protocol: Option<Protocol>,
+        },
     }
     fn domain_specificity_rank(domain: &str) -> (u8, usize) {
         if domain == "all" {
@@ -102,9 +113,21 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
         }
         // Both host or both domain: for host, keep port ordering
         if a_is_host && b_is_host {
-            if let (OrderedItem::Host { port: pa, protocol: prota }, OrderedItem::Host { port: pb, protocol: protb }) = (a, b) {
+            if let (
+                OrderedItem::Host {
+                    port: pa,
+                    protocol: prota,
+                },
+                OrderedItem::Host {
+                    port: pb,
+                    protocol: protb,
+                },
+            ) = (a, b)
+            {
                 match pa.cmp(pb) {
-                    std::cmp::Ordering::Equal => return format!("{:?}", prota).cmp(&format!("{:?}", protb)),
+                    std::cmp::Ordering::Equal => {
+                        return format!("{:?}", prota).cmp(&format!("{:?}", protb));
+                    }
                     other => return other,
                 }
             }
@@ -112,50 +135,79 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
         // Domain items: compute specificity and port/action ranks
         // AllowDomain is always port-scoped (port required) so rank 1; DenyDomain rank 1 if port-scoped else 0 — this achieves carve-out semantics where narrower coverage sorts first.
         let (a_spec, a_len, a_port_rank, a_is_deny) = match a {
-            OrderedItem::AllowDomain { domain, port: _, protocol: _ } => {
+            OrderedItem::AllowDomain {
+                domain,
+                port: _,
+                protocol: _,
+            } => {
                 let (rank, len) = domain_specificity_rank(domain);
                 (rank, len, 1, false)
-            },
-            OrderedItem::DenyDomain { suffix, port, protocol: _ } => {
+            }
+            OrderedItem::DenyDomain {
+                suffix,
+                port,
+                protocol: _,
+            } => {
                 let (rank, len) = domain_specificity_rank(suffix);
                 let pr = if port.is_some() { 1 } else { 0 };
                 (rank, len, pr, true)
-            },
+            }
             OrderedItem::Host { .. } => (0, 0, 0, false),
         };
         let (b_spec, b_len, b_port_rank, b_is_deny) = match b {
-            OrderedItem::AllowDomain { domain, port: _, protocol: _ } => {
+            OrderedItem::AllowDomain {
+                domain,
+                port: _,
+                protocol: _,
+            } => {
                 let (rank, len) = domain_specificity_rank(domain);
                 (rank, len, 1, false)
-            },
-            OrderedItem::DenyDomain { suffix, port, protocol: _ } => {
+            }
+            OrderedItem::DenyDomain {
+                suffix,
+                port,
+                protocol: _,
+            } => {
                 let (rank, len) = domain_specificity_rank(suffix);
                 let pr = if port.is_some() { 1 } else { 0 };
                 (rank, len, pr, true)
-            },
+            }
             OrderedItem::Host { .. } => (0, 0, 0, false),
         };
         // Specificity desc
         match b_spec.cmp(&a_spec) {
-            std::cmp::Ordering::Equal => {},
+            std::cmp::Ordering::Equal => {}
             other => return other,
         }
         match b_len.cmp(&a_len) {
-            std::cmp::Ordering::Equal => {},
+            std::cmp::Ordering::Equal => {}
             other => return other,
         }
         // narrower coverage (port-scoped) sorts before broader (any-port) at equal domain specificity — carve-out wins per ADR §6; identical-coverage ties resolve deny-first (fail-closed)
         match b_port_rank.cmp(&a_port_rank) {
-            std::cmp::Ordering::Equal => {},
+            std::cmp::Ordering::Equal => {}
             other => return other,
         }
         if a_is_deny != b_is_deny {
-            return if a_is_deny { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+            return if a_is_deny {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
         }
         // Deterministic fallbacks: domain string, port
         match a {
-            OrderedItem::AllowDomain { domain: da, port: pa, .. } => {
-                if let OrderedItem::AllowDomain { domain: db, port: pb, .. } = b {
+            OrderedItem::AllowDomain {
+                domain: da,
+                port: pa,
+                ..
+            } => {
+                if let OrderedItem::AllowDomain {
+                    domain: db,
+                    port: pb,
+                    ..
+                } = b
+                {
                     match da.cmp(db) {
                         std::cmp::Ordering::Equal => pa.cmp(pb),
                         other => other,
@@ -163,9 +215,18 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
                 } else {
                     std::cmp::Ordering::Equal
                 }
-            },
-            OrderedItem::DenyDomain { suffix: sa, port: pa, .. } => {
-                if let OrderedItem::DenyDomain { suffix: sb, port: pb, .. } = b {
+            }
+            OrderedItem::DenyDomain {
+                suffix: sa,
+                port: pa,
+                ..
+            } => {
+                if let OrderedItem::DenyDomain {
+                    suffix: sb,
+                    port: pb,
+                    ..
+                } = b
+                {
                     match sa.cmp(sb) {
                         std::cmp::Ordering::Equal => pa.cmp(pb),
                         other => other,
@@ -173,7 +234,7 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
                 } else {
                     std::cmp::Ordering::Equal
                 }
-            },
+            }
             _ => std::cmp::Ordering::Equal,
         }
     });
@@ -182,85 +243,110 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
             OrderedItem::Host { protocol, port } => match protocol {
                 Protocol::Tcp => {
                     builder = builder.egress(|e| e.tcp().port(port).allow_host());
-                },
+                }
                 Protocol::Udp => {
                     builder = builder.egress(|e| e.udp().port(port).allow_host());
-                },
+                }
             },
-            OrderedItem::AllowDomain { domain, port, protocol } => {
+            OrderedItem::AllowDomain {
+                domain,
+                port,
+                protocol,
+            } => {
                 let is_suffix = domain.starts_with('.');
                 match protocol {
                     Protocol::Tcp => {
                         if is_suffix {
                             let d = domain.clone();
-                            builder = builder.egress(move |e| e.tcp().port(port).allow_domain_suffixes([d.as_str()]));
+                            builder = builder.egress(move |e| {
+                                e.tcp().port(port).allow_domain_suffixes([d.as_str()])
+                            });
                         } else {
                             let d = domain.clone();
-                            builder = builder.egress(move |e| e.tcp().port(port).allow_domains([d.as_str()]));
+                            builder = builder
+                                .egress(move |e| e.tcp().port(port).allow_domains([d.as_str()]));
                         }
-                    },
+                    }
                     Protocol::Udp => {
                         if is_suffix {
                             let d = domain.clone();
-                            builder = builder.egress(move |e| e.udp().port(port).allow_domain_suffixes([d.as_str()]));
+                            builder = builder.egress(move |e| {
+                                e.udp().port(port).allow_domain_suffixes([d.as_str()])
+                            });
                         } else {
                             let d = domain.clone();
-                            builder = builder.egress(move |e| e.udp().port(port).allow_domains([d.as_str()]));
+                            builder = builder
+                                .egress(move |e| e.udp().port(port).allow_domains([d.as_str()]));
                         }
-                    },
+                    }
                 }
-            },
-            OrderedItem::DenyDomain { suffix, port, protocol } => {
+            }
+            OrderedItem::DenyDomain {
+                suffix,
+                port,
+                protocol,
+            } => {
                 let is_suffix = suffix.starts_with('.');
                 // FIX2: port-scoped deny uses protocol+port prefix; any-port without protocol uses any-protocol rule.
                 match (port, protocol) {
                     (Some(p), Some(Protocol::Tcp)) => {
                         if is_suffix {
                             let s = suffix.clone();
-                            builder = builder.egress(move |e| e.tcp().port(p).deny_domain_suffixes([s.as_str()]));
+                            builder = builder.egress(move |e| {
+                                e.tcp().port(p).deny_domain_suffixes([s.as_str()])
+                            });
                         } else {
                             let s = suffix.clone();
-                            builder = builder.egress(move |e| e.tcp().port(p).deny_domains([s.as_str()]));
+                            builder =
+                                builder.egress(move |e| e.tcp().port(p).deny_domains([s.as_str()]));
                         }
-                    },
+                    }
                     (Some(p), Some(Protocol::Udp)) => {
                         if is_suffix {
                             let s = suffix.clone();
-                            builder = builder.egress(move |e| e.udp().port(p).deny_domain_suffixes([s.as_str()]));
+                            builder = builder.egress(move |e| {
+                                e.udp().port(p).deny_domain_suffixes([s.as_str()])
+                            });
                         } else {
                             let s = suffix.clone();
-                            builder = builder.egress(move |e| e.udp().port(p).deny_domains([s.as_str()]));
+                            builder =
+                                builder.egress(move |e| e.udp().port(p).deny_domains([s.as_str()]));
                         }
-                    },
+                    }
                     (Some(p), None) => {
                         // Port-scoped but no protocol (legacy any-protocol port-scoped) — use tcp as default? But any-protocol port-scoped is distinct.
                         // Use tcp as fallback for now, but ideally would be any-protocol port filter. For v1, default to tcp.
                         if is_suffix {
                             let s = suffix.clone();
-                            builder = builder.egress(move |e| e.tcp().port(p).deny_domain_suffixes([s.as_str()]));
+                            builder = builder.egress(move |e| {
+                                e.tcp().port(p).deny_domain_suffixes([s.as_str()])
+                            });
                         } else {
                             let s = suffix.clone();
-                            builder = builder.egress(move |e| e.tcp().port(p).deny_domains([s.as_str()]));
+                            builder =
+                                builder.egress(move |e| e.tcp().port(p).deny_domains([s.as_str()]));
                         }
-                    },
+                    }
                     (None, Some(Protocol::Tcp)) => {
                         if is_suffix {
                             let s = suffix.clone();
-                            builder = builder.egress(move |e| e.tcp().deny_domain_suffixes([s.as_str()]));
+                            builder =
+                                builder.egress(move |e| e.tcp().deny_domain_suffixes([s.as_str()]));
                         } else {
                             let s = suffix.clone();
                             builder = builder.egress(move |e| e.tcp().deny_domains([s.as_str()]));
                         }
-                    },
+                    }
                     (None, Some(Protocol::Udp)) => {
                         if is_suffix {
                             let s = suffix.clone();
-                            builder = builder.egress(move |e| e.udp().deny_domain_suffixes([s.as_str()]));
+                            builder =
+                                builder.egress(move |e| e.udp().deny_domain_suffixes([s.as_str()]));
                         } else {
                             let s = suffix.clone();
                             builder = builder.egress(move |e| e.udp().deny_domains([s.as_str()]));
                         }
-                    },
+                    }
                     (None, None) => {
                         if is_suffix {
                             let s = suffix.clone();
@@ -269,9 +355,9 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
                             let s = suffix.clone();
                             builder = builder.egress(move |e| e.deny_domains([s.as_str()]));
                         }
-                    },
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -634,10 +720,18 @@ mod tests {
             .iter()
             .find(|r| r.action == microsandbox::NetworkAction::Deny)
             .expect("deny rule must exist");
-        assert!(rule.ports.iter().any(|p| p.start == 443), "deny rule must be port 443, got {:?}", rule.ports);
+        assert!(
+            rule.ports.iter().any(|p| p.start == 443),
+            "deny rule must be port 443, got {:?}",
+            rule.ports
+        );
         let v = serde_json::to_value(rule).unwrap();
         // protocols field should contain tcp
-        assert!(v["protocols"].to_string().contains("tcp"), "deny must be tcp, got {:?}", v["protocols"]);
+        assert!(
+            v["protocols"].to_string().contains("tcp"),
+            "deny must be tcp, got {:?}",
+            v["protocols"]
+        );
         // SDK canonicalizes DomainName by stripping leading dot, so .evil.com becomes evil.com
         assert_eq!(v["destination"]["domain_suffix"], "evil.com");
         Ok(())
@@ -692,16 +786,44 @@ mod tests {
                 let v = serde_json::to_value(r).unwrap();
                 let dest = v["destination"].clone();
                 let is_deny = r.action == microsandbox::NetworkAction::Deny;
-                (dest.to_string(), r.ports.iter().map(|p| p.start.to_string()).collect::<Vec<_>>().join(","), is_deny)
+                (
+                    dest.to_string(),
+                    r.ports
+                        .iter()
+                        .map(|p| p.start.to_string())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    is_deny,
+                )
             })
             .collect();
         // Ensure deny evil.com appears before allow .evil.com in the ordered list
-        let deny_pos = positions.iter().position(|(d, _, is_deny)| *is_deny && d.contains("evil.com") && !d.contains(".tracker.io")).unwrap();
-        let allow_suffix_pos = positions.iter().position(|(d, _, is_deny)| !*is_deny && d.contains("evil.com")).unwrap();
-        assert!(deny_pos < allow_suffix_pos, "deny exact must be before allow suffix: deny {} vs allow {} in {:?}", deny_pos, allow_suffix_pos, positions);
+        let deny_pos = positions
+            .iter()
+            .position(|(d, _, is_deny)| {
+                *is_deny && d.contains("evil.com") && !d.contains(".tracker.io")
+            })
+            .unwrap();
+        let allow_suffix_pos = positions
+            .iter()
+            .position(|(d, _, is_deny)| !*is_deny && d.contains("evil.com"))
+            .unwrap();
+        assert!(
+            deny_pos < allow_suffix_pos,
+            "deny exact must be before allow suffix: deny {} vs allow {} in {:?}",
+            deny_pos,
+            allow_suffix_pos,
+            positions
+        );
         // Port-scoped deny .evil.com:443 should be before any-port deny .tracker.io
-        let tracker_pos = positions.iter().position(|(d, _, _)| d.contains("tracker.io")).unwrap();
-        assert!(deny_pos < tracker_pos, "port-scoped deny should be before any-port deny");
+        let tracker_pos = positions
+            .iter()
+            .position(|(d, _, _)| d.contains("tracker.io"))
+            .unwrap();
+        assert!(
+            deny_pos < tracker_pos,
+            "port-scoped deny should be before any-port deny"
+        );
         Ok(())
     }
 
@@ -746,16 +868,31 @@ mod tests {
         for r in &policy.rules {
             let v = serde_json::to_value(r).unwrap();
             assert!(
-                v["destination"]["domain"] == "evil.com" || v["destination"]["domain_suffix"] == "evil.com",
+                v["destination"]["domain"] == "evil.com"
+                    || v["destination"]["domain_suffix"] == "evil.com",
                 "both rules must target evil.com, got {}",
                 v["destination"]
             );
-            assert!(r.ports.iter().any(|p| p.start == 443), "port 443, got {:?}", r.ports);
+            assert!(
+                r.ports.iter().any(|p| p.start == 443),
+                "port 443, got {:?}",
+                r.ports
+            );
         }
         // Explicit position check via serde for robustness
-        let vals: Vec<serde_json::Value> = policy.rules.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
-        assert!(vals[0]["destination"]["domain"] == "evil.com" || vals[0]["destination"]["domain_suffix"] == "evil.com");
-        assert!(vals[1]["destination"]["domain"] == "evil.com" || vals[1]["destination"]["domain_suffix"] == "evil.com");
+        let vals: Vec<serde_json::Value> = policy
+            .rules
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect();
+        assert!(
+            vals[0]["destination"]["domain"] == "evil.com"
+                || vals[0]["destination"]["domain_suffix"] == "evil.com"
+        );
+        assert!(
+            vals[1]["destination"]["domain"] == "evil.com"
+                || vals[1]["destination"]["domain_suffix"] == "evil.com"
+        );
         Ok(())
     }
 
@@ -787,10 +924,16 @@ mod tests {
         let v0 = serde_json::to_value(&policy.rules[0]).unwrap();
         let v1 = serde_json::to_value(&policy.rules[1]).unwrap();
         // First must be allow exact api.evil.com
-        assert!(policy.rules[0].action.is_allow(), "exact allow must be first, got deny");
+        assert!(
+            policy.rules[0].action.is_allow(),
+            "exact allow must be first, got deny"
+        );
         assert_eq!(v0["destination"]["domain"], "api.evil.com");
         // Second must be deny suffix evil.com
-        assert!(policy.rules[1].action.is_deny(), "suffix deny must be second");
+        assert!(
+            policy.rules[1].action.is_deny(),
+            "suffix deny must be second"
+        );
         assert_eq!(v1["destination"]["domain_suffix"], "evil.com");
         Ok(())
     }
@@ -822,13 +965,23 @@ mod tests {
         let v0 = serde_json::to_value(&policy.rules[0]).unwrap();
         let v1 = serde_json::to_value(&policy.rules[1]).unwrap();
         // Allow must be first (narrower coverage carve-out)
-        assert!(policy.rules[0].action.is_allow(), "port-scoped allow must be first");
+        assert!(
+            policy.rules[0].action.is_allow(),
+            "port-scoped allow must be first"
+        );
         assert_eq!(v0["destination"]["domain_suffix"], "evil.com");
         assert!(policy.rules[0].ports.iter().any(|p| p.start == 443));
         // Deny any-port must be second (broader)
-        assert!(policy.rules[1].action.is_deny(), "any-port deny must be second");
+        assert!(
+            policy.rules[1].action.is_deny(),
+            "any-port deny must be second"
+        );
         assert_eq!(v1["destination"]["domain_suffix"], "evil.com");
-        assert!(policy.rules[1].ports.is_empty(), "any-port deny should have no port filter, got {:?}", policy.rules[1].ports);
+        assert!(
+            policy.rules[1].ports.is_empty(),
+            "any-port deny should have no port filter, got {:?}",
+            policy.rules[1].ports
+        );
         Ok(())
     }
 
@@ -860,11 +1013,17 @@ mod tests {
         let v0 = serde_json::to_value(&policy.rules[0]).unwrap();
         let v1 = serde_json::to_value(&policy.rules[1]).unwrap();
         // Deny :443 must be first (deny-first tie at identical coverage, overriding numeric port order)
-        assert!(policy.rules[0].action.is_deny(), "deny :443 must be first, got allow");
+        assert!(
+            policy.rules[0].action.is_deny(),
+            "deny :443 must be first, got allow"
+        );
         assert_eq!(v0["destination"]["domain"], "evil.com");
         assert!(policy.rules[0].ports.iter().any(|p| p.start == 443));
         // Allow :80 second
-        assert!(policy.rules[1].action.is_allow(), "allow :80 must be second");
+        assert!(
+            policy.rules[1].action.is_allow(),
+            "allow :80 must be second"
+        );
         assert_eq!(v1["destination"]["domain"], "evil.com");
         assert!(policy.rules[1].ports.iter().any(|p| p.start == 80));
         Ok(())

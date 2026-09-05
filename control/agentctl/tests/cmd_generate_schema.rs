@@ -15,7 +15,7 @@ mod common;
 
 use std::process::Command;
 
-use common::{TempDir, BIN};
+use common::{BIN, TempDir};
 
 fn assert_schema_file_written(flag: &str) {
     let tmp = TempDir::new("cmd-generate-schema");

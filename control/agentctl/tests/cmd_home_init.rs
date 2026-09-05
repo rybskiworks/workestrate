@@ -211,10 +211,9 @@ fn init_creates_structure_gitignore_and_hook() {
         workload_schema.contains("workload capsule entry file"),
         "vendored workload subschema must carry the custom capsule title"
     );
-    let registry_schema = std::fs::read_to_string(
-        store.join("schemas").join("registry.schema.json"),
-    )
-    .expect("read vendored registry schema");
+    let registry_schema =
+        std::fs::read_to_string(store.join("schemas").join("registry.schema.json"))
+            .expect("read vendored registry schema");
     assert!(
         registry_schema.contains("Registry") || registry_schema.contains("\"$schema\""),
         "vendored registry schema must look like a JSON Schema document"

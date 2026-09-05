@@ -12,11 +12,19 @@
 //! and `runtime/network.rs` is untouched; this module replaces the old
 //! recipe expansion.
 
-#![allow(dead_code, unused_imports, unused_variables, clippy::type_complexity, clippy::absurd_extreme_comparisons, clippy::unnecessary_sort_by, unused_comparisons)]
+#![allow(
+    dead_code,
+    unused_imports,
+    unused_variables,
+    clippy::type_complexity,
+    clippy::absurd_extreme_comparisons,
+    clippy::unnecessary_sort_by,
+    unused_comparisons
+)]
 
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::config::{
     DomainEntry, EgressAllowTable, EgressDenyTable, EgressPolicyFragment, HostEntry, IdnaMode,
@@ -24,7 +32,9 @@ use crate::config::{
     PortEntry,
 };
 use crate::merge::NetworkPolicyLadder;
-use crate::microsandbox::plan::{DenyDomainRule, EgressRule, EgressTarget, IngressRule, Protocol, Scope};
+use crate::microsandbox::plan::{
+    DenyDomainRule, EgressRule, EgressTarget, IngressRule, Protocol, Scope,
+};
 
 // ---------------------------------------------------------------------------
 // IDNA handling
@@ -125,7 +135,9 @@ fn check_confusable(original: &str, ascii: &str) {
     // We do a best-effort: if the ascii != original and original had non-ASCII, we warn
     // The detailed confusable check against other domains is done at compile time across all entries
     // For now, just emit a warning to stderr
-    eprintln!("warning: idna: domain \"{original}\" converted to \"{ascii}\" via UTS46 — review for confusable/mixed-script (unicode-security skeleton check)");
+    eprintln!(
+        "warning: idna: domain \"{original}\" converted to \"{ascii}\" via UTS46 — review for confusable/mixed-script (unicode-security skeleton check)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +149,9 @@ pub fn validate_domain_syntax(domain: &str) -> Result<()> {
         bail!("domain cannot be empty");
     }
     if domain.contains('*') {
-        bail!("domain \"{domain}\" contains wildcard '*', which is rejected (use suffix \".domain\" instead)");
+        bail!(
+            "domain \"{domain}\" contains wildcard '*', which is rejected (use suffix \".domain\" instead)"
+        );
     }
     if domain.contains("://") {
         bail!("domain \"{domain}\" contains scheme '://', which is rejected");
@@ -146,7 +160,9 @@ pub fn validate_domain_syntax(domain: &str) -> Result<()> {
         bail!("domain \"{domain}\" contains path '/', which is rejected");
     }
     if domain.contains(':') {
-        bail!("domain \"{domain}\" contains port ':', which is rejected (port is a separate field)");
+        bail!(
+            "domain \"{domain}\" contains port ':', which is rejected (port is a separate field)"
+        );
     }
     // Check label length and total length (after IDNA conversion, but we also check raw)
     if domain.len() > 253 {
@@ -277,8 +293,8 @@ fn collect_egress_entries(
     Vec<EgressAllowDomain>,
     Vec<EgressAllowHost>,
     Vec<EgressDenyDomain>,
-    Option<bool>, // all allow
-    Option<bool>, // all deny
+    Option<bool>,                    // all allow
+    Option<bool>,                    // all deny
     Vec<(String, OnConflict, bool)>, // on_conflict per rung
 ) {
     let mut allow_domains = Vec::new();
@@ -399,7 +415,13 @@ fn collect_egress_entries(
 fn collect_ingress_entries(
     ladder: &NetworkPolicyLadder,
     workload_name: &str,
-) -> (Vec<IngressPort>, Vec<IngressPort>, Option<bool>, Option<bool>, Vec<(String, OnConflict, bool)>) {
+) -> (
+    Vec<IngressPort>,
+    Vec<IngressPort>,
+    Option<bool>,
+    Option<bool>,
+    Vec<(String, OnConflict, bool)>,
+) {
     let mut allow_ports = Vec::new();
     let mut deny_ports = Vec::new();
     let mut allow_all: Option<bool> = None;
@@ -493,7 +515,10 @@ fn effective_on_conflict(on_conflicts: &[(String, OnConflict, bool)]) -> OnConfl
 // Validation helpers
 // ---------------------------------------------------------------------------
 
-fn validate_egress_allow_domain(entry: &EgressAllowDomain, idna_mode: IdnaMode) -> Result<EgressAllowDomain> {
+fn validate_egress_allow_domain(
+    entry: &EgressAllowDomain,
+    idna_mode: IdnaMode,
+) -> Result<EgressAllowDomain> {
     if entry.domain.is_empty() {
         bail!("egress allow domain entry has empty domain");
     }
@@ -502,21 +527,35 @@ fn validate_egress_allow_domain(entry: &EgressAllowDomain, idna_mode: IdnaMode) 
     let canonical = canonicalize_domain(&entry.domain, idna_mode)?;
     // Port required for allow
     if entry.port == 0 {
-        bail!("egress allow domain \"{}\" port is required (allow without port is rejected — no hidden default to 443)", entry.domain);
+        bail!(
+            "egress allow domain \"{}\" port is required (allow without port is rejected — no hidden default to 443)",
+            entry.domain
+        );
     }
     if entry.port == 0 {
-        bail!("egress allow domain \"{}\" has invalid port {}", entry.domain, entry.port);
+        bail!(
+            "egress allow domain \"{}\" has invalid port {}",
+            entry.domain,
+            entry.port
+        );
     }
     // Protocol must be tcp for domain (udp only for host)
     if entry.protocol != "tcp" {
-        bail!("egress allow domain \"{}\" protocol \"{}\" is not supported v1, tcp only (udp is host-only)", entry.domain, entry.protocol);
+        bail!(
+            "egress allow domain \"{}\" protocol \"{}\" is not supported v1, tcp only (udp is host-only)",
+            entry.domain,
+            entry.protocol
+        );
     }
     let mut out = entry.clone();
     out.domain = canonical;
     Ok(out)
 }
 
-fn validate_egress_deny_domain(entry: &EgressDenyDomain, idna_mode: IdnaMode) -> Result<EgressDenyDomain> {
+fn validate_egress_deny_domain(
+    entry: &EgressDenyDomain,
+    idna_mode: IdnaMode,
+) -> Result<EgressDenyDomain> {
     if entry.domain.is_empty() {
         bail!("egress deny domain entry has empty domain");
     }
@@ -524,11 +563,19 @@ fn validate_egress_deny_domain(entry: &EgressDenyDomain, idna_mode: IdnaMode) ->
     let canonical = canonicalize_domain(&entry.domain, idna_mode)?;
     if let Some(port) = entry.port {
         if port == 0 {
-            bail!("egress deny domain \"{}\" has invalid port {}", entry.domain, port);
+            bail!(
+                "egress deny domain \"{}\" has invalid port {}",
+                entry.domain,
+                port
+            );
         }
     }
     if entry.protocol != "tcp" {
-        bail!("egress deny domain \"{}\" protocol \"{}\" is not supported v1, tcp only", entry.domain, entry.protocol);
+        bail!(
+            "egress deny domain \"{}\" protocol \"{}\" is not supported v1, tcp only",
+            entry.domain,
+            entry.protocol
+        );
     }
     let mut out = entry.clone();
     out.domain = canonical;
@@ -537,10 +584,16 @@ fn validate_egress_deny_domain(entry: &EgressDenyDomain, idna_mode: IdnaMode) ->
 
 fn validate_egress_host(entry: &EgressAllowHost) -> Result<()> {
     if entry.port == 0 {
-        bail!("egress allow host port {} is invalid (must be 1..=65535, no 0)", entry.port);
+        bail!(
+            "egress allow host port {} is invalid (must be 1..=65535, no 0)",
+            entry.port
+        );
     }
     if entry.protocol != "tcp" && entry.protocol != "udp" {
-        bail!("egress allow host protocol \"{}\" is invalid (must be subset of [\"tcp\",\"udp\"])", entry.protocol);
+        bail!(
+            "egress allow host protocol \"{}\" is invalid (must be subset of [\"tcp\",\"udp\"])",
+            entry.protocol
+        );
     }
     Ok(())
 }
@@ -550,13 +603,21 @@ fn validate_ingress_port(entry: &IngressPort) -> Result<()> {
         bail!("ingress port {} is invalid (must be 1..=65535)", entry.port);
     }
     if entry.protocol != "tcp" {
-        bail!("ingress port {} protocol \"{}\" is not supported v1, tcp/local only (udp/public not supported v1)", entry.port, entry.protocol);
+        bail!(
+            "ingress port {} protocol \"{}\" is not supported v1, tcp/local only (udp/public not supported v1)",
+            entry.port,
+            entry.protocol
+        );
     }
     if entry.scope != "local" {
         // Per ADR, only local is supported v1; other scopes should be validation error "not supported v1, tcp/local only"
         // But the task says PortEntry protocol String ("tcp" only v1 — "udp"/scope public = validation error "not supported v1, tcp/local only"), scope String ("local" only v1)
         // So we should error for any scope != local
-        bail!("ingress port {} scope \"{}\" is not supported v1, tcp/local only", entry.port, entry.scope);
+        bail!(
+            "ingress port {} scope \"{}\" is not supported v1, tcp/local only",
+            entry.port,
+            entry.scope
+        );
     }
     Ok(())
 }
@@ -819,7 +880,8 @@ pub fn compile_egress(
     }
 
     // Domain groups (after host to keep legacy order: dns/litellm first)
-    let mut domain_groups: std::collections::HashMap<(u16, String), Vec<String>> = std::collections::HashMap::new();
+    let mut domain_groups: std::collections::HashMap<(u16, String), Vec<String>> =
+        std::collections::HashMap::new();
     for allow in effective_allows {
         domain_groups
             .entry((allow.port, allow.protocol.clone()))
@@ -882,18 +944,34 @@ pub fn compile_egress(
         }
         // Both host or both domain: if both domain, sort by specificity of first domain (or max)
         if !a_is_host && !b_is_host {
-            let a_domains = match &a.target { EgressTarget::Domains(v) => v, _ => &vec![] };
-            let b_domains = match &b.target { EgressTarget::Domains(v) => v, _ => &vec![] };
+            let a_domains = match &a.target {
+                EgressTarget::Domains(v) => v,
+                _ => &vec![],
+            };
+            let b_domains = match &b.target {
+                EgressTarget::Domains(v) => v,
+                _ => &vec![],
+            };
             // Compute max specificity rank among domains in group
-            let a_max = a_domains.iter().map(|d| domain_specificity(d)).max().unwrap_or((Specificity::All, 0));
-            let b_max = b_domains.iter().map(|d| domain_specificity(d)).max().unwrap_or((Specificity::All, 0));
+            let a_max = a_domains
+                .iter()
+                .map(|d| domain_specificity(d))
+                .max()
+                .unwrap_or((Specificity::All, 0));
+            let b_max = b_domains
+                .iter()
+                .map(|d| domain_specificity(d))
+                .max()
+                .unwrap_or((Specificity::All, 0));
             match b_max.cmp(&a_max) {
-                std::cmp::Ordering::Equal => {},
+                std::cmp::Ordering::Equal => {}
                 other => return other,
             }
         }
         match a.port.cmp(&b.port) {
-            std::cmp::Ordering::Equal => format!("{:?}", a.protocol).cmp(&format!("{:?}", b.protocol)),
+            std::cmp::Ordering::Equal => {
+                format!("{:?}", a.protocol).cmp(&format!("{:?}", b.protocol))
+            }
             other => other,
         }
     });
@@ -902,23 +980,25 @@ pub fn compile_egress(
         let a_port_rank = if a.port.is_some() { 1 } else { 0 };
         let b_port_rank = if b.port.is_some() { 1 } else { 0 };
         match b_port_rank.cmp(&a_port_rank) {
-            std::cmp::Ordering::Equal => {},
+            std::cmp::Ordering::Equal => {}
             other => return other,
         }
         let (a_spec, a_len) = domain_specificity(&a.domain_suffix);
         let (b_spec, b_len) = domain_specificity(&b.domain_suffix);
         match b_spec.cmp(&a_spec) {
-            std::cmp::Ordering::Equal => {},
+            std::cmp::Ordering::Equal => {}
             other => return other,
         }
         match b_len.cmp(&a_len) {
-            std::cmp::Ordering::Equal => {},
+            std::cmp::Ordering::Equal => {}
             other => return other,
         }
         a.domain_suffix.cmp(&b.domain_suffix)
     });
     // Deduplicate by full key (suffix+port+protocol)
-    deny_rules.dedup_by(|a, b| a.domain_suffix == b.domain_suffix && a.port == b.port && a.protocol == b.protocol);
+    deny_rules.dedup_by(|a, b| {
+        a.domain_suffix == b.domain_suffix && a.port == b.port && a.protocol == b.protocol
+    });
 
     Ok(EgressCompilation {
         egress_rules,
@@ -1068,7 +1148,10 @@ pub fn compile_ingress(
             if deny_rank >= allow_rank {
                 continue;
             }
-            if deny.port == allow.port && deny.protocol == allow.protocol && deny.scope == allow.scope {
+            if deny.port == allow.port
+                && deny.protocol == allow.protocol
+                && deny.scope == allow.scope
+            {
                 let is_final = deny.final_entry || deny.final_table || deny.final_fragment;
                 if is_final {
                     frozen = true;
@@ -1421,9 +1504,19 @@ pub fn compile_network_plan(
     // silently, warn = per-line, fail = aggregate bail naming
     // axis+workload+frozen-by origin).
     let (egress_allow_all_effective, egress_allow_conflicts, egress_defaults_frozen_by) =
-        effective_egress_allow_all(ladder, workload_name, defaults_egress_allow, &defaults_origin);
+        effective_egress_allow_all(
+            ladder,
+            workload_name,
+            defaults_egress_allow,
+            &defaults_origin,
+        );
     let (ingress_allow_all_effective, ingress_allow_conflicts, ingress_defaults_frozen_by) =
-        effective_ingress_allow_all(ladder, workload_name, defaults_ingress_allow, &defaults_origin);
+        effective_ingress_allow_all(
+            ladder,
+            workload_name,
+            defaults_ingress_allow,
+            &defaults_origin,
+        );
 
     // Per-ladder on_conflict is already per ladder; reuse effective_on_conflict logic.
     // Build on_conflicts vecs for each ladder to derive effective policy.
@@ -1457,12 +1550,12 @@ pub fn compile_network_plan(
 
     // Handle egress allow_all frozen conflicts per on_conflict
     match egress_effective_oc {
-        OnConflict::Ignore => {},
+        OnConflict::Ignore => {}
         OnConflict::Warn => {
             for c in &egress_allow_conflicts {
                 eprintln!("warn: policy conflict: {c} (frozen)");
             }
-        },
+        }
         OnConflict::Fail => {
             if !egress_allow_conflicts.is_empty() {
                 bail!(
@@ -1471,15 +1564,15 @@ pub fn compile_network_plan(
                     egress_allow_conflicts.join("\n  ")
                 );
             }
-        },
+        }
     }
     match ingress_effective_oc {
-        OnConflict::Ignore => {},
+        OnConflict::Ignore => {}
         OnConflict::Warn => {
             for c in &ingress_allow_conflicts {
                 eprintln!("warn: policy conflict: {c} (frozen)");
             }
-        },
+        }
         OnConflict::Fail => {
             if !ingress_allow_conflicts.is_empty() {
                 bail!(
@@ -1488,7 +1581,7 @@ pub fn compile_network_plan(
                     ingress_allow_conflicts.join("\n  ")
                 );
             }
-        },
+        }
     }
 
     // E1: the defaults flip relaxes the default only while UNSEALED; a
@@ -1549,9 +1642,17 @@ mod tests {
         let ladder = test_ladder();
         let (mode, _) = resolve_idna_mode(&ladder, "pi");
         assert_eq!(mode, IdnaMode::Reject);
-        let err = canonicalize_domain("münchen.de", mode).unwrap_err().to_string();
-        assert!(err.contains("U+00FC"), "error must contain codepoint: {err}");
-        assert!(err.contains("xn--mnchen-3ya.de"), "error must contain punycode suggestion: {err}");
+        let err = canonicalize_domain("münchen.de", mode)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("U+00FC"),
+            "error must contain codepoint: {err}"
+        );
+        assert!(
+            err.contains("xn--mnchen-3ya.de"),
+            "error must contain punycode suggestion: {err}"
+        );
     }
 
     #[test]
@@ -1572,7 +1673,9 @@ mod tests {
 
     #[test]
     fn domain_validation_rejects_wildcard() {
-        let err = validate_domain_syntax("*.evil.com").unwrap_err().to_string();
+        let err = validate_domain_syntax("*.evil.com")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("wildcard"));
     }
 
@@ -1635,7 +1738,9 @@ mod tests {
                 r#final: false,
             }],
         });
-        ladder.egress_workloads.insert("pi".to_string(), vec![("workload".to_string(), wl)]);
+        ladder
+            .egress_workloads
+            .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
         // With no final, deny should win? But our current logic is allow is frozen only if deny is final
         // For cross-rung tie without final, deny wins per #9, but our implementation only freezes if deny is final
         // So we need to test the current behavior: allow will not be frozen, so both will be present
@@ -1658,7 +1763,9 @@ mod tests {
             domain: vec![],
             host: vec![],
         });
-        ladder.egress_workloads.insert("pi".to_string(), vec![("workload".to_string(), wl)]);
+        ladder
+            .egress_workloads
+            .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
         let workload = crate::config::WorkloadConfig {
             network: crate::config::NetworkConfig {
                 defaults: Some(crate::config::NetworkDefaultsConfig {
@@ -1700,7 +1807,9 @@ mod tests {
             domain: vec![],
             host: vec![],
         });
-        ladder.egress_workloads.insert("pi".to_string(), vec![("workload".to_string(), wl)]);
+        ladder
+            .egress_workloads
+            .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
         let workload = crate::config::WorkloadConfig {
             network: crate::config::NetworkConfig {
                 defaults: Some(crate::config::NetworkDefaultsConfig {
@@ -1718,7 +1827,9 @@ mod tests {
         );
         // .evil.com should be denied (present in deny_rules)
         assert!(
-            plan.deny_rules.iter().any(|r| r.domain_suffix == ".evil.com"),
+            plan.deny_rules
+                .iter()
+                .any(|r| r.domain_suffix == ".evil.com"),
             "frozen case must still emit .evil.com deny, got {:?}",
             plan.deny_rules
         );
@@ -1744,7 +1855,9 @@ mod tests {
             domain: vec![],
             host: vec![],
         });
-        ladder.egress_workloads.insert("pi".to_string(), vec![("workload".to_string(), wl)]);
+        ladder
+            .egress_workloads
+            .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
         let workload = crate::config::WorkloadConfig {
             network: crate::config::NetworkConfig {
                 defaults: Some(crate::config::NetworkDefaultsConfig {
@@ -1755,7 +1868,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let err = compile_network_plan(&ladder, "pi", &workload).unwrap_err().to_string();
+        let err = compile_network_plan(&ladder, "pi", &workload)
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("policy conflicts"),
             "fail on_conflict should aggregate and bail, got: {err}"
@@ -1778,7 +1893,9 @@ mod tests {
             domain: vec![],
             host: vec![],
         });
-        ladder2.egress_workloads.insert("pi".to_string(), vec![("workload".to_string(), wl2)]);
+        ladder2
+            .egress_workloads
+            .insert("pi".to_string(), vec![("workload".to_string(), wl2)]);
         let plan2 = compile_network_plan(&ladder2, "pi", &workload).unwrap();
         assert!(plan2.egress_default_deny, "warn should still keep deny");
     }
@@ -1798,7 +1915,9 @@ mod tests {
                 r#final: false,
             }],
         });
-        ladder.egress_workloads.insert("pi".to_string(), vec![("workload".to_string(), wl)]);
+        ladder
+            .egress_workloads
+            .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
         let comp = compile_egress(&ladder, "pi").unwrap();
         assert_eq!(comp.deny_rules.len(), 1);
         let rule = &comp.deny_rules[0];
@@ -1818,7 +1937,9 @@ mod tests {
                 r#final: false,
             }],
         });
-        ladder2.egress_workloads.insert("pi".to_string(), vec![("workload".to_string(), wl2)]);
+        ladder2
+            .egress_workloads
+            .insert("pi".to_string(), vec![("workload".to_string(), wl2)]);
         let comp2 = compile_egress(&ladder2, "pi").unwrap();
         assert_eq!(comp2.deny_rules[0].port, None);
     }
@@ -1881,7 +2002,10 @@ mod tests {
             .expect("sealed flip must carry provenance");
         assert!(seal.frozen_out);
         assert_eq!(seal.frozen_by.as_deref(), Some("home-registry"));
-        assert!(plan.ingress_defaults_seal.is_none(), "ingress axis untouched");
+        assert!(
+            plan.ingress_defaults_seal.is_none(),
+            "ingress axis untouched"
+        );
     }
 
     #[test]
@@ -1890,16 +2014,20 @@ mod tests {
         // conflict, fail aggregates it — must name axis, workload defaults
         // origin, and the freezing origin.
         let ladder = egress_home_deny_all_final(Some(OnConflict::Warn));
-        let (eff, conflicts, frozen_by) = effective_egress_allow_all(
-            &ladder,
-            "pi",
-            true,
-            "workload:pi [network.defaults]",
-        );
+        let (eff, conflicts, frozen_by) =
+            effective_egress_allow_all(&ladder, "pi", true, "workload:pi [network.defaults]");
         assert!(!eff, "no ladder allow-all present");
         assert_eq!(frozen_by.as_deref(), Some("home-registry"));
-        assert_eq!(conflicts.len(), 1, "one sealed flip -> one line: {conflicts:?}");
-        assert!(conflicts[0].contains("egress defaults"), "axis: {}", conflicts[0]);
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "one sealed flip -> one line: {conflicts:?}"
+        );
+        assert!(
+            conflicts[0].contains("egress defaults"),
+            "axis: {}",
+            conflicts[0]
+        );
         assert!(
             conflicts[0].contains("workload:pi [network.defaults]"),
             "workload: {}",
@@ -1926,7 +2054,10 @@ mod tests {
             err.contains("workload:pi [network.defaults]"),
             "workload named: {err}"
         );
-        assert!(err.contains("frozen by home-registry"), "frozen-by named: {err}");
+        assert!(
+            err.contains("frozen by home-registry"),
+            "frozen-by named: {err}"
+        );
     }
 
     #[test]
@@ -1998,7 +2129,10 @@ mod tests {
             !plan.egress_default_deny,
             "unsealed defaults flip must still relax the default"
         );
-        assert!(plan.egress_defaults_seal.is_none(), "unsealed -> no provenance");
+        assert!(
+            plan.egress_defaults_seal.is_none(),
+            "unsealed -> no provenance"
+        );
     }
 
     #[test]
@@ -2017,7 +2151,10 @@ mod tests {
         ladder.egress_layers.push(("base-layer".to_string(), layer));
         let workload = defaults_workload(true, false);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
-        assert!(plan.egress_default_deny, "layer final deny seals the flip too");
+        assert!(
+            plan.egress_default_deny,
+            "layer final deny seals the flip too"
+        );
         assert_eq!(
             plan.egress_defaults_seal
                 .expect("provenance")
@@ -2082,7 +2219,9 @@ mod tests {
                 },
             ],
         });
-        ladder.egress_workloads.insert("pi".to_string(), vec![("workload".to_string(), wl)]);
+        ladder
+            .egress_workloads
+            .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
         let comp = compile_egress(&ladder, "pi").unwrap();
         // Port-scoped first
         assert_eq!(comp.deny_rules[0].domain_suffix, ".b.com");

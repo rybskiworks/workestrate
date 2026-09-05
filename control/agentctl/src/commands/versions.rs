@@ -52,9 +52,7 @@ pub fn classify_version_match(baked_pin: &str, probed: &str) -> bool {
     if baked_pin.is_empty() || probed.is_empty() {
         return false;
     }
-    probed
-        .to_lowercase()
-        .contains(&baked_pin.to_lowercase())
+    probed.to_lowercase().contains(&baked_pin.to_lowercase())
 }
 
 /// Basename of a path string (everything after the last `/`).
@@ -125,7 +123,10 @@ fn is_executable(path: &str) -> bool {
 /// Short content hash of an executable via `sha256sum` (first 12 hex chars).
 /// Returns `None` when `sha256sum` is missing, fails, or yields no digest.
 fn short_sha256(path: &str) -> Option<String> {
-    let out = std::process::Command::new("sha256sum").arg(path).output().ok()?;
+    let out = std::process::Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -218,11 +219,7 @@ pub fn resolve_libkrunfw(search_dir: &str) -> String {
             } else {
                 target.clone()
             };
-            format!(
-                "{} -> {}",
-                picked,
-                resolved.to_string_lossy().into_owned()
-            )
+            format!("{} -> {}", picked, resolved.to_string_lossy().into_owned())
         }
         Err(_) => picked,
     }
@@ -324,10 +321,8 @@ pub fn collect_versions() -> VersionsReport {
     let baked = env!("WORKESTRATE_VERSION");
     let (version, rev) = parse_workestrate_version(baked);
     let msb_path = msb_binary();
-    let msb_resolved =
-        resolve_on_path(&msb_path).unwrap_or_else(|| "unavailable".to_string());
-    let msb_version =
-        probe_version(&msb_path).unwrap_or_else(|| "unavailable".to_string());
+    let msb_resolved = resolve_on_path(&msb_path).unwrap_or_else(|| "unavailable".to_string());
+    let msb_version = probe_version(&msb_path).unwrap_or_else(|| "unavailable".to_string());
     let agentd = agentd_path();
     let agentd_v = agentd_version_or_sha(&agentd);
     let search_dir = libkrunfw_search_dir();

@@ -303,8 +303,8 @@ mod tests {
     }
 
     #[test]
-    fn extract_last_run_error_falls_back_to_first_nonempty_when_no_error_marker(
-    ) -> anyhow::Result<()> {
+    fn extract_last_run_error_falls_back_to_first_nonempty_when_no_error_marker()
+    -> anyhow::Result<()> {
         let dir = crate::config::test_support::uniq_dir("extract-fallback");
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("workestrate.log");

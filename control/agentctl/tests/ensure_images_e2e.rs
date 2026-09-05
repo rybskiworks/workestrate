@@ -50,7 +50,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use workestrate::images::state::{image_key, ImagesState};
+use workestrate::images::state::{ImagesState, image_key};
 
 const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
 
@@ -79,11 +79,7 @@ fn msb_for_e2e() -> Option<String> {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    if ok {
-        Some(bin)
-    } else {
-        None
-    }
+    if ok { Some(bin) } else { None }
 }
 
 fn uniq_tmp(label: &str) -> PathBuf {

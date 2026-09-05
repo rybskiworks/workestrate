@@ -478,11 +478,12 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         // The agent dir was created.
-        assert!(tmp
-            .join("agents")
-            .join("fresh-agent")
-            .join("config")
-            .exists());
+        assert!(
+            tmp.join("agents")
+                .join("fresh-agent")
+                .join("config")
+                .exists()
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
         Ok(())

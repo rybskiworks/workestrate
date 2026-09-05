@@ -39,10 +39,10 @@ use anyhow::Result;
 
 use crate::config::{ConfigFile, ConflictStep, DepConflict, DepInstanceMode};
 use crate::microsandbox::depgraph::{dep_closure, singleton_record, topo_all};
-use crate::microsandbox::port_registry::{auto_allocate_slug, list_records, SandboxInstanceRecord};
+use crate::microsandbox::port_registry::{SandboxInstanceRecord, auto_allocate_slug, list_records};
 use crate::microsandbox::runtime::reconcile::{ChainStep, ReconcileFacts};
 use crate::microsandbox::runtime::{
-    down_instance, format_refuse_message, wait_for_port, DownStatus, DEFAULT_WAIT,
+    DEFAULT_WAIT, DownStatus, down_instance, format_refuse_message, wait_for_port,
 };
 use crate::microsandbox::slots::{instance_id_of, instance_name, slot_for, validate_instance_id};
 
@@ -1205,7 +1205,7 @@ fn readiness_targets(
 )]
 mod tests {
     use super::*;
-    use crate::config::test_support::{unique_state_dir, TestConfigGuard};
+    use crate::config::test_support::{TestConfigGuard, unique_state_dir};
     use crate::microsandbox::plan::PortMapping;
     use crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle;
     use microsandbox::sandbox::SandboxStatus;
@@ -2984,7 +2984,7 @@ command = []
     /// through the layer dirs, and keys it by the registered repo name.
     #[test]
     fn namespace_for_resolves_declaring_repo_from_provenance() -> Result<()> {
-        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS};
+        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(HOME_ENV_KEYS);
         let tmp = uniq_dir("ns-for");
@@ -3063,7 +3063,7 @@ command = []
     #[test]
     fn standalone_construction_namespace_is_declaring_repo_key() -> Result<()> {
         use crate::config::test_support::{
-            uniq_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS, PROVENANCE_STORAGE_TEST_LOCK,
+            ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, PROVENANCE_STORAGE_TEST_LOCK, uniq_dir,
         };
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         // This test DRAINS the process-global provenance slot (take_provenance

@@ -48,7 +48,7 @@ use anyhow::Result;
 use crate::images::detect::{MsbStoreProbe, StoreProbe};
 use crate::images::lock::ImageTagLock;
 use crate::images::pipeline::{ImageRemover, MsbCliRemover};
-use crate::images::state::{ImagesState, PointerRecord, OUT_PATH_HASH_PREFIX_LEN};
+use crate::images::state::{ImagesState, OUT_PATH_HASH_PREFIX_LEN, PointerRecord};
 
 /// Built-in keep-last-N default (ADR 0032 §Image tags — RESOLVED user
 /// decision 3): the lowest rung of the cascade, used when neither the home
@@ -691,7 +691,7 @@ mod tests {
     use crate::images::pipeline::test_fakes::FakeRemover;
     use crate::images::skew::StoreTag;
     use crate::images::state::{
-        image_key, pointer_key, ImageRecord, ImagesState, PointerRecord, RepoIdentity,
+        ImageRecord, ImagesState, PointerRecord, RepoIdentity, image_key, pointer_key,
     };
     use std::path::PathBuf;
 
@@ -1125,15 +1125,21 @@ mod tests {
         // State: pruned tags' records dropped; legacy record + kept tags +
         // pointer intact.
         let state = ImagesState::load(&state_dir);
-        assert!(state
-            .lookup(&image_key("personal", &format!("img:{SHA_A}")))
-            .is_none());
-        assert!(state
-            .lookup(&image_key("personal", &format!("img:{SHA_B}")))
-            .is_none());
-        assert!(state
-            .lookup(&image_key("personal", &format!("img:{SHA_C}")))
-            .is_some());
+        assert!(
+            state
+                .lookup(&image_key("personal", &format!("img:{SHA_A}")))
+                .is_none()
+        );
+        assert!(
+            state
+                .lookup(&image_key("personal", &format!("img:{SHA_B}")))
+                .is_none()
+        );
+        assert!(
+            state
+                .lookup(&image_key("personal", &format!("img:{SHA_C}")))
+                .is_some()
+        );
         assert!(
             state
                 .lookup(&image_key("personal", "legacy-img:latest"))
@@ -1279,9 +1285,11 @@ mod tests {
         assert_eq!(reports[0].pruned, vec![format!("img:{SHA_B}")]);
         // The failed tag's record STAYS (nothing dropped for it).
         let state = ImagesState::load(&state_dir);
-        assert!(state
-            .lookup(&image_key("personal", &format!("img:{SHA_A}")))
-            .is_some());
+        assert!(
+            state
+                .lookup(&image_key("personal", &format!("img:{SHA_A}")))
+                .is_some()
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
@@ -1433,15 +1441,21 @@ mod tests {
             "candidates prune in loaded_at-DESC order"
         );
         let state = ImagesState::load(&state_dir);
-        assert!(state
-            .lookup(&image_key("personal", &format!("img:{SHA_A}")))
-            .is_none());
-        assert!(state
-            .lookup(&image_key("personal", &format!("img:{SHA_B}")))
-            .is_none());
-        assert!(state
-            .lookup(&image_key("personal", &format!("img:{SHA_C}")))
-            .is_some());
+        assert!(
+            state
+                .lookup(&image_key("personal", &format!("img:{SHA_A}")))
+                .is_none()
+        );
+        assert!(
+            state
+                .lookup(&image_key("personal", &format!("img:{SHA_B}")))
+                .is_none()
+        );
+        assert!(
+            state
+                .lookup(&image_key("personal", &format!("img:{SHA_C}")))
+                .is_some()
+        );
         assert!(
             state
                 .lookup(&image_key("personal", &format!("prime:{SHA_A}")))
@@ -1485,9 +1499,11 @@ mod tests {
             "conservative: nothing pruned when protection cannot be verified"
         );
         let state = ImagesState::load(&state_dir);
-        assert!(state
-            .lookup(&image_key("personal", &format!("img:{SHA_A}")))
-            .is_some());
+        assert!(
+            state
+                .lookup(&image_key("personal", &format!("img:{SHA_A}")))
+                .is_some()
+        );
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }

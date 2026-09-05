@@ -1180,7 +1180,9 @@ egress = "deny"
 "#;
         let config: ConfigFile = toml::from_str(toml).expect("config must parse");
         // ADR 0035: secret allowed_hosts no longer validated against hardcoded allowlist — any host is allowed
-        validate_config(&config).expect("secret with any allowed_hosts should now validate (allowlist removed per ADR 0035)");
+        validate_config(&config).expect(
+            "secret with any allowed_hosts should now validate (allowlist removed per ADR 0035)",
+        );
     }
 
     #[test]

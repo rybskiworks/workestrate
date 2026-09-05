@@ -1,6 +1,6 @@
+use super::Workload;
 use super::config::ConfigWorkload;
 use super::secrets::secret_line_source;
-use super::Workload;
 
 impl ConfigWorkload {
     pub(super) fn show_source_render(&self) -> String {

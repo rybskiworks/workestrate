@@ -49,7 +49,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::images::build_cmd::{
-    process_target, resolve_targets, BuildScope, BuildTarget, TargetSeams,
+    BuildScope, BuildTarget, TargetSeams, process_target, resolve_targets,
 };
 use crate::images::detect::{DrvEvaluator, MsbStoreProbe, NixCliEvaluator, StoreProbe};
 use crate::images::pipeline::{
@@ -169,15 +169,15 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use crate::config::test_support::{unique_state_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS};
     use crate::config::ConfigFile;
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, unique_state_dir};
     use crate::images::build_cmd::SelectSkip;
-    use crate::images::detect::test_fakes::{FakeEvaluator, FakeStoreProbe};
     use crate::images::detect::DrvEvalError;
+    use crate::images::detect::test_fakes::{FakeEvaluator, FakeStoreProbe};
     use crate::images::pipeline::test_fakes::{FakeBuilder, FakeLoader, FakeRemover};
     use crate::images::repo_key::repo_identity_for;
     use crate::images::skew::StoreTag;
-    use crate::images::state::{image_key, images_state_path, ImagesState};
+    use crate::images::state::{ImagesState, image_key, images_state_path};
     use crate::merge::Provenance as MergeProvenance;
 
     // ---- the token gate (spec §2.2, BOTH directions) ----
@@ -746,8 +746,8 @@ gating_file = "package-lock.json"
     /// 0032 §Image tags + A5 arming discipline).
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
-    async fn armed_override_ensure_tags_under_override_ctx_and_moves_only_that_pointer(
-    ) -> Result<()> {
+    async fn armed_override_ensure_tags_under_override_ctx_and_moves_only_that_pointer()
+    -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
         crate::config::set_active_context(Some(crate::config::ActiveContext {

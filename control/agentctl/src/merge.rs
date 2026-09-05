@@ -801,8 +801,6 @@ mod tests {
             Some(crate::config::DefaultAction::Deny)
         );
 
-
-
         assert_eq!(
             provenance.get("workloads.pi.cpus"),
             Some(&"personal".to_string())
@@ -856,9 +854,7 @@ mod tests {
 
     // FS-24 tests removed (egress recipes removed per ADR 0035)
 
-
     // deny/egress union tests removed (per ADR 0035)
-
 
     #[test]
     fn egress_default_allow_stands_alone() {
@@ -959,7 +955,6 @@ mod tests {
     }
 
     // egress_ceiling test removed (allowlist removed per ADR 0035)
-
 
     #[test]
     fn single_layer_parity() -> Result<()> {

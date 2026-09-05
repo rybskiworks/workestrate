@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::cli_actions::{MountsDiagnosticsAction, PolicyAction};
-use crate::microsandbox::mounts::{resolve_mount_host, MountRoots};
+use crate::microsandbox::mounts::{MountRoots, resolve_mount_host};
 use crate::microsandbox::workload::{ConfigWorkload, Workload};
 use crate::mount_policy::{Decision, LexicalPath, MountPolicyProgram, WriteDecision};
 

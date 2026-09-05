@@ -223,8 +223,8 @@ mod tests {
             let b = std::sync::Arc::clone(&barrier);
             handles.push(std::thread::spawn(move || {
                 b.wait(); // release all threads at once
-                          // A1: workload = instance name keeps (instance, workload,
-                          // None) consistent under context-at-create verification.
+                // A1: workload = instance name keeps (instance, workload,
+                // None) consistent under context-at-create verification.
                 let instance = format!("inst-{i}");
                 combined_register(&dir, &instance, &instance, 4000)
             }));

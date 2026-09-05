@@ -150,7 +150,7 @@ pub fn remove_policy_dir(instance: &str) -> Result<()> {
 )]
 mod tests {
     use super::*;
-    use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
     use crate::mount_policy::compile;
 
     /// Pin MSB_HOME to a fresh temp dir for the duration of a test.
@@ -218,9 +218,10 @@ mod tests {
         // components.
         let rel = policy_file_rel("slot@id", "workspace");
         assert!(!rel.is_absolute());
-        assert!(!rel
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir)));
+        assert!(
+            !rel.components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        );
     }
 
     // ---- §9r slug-collision fix: mount_slug is injective ----

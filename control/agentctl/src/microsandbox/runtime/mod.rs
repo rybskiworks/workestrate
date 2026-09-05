@@ -27,14 +27,14 @@ mod wait;
 pub mod down_scope;
 
 pub use network::network_plan_to_policy;
-pub use ps::probe_liveness;
 pub use ps::PsKind;
+pub use ps::probe_liveness;
 pub use ps::{
-    classify_status, format_refuse_message, occupancy_from_state, ps, ConfigStaleness,
-    InstanceStatus, Occupancy, PsEntry,
+    ConfigStaleness, InstanceStatus, Occupancy, PsEntry, classify_status, format_refuse_message,
+    occupancy_from_state, ps,
 };
 pub use reconcile::{
-    decide_chain, default_chain, gather_facts, sandbox_dir, ChainStep, ReconcileFacts,
+    ChainStep, ReconcileFacts, decide_chain, default_chain, gather_facts, sandbox_dir,
 };
 pub(crate) use run::current_config_hash_for_workload;
 pub use run::{exec_agent_with_spec, up_service_with_spec};
@@ -46,7 +46,7 @@ pub use spawn::spawn_detached_service;
 // Crate-visible so down_scope's artifact-evidence probe reuses the ONE
 // detached-log location (ADR 0032 addendum 2026-08-30).
 pub(crate) use spawn::detached_log_path;
-pub use wait::{wait_for_port, DEFAULT_WAIT};
+pub use wait::{DEFAULT_WAIT, wait_for_port};
 
 use anyhow::Result;
 use microsandbox::sandbox::{SandboxBuilder, SandboxHandle, SandboxStatus};
@@ -583,8 +583,8 @@ pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<
 )]
 mod tests {
     use super::{
-        decide_remove_retry, down_all_instances, sandbox_dir, DownStatus, RemoveRetryDecision,
-        REMOVE_DEADLINE, REMOVE_KILL_THRESHOLD, REMOVE_RETRY_POLL,
+        DownStatus, REMOVE_DEADLINE, REMOVE_KILL_THRESHOLD, REMOVE_RETRY_POLL, RemoveRetryDecision,
+        decide_remove_retry, down_all_instances, sandbox_dir,
     };
     use crate::config::test_support::unique_state_dir_runtime;
     use std::time::Duration;
@@ -695,7 +695,7 @@ mod tests {
     /// sequence across the two spellings.
     #[test]
     fn decide_spelling_verdict_matrix() {
-        use super::{decide_spelling_verdict, SpellingOutcome, SpellingVerdict};
+        use super::{SpellingOutcome, SpellingVerdict, decide_spelling_verdict};
         let missing = SpellingOutcome::Missing;
         let present = SpellingOutcome::Present;
         let failed = |m: &str| SpellingOutcome::Failed(m.to_string());
@@ -851,8 +851,8 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see Error test
     #[ignore = "shares the SDK process-global DB pool with the Error test; run alone with --ignored"]
-    async fn down_all_instances_returns_notfound_when_msb_db_empty_but_openable(
-    ) -> anyhow::Result<()> {
+    async fn down_all_instances_returns_notfound_when_msb_db_empty_but_openable()
+    -> anyhow::Result<()> {
         // Serialize with ALL env-mutating tests (see the ENV_TEST_LOCK note above).
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!(
@@ -902,8 +902,8 @@ mod tests {
     /// `#[ignore]`'d empty-db test, this one is deterministic in any ordering.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see Error test
-    async fn teardown_for_replace_clears_record_and_dir_when_msb_db_unreachable(
-    ) -> anyhow::Result<()> {
+    async fn teardown_for_replace_clears_record_and_dir_when_msb_db_unreachable()
+    -> anyhow::Result<()> {
         // Serialize with ALL env-mutating tests (see the Error test note).
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!(

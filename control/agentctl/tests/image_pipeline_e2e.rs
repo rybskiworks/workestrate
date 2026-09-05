@@ -33,9 +33,9 @@ use std::path::{Path, PathBuf};
 
 use workestrate::images::detect::{DrvEvaluator, MsbStoreProbe, NixCliEvaluator, StoreProbe};
 use workestrate::images::pipeline::{
-    run_build_pipeline, BuildJob, LoadAction, MsbCliLoader, NixCliBuilder,
+    BuildJob, LoadAction, MsbCliLoader, NixCliBuilder, run_build_pipeline,
 };
-use workestrate::images::state::{image_key, ImagesState, RepoIdentity};
+use workestrate::images::state::{ImagesState, RepoIdentity, image_key};
 
 fn nix_on_path() -> bool {
     std::process::Command::new("nix")
@@ -62,11 +62,7 @@ fn msb_for_e2e() -> Option<String> {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    if ok {
-        Some(bin)
-    } else {
-        None
-    }
+    if ok { Some(bin) } else { None }
 }
 
 fn uniq_tmp(label: &str) -> PathBuf {

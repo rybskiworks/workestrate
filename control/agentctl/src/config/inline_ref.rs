@@ -265,7 +265,7 @@ pub fn clear_inline_override() {
 )]
 mod tests {
     use super::*;
-    use crate::config::test_support::{EnvGuard, ENV_TEST_LOCK};
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
 
     // ---- Grammar parse matrix ----
 

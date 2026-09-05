@@ -9,7 +9,7 @@
 use crate::mount_policy::lexical::LexicalPath;
 use crate::mount_policy::pattern::PatternError;
 use crate::mount_policy::rule::{PathPolicyRule, RuleEffect, RuleOrigin};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt;
 
 /// The three visibility states a path can be in (spec 22 §7).

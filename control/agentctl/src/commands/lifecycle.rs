@@ -729,8 +729,8 @@ pub async fn cmd_down_ladder(
 ) -> Result<()> {
     use crate::microsandbox::runtime::down_hardened;
     use crate::microsandbox::runtime::down_scope::{
-        enumerate_all_candidates, enumerate_managed, everything_gate, known_config_refs,
-        resolve_scope, validate_config_ref, DownScope,
+        DownScope, enumerate_all_candidates, enumerate_managed, everything_gate, known_config_refs,
+        resolve_scope, validate_config_ref,
     };
 
     // ---- gates ----
@@ -843,7 +843,7 @@ async fn down_retained_generations(
 ) -> Vec<(String, Vec<crate::microsandbox::runtime::DownResult>)> {
     use crate::microsandbox::runtime::down_hardened;
     use crate::microsandbox::runtime::down_scope::{
-        enumerate_generation_dir_candidates, resolve_scope, retained_generation_homes, DownScope,
+        DownScope, enumerate_generation_dir_candidates, resolve_scope, retained_generation_homes,
     };
     let mut sweeps = Vec::new();
     for gen_home in retained_generation_homes() {
@@ -991,7 +991,7 @@ mod tests {
     /// of masquerading as a decline.
     #[test]
     fn classify_confirm_answer_matrix() {
-        use super::{classify_confirm_answer, ConfirmAnswer};
+        use super::{ConfirmAnswer, classify_confirm_answer};
         let ok = |line: &str| Ok(Some(line.to_string()));
         // Confirm tokens.
         for line in ["y", "Y", "yes", "YES", "Yes", " y ", "\tyes\t"] {
@@ -1409,7 +1409,7 @@ mod tests {
     /// from the registry view of a REAL temp state dir.
     #[test]
     fn resolve_dependent_instance_id_parallel_strategy_allocates() {
-        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _env = EnvGuard::capture(&["WORKESTRATE_CONFIG_DIR", "WORKESTRATE_STATE_DIR"]);
         let cfg_dir = uniq_dir("depid-cfg");
@@ -1501,7 +1501,7 @@ strategy = "parallel"
     /// path instead.
     #[test]
     fn resolve_dependent_instance_id_per_dir_derives_cwd_keyed_id() {
-        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _env = EnvGuard::capture(&[
             "WORKESTRATE_CONFIG_DIR",
@@ -1565,7 +1565,7 @@ strategy = "per-dir"
     /// (None); `--new` allocates even then.
     #[test]
     fn resolve_dependent_instance_id_singleton_strategy_none_unless_new() {
-        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _env = EnvGuard::capture(&["WORKESTRATE_CONFIG_DIR", "WORKESTRATE_STATE_DIR"]);
         let cfg_dir = uniq_dir("depid-cfg-single");
@@ -1598,7 +1598,7 @@ strategy = "per-dir"
     /// that composition on a per-dir-strategy workload.
     #[test]
     fn resolve_dependent_instance_id_inline_ref_instance_beats_per_dir() {
-        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _env = EnvGuard::capture(&[
             "WORKESTRATE_CONFIG_DIR",

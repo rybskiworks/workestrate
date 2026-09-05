@@ -14,7 +14,7 @@
 //! Run with: `cargo run --example microsandbox_minimal`
 
 use workestrate::config::validate_config;
-use workestrate::merge::{merge_layers, Layer};
+use workestrate::merge::{Layer, merge_layers};
 
 /// A base layer: declares a single `agent` workload with default-deny
 /// networking and DNS egress.

@@ -14,7 +14,7 @@
 
 mod common;
 
-use common::{IsolatedHome, TempDir, BIN};
+use common::{BIN, IsolatedHome, TempDir};
 use std::path::Path;
 use std::process::Command;
 

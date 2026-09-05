@@ -52,7 +52,7 @@ use anyhow::Result;
 use crate::config::ConfigFile;
 use crate::microsandbox::plan::{EgressRule, EgressTarget, Protocol};
 use crate::microsandbox::port_registry::{
-    list_records_for_workload, list_records_for_workload_any_namespace, SandboxInstanceRecord,
+    SandboxInstanceRecord, list_records_for_workload, list_records_for_workload_any_namespace,
 };
 
 /// Guest-visible host alias: guests reach services published on the host via

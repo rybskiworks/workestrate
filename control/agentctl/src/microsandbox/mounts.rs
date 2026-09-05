@@ -204,11 +204,7 @@ pub(crate) fn apply_plan_mounts(
                 Some(pf) => v.mount_policy(pf),
                 None => v,
             };
-            if m.is_read_only() {
-                v.readonly()
-            } else {
-                v
-            }
+            if m.is_read_only() { v.readonly() } else { v }
         });
     }
     Ok(b)
@@ -550,7 +546,7 @@ pub(crate) fn preflight_existence(
     clippy::unwrap_in_result
 )]
 mod tests {
-    use super::{ensure_mount_sources, preflight_existence, resolve_mount_host, MountRoots};
+    use super::{MountRoots, ensure_mount_sources, preflight_existence, resolve_mount_host};
     use super::{expand_seed_glob, instance_scoped_state_path, literal_glob_root};
     use super::{validate_mount_guest, validate_mount_host};
     use crate::microsandbox::plan::{MountMode, MountPlan, NetworkPlan, SandboxPlan};
@@ -767,8 +763,8 @@ mod tests {
     /// with a flake project root available it resolves declaring-layer-relative
     /// against the content root.
     #[test]
-    fn undeclared_reserved_default_resolves_against_content_root_not_project_root(
-    ) -> anyhow::Result<()> {
+    fn undeclared_reserved_default_resolves_against_content_root_not_project_root()
+    -> anyhow::Result<()> {
         let content = unique_root("content");
         let project = unique_root("project");
         let roots = roots_for(&content, Some(&project), None);

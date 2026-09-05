@@ -20,8 +20,8 @@ use workestrate::commands::doctor::cmd_doctor;
 use workestrate::commands::home::cmd_home;
 use workestrate::commands::init::{cmd_init, cmd_new};
 use workestrate::commands::lifecycle::{
-    cmd_clean, cmd_down_ladder, dispatch_agent, dispatch_service, resolve_dependent_instance_id,
-    workload_route, WorkloadRoute,
+    WorkloadRoute, cmd_clean, cmd_down_ladder, dispatch_agent, dispatch_service,
+    resolve_dependent_instance_id, workload_route,
 };
 use workestrate::commands::migrate::cmd_migrate_home;
 use workestrate::commands::schemas::cmd_schemas;
@@ -1312,7 +1312,7 @@ mod tests {
     /// invocation cwd — deterministic, with no registry allocation.
     #[test]
     fn plan_preview_instance_id_per_dir_derives_cwd_keyed_id() {
-        use workestrate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        use workestrate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _env = EnvGuard::capture(&[workestrate::config::INVOKE_CWD_ENV]);
         let invoke = uniq_dir("plan-preview-perdir");

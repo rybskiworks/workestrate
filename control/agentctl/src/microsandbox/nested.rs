@@ -167,8 +167,7 @@ pub fn read_nested_probe() -> NestedProbe {
         .map(|body| cpu_flag_from(&body))
         .unwrap_or(false);
     let nested_param = nested_param_from(Path::new(SYS_MODULE_ROOT));
-    let arch_supported =
-        std::env::consts::OS == "linux" && std::env::consts::ARCH == "x86_64";
+    let arch_supported = std::env::consts::OS == "linux" && std::env::consts::ARCH == "x86_64";
     NestedProbe {
         kvm_present,
         kvm_accessible,
@@ -438,8 +437,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("exists but not accessible by uid=")
-                && err.contains("usermod -aG kvm"),
+            err.contains("exists but not accessible by uid=") && err.contains("usermod -aG kvm"),
             "require/unreadable refusal shape: {err}"
         );
     }
@@ -491,8 +489,13 @@ mod tests {
         }
         // Off + frozen seal: no ask, no refusal.
         assert!(
-            nested_up_decision("job", NestedMode::Off, &NestedProbe::full(), Some("home-registry"))
-                .is_ok()
+            nested_up_decision(
+                "job",
+                NestedMode::Off,
+                &NestedProbe::full(),
+                Some("home-registry")
+            )
+            .is_ok()
         );
     }
 
@@ -586,7 +589,8 @@ mod tests {
 
     #[test]
     fn euid_parses_from_proc_status_shape() {
-        let text = "Name:\tworkestrate\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n";
+        let text =
+            "Name:\tworkestrate\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n";
         assert_eq!(parse_euid_from_status(text), Some(1000));
         assert_eq!(parse_euid_from_status("Name:\tx\n"), None);
     }

@@ -12,11 +12,11 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::config::ConflictStep;
-use crate::microsandbox::port_registry::{find_record, SandboxInstanceRecord};
+use crate::microsandbox::port_registry::{SandboxInstanceRecord, find_record};
 use crate::microsandbox::runtime::time::record_age_secs;
 use crate::microsandbox::runtime::wait_for_port;
-use microsandbox::sandbox::SandboxStatus;
 use microsandbox::MicrosandboxError;
+use microsandbox::sandbox::SandboxStatus;
 
 /// Bounded budget for the reuse health probe (host TCP connect to each
 /// published port, shared deadline). Short by design: a healthy running
@@ -456,7 +456,7 @@ pub fn decide_step(
 )]
 mod tests {
     use super::*;
-    use crate::config::test_support::{EnvGuard, ENV_TEST_LOCK};
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
     use crate::microsandbox::plan::PortMapping;
 
     /// Build a minimal record for fact fixtures (only the fields the

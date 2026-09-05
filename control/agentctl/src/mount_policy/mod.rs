@@ -43,7 +43,7 @@ pub mod rule;
 pub mod scope;
 pub mod value;
 
-pub use compile::{compile, CompileError, DuplicateConflict, PolicyAxis};
+pub use compile::{CompileError, DuplicateConflict, PolicyAxis, compile};
 pub use lexical::{LexicalPath, LexicalPathError};
 pub use pattern::{Pattern, PatternError, PatternErrorKind};
 pub use program::{

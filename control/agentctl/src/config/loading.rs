@@ -56,14 +56,14 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::config::paths::{
-    expand_tilde, overrides_path, reference_config_path, resolve_home_with_kind, resolve_store_dir,
-    xdg_config_dir, HomeKind,
+    HomeKind, expand_tilde, overrides_path, reference_config_path, resolve_home_with_kind,
+    resolve_store_dir, xdg_config_dir,
 };
 use crate::config::registry::{load_registry, resolve_active_context};
 use crate::config::trust::is_trusted_project;
 use crate::config::types::{CONFIG_FIELDS, WORKLOAD_FIELDS};
 use crate::config::validation::validate_config;
-use crate::config::{set_active_context, ConfigFile, ConfigRepoEntry, Registry, SecretsLayer};
+use crate::config::{ConfigFile, ConfigRepoEntry, Registry, SecretsLayer, set_active_context};
 
 /// One row in the `agentctl check` report.
 #[derive(Debug, Clone)]
@@ -3831,12 +3831,16 @@ write.deny = ["sugar-write-deny"]
             );
         }
         // Both archives come from feat-x's shas.
-        assert!(crate::config::archive_dir(&alpha_feat)?
-            .join("workestrate.toml")
-            .exists());
-        assert!(crate::config::archive_dir(&beta_feat)?
-            .join("workestrate.toml")
-            .exists());
+        assert!(
+            crate::config::archive_dir(&alpha_feat)?
+                .join("workestrate.toml")
+                .exists()
+        );
+        assert!(
+            crate::config::archive_dir(&beta_feat)?
+                .join("workestrate.toml")
+                .exists()
+        );
         // Lock: refs map carries feat-x; PRIMARY pins unmoved.
         let lock = crate::config::load_home_lock()?.expect("lock");
         assert_eq!(
@@ -4578,11 +4582,10 @@ write.deny = ["sugar-write-deny"]
     #[test]
     fn collect_virtualization_ladder_orders_rungs() {
         let mut registry = Registry::default();
-        registry.policy.virtualization =
-            Some(crate::config::VirtualizationPolicyFragment {
-                allow_nested: Some(false),
-                r#final: false,
-            });
+        registry.policy.virtualization = Some(crate::config::VirtualizationPolicyFragment {
+            allow_nested: Some(false),
+            r#final: false,
+        });
         let layer = crate::merge::Layer::from_string(
             "personal",
             "schema_version = 1\n\n[policy.virtualization]\nallow_nested = true\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"\n\n[workloads.pi.policy.virtualization]\nallow_nested = true\n",
@@ -4629,9 +4632,7 @@ write.deny = ["sugar-write-deny"]
         assert_eq!(layers.len(), 1);
         let pi = layers[0].config.workloads.get("pi").unwrap();
         assert_eq!(
-            pi.virtualization
-                .as_ref()
-                .and_then(|v| v.nested),
+            pi.virtualization.as_ref().and_then(|v| v.nested),
             Some(crate::config::NestedMode::Prefer),
             "virtualization ask survives override stripping"
         );

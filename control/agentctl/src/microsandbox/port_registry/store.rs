@@ -1,5 +1,5 @@
-use super::lock::PortRegistryLock;
 use super::SandboxInstanceRecord;
+use super::lock::PortRegistryLock;
 use crate::microsandbox::plan::PortMapping;
 use anyhow::Result;
 use std::net::{IpAddr, Ipv4Addr};
@@ -1350,8 +1350,8 @@ mod tests {
             let b = std::sync::Arc::clone(&barrier);
             handles.push(std::thread::spawn(move || {
                 b.wait(); // release both threads at once
-                          // A1: workload = instance name keeps (instance, workload,
-                          // None) consistent under context-at-create verification.
+                // A1: workload = instance name keeps (instance, workload,
+                // None) consistent under context-at-create verification.
                 let instance = format!("race-{i}");
                 combined_register(&dir, &instance, &instance, 4000)
             }));

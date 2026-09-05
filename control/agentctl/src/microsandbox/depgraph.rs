@@ -32,7 +32,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::config::ConfigFile;
-use crate::microsandbox::port_registry::{list_records, SandboxInstanceRecord};
+use crate::microsandbox::port_registry::{SandboxInstanceRecord, list_records};
 use crate::microsandbox::slots::instance_id_of;
 
 /// Three-color DFS mark: GRAY = on the current path (a back edge to a gray

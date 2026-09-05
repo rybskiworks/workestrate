@@ -163,7 +163,7 @@ pub fn repo_identity_for(
 )]
 mod tests {
     use super::*;
-    use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK, HOME_ENV_KEYS};
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, uniq_dir};
 
     /// Fixture: a registered checkout at `<tmp>/checkout` and a declaring
     /// dir nested inside it. Returns (tmp, checkout, declaring).

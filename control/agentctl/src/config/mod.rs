@@ -16,42 +16,42 @@ pub mod validation;
 pub use archive::{archive_dir, archive_store_root, ensure_archive};
 #[allow(unused_imports)]
 pub use inline_ref::{
-    arm_inline_override, clear_inline_override, parse_workload_selector, pending_inline_override,
-    set_pending_inline_override, set_pending_inline_override_from_env,
-    verb_arms_after_dep_autostart, InlineOverride, WORKLOAD_REF_ENV,
+    InlineOverride, WORKLOAD_REF_ENV, arm_inline_override, clear_inline_override,
+    parse_workload_selector, pending_inline_override, set_pending_inline_override,
+    set_pending_inline_override_from_env, verb_arms_after_dep_autostart,
 };
 #[allow(unused_imports)]
 pub use loading::{
-    check_required_files, load_config, load_overrides, resolve_secrets_layers, CheckEntry,
+    CheckEntry, check_required_files, load_config, load_overrides, resolve_secrets_layers,
 };
 #[allow(unused_imports)]
 pub use lockfile::{
-    home_lock_path, home_lock_path_for, load_home_lock, load_home_lock_from, lock_from_registry,
-    save_home_lock, save_home_lock_to, upsert_locked_pin, upsert_locked_ref, HomeLock, LockedRef,
-    LockedRepo, LOCK_FILE_NAME, LOCK_VERSION,
+    HomeLock, LOCK_FILE_NAME, LOCK_VERSION, LockedRef, LockedRepo, home_lock_path,
+    home_lock_path_for, load_home_lock, load_home_lock_from, lock_from_registry, save_home_lock,
+    save_home_lock_to, upsert_locked_pin, upsert_locked_ref,
 };
 #[allow(unused_imports)]
-pub use migration::{run_migrate_home, MigrateSummary, MovedEntry};
+pub use migration::{MigrateSummary, MovedEntry, run_migrate_home};
 #[allow(unused_imports)]
 pub use paths::expand_tilde;
 #[allow(unused_imports)]
 pub use paths::{
-    canonical_invoke_cwd_string, ensure_invoke_cwd_env, invoke_cwd, invoke_cwd_or_err,
-    INVOKE_CWD_ENV,
+    HomeKind, config_repo_dir, overrides_path, registry_path, resolve_active_config_dir,
+    resolve_home, resolve_home_with_kind, resolve_state_dir, resolve_store_dir, source_store_dir,
+    xdg_config_dir, xdg_data_dir, xdg_state_dir,
 };
 #[allow(unused_imports)]
 pub use paths::{
-    config_repo_dir, overrides_path, registry_path, resolve_active_config_dir, resolve_home,
-    resolve_home_with_kind, resolve_state_dir, resolve_store_dir, source_store_dir, xdg_config_dir,
-    xdg_data_dir, xdg_state_dir, HomeKind,
+    INVOKE_CWD_ENV, canonical_invoke_cwd_string, ensure_invoke_cwd_env, invoke_cwd,
+    invoke_cwd_or_err,
 };
 #[allow(unused_imports)]
 pub(crate) use registry::looks_like_git_url;
 #[allow(unused_imports)]
 pub use registry::{
-    effective_ref, entry_is_local_path, load_registry, local_entry_checkout_dir, register_config,
-    resolve_active_context, resolve_default_ref, save_registry, set_default_context, source_kind,
-    ConfigSourceKind,
+    ConfigSourceKind, effective_ref, entry_is_local_path, load_registry, local_entry_checkout_dir,
+    register_config, resolve_active_context, resolve_default_ref, save_registry,
+    set_default_context, source_kind,
 };
 #[allow(unused_imports)]
 pub use trust::is_dir_trusted_via_base_registry;
@@ -64,13 +64,13 @@ pub use types::{
     EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef, EnvVarConfig,
     HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable, IngressDenyTable,
     IngressPolicyFragment, InstancePolicy, InstancePort, InstanceStrategy, LocalBuildConfig,
-    NetworkConfig, NetworkDefaultsConfig, NestedMode, OnConflict, OnSkew, PolicyConfig, PortEntry,
+    NestedMode, NetworkConfig, NetworkDefaultsConfig, OnConflict, OnSkew, PolicyConfig, PortEntry,
     PortOccupiedBare, PortOccupiedChain, PortOccupiedStep, Registry, RegistrySettings,
     SecretDefConfig, SecretViolationPolicy, SecretsLayer, SecretsPolicyFragment, SeedFileConfig,
     TrustedProject, VirtualizationConfig, VirtualizationPolicyFragment, WorkloadConfig,
 };
 #[allow(unused_imports)]
-pub use validation::{validate_config, validate_config_name, EXPECTED_SCHEMA_VERSION};
+pub use validation::{EXPECTED_SCHEMA_VERSION, validate_config, validate_config_name};
 
 use anyhow::Result;
 use std::path::PathBuf;

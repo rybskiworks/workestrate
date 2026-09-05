@@ -241,9 +241,7 @@ pub fn retained_generation_homes() -> Vec<PathBuf> {
         return Vec::new();
     }
     let resolved = match generation::resolve_msb_home_generation() {
-        HomeResolution::Current { gen_dir, .. } | HomeResolution::Healed { gen_dir, .. } => {
-            gen_dir
-        }
+        HomeResolution::Current { gen_dir, .. } | HomeResolution::Healed { gen_dir, .. } => gen_dir,
         _ => super::reconcile::msb_home(),
     };
     // Dedupe by CANONICAL path: `current` is a symlink into generations/,
@@ -1281,7 +1279,7 @@ mod tests {
     /// entry refs + ref KEYS (A5 helpers), sorted and deduped.
     #[test]
     fn known_config_refs_unions_registry_and_lockfile() -> anyhow::Result<()> {
-        use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _env = EnvGuard::capture(&["WORKESTRATE_HOME"]);
         let home = uniq_dir("down-scope-refs-home");

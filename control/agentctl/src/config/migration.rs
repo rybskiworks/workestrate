@@ -533,31 +533,41 @@ pub(crate) mod tests {
         assert!(summary.dry_run);
         assert!(!summary.registry_updated);
         assert!(summary.moved.iter().any(|m| m.dst.ends_with("config.toml")));
-        assert!(summary
-            .moved
-            .iter()
-            .any(|m| m.dst.ends_with("overrides.toml")));
-        assert!(summary
-            .moved
-            .iter()
-            .any(|m| m.dst.ends_with(".env.local.enc")));
-        assert!(summary
-            .moved
-            .iter()
-            .any(|m| m.dst.ends_with("config-repos/personal")));
+        assert!(
+            summary
+                .moved
+                .iter()
+                .any(|m| m.dst.ends_with("overrides.toml"))
+        );
+        assert!(
+            summary
+                .moved
+                .iter()
+                .any(|m| m.dst.ends_with(".env.local.enc"))
+        );
+        assert!(
+            summary
+                .moved
+                .iter()
+                .any(|m| m.dst.ends_with("config-repos/personal"))
+        );
         assert!(summary.moved.iter().any(|m| m.dst.ends_with("sources/foo")));
-        assert!(summary
-            .moved
-            .iter()
-            .any(|m| m.dst.ends_with("state/workspaces")));
+        assert!(
+            summary
+                .moved
+                .iter()
+                .any(|m| m.dst.ends_with("state/workspaces"))
+        );
 
         // Dry-run must touch nothing.
         assert!(xcfg.join("config.toml").exists());
-        assert!(xdata
-            .join("repos")
-            .join("personal")
-            .join("file.txt")
-            .exists());
+        assert!(
+            xdata
+                .join("repos")
+                .join("personal")
+                .join("file.txt")
+                .exists()
+        );
         assert!(xstate.join("workspaces").join("ws.txt").exists());
         assert!(!dest.exists());
 
@@ -584,17 +594,19 @@ pub(crate) mod tests {
         assert!(dest.join("config.toml").exists());
         assert!(dest.join("overrides.toml").exists());
         assert!(dest.join("secrets").join(".env.local.enc").exists());
-        assert!(dest
-            .join("config-repos")
-            .join("personal")
-            .join("file.txt")
-            .exists());
+        assert!(
+            dest.join("config-repos")
+                .join("personal")
+                .join("file.txt")
+                .exists()
+        );
         assert!(dest.join("sources").join("foo").join("f.txt").exists());
-        assert!(dest
-            .join("state")
-            .join("workspaces")
-            .join("ws.txt")
-            .exists());
+        assert!(
+            dest.join("state")
+                .join("workspaces")
+                .join("ws.txt")
+                .exists()
+        );
 
         // Registry consolidated: store_dir cleared, home_version stamped.
         let reg: Registry = toml::from_str(&std::fs::read_to_string(dest.join("config.toml"))?)?;
@@ -605,11 +617,13 @@ pub(crate) mod tests {
         // Old sources moved away.
         assert!(!xcfg.join("config.toml").exists());
         assert!(!xcfg.join(".env.local.enc").exists());
-        assert!(!xdata
-            .join("repos")
-            .join("personal")
-            .join("file.txt")
-            .exists());
+        assert!(
+            !xdata
+                .join("repos")
+                .join("personal")
+                .join("file.txt")
+                .exists()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -650,18 +664,20 @@ pub(crate) mod tests {
         // New single-home layout under dest.
         assert!(dest.join("config.toml").exists());
         assert!(dest.join("secrets").join(".env.local.enc").exists());
-        assert!(dest
-            .join("config-repos")
-            .join("personal")
-            .join("file.txt")
-            .exists());
+        assert!(
+            dest.join("config-repos")
+                .join("personal")
+                .join("file.txt")
+                .exists()
+        );
         assert!(dest.join("sources").join("foo").join("f.txt").exists());
         // State: old state/workestrate moved INTO dest/state (overlap case).
-        assert!(dest
-            .join("state")
-            .join("workspaces")
-            .join("ws.txt")
-            .exists());
+        assert!(
+            dest.join("state")
+                .join("workspaces")
+                .join("ws.txt")
+                .exists()
+        );
 
         // Old subtrees removed; dest/state (new) survives.
         assert!(!dest.join("config").exists());
@@ -773,11 +789,12 @@ pub(crate) mod tests {
             "expected existing dst sources/foo listed in refusal, got: {msg}"
         );
         // The stale files must be untouched (refusal happens before any move).
-        assert!(dest
-            .join("config-repos")
-            .join("personal")
-            .join("stale.txt")
-            .exists());
+        assert!(
+            dest.join("config-repos")
+                .join("personal")
+                .join("stale.txt")
+                .exists()
+        );
         assert!(dest.join("sources").join("foo").join("stale.txt").exists());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -808,11 +825,12 @@ pub(crate) mod tests {
         );
         assert!(summary.failed_at.is_none());
         // The moved repo content overwrites the stale file.
-        assert!(dest
-            .join("config-repos")
-            .join("personal")
-            .join("file.txt")
-            .exists());
+        assert!(
+            dest.join("config-repos")
+                .join("personal")
+                .join("file.txt")
+                .exists()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())

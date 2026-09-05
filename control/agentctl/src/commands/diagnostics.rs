@@ -881,7 +881,7 @@ pub fn cmd_validate_config() -> Result<()> {
 /// missing ones as warnings. Never bails (synthetic/reference configs may
 /// legitimately lack the files).
 fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> {
-    use crate::microsandbox::mounts::{resolve_mount_host, MountRootsOwned};
+    use crate::microsandbox::mounts::{MountRootsOwned, resolve_mount_host};
     let provenance = crate::merge::get_provenance();
     let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
     let project_root = crate::config::project_root_optional();
@@ -2091,7 +2091,7 @@ mod tests {
     /// honest-unknown (nothing displayed).
     #[test]
     fn apply_config_staleness_matches_current_and_skips_unresolvable_rows() -> Result<()> {
-        use crate::config::test_support::{unique_state_dir, TestConfigGuard};
+        use crate::config::test_support::{TestConfigGuard, unique_state_dir};
         use crate::microsandbox::plan::PortMapping;
 
         let _guard = TestConfigGuard::new();

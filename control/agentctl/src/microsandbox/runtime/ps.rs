@@ -2,8 +2,8 @@ use super::super::plan::PortMapping;
 use super::super::slots;
 use super::reconcile::ReconcileFacts;
 use anyhow::Result;
-use microsandbox::sandbox::SandboxStatus;
 use microsandbox::MicrosandboxError;
+use microsandbox::sandbox::SandboxStatus;
 use std::path::Path;
 
 /// Result of an occupancy probe against the state registry (no msb call).
@@ -347,8 +347,8 @@ pub async fn probe_liveness(entries: &mut [PsEntry]) -> (usize, usize) {
 )]
 mod tests {
     use super::{
-        apply_liveness_outcomes, classify_status, format_refuse_message, occupancy_from_state,
-        probe_liveness, ps, InstanceStatus, Occupancy, ProbeOutcome, PsEntry, PsKind,
+        InstanceStatus, Occupancy, ProbeOutcome, PsEntry, PsKind, apply_liveness_outcomes,
+        classify_status, format_refuse_message, occupancy_from_state, probe_liveness, ps,
     };
     use crate::config::test_support::unique_state_dir_runtime;
     use crate::microsandbox::plan::PortMapping;

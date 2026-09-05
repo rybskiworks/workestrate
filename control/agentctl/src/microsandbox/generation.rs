@@ -717,7 +717,10 @@ mod tests {
         assert!(is_generation_name(KEY12));
         assert!(is_generation_name(LEGACY_KEY));
         for non in ["", "abcde", "ABCDEFGHIJKL", "unmanaged", "legacyy", "legac"] {
-            assert!(!is_generation_name(non), "{non} must not be a generation name");
+            assert!(
+                !is_generation_name(non),
+                "{non} must not be a generation name"
+            );
         }
     }
 
@@ -741,7 +744,13 @@ mod tests {
         assert_eq!(keys, vec![KEY12, LEGACY_KEY]);
         assert_eq!(
             debris,
-            vec![".converge-tmp-xyz", "ABCDEFGHIJKL", "abcde", "ffffffffffff", "notes.txt"]
+            vec![
+                ".converge-tmp-xyz",
+                "ABCDEFGHIJKL",
+                "abcde",
+                "ffffffffffff",
+                "notes.txt"
+            ]
         );
         let _ = std::fs::remove_dir_all(root);
     }
