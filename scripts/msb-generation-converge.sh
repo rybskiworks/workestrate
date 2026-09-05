@@ -131,16 +131,24 @@ gen_key_from_msb_path() {
   fi
 }
 
-# Absolute paths of generation dirs under $GENS (any name, so 'legacy'
-# counts), excluding interrupted-converge staging debris.
+# Generation-name predicate — mirrors generation.rs::is_generation_name
+# bit-exactly: exactly "legacy", or exactly 12 lowercase base32 chars.
+is_gen_name() {
+  local n="$1"
+  [[ "$n" == "legacy" ]] && return 0
+  [[ "$n" =~ ^[a-z0-9]{12}$ ]]
+}
+
+# Absolute paths of generation dirs under $GENS (names per is_gen_name,
+# matching the Rust enumeration). Everything else (junk dirs, files,
+# interrupted-converge .converge-tmp-* staging) is DEBRIS: not counted
+# toward heal/ambiguous/quiesce/GC.
 list_gen_dirs() {
   [[ -d "$GENS" ]] || return 0
   local e
   for e in "$GENS"/*; do
     [[ -d "$e" ]] || continue
-    case "$(basename "$e")" in
-      .converge-tmp-*) continue ;;
-    esac
+    is_gen_name "$(basename "$e")" || continue
     echo "$e"
   done
 }

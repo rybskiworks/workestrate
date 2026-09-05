@@ -16,7 +16,8 @@
 #      sqlite3 is on PATH (SKIP otherwise)
 #   d  unprobeable generation -> not-proven-quiesced refusal (exit 2)
 #   e  resolution edges: single-gen heal then converge; two gens + no
-#      current -> ambiguous refusal (exit 2)
+#      current -> ambiguous refusal (exit 2); junk dirs are debris and do
+#      NOT count toward heal/ambiguous
 #   f  legacy-root absorb: probed first, relocated into generations/legacy,
 #      converged legacy->baked in the same run, legacy kept (same-run
 #      source exemption); + live pre-generation root refusal (exit 2, db
@@ -298,6 +299,22 @@ scenario_e() {
   assert_contains "e2: ambiguity text" "$OUT" "ambiguous state"
   assert_absent "e2: current left absent" "$root2/.microsandbox/current"
   assert_not_dir "e2: no gen B created" "$root2/.microsandbox/generations/$KEY_B"
+
+  echo "--- e3: junk dir alongside one real gen + no current -> heal+converge (not ambiguous)"
+  new_root
+  local root3="$NEW_ROOT"
+  local baked3
+  baked3=$(make_store_msb "$root3" "$HASH_B")
+  build_two_gen_fixture "$root3"
+  rm "$root3/.microsandbox/current"
+  mkdir -p "$root3/.microsandbox/generations/not-a-gen"
+  run_converge "$root3" "$baked3"
+  assert_eq "e3: junk dir does not trigger ambiguity (exit 0)" "0" "$RC"
+  assert_contains "e3: heal logged" "$OUT" "healing missing 'current' symlink -> $KEY_A"
+  assert_symlink_target "e3: converged after the heal" \
+    "$root3/.microsandbox/current" "$root3/.microsandbox/generations/$KEY_B"
+  assert_dir "e3: junk dir left alone (debris, never collected)" \
+    "$root3/.microsandbox/generations/not-a-gen"
 }
 
 scenario_f() {
