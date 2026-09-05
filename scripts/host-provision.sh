@@ -334,28 +334,49 @@ fi
 set -e
 
 # ---------------------------------------------------------------------------
-# Step B½ — MSB home migration (best-effort, never fails provisioning)
+# Step B½ — MSB state generation converge (best-effort, never fails provisioning)
 # ---------------------------------------------------------------------------
-log "Step B½: msb home migration (best-effort)"
+# Supersedes the raw migrate-msb-home.sh call: msb-generation-converge.sh owns
+# msb state placement (per-generation homes keyed by the baked msb store-path
+# hash + an atomic `current` symlink flip) and DELEGATES to
+# migrate-msb-home.sh itself when the legacy devshell cache home
+# ($HOME/.cache/ai-workbench-msb) is still present. Best-effort: failures warn
+# but NEVER increment ERRORS — the doctor `generation` row carries the FAIL.
+# The baked msb comes from the installed wrapper ($got) via P3's baked_msb
+# extraction, NOT from the MSB_PATH env var (the wrapper only sets MSB_PATH
+# for its own children — relying on the env var here was a defect).
+log "Step B½: msb state generation converge (best-effort)"
 set +e
-if [[ -x "$REPO/scripts/migrate-msb-home.sh" ]]; then
-  mig_check_out=$("$REPO/scripts/migrate-msb-home.sh" --check-only 2>&1)
-  mig_check_status=$?
-  if [[ "$mig_check_status" -eq 1 ]]; then
-    if [[ "$CHECK_ONLY" -eq 1 ]]; then
-      warn "msb homes need migration (--check-only: not migrating): $mig_check_out"
-      echo "[host-provision] run ./scripts/migrate-msb-home.sh to migrate"
-    else
-      log "legacy msb home needs migration; running migrate-msb-home.sh (best-effort)"
-      "$REPO/scripts/migrate-msb-home.sh" 2>&1 || warn "msb home migration failed; 'workestrate doctor' will flag it"
-    fi
-  elif [[ "$mig_check_status" -eq 0 ]]; then
-    log "msb homes already converged (nothing to do)"
-  else
-    warn "msb home migration check errored (status=$mig_check_status): $mig_check_out"
-  fi
+if [[ -z "${baked_msb:-}" ]]; then
+  warn "no baked MSB_PATH extracted at P3; skipping generation converge"
+elif [[ ! -x "$REPO/scripts/msb-generation-converge.sh" ]]; then
+  warn "msb-generation-converge.sh not present or not executable; skipping generation converge"
 else
-  log "migrate-msb-home.sh not present or not executable; skipping msb home migration"
+  baked_gen="unmanaged"
+  baked_resolved=$(readlink -f "$baked_msb" 2>/dev/null || true)
+  if [[ -n "$baked_resolved" ]]; then
+    baked_store=$(basename "$(dirname "$(dirname "$baked_resolved")")")
+    if [[ "$baked_store" == *"-microsandbox-"* ]]; then
+      baked_gen=${baked_store%%-microsandbox-*}
+      baked_gen=${baked_gen:0:12}
+    fi
+  fi
+  log "baked msb generation: $baked_gen ($baked_msb)"
+  conv_check_out=$(MSB_PATH="$baked_msb" "$REPO/scripts/msb-generation-converge.sh" --check-only 2>&1)
+  conv_check_status=$?
+  if [[ "$conv_check_status" -eq 1 ]]; then
+    if [[ "$CHECK_ONLY" -eq 1 ]]; then
+      warn "msb state needs generation converge (--check-only: not converging): $conv_check_out"
+      echo "[host-provision] run MSB_PATH=$baked_msb ./scripts/msb-generation-converge.sh to converge"
+    else
+      log "msb state needs generation converge; running msb-generation-converge.sh (best-effort)"
+      MSB_PATH="$baked_msb" "$REPO/scripts/msb-generation-converge.sh" 2>&1 || warn "msb generation converge failed; the 'workestrate doctor' generation row will flag it"
+    fi
+  elif [[ "$conv_check_status" -eq 0 ]]; then
+    log "msb state generations already converged (nothing to do)"
+  else
+    warn "msb generation converge check errored (status=$conv_check_status): $conv_check_out"
+  fi
 fi
 set -e
 
