@@ -86,7 +86,7 @@
   };
 
   outputs =
-    inputs@{ flake-parts, self, ... }:
+    inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
         inputs.devenv.flakeModule
@@ -234,7 +234,7 @@
         };
 
       perSystem =
-        { config, system, ... }:
+        { system, ... }:
         let
           pkgs = import inputs.nixpkgs {
             inherit system;
@@ -249,131 +249,6 @@
           rustToolchain = inputs.fenix.packages.${system}.stable; # RUST_TOOLCHAIN_VERSION = "1.97"
 
           referenceConfig = import ./nix/lib/config.nix { };
-
-          # Per-system lib exports (same as flake.lib above, but with perSystem pkgs)
-          libForSystem =
-            { pkgs }:
-            let
-              recipesForPkgs = import ./nix/lib/recipes.nix { inherit pkgs; };
-            in
-            {
-              recipes = recipesForPkgs;
-              vocabulary = recipesForPkgs.vocab;
-              config = referenceConfig;
-              buildWorkloadImage = recipesForPkgs.image.nix-layered;
-              buildImagesFromConfig =
-                {
-                  pkgs,
-                  config,
-                  sources ? { },
-                }:
-                let
-                  recipesForPkgs = import ./nix/lib/recipes.nix { inherit pkgs; };
-                  inherit (pkgs) lib;
-                  resolveSrc =
-                    srcStr:
-                    if lib.hasPrefix "flake://" srcStr then
-                      let
-                        name = lib.removePrefix "flake://" srcStr;
-                      in
-                      sources.${name}
-                        or (throw "buildImagesFromConfig: unresolved flake:// URI '${srcStr}'; pass sources.${name} = <path/derivation> to buildImagesFromConfig")
-                    else
-                      srcStr;
-                  buildBinary =
-                    binary:
-                    if binary.recipe == "bun-compile" then
-                      recipesForPkgs.build.bun-compile {
-                        src = resolveSrc binary.src;
-                        inherit (binary) entrypoint;
-                        inherit (binary) worker;
-                        assets = binary.assets or [ ];
-                        binaryName = binary.binary_name or "app";
-                        installDir = binary.install_dir or "bin";
-                        stripSrcReferences = binary.strip_src_references or true;
-                      }
-                    else if binary.recipe == "npm-build" then
-                      recipesForPkgs.build.npm-build {
-                        src = resolveSrc binary.src;
-                        npmDepsHash = binary.npm_deps_hash;
-                        dontNpmBuild = binary.dont_npm_build or false;
-                        buildPhase = binary.build_phase or null;
-                        installPhase = binary.install_phase or null;
-                      }
-                    else if binary.recipe == "pip-install" then
-                      recipesForPkgs.build.pip-install {
-                        source = resolveSrc binary.src;
-                        requirementsFile = binary.requirements_file or "requirements.txt";
-                        target = binary.target or ".deps";
-                      }
-                    else if binary.recipe == "bun-install" then
-                      recipesForPkgs.build.bun-install { source = resolveSrc binary.src; }
-                    else
-                      throw "unknown binary recipe: ${binary.recipe}";
-                  workloads = config.workloads or { };
-                  names = builtins.attrNames workloads;
-                  nixLayered = builtins.filter (name: (workloads.${name}.image.recipe or "") == "nix-layered") names;
-                in
-                builtins.listToAttrs (
-                  map (name: {
-                    name = workloads.${name}.image.name;
-                    value = recipesForPkgs.image.nix-layered {
-                      inherit (workloads.${name}.image) name tag;
-                      contents = workloads.${name}.image.contents or [ ];
-                      binary =
-                        if workloads.${name}.image ? binary then buildBinary workloads.${name}.image.binary else null;
-                      bakedFiles = workloads.${name}.image.baked_files or [ ];
-                      features = workloads.${name}.image.features or [ ];
-                      env = workloads.${name}.image.env or { };
-                      extraContents = workloads.${name}.image.extra_contents or [ ];
-                    };
-                  }) nixLayered
-                );
-              checks.validateConfig =
-                {
-                  pkgs,
-                  config,
-                  workestrate,
-                }:
-                let
-                  configFile = pkgs.writeText "workestrate.toml" config;
-                in
-                pkgs.runCommand "validate-config"
-                  {
-                    nativeBuildInputs = [ workestrate ];
-                    passAsFile = [ ];
-                  }
-                  ''
-                    mkdir -p $out
-                    cp ${configFile} workestrate.toml
-                    workestrate validate-config
-                    touch $out/ok
-                  '';
-              checks.tombiCheck =
-                {
-                  pkgs,
-                  src,
-                  tombi,
-                }:
-                pkgs.runCommand "tombi-check" { nativeBuildInputs = [ tombi ]; } ''
-                  mkdir -p $out
-                  cd ${
-                    builtins.path {
-                      path = src;
-                      filter =
-                        path: type:
-                        type == "directory"
-                        || pkgs.lib.hasSuffix ".toml" (baseNameOf path)
-                        || pkgs.lib.hasSuffix ".schema.json" (baseNameOf path);
-                      name = "tombi-check-src";
-                    }
-                  }
-                  export TOMBI_OFFLINE=true
-                  tombi format --check
-                  tombi lint --error-on-warnings
-                  touch $out/ok
-                '';
-            };
 
           agentd = pkgs.callPackage ./nix/packages/agentd.nix { inherit (inputs) microsandbox-fork; };
           microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {

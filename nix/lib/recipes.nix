@@ -17,7 +17,6 @@ in
         ;
     };
     bun-compile = import ./recipes/bun-compile.nix {
-      inherit pkgs;
       inherit (pkgs) bun;
       inherit (pkgs) stdenv;
       inherit (pkgs) lib;

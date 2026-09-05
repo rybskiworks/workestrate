@@ -269,53 +269,55 @@ pub fn doctor_check_msb() -> DoctorCheck {
 /// OK. Additive row: no existing check is renamed (host-provision Step D
 /// greps doctor rows by name).
 pub fn doctor_check_generation() -> DoctorCheck {
-    use crate::microsandbox::generation as gen;
+    use crate::microsandbox::generation;
     const REMEDIATION: &str = "Run ./scripts/host-provision.sh (generation converge)";
-    let baked = gen::baked_generation_key();
-    if baked == gen::UNMANAGED_KEY {
+    let baked = generation::baked_generation_key();
+    if baked == generation::UNMANAGED_KEY {
         return DoctorCheck::new(
             "generation",
             "OK",
             "unmanaged msb (no nix store path): single-generation legacy behavior".to_string(),
         );
     }
-    let base = match gen::resolve_msb_home_generation() {
-        gen::HomeResolution::Explicit(p) => match gen::generation_key_of_resolved_home(&p) {
-            Some((_, key)) if key != baked => DoctorCheck::new(
-                "generation",
-                "FAIL",
-                format!(
-                    "MSB_HOME override {} resolves to generation {key} but the baked msb is \
-                     generation {baked}",
-                    p.display()
+    let base = match generation::resolve_msb_home_generation() {
+        generation::HomeResolution::Explicit(p) => {
+            match generation::generation_key_of_resolved_home(&p) {
+                Some((_, key)) if key != baked => DoctorCheck::new(
+                    "generation",
+                    "FAIL",
+                    format!(
+                        "MSB_HOME override {} resolves to generation {key} but the baked msb is \
+                         generation {baked}",
+                        p.display()
+                    ),
+                )
+                .with_remediation(REMEDIATION),
+                Some((_, key)) => {
+                    // The verbatim value IS a generation dir (usually via the
+                    // `current` symlink the nix wrapper exports); note the
+                    // `current -> generations/<key>` form when so.
+                    let via_current = p.file_name().and_then(|n| n.to_str()) == Some("current");
+                    let message = if via_current {
+                        format!("current -> generations/{key}")
+                    } else {
+                        format!("MSB_HOME override: {} (generation {key})", p.display())
+                    };
+                    DoctorCheck::new("generation", "OK", message)
+                }
+                None => DoctorCheck::new(
+                    "generation",
+                    "OK",
+                    format!("MSB_HOME override: {}", p.display()),
                 ),
-            )
-            .with_remediation(REMEDIATION),
-            Some((_, key)) => {
-                // The verbatim value IS a generation dir (usually via the
-                // `current` symlink the nix wrapper exports); note the
-                // `current -> generations/<key>` form when so.
-                let via_current = p.file_name().and_then(|n| n.to_str()) == Some("current");
-                let message = if via_current {
-                    format!("current -> generations/{key}")
-                } else {
-                    format!("MSB_HOME override: {} (generation {key})", p.display())
-                };
-                DoctorCheck::new("generation", "OK", message)
             }
-            None => DoctorCheck::new(
-                "generation",
-                "OK",
-                format!("MSB_HOME override: {}", p.display()),
-            ),
-        },
-        gen::HomeResolution::Current { key, .. } => {
+        }
+        generation::HomeResolution::Current { key, .. } => {
             generation_keyed_row(&key, &baked, false, REMEDIATION)
         }
-        gen::HomeResolution::Healed { key, .. } => {
+        generation::HomeResolution::Healed { key, .. } => {
             generation_keyed_row(&key, &baked, true, REMEDIATION)
         }
-        gen::HomeResolution::LegacyRoot(root) => DoctorCheck::new(
+        generation::HomeResolution::LegacyRoot(root) => DoctorCheck::new(
             "generation",
             "FAIL",
             format!(
@@ -324,10 +326,10 @@ pub fn doctor_check_generation() -> DoctorCheck {
             ),
         )
         .with_remediation("Run ./scripts/host-provision.sh to absorb it as generations/legacy"),
-        gen::HomeResolution::Fresh(_) => {
+        generation::HomeResolution::Fresh(_) => {
             DoctorCheck::new("generation", "OK", "no generations yet (fresh)".to_string())
         }
-        gen::HomeResolution::Ambiguous(keys) => DoctorCheck::new(
+        generation::HomeResolution::Ambiguous(keys) => DoctorCheck::new(
             "generation",
             "FAIL",
             format!(
@@ -341,7 +343,7 @@ pub fn doctor_check_generation() -> DoctorCheck {
     // or any debris under generations/ (names failing
     // generation::is_generation_name, including any *.converge-tmp*
     // leftovers — see generation::generation_entries).
-    let (keys, debris) = gen::generation_entries(&gen::msb_home_root());
+    let (keys, debris) = generation::generation_entries(&generation::msb_home_root());
     let mut warns: Vec<String> = Vec::new();
     if keys.len() > 2 {
         warns.push(format!(

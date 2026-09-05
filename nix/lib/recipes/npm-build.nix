@@ -38,7 +38,6 @@
 {
   src,
   npmDepsHash,
-  nodeVersion ? "nodejs_24", # config string → resolved by caller
   dontNpmBuild ? false, # B3: skip default `npm run build` (pi root script fails offline)
   buildPhase ? null, # B3: custom build phase (pi's 4-workspace order)
   installPhase ? null, # B3: custom install phase (pi's monorepo layout)

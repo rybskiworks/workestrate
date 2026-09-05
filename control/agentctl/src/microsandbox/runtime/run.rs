@@ -806,14 +806,14 @@ fn apply_current_view_mutations<W: Workload>(plan: &mut SandboxPlan, workload: &
 ///   (adjudication): reusing a live sandbox mutates no msb state, and
 ///   converge's quiesce gate separately refuses while it is live.
 fn check_generation_up_gate() -> Result<Option<PathBuf>> {
-    use crate::microsandbox::generation as gen;
-    let baked = gen::baked_generation_key();
-    if baked == gen::UNMANAGED_KEY {
+    use crate::microsandbox::generation;
+    let baked = generation::baked_generation_key();
+    if baked == generation::UNMANAGED_KEY {
         return Ok(None);
     }
-    match gen::resolve_msb_home_generation() {
-        gen::HomeResolution::Current { gen_dir, key }
-        | gen::HomeResolution::Healed { gen_dir, key } => {
+    match generation::resolve_msb_home_generation() {
+        generation::HomeResolution::Current { gen_dir, key }
+        | generation::HomeResolution::Healed { gen_dir, key } => {
             if key == baked {
                 Ok(Some(gen_dir))
             } else {
@@ -824,24 +824,26 @@ fn check_generation_up_gate() -> Result<Option<PathBuf>> {
                 )
             }
         }
-        gen::HomeResolution::Explicit(path) => match gen::generation_key_of_resolved_home(&path) {
-            Some((_, key)) if key != baked => anyhow::bail!(
-                "refusing up: MSB_HOME resolves to generation '{key}' but the baked msb \
-                 is generation '{baked}'; run ./scripts/host-provision.sh (generation converge)"
-            ),
-            Some((gen_dir, _)) => Ok(Some(gen_dir)),
-            None => Ok(None),
-        },
-        gen::HomeResolution::LegacyRoot(_) => anyhow::bail!(
+        generation::HomeResolution::Explicit(path) => {
+            match generation::generation_key_of_resolved_home(&path) {
+                Some((_, key)) if key != baked => anyhow::bail!(
+                    "refusing up: MSB_HOME resolves to generation '{key}' but the baked msb \
+                     is generation '{baked}'; run ./scripts/host-provision.sh (generation converge)"
+                ),
+                Some((gen_dir, _)) => Ok(Some(gen_dir)),
+                None => Ok(None),
+            }
+        }
+        generation::HomeResolution::LegacyRoot(_) => anyhow::bail!(
             "refusing up: pre-generation msb home (db/ at $HOME/.microsandbox root); \
              run ./scripts/host-provision.sh to absorb it as generations/legacy"
         ),
-        gen::HomeResolution::Ambiguous(keys) => anyhow::bail!(
+        generation::HomeResolution::Ambiguous(keys) => anyhow::bail!(
             "refusing up: multiple msb state generations ({}) and no current symlink; \
              run ./scripts/host-provision.sh (generation converge)",
             keys.join(", ")
         ),
-        gen::HomeResolution::Fresh(_) => Ok(None),
+        generation::HomeResolution::Fresh(_) => Ok(None),
     }
 }
 

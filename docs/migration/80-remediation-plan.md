@@ -579,7 +579,7 @@ without acute security impact.
 - **C9:** config with `image.recipe = "vaporware"` -> `validate_config`
   errors with the allowed-set message.
 - **C10 (if approved):** config with a typo field `[workloads.pi]
-  imge = {...}` -> `validate_config` errors.
+  image = {...}` -> `validate_config` errors.
 
 **Effort:** ~1.5 days. **Dependencies:** WP1, WP3. **Validation gate:**
 `cargo test -p agentctl` green; `cargo clippy -- -D warnings`.
@@ -911,7 +911,7 @@ Drives the WP5/E1 fix shape and the long-term CLI contract.
 - **Option A (recommended): yes on main config, lenient on override
   layers.** Add `#[serde(deny_unknown_fields)]` to the main config
   structs (`ConfigFile`, `WorkloadConfig`, `NetworkConfig`, etc.) so typos
-  like `imge = {...}` fail loudly. Override layers keep the existing
+  like `image = {...}` fail loudly. Override layers keep the existing
   `CONFIG_FIELDS`/`WORKLOAD_FIELDS` allowlist + WARN semantics so
   user-global overrides can be partial across versions. **Default-if-
   silent: A.**

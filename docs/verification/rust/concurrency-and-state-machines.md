@@ -259,7 +259,7 @@ state_machine!{
         #[inductive(add)]
         fn add_inductive(pre: Self, post: Self, n: int) {
             // Verus proves that if `pre.number % 2 == 0` then
-            // `post.number` is `pre.number + 2*n` is divisble by 2 as well.
+            // `post.number` is `pre.number + 2*n` is divisible by 2 as well.
         }
     }
 }
@@ -598,7 +598,7 @@ state_machine!{
         #[inductive(add)]
         fn add_inductive(pre: Self, post: Self, n: int) {
             // Verus proves that if `pre.number % 2 == 0` then
-            // `post.number` is `pre.number + 2*n` is divisble by 2 as well.
+            // `post.number` is `pre.number + 2*n` is divisible by 2 as well.
         }
     }
 }

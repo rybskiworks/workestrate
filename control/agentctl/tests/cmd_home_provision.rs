@@ -476,7 +476,7 @@ fn from_src_missing_config_toml_fails_with_no_dest_residue() {
 }
 
 #[test]
-fn from_src_unparseable_config_toml_fails_with_no_dest_residue() {
+fn from_src_unparsable_config_toml_fails_with_no_dest_residue() {
     let home = IsolatedHome::new("cmd-home-prov");
     let scratch = TempDir::new("cmd-home-prov");
     let src = scratch.path().join("bad-home");
@@ -494,7 +494,7 @@ fn from_src_unparseable_config_toml_fails_with_no_dest_residue() {
         .expect("invoke");
     assert!(
         !out.status.success(),
-        "unparseable config.toml must fail; stdout=\n{}",
+        "unparsable config.toml must fail; stdout=\n{}",
         String::from_utf8_lossy(&out.stdout)
     );
     assert!(

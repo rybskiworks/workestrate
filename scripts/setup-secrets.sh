@@ -261,7 +261,7 @@ build_prefilled_buffer() {
         key="${BASH_REMATCH[1]}"
         printf '%s=\n' "$key"
       else
-        # Unparseable line: keep as a comment so it survives the round-trip
+        # Unparsable line: keep as a comment so it survives the round-trip
         printf '# %s\n' "$line"
       fi
     done <<< "$example_source"
@@ -380,7 +380,7 @@ edit_loop() {
 validate_buffer() {
   local tmpfile="$1"
   local errors=0
-  local warn_unparseable=0
+  local warn_unparsable=0
   declare -A seen
   local line key value trimmed_key trimmed_value
 
@@ -430,12 +430,12 @@ validate_buffer() {
 
       fi
     else
-      warn_unparseable=1
+      warn_unparsable=1
     fi
   done < "$tmpfile"
 
-  if [ "$warn_unparseable" -eq 1 ]; then
-    echo "[setup-secrets] warning: unparseable lines were ignored" >&2
+  if [ "$warn_unparsable" -eq 1 ]; then
+    echo "[setup-secrets] warning: unparsable lines were ignored" >&2
   fi
 
   if [ "$errors" -gt 0 ]; then

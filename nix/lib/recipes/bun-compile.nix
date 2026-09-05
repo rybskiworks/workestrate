@@ -22,7 +22,6 @@
 # (default "bin") let config-repo image builds choose the output layout;
 # the defaults preserve the historical $out/bin/app behavior exactly.
 {
-  pkgs,
   bun,
   stdenv,
   lib,

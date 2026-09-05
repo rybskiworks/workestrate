@@ -29,7 +29,7 @@ struct LockedSource {
 
 /// Resolve `flake://<input>` to its locked clone URL + rev from the config
 /// repo's `flake.lock`. Supports github- and git-type inputs. Returns `None`
-/// when the lock file is missing or unparseable, or the node is absent or is
+/// when the lock file is missing or unparsable, or the node is absent or is
 /// not a github/git node — the caller falls back to guidance.
 fn locked_source_from_flake_lock(root: &Path, input: &str) -> Option<LockedSource> {
     let text = std::fs::read_to_string(root.join("flake.lock")).ok()?;
@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn locked_source_unparseable_lock_returns_none() {
+    fn locked_source_unparsable_lock_returns_none() {
         let root = uniq_dir("flake-lock-bad");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("flake.lock"), "not json at all {").unwrap();

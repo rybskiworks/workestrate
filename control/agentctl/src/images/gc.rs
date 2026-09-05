@@ -161,7 +161,7 @@ pub struct GroupPlan {
 /// lexicographically by tag ASC — deterministic), retain the newest
 /// `keep_last`, and mark the rest for pruning. NEVER pruned: any tag
 /// referenced by ANY pointer, any tag in `protected` (running sandboxes),
-/// and the newest tag (implied by `keep_last >= 1`). Unparseable
+/// and the newest tag (implied by `keep_last >= 1`). Unparsable
 /// (legacy-shape) tags are ignored ENTIRELY. `only` restricts the output to
 /// a single `(name, ctx)` group — the prune-on-load call site passes the
 /// just-loaded group; the manual sweep passes `None`.
@@ -183,7 +183,7 @@ pub fn plan_prunes(
     let mut groups: BTreeMap<(String, Option<String>), Vec<String>> = BTreeMap::new();
     for record in records.values() {
         let Some((name, ctx)) = split_computed_tag(&record.tag) else {
-            continue; // legacy/unparseable: ignored entirely
+            continue; // legacy/unparsable: ignored entirely
         };
         let seen = loaded_at.contains_key(record.tag.as_str());
         let prev = loaded_at.get(record.tag.as_str()).copied().unwrap_or("");
@@ -935,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_selection_ignores_unparseable_legacy_tags_entirely() {
+    fn prune_selection_ignores_unparsable_legacy_tags_entirely() {
         let mut records = BTreeMap::new();
         records.extend([
             record("personal", "img-pi:latest", "2026-08-24T01:00:00Z"),

@@ -746,7 +746,7 @@ pub async fn cmd_workload_build(
         (None, Some(r), false) => BuildScope::Repo(r),
         (None, None, true) => BuildScope::AllRepos,
         // clap's conflicts_with declarations make every other shape
-        // unparseable.
+        // unparsable.
         other => unreachable!("clap conflicts guarantee one selector shape; got {other:?}"),
     };
     let single_name = name.is_some();
