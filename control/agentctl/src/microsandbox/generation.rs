@@ -138,7 +138,11 @@ pub fn baked_generation_key() -> String {
 /// PATH is unset or holds no `msb`.
 fn resolve_msb_on_path() -> Option<PathBuf> {
     let bin = crate::commands::doctor::msb_binary();
-    let bin = if bin.is_empty() { "msb".to_string() } else { bin };
+    let bin = if bin.is_empty() {
+        "msb".to_string()
+    } else {
+        bin
+    };
     if bin.contains('/') {
         let p = PathBuf::from(&bin);
         return p.is_file().then_some(p);
@@ -310,9 +314,13 @@ pub fn resolve_msb_home_generation() -> HomeResolution {
 fn heal_current_symlink(root: &Path, gen_dir: &Path) {
     use std::os::unix::fs::symlink;
     let _ = std::fs::create_dir_all(root);
+    // Lock-file existence only (the shell converge script flocks it — its
+    // content is irrelevant), so truncate is explicitly OFF: an existing
+    // lock file must survive the touch (clippy::suspicious_open_options).
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .open(root.join(".flip.lock"));
     let tmp = root.join(format!(".current.tmp-{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
@@ -342,7 +350,7 @@ fn heal_current_symlink(_root: &Path, _gen_dir: &Path) {}
 )]
 mod tests {
     use super::*;
-    use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
 
     // ---- key derivation (generation_key_from_msb_path) ----
 
@@ -611,7 +619,11 @@ mod tests {
         let root = home.join(".microsandbox");
         let gen_dir = root.join("generations").join(KEY12);
         std::fs::create_dir_all(&gen_dir).unwrap();
-        symlink(root.join("generations").join("999999999999"), root.join("current")).unwrap();
+        symlink(
+            root.join("generations").join("999999999999"),
+            root.join("current"),
+        )
+        .unwrap();
         match resolve_msb_home_generation() {
             HomeResolution::Healed { gen_dir: got, key } => {
                 assert_eq!(got, gen_dir);
