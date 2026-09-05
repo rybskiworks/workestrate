@@ -123,10 +123,16 @@ pub fn load_secrets() -> Result<std::collections::HashMap<String, String>> {
 /// skipped (defense-in-depth against a hostile key in an `.env.enc`).
 /// `build_sandbox` deliberately does NOT call this: it resolves secrets from
 /// the returned map.
+#[allow(unsafe_code)]
 pub fn apply_secrets_to_process_env(merged: &std::collections::HashMap<String, String>) {
     for (key, value) in merged {
         if is_valid_env_name(key) {
-            std::env::set_var(key, value);
+            // SAFETY: FN-9 exec boundary — called only at a boundary that
+            // requires process env (`workestrate run -- <cmd>` exec(2)-replaces
+            // the process); keys are validated by is_valid_env_name; no other
+            // code mutates these keys concurrently (caller contract documented
+            // on this fn).
+            unsafe { std::env::set_var(key, value) };
         }
     }
 }
@@ -194,20 +200,13 @@ fn decrypt_layer(layer: &crate::config::SecretsLayer) -> Result<Option<HashMap<S
         anyhow::bail!("age key not found: {}", key_file.display());
     }
 
-    // Set SOPS_AGE_KEY_FILE for this layer (save/restore).
-    let old_key = std::env::var("SOPS_AGE_KEY_FILE").ok();
-    std::env::set_var("SOPS_AGE_KEY_FILE", &key_file);
-
+    // Pass SOPS_AGE_KEY_FILE to the sops child via Command env — no
+    // process-env mutation, no save/restore needed.
     let result = Command::new("sops")
         .args(["decrypt", "--input-type", "dotenv", "--output-type", "json"])
         .arg(&env_enc)
+        .env("SOPS_AGE_KEY_FILE", &key_file)
         .output();
-
-    // Restore env var.
-    match old_key {
-        Some(v) => std::env::set_var("SOPS_AGE_KEY_FILE", v),
-        None => std::env::remove_var("SOPS_AGE_KEY_FILE"),
-    }
 
     let output = result.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -238,6 +237,7 @@ fn is_valid_env_name(name: &str) -> bool {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -320,13 +320,16 @@ mod tests {
         std::fs::write(tmp.join("workestrate.toml"), config_content).unwrap();
 
         let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         let result = load_secrets();
 
         match old {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         std::fs::remove_dir_all(&tmp).unwrap();
 
@@ -347,13 +350,16 @@ mod tests {
             std::env::temp_dir().join(format!("workestrate-layers-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp)?;
         let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         let layers = crate::config::resolve_secrets_layers()?;
 
         match old {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         std::fs::remove_dir_all(&tmp)?;
 
@@ -465,7 +471,8 @@ mod tests {
         // process — required=false so load_secrets succeeds and returns the
         // map without the key.
         let probe = "WORKESTRATE_FN9_PROBE_SECRET";
-        std::env::remove_var(probe);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var(probe) };
 
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-fn9-leak-{}-{}",
@@ -485,13 +492,16 @@ mod tests {
         std::fs::write(tmp.join("workestrate.toml"), config_content).unwrap();
 
         let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         let result = load_secrets();
 
         match old {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         std::fs::remove_dir_all(&tmp).unwrap();
 
@@ -506,7 +516,8 @@ mod tests {
         );
         // Hygiene: the merged map itself is the only carrier, and the
         // process env is untouched for an unrelated declared key.
-        std::env::remove_var(probe);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var(probe) };
     }
 
     #[test]
@@ -515,12 +526,14 @@ mod tests {
         // names that are not legal env identifiers.
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let good = "WORKESTRATE_FN9_APPLY_GOOD";
-        std::env::remove_var(good);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var(good) };
         let mut merged = HashMap::new();
         merged.insert(good.to_string(), "applied".to_string());
         merged.insert("9BAD-NAME".to_string(), "nope".to_string());
         apply_secrets_to_process_env(&merged);
         assert_eq!(std::env::var(good).as_deref(), Ok("applied"));
-        std::env::remove_var(good);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var(good) };
     }
 }

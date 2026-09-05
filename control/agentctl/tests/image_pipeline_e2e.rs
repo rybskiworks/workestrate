@@ -80,6 +80,7 @@ fn uniq_tmp(label: &str) -> PathBuf {
 /// The full pipeline lifecycle against a real nix build and a real
 /// (temp-homed) msb store: load → gate-skip → out-of-band delete → reload.
 #[tokio::test]
+#[allow(unsafe_code)]
 async fn fixture_image_full_pipeline_lifecycle() {
     if !nix_on_path() {
         eprintln!("note: nix not on PATH; skipping the phase-D pipeline e2e");
@@ -124,9 +125,12 @@ async fn fixture_image_full_pipeline_lifecycle() {
     // MSB_HOME for BOTH the SDK probe (MsbStoreProbe reads it directly) and
     // the msb CLI child processes (inherited env).
     let prior_msb_home = std::env::var_os("MSB_HOME");
-    std::env::set_var("MSB_HOME", &msb_home);
+    // SAFETY: sole test in this integration-test binary; MSB_HOME is
+    // restored below before the test returns.
+    unsafe { std::env::set_var("MSB_HOME", &msb_home) };
     // MsbCliLoader::new() resolves msb via the doctor MSB_PATH convention.
-    std::env::set_var("MSB_PATH", &msb);
+    // SAFETY: sole test in this integration-test binary.
+    unsafe { std::env::set_var("MSB_PATH", &msb) };
 
     let attr = "packages.x86_64-linux.wk-fixture-image";
     // A2 (ADR 0032 §Image tags): BuildJob.tag is the caller-computed
@@ -153,8 +157,10 @@ async fn fixture_image_full_pipeline_lifecycle() {
     };
 
     let restore = |prior: &Option<std::ffi::OsString>| match prior {
-        Some(v) => std::env::set_var("MSB_HOME", v),
-        None => std::env::remove_var("MSB_HOME"),
+        // SAFETY: sole test in this integration-test binary.
+        Some(v) => unsafe { std::env::set_var("MSB_HOME", v) },
+        // SAFETY: sole test in this integration-test binary.
+        None => unsafe { std::env::remove_var("MSB_HOME") },
     };
 
     let result = async {

@@ -876,6 +876,7 @@ impl Workload for ConfigWorkload {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::test_support::TestConfigGuard;
@@ -1012,12 +1013,14 @@ mod tests {
         let _guard = TestConfigGuard::new();
         let pi = ConfigWorkload::new("pi")?;
         // Override set → returns the env value (and is NOT the reserved default).
-        std::env::set_var("WORKESTRATE_PI_BUILD", "/tmp/test-pi-build");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_PI_BUILD", "/tmp/test-pi-build") };
         assert_eq!(pi.build_path(), "/tmp/test-pi-build");
         assert!(!pi.build_path_is_reserved_default());
         // Override removed → falls back to the reserved default
         // `.workestrate-build/<name>` (spec 21 §6.1).
-        std::env::remove_var("WORKESTRATE_PI_BUILD");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_PI_BUILD") };
         assert_eq!(pi.build_path(), ".workestrate-build/pi");
         assert!(pi.build_path_is_reserved_default());
         Ok(())
@@ -1030,14 +1033,17 @@ mod tests {
     fn build_path_declared_fallback_unchanged_and_env_beats_it() -> Result<()> {
         let _guard = TestConfigGuard::new();
         // Fixture odysseus declares `fallback = "agents/odysseus/build"`.
-        std::env::remove_var("WORKESTRATE_ODYSSEUS_BUILD");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_ODYSSEUS_BUILD") };
         let odysseus = ConfigWorkload::new("odysseus")?;
         assert_eq!(odysseus.build_path(), "agents/odysseus/build");
         assert!(!odysseus.build_path_is_reserved_default());
         // Env override precedence unchanged: it beats the declared fallback.
-        std::env::set_var("WORKESTRATE_ODYSSEUS_BUILD", "/tmp/test-ody-build");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_ODYSSEUS_BUILD", "/tmp/test-ody-build") };
         assert_eq!(odysseus.build_path(), "/tmp/test-ody-build");
-        std::env::remove_var("WORKESTRATE_ODYSSEUS_BUILD");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_ODYSSEUS_BUILD") };
         Ok(())
     }
 
@@ -1120,8 +1126,10 @@ egress = "deny"
             std::fs::create_dir_all(&state_dir).expect("create temp state dir");
             std::fs::write(config_dir.join("workestrate.toml"), content)
                 .expect("write temp workestrate.toml");
-            std::env::set_var("WORKESTRATE_CONFIG_DIR", &config_dir);
-            std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &config_dir) };
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
             Self {
                 _lock: lock,
                 config_dir,
@@ -1140,8 +1148,10 @@ egress = "deny"
 
     impl Drop for DependsEnvGuard {
         fn drop(&mut self) {
-            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
-            std::env::remove_var("WORKESTRATE_STATE_DIR");
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
             let _ = std::fs::remove_dir_all(&self.config_dir);
             let _ = std::fs::remove_dir_all(&self.state_dir);
         }
@@ -1274,8 +1284,10 @@ egress = "deny"
             let env = EnvGuard::capture(HOME_ENV_KEYS);
             let home = uniq_dir(label);
             std::fs::create_dir_all(&home).expect("create temp home");
-            std::env::set_var("WORKESTRATE_HOME", &home);
-            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
             let repo = home.join("config-repos").join("personal");
             let workloads = repo.join("workestrate").join("workloads");
             std::fs::create_dir_all(&workloads)?;
@@ -1910,8 +1922,10 @@ egress = "deny"
         // CARGO_MANIFEST_DIR, cwd = a flake-less temp dir.
         let cwd = crate::config::test_support::uniq_dir("cw-prepare-noroot");
         std::fs::create_dir_all(&cwd)?;
-        std::env::remove_var("AGENTCTL_ROOT");
-        std::env::remove_var("CARGO_MANIFEST_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("AGENTCTL_ROOT") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") };
         std::env::set_current_dir(&cwd)?;
 
         let result = synthetic_workload(SEED_CONFIG_TOML, "svc").prepare(
@@ -1921,12 +1935,16 @@ egress = "deny"
         );
 
         match old_root {
-            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
-            None => std::env::remove_var("AGENTCTL_ROOT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("AGENTCTL_ROOT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("AGENTCTL_ROOT") },
         }
         match old_manifest {
-            Some(v) => std::env::set_var("CARGO_MANIFEST_DIR", v),
-            None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("CARGO_MANIFEST_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") },
         }
         let _ = std::fs::remove_dir_all(&cwd);
 
@@ -2542,7 +2560,8 @@ read_only = true
 egress = "deny"
 "#;
         // UNDECLARED reserved default: declaring-layer-relative → no gate.
-        std::env::remove_var("WORKESTRATE_SVC_BUILD");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_SVC_BUILD") };
         let svc = synthetic_workload(toml, "svc");
         assert_eq!(svc.build_path(), ".workestrate-build/svc");
         assert_eq!(
@@ -2553,7 +2572,8 @@ egress = "deny"
 
         // Env override to a RELATIVE path (flake-checkout artifact, e.g.
         // `agents/svc/build`) → the gate still fires.
-        std::env::set_var("WORKESTRATE_SVC_BUILD", "agents/svc/build");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_SVC_BUILD", "agents/svc/build") };
         let svc = synthetic_workload(toml, "svc");
         let req = svc
             .flake_root_requirement(&svc.plan())
@@ -2561,10 +2581,12 @@ egress = "deny"
         assert!(req.contains("agents/svc/build"), "got: {req}");
 
         // An ABSOLUTE build path (env override to a store path) needs no root.
-        std::env::set_var("WORKESTRATE_SVC_BUILD", "/nix/store/abc-build");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_SVC_BUILD", "/nix/store/abc-build") };
         let svc = synthetic_workload(toml, "svc");
         assert_eq!(svc.flake_root_requirement(&svc.plan()), None);
-        std::env::remove_var("WORKESTRATE_SVC_BUILD");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_SVC_BUILD") };
         Ok(())
     }
 
@@ -2622,7 +2644,8 @@ egress = "deny"
         let foreign = crate::config::test_support::uniq_dir("f2-flakeless-cwd");
         std::fs::create_dir_all(&foreign).unwrap();
         std::env::set_current_dir(&foreign)?;
-        std::env::remove_var("AGENTCTL_ROOT");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("AGENTCTL_ROOT") };
 
         let plan = wl.plan();
         let roots = crate::microsandbox::mounts::resolve_mount_roots_owned(&wl, &plan)?;
@@ -2653,7 +2676,8 @@ egress = "deny"
         let override_root = crate::config::test_support::uniq_dir("f2-override-root");
         std::fs::create_dir_all(&override_root).unwrap();
         std::fs::write(override_root.join("flake.nix"), "{}\n").unwrap();
-        std::env::set_var("AGENTCTL_ROOT", &override_root);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("AGENTCTL_ROOT", &override_root) };
         // Foreign cwd so tier 3 cannot accidentally win.
         let foreign = crate::config::test_support::uniq_dir("f2-override-cwd");
         std::fs::create_dir_all(&foreign).unwrap();
@@ -2686,8 +2710,10 @@ egress = "deny"
         let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
         let cwd = crate::config::test_support::uniq_dir("f2-synthetic-cwd");
         std::fs::create_dir_all(&cwd).unwrap();
-        std::env::remove_var("AGENTCTL_ROOT");
-        std::env::remove_var("CARGO_MANIFEST_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("AGENTCTL_ROOT") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") };
         std::env::set_current_dir(&cwd)?;
 
         // Synthetic workload: mount_content_root = None → tier 2 skipped.
@@ -2721,12 +2747,16 @@ egress = "deny"
         );
 
         match old_root {
-            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
-            None => std::env::remove_var("AGENTCTL_ROOT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("AGENTCTL_ROOT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("AGENTCTL_ROOT") },
         }
         match old_manifest {
-            Some(v) => std::env::set_var("CARGO_MANIFEST_DIR", v),
-            None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("CARGO_MANIFEST_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") },
         }
         let _ = std::fs::remove_dir_all(&cwd);
         Ok(())
@@ -2745,7 +2775,8 @@ egress = "deny"
         let foreign = crate::config::test_support::uniq_dir("f2-preflight-cwd");
         std::fs::create_dir_all(&foreign).unwrap();
         std::env::set_current_dir(&foreign)?;
-        std::env::remove_var("AGENTCTL_ROOT");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("AGENTCTL_ROOT") };
 
         let plan = wl.plan();
         // hard = true (the `plan` command semantics): must succeed.
@@ -2771,8 +2802,10 @@ egress = "deny"
         );
         let home = crate::config::test_support::uniq_dir("host-overlap-home");
         std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var("WORKESTRATE_HOME", &home);
-        std::env::remove_var("WORKESTRATE_STATE_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
 
         // Make the cwd a SUBDIR of the state dir that `workspaces/prime-state`
         // resolves to, so the two resolved hosts nest.
@@ -2850,7 +2883,8 @@ egress = "deny"
         let foreign = crate::config::test_support::uniq_dir("plan-foreign-cwd");
         std::fs::create_dir_all(&invoke).unwrap();
         std::fs::create_dir_all(&foreign).unwrap();
-        std::env::set_var(crate::config::INVOKE_CWD_ENV, &invoke);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(crate::config::INVOKE_CWD_ENV, &invoke) };
         std::env::set_current_dir(&foreign)?;
 
         let toml = r#"

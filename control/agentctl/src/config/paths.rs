@@ -174,12 +174,15 @@ pub fn canonical_invoke_cwd_string() -> anyhow::Result<String> {
 /// INHERITED value WINS: a re-exec'd or detached child keeps the ORIGINAL
 /// operator cwd rather than re-capturing its own. If `current_dir()` fails
 /// the var is left unset and readers fall back per [`invoke_cwd`].
+#[allow(unsafe_code)]
 pub fn ensure_invoke_cwd_env() {
     if std::env::var_os(INVOKE_CWD_ENV).is_some() {
         return;
     }
     if let Ok(cwd) = std::env::current_dir() {
-        std::env::set_var(INVOKE_CWD_ENV, cwd);
+        // SAFETY: called as the FIRST thing in main(), before the tokio
+        // runtime and any threads exist; no concurrent env access.
+        unsafe { std::env::set_var(INVOKE_CWD_ENV, cwd) };
     }
 }
 
@@ -511,6 +514,7 @@ pub fn resolve_active_config_dir() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
+        unsafe_code,
         clippy::unwrap_used,
         clippy::expect_used,
         clippy::panic,
@@ -528,9 +532,12 @@ pub(crate) mod tests {
         let env_home = uniq_dir("rh-env");
         let xdg = uniq_dir("rh-env-xdg");
         std::fs::create_dir_all(&env_home)?;
-        std::env::set_var("HOME", &env_home);
-        std::env::set_var("XDG_CONFIG_HOME", &xdg);
-        std::env::set_var("WORKESTRATE_HOME", &env_home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &env_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &xdg) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &env_home) };
 
         let (home, kind) = resolve_home_with_kind();
         assert_eq!(kind, HomeKind::Env, "WORKESTRATE_HOME must win over XDG");
@@ -549,8 +556,10 @@ pub(crate) mod tests {
         let xdg = uniq_dir("rh-xdg");
         let home = uniq_dir("rh-xdg-home");
         std::fs::create_dir_all(&xdg)?;
-        std::env::set_var("HOME", &home);
-        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &xdg) };
 
         let (resolved, kind) = resolve_home_with_kind();
         assert_eq!(kind, HomeKind::LegacyXdg);
@@ -568,7 +577,8 @@ pub(crate) mod tests {
 
         let home = uniq_dir("rh-default-home");
         std::fs::create_dir_all(&home)?;
-        std::env::set_var("HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
 
         let (resolved, kind) = resolve_home_with_kind();
         assert_eq!(kind, HomeKind::Default);
@@ -585,7 +595,8 @@ pub(crate) mod tests {
 
         let xdg = uniq_dir("rh-compat");
         std::fs::create_dir_all(&xdg)?;
-        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &xdg) };
 
         // Backward-compat guarantee: existing XDG-pinned callers see the
         // same registry path as before ADR 0023.
@@ -609,7 +620,8 @@ pub(crate) mod tests {
             home.join(".workestrate").join("config.toml"),
             "this is = not = valid toml [[[",
         )?;
-        std::env::set_var("HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
 
         // load_registry_for_dir_resolution must yield None (fallback), not
         // panic — the corrupt file surfaces as a WARNING on stderr.
@@ -637,7 +649,8 @@ pub(crate) mod tests {
             home.join(".workestrate").join("config.toml"),
             format!("[settings]\nstate_dir = \"{}\"\n", custom_state.display()),
         )?;
-        std::env::set_var("HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
 
         assert!(
             load_registry_for_dir_resolution().is_some(),
@@ -659,7 +672,8 @@ pub(crate) mod tests {
 
         let home = uniq_dir("tilde-home");
         std::fs::create_dir_all(&home)?;
-        std::env::set_var("HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
 
         assert_eq!(expand_tilde("~/foo/bar"), home.join("foo").join("bar"));
 
@@ -675,7 +689,8 @@ pub(crate) mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(HOME_ENV_KEYS);
 
-        std::env::set_var("HOME", "/definitely/not/used");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", "/definitely/not/used") };
         assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
         assert_eq!(expand_tilde("rel/path"), PathBuf::from("rel/path"));
         assert_eq!(expand_tilde("~"), PathBuf::from("~"));
@@ -694,7 +709,8 @@ pub(crate) mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(HOME_ENV_KEYS);
 
-        std::env::remove_var("HOME");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("HOME") };
         let expanded = expand_tilde("~/some/state");
         assert_eq!(
             expanded,
@@ -717,7 +733,8 @@ pub(crate) mod tests {
         let elsewhere = uniq_dir("invoke-cwd-elsewhere");
         std::fs::create_dir_all(&invoke)?;
         std::fs::create_dir_all(&elsewhere)?;
-        std::env::set_var(INVOKE_CWD_ENV, &invoke);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(INVOKE_CWD_ENV, &invoke) };
         std::env::set_current_dir(&elsewhere)?;
 
         assert_eq!(invoke_cwd(), Some(invoke.clone()));
@@ -735,7 +752,8 @@ pub(crate) mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(&[INVOKE_CWD_ENV]);
 
-        std::env::remove_var(INVOKE_CWD_ENV);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var(INVOKE_CWD_ENV) };
         assert_eq!(invoke_cwd(), Some(std::env::current_dir()?));
         Ok(())
     }
@@ -748,7 +766,8 @@ pub(crate) mod tests {
         let _g = EnvGuard::capture(&[INVOKE_CWD_ENV]);
 
         for bad in ["", "relative/dir", "./dot"] {
-            std::env::set_var(INVOKE_CWD_ENV, bad);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var(INVOKE_CWD_ENV, bad) };
             assert_eq!(
                 invoke_cwd(),
                 Some(std::env::current_dir()?),
@@ -766,7 +785,8 @@ pub(crate) mod tests {
         let dir = uniq_dir("invoke-cwd-ensure");
         std::fs::create_dir_all(&dir)?;
         std::env::set_current_dir(&dir)?;
-        std::env::remove_var(INVOKE_CWD_ENV);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var(INVOKE_CWD_ENV) };
 
         ensure_invoke_cwd_env();
 
@@ -788,7 +808,8 @@ pub(crate) mod tests {
         // Simulates a re-exec'd / detached child: the ORIGINAL operator cwd
         // inherited from the parent must NOT be overwritten by the child's
         // own cwd.
-        std::env::set_var(INVOKE_CWD_ENV, "/inherited/operator-cwd");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(INVOKE_CWD_ENV, "/inherited/operator-cwd") };
         ensure_invoke_cwd_env();
         assert_eq!(
             std::env::var(INVOKE_CWD_ENV).unwrap(),
@@ -817,8 +838,10 @@ pub(crate) mod tests {
             home.join(".workestrate").join("config.toml"),
             format!("[settings]\nstate_dir = \"{}\"\n", registry_state.display()),
         )?;
-        std::env::set_var("HOME", &home);
-        std::env::set_var("WORKESTRATE_STATE_DIR", &env_state);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &env_state) };
 
         assert_eq!(
             resolve_state_dir(),
@@ -827,12 +850,15 @@ pub(crate) mod tests {
         );
 
         // Unset → the registry setting takes over again.
-        std::env::remove_var("WORKESTRATE_STATE_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
         assert_eq!(resolve_state_dir(), registry_state);
 
         match old_state {
-            Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") },
         }
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
@@ -845,7 +871,8 @@ pub(crate) mod tests {
 
         let home = uniq_dir("a16-missing-home");
         std::fs::create_dir_all(&home)?; // no .workestrate/config.toml at all
-        std::env::set_var("HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
 
         assert!(
             load_registry_for_dir_resolution().is_none(),
@@ -886,7 +913,8 @@ pub(crate) mod tests {
         )?;
         std::env::set_current_dir(&tmp)?;
         for k in SPEC05_ENV_KEYS {
-            std::env::remove_var(k);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::remove_var(k) };
         }
         Ok(tmp)
     }
@@ -899,7 +927,8 @@ pub(crate) mod tests {
         let tmp = spec05_cwd_fixture("phase2-no-opt-in")?;
         // Even a PINNED root (tier 1) must not yield the reference layer
         // without WORKESTRATE_REFERENCE_CONFIG=1 (cleanup phase 2).
-        std::env::set_var("AGENTCTL_ROOT", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("AGENTCTL_ROOT", &tmp) };
 
         assert_eq!(
             reference_config_path(),
@@ -918,7 +947,8 @@ pub(crate) mod tests {
 
         let tmp = spec05_cwd_fixture("spec05-no-opt-in")?;
         // Phase-2 opt-in present, so only the spec-05 cwd gate is under test.
-        std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1") };
 
         // Root resolves from cwd (tier 3); without the cwd opt-in env the
         // cwd-derived reference must NOT be returned. CARGO_MANIFEST_DIR is
@@ -939,8 +969,10 @@ pub(crate) mod tests {
         let _g = EnvGuard::capture(SPEC05_ENV_KEYS);
 
         let tmp = spec05_cwd_fixture("spec05-opt-in")?;
-        std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1");
-        std::env::set_var("WORKESTRATE_ALLOW_CWD_REFERENCE", "1");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_ALLOW_CWD_REFERENCE", "1") };
 
         assert_eq!(
             reference_config_path(),
@@ -960,8 +992,10 @@ pub(crate) mod tests {
         let tmp = spec05_cwd_fixture("spec05-pinned-root")?;
         // A pinned root never requires the cwd opt-in — only the phase-2
         // WORKESTRATE_REFERENCE_CONFIG=1 flag.
-        std::env::set_var("AGENTCTL_ROOT", &tmp);
-        std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("AGENTCTL_ROOT", &tmp) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1") };
 
         assert_eq!(
             reference_config_path(),
@@ -984,11 +1018,16 @@ pub(crate) mod tests {
         let tmp = uniq_dir("spec05-manifest-tier");
         std::fs::create_dir_all(&tmp)?;
         std::env::set_current_dir(&tmp)?;
-        std::env::remove_var("AGENTCTL_ROOT");
-        std::env::remove_var("WORKESTRATE_ALLOW_CWD_REFERENCE");
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
-        std::env::set_var("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"));
-        std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("AGENTCTL_ROOT") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_ALLOW_CWD_REFERENCE") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR")) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_REFERENCE_CONFIG", "1") };
 
         let path = reference_config_path()
             .expect("manifest-tier reference must resolve with only the phase-2 opt-in");

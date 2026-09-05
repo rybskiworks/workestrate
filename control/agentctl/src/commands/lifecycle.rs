@@ -837,6 +837,7 @@ pub async fn cmd_down_ladder(
 /// the env pinning cannot race.
 ///
 /// [`retained_generation_homes`]: crate::microsandbox::runtime::down_scope::retained_generation_homes
+#[allow(unsafe_code)]
 async fn down_retained_generations(
     state_dir: &std::path::Path,
     scope: &crate::microsandbox::runtime::down_scope::DownScope,
@@ -864,7 +865,10 @@ async fn down_retained_generations(
         // section; the guard restores the prior value on drop even on
         // error (it also snapshots cwd, which is untouched here).
         let _pin = crate::config::test_support::EnvGuard::capture(&["MSB_HOME"]);
-        std::env::set_var("MSB_HOME", gen_home);
+        // SAFETY: MSB_HOME is pinned per-generation and restored by the
+        // EnvGuard on drop (even on error); the sweep is sequential, so no
+        // concurrent env mutation of this key.
+        unsafe { std::env::set_var("MSB_HOME", gen_home) };
         let candidates =
             enumerate_generation_dir_candidates(matches!(scope, DownScope::Everything));
         let selected = resolve_scope(scope, &candidates);
@@ -979,6 +983,7 @@ pub fn cmd_clean(yes: bool, json: bool) -> Result<()> {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -1429,8 +1434,10 @@ strategy = "parallel"
         )
         .unwrap();
         let state_dir = uniq_dir("depid-state");
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir);
-        std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
 
         let id = resolve_dependent_instance_id("par", None, false, false).unwrap();
         let slug = id.expect("parallel strategy with no flags must allocate a slug");
@@ -1531,12 +1538,17 @@ strategy = "per-dir"
         let state_dir = uniq_dir("depid-state-perdir");
         let invoke = uniq_dir("depid-invoke-perdir");
         std::fs::create_dir_all(&invoke).unwrap();
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir);
-        std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
-        std::env::set_var(
-            crate::config::INVOKE_CWD_ENV,
-            std::fs::canonicalize(&invoke).unwrap(),
-        );
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                crate::config::INVOKE_CWD_ENV,
+                std::fs::canonicalize(&invoke).unwrap(),
+            )
+        };
 
         let expected = Some(crate::microsandbox::slots::per_dir_instance_id(
             &std::fs::canonicalize(&invoke).unwrap().to_string_lossy(),
@@ -1576,8 +1588,10 @@ strategy = "per-dir"
         )
         .unwrap();
         let state_dir = uniq_dir("depid-state-single");
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir);
-        std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
 
         assert_eq!(
             resolve_dependent_instance_id("solo", None, false, false).unwrap(),
@@ -1624,12 +1638,17 @@ strategy = "per-dir"
         let state_dir = uniq_dir("depid-state-inline-perdir");
         let invoke = uniq_dir("depid-invoke-inline-perdir");
         std::fs::create_dir_all(&invoke).unwrap();
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir);
-        std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
-        std::env::set_var(
-            crate::config::INVOKE_CWD_ENV,
-            std::fs::canonicalize(&invoke).unwrap(),
-        );
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                crate::config::INVOKE_CWD_ENV,
+                std::fs::canonicalize(&invoke).unwrap(),
+            )
+        };
 
         let per_dir = crate::microsandbox::slots::per_dir_instance_id(
             &std::fs::canonicalize(&invoke).unwrap().to_string_lossy(),

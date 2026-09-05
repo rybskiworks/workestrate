@@ -1214,6 +1214,7 @@ pub fn cmd_msb(args: &[String]) -> Result<()> {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -1593,18 +1594,24 @@ mod tests {
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&tmp).ok();
-        std::env::set_var("AGENTCTL_ROOT", &tmp);
-        std::env::remove_var("CARGO_MANIFEST_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("AGENTCTL_ROOT", &tmp) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") };
 
         let result = config::project_root_optional();
 
         match old_root {
-            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
-            None => std::env::remove_var("AGENTCTL_ROOT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("AGENTCTL_ROOT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("AGENTCTL_ROOT") },
         }
         match old_manifest {
-            Some(v) => std::env::set_var("CARGO_MANIFEST_DIR", v),
-            None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("CARGO_MANIFEST_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") },
         }
 
         // The contract: project_root_optional NEVER returns a path that
@@ -1647,23 +1654,34 @@ mod tests {
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
 
-        std::env::set_var("HOME", &tmp_home);
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            tmp_home.join(".config").to_string_lossy().as_ref(),
-        );
-        std::env::set_var(
-            "XDG_DATA_HOME",
-            tmp_home
-                .join(".local")
-                .join("share")
-                .to_string_lossy()
-                .as_ref(),
-        );
-        std::env::set_var("AGENTCTL_ROOT", &tmp_home);
-        std::env::remove_var("CARGO_MANIFEST_DIR");
-        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_CONFIG_HOME",
+                tmp_home.join(".config").to_string_lossy().as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_DATA_HOME",
+                tmp_home
+                    .join(".local")
+                    .join("share")
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("AGENTCTL_ROOT", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
 
         let result = cmd_check();
 
@@ -1677,8 +1695,10 @@ mod tests {
             ("WORKESTRATE_CONFIG_DIR", old_config_dir),
         ] {
             match v {
-                Some(val) => std::env::set_var(k, val),
-                None => std::env::remove_var(k),
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                Some(val) => unsafe { std::env::set_var(k, val) },
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                None => unsafe { std::env::remove_var(k) },
             }
         }
         let _ = std::fs::remove_dir_all(&tmp_home);

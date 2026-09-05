@@ -39,20 +39,27 @@ pub struct TestConfigGuard {
 }
 
 impl TestConfigGuard {
+    #[allow(unsafe_code)]
     pub fn new() -> Self {
         let lock = ENV_TEST_LOCK.lock().unwrap();
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("fixtures")
             .join("config");
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture);
+        // SAFETY: holds the ENV_TEST_LOCK mutex guard for its lifetime,
+        // serializing env mutation across parallel tests.
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture) };
         Self { _lock: lock }
     }
 }
 
 impl Drop for TestConfigGuard {
+    #[allow(unsafe_code)]
     fn drop(&mut self) {
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: the ENV_TEST_LOCK guard is still held during Drop (field
+        // drop order runs after this fn body), so env mutation stays
+        // serialized.
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
     }
 }
 
@@ -72,11 +79,17 @@ impl EnvGuard {
     }
 }
 impl Drop for EnvGuard {
+    #[allow(unsafe_code)]
     fn drop(&mut self) {
         for (k, v) in &self.vars {
-            match v {
-                Some(val) => std::env::set_var(k, val),
-                None => std::env::remove_var(k),
+            // SAFETY: restores caller-snapshotted values; test callers hold
+            // ENV_TEST_LOCK; the runtime caller (generation sweep in
+            // lifecycle.rs) pins/restores MSB_HOME sequentially.
+            unsafe {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
             }
         }
         if let Some(cwd) = &self.cwd {

@@ -31,15 +31,15 @@ pub(crate) fn slot_bind_ip(instance: &str, state_dir: &Path) -> Result<IpAddr> {
 }
 
 fn reject_if_placeholder(value: &str, placeholder: &Option<String>, label: &str) -> Result<()> {
-    if let Some(ref ph) = placeholder {
-        if value.trim() == ph.trim() {
-            anyhow::bail!(
-                "{} is set to the placeholder value '{}'. \
-                 Replace it with a real secret before running this command.",
-                label,
-                ph
-            );
-        }
+    if let Some(ph) = placeholder
+        && value.trim() == ph.trim()
+    {
+        anyhow::bail!(
+            "{} is set to the placeholder value '{}'. \
+             Replace it with a real secret before running this command.",
+            label,
+            ph
+        );
     }
     Ok(())
 }
@@ -1583,6 +1583,7 @@ pub async fn exec_agent_with_spec<W: Workload>(workload: &W, spec: &InstanceSpec
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::test_support::unique_state_dir;
@@ -1787,11 +1788,13 @@ mod tests {
     #[test]
     fn resolve_plan_envs_falls_back_to_process_env_for_names_not_in_plan() -> Result<()> {
         let unique = "WORKESTRATE_TEST_PLAN_ENV_FALLBACK";
-        std::env::set_var(unique, "process-value");
+        // SAFETY: unique per-test var name; no concurrent accessor; removed before test end.
+        unsafe { std::env::set_var(unique, "process-value") };
         let plan =
             empty_plan_with_env(vec![EnvVar::literal("AD_HOC", &format!("${{{}}}", unique))]);
         let resolved = resolve_plan_envs(&plan, &secrets_map(&[]))?;
-        std::env::remove_var(unique);
+        // SAFETY: unique per-test var name; no concurrent accessor; removed before test end.
+        unsafe { std::env::remove_var(unique) };
         assert_eq!(
             resolved,
             vec![("AD_HOC".to_string(), "process-value".to_string())]

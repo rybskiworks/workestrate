@@ -751,13 +751,20 @@ fn main() {
     }
 }
 
+#[allow(unsafe_code)]
 async fn async_main(args: Vec<String>) -> Result<()> {
     let cli = Cli::parse_from(args);
     if cli.no_project_config {
-        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+        // SAFETY: startup-phase write-once CLI override, set before any
+        // command flow reads it and before any spawned tasks mutate env; no
+        // concurrent mutation of this key.
+        unsafe { std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1") };
     }
     if let Some(ref ctx) = cli.context {
-        std::env::set_var("WORKESTRATE_CONTEXT", ctx);
+        // SAFETY: startup-phase write-once CLI override, set before any
+        // command flow reads it and before any spawned tasks mutate env; no
+        // concurrent mutation of this key.
+        unsafe { std::env::set_var("WORKESTRATE_CONTEXT", ctx) };
     }
     // --config-ref <branch|sha> populates WORKESTRATE_CONFIG_REF (ADR 0032
     // addendum §Selection ladder, A5 Session 3a): the pinned-consumption
@@ -768,7 +775,10 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     // var (like --context/--home) propagates the override to detached
     // children via spawn env inheritance.
     if let Some(ref config_ref) = cli.config_ref {
-        std::env::set_var("WORKESTRATE_CONFIG_REF", config_ref);
+        // SAFETY: startup-phase write-once CLI override, set before any
+        // command flow reads it and before any spawned tasks mutate env; no
+        // concurrent mutation of this key.
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", config_ref) };
     }
     // A5 Session 3b (ADR 0032 addendum §Selection ladder rung 3): a DETACHED
     // CHILD inherits WORKESTRATE_WORKLOAD_REF="name:ref" from its parent
@@ -789,7 +799,10 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     // (paths.rs resolve_home_with_kind checks it first), so the flag becomes
     // the highest-precedence override with no path-resolution change.
     if let Some(ref h) = cli.home {
-        std::env::set_var("WORKESTRATE_HOME", h);
+        // SAFETY: startup-phase write-once CLI override, set before any
+        // command flow reads it and before any spawned tasks mutate env; no
+        // concurrent mutation of this key.
+        unsafe { std::env::set_var("WORKESTRATE_HOME", h) };
     }
 
     match cli.command {
@@ -1018,10 +1031,15 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             let name = selector.name.clone();
             if let Some(ref inline_ref) = selector.config_ref {
                 workestrate::config::set_pending_inline_override(&name, inline_ref);
-                std::env::set_var(
-                    workestrate::config::WORKLOAD_REF_ENV,
-                    format!("{name}:{inline_ref}"),
-                );
+                // SAFETY: startup-phase write-once CLI override, set before
+                // the verb flow reads it and before any spawned tasks mutate
+                // env; no concurrent mutation of this key.
+                unsafe {
+                    std::env::set_var(
+                        workestrate::config::WORKLOAD_REF_ENV,
+                        format!("{name}:{inline_ref}"),
+                    )
+                };
                 if verb == "plan" {
                     workestrate::config::arm_inline_override();
                 }
@@ -1194,6 +1212,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 #[allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -1318,7 +1337,9 @@ mod tests {
         let invoke = uniq_dir("plan-preview-perdir");
         std::fs::create_dir_all(&invoke).unwrap();
         let canonical = std::fs::canonicalize(&invoke).unwrap();
-        std::env::set_var(workestrate::config::INVOKE_CWD_ENV, &canonical);
+        // SAFETY: serialized by ENV_TEST_LOCK (held directly); var restored
+        // by EnvGuard on drop.
+        unsafe { std::env::set_var(workestrate::config::INVOKE_CWD_ENV, &canonical) };
         let plan_without = WorkloadAction::Plan {
             name: "prime".to_string(),
             instance: None,

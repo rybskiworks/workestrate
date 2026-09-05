@@ -581,6 +581,7 @@ pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::{
         DownStatus, REMOVE_DEADLINE, REMOVE_KILL_THRESHOLD, REMOVE_RETRY_POLL, RemoveRetryDecision,
@@ -761,7 +762,8 @@ mod tests {
     impl MsbHomeGuard {
         fn set(path: &std::path::Path) -> Self {
             let prior = std::env::var_os("MSB_HOME");
-            std::env::set_var("MSB_HOME", path);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var("MSB_HOME", path) };
             Self { prior }
         }
     }
@@ -769,8 +771,10 @@ mod tests {
     impl Drop for MsbHomeGuard {
         fn drop(&mut self) {
             match &self.prior {
-                Some(v) => std::env::set_var("MSB_HOME", v),
-                None => std::env::remove_var("MSB_HOME"),
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                Some(v) => unsafe { std::env::set_var("MSB_HOME", v) },
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                None => unsafe { std::env::remove_var("MSB_HOME") },
             }
         }
     }

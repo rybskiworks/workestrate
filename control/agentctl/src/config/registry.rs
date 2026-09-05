@@ -655,6 +655,7 @@ pub fn resolve_active_context() -> Result<ActiveContext> {
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
+        unsafe_code,
         clippy::unwrap_used,
         clippy::expect_used,
         clippy::panic,
@@ -680,32 +681,46 @@ pub(crate) mod tests {
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
 
-        std::env::set_var("HOME", &tmp_home);
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            tmp_home.join(".config").to_string_lossy().as_ref(),
-        );
-        std::env::remove_var("WORKESTRATE_CONTEXT");
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_CONFIG_HOME",
+                tmp_home.join(".config").to_string_lossy().as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
 
         let ctx = resolve_active_context()?;
 
         // Restore
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_xdg {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
         match old_ctx {
-            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
-            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
         }
         match old_config_dir {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -738,31 +753,45 @@ pub(crate) mod tests {
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
 
-        std::env::set_var("HOME", &tmp_home);
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            tmp_home.join(".config").to_string_lossy().as_ref(),
-        );
-        std::env::remove_var("WORKESTRATE_CONTEXT");
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_CONFIG_HOME",
+                tmp_home.join(".config").to_string_lossy().as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
 
         let ctx = resolve_active_context()?;
 
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_xdg {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
         match old_ctx {
-            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
-            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
         }
         match old_config_dir {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -795,31 +824,45 @@ pub(crate) mod tests {
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
 
-        std::env::set_var("HOME", &tmp_home);
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            tmp_home.join(".config").to_string_lossy().as_ref(),
-        );
-        std::env::set_var("WORKESTRATE_CONTEXT", "work");
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_CONFIG_HOME",
+                tmp_home.join(".config").to_string_lossy().as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "work") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
 
         let ctx = resolve_active_context()?;
 
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_xdg {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
         match old_ctx {
-            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
-            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
         }
         match old_config_dir {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -851,31 +894,45 @@ pub(crate) mod tests {
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
 
-        std::env::set_var("HOME", &tmp_home);
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            tmp_home.join(".config").to_string_lossy().as_ref(),
-        );
-        std::env::remove_var("WORKESTRATE_CONTEXT");
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_CONFIG_HOME",
+                tmp_home.join(".config").to_string_lossy().as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
 
         let ctx = resolve_active_context()?;
 
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_xdg {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
         match old_ctx {
-            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
-            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
         }
         match old_config_dir {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -907,31 +964,45 @@ pub(crate) mod tests {
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
 
-        std::env::set_var("HOME", &tmp_home);
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            tmp_home.join(".config").to_string_lossy().as_ref(),
-        );
-        std::env::set_var("WORKESTRATE_CONTEXT", "nonexistent");
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_CONFIG_HOME",
+                tmp_home.join(".config").to_string_lossy().as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "nonexistent") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
 
         let result = resolve_active_context();
 
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_xdg {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
         match old_ctx {
-            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
-            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
         }
         match old_config_dir {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -968,31 +1039,45 @@ pub(crate) mod tests {
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
         let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
 
-        std::env::set_var("HOME", &tmp_home);
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            tmp_home.join(".config").to_string_lossy().as_ref(),
-        );
-        std::env::remove_var("WORKESTRATE_CONTEXT");
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_CONFIG_HOME",
+                tmp_home.join(".config").to_string_lossy().as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
 
         let result = resolve_active_context();
 
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_xdg {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
         match old_ctx {
-            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
-            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
         }
         match old_config_dir {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -1071,7 +1156,8 @@ pub(crate) mod tests {
     fn pin_home(label: &str) -> std::path::PathBuf {
         let home = uniq_dir(label);
         std::fs::create_dir_all(&home).expect("create pinned home");
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
         home
     }
 
@@ -1286,14 +1372,17 @@ pub(crate) mod tests {
         let home = seed_two_context_home("w6a-use-resolve");
         // No env override may shadow the persisted default.
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        std::env::remove_var("WORKESTRATE_CONTEXT");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
 
         set_default_context("work")?;
         let active = resolve_active_context()?;
 
         match old_ctx {
-            Some(v) => std::env::set_var("WORKESTRATE_CONTEXT", v),
-            None => std::env::remove_var("WORKESTRATE_CONTEXT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
         }
         let _ = std::fs::remove_dir_all(&home);
 
@@ -1639,8 +1728,10 @@ pub(crate) mod tests {
     /// ENV_TEST_LOCK; the EnvGuard is captured by the caller BEFORE this.
     fn a5_derive_home(label: &str) -> std::path::PathBuf {
         let home = pin_home(label);
-        std::env::remove_var("WORKESTRATE_CONTEXT");
-        std::env::remove_var("WORKESTRATE_CONFIG_REF");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_REF") };
         home
     }
 
@@ -1706,7 +1797,8 @@ pub(crate) mod tests {
         // The branch exists in the clone but is NOT checked out (isolating
         // step b from step c, which would report the checkout branch).
         a5_derive_git(&clone, &["branch", "feat-x"]);
-        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
 
         let ctx = resolve_active_context()?;
 
@@ -1729,7 +1821,8 @@ pub(crate) mod tests {
         // Detach HEAD so step c cannot name a context either — isolating
         // the sha-ref behavior at step b.
         crate::git::git_checkout_rev(&clone, &sha)?;
-        std::env::set_var("WORKESTRATE_CONFIG_REF", &sha);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", &sha) };
 
         let ctx = resolve_active_context()?;
 
@@ -1789,8 +1882,10 @@ pub(crate) mod tests {
             home.join("config.toml"),
             "layers = [\"team\"]\n\n[configs.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
         )?;
-        std::env::set_var("WORKESTRATE_CONTEXT", "work");
-        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "work") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
 
         let ctx = resolve_active_context()?;
 
@@ -1811,7 +1906,8 @@ pub(crate) mod tests {
         let home = a5_derive_remote_bare_home("a5-derive-b-over-c", "team", "main");
         let clone = home.join("config-repos").join("team");
         a5_derive_git(&clone, &["branch", "feat-x"]);
-        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
 
         let ctx = resolve_active_context()?;
 
@@ -1951,7 +2047,8 @@ pub(crate) mod tests {
         let home = a5_derive_remote_bare_home("a5-derive-slug-b", "team", "main");
         let clone = home.join("config-repos").join("team");
         a5_derive_git(&clone, &["branch", "feat/Foo#1.2"]);
-        std::env::set_var("WORKESTRATE_CONFIG_REF", "feat/Foo#1.2");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat/Foo#1.2") };
 
         let ctx = resolve_active_context()?;
         assert_eq!(ctx.name.as_deref(), Some("feat-foo-1-2"));

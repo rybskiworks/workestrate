@@ -226,6 +226,7 @@ pub mod test_support;
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
+        unsafe_code,
         clippy::unwrap_used,
         clippy::expect_used,
         clippy::panic,
@@ -238,11 +239,14 @@ pub(crate) mod tests {
     fn project_root_with_agentctl_root_env() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let old = std::env::var("AGENTCTL_ROOT").ok();
-        std::env::set_var("AGENTCTL_ROOT", "/tmp");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("AGENTCTL_ROOT", "/tmp") };
         let result = project_root();
         match old {
-            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
-            None => std::env::remove_var("AGENTCTL_ROOT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("AGENTCTL_ROOT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("AGENTCTL_ROOT") },
         }
         // /tmp doesn't have flake.nix, so this should error
         assert!(result.is_err(), "expected error when flake.nix missing");
@@ -252,11 +256,14 @@ pub(crate) mod tests {
     fn project_root_rejects_missing_flake_nix() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let old = std::env::var("AGENTCTL_ROOT").ok();
-        std::env::set_var("AGENTCTL_ROOT", "/tmp/nonexistent-ai-workbench-test");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("AGENTCTL_ROOT", "/tmp/nonexistent-ai-workbench-test") };
         let result = project_root();
         match old {
-            Some(v) => std::env::set_var("AGENTCTL_ROOT", v),
-            None => std::env::remove_var("AGENTCTL_ROOT"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("AGENTCTL_ROOT", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("AGENTCTL_ROOT") },
         }
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();

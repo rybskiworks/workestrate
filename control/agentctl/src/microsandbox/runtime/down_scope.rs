@@ -555,6 +555,7 @@ pub fn everything_gate(flag_count: u8, yes: bool, confirmed: Option<bool>) -> Re
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -945,7 +946,8 @@ mod tests {
     impl MsbHomeGuard {
         fn set(path: &std::path::Path) -> Self {
             let prior = std::env::var_os("MSB_HOME");
-            std::env::set_var("MSB_HOME", path);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var("MSB_HOME", path) };
             Self { prior }
         }
     }
@@ -953,8 +955,10 @@ mod tests {
     impl Drop for MsbHomeGuard {
         fn drop(&mut self) {
             match &self.prior {
-                Some(v) => std::env::set_var("MSB_HOME", v),
-                None => std::env::remove_var("MSB_HOME"),
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                Some(v) => unsafe { std::env::set_var("MSB_HOME", v) },
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                None => unsafe { std::env::remove_var("MSB_HOME") },
             }
         }
     }
@@ -971,7 +975,8 @@ mod tests {
     impl StateDirGuard {
         fn set(path: &std::path::Path) -> Self {
             let prior = std::env::var_os("WORKESTRATE_STATE_DIR");
-            std::env::set_var("WORKESTRATE_STATE_DIR", path);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", path) };
             Self { prior }
         }
     }
@@ -979,8 +984,10 @@ mod tests {
     impl Drop for StateDirGuard {
         fn drop(&mut self) {
             match &self.prior {
-                Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
-                None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                Some(v) => unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", v) },
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                None => unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") },
             }
         }
     }
@@ -1284,7 +1291,8 @@ mod tests {
         let _env = EnvGuard::capture(&["WORKESTRATE_HOME"]);
         let home = uniq_dir("down-scope-refs-home");
         std::fs::create_dir_all(&home)?;
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
 
         // Registry: one entry carrying ref "reg-branch".
         std::fs::write(

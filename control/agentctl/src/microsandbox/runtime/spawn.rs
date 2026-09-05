@@ -202,6 +202,7 @@ pub async fn logs(name: &str) -> Result<()> {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -226,11 +227,13 @@ mod tests {
         let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
         let state = crate::config::test_support::uniq_dir("fs8-spawn-state");
         std::fs::create_dir_all(&state)?;
-        std::env::set_var("WORKESTRATE_STATE_DIR", &state);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state) };
 
         let home = crate::config::test_support::uniq_dir("fs8-spawn-home");
         std::fs::create_dir_all(&home)?;
-        std::env::set_var("HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
 
         let args = vec!["--definitely-not-a-real-flag".to_string()];
         let result = spawn_detached_service("fs8-immediate-fail", &args);
@@ -277,8 +280,10 @@ mod tests {
         );
 
         match prior_state {
-            Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") },
         }
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&state);
@@ -380,11 +385,13 @@ mod tests {
         let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
         let state = crate::config::test_support::uniq_dir("fs8-log-state");
         std::fs::create_dir_all(&state)?;
-        std::env::set_var("WORKESTRATE_STATE_DIR", &state);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state) };
 
         let home = crate::config::test_support::uniq_dir("fs8-log-home");
         std::fs::create_dir_all(&home)?;
-        std::env::set_var("HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
 
         // Even on the failure path, the log file must exist (the failure
         // message points at it).
@@ -400,8 +407,10 @@ mod tests {
         );
 
         match prior_state {
-            Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") },
         }
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&state);
@@ -416,7 +425,8 @@ mod tests {
         // WORKESTRATE_STATE_DIR is not in HOME_ENV_KEYS; guard it manually.
         let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
         let state = crate::config::test_support::uniq_dir("detached-log-path");
-        std::env::set_var("WORKESTRATE_STATE_DIR", &state);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state) };
 
         // A parallel identity keeps its RAW spelling: `@` is legal in dir
         // names and no msb-name encoding applies on this side of the SDK.
@@ -434,8 +444,10 @@ mod tests {
         assert!(crate::microsandbox::slots::validate_instance_id("a/b").is_err());
 
         match prior_state {
-            Some(v) => std::env::set_var("WORKESTRATE_STATE_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_STATE_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") },
         }
         let _ = std::fs::remove_dir_all(&state);
         Ok(())

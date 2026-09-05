@@ -301,6 +301,7 @@ pub(super) fn resolve_mount_host_template(
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -491,7 +492,8 @@ mod tests {
         let _g = crate::config::test_support::EnvGuard::capture(&[crate::config::INVOKE_CWD_ENV]);
         // Pin the fallback path: with no captured invocation cwd, the
         // process cwd wins (pre-capture behavior).
-        std::env::remove_var(crate::config::INVOKE_CWD_ENV);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var(crate::config::INVOKE_CWD_ENV) };
 
         let got = resolve_mount_host_template("${CWD}", "pi", "/tmp/build-out", None);
         let cwd = std::env::current_dir().unwrap();
@@ -515,7 +517,8 @@ mod tests {
         let elsewhere = crate::config::test_support::uniq_dir("invoke-cwd-b");
         std::fs::create_dir_all(&invoke).unwrap();
         std::fs::create_dir_all(&elsewhere).unwrap();
-        std::env::set_var(crate::config::INVOKE_CWD_ENV, &invoke);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(crate::config::INVOKE_CWD_ENV, &invoke) };
         std::env::set_current_dir(&elsewhere).unwrap();
 
         let got = resolve_mount_host_template("${CWD}", "pi", "/tmp/build-out", None);

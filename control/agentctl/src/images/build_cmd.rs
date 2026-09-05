@@ -813,6 +813,7 @@ pub async fn cmd_workload_build(
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::super::detect::test_fakes::{FakeEvaluator, FakeStoreProbe};
     use super::super::pipeline::test_fakes::{FakeBuilder, FakeLoader, FakeRemover};
@@ -1033,7 +1034,8 @@ mod tests {
         let good = write_local_repo(&home, "good", "pi", false);
         let bad = write_local_repo(&home, "bad", "evil", true);
         write_registry(&home, &[("good", &good), ("bad", &bad)]);
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
 
         let (targets, skips) = resolve_targets(BuildScope::Repo("good")).unwrap();
         assert!(skips.is_empty());
@@ -1076,7 +1078,8 @@ mod tests {
         let good = write_local_repo(&home, "good", "pi", false);
         let bad = write_local_repo(&home, "bad", "evil", true);
         write_registry(&home, &[("good", &good), ("bad", &bad)]);
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
 
         let (targets, skips) =
             resolve_targets(BuildScope::AllRepos).expect("a failing repo must NOT fail the batch");

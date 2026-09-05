@@ -164,6 +164,7 @@ pub async fn ensure_resolved<
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
@@ -856,12 +857,15 @@ gating_file = "package-lock.json"
         let _g = EnvGuard::capture(HOME_ENV_KEYS);
         let home = unique_state_dir("ensure-flakeless-home");
         std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
         // Not covered by HOME_ENV_KEYS; pin it off so the state dir derives
         // from the temp home hermetically.
-        std::env::remove_var("WORKESTRATE_STATE_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
         let config_dir = write_flakeless_config_dir("ensure-flakeless-config", "pi");
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &config_dir);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &config_dir) };
 
         // Single: hard error naming the repo (before any nix/msb touch).
         let err = ensure_images_for_workload("pi", false)
@@ -894,8 +898,10 @@ gating_file = "package-lock.json"
         let _g = EnvGuard::capture(HOME_ENV_KEYS);
         let home = unique_state_dir("ensure-noop-home");
         std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var("WORKESTRATE_HOME", &home);
-        std::env::remove_var("WORKESTRATE_STATE_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
         let dir = unique_state_dir("ensure-noop-config");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -906,7 +912,8 @@ gating_file = "package-lock.json"
              command = []\n\n\
              [workloads.web.network.defaults]\negress = \"deny\"\n",
         )?;
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &dir);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &dir) };
 
         ensure_images_for_workload("web", false).await?;
         ensure_images_for_workload("web", true).await?;

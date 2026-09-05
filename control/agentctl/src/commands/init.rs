@@ -225,6 +225,7 @@ pub fn find_reference_workestrate(start: &std::path::Path) -> Result<std::path::
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -248,7 +249,8 @@ mod tests {
 
         // Point WORKESTRATE_CONFIG_DIR at the temp repo
         let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         // Verify resolve_active_config_dir returns the temp dir
         let config_dir = config::resolve_active_config_dir()?;
@@ -273,8 +275,10 @@ mod tests {
 
         // Restore env
         match old {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
 
         // Verify the agent config dir was created in the config repo
@@ -314,32 +318,47 @@ mod tests {
         let old_config = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
 
-        std::env::set_var("HOME", &tmp_home);
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            tmp_home.join(".config").to_string_lossy().as_ref(),
-        );
-        std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share"));
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
-        std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe {
+            std::env::set_var(
+                "XDG_CONFIG_HOME",
+                tmp_home.join(".config").to_string_lossy().as_ref(),
+            )
+        };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share")) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1") };
 
         let result = config::resolve_active_config_dir();
 
         // Restore env
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_config {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         match old_no_project {
-            Some(v) => std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", v),
-            None => std::env::remove_var("WORKESTRATE_NO_PROJECT_CONFIG"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_NO_PROJECT_CONFIG") },
         }
-        std::env::remove_var("XDG_CONFIG_HOME");
-        std::env::remove_var("XDG_DATA_HOME");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("XDG_DATA_HOME") };
 
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -383,7 +402,8 @@ mod tests {
 
         let home = crate::config::test_support::uniq_dir("w6a-init-bare");
         std::fs::create_dir_all(&home)?;
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
 
         cmd_init(None)?;
 
@@ -416,7 +436,8 @@ mod tests {
         std::fs::create_dir_all(&tmp)?;
         std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
         std::fs::create_dir_all(tmp.join("agents").join("dupe"))?;
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         let result = cmd_new("dupe", "agent");
         assert!(result.is_err(), "existing agents/dupe must fail");
@@ -447,7 +468,8 @@ mod tests {
             tmp.join("workestrate.toml"),
             "schema_version = 1\n\n[workloads.existing]\nkind = \"agent\"\n",
         )?;
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         cmd_new("fresh-agent", "agent")?;
 
@@ -501,7 +523,8 @@ mod tests {
         let tmp = crate::config::test_support::uniq_dir("w6a-new-service");
         std::fs::create_dir_all(&tmp)?;
         std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         cmd_new("svc", "service")?;
 

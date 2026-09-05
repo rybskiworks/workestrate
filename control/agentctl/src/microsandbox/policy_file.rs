@@ -148,6 +148,7 @@ pub fn remove_policy_dir(instance: &str) -> Result<()> {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
@@ -158,7 +159,8 @@ mod tests {
         let lock = ENV_TEST_LOCK.lock().unwrap();
         let guard = EnvGuard::capture(&["MSB_HOME"]);
         let home = uniq_dir(label);
-        std::env::set_var("MSB_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", &home) };
         (lock, guard, home)
     }
 
@@ -194,9 +196,11 @@ mod tests {
         let lock = ENV_TEST_LOCK.lock().unwrap();
         let _guard = EnvGuard::capture(&["MSB_HOME", "WORKESTRATE_HOME"]);
         let msb = uniq_dir("policy-file-legacy-msb");
-        std::env::set_var("MSB_HOME", &msb);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", &msb) };
         let home = uniq_dir("policy-file-legacy-home");
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
         // Pre-fix spec 22 layout: <state_dir>/policy/<instance>.
         let legacy = crate::config::resolve_state_dir()
             .join("policy")
@@ -284,7 +288,8 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
         let custom = uniq_dir("policy-msb-home-set");
-        std::env::set_var("MSB_HOME", &custom);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", &custom) };
         assert_eq!(msb_home(), custom);
     }
 
@@ -294,10 +299,13 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
         let fake_home = uniq_dir("policy-msb-home-empty");
-        std::env::set_var("HOME", &fake_home);
-        std::env::set_var("MSB_HOME", "");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &fake_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", "") };
         let via_empty = msb_home();
-        std::env::remove_var("MSB_HOME");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("MSB_HOME") };
         let via_unset = msb_home();
         assert_eq!(via_empty, via_unset);
         assert_eq!(via_empty, fake_home.join(".microsandbox").join("current"));
@@ -311,10 +319,13 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
         let fake_home = uniq_dir("policy-msb-home-unset");
-        std::env::remove_var("MSB_HOME");
-        std::env::set_var("HOME", &fake_home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("MSB_HOME") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &fake_home) };
         assert_eq!(msb_home(), fake_home.join(".microsandbox").join("current"));
-        std::env::remove_var("HOME");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("HOME") };
         assert_eq!(
             msb_home(),
             PathBuf::from(".").join(".microsandbox").join("current")

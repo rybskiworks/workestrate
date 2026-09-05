@@ -221,6 +221,7 @@ fn missing_var_name(msg: &str) -> Option<&str> {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::SecretViolationPolicy;
@@ -356,14 +357,16 @@ mod tests {
     fn env_fallback_uses_process_env_when_map_lacks_the_var() {
         // A name the map does not carry falls back to the process env.
         let unique = "WORKESTRATE_TEST_ENV_FALLBACK_VAR";
-        std::env::set_var(unique, "from-process-env");
+        // SAFETY: unique per-test var name; no concurrent accessor; removed before test end.
+        unsafe { std::env::set_var(unique, "from-process-env") };
         let m = vars(&[]);
         let templated = format!("${{{}}}", unique);
         assert_eq!(
             resolve_templated_value_with_env_fallback(&templated, &m).unwrap(),
             "from-process-env"
         );
-        std::env::remove_var(unique);
+        // SAFETY: unique per-test var name; no concurrent accessor; removed before test end.
+        unsafe { std::env::remove_var(unique) };
     }
 
     #[test]

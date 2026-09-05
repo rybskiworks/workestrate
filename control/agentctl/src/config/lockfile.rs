@@ -335,6 +335,7 @@ pub fn upsert_locked_ref(
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
+        unsafe_code,
         clippy::unwrap_used,
         clippy::expect_used,
         clippy::panic,
@@ -349,7 +350,8 @@ pub(crate) mod tests {
     fn pin_home(label: &str) -> PathBuf {
         let home = uniq_dir(label);
         std::fs::create_dir_all(&home).expect("create pinned home");
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
         home
     }
 

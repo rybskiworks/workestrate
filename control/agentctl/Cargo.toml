@@ -46,7 +46,11 @@ opt-level = 3
 lto = "thin"
 
 [lints.rust]
-unsafe_code = "forbid"
+# Edition 2024 makes std::env::set_var/remove_var unsafe; `forbid` cannot be
+# overridden by scoped #[allow] (E0453), so `deny` is the strictest workable
+# level: unsafe stays denied crate-wide by default and every legitimate site
+# needs an explicit fn/module-level #[allow(unsafe_code)] + SAFETY comment.
+unsafe_code = "deny"
 unused_must_use = "deny"
 
 [lints.clippy]

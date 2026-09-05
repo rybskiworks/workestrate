@@ -387,6 +387,7 @@ pub mod test_fakes {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::test_fakes::*;
     use super::*;
@@ -641,14 +642,17 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("blocker"), b"x").unwrap();
         let prior = std::env::var_os("MSB_HOME");
-        std::env::set_var("MSB_HOME", tmp.join("blocker"));
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", tmp.join("blocker")) };
 
         let mut probe = MsbStoreProbe;
         let result = probe.tag_state("workestrate-pi:latest").await;
 
         match &prior {
-            Some(v) => std::env::set_var("MSB_HOME", v),
-            None => std::env::remove_var("MSB_HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("MSB_HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("MSB_HOME") },
         }
         let _ = std::fs::remove_dir_all(&tmp);
 

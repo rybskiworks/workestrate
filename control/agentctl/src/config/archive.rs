@@ -111,6 +111,7 @@ pub fn ensure_archive(repo: &Path, sha: &str) -> Result<PathBuf> {
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
+        unsafe_code,
         clippy::unwrap_used,
         clippy::expect_used,
         clippy::panic,
@@ -128,7 +129,8 @@ pub(crate) mod tests {
     fn pin_state(label: &str) -> PathBuf {
         let state = uniq_dir(label);
         std::fs::create_dir_all(&state).expect("create pinned state dir");
-        std::env::set_var("WORKESTRATE_STATE_DIR", &state);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state) };
         state
     }
 

@@ -248,6 +248,7 @@ pub fn cmd_home_init(config_url: Option<&str>, name: &str) -> Result<()> {
 /// [`provision_home_from`]). The positional `<dest>` selects where the new
 /// home is created (default: the resolved tool home); it must not exist or
 /// be empty.
+#[allow(unsafe_code)]
 pub fn cmd_home_clone(src: &str, dest: Option<&str>) -> Result<()> {
     // Resolve the dest home: positional dest (`~/` expanded; relative paths
     // resolve against cwd at use time) or the standard resolution.
@@ -271,7 +272,10 @@ pub fn cmd_home_clone(src: &str, dest: Option<&str>) -> Result<()> {
     // every env-based helper (config_repo_dir, save_registry, cmd_config_add,
     // the post-flight validate) operates on dest.
     if dest.is_some() {
-        std::env::set_var("WORKESTRATE_HOME", home.to_string_lossy().as_ref());
+        // SAFETY: pins WORKESTRATE_HOME early in the command handler so
+        // env-based helpers operate on dest; sequential command flow, no
+        // concurrent env mutation.
+        unsafe { std::env::set_var("WORKESTRATE_HOME", home.to_string_lossy().as_ref()) };
     }
 
     provision_home_from(src, &home)

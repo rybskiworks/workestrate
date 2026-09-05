@@ -345,6 +345,7 @@ pub async fn probe_liveness(entries: &mut [PsEntry]) -> (usize, usize) {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::{
         InstanceStatus, Occupancy, ProbeOutcome, PsEntry, PsKind, apply_liveness_outcomes,
@@ -581,7 +582,8 @@ mod tests {
     impl MsbHomeGuard {
         fn set(path: &std::path::Path) -> Self {
             let prior = std::env::var_os("MSB_HOME");
-            std::env::set_var("MSB_HOME", path);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var("MSB_HOME", path) };
             Self { prior }
         }
     }
@@ -589,8 +591,10 @@ mod tests {
     impl Drop for MsbHomeGuard {
         fn drop(&mut self) {
             match &self.prior {
-                Some(v) => std::env::set_var("MSB_HOME", v),
-                None => std::env::remove_var("MSB_HOME"),
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                Some(v) => unsafe { std::env::set_var("MSB_HOME", v) },
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                None => unsafe { std::env::remove_var("MSB_HOME") },
             }
         }
     }

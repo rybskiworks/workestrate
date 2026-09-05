@@ -263,6 +263,7 @@ pub fn clear_inline_override() {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
@@ -383,7 +384,8 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
-        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x") };
         set_pending_inline_override_from_env(Some("prime")).unwrap();
         assert_eq!(
             armed_inline_override(),
@@ -403,7 +405,8 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
-        std::env::remove_var(WORKLOAD_REF_ENV);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var(WORKLOAD_REF_ENV) };
         set_pending_inline_override_from_env(Some("prime")).unwrap();
         arm_inline_override();
         assert_eq!(armed_inline_override(), None);
@@ -415,7 +418,8 @@ mod tests {
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
         for bad in ["prime", "prime:", ":feat-x"] {
-            std::env::set_var(WORKLOAD_REF_ENV, bad);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var(WORKLOAD_REF_ENV, bad) };
             let err = set_pending_inline_override_from_env(Some("prime"))
                 .unwrap_err()
                 .to_string();
@@ -439,7 +443,8 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
-        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x") };
         set_pending_inline_override_from_env(Some("litellm")).unwrap();
         arm_inline_override();
         assert_eq!(
@@ -458,7 +463,8 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
-        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x") };
         set_pending_inline_override_from_env(None).unwrap();
         arm_inline_override();
         assert_eq!(
@@ -476,7 +482,8 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
-        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x") };
         set_pending_inline_override_from_env(Some("prime")).unwrap();
         arm_inline_override();
         assert_eq!(
@@ -496,7 +503,8 @@ mod tests {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(&[WORKLOAD_REF_ENV]);
         clear_inline_override();
-        std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var(WORKLOAD_REF_ENV, "prime:feat-x") };
         set_pending_inline_override_from_env(Some("prime")).unwrap();
         for verb in ["down", "logs", "plan", "build"] {
             assert!(

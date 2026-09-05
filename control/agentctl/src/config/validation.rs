@@ -664,6 +664,7 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
+        unsafe_code,
         clippy::unwrap_used,
         clippy::expect_used,
         clippy::panic,
@@ -920,13 +921,16 @@ pub(crate) mod tests {
             MINIMAL_VALID_TOML.replace("schema_version = 1", "schema_version = 3"),
         )?;
         let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         let result = crate::config::load_config();
 
         match old {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp);
 
@@ -955,13 +959,16 @@ pub(crate) mod tests {
             MINIMAL_VALID_TOML.replace("schema_version = 1\n\n", ""),
         )?;
         let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
-        std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
 
         let result = crate::config::load_config();
 
         match old {
-            Some(v) => std::env::set_var("WORKESTRATE_CONFIG_DIR", v),
-            None => std::env::remove_var("WORKESTRATE_CONFIG_DIR"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp);
 

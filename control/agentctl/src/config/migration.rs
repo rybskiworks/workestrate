@@ -473,6 +473,7 @@ pub fn run_migrate_home(
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
+        unsafe_code,
         clippy::unwrap_used,
         clippy::expect_used,
         clippy::panic,
@@ -490,10 +491,14 @@ pub(crate) mod tests {
     /// Build a full legacy XDG layout under `root` and return the computed
     /// xdg config/data/state dirs. Pins XDG_*_HOME env vars.
     fn build_xdg_layout(root: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {
-        std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
-        std::env::set_var("XDG_DATA_HOME", root.join("xdg-data"));
-        std::env::set_var("XDG_STATE_HOME", root.join("xdg-state"));
-        std::env::set_var("HOME", root.join("home"));
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config")) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("XDG_DATA_HOME", root.join("xdg-data")) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("XDG_STATE_HOME", root.join("xdg-state")) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", root.join("home")) };
 
         let xcfg = xdg_config_dir();
         let xdata = xdg_data_dir();

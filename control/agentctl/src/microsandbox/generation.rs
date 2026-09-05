@@ -382,6 +382,7 @@ fn heal_current_symlink(_root: &Path, _gen_dir: &Path) {}
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
@@ -514,8 +515,10 @@ mod tests {
         let guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
         let home = uniq_dir(label);
         std::fs::create_dir_all(&home).unwrap();
-        std::env::remove_var("MSB_HOME");
-        std::env::set_var("HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("MSB_HOME") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &home) };
         (lock, guard, home)
     }
 
@@ -525,7 +528,8 @@ mod tests {
     fn explicit_msb_home_is_verbatim() {
         let (_lock, _guard, home) = pin_home("gen-resolve-explicit");
         let explicit = home.join("somewhere").join("else");
-        std::env::set_var("MSB_HOME", &explicit);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", &explicit) };
         match resolve_msb_home_generation() {
             HomeResolution::Explicit(p) => assert_eq!(p, explicit),
             other => panic!("expected Explicit, got {other:?}"),
@@ -538,7 +542,8 @@ mod tests {
     #[test]
     fn empty_msb_home_is_treated_as_unset() {
         let (_lock, _guard, home) = pin_home("gen-resolve-empty");
-        std::env::set_var("MSB_HOME", "");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", "") };
         match resolve_msb_home_generation() {
             HomeResolution::Fresh(root) => assert_eq!(root, home.join(".microsandbox")),
             other => panic!("expected Fresh, got {other:?}"),

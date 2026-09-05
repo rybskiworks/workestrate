@@ -883,6 +883,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::images::state::{image_key, RepoIdentity};
@@ -1095,21 +1096,25 @@ mod tests {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _guard = crate::config::test_support::EnvGuard::capture(&["MSB_HOME", "HOME"]);
         let fake_home = crate::config::test_support::uniq_dir("doctor-msb-home");
-        std::env::set_var("HOME", &fake_home);
-        std::env::remove_var("MSB_HOME");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &fake_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("MSB_HOME") };
         assert_eq!(
             resolve_msb_home(),
             fake_home.join(".microsandbox").join("current"),
             "unset MSB_HOME → $HOME/.microsandbox/current"
         );
-        std::env::set_var("MSB_HOME", "");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", "") };
         assert_eq!(
             resolve_msb_home(),
             fake_home.join(".microsandbox").join("current"),
             "empty MSB_HOME → treated as unset"
         );
         let custom = crate::config::test_support::uniq_dir("doctor-msb-custom");
-        std::env::set_var("MSB_HOME", &custom);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", &custom) };
         assert_eq!(resolve_msb_home(), custom, "set MSB_HOME → verbatim");
         let msg = msb_ok_message(&custom, "msb 0.6.16");
         assert!(msg.contains(&custom.display().to_string()), "{msg}");

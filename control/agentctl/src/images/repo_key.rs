@@ -161,6 +161,7 @@ pub fn repo_identity_for(
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, uniq_dir};
@@ -296,7 +297,8 @@ mod tests {
         let _g = EnvGuard::capture(HOME_ENV_KEYS);
         let home = uniq_dir("repokey-wrapper-home");
         std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
 
         let local_checkout = home.join("my-local-repo");
         std::fs::write(
@@ -337,7 +339,8 @@ mod tests {
         let checkout = home.join("checkout");
         let declaring = checkout.join("workestrate").join("workloads").join("pi");
         std::fs::create_dir_all(&declaring).unwrap();
-        std::env::set_var("WORKESTRATE_HOME", &home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
         std::fs::write(
             home.join("config.toml"),
             format!(

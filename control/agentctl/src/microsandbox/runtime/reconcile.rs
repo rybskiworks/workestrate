@@ -454,6 +454,7 @@ pub fn decide_step(
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
@@ -923,7 +924,8 @@ mod tests {
     impl MsbHomeGuard {
         fn set(path: &std::path::Path) -> Self {
             let prior = std::env::var_os("MSB_HOME");
-            std::env::set_var("MSB_HOME", path);
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            unsafe { std::env::set_var("MSB_HOME", path) };
             Self { prior }
         }
     }
@@ -931,8 +933,10 @@ mod tests {
     impl Drop for MsbHomeGuard {
         fn drop(&mut self) {
             match &self.prior {
-                Some(v) => std::env::set_var("MSB_HOME", v),
-                None => std::env::remove_var("MSB_HOME"),
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                Some(v) => unsafe { std::env::set_var("MSB_HOME", v) },
+                // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+                None => unsafe { std::env::remove_var("MSB_HOME") },
             }
         }
     }
@@ -960,7 +964,8 @@ mod tests {
     fn sandbox_dir_falls_back_to_home_microsandbox() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let prior_msb = std::env::var_os("MSB_HOME");
-        std::env::remove_var("MSB_HOME");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("MSB_HOME") };
         let prior_home = std::env::var_os("HOME");
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-reconcile-home-{}-{}",
@@ -970,7 +975,8 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0),
         ));
-        std::env::set_var("HOME", &tmp);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &tmp) };
         assert_eq!(
             sandbox_dir("personal-b"),
             tmp.join(".microsandbox")
@@ -979,12 +985,16 @@ mod tests {
                 .join("personal-b")
         );
         match prior_msb {
-            Some(v) => std::env::set_var("MSB_HOME", v),
-            None => std::env::remove_var("MSB_HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("MSB_HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("MSB_HOME") },
         }
         match prior_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+            None => unsafe { std::env::remove_var("HOME") },
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1004,7 +1014,8 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0),
         ));
-        std::env::set_var("MSB_HOME", &custom);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", &custom) };
         assert_eq!(msb_home(), custom);
     }
 
@@ -1021,10 +1032,13 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0),
         ));
-        std::env::set_var("HOME", &fake_home);
-        std::env::set_var("MSB_HOME", "");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &fake_home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("MSB_HOME", "") };
         let via_empty = msb_home();
-        std::env::remove_var("MSB_HOME");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("MSB_HOME") };
         let via_unset = msb_home();
         assert_eq!(via_empty, via_unset);
         assert_eq!(via_empty, fake_home.join(".microsandbox").join("current"));
@@ -1045,10 +1059,13 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0),
         ));
-        std::env::remove_var("MSB_HOME");
-        std::env::set_var("HOME", &fake_home);
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("MSB_HOME") };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("HOME", &fake_home) };
         assert_eq!(msb_home(), fake_home.join(".microsandbox").join("current"));
-        std::env::remove_var("HOME");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("HOME") };
         assert_eq!(
             msb_home(),
             std::path::PathBuf::from(".")

@@ -1203,6 +1203,7 @@ fn readiness_targets(
     clippy::panic,
     clippy::unwrap_in_result
 )]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use crate::config::test_support::{TestConfigGuard, unique_state_dir};
@@ -3073,8 +3074,10 @@ command = []
         let _g = EnvGuard::capture(HOME_ENV_KEYS);
         let home = uniq_dir("ns-standalone");
         std::fs::create_dir_all(&home)?;
-        std::env::set_var("WORKESTRATE_HOME", &home);
-        std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
         // Directory-mode repo at <store>/config-repos/personal (store = the
         // home in the single-home layout).
         let repo = home.join("config-repos").join("personal");
