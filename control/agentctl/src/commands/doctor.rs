@@ -263,8 +263,9 @@ pub fn doctor_check_msb() -> DoctorCheck {
 /// identity check engages under the wrapper), a pre-generation legacy
 /// root, and an ambiguous multi-generation root are FAIL naming
 /// `scripts/host-provision.sh`; fresh is OK. WARN overrides (never OK):
-/// more than 2 generation dirs, or any debris under `generations/`
-/// (non-12-char names, `*.converge-tmp*` leftovers) — FAIL beats WARN beats
+/// more than 2 generation dirs, or any debris under `generations/` (names
+/// failing `generation::is_generation_name`, `*.converge-tmp*` leftovers)
+/// — FAIL beats WARN beats
 /// OK. Additive row: no existing check is renamed (host-provision Step D
 /// greps doctor rows by name).
 pub fn doctor_check_generation() -> DoctorCheck {
@@ -337,8 +338,9 @@ pub fn doctor_check_generation() -> DoctorCheck {
         .with_remediation(REMEDIATION),
     };
     // WARN overrides (status WARN, never OK): more than 2 generation dirs,
-    // or any debris under generations/ (non-12-char names and any
-    // *.converge-tmp* leftovers — see generation::generation_entries).
+    // or any debris under generations/ (names failing
+    // generation::is_generation_name, including any *.converge-tmp*
+    // leftovers — see generation::generation_entries).
     let (keys, debris) = gen::generation_entries(&gen::msb_home_root());
     let mut warns: Vec<String> = Vec::new();
     if keys.len() > 2 {

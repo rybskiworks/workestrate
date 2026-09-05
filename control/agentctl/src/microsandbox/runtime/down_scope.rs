@@ -217,8 +217,10 @@ fn dir_listing_names() -> Vec<String> {
 }
 
 /// The RETAINED generation homes OTHER than the currently-resolved one
-/// (msb state generations): every valid `generations/<key12>` dir under
-/// [`generation::msb_home_root`] (per [`generation::generation_entries`]),
+/// (msb state generations): every valid generation dir under
+/// [`generation::msb_home_root`] (per [`generation::generation_entries`] —
+/// a 12-char key OR the first-class `legacy`, per
+/// `generation::is_generation_name`),
 /// minus the dir CANONICAL-equal to the resolved home — the `current`
 /// symlink target / rule-3 heal target
 /// ([`generation::resolve_msb_home_generation`]) or, for every other

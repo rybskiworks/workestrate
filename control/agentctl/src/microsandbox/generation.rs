@@ -29,6 +29,17 @@ use std::path::{Path, PathBuf};
 /// microsandbox path: a single unmanaged generation (legacy behavior).
 pub const UNMANAGED_KEY: &str = "unmanaged";
 
+/// The FIRST-CLASS generation name of the absorbed pre-generation home
+/// (`generations/legacy`): host-provision moves a legacy root (`db/` at
+/// `$HOME/.microsandbox`) here, so the ONE rule counts it as a generation
+/// exactly like a key12 dir (the shell converge treats ANY dir under
+/// `generations/` as one — the Rust rule must agree). It is a converge
+/// SOURCE, never a target: [`baked_generation_key`] can never be `legacy`
+/// (it is always a 12-char store-hash prefix or [`UNMANAGED_KEY`]), so a
+/// Current/Healed legacy generation ALWAYS mismatches the baked key and
+/// the doctor row / up gate refuse naming host-provision.
+pub const LEGACY_KEY: &str = "legacy";
+
 /// Length of a generation key (the 12-char prefix of the nix store hash).
 /// See the module doc for the socket budget that motivates the short key.
 pub const GENERATION_KEY_LEN: usize = 12;
@@ -178,24 +189,39 @@ pub fn default_msb_home() -> PathBuf {
     msb_home_root().join(CURRENT_LINK_NAME)
 }
 
-/// The generation key of an EXPLICIT path whose basename is a 12-char
-/// generation dir name; `None` for any other path (non-generation
-/// overrides pass the generation gates unchecked). Pure basename check —
-/// no symlink resolution (for the canonicalizing variant used by the
-/// doctor row and the up gate see [`generation_key_of_resolved_home`]).
+/// The ONE generation-name spelling: true for exactly
+/// [`GENERATION_KEY_LEN`] lowercase base32 chars (`[a-z0-9]`) OR exactly
+/// [`LEGACY_KEY`] (the absorbed pre-generation home is a first-class
+/// generation). Used by [`generation_entries`] — and through it the
+/// resolution counting, the Ambiguous key listing, the doctor debris WARN,
+/// and the retained-generation down sweep — plus the explicit-home key
+/// helpers below. Never re-implement the shape check elsewhere.
+pub fn is_generation_name(name: &str) -> bool {
+    name == LEGACY_KEY
+        || (name.len() == GENERATION_KEY_LEN
+            && name.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9')))
+}
+
+/// The generation key of an EXPLICIT path whose basename is a generation
+/// dir name ([`is_generation_name`]); `None` for any other path
+/// (non-generation overrides pass the generation gates unchecked). Pure
+/// basename check — no symlink resolution (for the canonicalizing variant
+/// used by the doctor row and the up gate see
+/// [`generation_key_of_resolved_home`]).
 pub fn generation_key_of_path(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?;
-    (name.chars().count() == GENERATION_KEY_LEN).then(|| name.to_string())
+    is_generation_name(name).then(|| name.to_string())
 }
 
 /// The generation identity of an EXPLICIT (verbatim) `MSB_HOME`: canonicalize
 /// (`readlink -f` equivalent — this resolves the nix wrapper's default
 /// `$HOME/.microsandbox/current` symlink to its target generation dir) and
 /// accept the canonical path ONLY when its parent dir basename is
-/// `generations` AND its own basename is exactly [`GENERATION_KEY_LEN`]
-/// lowercase base32 chars (`[a-z0-9]`). Returns the canonical generation
-/// dir + its key. `None` when canonicalization fails or the target is not
-/// a `generations/<key12>` dir — a genuinely verbatim unmanaged override.
+/// `generations` AND its own basename is a generation name
+/// ([`is_generation_name`] — a 12-char base32 key or `legacy`). Returns the
+/// canonical generation dir + its key. `None` when canonicalization fails
+/// or the target is not a `generations/<name>` dir — a genuinely verbatim
+/// unmanaged override.
 ///
 /// `MSB_HOME` stays VERBATIM for STATE placement (msb resolves the path it
 /// is handed); this helper exists so the generation IDENTITY check (doctor
@@ -207,9 +233,7 @@ pub fn generation_key_of_resolved_home(path: &Path) -> Option<(PathBuf, String)>
     // Bind the OWNED key string first — a `&str` borrow of `canonical`
     // must not be live when `canonical` moves into the return tuple.
     let name = canonical.file_name()?.to_str()?.to_string();
-    let is_key = name.len() == GENERATION_KEY_LEN
-        && name.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9'));
-    if !is_key {
+    if !is_generation_name(&name) {
         return None;
     }
     let under_generations = canonical
@@ -225,11 +249,14 @@ pub fn generation_key_of_resolved_home(path: &Path) -> Option<(PathBuf, String)>
 
 /// Enumerate `<root>/generations/`: `(valid keys, debris names)`. A VALID
 /// entry is a directory (symlink-to-dir counts — metadata follows
-/// symlinks) whose name is exactly [`GENERATION_KEY_LEN`] chars. EVERYTHING
-/// else (regular files, non-12-char names, unreadable entries) is debris —
-/// this includes any `*.converge-tmp*` leftovers from an interrupted
-/// converge. A missing/unreadable `generations/` yields two empty vecs.
-/// Both vecs are sorted for stable reporting.
+/// symlinks) whose name satisfies [`is_generation_name`] (a 12-char base32
+/// key OR `legacy` — the absorbed pre-generation home is first-class, so
+/// `legacy` alone heals and `legacy` + a key12 is Ambiguous, matching the
+/// shell converge). EVERYTHING else (regular files, non-conforming names —
+/// including 12-char non-base32 ones — unreadable entries) is debris; this
+/// includes any `*.converge-tmp*` leftovers from an interrupted converge.
+/// A missing/unreadable `generations/` yields two empty vecs. Both vecs
+/// are sorted for stable reporting.
 pub fn generation_entries(root: &Path) -> (Vec<String>, Vec<String>) {
     let mut keys = Vec::new();
     let mut debris = Vec::new();
@@ -244,7 +271,7 @@ pub fn generation_entries(root: &Path) -> (Vec<String>, Vec<String>) {
         let is_dir = std::fs::metadata(entry.path())
             .map(|m| m.is_dir())
             .unwrap_or(false);
-        if is_dir && name.chars().count() == GENERATION_KEY_LEN {
+        if is_dir && is_generation_name(&name) {
             keys.push(name);
         } else {
             debris.push(name);
@@ -262,7 +289,14 @@ pub fn generation_entries(root: &Path) -> (Vec<String>, Vec<String>) {
 /// generation dir → heal + [`HomeResolution::Healed`]; missing `current` +
 /// zero generation dirs → [`HomeResolution::LegacyRoot`] when `db/` sits at
 /// the root, else [`HomeResolution::Fresh`]; missing `current` + more than
-/// one generation dir → [`HomeResolution::Ambiguous`].
+/// one generation dir → [`HomeResolution::Ambiguous`]. "Generation dir"
+/// means [`is_generation_name`]: `generations/legacy` (the absorbed
+/// pre-generation home) COUNTS — legacy alone heals to `legacy`, legacy +
+/// a key12 is Ambiguous, matching the shell converge. A Current/Healed
+/// `legacy` generation always mismatches the baked key
+/// ([`baked_generation_key`] can never be `legacy` — it is a converge
+/// SOURCE, never a target), so the doctor row / up gate refuse naming
+/// host-provision with no special-casing here.
 ///
 /// INTERPRETATION: a DANGLING `current` symlink (exists but does not
 /// canonicalize) is treated as missing — the enumeration rules apply, and
@@ -608,6 +642,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(home);
     }
 
+    /// `legacy` is a FIRST-CLASS generation: `generations/legacy` alone +
+    /// no `current` heals the symlink to it (matching the shell converge),
+    /// reported as Healed with key "legacy". (The doctor row / up gate then
+    /// FAIL/refuse on the inevitable baked-key mismatch — `legacy` is a
+    /// converge SOURCE, never a target.)
+    #[cfg(unix)]
+    #[test]
+    fn legacy_only_generation_heals_missing_current() {
+        let (_lock, _guard, home) = pin_home("gen-resolve-legacy-heal");
+        let root = home.join(".microsandbox");
+        let gen_dir = root.join("generations").join(LEGACY_KEY);
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        match resolve_msb_home_generation() {
+            HomeResolution::Healed { gen_dir: got, key } => {
+                assert_eq!(got, gen_dir);
+                assert_eq!(key, LEGACY_KEY);
+            }
+            other => panic!("expected Healed, got {other:?}"),
+        }
+        assert_eq!(root.join("current").canonicalize().unwrap(), gen_dir);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// `legacy` + one key12 + no `current` is Ambiguous (matching the shell
+    /// converge), NOT a heal — both names listed, sorted.
+    #[test]
+    fn legacy_and_key12_without_current_is_ambiguous() {
+        let (_lock, _guard, home) = pin_home("gen-resolve-legacy-ambiguous");
+        let gens = home.join(".microsandbox").join("generations");
+        std::fs::create_dir_all(gens.join(KEY12)).unwrap();
+        std::fs::create_dir_all(gens.join(LEGACY_KEY)).unwrap();
+        match resolve_msb_home_generation() {
+            HomeResolution::Ambiguous(keys) => {
+                assert_eq!(keys, vec![KEY12, LEGACY_KEY])
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
     /// A DANGLING `current` symlink (exists but does not canonicalize) is
     /// treated as missing: the enumeration rules apply, and the rule-3 heal
     /// atomically REPLACES the dangling link.
@@ -636,23 +710,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(home);
     }
 
-    /// generation_entries: a valid 12-char DIRECTORY counts as a key; wrong
-    /// length names, `.converge-tmp-*` staging leftovers, and regular files
-    /// (even 12-char ones) are debris.
+    /// The ONE name spelling: 12-char lowercase base32 or exactly `legacy`
+    /// are generation names; everything else is not.
+    #[test]
+    fn is_generation_name_covers_key12_and_legacy() {
+        assert!(is_generation_name(KEY12));
+        assert!(is_generation_name(LEGACY_KEY));
+        for non in ["", "abcde", "ABCDEFGHIJKL", "unmanaged", "legacyy", "legac"] {
+            assert!(!is_generation_name(non), "{non} must not be a generation name");
+        }
+    }
+
+    /// generation_entries: a valid 12-char DIRECTORY counts as a key, and
+    /// so does the first-class `legacy` dir (the absorbed pre-generation
+    /// home); wrong length names, 12-char NON-base32 names,
+    /// `.converge-tmp-*` staging leftovers, and regular files (even 12-char
+    /// ones) are debris.
     #[test]
     fn generation_entries_separates_valid_keys_from_debris() {
         let root = uniq_dir("gen-entries");
         let gens = root.join("generations");
         std::fs::create_dir_all(gens.join(KEY12)).unwrap();
+        std::fs::create_dir_all(gens.join(LEGACY_KEY)).unwrap();
         std::fs::create_dir_all(gens.join("abcde")).unwrap();
+        std::fs::create_dir_all(gens.join("ABCDEFGHIJKL")).unwrap();
         std::fs::create_dir_all(gens.join(".converge-tmp-xyz")).unwrap();
         std::fs::write(gens.join("ffffffffffff"), b"regular file").unwrap();
         std::fs::write(gens.join("notes.txt"), b"debris").unwrap();
         let (keys, debris) = generation_entries(&root);
-        assert_eq!(keys, vec![KEY12]);
+        assert_eq!(keys, vec![KEY12, LEGACY_KEY]);
         assert_eq!(
             debris,
-            vec![".converge-tmp-xyz", "abcde", "ffffffffffff", "notes.txt"]
+            vec![".converge-tmp-xyz", "ABCDEFGHIJKL", "abcde", "ffffffffffff", "notes.txt"]
         );
         let _ = std::fs::remove_dir_all(root);
     }
