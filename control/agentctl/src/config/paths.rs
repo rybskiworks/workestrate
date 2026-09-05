@@ -45,10 +45,10 @@ fn xdg_var_set(name: &str) -> bool {
 /// registry check still uses it.)
 fn resolve_home_base_with_kind() -> (PathBuf, HomeKind) {
     // (a) Env: WORKESTRATE_HOME
-    if let Ok(value) = std::env::var("WORKESTRATE_HOME") {
-        if !value.is_empty() {
-            return (expand_tilde(&value), HomeKind::Env);
-        }
+    if let Ok(value) = std::env::var("WORKESTRATE_HOME")
+        && !value.is_empty()
+    {
+        return (expand_tilde(&value), HomeKind::Env);
     }
     // (c) Legacy XDG
     if xdg_var_set("XDG_CONFIG_HOME")
@@ -89,10 +89,10 @@ pub(crate) fn base_registry_path() -> PathBuf {
 /// discovery caused split-brain/shadow-home ambiguity.
 pub fn resolve_home_with_kind() -> (PathBuf, HomeKind) {
     // (a) Env: WORKESTRATE_HOME
-    if let Ok(value) = std::env::var("WORKESTRATE_HOME") {
-        if !value.is_empty() {
-            return (expand_tilde(&value), HomeKind::Env);
-        }
+    if let Ok(value) = std::env::var("WORKESTRATE_HOME")
+        && !value.is_empty()
+    {
+        return (expand_tilde(&value), HomeKind::Env);
     }
 
     // (b) Legacy XDG
@@ -293,15 +293,15 @@ fn load_registry_for_dir_resolution() -> Option<Registry> {
 ///    state dir in `HomeKind::LegacyXdg` mode). A corrupt registry warns and
 ///    falls back to the default.
 pub fn resolve_state_dir() -> PathBuf {
-    if let Ok(value) = std::env::var("WORKESTRATE_STATE_DIR") {
-        if !value.is_empty() {
-            return expand_tilde(&value);
-        }
+    if let Ok(value) = std::env::var("WORKESTRATE_STATE_DIR")
+        && !value.is_empty()
+    {
+        return expand_tilde(&value);
     }
-    if let Some(registry) = load_registry_for_dir_resolution() {
-        if let Some(ref state_dir) = registry.settings.state_dir {
-            return expand_tilde(state_dir);
-        }
+    if let Some(registry) = load_registry_for_dir_resolution()
+        && let Some(ref state_dir) = registry.settings.state_dir
+    {
+        return expand_tilde(state_dir);
     }
     let (home, kind) = resolve_home_with_kind();
     match kind {
@@ -316,10 +316,10 @@ pub fn resolve_state_dir() -> PathBuf {
 /// (the home dir itself, or the legacy XDG data dir in `HomeKind::LegacyXdg`
 /// mode). A corrupt registry warns and falls back to the default.
 pub fn resolve_store_dir() -> PathBuf {
-    if let Some(registry) = load_registry_for_dir_resolution() {
-        if let Some(ref store_dir) = registry.settings.store_dir {
-            return expand_tilde(store_dir);
-        }
+    if let Some(registry) = load_registry_for_dir_resolution()
+        && let Some(ref store_dir) = registry.settings.store_dir
+    {
+        return expand_tilde(store_dir);
     }
     let (home, kind) = resolve_home_with_kind();
     match kind {

@@ -10,7 +10,7 @@
 //! `merge::Layer::from_string`, so override typos remain warnings, not errors.
 
 use serde::ser::SerializeMap;
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -604,7 +604,11 @@ pub struct NetworkConfig {
     #[schemars(skip)]
     #[doc(hidden)]
     pub deny: Option<()>,
-    #[serde(default, deserialize_with = "removed_network_ingress", skip_serializing)]
+    #[serde(
+        default,
+        deserialize_with = "removed_network_ingress",
+        skip_serializing
+    )]
     #[schemars(skip)]
     #[doc(hidden)]
     pub ingress: Option<()>,
@@ -1608,7 +1612,9 @@ pub struct PolicyConfig {
 /// Conflict handling for a frozen rung (ADR 0035 §8). Per-ladder granular:
 /// egress vs ingress ladders have independent `on_conflict`; each polarity
 /// table overridable; `final` seals the choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum OnConflict {
     #[default]
@@ -1620,7 +1626,9 @@ pub enum OnConflict {
 /// IDNA mode for `policy.idna` (ADR 0035 §3.5). `reject` is the built-in
 /// default (hard error on non-ASCII); `uts46` enables strict ToASCII
 /// conversion via the `idna` crate with `unicode-security` confusable warnings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum IdnaMode {
     #[default]
@@ -3927,7 +3935,8 @@ strategy = "per-dir"
     /// remnant, a require_device) hard-error.
     #[test]
     fn virtualization_policy_fragment_parses_and_seals() {
-        let raw = "schema_version = 1\n\n[policy.virtualization]\nallow_nested = false\nfinal = true\n";
+        let raw =
+            "schema_version = 1\n\n[policy.virtualization]\nallow_nested = false\nfinal = true\n";
         let config: ConfigFile = toml::from_str(raw).unwrap();
         assert_eq!(
             config.policy.virtualization,

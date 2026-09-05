@@ -113,19 +113,14 @@ pub fn doctor_check_kvm() -> DoctorCheck {
 /// (libkrunfw CONFIG_KVM) lands (plan D6: no "nested works" claim until
 /// Track 3).
 pub fn doctor_check_nested_virt() -> DoctorCheck {
-    const PIN_NOTE: &str =
-        "pin b2c672c8 carries the mount-policy stack and the nested_virt VMM flag; nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
+    const PIN_NOTE: &str = "pin b2c672c8 carries the mount-policy stack and the nested_virt VMM flag; nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
     const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
          sudo usermod -aG kvm $USER (re-login); guest nesting additionally needs the host \
          kvm_intel/kvm_amd nested parameter at Y (sudo modprobe kvm_intel nested=1)";
     let probe = crate::microsandbox::nested::read_nested_probe();
     if !probe.kvm_present {
-        return DoctorCheck::new(
-            "nested_virt",
-            "FAIL",
-            format!("no /dev/kvm; {PIN_NOTE}"),
-        )
-        .with_remediation(REMEDIATION);
+        return DoctorCheck::new("nested_virt", "FAIL", format!("no /dev/kvm; {PIN_NOTE}"))
+            .with_remediation(REMEDIATION);
     }
     if !probe.kvm_accessible {
         // WARN, not FAIL (matches `dev_kvm` severity: fixable perms, and a
@@ -149,7 +144,11 @@ pub fn doctor_check_nested_virt() -> DoctorCheck {
                 Some(false) => "nested=N (disabled)",
                 _ => "nested param unknown",
             };
-            let cpu = if probe.cpu_flag { "vmx/svm" } else { "no vmx/svm flag" };
+            let cpu = if probe.cpu_flag {
+                "vmx/svm"
+            } else {
+                "no vmx/svm flag"
+            };
             DoctorCheck::new(
                 "nested_virt",
                 "WARN",
@@ -212,7 +211,7 @@ pub fn doctor_check_msb() -> DoctorCheck {
             )
             .with_remediation(
                 "Ensure msb is installed; run 'nix develop' or check MSB_HOME/MSB_PATH",
-            )
+            );
         }
     };
     // Downgrade probe first: a canonical DB newer than the msb binary is a
@@ -886,7 +885,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
 #[allow(unsafe_code)]
 mod tests {
     use super::*;
-    use crate::images::state::{image_key, RepoIdentity};
+    use crate::images::state::{RepoIdentity, image_key};
 
     fn record(repo: &str, tag: &str) -> ImageRecord {
         ImageRecord {
@@ -1153,7 +1152,11 @@ mod tests {
         );
         if check.status != "OK" {
             assert!(
-                check.remediation.as_deref().unwrap_or("").contains("modprobe"),
+                check
+                    .remediation
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("modprobe"),
                 "non-OK carries remediation: {check:?}"
             );
         }

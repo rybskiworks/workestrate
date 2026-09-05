@@ -35,11 +35,11 @@ pub fn load_secrets() -> Result<std::collections::HashMap<String, String>> {
 
     // Process env as lowest precedence (only for defined secrets).
     for env_var in &secret_env_vars {
-        if let Ok(val) = std::env::var(env_var) {
-            if !val.is_empty() {
-                merged.insert(env_var.clone(), val);
-                provenance.insert(env_var.clone(), "process_env".to_string());
-            }
+        if let Ok(val) = std::env::var(env_var)
+            && !val.is_empty()
+        {
+            merged.insert(env_var.clone(), val);
+            provenance.insert(env_var.clone(), "process_env".to_string());
         }
     }
 

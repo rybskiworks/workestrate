@@ -181,14 +181,14 @@ pub fn validate_instance_id(id: &str) -> Result<()> {
     let mut chars = id.chars();
     // First char must be [a-z0-9]. `id` is non-empty here (checked above), so
     // `chars.next()` is always `Some`; the `if let` is exhaustive in practice.
-    if let Some(first) = chars.next() {
-        if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
-            anyhow::bail!(
-                "instance id '{}' must start with [a-z0-9]; \
+    if let Some(first) = chars.next()
+        && !(first.is_ascii_lowercase() || first.is_ascii_digit())
+    {
+        anyhow::bail!(
+            "instance id '{}' must start with [a-z0-9]; \
                  pattern: ^[a-z0-9][a-z0-9-]{{0,31}}$",
-                id
-            );
-        }
+            id
+        );
     }
     for c in chars {
         if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
@@ -389,12 +389,10 @@ pub fn instance_of_msb_name(name: &str) -> std::borrow::Cow<'_, str> {
             let lower_hex = suffix
                 .bytes()
                 .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-            if lower_hex {
-                if let Some(stripped) = base.strip_suffix('-') {
-                    let candidate = stripped.replace("--", "@");
-                    if fnv1a64_hex8(candidate.as_bytes()) == suffix {
-                        return std::borrow::Cow::Owned(candidate);
-                    }
+            if lower_hex && let Some(stripped) = base.strip_suffix('-') {
+                let candidate = stripped.replace("--", "@");
+                if fnv1a64_hex8(candidate.as_bytes()) == suffix {
+                    return std::borrow::Cow::Owned(candidate);
                 }
             }
         }

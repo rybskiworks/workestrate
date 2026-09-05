@@ -362,16 +362,16 @@ fn provision_home_from(from: &str, dest: &Path) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to read {}: {}", src_registry_path.display(), e))?;
     let src_registry: Registry = toml::from_str(&content)
         .map_err(|e| anyhow::anyhow!("failed to parse {}: {}", src_registry_path.display(), e))?;
-    if let Some(v) = src_registry.settings.home_version {
-        if v > MAX_SUPPORTED_HOME_VERSION {
-            anyhow::bail!(
-                "home created by a newer workestrate (settings.home_version = {} > {}); \
+    if let Some(v) = src_registry.settings.home_version
+        && v > MAX_SUPPORTED_HOME_VERSION
+    {
+        anyhow::bail!(
+            "home created by a newer workestrate (settings.home_version = {} > {}); \
                  upgrade this workestrate before provisioning from {}",
-                v,
-                MAX_SUPPORTED_HOME_VERSION,
-                src.display()
-            );
-        }
+            v,
+            MAX_SUPPORTED_HOME_VERSION,
+            src.display()
+        );
     }
     // Source lock (spec 11 §2 step 2: read src workestrate.lock if present,
     // same version rules). Absent file → legacy path (Ok(None)); absent

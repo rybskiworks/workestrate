@@ -2,11 +2,11 @@ use super::super::env::{resolve_templated_value_with, resolve_templated_value_wi
 use super::super::mounts::{apply_plan_mounts, ensure_mount_sources};
 use super::super::plan::{PortMapping, SandboxPlan};
 use super::super::workload::{EntrypointSpec, SandboxCommand, Workload};
-use super::{check_occupied_or_replace, ForegroundConfig, InstanceSpec};
+use super::{ForegroundConfig, InstanceSpec, check_occupied_or_replace};
 use crate::config::SecretViolationPolicy;
 use anyhow::Result;
-use microsandbox::sandbox::{exec::ExecEvent, SandboxBuilder};
 use microsandbox::Sandbox;
+use microsandbox::sandbox::{SandboxBuilder, exec::ExecEvent};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};

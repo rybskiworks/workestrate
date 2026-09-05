@@ -264,11 +264,11 @@ async fn detached_example_litellm_up_from_flake_less_cwd_passes_project_root_gat
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut log = String::new();
     while std::time::Instant::now() < deadline {
-        if let Ok(content) = std::fs::read_to_string(&log_path) {
-            if content.contains("===== workestrate ") {
-                log = content;
-                break;
-            }
+        if let Ok(content) = std::fs::read_to_string(&log_path)
+            && content.contains("===== workestrate ")
+        {
+            log = content;
+            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }

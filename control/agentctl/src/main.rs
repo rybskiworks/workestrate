@@ -497,11 +497,11 @@ fn rewrite_action_for_inline_selector(
             ..
         } => {
             *n = Some(name.clone());
-            if instance.is_none() {
-                if let Some(id) = derived_id {
-                    *instance = Some(id);
-                    *new = false;
-                }
+            if instance.is_none()
+                && let Some(id) = derived_id
+            {
+                *instance = Some(id);
+                *new = false;
             }
         }
         WorkloadAction::Exec {
@@ -511,21 +511,21 @@ fn rewrite_action_for_inline_selector(
             ..
         } => {
             *n = name.clone();
-            if instance.is_none() {
-                if let Some(id) = derived_id {
-                    *instance = Some(id);
-                    *new = false;
-                }
+            if instance.is_none()
+                && let Some(id) = derived_id
+            {
+                *instance = Some(id);
+                *new = false;
             }
         }
         WorkloadAction::Plan {
             name: n, instance, ..
         } => {
             *n = name.clone();
-            if instance.is_none() {
-                if let Some(id) = derived_id {
-                    *instance = Some(id);
-                }
+            if instance.is_none()
+                && let Some(id) = derived_id
+            {
+                *instance = Some(id);
             }
         }
         _ => {}

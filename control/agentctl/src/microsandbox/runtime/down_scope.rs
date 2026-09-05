@@ -206,10 +206,10 @@ fn dir_listing_names() -> Vec<String> {
     for entry in entries.filter_map(|e| e.ok()) {
         // Only directories are sandbox-dir candidates (the create gate's
         // shape); stray files are ignored.
-        if entry.path().is_dir() {
-            if let Some(name) = entry.file_name().to_str() {
-                out.push(name.to_string());
-            }
+        if entry.path().is_dir()
+            && let Some(name) = entry.file_name().to_str()
+        {
+            out.push(name.to_string());
         }
     }
     out.sort();

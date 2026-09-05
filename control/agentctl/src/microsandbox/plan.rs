@@ -592,11 +592,7 @@ impl DenyDomainRule {
         }
     }
     /// Port-scoped deny.
-    pub fn suffix_with_port(
-        suffix: impl Into<String>,
-        port: u16,
-        protocol: Protocol,
-    ) -> Self {
+    pub fn suffix_with_port(suffix: impl Into<String>, port: u16, protocol: Protocol) -> Self {
         Self {
             domain_suffix: suffix.into(),
             port: Some(port),
@@ -1250,12 +1246,21 @@ network: egress_default=deny ingress_default=deny
         // Egress relaxed only → egress NOTE alone.
         let plan = base(false, true);
         let rendered = format!("{plan}");
-        assert!(rendered.contains("(egress=allow)"), "egress NOTE missing: {rendered}");
-        assert!(!rendered.contains("(ingress=allow)"), "ingress NOTE must not fire: {rendered}");
+        assert!(
+            rendered.contains("(egress=allow)"),
+            "egress NOTE missing: {rendered}"
+        );
+        assert!(
+            !rendered.contains("(ingress=allow)"),
+            "ingress NOTE must not fire: {rendered}"
+        );
         // Both deny → silent.
         let plan = base(true, true);
         let rendered = format!("{plan}");
-        assert!(!rendered.contains("NOTE:"), "deny/deny must render no NOTE: {rendered}");
+        assert!(
+            !rendered.contains("NOTE:"),
+            "deny/deny must render no NOTE: {rendered}"
+        );
     }
 
     #[test]
@@ -1427,7 +1432,10 @@ network: egress_default=deny ingress_default=deny
         let rules = EgressRule::agent_base();
         assert_eq!(rules.len(), 4);
         assert_eq!(rules[2], EgressRule::litellm_proxy());
-        assert_eq!(rules[3], EgressRule::https(&["github.com", "api.github.com"]));
+        assert_eq!(
+            rules[3],
+            EgressRule::https(&["github.com", "api.github.com"])
+        );
     }
 
     // ---- HostBoundSecret ----

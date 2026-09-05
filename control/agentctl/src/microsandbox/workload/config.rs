@@ -326,10 +326,10 @@ impl ConfigWorkload {
     /// overrides keep the pre-reservation behavior unchanged.
     fn resolve_build_path(&self) -> (String, bool) {
         if let Some(ref build) = self.workload.local_build {
-            if let Some(ref env_override) = build.env_override {
-                if let Ok(p) = std::env::var(env_override) {
-                    return (p, false);
-                }
+            if let Some(ref env_override) = build.env_override
+                && let Ok(p) = std::env::var(env_override)
+            {
+                return (p, false);
             }
             if let Some(ref fallback) = build.fallback {
                 return (fallback.clone(), false);

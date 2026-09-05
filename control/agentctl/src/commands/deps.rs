@@ -284,24 +284,22 @@ pub fn decide_dep_disposition(
         facts,
         target_of_action(action),
     )?;
-    if matches!(step, ChainStep::Reuse | ChainStep::StartExisting) {
-        if let Some(found) =
+    if matches!(step, ChainStep::Reuse | ChainStep::StartExisting)
+        && let Some(found) =
             crate::microsandbox::runtime::reconcile::foreign_namespace_record(facts, namespace)
-        {
-            let dep = match action {
-                DepStartAction::StartService { dep, .. }
-                | DepStartAction::Satisfied { dep, .. } => dep,
-            };
-            anyhow::bail!(
-                "dependency '{dep}' of workload '{workload_name}' cannot reuse instance '{}': \
+    {
+        let dep = match action {
+            DepStartAction::StartService { dep, .. } | DepStartAction::Satisfied { dep, .. } => dep,
+        };
+        anyhow::bail!(
+            "dependency '{dep}' of workload '{workload_name}' cannot reuse instance '{}': \
                  its registry record is in namespace '{found}' but the dependent requires \
                  namespace '{namespace}' — the same workload name is declared by multiple \
                  config repos (last layer wins in the merged config). Start it in this \
                  namespace with `workestrate workload up {dep} --replace`, or remove the \
                  foreign record.",
-                target_of_action(action),
-            );
-        }
+            target_of_action(action),
+        );
     }
     let (dep, slot, ports) = match action {
         DepStartAction::StartService {
@@ -1178,13 +1176,13 @@ fn readiness_targets(
 ) -> Vec<(IpAddr, u16)> {
     let poll_deadline = Instant::now() + RECORD_POLL_BUDGET;
     loop {
-        if let Ok(records) = list_records(state_dir) {
-            if let Some(rec) = records.iter().find(|r| r.instance == instance) {
-                if !rec.port_pairs.is_empty() {
-                    return rec.port_pairs.iter().map(|p| (p.bind_ip, p.host)).collect();
-                }
-                return rec.ports.iter().map(|&p| (rec.bind_ip, p)).collect();
+        if let Ok(records) = list_records(state_dir)
+            && let Some(rec) = records.iter().find(|r| r.instance == instance)
+        {
+            if !rec.port_pairs.is_empty() {
+                return rec.port_pairs.iter().map(|p| (p.bind_ip, p.host)).collect();
             }
+            return rec.ports.iter().map(|&p| (rec.bind_ip, p)).collect();
         }
         if Instant::now() >= poll_deadline {
             return declared_ports

@@ -170,31 +170,31 @@ fn plan_moves(sources: &MigrateSources, dest: &Path) -> Vec<(PathBuf, PathBuf)> 
             dest.join("secrets").join(".env.local.enc"),
         ));
     }
-    if sources.repos_root.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&sources.repos_root) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let p = entry.path();
-                moves.push((p, dest.join("config-repos").join(name)));
-            }
+    if sources.repos_root.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&sources.repos_root)
+    {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let p = entry.path();
+            moves.push((p, dest.join("config-repos").join(name)));
         }
     }
-    if sources.sources_root.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&sources.sources_root) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let p = entry.path();
-                moves.push((p, dest.join("sources").join(name)));
-            }
+    if sources.sources_root.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&sources.sources_root)
+    {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let p = entry.path();
+            moves.push((p, dest.join("sources").join(name)));
         }
     }
-    if sources.state_root.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&sources.state_root) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let p = entry.path();
-                moves.push((p, dest.join("state").join(name)));
-            }
+    if sources.state_root.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&sources.state_root)
+    {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let p = entry.path();
+            moves.push((p, dest.join("state").join(name)));
         }
     }
     moves
@@ -205,16 +205,15 @@ fn plan_moves(sources: &MigrateSources, dest: &Path) -> Vec<(PathBuf, PathBuf)> 
 /// Prefers "bundle" when a `.workestrate/config/workestrate/config.toml` exists
 /// in the cwd, otherwise treats the source as the legacy XDG layout.
 fn detect_layout() -> &'static str {
-    if let Some(cwd) = crate::config::invoke_cwd() {
-        if cwd
+    if let Some(cwd) = crate::config::invoke_cwd()
+        && cwd
             .join(".workestrate")
             .join("config")
             .join("workestrate")
             .join("config.toml")
             .exists()
-        {
-            return "bundle";
-        }
+    {
+        return "bundle";
     }
     "xdg"
 }
@@ -390,70 +389,69 @@ pub fn run_migrate_home(
     let mut home_version = None;
     let mut urls_rewritten: Vec<String> = Vec::new();
     let reg_path = dest.join("config.toml");
-    if reg_path.exists() {
-        if let Some(mut reg) = std::fs::read_to_string(&reg_path)
+    if reg_path.exists()
+        && let Some(mut reg) = std::fs::read_to_string(&reg_path)
             .ok()
             .and_then(|c| toml::from_str::<Registry>(&c).ok())
-        {
-            reg.settings.store_dir = None;
-            reg.settings.state_dir = None;
-            reg.settings.home_version = Some(2);
+    {
+        reg.settings.store_dir = None;
+        reg.settings.state_dir = None;
+        reg.settings.home_version = Some(2);
 
-            // Rewrite `configs.<name>.url` fields that still point into the
-            // OLD layout that was just migrated. Only local filesystem paths
-            // are considered (remote URLs are left untouched). A url matches
-            // when it equals, or lives under, the old repo base
-            // `sources.repos_root/<name>`; it is then rewritten to the new
-            // `dest/config-repos/<name>` path.
-            for (name, entry) in reg.configs.iter_mut() {
-                if looks_like_remote_url(&entry.url) {
-                    continue;
-                }
-                let url_path = PathBuf::from(&entry.url);
-                let old_base = sources.repos_root.join(name);
-                // This site REWRITES urls from the old layout to the new one;
-                // it does not resolve a checkout for reading, so
-                // `local_entry_checkout_dir` (home-relative resolution) does
-                // not apply here.
-                // Prefer canonical comparison when both paths still resolve,
-                // else fall back to lexical (component-wise) matching. In a
-                // real run the old repo dir has already been moved, so both
-                // canonicalizations fail and we use the lexical branch.
-                let matches = match (url_path.canonicalize(), old_base.canonicalize()) {
-                    (Ok(u), Ok(b)) => u == b || u.starts_with(&b),
-                    _ => url_path == old_base || url_path.starts_with(&old_base),
-                };
-                if matches {
-                    entry.url = dest
-                        .join("config-repos")
-                        .join(name)
-                        .to_string_lossy()
-                        .to_string();
-                    urls_rewritten.push(name.clone());
-                }
+        // Rewrite `configs.<name>.url` fields that still point into the
+        // OLD layout that was just migrated. Only local filesystem paths
+        // are considered (remote URLs are left untouched). A url matches
+        // when it equals, or lives under, the old repo base
+        // `sources.repos_root/<name>`; it is then rewritten to the new
+        // `dest/config-repos/<name>` path.
+        for (name, entry) in reg.configs.iter_mut() {
+            if looks_like_remote_url(&entry.url) {
+                continue;
             }
-            // Deterministic (alphabetical) output ordering regardless of
-            // HashMap iteration order.
-            urls_rewritten.sort();
-
-            let toml_str = toml::to_string_pretty(&reg)
-                .map_err(|e| anyhow::anyhow!("failed to serialize migrated registry: {}", e))?;
-            std::fs::write(&reg_path, toml_str)?;
-            registry_updated = true;
-            home_version = Some(2);
+            let url_path = PathBuf::from(&entry.url);
+            let old_base = sources.repos_root.join(name);
+            // This site REWRITES urls from the old layout to the new one;
+            // it does not resolve a checkout for reading, so
+            // `local_entry_checkout_dir` (home-relative resolution) does
+            // not apply here.
+            // Prefer canonical comparison when both paths still resolve,
+            // else fall back to lexical (component-wise) matching. In a
+            // real run the old repo dir has already been moved, so both
+            // canonicalizations fail and we use the lexical branch.
+            let matches = match (url_path.canonicalize(), old_base.canonicalize()) {
+                (Ok(u), Ok(b)) => u == b || u.starts_with(&b),
+                _ => url_path == old_base || url_path.starts_with(&old_base),
+            };
+            if matches {
+                entry.url = dest
+                    .join("config-repos")
+                    .join(name)
+                    .to_string_lossy()
+                    .to_string();
+                urls_rewritten.push(name.clone());
+            }
         }
+        // Deterministic (alphabetical) output ordering regardless of
+        // HashMap iteration order.
+        urls_rewritten.sort();
+
+        let toml_str = toml::to_string_pretty(&reg)
+            .map_err(|e| anyhow::anyhow!("failed to serialize migrated registry: {}", e))?;
+        std::fs::write(&reg_path, toml_str)?;
+        registry_updated = true;
+        home_version = Some(2);
     }
 
     // Best-effort cleanup of now-empty old subtrees (bundle in-place).
     for dir in &sources.cleanup_dirs {
-        if dir.exists() {
-            if let Err(e) = std::fs::remove_dir_all(dir) {
-                eprintln!(
-                    "warning: could not remove old subtree {}: {}",
-                    dir.display(),
-                    e
-                );
-            }
+        if dir.exists()
+            && let Err(e) = std::fs::remove_dir_all(dir)
+        {
+            eprintln!(
+                "warning: could not remove old subtree {}: {}",
+                dir.display(),
+                e
+            );
         }
     }
 

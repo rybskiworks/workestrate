@@ -561,14 +561,14 @@ fn validate_egress_deny_domain(
     }
     validate_domain_syntax(&entry.domain)?;
     let canonical = canonicalize_domain(&entry.domain, idna_mode)?;
-    if let Some(port) = entry.port {
-        if port == 0 {
-            bail!(
-                "egress deny domain \"{}\" has invalid port {}",
-                entry.domain,
-                port
-            );
-        }
+    if let Some(port) = entry.port
+        && port == 0
+    {
+        bail!(
+            "egress deny domain \"{}\" has invalid port {}",
+            entry.domain,
+            port
+        );
     }
     if entry.protocol != "tcp" {
         bail!(
@@ -696,10 +696,10 @@ pub fn compile_egress(
         // For now, if deny_all is true and any egress fragment had final, treat as frozen
         // Simplify: if deny_all is true, it's frozen if any rung had final
         let mut has_final = false;
-        if let Some((_, frag)) = &ladder.egress_home {
-            if frag.deny.as_ref().map(|t| t.r#final).unwrap_or(false) || frag.r#final {
-                has_final = true;
-            }
+        if let Some((_, frag)) = &ladder.egress_home
+            && (frag.deny.as_ref().map(|t| t.r#final).unwrap_or(false) || frag.r#final)
+        {
+            has_final = true;
         }
         for (_, frag) in &ladder.egress_layers {
             if frag.deny.as_ref().map(|t| t.r#final).unwrap_or(false) || frag.r#final {
@@ -740,10 +740,10 @@ pub fn compile_egress(
         if !domain_covers(&deny.domain, &allow.domain) {
             return false;
         }
-        if let Some(dport) = deny.port {
-            if dport != allow.port {
-                return false;
-            }
+        if let Some(dport) = deny.port
+            && dport != allow.port
+        {
+            return false;
         }
         // deny with no port covers all ports
         if deny.protocol != allow.protocol {
@@ -1075,10 +1075,10 @@ fn find_all_rank(ladder: &NetworkPolicyLadder, workload_name: &str, is_egress: b
     if is_egress {
         if let Some((o, _)) = &ladder.egress_home {
             // Check if that fragment had deny all
-            if let Some(frag) = &ladder.egress_home.as_ref().map(|(_, f)| f) {
-                if frag.deny.as_ref().and_then(|t| t.all).unwrap_or(false) {
-                    return origin_rank(ladder, workload_name, o);
-                }
+            if let Some(frag) = &ladder.egress_home.as_ref().map(|(_, f)| f)
+                && frag.deny.as_ref().and_then(|t| t.all).unwrap_or(false)
+            {
+                return origin_rank(ladder, workload_name, o);
             }
         }
         for (o, frag) in &ladder.egress_layers {
@@ -1371,18 +1371,18 @@ fn effective_egress_allow_all(
                 ));
             }
         }
-        if let Some(allow) = &frag.allow {
-            if let Some(true) = allow.all {
-                if frozen {
-                    conflicts.push(format!(
-                        "egress allow all=true from {} frozen by {} (higher final deny)",
-                        origin,
-                        frozen_by.as_ref().unwrap()
-                    ));
-                } else if !effective {
-                    // First unfrozen allow-all wins (higher authority); later same-polarity is redundant no-op.
-                    effective = true;
-                }
+        if let Some(allow) = &frag.allow
+            && let Some(true) = allow.all
+        {
+            if frozen {
+                conflicts.push(format!(
+                    "egress allow all=true from {} frozen by {} (higher final deny)",
+                    origin,
+                    frozen_by.as_ref().unwrap()
+                ));
+            } else if !effective {
+                // First unfrozen allow-all wins (higher authority); later same-polarity is redundant no-op.
+                effective = true;
             }
         }
         if egress_fragment_has_final_deny(frag) && !frozen {
@@ -1433,17 +1433,17 @@ fn effective_ingress_allow_all(
                 ));
             }
         }
-        if let Some(allow) = &frag.allow {
-            if let Some(true) = allow.all {
-                if frozen {
-                    conflicts.push(format!(
-                        "ingress allow all=true from {} frozen by {} (higher final deny)",
-                        origin,
-                        frozen_by.as_ref().unwrap()
-                    ));
-                } else if !effective {
-                    effective = true;
-                }
+        if let Some(allow) = &frag.allow
+            && let Some(true) = allow.all
+        {
+            if frozen {
+                conflicts.push(format!(
+                    "ingress allow all=true from {} frozen by {} (higher final deny)",
+                    origin,
+                    frozen_by.as_ref().unwrap()
+                ));
+            } else if !effective {
+                effective = true;
             }
         }
         if ingress_fragment_has_final_deny(frag) && !frozen {
@@ -1526,12 +1526,12 @@ pub fn compile_network_plan(
         for (origin, frag) in rungs {
             let oc = frag.on_conflict.unwrap_or(OnConflict::Ignore);
             v.push((origin, oc, frag.r#final));
-            if let Some(allow) = &frag.allow {
-                if allow.r#final {
-                    // table final also seals on_conflict for that ladder? The spec says final seals the ladder.
-                    // We already capture frag final; table final also should be considered.
-                    // For simplicity, treat table final as frag final for on_conflict sealing.
-                }
+            if let Some(allow) = &frag.allow
+                && allow.r#final
+            {
+                // table final also seals on_conflict for that ladder? The spec says final seals the ladder.
+                // We already capture frag final; table final also should be considered.
+                // For simplicity, treat table final as frag final for on_conflict sealing.
             }
         }
         v
@@ -1586,20 +1586,10 @@ pub fn compile_network_plan(
 
     // E1: the defaults flip relaxes the default only while UNSEALED; a
     // higher-rung covering final deny freezes it (deny stands).
-    let egress_default_deny = if egress_allow_all_effective
-        || (defaults_egress_allow && egress_defaults_frozen_by.is_none())
-    {
-        false
-    } else {
-        true
-    };
-    let ingress_default_deny = if ingress_allow_all_effective
-        || (defaults_ingress_allow && ingress_defaults_frozen_by.is_none())
-    {
-        false
-    } else {
-        true
-    };
+    let egress_default_deny = !(egress_allow_all_effective
+        || (defaults_egress_allow && egress_defaults_frozen_by.is_none()));
+    let ingress_default_deny = !(ingress_allow_all_effective
+        || (defaults_ingress_allow && ingress_defaults_frozen_by.is_none()));
 
     let egress_comp = compile_egress(ladder, workload_name)?;
     let ingress_rules = compile_ingress(ladder, workload_name)?;
@@ -1629,6 +1619,8 @@ pub fn compile_network_plan(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
     use crate::config::{EgressAllowTable, EgressDenyTable, PolicyConfig};
     use crate::merge::NetworkPolicyLadder;
@@ -1682,28 +1674,30 @@ mod tests {
     #[test]
     fn same_rung_identical_coverage_is_error() {
         let mut ladder = NetworkPolicyLadder::default();
-        let mut frag = EgressPolicyFragment::default();
-        frag.allow = Some(EgressAllowTable {
-            all: None,
-            r#final: false,
-            domain: vec![DomainEntry {
-                domains: vec!["evil.com".to_string()],
-                port: Some(443),
-                protocol: Some("tcp".to_string()),
+        let frag = EgressPolicyFragment {
+            allow: Some(EgressAllowTable {
+                all: None,
                 r#final: false,
-            }],
-            host: vec![],
-        });
-        frag.deny = Some(EgressDenyTable {
-            all: None,
-            r#final: false,
-            domain: vec![DomainEntry {
-                domains: vec!["evil.com".to_string()],
-                port: Some(443),
-                protocol: Some("tcp".to_string()),
+                domain: vec![DomainEntry {
+                    domains: vec!["evil.com".to_string()],
+                    port: Some(443),
+                    protocol: Some("tcp".to_string()),
+                    r#final: false,
+                }],
+                host: vec![],
+            }),
+            deny: Some(EgressDenyTable {
+                all: None,
                 r#final: false,
-            }],
-        });
+                domain: vec![DomainEntry {
+                    domains: vec!["evil.com".to_string()],
+                    port: Some(443),
+                    protocol: Some("tcp".to_string()),
+                    r#final: false,
+                }],
+            }),
+            ..Default::default()
+        };
         ladder.egress_layers.push(("test".to_string(), frag));
         let err = compile_egress(&ladder, "pi").unwrap_err().to_string();
         assert!(err.contains("same-rung identical coverage"), "got: {err}");
@@ -1713,31 +1707,35 @@ mod tests {
     fn cross_rung_deny_wins_without_final() {
         let mut ladder = NetworkPolicyLadder::default();
         // Home allow
-        let mut home = EgressPolicyFragment::default();
-        home.allow = Some(EgressAllowTable {
-            all: None,
-            r#final: false,
-            domain: vec![DomainEntry {
-                domains: vec!["github.com".to_string()],
-                port: Some(443),
-                protocol: Some("tcp".to_string()),
+        let home = EgressPolicyFragment {
+            allow: Some(EgressAllowTable {
+                all: None,
                 r#final: false,
-            }],
-            host: vec![],
-        });
+                domain: vec![DomainEntry {
+                    domains: vec!["github.com".to_string()],
+                    port: Some(443),
+                    protocol: Some("tcp".to_string()),
+                    r#final: false,
+                }],
+                host: vec![],
+            }),
+            ..Default::default()
+        };
         ladder.egress_home = Some(("home-registry".to_string(), home));
         // Workload deny same coverage, no final
-        let mut wl = EgressPolicyFragment::default();
-        wl.deny = Some(EgressDenyTable {
-            all: None,
-            r#final: false,
-            domain: vec![DomainEntry {
-                domains: vec!["github.com".to_string()],
-                port: Some(443),
-                protocol: Some("tcp".to_string()),
+        let wl = EgressPolicyFragment {
+            deny: Some(EgressDenyTable {
+                all: None,
                 r#final: false,
-            }],
-        });
+                domain: vec![DomainEntry {
+                    domains: vec!["github.com".to_string()],
+                    port: Some(443),
+                    protocol: Some("tcp".to_string()),
+                    r#final: false,
+                }],
+            }),
+            ..Default::default()
+        };
         ladder
             .egress_workloads
             .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
@@ -1756,13 +1754,15 @@ mod tests {
     fn all_true_allow_relaxes_default_deny() {
         // egress=deny (baseline) + [policy.egress.allow] all=true -> plan egress_default_deny=false
         let mut ladder = NetworkPolicyLadder::default();
-        let mut wl = EgressPolicyFragment::default();
-        wl.allow = Some(EgressAllowTable {
-            all: Some(true),
-            r#final: false,
-            domain: vec![],
-            host: vec![],
-        });
+        let wl = EgressPolicyFragment {
+            allow: Some(EgressAllowTable {
+                all: Some(true),
+                r#final: false,
+                domain: vec![],
+                host: vec![],
+            }),
+            ..Default::default()
+        };
         ladder
             .egress_workloads
             .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
@@ -1788,25 +1788,29 @@ mod tests {
     fn all_true_frozen_by_higher_final_deny() {
         // home deny .evil.com final + workload all=true -> default stays deny, .evil.com denied, frozen
         let mut ladder = NetworkPolicyLadder::default();
-        let mut home = EgressPolicyFragment::default();
-        home.deny = Some(EgressDenyTable {
-            all: None,
-            r#final: false,
-            domain: vec![DomainEntry {
-                domains: vec![".evil.com".to_string()],
-                port: Some(443),
-                protocol: Some("tcp".to_string()),
-                r#final: true,
-            }],
-        });
+        let home = EgressPolicyFragment {
+            deny: Some(EgressDenyTable {
+                all: None,
+                r#final: false,
+                domain: vec![DomainEntry {
+                    domains: vec![".evil.com".to_string()],
+                    port: Some(443),
+                    protocol: Some("tcp".to_string()),
+                    r#final: true,
+                }],
+            }),
+            ..Default::default()
+        };
         ladder.egress_home = Some(("home-registry".to_string(), home));
-        let mut wl = EgressPolicyFragment::default();
-        wl.allow = Some(EgressAllowTable {
-            all: Some(true),
-            r#final: false,
-            domain: vec![],
-            host: vec![],
-        });
+        let wl = EgressPolicyFragment {
+            allow: Some(EgressAllowTable {
+                all: Some(true),
+                r#final: false,
+                domain: vec![],
+                host: vec![],
+            }),
+            ..Default::default()
+        };
         ladder
             .egress_workloads
             .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
@@ -1839,22 +1843,26 @@ mod tests {
     fn all_true_allow_deny_all_conflict() {
         // home deny-all final (on_conflict=fail) + workload all=true allow -> conflict per on_conflict
         let mut ladder = NetworkPolicyLadder::default();
-        let mut home = EgressPolicyFragment::default();
-        home.on_conflict = Some(OnConflict::Fail);
-        home.r#final = true;
-        home.deny = Some(EgressDenyTable {
-            all: Some(true),
+        let home = EgressPolicyFragment {
+            on_conflict: Some(OnConflict::Fail),
             r#final: true,
-            domain: vec![],
-        });
+            deny: Some(EgressDenyTable {
+                all: Some(true),
+                r#final: true,
+                domain: vec![],
+            }),
+            ..Default::default()
+        };
         ladder.egress_home = Some(("home-registry".to_string(), home));
-        let mut wl = EgressPolicyFragment::default();
-        wl.allow = Some(EgressAllowTable {
-            all: Some(true),
-            r#final: false,
-            domain: vec![],
-            host: vec![],
-        });
+        let wl = EgressPolicyFragment {
+            allow: Some(EgressAllowTable {
+                all: Some(true),
+                r#final: false,
+                domain: vec![],
+                host: vec![],
+            }),
+            ..Default::default()
+        };
         ladder
             .egress_workloads
             .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
@@ -1877,22 +1885,26 @@ mod tests {
         );
         // With on_conflict=warn, it should succeed with warning and keep default deny
         let mut ladder2 = NetworkPolicyLadder::default();
-        let mut home2 = EgressPolicyFragment::default();
-        home2.on_conflict = Some(OnConflict::Warn);
-        home2.r#final = true;
-        home2.deny = Some(EgressDenyTable {
-            all: Some(true),
+        let home2 = EgressPolicyFragment {
+            on_conflict: Some(OnConflict::Warn),
             r#final: true,
-            domain: vec![],
-        });
+            deny: Some(EgressDenyTable {
+                all: Some(true),
+                r#final: true,
+                domain: vec![],
+            }),
+            ..Default::default()
+        };
         ladder2.egress_home = Some(("home-registry".to_string(), home2));
-        let mut wl2 = EgressPolicyFragment::default();
-        wl2.allow = Some(EgressAllowTable {
-            all: Some(true),
-            r#final: false,
-            domain: vec![],
-            host: vec![],
-        });
+        let wl2 = EgressPolicyFragment {
+            allow: Some(EgressAllowTable {
+                all: Some(true),
+                r#final: false,
+                domain: vec![],
+                host: vec![],
+            }),
+            ..Default::default()
+        };
         ladder2
             .egress_workloads
             .insert("pi".to_string(), vec![("workload".to_string(), wl2)]);
@@ -1904,17 +1916,19 @@ mod tests {
     fn port_scoped_deny_wire_preserved() {
         // FIX2: plan inspection shows port preserved
         let mut ladder = NetworkPolicyLadder::default();
-        let mut wl = EgressPolicyFragment::default();
-        wl.deny = Some(EgressDenyTable {
-            all: None,
-            r#final: false,
-            domain: vec![DomainEntry {
-                domains: vec![".evil.com".to_string()],
-                port: Some(443),
-                protocol: Some("tcp".to_string()),
+        let wl = EgressPolicyFragment {
+            deny: Some(EgressDenyTable {
+                all: None,
                 r#final: false,
-            }],
-        });
+                domain: vec![DomainEntry {
+                    domains: vec![".evil.com".to_string()],
+                    port: Some(443),
+                    protocol: Some("tcp".to_string()),
+                    r#final: false,
+                }],
+            }),
+            ..Default::default()
+        };
         ladder
             .egress_workloads
             .insert("pi".to_string(), vec![("workload".to_string(), wl)]);
@@ -1926,17 +1940,19 @@ mod tests {
         assert_eq!(rule.protocol, Some(Protocol::Tcp));
         // Port-agnostic companion: no port
         let mut ladder2 = NetworkPolicyLadder::default();
-        let mut wl2 = EgressPolicyFragment::default();
-        wl2.deny = Some(EgressDenyTable {
-            all: None,
-            r#final: false,
-            domain: vec![DomainEntry {
-                domains: vec![".tracker.io".to_string()],
-                port: None,
-                protocol: None,
+        let wl2 = EgressPolicyFragment {
+            deny: Some(EgressDenyTable {
+                all: None,
                 r#final: false,
-            }],
-        });
+                domain: vec![DomainEntry {
+                    domains: vec![".tracker.io".to_string()],
+                    port: None,
+                    protocol: None,
+                    r#final: false,
+                }],
+            }),
+            ..Default::default()
+        };
         ladder2
             .egress_workloads
             .insert("pi".to_string(), vec![("workload".to_string(), wl2)]);
@@ -1974,14 +1990,16 @@ mod tests {
 
     fn egress_home_deny_all_final(on_conflict: Option<OnConflict>) -> NetworkPolicyLadder {
         let mut ladder = NetworkPolicyLadder::default();
-        let mut home = EgressPolicyFragment::default();
-        home.on_conflict = on_conflict;
-        home.r#final = true;
-        home.deny = Some(EgressDenyTable {
-            all: Some(true),
+        let home = EgressPolicyFragment {
+            on_conflict,
             r#final: true,
-            domain: vec![],
-        });
+            deny: Some(EgressDenyTable {
+                all: Some(true),
+                r#final: true,
+                domain: vec![],
+            }),
+            ..Default::default()
+        };
         ladder.egress_home = Some(("home-registry".to_string(), home));
         ladder
     }
@@ -2064,13 +2082,15 @@ mod tests {
     fn e1_defaults_ingress_allow_sealed_by_home_deny_all_final_symmetric() {
         // Ingress symmetric: home ingress deny-all final seals the flip.
         let mut ladder = NetworkPolicyLadder::default();
-        let mut home = IngressPolicyFragment::default();
-        home.r#final = true;
-        home.deny = Some(IngressDenyTable {
-            all: Some(true),
+        let home = IngressPolicyFragment {
             r#final: true,
-            port: vec![],
-        });
+            deny: Some(IngressDenyTable {
+                all: Some(true),
+                r#final: true,
+                port: vec![],
+            }),
+            ..Default::default()
+        };
         ladder.ingress_home = Some(("home-registry".to_string(), home));
         let workload = defaults_workload(false, true);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
@@ -2090,17 +2110,19 @@ mod tests {
         // FIX1 coarse parity (adjudicated): ANY covering final deny at a
         // higher rung freezes the synthetic all — not just deny-all.
         let mut ladder = NetworkPolicyLadder::default();
-        let mut home = EgressPolicyFragment::default();
-        home.deny = Some(EgressDenyTable {
-            all: None,
-            r#final: false,
-            domain: vec![DomainEntry {
-                domains: vec![".evil.com".to_string()],
-                port: Some(443),
-                protocol: Some("tcp".to_string()),
-                r#final: true,
-            }],
-        });
+        let home = EgressPolicyFragment {
+            deny: Some(EgressDenyTable {
+                all: None,
+                r#final: false,
+                domain: vec![DomainEntry {
+                    domains: vec![".evil.com".to_string()],
+                    port: Some(443),
+                    protocol: Some("tcp".to_string()),
+                    r#final: true,
+                }],
+            }),
+            ..Default::default()
+        };
         ladder.egress_home = Some(("home-registry".to_string(), home));
         let workload = defaults_workload(true, false);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
@@ -2116,12 +2138,14 @@ mod tests {
         // Regression: no covering FINAL deny -> flip stands, no provenance
         // (deny-all WITHOUT final must not seal; pre-E1 behavior unchanged).
         let mut ladder = NetworkPolicyLadder::default();
-        let mut home = EgressPolicyFragment::default();
-        home.deny = Some(EgressDenyTable {
-            all: Some(true),
-            r#final: false,
-            domain: vec![],
-        });
+        let home = EgressPolicyFragment {
+            deny: Some(EgressDenyTable {
+                all: Some(true),
+                r#final: false,
+                domain: vec![],
+            }),
+            ..Default::default()
+        };
         ladder.egress_home = Some(("home-registry".to_string(), home));
         let workload = defaults_workload(true, false);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
@@ -2141,13 +2165,15 @@ mod tests {
         // effective value; provenance does not lift the synthetic rung): a
         // layer final deny above seals it identically, naming the LAYER.
         let mut ladder = NetworkPolicyLadder::default();
-        let mut layer = EgressPolicyFragment::default();
-        layer.r#final = true;
-        layer.deny = Some(EgressDenyTable {
-            all: Some(true),
+        let layer = EgressPolicyFragment {
             r#final: true,
-            domain: vec![],
-        });
+            deny: Some(EgressDenyTable {
+                all: Some(true),
+                r#final: true,
+                domain: vec![],
+            }),
+            ..Default::default()
+        };
         ladder.egress_layers.push(("base-layer".to_string(), layer));
         let workload = defaults_workload(true, false);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
@@ -2171,13 +2197,15 @@ mod tests {
         // workload's own deny-all final (same file as its
         // [network.defaults]) must NOT seal its own defaults flip.
         let mut ladder = NetworkPolicyLadder::default();
-        let mut wl = EgressPolicyFragment::default();
-        wl.r#final = true;
-        wl.deny = Some(EgressDenyTable {
-            all: Some(true),
+        let wl = EgressPolicyFragment {
             r#final: true,
-            domain: vec![],
-        });
+            deny: Some(EgressDenyTable {
+                all: Some(true),
+                r#final: true,
+                domain: vec![],
+            }),
+            ..Default::default()
+        };
         // Two workload rungs (same file): the boundary must be evaluated
         // exactly once at the FIRST workload rung — a later same-rung
         // fragment can never retroactively freeze the defaults flip.
@@ -2200,25 +2228,27 @@ mod tests {
     #[test]
     fn port_scoped_deny_sorted_before_any_port() {
         let mut ladder = NetworkPolicyLadder::default();
-        let mut wl = EgressPolicyFragment::default();
-        wl.deny = Some(EgressDenyTable {
-            all: None,
-            r#final: false,
-            domain: vec![
-                DomainEntry {
-                    domains: vec![".a.com".to_string()],
-                    port: None,
-                    protocol: Some("tcp".to_string()),
-                    r#final: false,
-                },
-                DomainEntry {
-                    domains: vec![".b.com".to_string()],
-                    port: Some(443),
-                    protocol: Some("tcp".to_string()),
-                    r#final: false,
-                },
-            ],
-        });
+        let wl = EgressPolicyFragment {
+            deny: Some(EgressDenyTable {
+                all: None,
+                r#final: false,
+                domain: vec![
+                    DomainEntry {
+                        domains: vec![".a.com".to_string()],
+                        port: None,
+                        protocol: Some("tcp".to_string()),
+                        r#final: false,
+                    },
+                    DomainEntry {
+                        domains: vec![".b.com".to_string()],
+                        port: Some(443),
+                        protocol: Some("tcp".to_string()),
+                        r#final: false,
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
         ladder
             .egress_workloads
             .insert("pi".to_string(), vec![("workload".to_string(), wl)]);

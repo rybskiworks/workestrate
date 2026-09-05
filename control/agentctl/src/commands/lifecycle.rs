@@ -214,10 +214,10 @@ pub async fn dispatch_service<W: Workload>(
     show_source: bool,
     json: bool,
 ) -> Result<()> {
-    if let Some(name) = config::active_context_name() {
-        if !json {
-            eprintln!("context: {}", name);
-        }
+    if let Some(name) = config::active_context_name()
+        && !json
+    {
+        eprintln!("context: {}", name);
     }
     match action {
         ServiceAction::Up {
@@ -308,10 +308,10 @@ pub async fn dispatch_agent<W: Workload>(
     show_source: bool,
     json: bool,
 ) -> Result<()> {
-    if let Some(name) = config::active_context_name() {
-        if !json {
-            eprintln!("context: {}", name);
-        }
+    if let Some(name) = config::active_context_name()
+        && !json
+    {
+        eprintln!("context: {}", name);
     }
     match action {
         AgentAction::Exec {

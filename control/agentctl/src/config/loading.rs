@@ -373,10 +373,10 @@ pub fn load_config() -> Result<ConfigFile> {
 
     // 2. Reference config as the base layer (opt-in: reference_config_path()
     //    returns None unless WORKESTRATE_REFERENCE_CONFIG=1).
-    if let Some(path) = reference_config_path() {
-        if path.exists() {
-            layers.push(crate::merge::Layer::load("reference", &path)?);
-        }
+    if let Some(path) = reference_config_path()
+        && path.exists()
+    {
+        layers.push(crate::merge::Layer::load("reference", &path)?);
     }
 
     // 3. Resolve active context and load its layers. Each layer's CONTENT
@@ -782,15 +782,15 @@ fn collect_policy_scopes(
 ) -> Result<crate::mount_policy::CollectedPolicy> {
     use crate::mount_policy::{CollectedPolicy, PolicyScope, ScopeKind};
     let mut collected = CollectedPolicy::default();
-    if let Some(registry) = registry {
-        if let Some(fragment) = registry.policy.mounts.clone() {
-            collected.global.push(PolicyScope::new(
-                ScopeKind::HomeRegistry,
-                "home-registry",
-                crate::config::registry_path(),
-                fragment,
-            ));
-        }
+    if let Some(registry) = registry
+        && let Some(fragment) = registry.policy.mounts.clone()
+    {
+        collected.global.push(PolicyScope::new(
+            ScopeKind::HomeRegistry,
+            "home-registry",
+            crate::config::registry_path(),
+            fragment,
+        ));
     }
     for layer in layers {
         let source = layer
@@ -1135,10 +1135,10 @@ fn pinned_layer_content_root(
     // A5 Session 3a (ADR 0032 addendum §Selection ladder): the --config-ref
     // rung — when WORKESTRATE_CONFIG_REF is set, THIS ref overrides the
     // entry's own pinned/default ref entirely.
-    if let Ok(config_ref) = std::env::var("WORKESTRATE_CONFIG_REF") {
-        if !config_ref.is_empty() {
-            return config_ref_layer_content_root(name, entry, registry, &clone, &config_ref);
-        }
+    if let Ok(config_ref) = std::env::var("WORKESTRATE_CONFIG_REF")
+        && !config_ref.is_empty()
+    {
+        return config_ref_layer_content_root(name, entry, registry, &clone, &config_ref);
     }
 
     let effective_ref = crate::config::effective_ref(name, entry, &clone)?;
@@ -1149,10 +1149,10 @@ fn pinned_layer_content_root(
         if let Some(pin) = locked.refs.get(&effective_ref) {
             return crate::config::ensure_archive(&clone, &pin.sha);
         }
-        if locked.r#ref == entry.r#ref {
-            if let Some(sha) = locked.sha.as_deref().or(locked.rev.as_deref()) {
-                return crate::config::ensure_archive(&clone, sha);
-            }
+        if locked.r#ref == entry.r#ref
+            && let Some(sha) = locked.sha.as_deref().or(locked.rev.as_deref())
+        {
+            return crate::config::ensure_archive(&clone, sha);
         }
     }
 
@@ -1589,16 +1589,16 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
     //    but included so the layer list mirrors load_config()). Opt-in since
     //    cleanup phase 2: reference_config_path() returns None unless
     //    WORKESTRATE_REFERENCE_CONFIG=1.
-    if let Some(path) = reference_config_path() {
-        if let Some(parent) = path.parent() {
-            layers.push(SecretsLayer {
-                name: "reference".to_string(),
-                dir: parent.to_path_buf(),
-                secrets_file: ".env.enc".to_string(),
-                age_key_file: None,
-                skip: false,
-            });
-        }
+    if let Some(path) = reference_config_path()
+        && let Some(parent) = path.parent()
+    {
+        layers.push(SecretsLayer {
+            name: "reference".to_string(),
+            dir: parent.to_path_buf(),
+            secrets_file: ".env.enc".to_string(),
+            age_key_file: None,
+            skip: false,
+        });
     }
 
     // 3. Context layers in declared order, each with its own .env.enc. The

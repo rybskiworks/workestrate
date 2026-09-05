@@ -200,10 +200,10 @@ pub fn plan_prunes(
 
     let mut plans = Vec::new();
     for ((name, ctx), mut tags) in groups {
-        if let Some((want_name, want_ctx)) = only {
-            if name != want_name || ctx.as_deref() != want_ctx {
-                continue;
-            }
+        if let Some((want_name, want_ctx)) = only
+            && (name != want_name || ctx.as_deref() != want_ctx)
+        {
+            continue;
         }
         // loaded_at DESC, tie-break tag ASC (deterministic).
         tags.sort_by(|a, b| {

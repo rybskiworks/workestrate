@@ -8,31 +8,31 @@
 
 [files]
 extend-exclude = [
-    ".beads/",
-    "docs/**/.crawl/",
-    "docs/gleam/",
-    "docs/elixir/",
-    "docs/beam/",
-    "docs/migration/",
-    "docs/validation-and-improvements/",
+  ".beads/",
+  "docs/**/.crawl/",
+  "docs/gleam/",
+  "docs/elixir/",
+  "docs/beam/",
+  "docs/migration/",
+  "docs/validation-and-improvements/",
 ]
 
 [default.extend-words]
-FO = "FO"                        # fixed-output derivation(s) acronym (FOD/FODs tokenize to FO)
-wrk = "wrk"                      # beads issue prefix (wrk-*)
-mis = "mis"                      # idiomatic "mis-wired"/"mis-attributing"/... hyphenations
+FO = "FO"  # fixed-output derivation(s) acronym (FOD/FODs tokenize to FO)
+wrk = "wrk"  # beads issue prefix (wrk-*)
+mis = "mis"  # idiomatic "mis-wired"/"mis-attributing"/... hyphenations
 Mis = "Mis"
-alls = "alls"                    # "catch-alls", "allow-alls"
-strat = "strat"                  # proptest strategy variable idiom
-hel = "hel"                      # intentional substring example output
-evn = "evn"                      # intentional unknown-field test fixture (config/types.rs)
-preferr = "preferr"              # intentional invalid-enum test input
-daa = "daa"                      # commit-sha prefix cited in comments/history
-legac = "legac"                  # intentional near-miss generation-name test input
-legacyy = "legacyy"              # same test vector family
-caf = "caf"                      # slug test input derived from "café"
+alls = "alls"  # "catch-alls", "allow-alls"
+strat = "strat"  # proptest strategy variable idiom
+hel = "hel"  # intentional substring example output
+evn = "evn"  # intentional unknown-field test fixture (config/types.rs)
+preferr = "preferr"  # intentional invalid-enum test input
+daa = "daa"  # commit-sha prefix cited in comments/history
+legac = "legac"  # intentional near-miss generation-name test input
+legacyy = "legacyy"  # same test vector family
+caf = "caf"  # slug test input derived from "café"
 "café" = "café"
-invokable = "invokable"          # used in quoted/derived docs
+invokable = "invokable"  # used in quoted/derived docs
 canonicalizations = "canonicalizations"
 enumerables = "enumerables"
-Wwarning = "Wwarning"            # dialyzer -Wwarning flag shape in corpus docs
+Wwarning = "Wwarning"  # dialyzer -Wwarning flag shape in corpus docs

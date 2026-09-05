@@ -206,10 +206,10 @@ pub fn project_root_optional() -> Option<PathBuf> {
         }
     }
     // 3. Invocation working directory + flake.nix check.
-    if let Some(cwd) = paths::invoke_cwd() {
-        if cwd.join("flake.nix").exists() {
-            return Some(cwd);
-        }
+    if let Some(cwd) = paths::invoke_cwd()
+        && cwd.join("flake.nix").exists()
+    {
+        return Some(cwd);
     }
     None
 }

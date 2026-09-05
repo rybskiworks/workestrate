@@ -112,8 +112,9 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
             };
         }
         // Both host or both domain: for host, keep port ordering
-        if a_is_host && b_is_host {
-            if let (
+        if a_is_host
+            && b_is_host
+            && let (
                 OrderedItem::Host {
                     port: pa,
                     protocol: prota,
@@ -123,13 +124,12 @@ pub fn network_plan_to_policy(plan: &NetworkPlan) -> Result<NetworkPolicy> {
                     protocol: protb,
                 },
             ) = (a, b)
-            {
-                match pa.cmp(pb) {
-                    std::cmp::Ordering::Equal => {
-                        return format!("{:?}", prota).cmp(&format!("{:?}", protb));
-                    }
-                    other => return other,
+        {
+            match pa.cmp(pb) {
+                std::cmp::Ordering::Equal => {
+                    return format!("{:?}", prota).cmp(&format!("{:?}", protb));
                 }
+                other => return other,
             }
         }
         // Domain items: compute specificity and port/action ranks

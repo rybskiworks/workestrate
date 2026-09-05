@@ -187,25 +187,25 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                 ALLOWED_IMAGE_RECIPES.join(", ")
             );
         }
-        if let Some(ref binary) = workload.image.binary {
-            if !ALLOWED_BUILD_RECIPES.contains(&binary.recipe.as_str()) {
-                anyhow::bail!(
-                    "workload '{}' image.binary.recipe '{}' is not a known recipe (expected one of: {})",
-                    workload_name,
-                    binary.recipe,
-                    ALLOWED_BUILD_RECIPES.join(", ")
-                );
-            }
+        if let Some(ref binary) = workload.image.binary
+            && !ALLOWED_BUILD_RECIPES.contains(&binary.recipe.as_str())
+        {
+            anyhow::bail!(
+                "workload '{}' image.binary.recipe '{}' is not a known recipe (expected one of: {})",
+                workload_name,
+                binary.recipe,
+                ALLOWED_BUILD_RECIPES.join(", ")
+            );
         }
-        if let Some(ref build) = workload.local_build {
-            if !ALLOWED_BUILD_RECIPES.contains(&build.recipe.as_str()) {
-                anyhow::bail!(
-                    "workload '{}' local_build.recipe '{}' is not a known recipe (expected one of: {})",
-                    workload_name,
-                    build.recipe,
-                    ALLOWED_BUILD_RECIPES.join(", ")
-                );
-            }
+        if let Some(ref build) = workload.local_build
+            && !ALLOWED_BUILD_RECIPES.contains(&build.recipe.as_str())
+        {
+            anyhow::bail!(
+                "workload '{}' local_build.recipe '{}' is not a known recipe (expected one of: {})",
+                workload_name,
+                build.recipe,
+                ALLOWED_BUILD_RECIPES.join(", ")
+            );
         }
         if let Some(ref features) = workload.image.features {
             for feature in features {
@@ -320,14 +320,14 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // variables (read from the host and injected into the sandbox); reject
     // names no shell or `exec` could set.
     for (secret_name, secret) in &config.secrets {
-        if let Some(ref env_var) = secret.env_var {
-            if !is_valid_env_var_name(env_var) {
-                anyhow::bail!(
-                    "secret '{}' env_var '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
-                    secret_name,
-                    env_var
-                );
-            }
+        if let Some(ref env_var) = secret.env_var
+            && !is_valid_env_var_name(env_var)
+        {
+            anyhow::bail!(
+                "secret '{}' env_var '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
+                secret_name,
+                env_var
+            );
         }
     }
 
@@ -372,14 +372,14 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // Secret references must be defined in the secrets section.
     for (workload_name, workload) in &config.workloads {
         for (env_name, binding) in workload.env.iter() {
-            if let crate::config::EnvBinding::Secret(ref_) = binding {
-                if !config.secrets.contains_key(&ref_.secret) {
-                    anyhow::bail!(
-                        "workload '{}' env references undefined secret '{}'",
-                        workload_name,
-                        ref_.secret
-                    );
-                }
+            if let crate::config::EnvBinding::Secret(ref_) = binding
+                && !config.secrets.contains_key(&ref_.secret)
+            {
+                anyhow::bail!(
+                    "workload '{}' env references undefined secret '{}'",
+                    workload_name,
+                    ref_.secret
+                );
             }
             // WP10/A11: env binding keys become real environment variables in
             // the sandbox; reject anything that is not a valid env-var name.
@@ -412,15 +412,15 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                     dep
                 );
             }
-            if let Some(env) = &spec.env {
-                if !is_valid_env_var_name(env) {
-                    anyhow::bail!(
-                        "workload '{}' depends_on '{}' env '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
-                        workload_name,
-                        dep,
-                        env
-                    );
-                }
+            if let Some(env) = &spec.env
+                && !is_valid_env_var_name(env)
+            {
+                anyhow::bail!(
+                    "workload '{}' depends_on '{}' env '{}' is not a valid environment variable name (must match ^[A-Za-z_][A-Za-z0-9_]*$)",
+                    workload_name,
+                    dep,
+                    env
+                );
             }
         }
     }
@@ -647,14 +647,14 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                 )
             })?;
         }
-        if let Some(build) = &workload.local_build {
-            if let Some(name) = &build.env_override {
-                validate_env_override(name).map_err(|e| {
-                    anyhow::anyhow!(
-                        "workload '{workload_name}' local_build.env_override validation failed: {e}"
-                    )
-                })?;
-            }
+        if let Some(build) = &workload.local_build
+            && let Some(name) = &build.env_override
+        {
+            validate_env_override(name).map_err(|e| {
+                anyhow::anyhow!(
+                    "workload '{workload_name}' local_build.env_override validation failed: {e}"
+                )
+            })?;
         }
     }
 

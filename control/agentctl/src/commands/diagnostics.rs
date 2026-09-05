@@ -511,10 +511,10 @@ pub async fn cmd_instances(workload_filter: Option<&str>, json: bool) -> Result<
     let records = crate::microsandbox::port_registry::list_records(&state_dir)?;
     let mut entries = Vec::new();
     for r in records {
-        if let Some(filter) = workload_filter {
-            if r.workload != filter {
-                continue;
-            }
+        if let Some(filter) = workload_filter
+            && r.workload != filter
+        {
+            continue;
         }
         let declared_ports: Vec<u16> = r.ports.clone();
         let facts = crate::microsandbox::runtime::reconcile::gather_facts(
@@ -911,20 +911,20 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
         let roots = owned.as_roots();
         // Mounts: resolve each host and check existence (warn-only).
         for m in &wl.mounts {
-            if let Ok(path) = resolve_mount_host(&roots, &m.host) {
-                if !path.exists() {
-                    if m.is_read_only() {
-                        warnings.push(format!(
+            if let Ok(path) = resolve_mount_host(&roots, &m.host)
+                && !path.exists()
+            {
+                if m.is_read_only() {
+                    warnings.push(format!(
                             "workload '{name}': read-only mount source does not exist: {} (host = {:?})",
                             path.display(),
                             m.host
                         ));
-                    } else {
-                        warnings.push(format!(
+                } else {
+                    warnings.push(format!(
                             "workload '{name}': read-write mount source does not exist (will be created at runtime): {}",
                             path.display()
                         ));
-                    }
                 }
             }
         }
@@ -981,24 +981,24 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
             }
         }
         // local_build fallback: warn if missing (a build output).
-        if let Some(lb) = &wl.local_build {
-            if let Some(fallback) = &lb.fallback {
-                let resolved = if std::path::Path::new(fallback).is_absolute() {
-                    Some(std::path::PathBuf::from(fallback))
-                } else {
-                    project_root
-                        .as_deref()
-                        .or(Some(owned.content_root.as_path()))
-                        .map(|root| root.join(fallback))
-                };
-                if let Some(p) = resolved {
-                    if !p.exists() {
-                        warnings.push(format!(
-                            "workload '{name}': local_build fallback does not exist (will be built): {}",
-                            p.display()
-                        ));
-                    }
-                }
+        if let Some(lb) = &wl.local_build
+            && let Some(fallback) = &lb.fallback
+        {
+            let resolved = if std::path::Path::new(fallback).is_absolute() {
+                Some(std::path::PathBuf::from(fallback))
+            } else {
+                project_root
+                    .as_deref()
+                    .or(Some(owned.content_root.as_path()))
+                    .map(|root| root.join(fallback))
+            };
+            if let Some(p) = resolved
+                && !p.exists()
+            {
+                warnings.push(format!(
+                    "workload '{name}': local_build fallback does not exist (will be built): {}",
+                    p.display()
+                ));
             }
         }
     }
@@ -1034,10 +1034,10 @@ pub(crate) fn generate_schema_pair() -> Result<(String, String)> {
     wl.definitions.remove("WorkloadConfig");
     wl.definitions.remove("SecretDefConfig");
     // enforce the "additionalProperties false" rule even if schemars behavior changes
-    if let Some(obj) = wl.schema.object.as_mut() {
-        if obj.additional_properties.is_none() {
-            obj.additional_properties = Some(Box::new(schemars::schema::Schema::Bool(false)));
-        }
+    if let Some(obj) = wl.schema.object.as_mut()
+        && obj.additional_properties.is_none()
+    {
+        obj.additional_properties = Some(Box::new(schemars::schema::Schema::Bool(false)));
     }
     let workload = serde_json::to_string_pretty(&wl)?;
     Ok((full, workload))

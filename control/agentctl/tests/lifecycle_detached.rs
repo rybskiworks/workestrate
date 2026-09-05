@@ -229,14 +229,14 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
             seen = true;
             break;
         }
-        if let Some(pid) = child_pid {
-            if !child_alive(pid) {
-                panic!(
-                    "detached child (PID {pid}) exited before registering '{instance}'; \
+        if let Some(pid) = child_pid
+            && !child_alive(pid)
+        {
+            panic!(
+                "detached child (PID {pid}) exited before registering '{instance}'; \
                      child log tail:\n{}",
-                    child_log_tail(&home, &instance)
-                );
-            }
+                child_log_tail(&home, &instance)
+            );
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }

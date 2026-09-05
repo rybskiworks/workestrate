@@ -101,13 +101,13 @@ pub const OUT_PATH_HASH_PREFIX_LEN: usize = 12;
 /// own workload (deps are ensured BEFORE arming — see
 /// `commands::deps` / main.rs), so no workload-name filter is applied here.
 pub fn image_tag_context() -> Option<String> {
-    if let Some((_workload, config_ref)) = crate::config::inline_ref::armed_inline_override() {
-        if let Some(slug) = crate::config::registry::slugify_context_candidate(&config_ref) {
-            return Some(slug);
-        }
-        // No usable characters (e.g. `###`) → fall through to the active
-        // context name (the registry ladder's None→falls-through convention).
+    if let Some((_workload, config_ref)) = crate::config::inline_ref::armed_inline_override()
+        && let Some(slug) = crate::config::registry::slugify_context_candidate(&config_ref)
+    {
+        return Some(slug);
     }
+    // No usable characters (e.g. `###`) → fall through to the active
+    // context name (the registry ladder's None→falls-through convention).
     crate::config::active_context_name()
 }
 
@@ -362,10 +362,10 @@ pub fn resolve_image_tag(
     let legacy = format!("{name}:{declared_tag}");
     let ctx = image_tag_context();
     let state = ImagesState::load(state_dir);
-    if let Some(repo) = repo {
-        if let Some(p) = state.lookup_pointer(&pointer_key(repo, name, ctx.as_deref())) {
-            return p.tag.clone();
-        }
+    if let Some(repo) = repo
+        && let Some(p) = state.lookup_pointer(&pointer_key(repo, name, ctx.as_deref()))
+    {
+        return p.tag.clone();
     }
     for (key, p) in &state.pointers {
         if pointer_key_matches(key, name, ctx.as_deref()) {

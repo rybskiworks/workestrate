@@ -173,13 +173,13 @@ pub fn compile(mut scopes: Vec<PolicyScope>) -> Result<MountPolicyProgram, Compi
 
 /// Validate the program-level flags one scope may set (spec 22 §6, §10).
 fn validate_program_flags(scope: &PolicyScope) -> Result<(), CompileError> {
-    if let Some(value) = &scope.fragment.case_sensitivity {
-        if value != "sensitive" {
-            return Err(CompileError::UnsupportedCaseSensitivity {
-                origin: scope.origin(),
-                value: value.clone(),
-            });
-        }
+    if let Some(value) = &scope.fragment.case_sensitivity
+        && value != "sensitive"
+    {
+        return Err(CompileError::UnsupportedCaseSensitivity {
+            origin: scope.origin(),
+            value: value.clone(),
+        });
     }
     Ok(())
 }

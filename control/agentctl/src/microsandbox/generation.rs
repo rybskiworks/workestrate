@@ -309,16 +309,16 @@ pub fn resolve_msb_home_generation() -> HomeResolution {
     let current = root.join(CURRENT_LINK_NAME);
     // symlink_metadata: the symlink itself existing counts (canonicalize
     // below follows it to the target generation dir).
-    if std::fs::symlink_metadata(&current).is_ok() {
-        if let Ok(gen_dir) = std::fs::canonicalize(&current) {
-            let key = gen_dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            return HomeResolution::Current { gen_dir, key };
-        }
-        // Dangling symlink: fall through to the enumeration rules.
+    if std::fs::symlink_metadata(&current).is_ok()
+        && let Ok(gen_dir) = std::fs::canonicalize(&current)
+    {
+        let key = gen_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return HomeResolution::Current { gen_dir, key };
     }
+    // Dangling symlink: fall through to the enumeration rules.
     let (keys, _debris) = generation_entries(&root);
     if keys.is_empty() {
         return if root.join("db").is_dir() {

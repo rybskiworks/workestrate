@@ -62,12 +62,11 @@ pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathB
         // (`.workestrate-build/<name>`, spec 21 §6.1) is excluded —
         // `flake_build_path` is None then — so it falls through to the
         // declaring-layer-relative content root below.
-        if let Some(flake_build) = roots.flake_build_path {
-            if host == flake_build {
-                if let Some(project_root) = roots.project_root {
-                    return Ok(project_root.join(host));
-                }
-            }
+        if let Some(flake_build) = roots.flake_build_path
+            && host == flake_build
+            && let Some(project_root) = roots.project_root
+        {
+            return Ok(project_root.join(host));
         }
         // Plain repo-relative host: resolve against the DECLARING config
         // layer's content dir (F1), not the flake project root.
@@ -524,14 +523,14 @@ pub(crate) fn preflight_existence(
                 .or(Some(roots.content_root))
                 .map(|root| root.join(fallback))
         };
-        if let Some(p) = resolved {
-            if !p.exists() {
-                warnings.push(format!(
-                    "workload '{}': local_build fallback does not exist (will be built): {}",
-                    workload_name,
-                    p.display()
-                ));
-            }
+        if let Some(p) = resolved
+            && !p.exists()
+        {
+            warnings.push(format!(
+                "workload '{}': local_build fallback does not exist (will be built): {}",
+                workload_name,
+                p.display()
+            ));
         }
     }
 

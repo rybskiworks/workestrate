@@ -141,10 +141,10 @@ fn short_sha256(path: &str) -> Option<String> {
 /// The agentd binary path: `MSB_AGENTD_PATH` when set and non-empty, else an
 /// `agentd` resolved on `PATH`, else an `"unavailable ..."` note.
 pub fn agentd_path() -> String {
-    if let Ok(v) = std::env::var("MSB_AGENTD_PATH") {
-        if !v.trim().is_empty() {
-            return v;
-        }
+    if let Ok(v) = std::env::var("MSB_AGENTD_PATH")
+        && !v.trim().is_empty()
+    {
+        return v;
     }
     if let Some(p) = resolve_on_path("agentd") {
         return p;
@@ -163,10 +163,8 @@ pub fn agentd_version_or_sha(path: &str) -> String {
         return v;
     }
     let executable = is_executable(path);
-    if executable {
-        if let Some(sha) = short_sha256(path) {
-            return format!("sha256:{sha}");
-        }
+    if executable && let Some(sha) = short_sha256(path) {
+        return format!("sha256:{sha}");
     }
     format!("executable:{executable}")
 }
@@ -240,17 +238,17 @@ pub fn db_schema_marker(db: &Path) -> String {
         .arg(db)
         .arg("SELECT name FROM seaql_migrations ORDER BY name DESC LIMIT 1;")
         .output();
-    if let Ok(out) = out {
-        if out.status.success() {
-            let first = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if !first.is_empty() {
-                return format!("mig:{first}");
-            }
+    if let Ok(out) = out
+        && out.status.success()
+    {
+        let first = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !first.is_empty() {
+            return format!("mig:{first}");
         }
     }
     match std::fs::metadata(db) {

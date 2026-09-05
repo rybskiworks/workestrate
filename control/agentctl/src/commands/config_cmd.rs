@@ -339,17 +339,16 @@ pub async fn cmd_config_new(
 
     // Fail-fast: if we'd auto-register, check the registry now so we don't
     // write files + git init only to bail at the registration step.
-    if !no_register {
-        if let Some(reg) = config::load_registry()? {
-            if reg.configs.contains_key(name) {
-                anyhow::bail!(
-                    "config repo '{}' already registered; use a different name or \
+    if !no_register
+        && let Some(reg) = config::load_registry()?
+        && reg.configs.contains_key(name)
+    {
+        anyhow::bail!(
+            "config repo '{}' already registered; use a different name or \
                      'workestrate config update {}'",
-                    name,
-                    name
-                );
-            }
-        }
+            name,
+            name
+        );
     }
 
     // Resolve destination directory. Default is the managed store

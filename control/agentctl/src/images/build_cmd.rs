@@ -173,10 +173,10 @@ pub fn select_eligible(
     let mut targets = Vec::new();
     let mut skips = Vec::new();
     for name in names {
-        if let Some(only) = only {
-            if name != only {
-                continue;
-            }
+        if let Some(only) = only
+            && name != only
+        {
+            continue;
         }
         let wl = &config.workloads[name];
         // §2.3 eligibility: nix-layered only — registry / local_build-only

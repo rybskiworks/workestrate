@@ -281,15 +281,15 @@ pub(super) fn resolve_mount_host_template(
     if host == default_build_var {
         return build_path.to_string();
     }
-    if host == "${CWD}" {
-        if let Some(cwd) = crate::config::invoke_cwd() {
-            return cwd.to_string_lossy().into_owned();
-        }
+    if host == "${CWD}"
+        && let Some(cwd) = crate::config::invoke_cwd()
+    {
+        return cwd.to_string_lossy().into_owned();
     }
-    if let Some(rest) = host.strip_prefix("${CWD}/") {
-        if let Some(cwd) = crate::config::invoke_cwd() {
-            return format!("{}/{}", cwd.to_string_lossy(), rest);
-        }
+    if let Some(rest) = host.strip_prefix("${CWD}/")
+        && let Some(cwd) = crate::config::invoke_cwd()
+    {
+        return format!("{}/{}", cwd.to_string_lossy(), rest);
     }
     host.to_string()
 }
