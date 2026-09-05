@@ -390,11 +390,11 @@ impl schemars::JsonSchema for MountPlan {
         "MountPlan".to_string()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
         // Start from the wire shape (both fields optional, read_only present
         // but deprecated) so the schema matches exactly what the parser
         // accepts, then pin `mode` to its canonical closed-vocabulary form.
-        let mut schema = MountPlanWire::json_schema(gen).into_object();
+        let mut schema = MountPlanWire::json_schema(generator).into_object();
         schema.metadata = Some(Box::new(schemars::schema::Metadata {
             description: Some(
                 "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical \

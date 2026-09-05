@@ -289,10 +289,10 @@ impl schemars::JsonSchema for EnvBinding {
         "EnvBinding".to_string()
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
         // Render as the accepted wire forms (bare string | boolean | inline
         // table with optional `secret`/`bound`).
-        EnvValueShorthand::json_schema(gen)
+        EnvValueShorthand::json_schema(generator)
     }
 }
 
@@ -654,12 +654,12 @@ impl schemars::JsonSchema for DepConflict {
         "DepConflict".to_string()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
         // The spec's `#[schemars(with = "ConflictChainShape")]` attribute only
         // takes effect through the derive macro; with the manual Deserialize
         // impl the struct cannot derive JsonSchema, so delegate to the
         // boundary helper directly (same rendered shape: scalar | list).
-        ConflictChainShape::json_schema(gen)
+        ConflictChainShape::json_schema(generator)
     }
 }
 
@@ -920,8 +920,8 @@ impl schemars::JsonSchema for InstancePort {
         "InstancePort".to_string()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
-        InstancePortShape::json_schema(gen)
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
+        InstancePortShape::json_schema(generator)
     }
 }
 
@@ -1022,11 +1022,11 @@ impl schemars::JsonSchema for PortOccupiedChain {
         "PortOccupiedChain".to_string()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
         // Same boundary-helper pattern as `DepConflict`: the manual
         // Deserialize impl prevents the struct from deriving JsonSchema, so
         // delegate to the shape helper (scalar | list).
-        PortOccupiedChainShape::json_schema(gen)
+        PortOccupiedChainShape::json_schema(generator)
     }
 }
 
