@@ -9,7 +9,7 @@ use microsandbox::sandbox::{exec::ExecEvent, SandboxBuilder};
 use microsandbox::Sandbox;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Resolve the host bind IP for the slot `instance` runs in (ADR 0026(a)).
 ///
@@ -770,6 +770,72 @@ fn apply_current_view_mutations<W: Workload>(plan: &mut SandboxPlan, workload: &
     plan.name = instance.to_string();
 }
 
+/// msb state generations fail-closed pre-create gate (see
+/// [`crate::microsandbox::generation`]): refuses an up whose resolved msb
+/// home is pinned to a DIFFERENT generation than the baked msb store-path
+/// key, a pre-generation legacy root (`db/` at `$HOME/.microsandbox`), or
+/// an ambiguous multi-generation root with no `current` symlink — every
+/// refusal names `./scripts/host-provision.sh` (generation converge). An
+/// UNMANAGED baked msb (no nix store path) skips the gate (legacy
+/// single-generation behavior). Returns the generation dir that should
+/// receive the `.booted-ok` marker on a successful up (Current/Healed with
+/// the matching key, or an explicit generation-dir MSB_HOME override);
+/// `None` for the unmanaged posture, a non-generation explicit override,
+/// or a fresh root. Evaluated in [`build_sandbox`] immediately before the
+/// nested gate + `builder.create()`, so a refusal leaves NO partial
+/// sandbox behind (never partial: refuse before any sandbox creation).
+fn check_generation_up_gate() -> Result<Option<PathBuf>> {
+    use crate::microsandbox::generation as gen;
+    let baked = gen::baked_generation_key();
+    if baked == gen::UNMANAGED_KEY {
+        return Ok(None);
+    }
+    match gen::resolve_msb_home_generation() {
+        gen::HomeResolution::Current { gen_dir, key }
+        | gen::HomeResolution::Healed { gen_dir, key } => {
+            if key == baked {
+                Ok(Some(gen_dir))
+            } else {
+                anyhow::bail!(
+                    "refusing up: msb state generation mismatch — the resolved home is generation \
+                     '{key}' but the baked msb is generation '{baked}'; \
+                     run ./scripts/host-provision.sh (generation converge)"
+                )
+            }
+        }
+        gen::HomeResolution::Explicit(path) => match gen::generation_key_of_path(&path) {
+            Some(key) if key != baked => anyhow::bail!(
+                "refusing up: MSB_HOME override points at generation '{key}' but the baked msb \
+                 is generation '{baked}'; run ./scripts/host-provision.sh (generation converge)"
+            ),
+            Some(_) => Ok(Some(path)),
+            None => Ok(None),
+        },
+        gen::HomeResolution::LegacyRoot(_) => anyhow::bail!(
+            "refusing up: pre-generation msb home (db/ at $HOME/.microsandbox root); \
+             run ./scripts/host-provision.sh to absorb it as generations/legacy"
+        ),
+        gen::HomeResolution::Ambiguous(keys) => anyhow::bail!(
+            "refusing up: multiple msb state generations ({}) and no current symlink; \
+             run ./scripts/host-provision.sh (generation converge)",
+            keys.join(", ")
+        ),
+        gen::HomeResolution::Fresh(_) => Ok(None),
+    }
+}
+
+/// msb state generations: write the empty `.booted-ok` marker in the
+/// resolved generation dir after a successful up — best-effort only: write
+/// errors are logged and ignored, never fail the up.
+fn mark_generation_booted(gen_dir: &Path) {
+    if let Err(e) = std::fs::write(gen_dir.join(".booted-ok"), b"") {
+        eprintln!(
+            "warning: could not write .booted-ok marker in {}: {e}",
+            gen_dir.display()
+        );
+    }
+}
+
 /// ADR 0036 §4 pre-create gate evaluation (pure given the `probe`):
 /// `build_sandbox` passes the live `read_nested_probe()` immediately before
 /// `builder.create()`; unit tests pass mocked probes. Off skips silently
@@ -1129,6 +1195,12 @@ pub(crate) async fn build_sandbox<W: Workload>(
     } else {
         builder
     };
+    // msb state generations fail-closed pre-create gate: evaluated BEFORE
+    // the nested gate (and therefore before `builder.create()`) so a
+    // generation mismatch / legacy root / ambiguous root refuses with NO
+    // partial sandbox behind. The returned generation dir receives the
+    // `.booted-ok` marker after a successful create + registration below.
+    let generation_dir = check_generation_up_gate()?;
     // ADR 0036 §4: fail-closed nested-virt pre-create gate. Evaluated HERE —
     // after the policy-file write + `ensure_mount_sources`, immediately
     // before `builder.create()` — so a refusal leaves NO partial sandbox
@@ -1182,6 +1254,14 @@ pub(crate) async fn build_sandbox<W: Workload>(
         image_out_hash.as_deref(),
         Some(&config_hash),
     )?;
+    // msb state generations: the create + registration succeeded — record
+    // the first verified up for this generation. Best-effort; a write
+    // failure never fails the up (see `mark_generation_booted`). This is
+    // the shared create-success point for both `up_service_with_spec` and
+    // `exec_agent_with_spec` (both funnel through `build_sandbox`).
+    if let Some(dir) = &generation_dir {
+        mark_generation_booted(dir);
+    }
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
         service_label: workload.name().to_string(),

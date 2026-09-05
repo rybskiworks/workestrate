@@ -253,6 +253,126 @@ pub fn doctor_check_msb() -> DoctorCheck {
     }
 }
 
+/// `generation` check (msb state generations — see
+/// [`crate::microsandbox::generation`]): the BAKED msb store-path
+/// generation key against the resolved home's generation. An unmanaged msb
+/// (no nix store path) is OK (single-generation legacy behavior). A
+/// `current`/`healed` generation mismatch, an explicit MSB_HOME pointing at
+/// a different generation dir, a pre-generation legacy root, and an
+/// ambiguous multi-generation root are FAIL naming
+/// `scripts/host-provision.sh`; fresh is OK. WARN overrides (never OK):
+/// more than 2 generation dirs, or any debris under `generations/`
+/// (non-12-char names, `*.converge-tmp*` leftovers) — FAIL beats WARN beats
+/// OK. Additive row: no existing check is renamed (host-provision Step D
+/// greps doctor rows by name).
+pub fn doctor_check_generation() -> DoctorCheck {
+    use crate::microsandbox::generation as gen;
+    const REMEDIATION: &str = "Run ./scripts/host-provision.sh (generation converge)";
+    let baked = gen::baked_generation_key();
+    if baked == gen::UNMANAGED_KEY {
+        return DoctorCheck::new(
+            "generation",
+            "OK",
+            "unmanaged msb (no nix store path): single-generation legacy behavior".to_string(),
+        );
+    }
+    let base = match gen::resolve_msb_home_generation() {
+        gen::HomeResolution::Explicit(p) => match gen::generation_key_of_path(&p) {
+            Some(key) if key != baked => DoctorCheck::new(
+                "generation",
+                "FAIL",
+                format!(
+                    "MSB_HOME override {} points at generation {key} but the baked msb is \
+                     generation {baked}",
+                    p.display()
+                ),
+            )
+            .with_remediation(REMEDIATION),
+            _ => DoctorCheck::new(
+                "generation",
+                "OK",
+                format!("MSB_HOME override: {}", p.display()),
+            ),
+        },
+        gen::HomeResolution::Current { key, .. } => {
+            generation_keyed_row(&key, &baked, false, REMEDIATION)
+        }
+        gen::HomeResolution::Healed { key, .. } => {
+            generation_keyed_row(&key, &baked, true, REMEDIATION)
+        }
+        gen::HomeResolution::LegacyRoot(root) => DoctorCheck::new(
+            "generation",
+            "FAIL",
+            format!(
+                "pre-generation msb home (db/ at $HOME/.microsandbox root): {}",
+                root.display()
+            ),
+        )
+        .with_remediation("Run ./scripts/host-provision.sh to absorb it as generations/legacy"),
+        gen::HomeResolution::Fresh(_) => {
+            DoctorCheck::new("generation", "OK", "no generations yet (fresh)".to_string())
+        }
+        gen::HomeResolution::Ambiguous(keys) => DoctorCheck::new(
+            "generation",
+            "FAIL",
+            format!(
+                "multiple generation dirs and no current symlink: {}",
+                keys.join(", ")
+            ),
+        )
+        .with_remediation(REMEDIATION),
+    };
+    // WARN overrides (status WARN, never OK): more than 2 generation dirs,
+    // or any debris under generations/ (non-12-char names and any
+    // *.converge-tmp* leftovers — see generation::generation_entries).
+    let (keys, debris) = gen::generation_entries(&gen::msb_home_root());
+    let mut warns: Vec<String> = Vec::new();
+    if keys.len() > 2 {
+        warns.push(format!(
+            "{} generation dirs (> 2): {}",
+            keys.len(),
+            keys.join(", ")
+        ));
+    }
+    if !debris.is_empty() {
+        warns.push(format!("debris under generations/: {}", debris.join(", ")));
+    }
+    if base.status == "FAIL" || warns.is_empty() {
+        return base;
+    }
+    DoctorCheck::new(
+        "generation",
+        "WARN",
+        format!("{}; {}", base.message, warns.join("; ")),
+    )
+    .with_remediation(REMEDIATION)
+}
+
+/// The Current/Healed arm of [`doctor_check_generation`]: OK when the
+/// resolved generation key matches the baked key (a heal is noted), FAIL
+/// naming both keys otherwise.
+fn generation_keyed_row(key: &str, baked: &str, healed: bool, remediation: &str) -> DoctorCheck {
+    if key == baked {
+        let note = if healed {
+            " (healed missing current symlink)"
+        } else {
+            ""
+        };
+        DoctorCheck::new(
+            "generation",
+            "OK",
+            format!("current -> generations/{key}{note}"),
+        )
+    } else {
+        DoctorCheck::new(
+            "generation",
+            "FAIL",
+            format!("current generation {key} does not match the baked msb generation {baked}"),
+        )
+        .with_remediation(remediation)
+    }
+}
+
 /// Pure version-match classifier (Phase-0 observability): true when the
 /// probed version string contains the baked pin (case-insensitive).
 /// Canonical logic lives in
@@ -676,6 +796,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
         ),
         doctor_check_age_key_file(),
         doctor_check_msb(),
+        doctor_check_generation(),
         doctor_check_version_compare(),
         doctor_check_home(),
         doctor_check_config_repos()?,
