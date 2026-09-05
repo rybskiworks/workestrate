@@ -33,7 +33,7 @@ match the categories, so phase 04-review has the right skills and docs ready.
    in the diff.
 4. Load `constraint-nix-purity` — eval-time and build-time purity: source
    filters, `--impure`, `builtins.path`/`cleanSourceWith` without `filter =`,
-   `builtins.getFlace` + `toString`. This is **mandatory if the diff touches
+       `builtins.getFlake` + `toString`. This is **mandatory if the diff touches
    source filters or path-copying code**.
 5. Load `constraint-nix-reproducibility` — flake input pinning, fetcher hashes,
    FOD output verification, flake.lock discipline. This is **mandatory if the
