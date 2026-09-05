@@ -10,7 +10,8 @@
         "idna": null,
         "ingress": null,
         "mounts": null,
-        "secrets": null
+        "secrets": null,
+        "virtualization": null
       },
       "allOf": [
         {
@@ -156,7 +157,7 @@
       ]
     },
     "DefaultAction": {
-      "description": "Default per-direction action for a workload's network policy (`[...network.defaults] egress|ingress = \"allow\" | \"deny\"`). `Deny` is the fail-closed default; `Allow` requires the workload to declare the matching `default_egress_allow` / `default_ingress_allow` entitlement (checked at merge and validate time).",
+      "description": "Default per-direction action for a workload's network policy (`[...network.defaults] egress|ingress = \"allow\" | \"deny\"`). `Deny` is the fail-closed default; `Allow` is an explicit opt-in that stands alone (absent = deny; home `final` seals still veto).",
       "oneOf": [
         {
           "description": "Fail-open: all traffic in that direction allowed unless a `deny` rule matches.",
@@ -989,8 +990,34 @@
       },
       "additionalProperties": false
     },
+    "NestedMode": {
+      "description": "Nested-virtualization demand of ONE workload (ADR 0036 §3): the flat per-workload `[workloads.<name>.virtualization]` table with its single tri-state `nested` key (`\"require\"` | `\"prefer\"` | `\"off\"`, default `\"off\"`; an absent table — or an absent key — means off, i.e. current behavior with no device expectation and no gate beyond an explicit `nested≠off` plus the home-final seal).\n\nThe tri-state IS the conflict policy (no generic `on_conflict` field — a second knob could contradict the first): `require` fails closed at `up`, `prefer` warns at `plan` and degrades without the device (never refuses), `off` ignores. `require` demands the whole unit (guest /dev/kvm + VT-x/AMD-V together — the VMM yields both as one); there is deliberately NO `require_device` split (the old device-without-nested hole is closed BY DELETION) and NO backend namespacing (KVM is the only backend on this Linux-microVM arch; a second backend needs its own plan amendment). Non-Linux/x86_64 + `require` fails closed; `plan` stays portable (resolve + warn, never fail).",
+      "oneOf": [
+        {
+          "description": "Current behavior: no device expectation, no checks.",
+          "type": "string",
+          "enum": [
+            "off"
+          ]
+        },
+        {
+          "description": "Use nested virt when the host offers it, else degrade without the device (warn at `plan`, machine-readable degraded flag, never refuse at `up`).",
+          "type": "string",
+          "enum": [
+            "prefer"
+          ]
+        },
+        {
+          "description": "Guest must have /dev/kvm + VT-x/AMD-V; absent/unreadable (or CPU nested disabled, or a home-final ban) → fail-closed refusal at `up`.",
+          "type": "string",
+          "enum": [
+            "require"
+          ]
+        }
+      ]
+    },
     "NetworkConfig": {
-      "description": "Per-workload network policy (`workloads.<name>.network`). `defaults.egress` / `defaults.ingress` are the per-direction fail-closed switches (relaxing to `allow` requires the declared `default_egress_allow` / `default_ingress_allow` entitlement). The rule surface has migrated to hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035; `network.egress` / `network.deny` / `network.ingress` are removed and hard-error with ADR-citing messages.",
+      "description": "Per-workload network policy (`workloads.<name>.network`). `defaults.egress` / `defaults.ingress` are the per-direction fail-closed switches (absent = deny; explicit `allow` stands alone, home `final` seals still veto). The rule surface has migrated to hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035; `network.egress` / `network.deny` / `network.ingress` are removed and hard-error with ADR-citing messages.",
       "type": "object",
       "properties": {
         "defaults": {
@@ -1007,7 +1034,7 @@
       "additionalProperties": false
     },
     "NetworkDefaultsConfig": {
-      "description": "Per-workload network defaults (`[...network.defaults]`). `egress` and `ingress` are the per-direction fail-closed switches (absent = `deny`; tightening to `deny` is always allowed across layers, relaxing to `allow` requires the workload's declared `default_egress_allow` / `default_ingress_allow` entitlement).",
+      "description": "Per-workload network defaults (`[...network.defaults]`). `egress` and `ingress` are the per-direction fail-closed switches (absent = `deny`; explicit `allow` stands alone; home `final` seals still veto).",
       "type": "object",
       "properties": {
         "egress": {
@@ -1138,6 +1165,18 @@
           "anyOf": [
             {
               "$ref": "#/definitions/SecretsPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "virtualization": {
+          "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VirtualizationPolicyFragment"
             },
             {
               "type": "null"
@@ -1462,6 +1501,45 @@
       },
       "additionalProperties": false
     },
+    "VirtualizationConfig": {
+      "description": "`[workloads.<name>.virtualization]` — the workload's nested-virt ASK (ADR 0036 §3, ask-vs-grant: the workload asks with strength require|prefer|off, like firewall allow-rules; home grants/restricts via [`VirtualizationPolicyFragment`]). `None` (absent table) = omitted → Off. An explicit `nested≠off` stands alone — no entitlement gate (the entitlements mechanism was removed 2026-09-04; review + home-final suffice). Merges whole-unit like [`InstancePolicy`]: a higher layer re-declaring the table replaces it wholesale.",
+      "type": "object",
+      "properties": {
+        "nested": {
+          "description": "Tri-state demand; `None` = key omitted → Off (current behavior).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NestedMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VirtualizationPolicyFragment": {
+      "description": "`[policy.virtualization]` fragment — the HOME-registry operator seal (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final` seals. Collected per scope (home registry → config layers → workload capsule), NEVER merged — the same collect-never-merge idiom as the secrets/egress ladders. `final` seals, never enables: a freeze at `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban); `true` grants nothing by itself (the workload still needs an explicit `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is plan-time (`frozen_out` provenance; `up` refuses), NOT a validate-config error (validate stays static, no host I/O).",
+      "type": "object",
+      "properties": {
+        "allow_nested": {
+          "description": "Operator grant/restriction for nested virt at this rung. `None` = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "WorkloadConfig": {
       "description": "A single workload definition (`workloads.<name>` in workestrate.toml). `kind` is `\"agent\"` (interactive TUI attach) or `\"service\"` (headless, detached by default); the remaining fields describe the image, resources, command, env/secret wiring, mounts, ports, seed files, local-build override, network policy, and dependency declarations. All fields merge layer-by-layer via `merge::merge_layers`.",
       "type": "object",
@@ -1487,14 +1565,6 @@
           "type": "object",
           "additionalProperties": {
             "$ref": "#/definitions/DependsOnSpec"
-          }
-        },
-        "entitlements": {
-          "description": "Config-declared entitlements (`workloads.<name>.entitlements`). The closed vocabulary core understands lives in `config::validation` (currently only `\"default_egress_allow\"`, which permits `network.defaults.egress = \"allow\"` — fail-closed: setting `egress = \"allow\"` WITHOUT the declared entitlement is a hard error at merge and validate time). Layers merge union-style with dedup (an entitlement, once granted by any layer, cannot be revoked by a later layer).",
-          "default": [],
-          "type": "array",
-          "items": {
-            "type": "string"
           }
         },
         "env": {
@@ -1589,7 +1659,8 @@
             "idna": null,
             "ingress": null,
             "mounts": null,
-            "secrets": null
+            "secrets": null,
+            "virtualization": null
           },
           "allOf": [
             {
@@ -1610,6 +1681,18 @@
           "items": {
             "$ref": "#/definitions/SeedFileConfig"
           }
+        },
+        "virtualization": {
+          "description": "Per-workload nested-virtualization ask (`[workloads.<name>.virtualization]`; ADR 0036 §3). `None` (absent table) = off — current behavior, no device expectation, no checks. Merges whole-unit (last layer wins); the home `[policy.virtualization]` seal is collected via the ladder, never merged.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VirtualizationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "workdir": {
           "type": [

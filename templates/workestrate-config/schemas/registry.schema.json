@@ -31,7 +31,8 @@
         "idna": null,
         "ingress": null,
         "mounts": null,
-        "secrets": null
+        "secrets": null,
+        "virtualization": null
       },
       "allOf": [
         {
@@ -550,6 +551,18 @@
               "type": "null"
             }
           ]
+        },
+        "virtualization": {
+          "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VirtualizationPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -726,6 +739,26 @@
       "properties": {
         "path": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VirtualizationPolicyFragment": {
+      "description": "`[policy.virtualization]` fragment — the HOME-registry operator seal (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final` seals. Collected per scope (home registry → config layers → workload capsule), NEVER merged — the same collect-never-merge idiom as the secrets/egress ladders. `final` seals, never enables: a freeze at `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban); `true` grants nothing by itself (the workload still needs an explicit `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is plan-time (`frozen_out` provenance; `up` refuses), NOT a validate-config error (validate stays static, no host I/O).",
+      "type": "object",
+      "properties": {
+        "allow_nested": {
+          "description": "Operator grant/restriction for nested virt at this rung. `None` = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
         }
       },
       "additionalProperties": false
