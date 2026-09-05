@@ -590,6 +590,14 @@ fn config_new_hook_behavioral() {
     // Case tombi-present (HOST-NIX style gate): the hook must FAIL on the
     // malformed TOML.
     if find_tombi().is_some() {
+        // The nix-pinned tombi (nix-tooling wrapper) refuses to run at all —
+        // including `--version` — without a tombi.toml in scope (walk-up from
+        // cwd), which would make the hook's version probe read 'unknown' and
+        // warn-and-skip. Real config repos always carry the scaffolded
+        // tombi.toml, so give the scratch repo a minimal one to exercise the
+        // real gate.
+        std::fs::write(repo.join("tombi.toml"), "toml-version = \"v1.0.0\"\n")
+            .expect("write minimal tombi.toml into scratch repo");
         let out = Command::new("/bin/sh")
             .arg(repo.join(".git").join("hooks").join("pre-commit"))
             .current_dir(&repo)
