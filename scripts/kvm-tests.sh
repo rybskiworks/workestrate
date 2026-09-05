@@ -11,8 +11,8 @@
 #
 # Preflight fails fast with actionable messages: /dev/kvm, nix, the raw msb
 # store path, and the runtime-store image(s) the tests need. The runtime
-# store is ~/.microsandbox — the same store the wrapped `workestrate` and
-# `msb-wrapped` binaries force (nix/packages/agentctl.nix postInstall and
+# store is ~/.microsandbox/current — the same store the wrapped `workestrate`
+# and `msb-wrapped` binaries force (nix/packages/agentctl.nix postInstall and
 # flake.nix msb-wrapped). Images are NOT auto-pulled: on a miss the script
 # prints the exact pull command and exits 1.
 #
@@ -63,8 +63,8 @@ fi
 # ---------------------------------------------------------------------------
 # Preflight 3 — raw (unwrapped) msb store path. ensure_images_e2e REQUIRES
 # MSB_PATH pointing at an unwrapped msb that honors MSB_HOME (the devshell's
-# wrapped msb forces MSB_HOME=$HOME/.microsandbox and would write fixture
-# images into the real store).
+# wrapped msb forces MSB_HOME=$HOME/.microsandbox/current and would write
+# fixture images into the real store).
 # ---------------------------------------------------------------------------
 MSB_PATH=""
 if MSB_OUT=$(nix build .#microsandbox --no-link --print-out-paths 2>/dev/null); then
@@ -77,12 +77,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Preflight 4 — runtime-store images. The runtime store is ~/.microsandbox
-# (wrapper-baked MSB_HOME); lifecycle_detached and flake_root_gate boot a
-# python:3.12-slim registry image there. Do NOT auto-pull — print the exact
-# command and stop.
+# Preflight 4 — runtime-store images. The runtime store is
+# ~/.microsandbox/current (wrapper-baked MSB_HOME); lifecycle_detached and
+# flake_root_gate boot a python:3.12-slim registry image there. Do NOT
+# auto-pull — print the exact command and stop.
 # ---------------------------------------------------------------------------
-RUNTIME_MSB_HOME="$HOME/.microsandbox"
+RUNTIME_MSB_HOME="$HOME/.microsandbox/current"
 if [[ "$ERRORS" -eq 0 ]]; then
   if MSB_HOME="$RUNTIME_MSB_HOME" "$MSB_PATH" image ls 2>/dev/null | grep -q "python:3.12-slim"; then
     log "required image present: python:3.12-slim (in $RUNTIME_MSB_HOME)"

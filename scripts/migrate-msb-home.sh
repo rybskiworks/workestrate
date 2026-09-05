@@ -3,12 +3,18 @@
 # ($HOME/.cache/ai-workbench-msb) to the canonical SDK home
 # ($HOME/.microsandbox, the microsandbox_utils::resolve_home default).
 #
-# The canonical home is the ONLY runtime home: the workestrate + msb-wrapped
-# nix wrappers default unset/empty MSB_HOME to $HOME/.microsandbox, the
+# The canonical home root is $HOME/.microsandbox; under the generations
+# model the ONLY runtime home is $HOME/.microsandbox/current (a symlink into
+# generations/<hash12>): the workestrate + msb-wrapped nix wrappers default
+# unset/empty MSB_HOME to $HOME/.microsandbox/current (see
+# docs/runtime-provisioning.md and
+# docs/migration/50-decisions/0037-msb-state-generations.md), the
 # devshell no longer exports MSB_HOME/MSB_PATH, and the Rust mirrors
 # (reconcile.rs/policy_file.rs msb_home()) treat empty MSB_HOME as unset.
-# This script reconciles pre-convergence state where msb DBs/caches exist
-# under BOTH homes (skew) or only under the legacy home (unmigrated).
+# This script remains the legacy-cache-home → canonical-root migration,
+# which the generation converge delegates to. It reconciles pre-convergence
+# state where msb DBs/caches exist under BOTH homes (skew) or only under
+# the legacy home (unmigrated).
 #
 # Idempotent: re-running after a successful migration reports "nothing to do".
 #
