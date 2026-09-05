@@ -291,16 +291,15 @@ pub fn doctor_check_version_compare() -> DoctorCheck {
 }
 
 /// Resolve the canonical msb home: non-empty `MSB_HOME` verbatim (empty
-/// treated as unset), else `$HOME/.microsandbox`, else `./.microsandbox`.
-/// Mirrors `microsandbox_utils::resolve_home` (the SDK default).
+/// treated as unset), else `$HOME/.microsandbox/current` (the `current`
+/// generation symlink — see [`crate::microsandbox::generation`]), else
+/// `./.microsandbox/current`. Mirrors `microsandbox_utils::resolve_home`
+/// (the SDK default) with the generation-aware default.
 pub fn resolve_msb_home() -> PathBuf {
     if let Some(path) = std::env::var_os("MSB_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(path);
     }
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".microsandbox")
+    crate::microsandbox::generation::default_msb_home()
 }
 
 /// The legacy pre-convergence devshell home (`$HOME/.cache/ai-workbench-msb`).
@@ -961,13 +960,13 @@ mod tests {
         std::env::remove_var("MSB_HOME");
         assert_eq!(
             resolve_msb_home(),
-            fake_home.join(".microsandbox"),
-            "unset MSB_HOME → $HOME/.microsandbox"
+            fake_home.join(".microsandbox").join("current"),
+            "unset MSB_HOME → $HOME/.microsandbox/current"
         );
         std::env::set_var("MSB_HOME", "");
         assert_eq!(
             resolve_msb_home(),
-            fake_home.join(".microsandbox"),
+            fake_home.join(".microsandbox").join("current"),
             "empty MSB_HOME → treated as unset"
         );
         let custom = crate::config::test_support::uniq_dir("doctor-msb-custom");

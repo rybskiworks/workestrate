@@ -2,7 +2,7 @@
 //!
 //! The compiled policy is atomically written beneath the microsandbox
 //! loader's approved mount-policy root — `$MSB_HOME/mount-policy/`
-//! (default `~/.microsandbox/mount-policy/`) — with restrictive
+//! (default `~/.microsandbox/current/mount-policy/`) — with restrictive
 //! permissions, and the path handed to the SDK is the loader-RELATIVE
 //! token (`<instance>/<slug>.json`), not an absolute path: the fork's
 //! fail-closed loader (`load_mount_policy`) rejects absolute paths and
@@ -40,18 +40,17 @@ pub const MOUNT_POLICY_DIR_NAME: &str = "mount-policy";
 ///
 /// Mirror of `microsandbox_utils::resolve_home` (fork
 /// `crates/utils/lib/lib.rs`): non-empty `MSB_HOME` verbatim (empty treated
-/// as unset), else `$HOME/.microsandbox`, else `./.microsandbox`. The nix
-/// wrapper defaults unset/empty `MSB_HOME` to `$HOME/.microsandbox` at
-/// runtime (`nix/packages/agentctl.nix` postInstall), so this mirrors the
-/// SDK's home in every supported flow.
+/// as unset), else `$HOME/.microsandbox/current` (the `current` generation
+/// symlink — see [`crate::microsandbox::generation`]), else
+/// `./.microsandbox/current`. The nix wrapper defaults unset/empty
+/// `MSB_HOME` to `$HOME/.microsandbox/current` at runtime
+/// (`nix/packages/agentctl.nix` postInstall), so this mirrors the SDK's
+/// home in every supported flow.
 fn msb_home() -> PathBuf {
     if let Some(path) = std::env::var_os("MSB_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(path);
     }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".microsandbox")
+    crate::microsandbox::generation::default_msb_home()
 }
 
 /// The loader-approved mount-policy root (`<msb home>/mount-policy`).
@@ -300,11 +299,12 @@ mod tests {
         std::env::remove_var("MSB_HOME");
         let via_unset = msb_home();
         assert_eq!(via_empty, via_unset);
-        assert_eq!(via_empty, fake_home.join(".microsandbox"));
+        assert_eq!(via_empty, fake_home.join(".microsandbox").join("current"));
     }
 
-    /// Unset MSB_HOME falls back to $HOME/.microsandbox (or ./.microsandbox
-    /// when HOME is also unset).
+    /// Unset MSB_HOME falls back to $HOME/.microsandbox/current (or
+    /// ./.microsandbox/current when HOME is also unset) — the `current`
+    /// generation symlink is the canonical default home.
     #[test]
     fn msb_home_unset_uses_home_fallback() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
@@ -312,8 +312,11 @@ mod tests {
         let fake_home = uniq_dir("policy-msb-home-unset");
         std::env::remove_var("MSB_HOME");
         std::env::set_var("HOME", &fake_home);
-        assert_eq!(msb_home(), fake_home.join(".microsandbox"));
+        assert_eq!(msb_home(), fake_home.join(".microsandbox").join("current"));
         std::env::remove_var("HOME");
-        assert_eq!(msb_home(), PathBuf::from(".").join(".microsandbox"));
+        assert_eq!(
+            msb_home(),
+            PathBuf::from(".").join(".microsandbox").join("current")
+        );
     }
 }

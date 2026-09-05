@@ -124,19 +124,26 @@ rustPlatform.buildRustPackage {
   '';
 
   postInstall = ''
-    # Canonical MSB home: $HOME/.microsandbox (the SDK default from
-    # microsandbox_utils::resolve_home: non-empty MSB_HOME verbatim, else
-    # $HOME/.microsandbox, else ./.microsandbox). The guarded --run below
-    # honors an explicit caller override (including a non-empty MSB_HOME)
-    # while defaulting unset AND empty to the canonical home. --set-default
-    # would NOT handle the empty-string case (it only fires when unset), so
-    # the explicit `[ -z ... ]` guard is required. Shell expansion of $HOME
-    # happens at wrapper execution time, not at build time.
+    # Canonical MSB home: $HOME/.microsandbox/current — the `current`
+    # GENERATION symlink of the msb state-generations layout
+    # ($HOME/.microsandbox/generations/<hash12>/{db,sandboxes,run,...};
+    # see control/agentctl/src/microsandbox/generation.rs). msb resolves
+    # the symlink itself, so its home is the target generation dir keyed by
+    # the baked msb store-path hash. The guarded --run below honors an
+    # explicit caller override (a non-empty MSB_HOME still wins verbatim)
+    # while defaulting unset AND empty to the canonical home — empty
+    # mirrors the SDK's resolve_home semantics (empty treated as unset).
+    # --set-default would NOT handle the empty-string case (it only fires
+    # when unset), so the explicit `[ -z ... ]` guard is required. The
+    # 12-char generation keys exist because the total MSB_HOME path length
+    # is a fork hard limit of 59 chars (the unix-socket paths derived
+    # beneath MSB_HOME must fit sun_path). Shell expansion of $HOME happens
+    # at wrapper execution time, not at build time.
     wrapProgram $out/bin/workestrate \
       --set MSB_PATH "${microsandbox}/bin/msb" \
       --set MSB_AGENTD_PATH "${microsandbox}/libexec/agentd" \
       --prefix PATH : ${pkgs.sops}/bin \
-      --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox"; fi'
+      --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox/current"; fi'
   '';
 
   doCheck = false;

@@ -31,10 +31,15 @@ pub(crate) struct MountRoots<'a> {
 
 pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathBuf> {
     if let Some(rest) = host.strip_prefix("${MSB_HOME}/") {
-        let home = std::env::var("HOME")
-            .map(PathBuf::from)
-            .map_err(|_| anyhow::anyhow!("HOME not set"))?;
-        Ok(home.join(".microsandbox").join(rest))
+        // The default is the shared generation-aware one
+        // (`$HOME/.microsandbox/current` — the `current` symlink msb
+        // resolves as its home); keep the HOME-required error posture of
+        // this template (the SDK-style `.` fallback would silently
+        // retarget mounts).
+        if std::env::var_os("HOME").is_none() {
+            anyhow::bail!("HOME not set");
+        }
+        Ok(crate::microsandbox::generation::default_msb_home().join(rest))
     } else if host.starts_with("workspaces/") || host.starts_with("var/") {
         // Resolve to XDG state dir at runtime
         let state_dir = crate::config::resolve_state_dir();

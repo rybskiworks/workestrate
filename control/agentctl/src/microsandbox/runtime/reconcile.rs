@@ -60,19 +60,18 @@ pub struct ReconcileFacts {
     pub source_gone: bool,
 }
 
-/// Resolve the msb home dir (`$MSB_HOME` or `~/.microsandbox`), mirroring
-/// `microsandbox_utils::resolve_home` so the dir check matches the msb
-/// create gate exactly: a non-empty `MSB_HOME` is used verbatim, an empty
-/// value is treated as unset, else `$HOME/.microsandbox`, else
-/// `./.microsandbox`.
+/// Resolve the msb home dir (`$MSB_HOME` or `~/.microsandbox/current`),
+/// mirroring `microsandbox_utils::resolve_home` so the dir check matches
+/// the msb create gate exactly: a non-empty `MSB_HOME` is used verbatim, an
+/// empty value is treated as unset, else the canonical home — now the
+/// `current` generation symlink under `$HOME/.microsandbox` (msb state
+/// generations; see [`crate::microsandbox::generation`]) — else
+/// `./.microsandbox/current` when HOME is unset (the SDK's `.` fallback).
 pub fn msb_home() -> PathBuf {
     if let Some(path) = std::env::var_os("MSB_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(path);
     }
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".microsandbox")
+    crate::microsandbox::generation::default_msb_home()
 }
 
 /// The msb sandbox directory for `instance` — the directory the msb create
@@ -975,6 +974,7 @@ mod tests {
         assert_eq!(
             sandbox_dir("personal-b"),
             tmp.join(".microsandbox")
+                .join("current")
                 .join("sandboxes")
                 .join("personal-b")
         );
@@ -1027,11 +1027,12 @@ mod tests {
         std::env::remove_var("MSB_HOME");
         let via_unset = msb_home();
         assert_eq!(via_empty, via_unset);
-        assert_eq!(via_empty, fake_home.join(".microsandbox"));
+        assert_eq!(via_empty, fake_home.join(".microsandbox").join("current"));
     }
 
-    /// Unset MSB_HOME falls back to $HOME/.microsandbox (or ./.microsandbox
-    /// when HOME is also unset).
+    /// Unset MSB_HOME falls back to $HOME/.microsandbox/current (or
+    /// ./.microsandbox/current when HOME is also unset) — the `current`
+    /// generation symlink is the canonical default home.
     #[test]
     fn msb_home_unset_uses_home_fallback() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
@@ -1046,11 +1047,13 @@ mod tests {
         ));
         std::env::remove_var("MSB_HOME");
         std::env::set_var("HOME", &fake_home);
-        assert_eq!(msb_home(), fake_home.join(".microsandbox"));
+        assert_eq!(msb_home(), fake_home.join(".microsandbox").join("current"));
         std::env::remove_var("HOME");
         assert_eq!(
             msb_home(),
-            std::path::PathBuf::from(".").join(".microsandbox")
+            std::path::PathBuf::from(".")
+                .join(".microsandbox")
+                .join("current")
         );
     }
 
