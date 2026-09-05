@@ -342,16 +342,20 @@ read_only = true                 # DEPRECATED alias for mode = "ro" (kept here t
 [workloads.litellm.network.defaults]
 egress = "deny"
 
-[[workloads.litellm.network.egress]]
-recipe = "dns"
+# DNS (ADR 0035 hierarchical policy replaces the retired `network.egress`
+# recipe tables): host-scoped port/protocol allow.
+[[workloads.litellm.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.litellm.network.egress]]
-recipe = "https"
-hosts = ["openrouter.ai", "api.kimi.com", "api.neuralwatt.com", "api.minimax.io"]
-
-[[workloads.litellm.network.ingress]]
+[[workloads.litellm.policy.egress.allow.domain]]
+domains = ["openrouter.ai", "api.kimi.com", "api.neuralwatt.com", "api.minimax.io"]
+port = 443
 protocol = "tcp"
-port = 4000
+
+[[workloads.litellm.policy.ingress.allow.port]]
+ports = [4000]
+protocol = "tcp"
 scope = "local"
 
 # ─── pi ─────────────────────────────────────────────────────────────────────
@@ -384,11 +388,22 @@ mode = "rw"
 [workloads.pi.network.defaults]
 egress = "deny"
 
-[[workloads.pi.network.egress]]
-recipe = "agent_base"
+# agent_base equivalent (ADR 0035): DNS + host litellm proxy (4000) + github.
+[[workloads.pi.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.pi.network.deny]]
-domain_suffix = ".pi.dev"
+[[workloads.pi.policy.egress.allow.host]]
+ports = [4000]
+protocols = ["tcp"]
+
+[[workloads.pi.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[[workloads.pi.policy.egress.deny.domain]]
+domains = [".pi.dev"]
 
 [[workloads.pi.seed_files]]
 source = "agents/pi/config/models.json"   # config-relative
@@ -442,16 +457,28 @@ mode = "rw"
 [workloads.odysseus.network.defaults]
 egress = "deny"
 
-[[workloads.odysseus.network.egress]]
-recipe = "agent_base"
+# agent_base equivalent (ADR 0035): DNS + host litellm proxy (4000) + github.
+[[workloads.odysseus.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.odysseus.network.egress]]
-recipe = "https"
-hosts = ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co"]
+[[workloads.odysseus.policy.egress.allow.host]]
+ports = [4000]
+protocols = ["tcp"]
 
-[[workloads.odysseus.network.ingress]]
+[[workloads.odysseus.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
 protocol = "tcp"
-port = 7000
+
+[[workloads.odysseus.policy.egress.allow.domain]]
+domains = ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co"]
+port = 443
+protocol = "tcp"
+
+[[workloads.odysseus.policy.ingress.allow.port]]
+ports = [7000]
+protocol = "tcp"
 scope = "local"
 
 [[workloads.odysseus.seed_files]]
@@ -525,12 +552,23 @@ mode = "rw"
 [workloads.opencode.network.defaults]
 egress = "deny"
 
-[[workloads.opencode.network.egress]]
-recipe = "agent_base"
+# agent_base equivalent (ADR 0035): DNS + host litellm proxy (4000) + github.
+[[workloads.opencode.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
 
-[[workloads.opencode.network.ingress]]
+[[workloads.opencode.policy.egress.allow.host]]
+ports = [4000]
+protocols = ["tcp"]
+
+[[workloads.opencode.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
 protocol = "tcp"
-port = 3000
+
+[[workloads.opencode.policy.ingress.allow.port]]
+ports = [3000]
+protocol = "tcp"
 scope = "local"
 
 [workloads.opencode.local_build]
