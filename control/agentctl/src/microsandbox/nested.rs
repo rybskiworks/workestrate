@@ -149,10 +149,10 @@ fn nested_param_from(sys_module_root: &Path) -> Option<bool> {
             .join(module)
             .join("parameters")
             .join("nested");
-        if let Ok(body) = std::fs::read_to_string(&path) {
-            if let Some(value) = parse_nested_param(&body) {
-                return Some(value);
-            }
+        if let Ok(body) = std::fs::read_to_string(&path)
+            && let Some(value) = parse_nested_param(&body)
+        {
+            return Some(value);
         }
     }
     None
@@ -299,9 +299,9 @@ pub fn resolve_for_workload(
 /// - `off` → always Ok (current behavior, no checks).
 /// - `prefer` → NEVER refuses (degrades; the degraded state lands in the
 ///   plan provenance per D7).
-/// - `require` → refuses when the home-final seal froze it out, when the
-///   arch is unsupported, when `/dev/kvm` is missing or not accessible, or
-///   when the CPU nested parameter is affirmatively disabled. An UNKNOWN
+/// - `require` → refuses when the home-final seal froze it out, when
+///   `/dev/kvm` is missing or not accessible, when the arch is unsupported,
+///   or when the CPU nested parameter is affirmatively disabled. An UNKNOWN
 ///   nested parameter (`None`) is a `plan` note / doctor WARN, never a
 ///   refusal — the two refusal shapes stay exactly the plan §4 pair.
 /// - `frozen_by` carries the denying rung's origin for the seal refusal.
@@ -329,17 +329,6 @@ pub fn nested_up_decision(
         return Ok(());
     }
     // From here: require only.
-    if !probe.arch_supported {
-        anyhow::bail!(
-            "error: workload '{workload}' requires KVM (virtualization.nested=\"require\") \
-             but nested virtualization is only supported on Linux x86_64 (this host: {} {}) — \
-             see ADR 0036 §4 (guest /dev/kvm needs host KVM + nested; host gate scripts/host-check.sh)\n\
-             hint: run on a Linux x86_64 host with virtualization enabled in BIOS; \
-             or nested=\"prefer\" to degrade, or nested=\"off\" to opt out",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        );
-    }
     if !probe.kvm_present {
         anyhow::bail!(
             "error: workload '{workload}' requires KVM (virtualization.nested=\"require\") \
@@ -357,6 +346,17 @@ pub fn nested_up_decision(
              see ADR 0036 §4 (guest /dev/kvm needs host KVM + nested; host gate scripts/host-check.sh)\n\
              hint: enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
              sudo usermod -aG kvm $USER (re-login); or nested=\"prefer\" to degrade, or nested=\"off\" to opt out"
+        );
+    }
+    if !probe.arch_supported {
+        anyhow::bail!(
+            "error: workload '{workload}' requires KVM (virtualization.nested=\"require\") \
+             but nested virtualization is only supported on Linux x86_64 (this host: {} {}) — \
+             see ADR 0036 §4 (guest /dev/kvm needs host KVM + nested; host gate scripts/host-check.sh)\n\
+             hint: run on a Linux x86_64 host with virtualization enabled in BIOS; \
+             or nested=\"prefer\" to degrade, or nested=\"off\" to opt out",
+            std::env::consts::OS,
+            std::env::consts::ARCH
         );
     }
     if probe.nested_param == Some(false) {
