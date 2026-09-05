@@ -770,7 +770,7 @@ fn apply_current_view_mutations<W: Workload>(plan: &mut SandboxPlan, workload: &
     plan.name = instance.to_string();
 }
 
-/// msb state generations fail-closed pre-create gate (see
+/// msb state generations fail-closed up gate (see
 /// [`crate::microsandbox::generation`]): refuses an up whose resolved msb
 /// home is pinned to a DIFFERENT generation than the baked msb store-path
 /// key, a pre-generation legacy root (`db/` at `$HOME/.microsandbox`), or
@@ -786,9 +786,25 @@ fn apply_current_view_mutations<W: Workload>(plan: &mut SandboxPlan, workload: &
 /// the matching key, or an explicit home canonicalizing to a matching
 /// `generations/<key12>` dir — including via `current`); `None` for the
 /// unmanaged posture, a non-generation explicit override, or a fresh root.
-/// Evaluated in [`build_sandbox`] immediately before the nested gate +
-/// `builder.create()`, so a refusal leaves NO partial sandbox behind
-/// (never partial: refuse before any sandbox creation).
+///
+/// ORDERING INVARIANT: the verdict is EVALUATED at the TOP of
+/// [`build_sandbox`] and at the top of the detached-up parent
+/// (`up_service_with_spec` non-foreground block) — before gather_facts /
+/// chain decisions / ANY teardown or mount-policy write. Evaluation is
+/// cheap and side-effect-safe (its only side effect is the rule-3
+/// best-effort heal); the REFUSAL is then applied lazily at each mutation
+/// point via [`gate_refusal`] — never partial: a mismatch refuses before
+/// any state change:
+/// - chain-Replace and on_skew="replace" teardowns (child AND detached
+///   parent) refuse BEFORE `teardown_for_replace`;
+/// - StartExisting refuses BEFORE the policy write + `handle.start()` —
+///   starting a STOPPED old-generation sandbox with the NEW baked binary
+///   would forward-mutate the old generation in place;
+/// - the create path consumes the verdict before
+///   `check_occupied_or_replace` / builder assembly / `create()`;
+/// - REUSE of an already-RUNNING sandbox is deliberately UNGATED
+///   (adjudication): reusing a live sandbox mutates no msb state, and
+///   converge's quiesce gate separately refuses while it is live.
 fn check_generation_up_gate() -> Result<Option<PathBuf>> {
     use crate::microsandbox::generation as gen;
     let baked = gen::baked_generation_key();
@@ -827,6 +843,17 @@ fn check_generation_up_gate() -> Result<Option<PathBuf>> {
         ),
         gen::HomeResolution::Fresh(_) => Ok(None),
     }
+}
+
+/// The refusal half of a stored [`check_generation_up_gate`] verdict:
+/// `Some(error)` (message preserved) when the gate refused, WITHOUT
+/// consuming the verdict — the create path later consumes it for the
+/// `.booted-ok` marker dir. Applied at every pre-mutation point (chain /
+/// on_skew / parent-side teardowns, StartExisting) so a generation
+/// mismatch refuses BEFORE any state change while the adjudicated-ungated
+/// Reuse path never consults it.
+fn gate_refusal(gate: &Result<Option<PathBuf>>) -> Option<anyhow::Error> {
+    gate.as_ref().err().map(|e| anyhow::anyhow!("{e}"))
 }
 
 /// msb state generations: write the empty `.booted-ok` marker in the
@@ -870,6 +897,14 @@ pub(crate) async fn build_sandbox<W: Workload>(
     workload: &W,
     spec: &InstanceSpec,
 ) -> Result<BuildOutcome> {
+    // msb state generations fail-closed up gate: EVALUATED FIRST — before
+    // secrets/plan/gather_facts/chain decisions and therefore before ANY
+    // teardown or mount-policy write (ordering invariant: see
+    // `check_generation_up_gate`). The REFUSAL is applied lazily at each
+    // mutation point (`gate_refusal`) so the adjudicated-ungated Reuse
+    // path returns untouched; the create path consumes the verdict for the
+    // `.booted-ok` marker dir.
+    let generation_gate = check_generation_up_gate();
     // Load secrets from .env.enc across the resolved layers. FN-9: the
     // merged map is threaded into env/secret resolution below — it is NOT
     // written into process-global env (parallel build_sandbox calls would
@@ -1044,6 +1079,11 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let mut skew_replaced = false;
     match step {
         super::reconcile::ChainStep::Reuse => {
+            // msb state generations adjudication: reusing an
+            // already-RUNNING sandbox is deliberately UNGATED — it mutates
+            // no msb state, and converge's quiesce gate separately refuses
+            // while the sandbox is live. Only the on_skew="replace"
+            // fall-through mutates (teardown), so IT consults the gate.
             // A1/P3: adopting a record registered under a different context
             // than the active one is allowed but surfaced (warn-and-proceed).
             super::reconcile::warn_on_context_drift(
@@ -1072,6 +1112,12 @@ pub(crate) async fn build_sandbox<W: Workload>(
                     return Ok(BuildOutcome::Reused);
                 }
                 SkewDisposition::ReplaceNow => {
+                    // msb state generations gate: refuse BEFORE the
+                    // teardown (never partial — a mismatch must not destroy
+                    // the old-generation sandbox).
+                    if let Some(e) = gate_refusal(&generation_gate) {
+                        return Err(e);
+                    }
                     eprintln!(
                         "on_skew = \"replace\": replacing instance '{}' (build inputs diverged)",
                         spec.instance
@@ -1088,6 +1134,13 @@ pub(crate) async fn build_sandbox<W: Workload>(
             );
         }
         super::reconcile::ChainStep::StartExisting => {
+            // msb state generations gate: refuse BEFORE the policy write +
+            // `handle.start()` — starting a STOPPED old-generation sandbox
+            // with the NEW baked binary would forward-mutate the old
+            // generation in place.
+            if let Some(e) = gate_refusal(&generation_gate) {
+                return Err(e);
+            }
             // A1/P3: adopting a record registered under a different context
             // than the active one is allowed but surfaced (warn-and-proceed).
             super::reconcile::warn_on_context_drift(
@@ -1128,10 +1181,22 @@ pub(crate) async fn build_sandbox<W: Workload>(
             return Ok(BuildOutcome::Ready(Box::new(sandbox), config));
         }
         super::reconcile::ChainStep::Replace => {
+            // msb state generations gate: refuse BEFORE the teardown
+            // (never partial — a mismatch must not destroy the
+            // old-generation sandbox).
+            if let Some(e) = gate_refusal(&generation_gate) {
+                return Err(e);
+            }
             super::teardown_for_replace(&state_dir, &spec.instance).await?;
         }
         super::reconcile::ChainStep::Start => {}
     }
+    // msb state generations gate: the create path CONSUMES the verdict
+    // here — still before any create-path mutation
+    // (`check_occupied_or_replace`, the policy write, builder assembly,
+    // `create()`). The Ok generation dir rides to the `.booted-ok` marker
+    // write after registration below.
+    let generation_dir = generation_gate?;
     if spec.replace {
         check_occupied_or_replace(spec, &state_dir).await?;
     }
@@ -1200,12 +1265,6 @@ pub(crate) async fn build_sandbox<W: Workload>(
     } else {
         builder
     };
-    // msb state generations fail-closed pre-create gate: evaluated BEFORE
-    // the nested gate (and therefore before `builder.create()`) so a
-    // generation mismatch / legacy root / ambiguous root refuses with NO
-    // partial sandbox behind. The returned generation dir receives the
-    // `.booted-ok` marker after a successful create + registration below.
-    let generation_dir = check_generation_up_gate()?;
     // ADR 0036 §4: fail-closed nested-virt pre-create gate. Evaluated HERE —
     // after the policy-file write + `ensure_mount_sources`, immediately
     // before `builder.create()` — so a refusal leaves NO partial sandbox
@@ -1374,6 +1433,12 @@ pub async fn up_service_with_spec<W: Workload>(
     foreground: bool,
 ) -> Result<()> {
     if !foreground {
+        // msb state generations fail-closed up gate: EVALUATED before any
+        // parent-side mutation (the pre-spawn teardowns below); refusal is
+        // applied lazily (`gate_refusal`) so the adjudicated-ungated Reuse
+        // short-circuit returns untouched — ordering invariant: see
+        // `check_generation_up_gate`.
+        let generation_gate = check_generation_up_gate();
         // ADR 0030 Phase 0: short-circuit reuse/fail in the PARENT — a child
         // that reconciles to reuse would exit within the FS-8 grace window
         // and be misreported as an immediate failure. An explicit `--replace`
@@ -1388,6 +1453,11 @@ pub async fn up_service_with_spec<W: Workload>(
         let step = super::reconcile::decide_step(&chain, &facts, &spec.instance, spec.replace)?;
         match step {
             super::reconcile::ChainStep::Reuse => {
+                // msb state generations adjudication: the reuse
+                // short-circuit is deliberately UNGATED (reusing a live
+                // sandbox mutates no msb state — see
+                // `check_generation_up_gate`); only the on_skew="replace"
+                // teardown below consults the gate.
                 // A1/P3: adopting a record registered under a different
                 // context than the active one is allowed but surfaced
                 // (warn-and-proceed).
@@ -1414,7 +1484,12 @@ pub async fn up_service_with_spec<W: Workload>(
                         // hardened teardown the should_teardown_in_parent
                         // arm runs) and CONTINUE to spawn the child — the
                         // slot is now free, so the child re-derives Start
-                        // and creates fresh with new stamps.
+                        // and creates fresh with new stamps. msb state
+                        // generations gate: refuse BEFORE the teardown
+                        // (never partial).
+                        if let Some(e) = gate_refusal(&generation_gate) {
+                            return Err(e);
+                        }
                         eprintln!(
                             "on_skew = \"replace\": replacing instance '{}' (build inputs diverged)",
                             spec.instance
@@ -1440,6 +1515,11 @@ pub async fn up_service_with_spec<W: Workload>(
             }
             step => {
                 if should_teardown_in_parent(step) {
+                    // msb state generations gate: refuse BEFORE the
+                    // parent-side teardown (never partial).
+                    if let Some(e) = gate_refusal(&generation_gate) {
+                        return Err(e);
+                    }
                     // The FS-8 grace (spawn.rs: 500ms) only catches an IMMEDIATE
                     // child exit; a replace teardown takes seconds, so a
                     // child-side teardown failure would be logged by the child
@@ -1457,6 +1537,14 @@ pub async fn up_service_with_spec<W: Workload>(
                 }
             }
         }
+        // msb state generations gate: the SPAWNING paths (Start /
+        // StartExisting / post-teardown replace — the ungated Reuse
+        // short-circuit already returned) consume the verdict HERE so a
+        // refusal exits the parent nonzero instead of spawning a child that
+        // would fail at its own gate. The generation dir is unused in the
+        // parent (the `.booted-ok` marker write is child-side, in
+        // `build_sandbox`).
+        let _ = generation_gate?;
         let instance = spec.instance.clone();
         let child = super::spawn_detached_service(&instance, &workload.detach_args(spec))?;
         println!(
