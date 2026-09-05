@@ -393,10 +393,13 @@
 
           msb-wrapped = pkgs.runCommand "msb-wrapped" { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
             mkdir -p $out/bin
-            # Guarded MSB_HOME default: honors an explicit non-empty
-            # MSB_HOME override; --set-default would not handle empty.
+            # Guarded MSB_HOME default per the msb state-generations model: the
+            # canonical home is the `current` generation symlink (see
+            # nix/packages/agentctl.nix postInstall + docs/runtime-provisioning.md).
+            # A non-empty MSB_HOME still wins verbatim; empty is treated as
+            # unset, so --set-default would not handle empty.
             makeWrapper ${microsandbox}/bin/msb $out/bin/msb \
-              --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox"; fi'
+              --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox/current"; fi'
           '';
 
           decrypt-env = pkgs.writeShellApplication {
