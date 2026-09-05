@@ -21,8 +21,10 @@
 #     only the canonical root, so overrides are out of scope (nothing to do)
 #   > current symlink target
 #   > current missing + exactly one generation dir -> heal current to it
-#   > legacy root has db/ directly -> pre-generation home, ABSORBED as
-#     generations/legacy
+#   > legacy root has db/ directly -> pre-generation home, probed for
+#     liveness FIRST (live/unproven -> refuse), then ABSORBED as
+#     generations/legacy (a relocation, not a teardown: "refuse never
+#     partial" applies to sandboxes, not the move)
 #   > fresh (no db, no generations).
 #
 # The legacy devshell cache home ($HOME/.cache/ai-workbench-msb) is absorbed
@@ -376,10 +378,18 @@ gc_sweep() {
         run rm -rf "$g" ;;
     esac
   done
-  # Interrupted-converge staging debris.
-  local d
+  # Interrupted-converge staging debris: sweep ONLY staging dirs whose pid
+  # suffix is not a live process — the .flip.lock flock serializes just the
+  # flip, so a concurrent converge's in-flight staging must survive. (This
+  # run's own staging is already moved/removed by the converge path itself.)
+  local d spid
   for d in "$GENS"/.converge-tmp-*; do
     [[ -d "$d" ]] || continue
+    spid=${d##*/.converge-tmp-}
+    if [[ "$spid" =~ ^[0-9]+$ ]] && kill -0 "$spid" 2>/dev/null; then
+      log "GC: keeping staging dir $(basename "$d") (pid $spid is alive — concurrent converge in flight)"
+      continue
+    fi
     log "GC: removing interrupted-converge staging dir $(basename "$d")"
     run rm -rf "$d"
   done
@@ -495,6 +505,22 @@ do_converge() {
       log "healing missing 'current' symlink -> $cur_gen"
       flip_current "${gens[0]}"
     elif [[ -d "$ROOT/db" ]]; then
+      # Probe the pre-generation ROOT for liveness BEFORE moving anything:
+      # the absorb relocates state and must not run against live sandboxes.
+      local root_probe
+      root_probe=$(gen_probe "$ROOT" "$BIN")
+      case "$root_probe" in
+        empty) ;;
+        nodb-error) log "pre-generation root has no db file and 'msb list' errored; treating as empty" ;;
+        live)
+          warn "quiesce gate: LIVE sandboxes in the pre-generation root ($ROOT); refusing to absorb"
+          echo "[msb-gen-converge]   reap with: MSB_HOME=$ROOT $BIN down --all" >&2
+          die "quiesce gate REFUSED: live sandboxes in the pre-generation root (see above); converge never proceeds partially" ;;
+        error)
+          warn "quiesce gate: cannot prove the pre-generation root ($ROOT) quiesced: it has a db but 'MSB_HOME=$ROOT $BIN list' errored"
+          echo "[msb-gen-converge]   remediation: run 'MSB_HOME=$ROOT $BIN list' manually, resolve the error, then re-run converge" >&2
+          die "quiesce gate REFUSED: pre-generation root not proven quiesced (see above); converge never proceeds partially" ;;
+      esac
       absorb_legacy_root
       cur_gen="legacy"
     else
