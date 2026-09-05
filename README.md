@@ -567,9 +567,13 @@ recreates the symlink from the flake input.
 
 ## Git hooks
 
-Fresh clones have no hooks; install the pure-sh fallback with
-`cp scripts/git-hooks/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`.
-Entering the devenv shell replaces it with the generated hook (moved to `pre-commit.legacy`) —
+Fresh clones have no hooks; install the pure-sh fallbacks with
+`cp scripts/git-hooks/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
+and `cp scripts/git-hooks/pre-push.sh .git/hooks/pre-push && chmod +x .git/hooks/pre-push`.
+pre-commit runs the tier-1/2 gates (secret scan, typos/nixfmt/statix/deadnix, tombi,
+rustfmt --check); pre-push runs the tier-3 gate (`just check` when just+nix+check-recipe
+are present, skip-with-message otherwise). The devenv shell clobber of the generated hook
+is disabled by default (nix-tooling `git-hooks.install.enable = false`) —
 see `docs/nix/store-hygiene-and-gc.md` §"Git hooks vs GC".
 
 ## Nix build integration
