@@ -176,7 +176,7 @@ _golden-generate-inner:
         printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _golden-generate-inner
     fi
-    @for name in example-service example-agent example-offensive; do \
+    for name in example-service example-agent example-offensive; do \
         WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
           > control/agentctl/tests/golden/$name.plan.txt; \
     done
@@ -200,7 +200,7 @@ _golden-check-inner:
         printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _golden-check-inner
     fi
-    @for name in example-service example-agent example-offensive; do \
+    for name in example-service example-agent example-offensive; do \
         WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
           | diff - control/agentctl/tests/golden/$name.plan.txt \
           || (echo "golden mismatch for $name; run 'just golden-generate' to update" && exit 1); \
