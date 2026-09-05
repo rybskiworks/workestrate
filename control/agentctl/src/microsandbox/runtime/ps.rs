@@ -201,6 +201,9 @@ pub fn occupancy_from_state(state_dir: &Path, instance: &str) -> Result<Occupanc
 
 /// Pure listing for `workestrate ps`. Reads the registry state files; does
 /// NOT call msb (callers may post-process to populate `stale`).
+/// CURRENT-GENERATION ONLY by deliberate default (msb state generations):
+/// `ps` reflects the RESOLVED home; sweeping every retained generation is
+/// a `down` broad-rung behavior, not a `ps` default.
 pub fn ps(state_dir: &Path) -> Result<Vec<PsEntry>> {
     let records = super::super::port_registry::list_records(state_dir)?;
     Ok(records

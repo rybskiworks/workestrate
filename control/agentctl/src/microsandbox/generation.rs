@@ -41,7 +41,9 @@ const STORE_HASH_LEN: usize = 32;
 const STORE_NAME_MARKER: &str = "-microsandbox-";
 
 /// Name of the per-generation container directory under the msb home root.
-const GENERATIONS_DIR_NAME: &str = "generations";
+/// Crate-visible so the retained-generation down sweep
+/// (`down_scope::retained_generation_homes`) reuses the ONE spelling.
+pub(crate) const GENERATIONS_DIR_NAME: &str = "generations";
 
 /// Name of the `current` symlink at the msb home root.
 const CURRENT_LINK_NAME: &str = "current";

@@ -16,10 +16,19 @@
 //! scope goes through the hardened
 //! teardown path ([`super::down_hardened`]); per-target outcomes are
 //! reported and ANY failure exits nonzero (§Down scope ladder).
+//!
+//! RETAINED GENERATIONS (msb state generations): the BROAD rungs (home /
+//! everything) sweep EVERY retained generation home, not just the
+//! currently-resolved one — [`retained_generation_homes`] lists the OTHER
+//! `generations/<key12>` dirs and [`enumerate_generation_dir_candidates`]
+//! is the per-generation DIR-driven enumeration (no registry records: the
+//! workestrate port registry is generation-agnostic and is swept ONCE,
+//! against the resolved home). The targeted rungs (context / config-ref)
+//! — and `ps` — stay current-only.
 
 use anyhow::Result;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use microsandbox::Sandbox;
 
@@ -205,6 +214,80 @@ fn dir_listing_names() -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// The RETAINED generation homes OTHER than the currently-resolved one
+/// (msb state generations): every valid `generations/<key12>` dir under
+/// [`generation::msb_home_root`] (per [`generation::generation_entries`]),
+/// minus the dir CANONICAL-equal to the resolved home — the `current`
+/// symlink target / rule-3 heal target
+/// ([`generation::resolve_msb_home_generation`]) or, for every other
+/// resolution (explicit override, legacy root, fresh, ambiguous), the
+/// verbatim [`super::reconcile::msb_home`] — so `current`'s own generation
+/// is never swept twice by the broad down rungs. Empty when no
+/// `generations/` dir exists (unmanaged / legacy single-home posture
+/// preserved).
+///
+/// [`generation::resolve_msb_home_generation`]: crate::microsandbox::generation::resolve_msb_home_generation
+/// [`generation::generation_entries`]: crate::microsandbox::generation::generation_entries
+/// [`generation::msb_home_root`]: crate::microsandbox::generation::msb_home_root
+pub fn retained_generation_homes() -> Vec<PathBuf> {
+    use crate::microsandbox::generation::{self, HomeResolution};
+    let root = generation::msb_home_root();
+    let (keys, _debris) = generation::generation_entries(&root);
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    let resolved = match generation::resolve_msb_home_generation() {
+        HomeResolution::Current { gen_dir, .. } | HomeResolution::Healed { gen_dir, .. } => {
+            gen_dir
+        }
+        _ => super::reconcile::msb_home(),
+    };
+    // Dedupe by CANONICAL path: `current` is a symlink into generations/,
+    // so a literal path comparison would miss the equivalence.
+    let resolved = resolved.canonicalize().ok();
+    keys.into_iter()
+        .map(|key| root.join(generation::GENERATIONS_DIR_NAME).join(key))
+        .filter(|dir| match (&resolved, dir.canonicalize()) {
+            (Some(home), Ok(canonical)) => canonical != *home,
+            // Unresolvable on either side: keep the dir — a generation that
+            // vanished is skipped later, at sweep time, not here.
+            _ => true,
+        })
+        .collect()
+}
+
+/// Per-generation DIR-driven enumeration for the retained-generation sweep
+/// ([`retained_generation_homes`]): the sandbox-dir listing under the
+/// pinned generation home (the [`dir_listing_names`] entry point) with NO
+/// port-registry records and NO SDK-first listing. The workestrate
+/// registry is generation-agnostic — its record-driven targets are swept
+/// ONCE, against the resolved home, by the caller — and the SDK's
+/// process-global DB pool may already be pinned to another home in this
+/// process, so the honest per-generation store is the on-disk
+/// `<gen>/sandboxes/*` listing. The caller MUST pin `MSB_HOME` to the
+/// generation dir around this call (and the matching `down_hardened`
+/// section); artifact evidence stays DUAL-PATH, with the legacy
+/// sandbox-dir probe resolving under the pinned home. Unmanaged
+/// candidates (zero evidence) are included only for the everything rung
+/// (`include_unmanaged`).
+pub fn enumerate_generation_dir_candidates(include_unmanaged: bool) -> Vec<ManagedTarget> {
+    let mut targets = Vec::new();
+    for name in dir_listing_names() {
+        // No record store on this side (records belong to the resolved
+        // home's sweep): classify on slot shape + artifact only.
+        let evidence = classify(&name, None, artifact_log_exists(&name));
+        if evidence.is_empty() && !include_unmanaged {
+            continue;
+        }
+        targets.push(ManagedTarget {
+            instance: name,
+            context: None,
+            evidence,
+        });
+    }
+    targets
 }
 
 /// Enumerate every MANAGED teardown candidate (ADR 0032 addendum §Down

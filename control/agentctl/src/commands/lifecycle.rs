@@ -775,6 +775,19 @@ pub async fn cmd_down_ladder(
         results.push(down_hardened(&state_dir, &t.instance).await);
     }
 
+    // ---- retained-generation sweeps (BROAD rungs only) ----
+    // Home/Everything sweep EVERY retained generation home, not just the
+    // resolved one (msb state generations): the record-driven targets were
+    // torn down above, ONCE, against the resolved home (the workestrate
+    // port registry is generation-agnostic); each EXTRA generation
+    // contributes its own dir-driven candidates, torn down with MSB_HOME
+    // pinned to that generation dir. Targeted rungs stay current-only.
+    let generation_sweeps = if matches!(scope, DownScope::Home | DownScope::Everything) {
+        down_retained_generations(&state_dir, &scope).await
+    } else {
+        Vec::new()
+    };
+
     // ---- outcomes: ONE scope header line + per-target lines / JSON ----
     let description = scope.description();
     if json {
@@ -782,14 +795,86 @@ pub async fn cmd_down_ladder(
             "{}",
             serde_json::to_string_pretty(&crate::json_out::down_scope_results_json(
                 &description,
-                &results
+                &results,
+                &generation_sweeps
             ))?
         );
     } else {
         println!("down {description}: {} target(s)", results.len());
         print_down_results_text(&results);
+        for (generation, gen_results) in &generation_sweeps {
+            println!(
+                "down {description} (generation {generation}): {} target(s)",
+                gen_results.len()
+            );
+            print_down_results_text(gen_results);
+        }
     }
-    report_down_aggregate(&results)
+    // ANY per-target failure in ANY swept home exits nonzero — the same
+    // aggregate posture as the single-home sweep.
+    let all_results: Vec<crate::microsandbox::runtime::DownResult> = results
+        .iter()
+        .chain(
+            generation_sweeps
+                .iter()
+                .flat_map(|(_, gen_results)| gen_results.iter()),
+        )
+        .cloned()
+        .collect();
+    report_down_aggregate(&all_results)
+}
+
+/// The retained-generation sweep for the BROAD down rungs (msb state
+/// generations): for each extra generation home from
+/// [`retained_generation_homes`], pin `MSB_HOME` to it (save/set/restore
+/// via the shared EnvGuard; restored on drop even on error), enumerate
+/// that generation's DIR-driven candidates, resolve the same scope against
+/// them, and tear each selected target down through the hardened path.
+/// Record-driven targets are NOT re-swept here — the workestrate port
+/// registry is generation-agnostic and was handled once against the
+/// resolved home. A generation dir that vanished mid-sweep is logged and
+/// skipped, never a hard error. Sequential (the ladder is sequential), so
+/// the env pinning cannot race.
+///
+/// [`retained_generation_homes`]: crate::microsandbox::runtime::down_scope::retained_generation_homes
+async fn down_retained_generations(
+    state_dir: &std::path::Path,
+    scope: &crate::microsandbox::runtime::down_scope::DownScope,
+) -> Vec<(String, Vec<crate::microsandbox::runtime::DownResult>)> {
+    use crate::microsandbox::runtime::down_hardened;
+    use crate::microsandbox::runtime::down_scope::{
+        enumerate_generation_dir_candidates, resolve_scope, retained_generation_homes, DownScope,
+    };
+    let mut sweeps = Vec::new();
+    for gen_home in retained_generation_homes() {
+        let key = gen_home
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // A generation dir that vanished mid-sweep: log + skip, not a hard
+        // error.
+        if !gen_home.is_dir() {
+            eprintln!(
+                "warning: retained generation home {} vanished mid-sweep; skipping",
+                gen_home.display()
+            );
+            continue;
+        }
+        // Pin MSB_HOME to THIS generation for the enumeration + teardown
+        // section; the guard restores the prior value on drop even on
+        // error (it also snapshots cwd, which is untouched here).
+        let _pin = crate::config::test_support::EnvGuard::capture(&["MSB_HOME"]);
+        std::env::set_var("MSB_HOME", gen_home);
+        let candidates =
+            enumerate_generation_dir_candidates(matches!(scope, DownScope::Everything));
+        let selected = resolve_scope(scope, &candidates);
+        let mut results = Vec::with_capacity(selected.len());
+        for t in &selected {
+            results.push(down_hardened(state_dir, &t.instance).await);
+        }
+        sweeps.push((key, results));
+    }
+    sweeps
 }
 
 /// `workestrate clean` — remove the CONTENTS of the volatile state-dir

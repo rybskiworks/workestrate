@@ -39,15 +39,38 @@ pub fn down_results_json(
 pub struct DownScopeResultsJson {
     pub scope: String,
     pub results: Vec<DownResultJson>,
+    /// The RETAINED-GENERATION sweeps (msb state generations): one entry
+    /// per EXTRA generation home torn down by the broad rungs (home /
+    /// everything), keyed by the 12-char generation key. Additive; omitted
+    /// when empty so the single-home envelope stays byte-identical.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub generations: Vec<GenerationDownResultsJson>,
+}
+
+/// One extra retained generation home's sweep results (msb state
+/// generations): the 12-char generation key plus that home's per-target
+/// results (same object shape as the top-level `results`).
+#[derive(serde::Serialize)]
+pub struct GenerationDownResultsJson {
+    pub generation: String,
+    pub results: Vec<DownResultJson>,
 }
 
 pub fn down_scope_results_json(
     scope: &str,
     results: &[crate::microsandbox::runtime::DownResult],
+    generations: &[(String, Vec<crate::microsandbox::runtime::DownResult>)],
 ) -> DownScopeResultsJson {
     DownScopeResultsJson {
         scope: scope.to_string(),
         results: down_results_json(results),
+        generations: generations
+            .iter()
+            .map(|(generation, r)| GenerationDownResultsJson {
+                generation: generation.clone(),
+                results: down_results_json(r),
+            })
+            .collect(),
     }
 }
 
