@@ -746,9 +746,13 @@ capsule (`workestrate/workloads/litellm/`), not in this repo.
   and confirm virtualization is enabled in firmware. `just host-check`
   surfaces all of these.
 - **Canonical `~/.microsandbox` is LIVE (do NOT delete).** It is the
-  SDK runtime home; `$HOME/.cache/ai-workbench-msb` is staging-only for
+  SDK runtime root; `$HOME/.cache/ai-workbench-msb` is staging-only for
   offline `cargo check`/`build.rs`. On any skew, run
-  `./scripts/migrate-msb-home.sh`.
+  `./scripts/migrate-msb-home.sh`. msb state under the root is
+  **generation-keyed** (`generations/<hash12>/` + an atomic `current`
+  symlink, one dir per pinned msb build); `just host-provision` converges
+  state across binary bumps and `workestrate doctor` reports the
+  `generation` row — see `docs/runtime-provisioning.md`.
 - **Port 4000 already in use.** Another process is bound to the
   LiteLLM port. Stop it, or change the proxy port in the sandbox plan
   and update any agent configuration that points at `:4000`.
