@@ -71,8 +71,10 @@ See ADR 0023.
 **Bundle (repo-local home)**
 A `$WORKESTRATE_HOME` placed inside a repository (typically
 `<repo>/.workestrate/`) for container persistence. Bind-mountable across
-container restarts. The `.envrc`/`local-xdg.sh` set `WORKESTRATE_HOME` to
-point at it. See ADR 0023.
+container restarts. The `.envrc`/`local-xdg.sh` machinery that set
+`WORKESTRATE_HOME` to point at it is REMOVED (2026-09-04 note: `local-xdg.sh`
+was removed in `418530a`, `.envrc` deleted in `7805648`); the bundle remains as
+a layout concept. See ADR 0023.
 
 **migrate-home**
 `workestrate migrate-home` — migrates a legacy XDG three-home layout

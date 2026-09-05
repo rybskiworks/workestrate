@@ -22,8 +22,10 @@ Rust CLI built with Tokio and Clap. Sources live in `control/agentctl/src/`.
 Commands span workload lifecycle (`up`/`down`/`logs`/`exec`/`plan`), config
 management (`config add/new/update/list/trust`), source management
 (`source clone/build/list/reset`), bootstrap (`init`, `migrate-home`),
-introspection (`check`, `ps`, `validate-config`, `secrets-schema`,
-`generate-env-example`, `generate-schema`, `completions`), and the
+introspection (`check`, `ps`, `doctor`, `versions`, `validate-config`, `secrets-schema`,
+`generate-env-example`, `generate-schema`, `completions`), the `msb`
+passthrough (`workestrate msb <args>` forwards verbatim to the pinned
+microsandbox binary), and the
 secret-bearing escape hatch (`run`). `plan` prints sandbox configurations
 built with `SandboxBuilder` and `NetworkPolicyBuilder`; `plan --show-source`
 annotates per-field provenance with layer names. `up`/`exec` target a slot

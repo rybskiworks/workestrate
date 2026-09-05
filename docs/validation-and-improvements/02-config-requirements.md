@@ -1,5 +1,7 @@
 # 02 — Config Requirements (workestrate.toml contract)
 
+> **Superseded 2026-09-04: entitlements removed; explicit allow stands alone + home final seals veto (ADR 0035 amendment + docs/migration/30-security-model.md). Content below is a historical record.**
+
 > **STATUS: READY-TO-EXECUTE (requirements frozen pending sign-off)**
 
 > CLI config authoring is DEFERRED (see `06-improvements/04-cli-config-authoring.md`);

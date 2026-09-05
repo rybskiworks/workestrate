@@ -1,5 +1,7 @@
 # 06.01 — Mount Filtering / Shadowing (Track A)
 
+> **Superseded 2026-09-04: entitlements removed; explicit allow stands alone + home final seals veto (ADR 0035 amendment + docs/migration/30-security-model.md). Content below is a historical record.**
+
 > **STATUS: SECONDARY / FALLBACK (2026-08-02) — spec 22 (dynamic PassthroughFs
 > masking, [22-dynamic-mount-masking-policy.md](22-dynamic-mount-masking-policy.md))
 > is the PRIMARY plan; if spec 22 lands successfully THIS SPEC WILL BE DELETED.**

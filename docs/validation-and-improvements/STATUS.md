@@ -1,6 +1,6 @@
 # STATUS — comprehensive state report for the next session
 
-> **STATUS: CURRENT (2026-08-13, HEAD `894e1bc` on `feature/mount-masking`; mount-masking library+config+CLI landed, rebased onto sibling/migration/tool-model c45494b; SDK seam dormant; merge onto wr `migration/tool-model` PLANNED — merge-readiness addendum below)**
+> **STATUS: DATED RECORD (snapshot of 2026-08-13, HEAD `894e1bc` on `feature/mount-masking`; mount-masking library+config+CLI landed, rebased onto sibling/migration/tool-model c45494b; SDK seam dormant; merge onto wr `migration/tool-model` PLANNED — merge-readiness addendum below). Not current — retained as a historical record.**
 > Prerequisites / see-also: [README.md](README.md) · [NEXT-SESSION.md](NEXT-SESSION.md) ·
 > [07-execution-order.md](07-execution-order.md) · [06-improvements/00-index.md](06-improvements/00-index.md) ·
 > [02-config-requirements.md](02-config-requirements.md)

@@ -1,5 +1,7 @@
 # 00 — Overview (the whole effort in ≤2 pages)
 
+> **Superseded 2026-09-04: entitlements removed; explicit allow stands alone + home final seals veto (ADR 0035 amendment + docs/migration/30-security-model.md). Content below is a historical record.**
+
 > **STATUS: READY-TO-EXECUTE**
 > Prerequisites / see-also: [README.md](README.md) ·
 > [01-current-state-and-prereqs.md](01-current-state-and-prereqs.md)

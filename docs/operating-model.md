@@ -268,6 +268,8 @@ Exact gates, as implemented:
 * Context scope keys on RECORD context (primary) or the `<ctx>-` slot
   prefix (corroborating only) — never bare-name equality.
 
+Generation coverage (ADR 0037): the `home` (`--all`) and `everything` scopes sweep ALL retained msb state generations under `$HOME/.microsandbox/generations/` (multi-generation down sweeps), not only the `current` generation.
+
 Classification evidence per target: registry record ∨ dashed slot pattern
 (`<ctx>-<workload>`) ∨ the `workestrate.log` artifact (detached-child log,
 persisted in the state dir at `logs/<instance>/workestrate.log` since

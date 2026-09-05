@@ -1,5 +1,7 @@
 # 01 — Current State and Prerequisites
 
+> **Superseded 2026-09-04: entitlements removed; explicit allow stands alone + home final seals veto (ADR 0035 amendment + docs/migration/30-security-model.md). Content below is a historical record.**
+
 > **STATUS: READY-TO-EXECUTE**
 > Prerequisites / see-also: [README.md](README.md) · [00-overview.md](00-overview.md) ·
 > [03-sibling-config-setup.md](03-sibling-config-setup.md) · [04-baseline-validation.md](04-baseline-validation.md)
