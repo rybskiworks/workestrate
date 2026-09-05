@@ -100,6 +100,7 @@ fn doctor_json_has_expected_check_names() {
         "age_keygen",
         "age_key_file",
         "msb",
+        "generation",
         "home",
         "config_repos",
         "schemas",

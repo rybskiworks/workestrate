@@ -328,3 +328,330 @@ fn heal_current_symlink(root: &Path, gen_dir: &Path) {
 /// converge script owns real provisioning.
 #[cfg(not(unix))]
 fn heal_current_symlink(_root: &Path, _gen_dir: &Path) {}
+
+//--------------------------------------------------------------------------------------------------
+// Tests
+//--------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_in_result
+)]
+mod tests {
+    use super::*;
+    use crate::config::test_support::{uniq_dir, EnvGuard, ENV_TEST_LOCK};
+
+    // ---- key derivation (generation_key_from_msb_path) ----
+
+    /// 32-char lowercase base32 store-hash segment shared by the derivation
+    /// tests; the expected key is its 12-char prefix.
+    const HASH32: &str = "0123456789abcdef0123456789abcdef";
+    const KEY12: &str = "0123456789ab";
+
+    /// Create `<root>/nix/store/<hash>-microsandbox-0.6.16/bin/msb` as a real
+    /// file (so canonicalize succeeds) and return the msb path.
+    fn fake_store_msb(root: &Path, hash: &str) -> PathBuf {
+        let bin_dir = root
+            .join("nix")
+            .join("store")
+            .join(format!("{hash}-microsandbox-0.6.16"))
+            .join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let msb = bin_dir.join("msb");
+        std::fs::write(&msb, b"#!/bin/sh\n").unwrap();
+        msb
+    }
+
+    #[test]
+    fn store_path_msb_key_is_hash_prefix() {
+        let root = uniq_dir("gen-key-store");
+        let msb = fake_store_msb(&root, HASH32);
+        assert_eq!(generation_key_from_msb_path(&msb), KEY12);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A SYMLINKED msb path canonicalizes to the store target; the key
+    /// derives from the resolved target, never from the link's own path.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_msb_key_derives_from_resolved_target() {
+        use std::os::unix::fs::symlink;
+        let root = uniq_dir("gen-key-symlink");
+        let real = fake_store_msb(&root, HASH32);
+        let link_dir = root.join("wrappers").join("bin");
+        std::fs::create_dir_all(&link_dir).unwrap();
+        let link = link_dir.join("msb");
+        symlink(&real, &link).unwrap();
+        assert_eq!(generation_key_from_msb_path(&link), KEY12);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn uppercase_hash_segment_is_unmanaged() {
+        let root = uniq_dir("gen-key-upper");
+        let msb = fake_store_msb(&root, "0123456789ABCDEF0123456789abcdef");
+        assert_eq!(generation_key_from_msb_path(&msb), UNMANAGED_KEY);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn thirty_one_char_hash_segment_is_unmanaged() {
+        let root = uniq_dir("gen-key-31");
+        let msb = fake_store_msb(&root, "0123456789abcdef0123456789abcde");
+        assert_eq!(generation_key_from_msb_path(&msb), UNMANAGED_KEY);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn thirty_three_char_hash_segment_is_unmanaged() {
+        let root = uniq_dir("gen-key-33");
+        let msb = fake_store_msb(&root, "0123456789abcdef0123456789abcdef0");
+        assert_eq!(generation_key_from_msb_path(&msb), UNMANAGED_KEY);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A real msb-shaped path WITHOUT the `-microsandbox-` store marker
+    /// (raw PATH install shape) is unmanaged.
+    #[test]
+    fn non_store_path_is_unmanaged() {
+        let root = uniq_dir("gen-key-nonstore");
+        let bin_dir = root.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let msb = bin_dir.join("msb");
+        std::fs::write(&msb, b"#!/bin/sh\n").unwrap();
+        assert_eq!(generation_key_from_msb_path(&msb), UNMANAGED_KEY);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Canonicalize failure (missing file) is unmanaged.
+    #[test]
+    fn missing_msb_file_is_unmanaged() {
+        let root = uniq_dir("gen-key-missing");
+        let ghost = root
+            .join("nix")
+            .join("store")
+            .join(format!("{HASH32}-microsandbox-0.6.16"))
+            .join("bin")
+            .join("msb");
+        assert_eq!(generation_key_from_msb_path(&ghost), UNMANAGED_KEY);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Tail-shape rule: a store path NOT ending in `<store-dir>/bin/msb`
+    /// (e.g. the sibling `libexec/agentd`) is unmanaged, even though its
+    /// store-dir basename carries a valid hash — the baked identity comes
+    /// ONLY from the msb binary itself.
+    #[test]
+    fn store_path_without_bin_msb_tail_is_unmanaged() {
+        let root = uniq_dir("gen-key-tail");
+        let libexec = root
+            .join("nix")
+            .join("store")
+            .join(format!("{HASH32}-microsandbox-0.6.16"))
+            .join("libexec");
+        std::fs::create_dir_all(&libexec).unwrap();
+        let agentd = libexec.join("agentd");
+        std::fs::write(&agentd, b"#!/bin/sh\n").unwrap();
+        assert_eq!(generation_key_from_msb_path(&agentd), UNMANAGED_KEY);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // ---- resolution rule matrix (resolve_msb_home_generation) ----
+    //
+    // These tests mutate process env (MSB_HOME/HOME), so they serialize on
+    // ENV_TEST_LOCK and restore via EnvGuard (the reconcile/policy_file
+    // pattern).
+
+    /// Pin HOME to a fresh temp root with MSB_HOME removed; the returned
+    /// guards MUST stay alive for the test body.
+    fn pin_home(label: &str) -> (std::sync::MutexGuard<'static, ()>, EnvGuard, PathBuf) {
+        let lock = ENV_TEST_LOCK.lock().unwrap();
+        let guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
+        let home = uniq_dir(label);
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::remove_var("MSB_HOME");
+        std::env::set_var("HOME", &home);
+        (lock, guard, home)
+    }
+
+    /// Rule 1: a non-empty MSB_HOME is Explicit, verbatim (never
+    /// canonicalized, never required to exist).
+    #[test]
+    fn explicit_msb_home_is_verbatim() {
+        let (_lock, _guard, home) = pin_home("gen-resolve-explicit");
+        let explicit = home.join("somewhere").join("else");
+        std::env::set_var("MSB_HOME", &explicit);
+        match resolve_msb_home_generation() {
+            HomeResolution::Explicit(p) => assert_eq!(p, explicit),
+            other => panic!("expected Explicit, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Rule 1 edge: an EMPTY MSB_HOME is treated as unset and falls through
+    /// to the enumeration rules (a fresh root here).
+    #[test]
+    fn empty_msb_home_is_treated_as_unset() {
+        let (_lock, _guard, home) = pin_home("gen-resolve-empty");
+        std::env::set_var("MSB_HOME", "");
+        match resolve_msb_home_generation() {
+            HomeResolution::Fresh(root) => assert_eq!(root, home.join(".microsandbox")),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// The unset-MSB_HOME default home is the `current` symlink under the
+    /// msb home root (the wrapper default change).
+    #[test]
+    fn default_home_is_current_symlink() {
+        let (_lock, _guard, home) = pin_home("gen-default-home");
+        assert_eq!(
+            default_msb_home(),
+            home.join(".microsandbox").join("current")
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Rule 2: an existing `current` symlink resolves to its target
+    /// generation dir and that dir's basename key.
+    #[cfg(unix)]
+    #[test]
+    fn current_symlink_resolves_to_generation() {
+        use std::os::unix::fs::symlink;
+        let (_lock, _guard, home) = pin_home("gen-resolve-current");
+        let root = home.join(".microsandbox");
+        let gen_dir = root.join("generations").join(KEY12);
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        symlink(&gen_dir, root.join("current")).unwrap();
+        match resolve_msb_home_generation() {
+            HomeResolution::Current { gen_dir: got, key } => {
+                assert_eq!(got, gen_dir.canonicalize().unwrap());
+                assert_eq!(key, KEY12);
+            }
+            other => panic!("expected Current, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Rule 3: `current` missing + exactly ONE generation dir heals the
+    /// symlink and reports Healed.
+    #[cfg(unix)]
+    #[test]
+    fn single_generation_heals_missing_current() {
+        let (_lock, _guard, home) = pin_home("gen-resolve-heal");
+        let root = home.join(".microsandbox");
+        let gen_dir = root.join("generations").join(KEY12);
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        match resolve_msb_home_generation() {
+            HomeResolution::Healed { gen_dir: got, key } => {
+                assert_eq!(got, gen_dir);
+                assert_eq!(key, KEY12);
+            }
+            other => panic!("expected Healed, got {other:?}"),
+        }
+        // The heal is real: `current` now resolves to the generation dir.
+        assert_eq!(root.join("current").canonicalize().unwrap(), gen_dir);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Rule 4: `current` missing + zero generation dirs + `db/` at the root
+    /// is a pre-generation home.
+    #[test]
+    fn legacy_root_db_is_pre_generation_home() {
+        let (_lock, _guard, home) = pin_home("gen-resolve-legacy");
+        let root = home.join(".microsandbox");
+        std::fs::create_dir_all(root.join("db")).unwrap();
+        match resolve_msb_home_generation() {
+            HomeResolution::LegacyRoot(got) => assert_eq!(got, root),
+            other => panic!("expected LegacyRoot, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Rule 5: `current` missing + zero generation dirs + no `db/` is fresh.
+    #[test]
+    fn no_db_no_generations_is_fresh() {
+        let (_lock, _guard, home) = pin_home("gen-resolve-fresh");
+        match resolve_msb_home_generation() {
+            HomeResolution::Fresh(root) => assert_eq!(root, home.join(".microsandbox")),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Rule 6: `current` missing + MORE THAN ONE generation dir is
+    /// Ambiguous, naming both keys (sorted).
+    #[test]
+    fn two_generations_without_current_is_ambiguous() {
+        let (_lock, _guard, home) = pin_home("gen-resolve-ambiguous");
+        let gens = home.join(".microsandbox").join("generations");
+        std::fs::create_dir_all(gens.join("bbbbbbbbbbbb")).unwrap();
+        std::fs::create_dir_all(gens.join("aaaaaaaaaaaa")).unwrap();
+        match resolve_msb_home_generation() {
+            HomeResolution::Ambiguous(keys) => {
+                assert_eq!(keys, vec!["aaaaaaaaaaaa", "bbbbbbbbbbbb"])
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// A DANGLING `current` symlink (exists but does not canonicalize) is
+    /// treated as missing: the enumeration rules apply, and the rule-3 heal
+    /// atomically REPLACES the dangling link.
+    #[cfg(unix)]
+    #[test]
+    fn dangling_current_is_treated_as_missing() {
+        use std::os::unix::fs::symlink;
+        let (_lock, _guard, home) = pin_home("gen-resolve-dangling");
+        let root = home.join(".microsandbox");
+        let gen_dir = root.join("generations").join(KEY12);
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        symlink(root.join("generations").join("999999999999"), root.join("current")).unwrap();
+        match resolve_msb_home_generation() {
+            HomeResolution::Healed { gen_dir: got, key } => {
+                assert_eq!(got, gen_dir);
+                assert_eq!(key, KEY12);
+            }
+            other => panic!("expected Healed, got {other:?}"),
+        }
+        // The dangling link was replaced by the heal.
+        assert_eq!(root.join("current").canonicalize().unwrap(), gen_dir);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// generation_entries: a valid 12-char DIRECTORY counts as a key; wrong
+    /// length names, `.converge-tmp-*` staging leftovers, and regular files
+    /// (even 12-char ones) are debris.
+    #[test]
+    fn generation_entries_separates_valid_keys_from_debris() {
+        let root = uniq_dir("gen-entries");
+        let gens = root.join("generations");
+        std::fs::create_dir_all(gens.join(KEY12)).unwrap();
+        std::fs::create_dir_all(gens.join("abcde")).unwrap();
+        std::fs::create_dir_all(gens.join(".converge-tmp-xyz")).unwrap();
+        std::fs::write(gens.join("ffffffffffff"), b"regular file").unwrap();
+        std::fs::write(gens.join("notes.txt"), b"debris").unwrap();
+        let (keys, debris) = generation_entries(&root);
+        assert_eq!(keys, vec![KEY12]);
+        assert_eq!(
+            debris,
+            vec![".converge-tmp-xyz", "abcde", "ffffffffffff", "notes.txt"]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A missing `generations/` dir yields two empty vecs (no error).
+    #[test]
+    fn generation_entries_of_missing_dir_is_empty() {
+        let root = uniq_dir("gen-entries-missing");
+        let (keys, debris) = generation_entries(&root);
+        assert!(keys.is_empty());
+        assert!(debris.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
