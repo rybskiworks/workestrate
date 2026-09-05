@@ -367,8 +367,8 @@
           _module.args.pkgs = pkgs;
 
           # treefmt for `nix fmt` and `nix flake check` (including tombi via tooling)
-          # rustfmt edition 2021 matches control/agentctl's Cargo.toml (edition = "2021");
-          # using default 2024 would treat `gen` as reserved keyword and fail on schemars derives.
+          # rustfmt edition 2024 matches control/agentctl's Cargo.toml (edition = "2024");
+          # the crate is edition-2024-clean (`gen` identifiers renamed to `generator`, f20bfca).
           treefmt.config = {
             projectRootFile = "flake.nix";
             programs = {
@@ -376,7 +376,7 @@
               statix.enable = true;
               rustfmt = {
                 enable = true;
-                edition = "2021";
+                edition = "2024";
               };
             };
             settings.formatter.tombi = {

@@ -26,8 +26,8 @@
 #       deadnix) — present-run / absent-skip-with-message;
 #   (3) tombi TOML gates when tombi is on PATH (absent, or version mismatch,
 #       warns and skips — never fails);
-#   (4) tier-2 in-devshell rustfmt --check at the crate's edition when
-#       rustfmt is on PATH and .rs files are staged;
+#   (4) tier-2 in-devshell rustfmt --check at edition 2024 (codebase is
+#       edition-2024-clean) when rustfmt is on PATH and .rs files are staged;
 #   (5) prek delegation only when BOTH the prek binary AND a non-dangling
 #       repo-root config are present.
 # `.git/hooks/pre-commit.legacy`, when present, is a historical backup left
@@ -124,11 +124,10 @@ if [ -n "$rs_files" ]; then
             echo "$label pre-commit: no Cargo.toml found; skipping rustfmt gate" >&2
         fi
         if [ -n "$manifest" ]; then
-            # Edition follows the crate's Cargo.toml (single source of truth);
-            # edition 2024 would break pre-2024 crates (`gen` becomes reserved).
-            crate_edition=$(sed -n 's/^edition *= *"\([^"]*\)".*/\1/p' "$manifest" | head -1)
-            [ -n "$crate_edition" ] || crate_edition="2021"
-            if ! rustfmt --edition "$crate_edition" --check -- $rs_files; then
+            # Hardcoded edition 2024: the codebase is edition-2024-clean by
+            # design (owner directive — do not derive the edition from the
+            # manifest; that path enabled the 2021 downgrade being reverted).
+            if ! rustfmt --edition 2024 --check -- $rs_files; then
                 echo "$label pre-commit: rustfmt check failed — run \`cargo fmt\` or \`just fmt\`" >&2
                 exit 1
             fi
