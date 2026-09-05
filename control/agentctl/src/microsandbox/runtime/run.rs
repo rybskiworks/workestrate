@@ -776,14 +776,19 @@ fn apply_current_view_mutations<W: Workload>(plan: &mut SandboxPlan, workload: &
 /// key, a pre-generation legacy root (`db/` at `$HOME/.microsandbox`), or
 /// an ambiguous multi-generation root with no `current` symlink — every
 /// refusal names `./scripts/host-provision.sh` (generation converge). An
+/// explicit MSB_HOME is verbatim for STATE placement but its generation
+/// IDENTITY is canonicalized (`generation_key_of_resolved_home`), so the
+/// nix wrapper's `$HOME/.microsandbox/current` default resolves through
+/// the symlink and the mismatch check engages under the wrapper. An
 /// UNMANAGED baked msb (no nix store path) skips the gate (legacy
 /// single-generation behavior). Returns the generation dir that should
 /// receive the `.booted-ok` marker on a successful up (Current/Healed with
-/// the matching key, or an explicit generation-dir MSB_HOME override);
-/// `None` for the unmanaged posture, a non-generation explicit override,
-/// or a fresh root. Evaluated in [`build_sandbox`] immediately before the
-/// nested gate + `builder.create()`, so a refusal leaves NO partial
-/// sandbox behind (never partial: refuse before any sandbox creation).
+/// the matching key, or an explicit home canonicalizing to a matching
+/// `generations/<key12>` dir — including via `current`); `None` for the
+/// unmanaged posture, a non-generation explicit override, or a fresh root.
+/// Evaluated in [`build_sandbox`] immediately before the nested gate +
+/// `builder.create()`, so a refusal leaves NO partial sandbox behind
+/// (never partial: refuse before any sandbox creation).
 fn check_generation_up_gate() -> Result<Option<PathBuf>> {
     use crate::microsandbox::generation as gen;
     let baked = gen::baked_generation_key();
@@ -803,12 +808,12 @@ fn check_generation_up_gate() -> Result<Option<PathBuf>> {
                 )
             }
         }
-        gen::HomeResolution::Explicit(path) => match gen::generation_key_of_path(&path) {
-            Some(key) if key != baked => anyhow::bail!(
-                "refusing up: MSB_HOME override points at generation '{key}' but the baked msb \
+        gen::HomeResolution::Explicit(path) => match gen::generation_key_of_resolved_home(&path) {
+            Some((gen_dir, key)) if key != baked => anyhow::bail!(
+                "refusing up: MSB_HOME resolves to generation '{key}' but the baked msb \
                  is generation '{baked}'; run ./scripts/host-provision.sh (generation converge)"
             ),
-            Some(_) => Ok(Some(path)),
+            Some((gen_dir, _)) => Ok(Some(gen_dir)),
             None => Ok(None),
         },
         gen::HomeResolution::LegacyRoot(_) => anyhow::bail!(

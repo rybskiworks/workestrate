@@ -50,7 +50,10 @@ const CURRENT_LINK_NAME: &str = "current";
 /// ([`resolve_msb_home_generation`]) when `MSB_HOME` is unset-or-empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HomeResolution {
-    /// Rule 1: a non-empty `MSB_HOME` — used verbatim, never interpreted.
+    /// Rule 1: a non-empty `MSB_HOME` — used verbatim for STATE placement
+    /// (never reinterpreted as a home), but the generation IDENTITY check
+    /// canonicalizes it (through the `current` symlink) via
+    /// [`generation_key_of_resolved_home`].
     Explicit(PathBuf),
     /// Rule 2: the `current` symlink exists — its canonical target
     /// generation dir and that dir's basename key.
@@ -171,10 +174,45 @@ pub fn default_msb_home() -> PathBuf {
 
 /// The generation key of an EXPLICIT path whose basename is a 12-char
 /// generation dir name; `None` for any other path (non-generation
-/// overrides pass the generation gates unchecked).
+/// overrides pass the generation gates unchecked). Pure basename check —
+/// no symlink resolution (for the canonicalizing variant used by the
+/// doctor row and the up gate see [`generation_key_of_resolved_home`]).
 pub fn generation_key_of_path(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?;
     (name.chars().count() == GENERATION_KEY_LEN).then(|| name.to_string())
+}
+
+/// The generation identity of an EXPLICIT (verbatim) `MSB_HOME`: canonicalize
+/// (`readlink -f` equivalent — this resolves the nix wrapper's default
+/// `$HOME/.microsandbox/current` symlink to its target generation dir) and
+/// accept the canonical path ONLY when its parent dir basename is
+/// `generations` AND its own basename is exactly [`GENERATION_KEY_LEN`]
+/// lowercase base32 chars (`[a-z0-9]`). Returns the canonical generation
+/// dir + its key. `None` when canonicalization fails or the target is not
+/// a `generations/<key12>` dir — a genuinely verbatim unmanaged override.
+///
+/// `MSB_HOME` stays VERBATIM for STATE placement (msb resolves the path it
+/// is handed); this helper exists so the generation IDENTITY check (doctor
+/// row + fail-closed up gate) canonicalizes through the `current` symlink
+/// instead of trusting the literal value — otherwise the wrapper default
+/// would make the mismatch check dead code.
+pub fn generation_key_of_resolved_home(path: &Path) -> Option<(PathBuf, String)> {
+    let canonical = path.canonicalize().ok()?;
+    let name = canonical.file_name()?.to_str()?;
+    let is_key = name.len() == GENERATION_KEY_LEN
+        && name.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9'));
+    if !is_key {
+        return None;
+    }
+    let under_generations = canonical
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some(GENERATIONS_DIR_NAME);
+    if !under_generations {
+        return None;
+    }
+    Some((canonical, name.to_string()))
 }
 
 /// Enumerate `<root>/generations/`: `(valid keys, debris names)`. A VALID

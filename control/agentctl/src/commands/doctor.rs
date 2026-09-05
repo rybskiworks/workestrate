@@ -257,9 +257,11 @@ pub fn doctor_check_msb() -> DoctorCheck {
 /// [`crate::microsandbox::generation`]): the BAKED msb store-path
 /// generation key against the resolved home's generation. An unmanaged msb
 /// (no nix store path) is OK (single-generation legacy behavior). A
-/// `current`/`healed` generation mismatch, an explicit MSB_HOME pointing at
-/// a different generation dir, a pre-generation legacy root, and an
-/// ambiguous multi-generation root are FAIL naming
+/// `current`/`healed` generation mismatch, an explicit MSB_HOME that
+/// canonicalizes to a DIFFERENT `generations/<key12>` dir (the nix
+/// wrapper's `.../current` default resolves through the symlink — the
+/// identity check engages under the wrapper), a pre-generation legacy
+/// root, and an ambiguous multi-generation root are FAIL naming
 /// `scripts/host-provision.sh`; fresh is OK. WARN overrides (never OK):
 /// more than 2 generation dirs, or any debris under `generations/`
 /// (non-12-char names, `*.converge-tmp*` leftovers) — FAIL beats WARN beats
@@ -277,18 +279,30 @@ pub fn doctor_check_generation() -> DoctorCheck {
         );
     }
     let base = match gen::resolve_msb_home_generation() {
-        gen::HomeResolution::Explicit(p) => match gen::generation_key_of_path(&p) {
-            Some(key) if key != baked => DoctorCheck::new(
+        gen::HomeResolution::Explicit(p) => match gen::generation_key_of_resolved_home(&p) {
+            Some((_, key)) if key != baked => DoctorCheck::new(
                 "generation",
                 "FAIL",
                 format!(
-                    "MSB_HOME override {} points at generation {key} but the baked msb is \
+                    "MSB_HOME override {} resolves to generation {key} but the baked msb is \
                      generation {baked}",
                     p.display()
                 ),
             )
             .with_remediation(REMEDIATION),
-            _ => DoctorCheck::new(
+            Some((_, key)) => {
+                // The verbatim value IS a generation dir (usually via the
+                // `current` symlink the nix wrapper exports); note the
+                // `current -> generations/<key>` form when so.
+                let via_current = p.file_name().and_then(|n| n.to_str()) == Some("current");
+                let message = if via_current {
+                    format!("current -> generations/{key}")
+                } else {
+                    format!("MSB_HOME override: {} (generation {key})", p.display())
+                };
+                DoctorCheck::new("generation", "OK", message)
+            }
+            None => DoctorCheck::new(
                 "generation",
                 "OK",
                 format!("MSB_HOME override: {}", p.display()),
