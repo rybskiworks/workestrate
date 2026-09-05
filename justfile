@@ -121,10 +121,17 @@ _spec-examples-inner:
 
 # Full pre-merge validation: format, lint, compile-check, test, spec-examples,
 # golden-check, schema drift, lock-file stability, AND nix-purity lint.
-verify: lock-guard toolchain-check versions-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
-    @just _verify-inner
-[private]
-_verify-inner:
+#
+# Self-enshells FIRST, then runs the chain INSIDE the devshell: just runs a
+# recipe's dependencies in the invoking (outer) environment, so as a
+# `verify` dep `toolchain-check` measured the HOST rustc (rustup) instead of
+# the fenix-pinned shell toolchain — a canary firing on the wrong binary.
+# Pure-script gates (lock-guard, versions-check: bash+python3 only,
+# env-agnostic) stay as outer deps so they still run anywhere; everything
+# that needs the pinned toolchain is a dep of _verify-inner, i.e. runs after
+# `nix develop` has exported WORKESTRATE_DEVSHELL (inner recipes then skip
+# their own re-enshell guards).
+verify: lock-guard versions-check
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
@@ -139,9 +146,14 @@ _verify-inner:
         printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _verify-inner
     fi
+    just _verify-inner
+[private]
+_verify-inner: toolchain-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
-# Heaviest validation: verify plus Nix build
+# Heaviest validation: verify plus Nix build. `verify` self-enshells first,
+# so the whole chain runs inside the devshell; `nix build` itself stays
+# host-side (a nix command, env-agnostic).
 verify-full: verify
     nix build .#workestrate
 
