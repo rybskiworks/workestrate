@@ -591,8 +591,14 @@
                 if [ -L "$vendor_link" ]; then
                   local current
                   current=$(readlink -f "$vendor_link" 2>/dev/null || true)
+                  # The pinned input's store path changes on every pin bump; a
+                  # still-present old generation must not suppress the refresh
+                  # (staleness is silent, GC makes it loud).
                   if [ -z "$current" ] || [ ! -d "$current" ]; then
                     echo "workestrate: refreshing stale vendor symlink" >&2
+                    ln -sfn "$target" "$vendor_link"
+                  elif [ "$current" != "$target" ]; then
+                    echo "workestrate: vendor symlink re-pointed to pinned fork generation" >&2
                     ln -sfn "$target" "$vendor_link"
                   fi
                 elif [ -e "$vendor_link" ]; then
