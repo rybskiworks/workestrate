@@ -23,6 +23,8 @@
 # nothing assumed from the runner image or a devshell. Pattern borrowed
 # from github.com/akitaonrails/ai-memory (ci.yml label-gated heavy legs,
 # nix.yml build-then-run-the-binary):
+#   Adapted from github.com/akitaonrails/ai-memory, MIT, (c) 2026 Fabio Akita
+#   — the two borrowed patterns: label-gated heavy leg; build-then-run-binary.
 #   e2e-nix — runs the nix/msb-gated e2e tests (image_pipeline_e2e,
 #     ensure_images_e2e non-ignored) with msb+agentd provisioned IN the job
 #     (nix build .#microsandbox) and MSB_PATH/MSB_AGENTD_PATH exported by a
@@ -68,6 +70,7 @@ on:
   pull_request:
     # `labeled` so the e2e-nix job's `nix-ci` label gate retriggers on
     # labeling (ai-memory ci.yml line 7 pattern).
+    # Adapted from github.com/akitaonrails/ai-memory — MIT, (c) 2026 Fabio Akita
     types: [opened, synchronize, reopened, labeled]
     paths:
       - 'control/**'
@@ -200,6 +203,7 @@ jobs:
     # Heavy leg opts in per PR via the `nix-ci` label (ai-memory's full-ci
     # pattern); always on push/dispatch. Every input the e2e tests probe is
     # provisioned BY THIS JOB — nothing ambient.
+    # Adapted from github.com/akitaonrails/ai-memory — MIT, (c) 2026 Fabio Akita
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
@@ -303,5 +307,6 @@ jobs:
         run: nix build -L .#workestrate
       # ai-memory nix.yml pattern: run what the flake promises — a package
       # that builds but cannot execute still fails.
+      # Adapted from github.com/akitaonrails/ai-memory — MIT, (c) 2026 Fabio Akita
       - name: smoke (built binary runs)
         run: ./result/bin/workestrate --version
