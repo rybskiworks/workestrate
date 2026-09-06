@@ -1,0 +1,11 @@
+# Dependabot: keep GitHub Actions up to date.
+#
+# The cargo ecosystem is deliberately OUT — dependabot cargo updates would
+# fight the Cargo.lock stability gates (scripts/check-cargo-lock.sh +
+# the lock stability diff in .github/workflows/ci.yml).
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
