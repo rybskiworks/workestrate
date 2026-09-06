@@ -85,6 +85,12 @@ on:
       - 'docs/migration/**'
       - 'nix/**'
       - '.github/**'
+      - 'deny.toml'
+      - 'LICENSE*'
+      - 'CODEOWNERS'
+      - 'tombi.toml'
+      - '*.md'
+      - '.github/CODEOWNERS'
   push:
     branches:
       - migration/tool-model
@@ -101,6 +107,12 @@ on:
       - 'docs/migration/**'
       - 'nix/**'
       - '.github/**'
+      - 'deny.toml'
+      - 'LICENSE*'
+      - 'CODEOWNERS'
+      - 'tombi.toml'
+      - '*.md'
+      - '.github/CODEOWNERS'
   workflow_dispatch:
 
 concurrency:
@@ -318,3 +330,23 @@ jobs:
       # Adapted from github.com/akitaonrails/ai-memory — MIT, (c) 2026 Fabio Akita
       - name: smoke (built binary runs)
         run: ./result/bin/workestrate --version
+
+  # Branch-protection anchor: a single check that ALWAYS runs (even when
+  # gates is skipped/path-filtered) so branch protection can require it
+  # without pending forever. e2e-nix and heavy-build deliberately stay
+  # OUT of needs — they are label/dispatch gated.
+  required-gates:
+    name: required-gates (branch-protection anchor)
+    needs: [gates]
+    if: always() && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert gates succeeded
+        run: |
+          set -euo pipefail
+          result="${{ needs.gates.result }}"
+          echo "gates result: $result"
+          if [ "$result" != "success" ]; then
+            echo "FAIL: gates job did not succeed (result: $result)" >&2
+            exit 1
+          fi
