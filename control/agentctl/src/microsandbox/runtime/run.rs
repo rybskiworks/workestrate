@@ -877,11 +877,12 @@ fn mark_generation_booted(gen_dir: &Path) {
 /// `nested_up_decision` applies — `prefer` degrades, `require` refuses
 /// fail-closed, a home-final seal refuses either ask.
 ///
-/// The returned bool reports whether the `MSB_NESTED_VIRT` env flag should
-/// be set for the create (consumed by [`apply_nested_env_flag`]): `require`
-/// that passed the decision sets it ON; `prefer` sets it ON only when the
+/// The returned bool reports the nested-ON verdict that the create path
+/// threads into `SandboxBuilder::nested_virt(...)` (the fork's first-class
+/// `resources.nested_virt` spec option, default OFF): `require`
+/// that passed the decision is ON; `prefer` is ON only when the
 /// probe reports the full host nested offering (a DEGRADED prefer must NOT
-/// set it); `off` never sets it. This CONSUMES the decision result — the
+/// be ON); `off` is never ON. This CONSUMES the decision result — the
 /// probe is not re-read.
 fn check_nested_up_gate<W: Workload + ?Sized>(
     workload: &W,
@@ -905,30 +906,14 @@ fn check_nested_up_gate<W: Workload + ?Sized>(
     })
 }
 
-/// Apply the [`check_nested_up_gate`] verdict to the process environment
-/// immediately before `builder.create()`: `on` sets `MSB_NESTED_VIRT=1`
-/// (the fork's env gate treats only the exact value "1" as on); `!on`
-/// REMOVES the var so an ambient operator export can never leak nested virt
-/// into an off/degraded workload — the fork default is OFF and must hold
-/// regardless of the shell env. The msb runtime executes IN-PROCESS
-/// (`SandboxBuilder::create` is a library call; precedent: MSB_HOME is read
-/// by the SDK via `std::env`), so "injecting into the msb child env" is
-/// mutating the CURRENT process env.
-#[allow(unsafe_code)]
-fn apply_nested_env_flag(on: bool) {
-    // SAFETY: the mutation is serialized with the `builder.create()` it
-    // gates — set/removed immediately before, and the fork reads the var
-    // synchronously inside `create()`. Parallel `build_sandbox` calls
-    // within ONE process could race on the shared key; in practice each
-    // create path is effectively single-threaded per process (detached ups
-    // run in CHILD processes), so no concurrent mutation of this key.
-    unsafe {
-        if on {
-            std::env::set_var("MSB_NESTED_VIRT", "1");
-        } else {
-            std::env::remove_var("MSB_NESTED_VIRT");
-        }
-    }
+/// Thread the [`check_nested_up_gate`] verdict into the sandbox builder as
+/// the fork's first-class `nested_virt` spec option (supersedes the
+/// same-day env flag): per-sandbox data on the persisted spec, not
+/// process-global state — an ambient operator export can no longer leak
+/// nested virt into an off/degraded workload, and parallel creates cannot
+/// race on a shared env key.
+fn apply_nested_virt(builder: SandboxBuilder, nested_on: bool) -> SandboxBuilder {
+    builder.nested_virt(nested_on)
 }
 
 /// Prepare, resolve, and create the sandbox plus the foreground config used
@@ -1312,16 +1297,17 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // refuses (it degrades; the degrade is already in the plan provenance);
     // `off` skips silently. The decision shares
     // `microsandbox::nested::nested_up_decision` with the `plan` warn path
-    // so warn and refuse can never disagree. The gate ALSO drives the
-    // MSB_NESTED_VIRT env flag into the in-process msb runtime (the fork's
-    // env gate, default OFF): the flag is set only when the decision
-    // resolves nested-ON (`require` that passed, or `prefer` with the full
-    // host offering) and REMOVED otherwise, so an ambient export cannot
-    // leak nested virt into an off/degraded workload; a refused workload
-    // never reaches create and never sets the flag.
+    // so warn and refuse can never disagree. The gate ALSO threads its
+    // nested-ON verdict into the builder via the fork's first-class
+    // `nested_virt` spec-field option (default OFF): the builder call is
+    // per-sandbox data on the persisted spec, not process-global state, so
+    // an ambient shell env can no longer leak nested virt into an
+    // off/degraded workload and parallel creates cannot race on a shared
+    // env key; a refused workload never reaches create and never sets the
+    // option.
     let nested_on =
         check_nested_up_gate(workload, &crate::microsandbox::nested::read_nested_probe())?;
-    apply_nested_env_flag(nested_on);
+    let builder = apply_nested_virt(builder, nested_on);
     let sandbox = builder.create().await?;
 
     let created_at = super::time::current_rfc3339_utc();
@@ -1736,13 +1722,13 @@ mod tests {
         );
     }
 
-    /// The gate's bool = "MSB_NESTED_VIRT should be ON for the create":
+    /// The gate's bool = "the `nested_virt` builder option for the create":
     /// require/prefer on a FULL host set it; off (any probe) and a DEGRADED
     /// prefer (kvm absent, or the nested module param not affirmatively Y)
     /// must NOT; require on a lacking host refuses (exact-error shape
     /// pinned above).
     #[test]
-    fn nested_gate_env_flag_bool_matrix() {
+    fn nested_gate_nested_on_bool_matrix() {
         use crate::config::NestedMode;
         use crate::microsandbox::nested::NestedProbe;
         let workload = |ask| NestedGateWorkload {
@@ -1754,7 +1740,7 @@ mod tests {
             .unwrap());
         assert!(check_nested_up_gate(&workload(NestedMode::Prefer), &NestedProbe::full())
             .unwrap());
-        // Degraded prefer never sets the flag: kvm absent...
+        // Degraded prefer never sets the option: kvm absent...
         assert!(!check_nested_up_gate(&workload(NestedMode::Prefer), &NestedProbe::absent())
             .unwrap());
         // ...or the nested module param not affirmatively Y.
@@ -1767,13 +1753,13 @@ mod tests {
         };
         assert!(!check_nested_up_gate(&workload(NestedMode::Prefer), &degraded_param)
             .unwrap());
-        // Require on a lacking host refuses (no flag is ever applied —
+        // Require on a lacking host refuses (no option is ever applied —
         // a refusal never reaches create).
         assert!(
             check_nested_up_gate(&workload(NestedMode::Require), &NestedProbe::absent())
                 .is_err()
         );
-        // Off is flag-less on EVERY probe.
+        // Off is option-less on EVERY probe.
         let off = NestedGateWorkload {
             ask: None,
             frozen_by: None,
@@ -1783,30 +1769,16 @@ mod tests {
         }
     }
 
-    /// `apply_nested_env_flag(true)` sets the fork's env gate to the exact
-    /// "1" (the only value the fork treats as on). Env mutation is
-    /// serialized under ENV_TEST_LOCK; EnvGuard restores the prior value on
-    /// drop.
+    /// The verdict reaches the fork as the spec-field option: ON sets
+    /// `resources.nested_virt` on the built spec, OFF leaves it at the
+    /// fork's default-off (which the ambient shell env can no longer
+    /// override — the env gate is gone).
     #[test]
-    fn nested_env_flag_on_sets_msb_nested_virt() {
-        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        let _g = crate::config::test_support::EnvGuard::capture(&["MSB_NESTED_VIRT"]);
-        apply_nested_env_flag(true);
-        assert_eq!(std::env::var("MSB_NESTED_VIRT").as_deref(), Ok("1"));
-    }
-
-    /// `apply_nested_env_flag(false)` REMOVES a pre-existing
-    /// MSB_NESTED_VIRT, so an ambient operator export can never leak nested
-    /// virt into an off/degraded workload (fork default OFF must hold
-    /// regardless of the shell env).
-    #[test]
-    fn nested_env_flag_off_removes_ambient_msb_nested_virt() {
-        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        let _g = crate::config::test_support::EnvGuard::capture(&["MSB_NESTED_VIRT"]);
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard).
-        unsafe { std::env::set_var("MSB_NESTED_VIRT", "1") };
-        apply_nested_env_flag(false);
-        assert!(std::env::var("MSB_NESTED_VIRT").is_err());
+    fn apply_nested_virt_sets_the_spec_option() {
+        let on = apply_nested_virt(Sandbox::builder("nested-on"), true);
+        assert!(on.spec().resources.nested_virt);
+        let off = apply_nested_virt(Sandbox::builder("nested-off"), false);
+        assert!(!off.spec().resources.nested_virt);
     }
 
     fn empty_plan_with_env(env: Vec<EnvVar>) -> SandboxPlan {
