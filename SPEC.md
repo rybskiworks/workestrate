@@ -55,9 +55,11 @@ from the user's fork via the pinned `microsandbox-fork` flake input at
 validated rev b2c672c8, which carries the mount-policy stack and the
 always-on Track 1 `nested_virt(true)` VMM flag (the guest kernel firmware
 still lacks `CONFIG_KVM`, so nested stays inert and no nested-works claim
-holds until the Phase 2 firmware rebuild lands). The gated successor
-b1424618 makes the flag follow `MSB_NESTED_VIRT` (default OFF; driven by
-the `virtualization.nested` decision via agentctl) and awaits the pin bump
+holds until the Phase 2 firmware rebuild lands). The spec-field successor
+— fork 09aeb8ae (feat) plus docs 8e53de7e — makes the flag a first-class
+`resources.nested_virt` spec option (default OFF; driven by the
+`virtualization.nested` decision via agentctl's `builder.nested_virt(...)`),
+superseding the same-day env gate, and awaits the pin bump
 and host relock.
 Provides
 `Sandbox`, `SandboxBuilder`, `NetworkPolicy`, and builder methods for
@@ -66,7 +68,7 @@ requires Tokio. Runtime execution requires a host with `/dev/kvm`.
 `nested=off` (the default) withholds the guest device promise; on the
 currently pinned always-on rev it does not remove CPU capability — that
 limitation is closed by ADR 0036's 2026-09-06 amendment: once the pin
-bumps to b1424618, `nested=off` withholds the CPU capability too.
+bumps to 09aeb8ae/8e53de7e, `nested=off` withholds the CPU capability too.
 
 ### LiteLLM
 
