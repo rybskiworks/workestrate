@@ -1,3 +1,4 @@
+pub mod broker;
 pub mod depgraph;
 pub mod discovery;
 mod env;
