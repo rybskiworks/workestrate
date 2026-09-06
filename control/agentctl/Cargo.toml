@@ -12,12 +12,24 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+# Credential broker: CBOR wire codec (same 0.2.x already in the lockfile
+# via the microsandbox SDK — promoted to a direct dep, no new package).
+ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+# Credential broker: platform secure-random source for epoch tokens
+# (getrandom 0.3.x already in the lockfile — promoted to direct, no new pkg).
+getrandom = "0.3"
 glob = "0.3.4"
 globset = "0.4"
+# Credential broker: hex rendering of epoch tokens / payload digests
+# (0.4.x already in the lockfile — promoted to direct, no new package).
+hex = "0.4"
 idna = "1.1"
 microsandbox = { version = "=0.6.16", features = ["net"] }
+# Credential broker: SHA-256 payload digests for the audit log
+# (0.10.x already in the lockfile — promoted to direct, no new package).
+sha2 = "0.10"
 unicode-security = "0.1"
 
 schemars = { version = "0.8", optional = true }
