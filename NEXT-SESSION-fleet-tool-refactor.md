@@ -61,3 +61,47 @@ Read ADR 0038's fleet-level lock design + the earlier interface sketch (per-work
 - No rename execution (config/fleet renames batch later).
 - No firmware Phase 2 (needs an owner).
 - No perf work.
+
+## Addendum — post-handover landings (2026-09-06)
+
+Everything below landed after this handover was drafted (`b68ebb7` in dev-home; moved here in `9d1a371`). All SHAs verified in `git log` 2026-09-06.
+
+### CI evolution (3 iterations)
+
+- **POC (`3799d42`, 2 jobs)**: PR quality-gate workflow (verify chain + build). Pushed and RAN on GitHub — failed on disk fill: the verify job booted the full devenv closure on a fresh runner (GH runners ~14G).
+- **v2 (`8803ff8`)**: rework to light path-gated PR job — rustup toolchain via `dtolnay/rust-toolchain@1.97` (guarded against the flake marker); cargo fmt/clippy/test gates defined in-run with repo configs; pure-script gates (lock-guard / versions-check / lint-nix) run without nix; `nix build` moved to a `workflow_dispatch`-only heavy job; rust-cache added.
+- **v3 (`8b68eee`)**: self-contained `e2e-nix` job (ai-memory-inspired patterns) — label-gated (`nix-ci`); in-action provisioning of pinned msb+agentd with fail-closed env asserts via `$GITHUB_ENV`; build-then-run smoke in heavy-build.
+- **Deferred**: self-hosted KVM runner (dblab42), org cachix, nightly flake check, SHA pinning of actions.
+
+### Edition 2024 (crate + formatter, forward-only posture)
+
+- `gen` identifiers renamed: `f20bfca` (params) + `adfb22e` (alias/debt).
+- `unsafe_code` forbid→deny deviation with scoped allows (E0133 env-mutation fix, `1f89e48`) — **needs owner sign-off**.
+- Clippy 106 → 0.
+- Formatter/checks pinned at edition 2024: workestrate `9b0fd97` + nix-tooling `a9bd083`.
+
+### Gates to green
+
+- Hook auto-fixes + lint debt: `7106ad4`, `adfb22e`.
+- Verify chain moved inside the devshell: `4f64adf`.
+- Entry decoupled from shell-entry lint: nix-tooling `b6636bb` / `62e0694`.
+- Nested up-decision logic bug fixed: `1ce3f80`.
+- Schema regen + distribution: `ef56e79` + resync commits (home `e9c2162`).
+- Result: `just test` 1545/0, `just check` / `just verify` exit 0, devshell entry clean without skips.
+
+### Runtime proof
+
+- prime + litellm running end-to-end on the host; seed-staleness root-caused → prime capsule `only_if_missing = false` (personal config repo `7c5eede`).
+- pi↔litellm connectivity proven.
+- live-home repaired: on main, clones fresh, receives via github origin.
+
+### Disk
+
+- nix store optimise freed +1G; regenerable cargo caches deleted (+12.5G) → ~18G free.
+
+### Push state (verified fresh 2026-09-06)
+
+- **workestrate**: `origin/migration/tool-model` == HEAD `8b68eee` — 0 unpushed (local tracking refs).
+- **home (workestrate-dev-home)**: HEAD `b36eb28`, 2 ahead of `origin/main` (`6be220b`) — unpushed: `b68ebb7` (handover draft) + `b36eb28` (move to tool repo).
+- **nix-tooling**: `origin/main` == HEAD `a9bd083` — 0 unpushed (local tracking refs).
+- **live-home (~/.workestrate)**: content synced via github origin (HEAD `e9c2162` == its `origin/main`). Direct push `main:main` was refused (checked-out branch); `receive.denyCurrentBranch=updateInstead` is the one-line fix if direct pushes are wanted.
