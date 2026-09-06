@@ -180,3 +180,4 @@ Run `tombi format` / `tombi lint` (or `nix fmt`) — the ADR 0035 policy example
 - **ADR 0034** — secrets ladder precedent for rungs + provenance.
 - **`nix/packages/agentctl.nix:111-136`** — authoritative wrapper contract.
 - **`flake.nix` (`msb-wrapped` + `devenv.shells.default` `enterShell`)** — msb wrapper guard + devshell MSB staging.
+- **msb state model (both ends)** — `docs/nix/msb-state-model.md` (consumer side) → fork `nix/README.md` (producer side).
