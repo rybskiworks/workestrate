@@ -1790,6 +1790,7 @@ mod tests {
             memory_mib: None,
             env,
             secret_env: Vec::new(),
+            credentials: None,
             ports: Vec::new(),
             mounts: Vec::new(),
             network: NetworkPlan {
@@ -1823,6 +1824,7 @@ mod tests {
             memory_mib: None,
             env: Vec::new(),
             secret_env,
+            credentials: None,
             ports: Vec::new(),
             mounts: Vec::new(),
             network: NetworkPlan {

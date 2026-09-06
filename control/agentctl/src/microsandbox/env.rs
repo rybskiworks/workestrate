@@ -245,6 +245,7 @@ mod tests {
             memory_mib: None,
             env,
             secret_env,
+            credentials: None,
             ports: Vec::new(),
             mounts: Vec::new(),
             network: NetworkPlan {

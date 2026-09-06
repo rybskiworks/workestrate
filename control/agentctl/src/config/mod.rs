@@ -60,14 +60,16 @@ pub use trust::{is_trusted_project, trust_project, untrust_project};
 #[allow(unused_imports)]
 pub use types::{
     BakedFileSpec, BinarySpec, Bound, ConfigFile, ConfigRepoEntry, ConflictStep, Context,
-    DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, DomainEntry, EgressAllowTable,
-    EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef, EnvVarConfig,
-    HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable, IngressDenyTable,
-    IngressPolicyFragment, InstancePolicy, InstancePort, InstanceStrategy, LocalBuildConfig,
-    NestedMode, NetworkConfig, NetworkDefaultsConfig, OnConflict, OnSkew, PolicyConfig, PortEntry,
-    PortOccupiedBare, PortOccupiedChain, PortOccupiedStep, Registry, RegistrySettings,
-    SecretDefConfig, SecretViolationPolicy, SecretsLayer, SecretsPolicyFragment, SeedFileConfig,
-    TrustedProject, VirtualizationConfig, VirtualizationPolicyFragment, WorkloadConfig,
+    CredentialsConfig, DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, DomainEntry,
+    EgressAllowTable, EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef,
+    EnvVarConfig, HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable,
+    IngressDenyTable, IngressPolicyFragment, InstancePolicy, InstancePort, InstanceStrategy,
+    LocalBuildConfig, NestedMode, NetworkConfig, NetworkDefaultsConfig, OnConflict, OnSkew,
+    PolicyConfig, PortEntry, PortOccupiedBare, PortOccupiedChain, PortOccupiedStep, Registry,
+    RegistrySettings, SecretDefConfig, SecretViolationPolicy, SecretsLayer, SecretsPolicyFragment,
+    SeedFileConfig, SigningCredentialsConfig, SigningSshCredentialDef, SshCredentialDef,
+    SshPolicyFragment, TrustedProject, VirtualizationConfig, VirtualizationPolicyFragment,
+    WorkloadConfig, WorkloadCredentials,
 };
 #[allow(unused_imports)]
 pub use validation::{EXPECTED_SCHEMA_VERSION, validate_config, validate_config_name};

@@ -1,0 +1,31 @@
+schema_version = 1
+
+# (a) broker-bound default: the workload holds an ssh grant but NO env
+# binding for the material — omission renders the grant broker-bound (the
+# default, secure): no env/secret_env lines for the key, only the grant.
+
+[secrets.DEPLOY_KEY]
+env_var = "DEPLOY_KEY"
+allowed_hosts = ["github.com"]
+required = false
+
+[credentials.ssh.deploy]
+material = "DEPLOY_KEY"
+hosts = ["github.com"]
+users = ["git"]
+# ports absent → [22]
+
+[workloads.deployer]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.deployer.credentials]
+ssh = ["deploy"]
+
+[workloads.deployer.network.defaults]
+egress = "deny"
+
+[[workloads.deployer.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]

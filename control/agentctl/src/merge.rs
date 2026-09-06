@@ -1,6 +1,7 @@
 use crate::config::{
     ConfigFile, EgressPolicyFragment, IdnaPolicyFragment, IngressPolicyFragment, SecretDefConfig,
-    SecretsPolicyFragment, VirtualizationPolicyFragment, WorkloadConfig,
+    SecretsPolicyFragment, SigningSshCredentialDef, SshCredentialDef, SshPolicyFragment,
+    VirtualizationPolicyFragment, WorkloadConfig,
 };
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -196,6 +197,7 @@ pub fn merge_layers(layers: &[Layer]) -> Result<(ConfigFile, Provenance)> {
     for layer in layers {
         merge_schema_version(&mut merged, layer, &mut provenance);
         merge_secrets(&mut merged, layer, &mut provenance)?;
+        merge_credentials(&mut merged, layer, &mut provenance)?;
         merge_workloads(&mut merged, layer, &mut provenance)?;
     }
 
@@ -457,6 +459,48 @@ pub fn get_virtualization_ladder() -> Option<VirtualizationLadder> {
 }
 
 // ---------------------------------------------------------------------------
+// SSH confinement-policy ladder process-global storage (M1 credential broker)
+// ---------------------------------------------------------------------------
+//
+// The collected `[policy.ssh]` fragments for the most recent config load,
+// mirroring the secret-policy ladder: fragments are COLLECTED per scope,
+// never merged (no policy field passes through merge_layers), and the
+// resolution walks them authority-ascending. Rung 1 is home-registry, rung 2
+// is config layers in stack order, rung 3 is workload capsules
+// (`[workloads.<name>.policy.ssh]`) per workload name — a bare
+// directory-mode capsule's top-level `[policy.ssh]` lands there via the
+// workload wrapper. Same Mutex rationale as above.
+
+/// The collected SSH confinement-policy ladder rungs (M1). Each entry
+/// carries the ORIGIN label used in resolution provenance (home-registry
+/// scope label, or the declaring layer's name).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SshPolicyLadder {
+    /// Rung 1: the home registry's `[policy.ssh]` (operator scope).
+    pub home: Option<(String, SshPolicyFragment)>,
+    /// Rung 2: each layer's `[policy.ssh]` in loader stack order.
+    pub layers: Vec<(String, SshPolicyFragment)>,
+    /// Rung 3: workload capsule `[policy.ssh]` rungs per workload name, in
+    /// loader stack order.
+    pub workloads: HashMap<String, Vec<(String, SshPolicyFragment)>>,
+}
+
+static SSH_POLICY_LADDER: std::sync::Mutex<Option<SshPolicyLadder>> = std::sync::Mutex::new(None);
+
+/// Store the collected SSH confinement-policy ladder for the most recent config load.
+pub fn set_ssh_policy_ladder(ladder: Option<SshPolicyLadder>) {
+    *SSH_POLICY_LADDER.lock().unwrap_or_else(|e| e.into_inner()) = ladder;
+}
+
+/// Clone the stored SSH confinement-policy ladder without consuming it.
+pub fn get_ssh_policy_ladder() -> Option<SshPolicyLadder> {
+    SSH_POLICY_LADDER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+// ---------------------------------------------------------------------------
 // Merge helpers
 // ---------------------------------------------------------------------------
 
@@ -529,6 +573,184 @@ fn merge_secret_def(
         merged.on_violation = layer.on_violation;
         provenance.insert(
             format!("secrets.{name}.on_violation"),
+            layer_ctx.name.clone(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Merge the repo-global credentials catalog (M1): union-by-name across
+/// layers, mirroring [`merge_secrets`] — each catalog entry merges
+/// per-field (last layer wins when present), brand-new names are appended.
+fn merge_credentials(
+    merged: &mut ConfigFile,
+    layer: &Layer,
+    provenance: &mut Provenance,
+) -> Result<()> {
+    merge_ssh_catalog(merged, layer, provenance)?;
+    merge_signing_ssh_catalog(merged, layer, provenance)?;
+    Ok(())
+}
+
+fn merge_ssh_catalog(
+    merged: &mut ConfigFile,
+    layer: &Layer,
+    provenance: &mut Provenance,
+) -> Result<()> {
+    let ssh_table = match layer
+        .raw
+        .get("credentials")
+        .and_then(|v| v.get("ssh"))
+        .and_then(|v| v.as_table())
+    {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+
+    for (name, _) in ssh_table {
+        let layer_cred = layer
+            .config
+            .credentials
+            .ssh
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        let merged_cred = merged.credentials.ssh.entry(name.clone()).or_default();
+        merge_ssh_credential_def(merged_cred, &layer_cred, name, layer, provenance)?;
+    }
+
+    Ok(())
+}
+
+fn merge_ssh_credential_def(
+    merged: &mut SshCredentialDef,
+    layer: &SshCredentialDef,
+    name: &str,
+    layer_ctx: &Layer,
+    provenance: &mut Provenance,
+) -> Result<()> {
+    let raw_cred = layer_ctx
+        .raw
+        .get("credentials")
+        .and_then(|v| v.get("ssh"))
+        .and_then(|v| v.get(name))
+        .and_then(|v| v.as_table());
+
+    let Some(table) = raw_cred else {
+        return Ok(());
+    };
+
+    // `material`/`hosts`/`users` are required at VALIDATION (not parse, so
+    // one field can be overridden per layer) — last-wins when present.
+    if table.contains_key("material") {
+        merged.material = layer.material.clone();
+        provenance.insert(
+            format!("credentials.ssh.{name}.material"),
+            layer_ctx.name.clone(),
+        );
+    }
+    if table.contains_key("hosts") {
+        merged.hosts = layer.hosts.clone();
+        provenance.insert(
+            format!("credentials.ssh.{name}.hosts"),
+            layer_ctx.name.clone(),
+        );
+    }
+    if table.contains_key("users") {
+        merged.users = layer.users.clone();
+        provenance.insert(
+            format!("credentials.ssh.{name}.users"),
+            layer_ctx.name.clone(),
+        );
+    }
+    if table.contains_key("ports") {
+        merged.ports = layer.ports.clone();
+        provenance.insert(
+            format!("credentials.ssh.{name}.ports"),
+            layer_ctx.name.clone(),
+        );
+    }
+
+    Ok(())
+}
+
+fn merge_signing_ssh_catalog(
+    merged: &mut ConfigFile,
+    layer: &Layer,
+    provenance: &mut Provenance,
+) -> Result<()> {
+    let ssh_table = match layer
+        .raw
+        .get("credentials")
+        .and_then(|v| v.get("signing"))
+        .and_then(|v| v.get("ssh"))
+        .and_then(|v| v.as_table())
+    {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+
+    for (name, _) in ssh_table {
+        let layer_cred = layer
+            .config
+            .credentials
+            .signing
+            .ssh
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        let merged_cred = merged
+            .credentials
+            .signing
+            .ssh
+            .entry(name.clone())
+            .or_default();
+        merge_signing_ssh_credential_def(merged_cred, &layer_cred, name, layer, provenance)?;
+    }
+
+    Ok(())
+}
+
+fn merge_signing_ssh_credential_def(
+    merged: &mut SigningSshCredentialDef,
+    layer: &SigningSshCredentialDef,
+    name: &str,
+    layer_ctx: &Layer,
+    provenance: &mut Provenance,
+) -> Result<()> {
+    let raw_cred = layer_ctx
+        .raw
+        .get("credentials")
+        .and_then(|v| v.get("signing"))
+        .and_then(|v| v.get("ssh"))
+        .and_then(|v| v.get(name))
+        .and_then(|v| v.as_table());
+
+    let Some(table) = raw_cred else {
+        return Ok(());
+    };
+
+    // `material`/`namespace` are required at VALIDATION (not parse) —
+    // last-wins when present.
+    if table.contains_key("material") {
+        merged.material = layer.material.clone();
+        provenance.insert(
+            format!("credentials.signing.ssh.{name}.material"),
+            layer_ctx.name.clone(),
+        );
+    }
+    if table.contains_key("namespace") {
+        merged.namespace = layer.namespace.clone();
+        provenance.insert(
+            format!("credentials.signing.ssh.{name}.namespace"),
+            layer_ctx.name.clone(),
+        );
+    }
+    if table.contains_key("on_violation") {
+        merged.on_violation = layer.on_violation;
+        provenance.insert(
+            format!("credentials.signing.ssh.{name}.on_violation"),
             layer_ctx.name.clone(),
         );
     }
@@ -707,6 +929,18 @@ fn merge_workload(
             raw_network,
             provenance,
         )?;
+    }
+
+    if table.contains_key("credentials") {
+        // M1 credential-broker consumption: the grant allowlist is ONE unit
+        // — a higher layer re-declaring `[workloads.<name>.credentials]`
+        // replaces the WHOLE allowlist (last layer wins), the same
+        // whole-spec reset semantics the instance block applies.
+        merged.credentials = layer.credentials.clone();
+        provenance.insert(
+            format!("workloads.{name}.credentials"),
+            layer_ctx.name.clone(),
+        );
     }
 
     Ok(())
@@ -1788,6 +2022,145 @@ mod tests {
         assert_eq!(
             merged.workloads["pi"].virtualization, None,
             "no ask anywhere merges to None (omitted → Off)"
+        );
+        Ok(())
+    }
+
+    // ---- M1 credential broker: catalog merge union-by-name ----
+
+    #[test]
+    fn credentials_catalog_merges_union_by_name() -> Result<()> {
+        // Base declares `deploy`, team adds `backup` — both survive (the
+        // secrets union-by-name shape).
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n[credentials.ssh.backup]\nmaterial = \"BACKUP_KEY\"\nhosts = [\"backup.example.com\"]\nusers = [\"backup\"]\n",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        assert!(merged.credentials.ssh.contains_key("deploy"));
+        assert!(merged.credentials.ssh.contains_key("backup"));
+        assert_eq!(
+            provenance.get("credentials.ssh.deploy.material"),
+            Some(&"base".to_string())
+        );
+        assert_eq!(
+            provenance.get("credentials.ssh.backup.hosts"),
+            Some(&"team".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn credentials_catalog_merges_per_field_last_layer_wins() -> Result<()> {
+        // A higher layer re-declaring one field of an entry overrides just
+        // that field (merge_secret_def shape); untouched fields keep the
+        // lower layer's value AND provenance.
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"ghe.example.com\"]\n",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let deploy = &merged.credentials.ssh["deploy"];
+        assert_eq!(deploy.hosts, vec!["ghe.example.com".to_string()]);
+        assert_eq!(deploy.users, vec!["git".to_string()]);
+        assert_eq!(
+            provenance.get("credentials.ssh.deploy.hosts"),
+            Some(&"team".to_string())
+        );
+        assert_eq!(
+            provenance.get("credentials.ssh.deploy.users"),
+            Some(&"base".to_string()),
+            "untouched field keeps the base layer provenance"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn signing_catalog_merges_union_by_name_with_ports_untouched() -> Result<()> {
+        // The signing namespace merges independently of the ssh namespace;
+        // an absent `ports` stays None through merge (defaults-after-merge).
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n[credentials.signing.ssh.rel]\nmaterial = \"SIGN_KEY\"\nnamespace = \"release\"\n",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n[credentials.signing.ssh.rel]\nmaterial = \"SIGN_KEY\"\non_violation = \"block\"\n",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        assert!(merged.credentials.ssh.contains_key("deploy"));
+        let rel = &merged.credentials.signing.ssh["rel"];
+        assert_eq!(rel.namespace, "release");
+        assert_eq!(
+            rel.on_violation,
+            Some(crate::config::SecretViolationPolicy::Block)
+        );
+        assert_eq!(
+            merged.credentials.ssh["deploy"].ports, None,
+            "absent ports stay None through merge (default [22] applies at grant resolution)"
+        );
+        assert_eq!(
+            provenance.get("credentials.signing.ssh.rel.on_violation"),
+            Some(&"team".to_string())
+        );
+        assert_eq!(
+            provenance.get("credentials.signing.ssh.rel.namespace"),
+            Some(&"base".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn workload_credentials_allowlist_replaces_wholesale() -> Result<()> {
+        // The grant allowlist is ONE unit: a higher layer re-declaring
+        // [workloads.<name>.credentials] replaces it wholesale (the
+        // instance-block shape), last layer wins.
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.credentials]\nssh = [\"deploy\"]\nsigning = [\"rel\"]\n",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n\n[workloads.pi]\ncommand = []\n\n[workloads.pi.credentials]\nssh = [\"backup\"]\n",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let creds = &merged.workloads["pi"].credentials;
+        assert_eq!(creds.ssh, vec!["backup".to_string()]);
+        assert!(
+            creds.signing.is_empty(),
+            "wholesale replace resets undeclared keys to the default"
+        );
+        assert_eq!(
+            provenance.get("workloads.pi.credentials"),
+            Some(&"team".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn workload_credentials_absent_preserves_lower_layer() -> Result<()> {
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.credentials]\nssh = [\"deploy\"]\n",
+        )?;
+        let top = Layer::from_string("top", "schema_version = 1\n\n[workloads.pi]\ncommand = []")?;
+
+        let (merged, _) = merge_layers(&[base, top])?;
+        assert_eq!(
+            merged.workloads["pi"].credentials.ssh,
+            vec!["deploy".to_string()]
         );
         Ok(())
     }

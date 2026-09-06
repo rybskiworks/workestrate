@@ -32,6 +32,7 @@
         "ingress": null,
         "mounts": null,
         "secrets": null,
+        "ssh": null,
         "virtualization": null
       },
       "allOf": [
@@ -552,6 +553,18 @@
             }
           ]
         },
+        "ssh": {
+          "description": "SSH confinement-policy rung (`[policy.ssh]`; M1). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SshPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "virtualization": {
           "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
           "default": null,
@@ -725,6 +738,26 @@
             {
               "type": "null"
             }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SshPolicyFragment": {
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`; M1): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "strict": {
+          "description": "Confinement switch this rung declares. `strict = true` means recognized SSH flows are checked against SSH grants/egress even when a generic TCP allowance would match. Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
           ]
         }
       },

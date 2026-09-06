@@ -1442,6 +1442,138 @@ pub struct WorkloadConfig {
     /// time. Layers merge union-by-dependency-name, last layer wins per dep.
     #[serde(default)]
     pub depends_on: HashMap<String, DependsOnSpec>,
+    /// Credential-broker grants (`workloads.<name>.credentials`; M1): the
+    /// allowlist of catalog entry names this workload may use (`ssh` names
+    /// `[credentials.ssh.<name>]` entries, `signing` names
+    /// `[credentials.signing.ssh.<name>]` entries). Unknown names are a
+    /// validation error. Merges whole-unit (last layer wins), like
+    /// `ports`/`mounts`: a higher layer restates the full allowlist.
+    #[serde(default)]
+    pub credentials: WorkloadCredentials,
+}
+
+/// Workload credential-broker consumption (`workloads.<name>.credentials`;
+/// M1): the allowlist of catalog entry names this workload may use. `ssh`
+/// names `[credentials.ssh.<name>]` entries, `signing` names
+/// `[credentials.signing.ssh.<name>]` entries; an unknown name is a
+/// validation error. Binding stays at consumption via the EXISTING env
+/// idiom: omission of any guest binding renders the grant broker-bound (the
+/// default, secure); `bound = "guest"` on the corresponding secret
+/// consumption delivers real material via the existing secret-delivery path.
+/// There is deliberately NO `bound` (and no `via`/`recipe` vocabulary) here —
+/// `deny_unknown_fields` rejects them.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+pub struct WorkloadCredentials {
+    #[serde(default)]
+    pub ssh: Vec<String>,
+    #[serde(default)]
+    pub signing: Vec<String>,
+}
+
+/// One SSH credential catalog entry (`credentials.ssh.<name>`; M1): an
+/// explicit first-class reference (`material` names an existing
+/// `[secrets.<N>]` entry — no same-name magic) plus the confinement scope
+/// (`hosts`/`users` required, `ports` defaulting to `[22]` post-merge).
+/// Merged union-by-name across layers (per-field, last layer wins when
+/// present), like [`SecretDefConfig`]: every field is omittable per layer
+/// and required-ness is enforced at VALIDATION (fail-closed, naming the
+/// credential) rather than at parse, so a higher layer can override one
+/// field without restating the entry.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+pub struct SshCredentialDef {
+    /// Name of the `[secrets.<N>]` entry holding the key material (REQUIRED).
+    /// Validation fails closed naming both the credential and the secret
+    /// when the secret does not exist.
+    #[serde(default)]
+    pub material: String,
+    /// Hosts the key may authenticate to (REQUIRED, non-empty).
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    /// Remote users the key may authenticate as (REQUIRED, non-empty).
+    #[serde(default)]
+    pub users: Vec<String>,
+    /// Ports the key may reach. `None` (absent) defaults to `[22]` at grant
+    /// resolution (defaults-after-merge — it stays `None` through parse and
+    /// merge, the same idiom as `EnvSecretRef.bound`).
+    #[serde(default)]
+    pub ports: Option<Vec<u16>>,
+}
+
+/// One SSH signing credential catalog entry
+/// (`credentials.signing.ssh.<name>`; M1): key material for signatures
+/// scoped to a `namespace`. Deliberately has NO `users`/`ports` fields —
+/// `deny_unknown_fields` rejects them at parse time. Like
+/// [`SshCredentialDef`], fields are omittable per layer (per-field merge)
+/// with required-ness enforced at validation.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+pub struct SigningSshCredentialDef {
+    /// Name of the `[secrets.<N>]` entry holding the key material (REQUIRED).
+    #[serde(default)]
+    pub material: String,
+    /// Signature namespace (REQUIRED, non-empty).
+    #[serde(default)]
+    pub namespace: String,
+    /// Violation policy for this signing use. `None` inherits the material
+    /// secret's ladder-resolved policy at grant resolution (same
+    /// defaults-after-merge idiom as `SshCredentialDef.ports`).
+    #[serde(default)]
+    pub on_violation: Option<SecretViolationPolicy>,
+}
+
+/// The `[credentials.signing]` namespace (M1): currently SSH signing only
+/// (`[credentials.signing.ssh.<name>]`).
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+pub struct SigningCredentialsConfig {
+    #[serde(default)]
+    pub ssh: HashMap<String, SigningSshCredentialDef>,
+}
+
+/// The repo-global credentials catalog (`credentials`; M1, directory-mode
+/// aware): `[credentials.ssh.<name>]` SSH grants plus the
+/// `[credentials.signing]` namespace. Declared in `default.toml` (or
+/// `secrets.toml` — every directory-mode file parses as a full layer, so no
+/// new file is needed); merged union-by-name across layers like `secrets`.
+/// There is deliberately NO `via`/`recipe` vocabulary anywhere on this
+/// surface — `deny_unknown_fields` rejects it.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+pub struct CredentialsConfig {
+    #[serde(default)]
+    pub ssh: HashMap<String, SshCredentialDef>,
+    #[serde(default)]
+    pub signing: SigningCredentialsConfig,
+}
+
+/// One rung of the SSH confinement-policy ladder (`[policy.ssh]`; M1):
+/// the fragment declared at the home-registry, config-repo-layer, or
+/// workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder
+/// pattern exactly: collected per rung (never merged — no policy field
+/// passes through `merge_layers`), resolved authority-ascending, `final`
+/// terminally freezing lower rungs (including a bare `final` with no
+/// `strict`, which freezes whatever the higher rungs resolved so far).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SshPolicyFragment {
+    /// Confinement switch this rung declares. `strict = true` means
+    /// recognized SSH flows are checked against SSH grants/egress even when
+    /// a generic TCP allowance would match. Absent = this rung declares no
+    /// value (it may still freeze with `final`).
+    #[serde(default)]
+    pub strict: Option<bool>,
+    /// Terminal freeze (mount-policy `final` vocabulary): when true, every
+    /// lower rung is frozen out and cannot override the value resolved at
+    /// this rung. Defaults to false.
+    #[serde(rename = "final", default)]
+    pub r#final: bool,
 }
 
 /// Per-secret egress violation policy (`secrets.<name>.on_violation`): what
@@ -1563,6 +1695,10 @@ pub struct ConfigFile {
     pub schema_version: u32,
     #[serde(default)]
     pub secrets: HashMap<String, SecretDefConfig>,
+    /// Repo-global credentials catalog (`credentials`; M1). Merged
+    /// union-by-name across layers, like `secrets`.
+    #[serde(default)]
+    pub credentials: CredentialsConfig,
     #[serde(default)]
     pub workloads: HashMap<String, WorkloadConfig>,
     #[serde(default)]
@@ -1607,6 +1743,13 @@ pub struct PolicyConfig {
     /// secrets/egress ladders. `final` seals a denial, never enables.
     #[serde(default)]
     pub virtualization: Option<VirtualizationPolicyFragment>,
+    /// SSH confinement-policy rung (`[policy.ssh]`; M1). Collected per scope
+    /// (home registry, config layers, workload capsule — a bare
+    /// directory-mode capsule's top-level `[policy.ssh]` lands on the
+    /// workload rung via the workload wrapper), never merged — the same
+    /// collect-never-merge idiom as the secrets/virtualization ladders.
+    #[serde(default)]
+    pub ssh: Option<SshPolicyFragment>,
 }
 
 /// Conflict handling for a frozen rung (ADR 0035 §8). Per-ladder granular:
@@ -1883,7 +2026,13 @@ pub struct Registry {
 // ---------------------------------------------------------------------------
 
 /// Known top-level ConfigFile fields (for unknown-field detection in overrides).
-pub(crate) const CONFIG_FIELDS: &[&str] = &["schema_version", "secrets", "workloads", "policy"];
+pub(crate) const CONFIG_FIELDS: &[&str] = &[
+    "schema_version",
+    "secrets",
+    "credentials",
+    "workloads",
+    "policy",
+];
 
 /// Known WorkloadConfig fields (for unknown-field detection in overrides).
 pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
@@ -1904,6 +2053,7 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
     "instance",
     "virtualization",
     "depends_on",
+    "credentials",
 ];
 
 #[cfg(test)]
@@ -3981,6 +4131,14 @@ strategy = "per-dir"
         assert!(
             WORKLOAD_FIELDS.contains(&"instance"),
             "WORKLOAD_FIELDS must list instance: {WORKLOAD_FIELDS:?}"
+        );
+        assert!(
+            WORKLOAD_FIELDS.contains(&"credentials"),
+            "WORKLOAD_FIELDS must list credentials: {WORKLOAD_FIELDS:?}"
+        );
+        assert!(
+            CONFIG_FIELDS.contains(&"credentials"),
+            "CONFIG_FIELDS must list credentials: {CONFIG_FIELDS:?}"
         );
     }
 

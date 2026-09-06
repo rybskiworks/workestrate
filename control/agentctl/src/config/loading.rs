@@ -355,12 +355,14 @@ pub fn load_config() -> Result<ConfigFile> {
             let ladder = collect_secret_policy_ladder(None, std::slice::from_ref(&layer));
             let network_ladder = collect_network_policy_ladder(None, std::slice::from_ref(&layer));
             let virt_ladder = collect_virtualization_ladder(None, std::slice::from_ref(&layer));
+            let ssh_ladder = collect_ssh_policy_ladder(None, std::slice::from_ref(&layer));
             let layer_dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&layer));
             let (merged, provenance) = crate::merge::merge_layers(&[layer])?;
             crate::mount_policy::set_collected_policy(Some(collected));
             crate::merge::set_secret_policy_ladder(Some(ladder));
             crate::merge::set_network_policy_ladder(Some(network_ladder));
             crate::merge::set_virtualization_ladder(Some(virt_ladder));
+            crate::merge::set_ssh_policy_ladder(Some(ssh_ladder));
             crate::merge::set_provenance(Some(provenance));
             crate::merge::set_layer_dirs(Some(layer_dirs));
             validate_config(&merged)?;
@@ -495,6 +497,7 @@ pub fn load_config() -> Result<ConfigFile> {
     let mut ladder = collect_secret_policy_ladder(registry.as_ref(), &layers);
     let mut network_ladder = collect_network_policy_ladder(registry.as_ref(), &layers);
     let mut virt_ladder = collect_virtualization_ladder(registry.as_ref(), &layers);
+    let mut ssh_ladder = collect_ssh_policy_ladder(registry.as_ref(), &layers);
     if let Some((workload, layer)) = substituted_layer {
         // The policy collection must reflect the substitution: the home
         // collection above saw the PRE-substitution declaration, which
@@ -506,11 +509,13 @@ pub fn load_config() -> Result<ConfigFile> {
         replace_workload_secret_rungs_from_layer(&mut ladder, &workload, &layer);
         replace_workload_network_rungs_from_layer(&mut network_ladder, &workload, &layer);
         replace_workload_virtualization_rungs_from_layer(&mut virt_ladder, &workload, &layer);
+        replace_workload_ssh_rungs_from_layer(&mut ssh_ladder, &workload, &layer);
     }
     crate::mount_policy::set_collected_policy(Some(collected));
     crate::merge::set_secret_policy_ladder(Some(ladder));
     crate::merge::set_network_policy_ladder(Some(network_ladder));
     crate::merge::set_virtualization_ladder(Some(virt_ladder));
+    crate::merge::set_ssh_policy_ladder(Some(ssh_ladder));
     crate::merge::set_provenance(Some(provenance));
     crate::merge::set_layer_dirs(Some(layer_dirs));
     validate_config(&merged)?;
@@ -1053,6 +1058,69 @@ fn replace_workload_virtualization_rungs_from_layer(
         .workloads
         .get(workload)
         .and_then(|decl| decl.policy.virtualization.clone())
+        .map(|fragment| (layer.name.clone(), fragment));
+    match rung {
+        Some(rung) => {
+            ladder.workloads.insert(workload.to_string(), vec![rung]);
+        }
+        None => {
+            ladder.workloads.remove(workload);
+        }
+    }
+}
+
+/// Collect the SSH confinement-policy ladder rungs in the loader's actual
+/// order (M1 credential broker) — the SSH edition of
+/// [`collect_secret_policy_ladder`]: `[policy.ssh]` fragments are collected
+/// per scope, never merged, and the resolution walks them
+/// authority-ascending. Rung 1 is the home registry's fragment (operator
+/// scope); rung 2 is each layer's fragment in stack order; rung 3 is each
+/// workload's `[workloads.<name>.policy.ssh]` in stack order (a bare
+/// directory-mode capsule's top-level `[policy.ssh]` lands there via the
+/// workload wrapper).
+fn collect_ssh_policy_ladder(
+    registry: Option<&Registry>,
+    layers: &[crate::merge::Layer],
+) -> crate::merge::SshPolicyLadder {
+    let mut ladder = crate::merge::SshPolicyLadder::default();
+    if let Some(fragment) = registry.and_then(|r| r.policy.ssh.clone()) {
+        ladder.home = Some(("home-registry".to_string(), fragment));
+    }
+    for layer in layers {
+        if let Some(fragment) = layer.config.policy.ssh.clone() {
+            ladder.layers.push((layer.name.clone(), fragment));
+        }
+        for (name, workload) in &layer.config.workloads {
+            if let Some(fragment) = workload.policy.ssh.clone() {
+                ladder
+                    .workloads
+                    .entry(name.clone())
+                    .or_default()
+                    .push((layer.name.clone(), fragment));
+            }
+        }
+    }
+    ladder
+}
+
+/// Re-collect ONE workload's SSH confinement rungs from a substituted layer,
+/// replacing whatever the home-scoped [`collect_ssh_policy_ladder`] pass
+/// recorded for it (the same inline-override consistency rule as
+/// [`replace_workload_secret_rungs_from_layer`]): the substituted
+/// declaration IS the whole workload declaration at the ref, so its
+/// `[policy.ssh]` is authoritative — a ref declaration carrying NO fragment
+/// REMOVES the home-collected rungs for that workload. Capsule-only:
+/// layer-global `[policy.ssh]` rungs stay home-scoped.
+fn replace_workload_ssh_rungs_from_layer(
+    ladder: &mut crate::merge::SshPolicyLadder,
+    workload: &str,
+    layer: &crate::merge::Layer,
+) {
+    let rung = layer
+        .config
+        .workloads
+        .get(workload)
+        .and_then(|decl| decl.policy.ssh.clone())
         .map(|fragment| (layer.name.clone(), fragment));
     match rung {
         Some(rung) => {
@@ -3305,6 +3373,39 @@ write.deny = ["sugar-write-deny"]
             scope.source_path,
             repo.join("workestrate/workloads/capsule/workload.toml")
         );
+        let _ = std::fs::remove_dir_all(&repo);
+        Ok(())
+    }
+
+    /// M1: a bare directory-mode capsule's top-level `[policy.ssh]` lands
+    /// on the workload rung via the workload wrapper (the same path the
+    /// `[policy.secrets]` capsule rung takes), and layer-level
+    /// `[policy.ssh]` lands on the layer rung.
+    #[test]
+    fn ssh_policy_collection_covers_layers_and_capsules() -> Result<()> {
+        let repo = uniq_dir("ssh-policy-provenance");
+        write_repo_file(
+            &repo,
+            "workestrate/default.toml",
+            "schema_version = 1\n[policy.ssh]\nstrict = false\n",
+        );
+        write_repo_file(
+            &repo,
+            "workestrate/workloads/capsule/workload.toml",
+            "kind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n[policy.ssh]\nstrict = true\n",
+        );
+        let layers = load_config_repo_layers("personal", &repo)?;
+        let ladder = collect_ssh_policy_ladder(None, &layers);
+        assert_eq!(ladder.layers.len(), 1);
+        assert_eq!(ladder.layers[0].0, "personal#workestrate/default.toml");
+        assert_eq!(ladder.layers[0].1.strict, Some(false));
+        let capsule = &ladder.workloads["capsule"];
+        assert_eq!(capsule.len(), 1);
+        assert_eq!(
+            capsule[0].0,
+            "personal#workestrate/workloads/capsule/workload.toml"
+        );
+        assert_eq!(capsule[0].1.strict, Some(true));
         let _ = std::fs::remove_dir_all(&repo);
         Ok(())
     }

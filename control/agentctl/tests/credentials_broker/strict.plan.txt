@@ -1,0 +1,8 @@
+name: hardened
+image: node:24
+ssh: strict=true (origin local)
+credential: signing rel material=DEPLOY_KEY namespace=release on_violation=passthrough binding=broker-bound
+network: egress_default=deny ingress_default=deny
+  egress: tcp:22 -> host
+  egress: tcp:53 -> host
+  egress: udp:53 -> host
