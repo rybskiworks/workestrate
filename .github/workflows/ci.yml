@@ -17,6 +17,19 @@
 #   - The heavy nix build is on-demand only (workflow_dispatch) until a
 #     self-hosted runner / cachix cache lands.
 #
+# v3 (owner directive): nix-dependent functional tests are SELF-CONTAINED
+# ACTIONS — each nix-needing job defines its complete tooling on the job
+# itself (install-nix-action + in-job provisioning + explicit env exports),
+# nothing assumed from the runner image or a devshell. Pattern borrowed
+# from github.com/akitaonrails/ai-memory (ci.yml label-gated heavy legs,
+# nix.yml build-then-run-the-binary):
+#   e2e-nix — runs the nix/msb-gated e2e tests (image_pipeline_e2e,
+#     ensure_images_e2e non-ignored) with msb+agentd provisioned IN the job
+#     (nix build .#microsandbox) and MSB_PATH/MSB_AGENTD_PATH exported by a
+#     job step. On push + workflow_dispatch; per-PR it opts in via the
+#     `nix-ci` label (ai-memory's `full-ci` pattern). KVM variants stay
+#     #[ignore]'d — self-hosted runner follow-up.
+#
 # PR-gated job (path-filtered — code/CI-relevant paths only, per the
 # not-every-run directive):
 #   gates — lock-guard, versions-check, lint-nix, toolchain-pin guard,
@@ -39,7 +52,8 @@
 #
 # Deferred by design (follow-ups, not POC scope):
 #   - self-hosted runner (dblab42, labels [self-hosted, linux, kvm]) for
-#     kvm-tests / prime-smoke / nix-gated e2e, post-merge or nightly.
+#     the #[ignore]'d KVM tests / prime-smoke, post-merge or nightly
+#     (non-KVM nix-gated e2e now runs in the e2e-nix job below).
 #   - Real binary cache (org cachix decision pending) to make the heavy
 #     build cheap enough for per-PR gating. magic-nix-cache below is the
 #     zero-config stopgap: continue-on-error so a cache outage never blocks;
@@ -52,6 +66,9 @@ name: ci
 
 on:
   pull_request:
+    # `labeled` so the e2e-nix job's `nix-ci` label gate retriggers on
+    # labeling (ai-memory ci.yml line 7 pattern).
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'control/**'
       - 'flake.nix'
@@ -178,6 +195,94 @@ jobs:
       - name: Cargo.lock stability diff
         run: git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
+  e2e-nix:
+    name: e2e-nix (nix-gated functional tests, self-contained tooling)
+    # Heavy leg opts in per PR via the `nix-ci` label (ai-memory's full-ci
+    # pattern); always on push/dispatch. Every input the e2e tests probe is
+    # provisioned BY THIS JOB — nothing ambient.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'nix-ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # SELF-CONTAINED TOOLING (owner directive): the nix-gated e2e tests
+      # probe four inputs — nix on PATH, MSB_PATH (unwrapped msb honoring
+      # MSB_HOME), MSB_AGENTD_PATH (compile-time agentd embed), gunzip.
+      # All four are provisioned/exported here, on the action itself.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Zero-config stopgap cache; continue-on-error so an outage never
+      # blocks (same hardening item as in heavy-build: @main, unpinnable).
+      - name: Warm Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+        continue-on-error: true
+
+      # Provision msb + agentd INSIDE the action: source build of the
+      # flake.lock-pinned fork (bin/msb + libexec/agentd + libkrunfw). The
+      # light gates job's download fallback only covers the compile-time
+      # agentd embed — the e2e runtime gate needs a real msb binary.
+      - name: Provision msb + agentd (nix build .#microsandbox)
+        run: nix build -L .#microsandbox -o result-msb
+
+      # Explicit env set by the action, and fail-CLOSED provisioning proof:
+      # the e2e tests skip-with-note when an input is absent, so a silent
+      # provisioning miss would be a green lie — assert all four inputs
+      # before exporting.
+      - name: Export e2e env (MSB_PATH / MSB_AGENTD_PATH) + provision check
+        run: |
+          set -euo pipefail
+          msb="$PWD/result-msb/bin/msb"
+          agentd="$PWD/result-msb/libexec/agentd"
+          [ -f "$agentd" ] || { echo "FAIL: agentd missing at $agentd" >&2; exit 1; }
+          command -v nix >/dev/null || { echo "FAIL: nix not on PATH" >&2; exit 1; }
+          command -v gunzip >/dev/null || { echo "FAIL: gunzip not on PATH" >&2; exit 1; }
+          "$msb" --version || { echo "FAIL: msb not runnable at $msb" >&2; exit 1; }
+          echo "MSB_PATH=$msb" >> "$GITHUB_ENV"
+          echo "MSB_AGENTD_PATH=$agentd" >> "$GITHUB_ENV"
+
+      # Same vendor-symlink staging as the gates job: [patch.crates-io]
+      # resolves against it (both .cargo/config.toml files are committed).
+      - name: Vendor microsandbox fork (flake.lock-pinned rev)
+        run: |
+          set -euo pipefail
+          rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
+          echo "microsandbox-fork rev: $rev"
+          mkdir -p "$RUNNER_TEMP/msb-fork"
+          curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
+          mkdir -p control/agentctl/vendor
+          ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
+
+      # Pinned to the same major.minor as the gates job (the drift guard
+      # lives there — one owner of the invariant).
+      - name: Install pinned Rust toolchain (flake marker parity)
+        uses: dtolnay/rust-toolchain@1.97
+
+      - name: Cache cargo registry + target dir
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: control/agentctl
+
+      # With MSB_AGENTD_PATH set, the fork's build.rs embeds the REAL
+      # agentd; with MSB_PATH + nix + gunzip present, the nix/msb-gated
+      # e2e tests RUN here instead of skip-with-note. KVM variants stay
+      # #[ignore]'d (self-hosted runner follow-up).
+      - name: cargo test (nix-gated e2e, real nix + msb + agentd)
+        run: >-
+          cargo test --manifest-path control/agentctl/Cargo.toml
+          --test image_pipeline_e2e --test ensure_images_e2e
+
   heavy-build:
     name: heavy build (nix build .#workestrate, on-demand only)
     if: github.event_name == 'workflow_dispatch'
@@ -196,3 +301,7 @@ jobs:
         continue-on-error: true
       - name: nix build .#workestrate
         run: nix build -L .#workestrate
+      # ai-memory nix.yml pattern: run what the flake promises — a package
+      # that builds but cannot execute still fails.
+      - name: smoke (built binary runs)
+        run: ./result/bin/workestrate --version
