@@ -350,3 +350,32 @@ jobs:
             echo "FAIL: gates job did not succeed (result: $result)" >&2
             exit 1
           fi
+
+  # Workflow lint: self-contained (no devenv, no nix), default settings —
+  # actionlint runs on .github/workflows.
+  actionlint:
+    name: actionlint (workflow lint)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: actionlint
+        uses: reviewdog/action-actionlint@d290e336d5a743810aef4404f757dc862276d2ae # v1.73.4
+
+  # Workflow security audit: self-contained (no devenv, no nix). Console
+  # output with GitHub annotations — a private repo without GHAS cannot
+  # upload SARIF, so no SARIF upload here.
+  zizmor:
+    name: zizmor (workflow security audit)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install zizmor
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        with:
+          tool: zizmor@1.30.0
+      - name: zizmor (annotations to console)
+        run: zizmor --format github .github/workflows/

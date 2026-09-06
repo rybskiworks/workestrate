@@ -494,6 +494,7 @@
             ];
 
             packages = with pkgs; [
+              actionlint
               age
               workestrate
               rustToolchain.cargo
@@ -522,6 +523,7 @@
               tombi
               write-env
               setup-secrets
+              zizmor
             ];
 
             # Preserve the extensive shellHook from the previous mkShell (staging msb, vendor, agent builds)
