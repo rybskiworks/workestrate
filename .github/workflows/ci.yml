@@ -58,9 +58,10 @@
 #     (non-KVM nix-gated e2e now runs in the e2e-nix job below).
 #   - Real binary cache (org cachix decision pending) to make the heavy
 #     build cheap enough for per-PR gating. magic-nix-cache below is the
-#     zero-config stopgap: continue-on-error so a cache outage never blocks;
-#     unpinnable (@main, no releases) — same hardening item as SHA-pinning
-#     all actions (tags are mutable).
+#     zero-config stopgap: SHA-pinned to the v14 tag (it has releases);
+#     continue-on-error by design so a cache outage never blocks. All
+#     third-party actions in this workflow are SHA-pinned (tags are
+#     mutable).
 #   - nightly `nix flake check` (treefmt nixfmt/statix + tombiCheck +
 #     validateConfig) once devenv-test IFD warm-up is cacheable.
 
@@ -121,12 +122,15 @@ jobs:
       CARGO_INCREMENTAL: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # dtolnay/rust-toolchain resolves the toolchain from the @ref: @1.97
       # tracks the latest 1.97.x (fenix pins rustc 1.97.1 via the same
       # major.minor). The guard step below fails closed if the ref drifts
       # from the flake's RUST_TOOLCHAIN_VERSION marker.
+      # WAIVER: unpinned by design — no version tags exist; the
+      # toolchain-pin guard below fails closed on drift from the flake
+      # marker.
       - name: Install pinned Rust toolchain (flake marker parity)
         uses: dtolnay/rust-toolchain@1.97
         with:
@@ -168,7 +172,7 @@ jobs:
           ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
 
       - name: Cache cargo registry + target dir
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: control/agentctl
 
@@ -214,22 +218,23 @@ jobs:
       CARGO_INCREMENTAL: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # SELF-CONTAINED TOOLING (owner directive): the nix-gated e2e tests
       # probe four inputs — nix on PATH, MSB_PATH (unwrapped msb honoring
       # MSB_HOME), MSB_AGENTD_PATH (compile-time agentd embed), gunzip.
       # All four are provisioned/exported here, on the action itself.
       - name: Install Nix
-        uses: cachix/install-nix-action@v31
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      # Zero-config stopgap cache; continue-on-error so an outage never
-      # blocks (same hardening item as in heavy-build: @main, unpinnable).
+      # Zero-config stopgap cache; continue-on-error by design so an
+      # outage never blocks. SHA-pinned to the v14 tag (same as in
+      # heavy-build) — the action has releases.
       - name: Warm Nix store cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         continue-on-error: true
 
       # Provision msb + agentd INSIDE the action: source build of the
@@ -270,11 +275,14 @@ jobs:
 
       # Pinned to the same major.minor as the gates job (the drift guard
       # lives there — one owner of the invariant).
+      # WAIVER: unpinned by design — no version tags exist; the
+      # toolchain-pin guard in the gates job fails closed on drift from
+      # the flake marker.
       - name: Install pinned Rust toolchain (flake marker parity)
         uses: dtolnay/rust-toolchain@1.97
 
       - name: Cache cargo registry + target dir
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: control/agentctl
 
@@ -294,14 +302,14 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Nix
-        uses: cachix/install-nix-action@v31
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Warm Nix store cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         continue-on-error: true
       - name: nix build .#workestrate
         run: nix build -L .#workestrate
