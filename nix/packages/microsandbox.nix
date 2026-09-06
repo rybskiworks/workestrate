@@ -26,6 +26,14 @@ let
   # -----------------------------------------------------------------------
   # libkrunfw — CONTINGENCY
   # -----------------------------------------------------------------------
+  # Provenance / license: the tarball fetched below is a prebuilt binary of
+  # libkrunfw, which embeds a GPL-2.0-licensed Linux kernel image plus
+  # patches. Redistributing the built package therefore carries the GPL-2.0
+  # §3 corresponding-source offer obligation. The exact corresponding source
+  # is the upstream fork repo https://github.com/superradcompany/libkrunfw
+  # (branch krunfw; at the time of writing resolving to 21cb6dce), pinned as
+  # the fork's vendor/libkrunfw submodule (recorded gitlink c5503d82).
+  #
   # Branch A (default): fetch the upstream v0.6.8 release tarball and extract
   # ONLY libkrunfw.so* from it. The tar sha256 below (line ~44) is REAL and
   # verified against the GitHub v0.6.8 release digest (SRI mSvmbOim... decodes
