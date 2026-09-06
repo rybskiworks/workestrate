@@ -379,3 +379,44 @@ jobs:
           tool: zizmor@1.30.0
       - name: zizmor (annotations to console)
         run: zizmor --format github .github/workflows/
+
+  # Supply-chain gates (cargo-deny, config at repo-root deny.toml):
+  # licenses/bans/sources are a HARD gate. advisories stay soft
+  # (continue-on-error) — the advisory DB needs network + git; CI-only by
+  # design, deliberately not in `just verify`.
+  deny:
+    name: deny (cargo-deny supply-chain gates, no devenv)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Same staging as the gates job: the committed .cargo/config.toml
+      # [patch.crates-io] section makes cargo metadata fail without the
+      # vendored fork symlink.
+      - name: Vendor microsandbox fork (flake.lock-pinned rev)
+        run: |
+          set -euo pipefail
+          rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
+          echo "microsandbox-fork rev: $rev"
+          mkdir -p "$RUNNER_TEMP/msb-fork"
+          curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
+          mkdir -p control/agentctl/vendor
+          ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        with:
+          tool: cargo-deny
+
+      - name: cargo deny check licenses bans sources (hard gate)
+        run: cargo deny --locked --manifest-path control/agentctl/Cargo.toml check licenses bans sources
+
+      # Soft gate: the advisory DB needs network + git; CI-only by design,
+      # deliberately not in `just verify`.
+      - name: cargo deny check advisories (soft)
+        continue-on-error: true
+        run: cargo deny --locked --manifest-path control/agentctl/Cargo.toml check advisories

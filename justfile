@@ -97,6 +97,30 @@ _check-inner:
     cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
     cargo check --manifest-path control/agentctl/Cargo.toml
 
+# Supply-chain gates (cargo-deny, config at repo-root deny.toml): licenses,
+# bans (wildcard deps), sources (unknown registries/git). advisories are
+# CI-only by design (continue-on-error in ci.yml) — the advisory DB needs
+# network + git, so it is deliberately NOT part of `just verify`.
+deny-check:
+    @just _deny-check-inner
+[private]
+_deny-check-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _deny-check-inner
+    fi
+    cargo deny --locked --manifest-path control/agentctl/Cargo.toml check licenses bans sources
+
 # Parse every fenced toml block in docs/migration/20-target-system-spec.md
 # against the ConfigFile schema shape (WP4 / D1 standing guard).
 spec-examples:
@@ -148,7 +172,7 @@ verify: lock-guard versions-check
     fi
     just _verify-inner
 [private]
-_verify-inner: toolchain-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix store-audit
+_verify-inner: toolchain-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix deny-check store-audit
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
 # Heaviest validation: verify plus Nix build. `verify` self-enshells first,

@@ -10,6 +10,7 @@ include = [
   ".cargo/config.toml",
   "control/agentctl/.cargo/config.toml",
   "tombi.toml",
+  "deny.toml",
 ]
 exclude = [
   "control/agentctl/tests/fixtures/**",

@@ -509,6 +509,7 @@
               msb-wrapped
               nodejs_24
               bun
+              cargo-deny
               openssl
               pkg-config
               (python3.withPackages (p: [ p.pip ]))
