@@ -1736,13 +1736,14 @@ mod tests {
             frozen_by: None,
         };
         // Full host: require AND prefer resolve nested-ON.
-        assert!(check_nested_up_gate(&workload(NestedMode::Require), &NestedProbe::full())
-            .unwrap());
-        assert!(check_nested_up_gate(&workload(NestedMode::Prefer), &NestedProbe::full())
-            .unwrap());
+        assert!(
+            check_nested_up_gate(&workload(NestedMode::Require), &NestedProbe::full()).unwrap()
+        );
+        assert!(check_nested_up_gate(&workload(NestedMode::Prefer), &NestedProbe::full()).unwrap());
         // Degraded prefer never sets the option: kvm absent...
-        assert!(!check_nested_up_gate(&workload(NestedMode::Prefer), &NestedProbe::absent())
-            .unwrap());
+        assert!(
+            !check_nested_up_gate(&workload(NestedMode::Prefer), &NestedProbe::absent()).unwrap()
+        );
         // ...or the nested module param not affirmatively Y.
         let degraded_param = NestedProbe {
             kvm_present: true,
@@ -1751,13 +1752,11 @@ mod tests {
             nested_param: None,
             arch_supported: true,
         };
-        assert!(!check_nested_up_gate(&workload(NestedMode::Prefer), &degraded_param)
-            .unwrap());
+        assert!(!check_nested_up_gate(&workload(NestedMode::Prefer), &degraded_param).unwrap());
         // Require on a lacking host refuses (no option is ever applied —
         // a refusal never reaches create).
         assert!(
-            check_nested_up_gate(&workload(NestedMode::Require), &NestedProbe::absent())
-                .is_err()
+            check_nested_up_gate(&workload(NestedMode::Require), &NestedProbe::absent()).is_err()
         );
         // Off is option-less on EVERY probe.
         let off = NestedGateWorkload {
