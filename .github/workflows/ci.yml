@@ -1,41 +1,86 @@
-# ci.yml — PR quality gates for workestrate.
+# ci.yml — PR quality gates for workestrate (v2: light PR gates + on-demand heavy build).
 #
-# Design: map the justfile gate tiers to CI checks without drifting from
-# local gates — everything drives through `just`. The recipes self-enshell
-# and write the devenv-root override file from the worktree themselves
-# (justfile `shell`/`verify` guards), so no --override-input plumbing is
-# needed in CI: `just verify` on a fresh runner is transparent.
+# Why the rework (v1 failed on its first run): v1 ran `just verify` on every
+# PR; the recipes self-enshell into the FULL devenv closure, and on a fresh
+# GH-hosted runner that meant building the fenix rust toolchain + closure
+# from source until the disk filled (~14G — "No space left on device").
+# v2 never boots the devenv in CI:
 #
-# PR-required (this workflow):
-#   verify — `just verify` = lock-guard, versions-check, toolchain-check,
-#     check (cargo fmt --check / clippy -D warnings / cargo check), test,
-#     spec-examples, tombi-check, golden-check, schema-check,
-#     schema-sync-check, scaffold-check, lint-nix, store-audit, and the
+#   - Rust gates are DEFINED IN THIS WORKFLOW with OUR configs: a rustup
+#     toolchain pinned to the flake's RUST_TOOLCHAIN_VERSION marker (the
+#     guard step below fails closed on drift between the dtolnay ref and the
+#     marker), and cargo commands mirroring the justfile recipes
+#     (fmt --check / clippy -D warnings / test). Nix-tooling checks
+#     (treefmt & co.) stay OUT of CI — they drag the whole closure in.
+#   - Pure-script gates (bash+python3 only, no toolchain/nix): lock-guard,
+#     versions-check, lint-nix run directly.
+#   - The heavy nix build is on-demand only (workflow_dispatch) until a
+#     self-hosted runner / cachix cache lands.
+#
+# PR-gated job (path-filtered — code/CI-relevant paths only, per the
+# not-every-run directive):
+#   gates — lock-guard, versions-check, lint-nix, toolchain-pin guard,
+#     cargo fmt --check (edition 2024 via Cargo.toml, matching treefmt),
+#     cargo clippy --all-targets -- -D warnings, cargo test, and the
 #     Cargo.lock stability diff.
-#   build — `nix build .#workestrate` (host-side nix command, env-agnostic
-#     per the justfile verify-full recipe; no devenv-root override needed).
+#
+# agentd handling: the microsandbox-filesystem build.rs (default `prebuilt`
+# feature) embeds an agentd binary at COMPILE time. Locally the devshell
+# exports MSB_AGENTD_PATH (nix-built .#microsandbox) and stages the vendor
+# symlink. In CI we recreate the vendor symlink from the flake.lock-pinned
+# GitHub rev (public tarball, no nix needed) and leave MSB_AGENTD_PATH
+# unset: build.rs falls back to downloading the pinned prebuilt agentd
+# v0.6.16 release asset (URL verified live at design time). No test needs
+# agentd at RUNTIME: the KVM tests (lifecycle_detached, flake_root_gate,
+# ensure_images_e2e host variant) are #[ignore]'d, and the nix/msb-gated
+# e2e tests (image_pipeline_e2e, ensure_images_e2e non-ignored) skip with
+# a note when nix/MSB_PATH are absent. FULL coverage (nix-gated e2e, KVM,
+# real agentd embed) needs the self-hosted runner — deferred below.
 #
 # Deferred by design (follow-ups, not POC scope):
-#   - `nix flake check` (treefmt nixfmt/statix/deadnix + tombiCheck +
-#     validateConfig) — needs devenv-test IFD warm-up on a fresh store;
-#     slots into a nightly job. Local hook tier-1 covers these linters
-#     until then; lint-nix + tombi-check already run in `verify`.
-#   - kvm-tests / prime-smoke — KVM gates; slot into a self-hosted runner
-#     (dblab42, labels [self-hosted, linux, kvm]), post-merge or nightly.
-#   - Real binary cache — org cachix decision pending. magic-nix-cache
-#     below is the zero-config stopgap and is continue-on-error so a cache
-#     outage (its GitHub cache API is reverse-engineered) never blocks a
-#     merge; it is unpinnable (@main, no releases), same hardening item as
-#     SHA-pinning all actions below (tags are mutable).
+#   - self-hosted runner (dblab42, labels [self-hosted, linux, kvm]) for
+#     kvm-tests / prime-smoke / nix-gated e2e, post-merge or nightly.
+#   - Real binary cache (org cachix decision pending) to make the heavy
+#     build cheap enough for per-PR gating. magic-nix-cache below is the
+#     zero-config stopgap: continue-on-error so a cache outage never blocks;
+#     unpinnable (@main, no releases) — same hardening item as SHA-pinning
+#     all actions (tags are mutable).
+#   - nightly `nix flake check` (treefmt nixfmt/statix + tombiCheck +
+#     validateConfig) once devenv-test IFD warm-up is cacheable.
 
 name: ci
 
 on:
   pull_request:
+    paths:
+      - 'control/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'justfile'
+      - 'scripts/**'
+      - 'schemas/**'
+      - 'templates/**'
+      - 'config.reference/**'
+      - 'docs/migration/**'
+      - 'nix/**'
+      - '.github/**'
   push:
     branches:
       - migration/tool-model
       - main
+    paths:
+      - 'control/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'justfile'
+      - 'scripts/**'
+      - 'schemas/**'
+      - 'templates/**'
+      - 'config.reference/**'
+      - 'docs/migration/**'
+      - 'nix/**'
+      - '.github/**'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -45,30 +90,99 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: verify (quality-gate chain)
+  gates:
+    name: gates (light PR quality gates, no devenv)
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
+    env:
+      # No incremental artifacts — smaller target dir, fresh-runner builds
+      # gain nothing from incrementality.
+      CARGO_INCREMENTAL: '0'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      - name: Warm Nix store cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
-        continue-on-error: true
-      - name: Install just
-        run: nix profile install nixpkgs#just
-      - name: just verify
-        run: just verify
 
-  build:
-    name: build (nix build .#workestrate)
+      # dtolnay/rust-toolchain resolves the toolchain from the @ref: @1.97
+      # tracks the latest 1.97.x (fenix pins rustc 1.97.1 via the same
+      # major.minor). The guard step below fails closed if the ref drifts
+      # from the flake's RUST_TOOLCHAIN_VERSION marker.
+      - name: Install pinned Rust toolchain (flake marker parity)
+        uses: dtolnay/rust-toolchain@1.97
+        with:
+          components: rustfmt, clippy
+
+      - name: Toolchain pin guard (flake marker vs installed rustc)
+        run: |
+          set -euo pipefail
+          matches=$(grep 'rustToolchain = inputs\.fenix.*# RUST_TOOLCHAIN_VERSION = "' flake.nix || true)
+          hits=$(printf '%s\n' "$matches" | grep -c 'RUST_TOOLCHAIN_VERSION' || true)
+          if [ "$hits" -ne 1 ]; then
+              echo "ERROR: expected exactly 1 RUST_TOOLCHAIN_VERSION marker on the live rustToolchain line (found $hits)" >&2
+              exit 1
+          fi
+          expected=$(printf '%s\n' "$matches" | grep -oP '# RUST_TOOLCHAIN_VERSION = "\K[^"]+')
+          actual=$(rustc --version | grep -oP 'rustc \K[0-9]+\.[0-9]+')
+          echo "expected (flake.nix): rustc $expected.x"
+          echo "actual (CI):          rustc $actual"
+          if [ "$actual" != "$expected" ]; then
+              echo "FAIL: update the dtolnay/rust-toolchain@ ref in this workflow to match the flake marker" >&2
+              exit 1
+          fi
+          echo "OK: CI toolchain matches pinned toolchain"
+
+      # The devshell normally stages control/agentctl/vendor/microsandbox-fork
+      # as a nix-store symlink (gitignored). CI recreates it from the
+      # flake.lock-pinned GitHub rev (public repo tarball — no nix needed).
+      # Both .cargo/config.toml files are committed, so the [patch.crates-io]
+      # section resolves as soon as the symlink exists.
+      - name: Vendor microsandbox fork (flake.lock-pinned rev)
+        run: |
+          set -euo pipefail
+          rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
+          echo "microsandbox-fork rev: $rev"
+          mkdir -p "$RUNNER_TEMP/msb-fork"
+          curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
+          mkdir -p control/agentctl/vendor
+          ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
+
+      - name: Cache cargo registry + target dir
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: control/agentctl
+
+      # Pure-script gates: bash+python3 only, no toolchain, no nix.
+      - name: lock-guard (Cargo.lock fork pins)
+        run: ./scripts/check-cargo-lock.sh
+
+      - name: versions-check (msb pin agreement)
+        run: ./scripts/check-msb-versions.sh
+
+      - name: lint-nix (nix-purity invariants)
+        run: ./scripts/check-nix-paths.sh
+
+      # Rust gates: defined here with OUR configs (cargo/rustfmt/clippy read
+      # control/agentctl/Cargo.toml + rustfmt edition 2024), mirroring the
+      # justfile `check`/`test` recipes. MSB_AGENTD_PATH is deliberately
+      # unset — the fork's build.rs downloads the pinned prebuilt agentd.
+      - name: cargo fmt --check (edition 2024)
+        run: cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
+
+      - name: cargo clippy --all-targets -D warnings
+        run: cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test (agentd-dependent and KVM tests skip gracefully)
+        run: cargo test --manifest-path control/agentctl/Cargo.toml
+
+      - name: Cargo.lock stability diff
+        run: git diff --exit-code HEAD -- control/agentctl/Cargo.lock
+
+  heavy-build:
+    name: heavy build (nix build .#workestrate, on-demand only)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v7
