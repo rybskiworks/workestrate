@@ -108,12 +108,13 @@ pub fn doctor_check_kvm() -> DoctorCheck {
 /// vmx|svm flag + nested parameter affirmatively enabled; WARN = KVM works
 /// but nested is disabled/unknown; FAIL = no /dev/kvm. Each carries
 /// remediation. The trailing pin note records what the pinned fork rev
-/// actually carries (the mount-policy stack plus the Track 1 nested_virt
-/// VMM flag, pin b2c672c8) — nested stays inert until the Phase 2 firmware
-/// (libkrunfw CONFIG_KVM) lands (plan D6: no "nested works" claim until
-/// Track 3).
+/// actually carries (the mount-policy stack plus the always-on Track 1
+/// nested_virt VMM flag, pin b2c672c8; the env-gated `MSB_NESTED_VIRT`
+/// default-off successor b1424618 awaits the pin bump/relock) — nested
+/// stays inert until the Phase 2 firmware (libkrunfw CONFIG_KVM) lands
+/// (plan D6: no "nested works" claim until Track 3).
 pub fn doctor_check_nested_virt() -> DoctorCheck {
-    const PIN_NOTE: &str = "pin b2c672c8 carries the mount-policy stack and the nested_virt VMM flag; nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
+    const PIN_NOTE: &str = "pin b2c672c8 carries the mount-policy stack and the always-on nested_virt VMM flag (env-gated MSB_NESTED_VIRT default-off successor b1424618 awaits pin bump); nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
     const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
          sudo usermod -aG kvm $USER (re-login); guest nesting additionally needs the host \
          kvm_intel/kvm_amd nested parameter at Y (sudo modprobe kvm_intel nested=1)";

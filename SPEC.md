@@ -53,15 +53,20 @@ override (`Workload::build_path()`) can point the CLI at any built tree.
 MicroVM runtime. SDK version 0.6.16 with the `net` feature, source-built
 from the user's fork via the pinned `microsandbox-fork` flake input at
 validated rev b2c672c8, which carries the mount-policy stack and the
-Track 1 `nested_virt(true)` VMM flag (the guest kernel firmware still lacks
-`CONFIG_KVM`, so nested stays inert and no nested-works claim holds until
-the Phase 2 firmware rebuild lands).
+always-on Track 1 `nested_virt(true)` VMM flag (the guest kernel firmware
+still lacks `CONFIG_KVM`, so nested stays inert and no nested-works claim
+holds until the Phase 2 firmware rebuild lands). The gated successor
+b1424618 makes the flag follow `MSB_NESTED_VIRT` (default OFF; driven by
+the `virtualization.nested` decision via agentctl) and awaits the pin bump
+and host relock.
 Provides
 `Sandbox`, `SandboxBuilder`, `NetworkPolicy`, and builder methods for
 images, resources, ports, env vars, volumes, and network rules. Async-only,
 requires Tokio. Runtime execution requires a host with `/dev/kvm`.
-`nested=off` (the default) withholds the guest device promise — it does
-not remove CPU capability (ADR 0036).
+`nested=off` (the default) withholds the guest device promise; on the
+currently pinned always-on rev it does not remove CPU capability — that
+limitation is closed by ADR 0036's 2026-09-06 amendment: once the pin
+bumps to b1424618, `nested=off` withholds the CPU capability too.
 
 ### LiteLLM
 
