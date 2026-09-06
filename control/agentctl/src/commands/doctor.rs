@@ -108,13 +108,13 @@ pub fn doctor_check_kvm() -> DoctorCheck {
 /// vmx|svm flag + nested parameter affirmatively enabled; WARN = KVM works
 /// but nested is disabled/unknown; FAIL = no /dev/kvm. Each carries
 /// remediation. The trailing pin note records what the pinned fork rev
-/// actually carries (the mount-policy stack plus the always-on Track 1
-/// nested_virt VMM flag, pin b2c672c8; the first-class `nested_virt` spec
-/// option (default off) in fork 09aeb8ae awaits the pin bump/relock) — nested
+/// actually carries: pin 8e53de7e carries the mount-policy stack plus the
+/// first-class `nested_virt` spec option (default off; 09aeb8ae + docs
+/// 8e53de7e, superseding the former always-on Track 1 VMM flag) — nested
 /// stays inert until the Phase 2 firmware (libkrunfw CONFIG_KVM) lands
 /// (plan D6: no "nested works" claim until Track 3).
 pub fn doctor_check_nested_virt() -> DoctorCheck {
-    const PIN_NOTE: &str = "pin b2c672c8 carries the mount-policy stack and the always-on nested_virt VMM flag (first-class nested_virt spec option, default off, in fork 09aeb8ae awaits pin bump); nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
+    const PIN_NOTE: &str = "pin 8e53de7e carries the mount-policy stack and the first-class nested_virt spec option (default off, driven per-sandbox via builder.nested_virt; supersedes the always-on VMM flag); nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
     const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
          sudo usermod -aG kvm $USER (re-login); guest nesting additionally needs the host \
          kvm_intel/kvm_amd nested parameter at Y (sudo modprobe kvm_intel nested=1)";
@@ -1141,7 +1141,7 @@ mod tests {
             check
         );
         assert!(
-            check.message.contains("b2c672c8"),
+            check.message.contains("8e53de7e"),
             "every verdict carries the fork pin note: {check:?}"
         );
         // Honest pin strings: the pin carries the mount-policy stack + the

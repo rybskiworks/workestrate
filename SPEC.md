@@ -52,23 +52,19 @@ override (`Workload::build_path()`) can point the CLI at any built tree.
 
 MicroVM runtime. SDK version 0.6.16 with the `net` feature, source-built
 from the user's fork via the pinned `microsandbox-fork` flake input at
-validated rev b2c672c8, which carries the mount-policy stack and the
-always-on Track 1 `nested_virt(true)` VMM flag (the guest kernel firmware
-still lacks `CONFIG_KVM`, so nested stays inert and no nested-works claim
-holds until the Phase 2 firmware rebuild lands). The spec-field successor
-— fork 09aeb8ae (feat) plus docs 8e53de7e — makes the flag a first-class
-`resources.nested_virt` spec option (default OFF; driven by the
-`virtualization.nested` decision via agentctl's `builder.nested_virt(...)`),
-superseding the same-day env gate, and awaits the pin bump
-and host relock.
+validated rev 8e53de7e, which carries the mount-policy stack and the
+first-class `resources.nested_virt` spec option (default OFF; driven by the
+`virtualization.nested` decision via agentctl's `builder.nested_virt(...)`,
+superseding the same-day env gate and the earlier always-on Track 1 flag).
+The guest kernel firmware still lacks `CONFIG_KVM`, so nested stays inert
+and no nested-works claim holds until the Phase 2 firmware rebuild lands.
 Provides
 `Sandbox`, `SandboxBuilder`, `NetworkPolicy`, and builder methods for
 images, resources, ports, env vars, volumes, and network rules. Async-only,
 requires Tokio. Runtime execution requires a host with `/dev/kvm`.
-`nested=off` (the default) withholds the guest device promise; on the
-currently pinned always-on rev it does not remove CPU capability — that
-limitation is closed by ADR 0036's 2026-09-06 amendment: once the pin
-bumps to 09aeb8ae/8e53de7e, `nested=off` withholds the CPU capability too.
+`nested=off` (the default) withholds the guest device promise and, with
+the spec-field pin 8e53de7e (default-OFF `resources.nested_virt`), the
+nested CPU capability too — ADR 0036's 2026-09-06 amendment.
 
 ### LiteLLM
 

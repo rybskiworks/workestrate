@@ -13,9 +13,11 @@
     };
 
     microsandbox-fork = {
-      # Pinned fork rev b2c672c8e1d59826063cd5ca4493abfb7f38b3bc — the
-      # nested-virtualization port (feat/nested-virt-port, pushed to origin)
-      # on top of 78fb3ed12623526ad02f5999047c12953013c395, the merge of
+      # Pinned fork rev 8e53de7e377aa888d6d3684475f9c56b37ee4974 — the
+      # feat/nested-virt-port tip: the first-class default-off nested_virt
+      # spec option (09aeb8ae) + docs (8e53de7e) on top of b2c672c8 (the
+      # former always-on port) on top of
+      # 78fb3ed12623526ad02f5999047c12953013c395, the merge of
       # fix/stop-process-exit-wait onto develop (0-conflict --no-ff merge
       # on top of 205a7b95), verified pushed to origin via
       # `git ls-remote origin`. Moves to `develop` tracking or a
@@ -34,7 +36,7 @@
       # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
       # wait → hard MicrosandboxError::Runtime). The transient build-time
       # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
-      url = "github:rybskiworks/microsandbox/b2c672c8e1d59826063cd5ca4493abfb7f38b3bc";
+      url = "github:rybskiworks/microsandbox/8e53de7e377aa888d6d3684475f9c56b37ee4974";
       flake = false;
     };
 
