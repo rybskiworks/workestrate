@@ -127,7 +127,11 @@ pub(crate) fn apply_secret_policy_ladder(
 /// DEF's `allowed_hosts` / `required` / `placeholder` / `on_violation`. An
 /// unknown secret reference is a hard error naming the binding key and the
 /// secret ID.
-pub(super) fn build_env_and_secret_env(
+///
+/// `pub(crate)` (widened from `pub(super)` for M1): the credential-broker
+/// backward-compat test in `config::validation` drives the same dispatch
+/// the plan uses, proving `bound = "guest"` semantics are untouched.
+pub(crate) fn build_env_and_secret_env(
     workload: &WorkloadConfig,
     secrets: &HashMap<String, SecretDefinition>,
 ) -> Result<(Vec<EnvVar>, Vec<HostBoundSecret>)> {

@@ -1,3 +1,4 @@
+use super::credentials::build_credentials_plan;
 use super::secrets::{
     apply_secret_policy_ladder, build_env_and_secret_env, build_secret_definitions,
 };
@@ -36,6 +37,9 @@ pub struct ConfigWorkload {
     pub(super) env: Vec<EnvVar>,
     pub(super) secret_env: Vec<HostBoundSecret>,
     pub(super) provenance: Option<crate::merge::Provenance>,
+    /// Compiled credential-broker view (M1): grants + binding + SSH
+    /// confinement. `None` = no grants and no confinement (silent).
+    pub(super) credentials: Option<crate::microsandbox::plan::CredentialsPlan>,
     /// Content root for repo-relative mount hosts: the directory of the
     /// config layer that declared `workloads.<name>.mounts`. Resolved at
     /// construction from provenance + the load-time layer-dirs map.
@@ -260,12 +264,18 @@ impl ConfigWorkload {
         let mut secrets = build_secret_definitions(&config)?;
         apply_secret_policy_ladder(&mut secrets, &config, name, &mut provenance);
         let (env, secret_env) = build_env_and_secret_env(&workload, &secrets)?;
+        // M1 credential broker: compile the grant allowlist against the
+        // catalog AFTER the secret ladder resolves (signing grants inherit
+        // the material secret's resolved policy). Validation already
+        // rejected unknown refs; this is the compiled plan view.
+        let credentials = build_credentials_plan(&config, name, &workload, &secrets)?;
 
         Ok(Self {
             name: name.to_string(),
             workload,
             env,
             secret_env,
+            credentials,
             provenance: Some(provenance),
             mount_content_root,
             seed_content_root,
@@ -582,6 +592,7 @@ impl Workload for ConfigWorkload {
             memory_mib: self.workload.memory_mib,
             env,
             secret_env: self.secret_env.clone(),
+            credentials: self.credentials.clone(),
             ports: self.workload.ports.clone(),
             mounts,
             network: network_plan,
@@ -2486,6 +2497,7 @@ egress = "deny"
             workload,
             env: Vec::new(),
             secret_env: Vec::new(),
+            credentials: None,
             provenance: None,
             mount_content_root: None,
             seed_content_root: None,
@@ -2621,6 +2633,7 @@ egress = "deny"
             workload,
             env: Vec::new(),
             secret_env: Vec::new(),
+            credentials: None,
             provenance: None,
             mount_content_root: Some(repo.clone()),
             seed_content_root: None,
@@ -2842,6 +2855,7 @@ egress = "deny"
             workload,
             env: Vec::new(),
             secret_env: Vec::new(),
+            credentials: None,
             provenance: None,
             mount_content_root: None,
             seed_content_root: None,

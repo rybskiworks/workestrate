@@ -46,6 +46,17 @@ deny = [
 on_violation = "passthrough"  # the built-in default, made explicit; also: block, block-and-log, block-and-terminate
 # final = true  # terminal freeze — lower rungs could not override
 
+# SSH confinement policy (M1 credential broker): the [policy.ssh] ladder
+# follows the [policy.secrets] pattern (collected per rung, `final` freeze,
+# never merged). strict = true checks recognized SSH flows against SSH
+# grants/egress even when a generic TCP allowance would match; strict = true
+# requires at least one credentials.ssh grant or one port-22 egress allowance
+# in the same effective policy (else a config error). Absent = no
+# confinement (current behavior).
+# [policy.ssh]
+# strict = false
+# final = false  # true freezes the value against ALL lower rungs
+
 # Nested-virtualization operator seal (ADR 0036, optional, restrict-only):
 # the home fragment grants/restricts via allow_nested + final (final seals,
 # never enables; absent fragment = no restriction).
@@ -62,6 +73,25 @@ env_var = "GITHUB_TOKEN"
 allowed_hosts = ["github.com", "api.github.com"]
 required = false
 on_violation = "passthrough"  # default; placeholder text may leave the sandbox unsubstituted — real values still only go to allowed_hosts
+
+# Credential-broker catalog (M1, repo-global): [credentials.ssh.<name>]
+# SSH grants plus [credentials.signing.ssh.<name>] signing grants. `material`
+# is an explicit first-class reference to an existing [secrets.<N>] entry
+# (no same-name magic). Workloads opt in via [workloads.<name>.credentials]
+# allowlists; binding stays at consumption via the existing env idiom
+# (omission = broker-bound, the default; `bound = "guest"` delivers real
+# material). No workload below consumes these entries, so the golden plans
+# are unaffected — they document the catalog shape.
+[credentials.ssh.deploy]
+material = "GITHUB_TOKEN"
+hosts = ["github.com"]
+users = ["git"]
+# ports = [22]  # absent = [22] (defaults-after-merge)
+
+[credentials.signing.ssh.release]
+material = "GITHUB_TOKEN"
+namespace = "release"
+# on_violation = "block"  # absent = the material secret's ladder-resolved policy
 
 [workloads.example-litellm]
 kind = "service"

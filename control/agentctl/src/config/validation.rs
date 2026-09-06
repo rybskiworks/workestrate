@@ -658,6 +658,209 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
+    // M1 credential broker: catalog integrity + grant references + SSH
+    // confinement coherence. The ladders come from the process-global stores
+    // populated by loading.rs BEFORE validate_config runs; synthetic/test
+    // paths without a load degrade to empty ladders (strict defaults false).
+    validate_credentials(
+        config,
+        &crate::merge::get_ssh_policy_ladder().unwrap_or_default(),
+        &crate::merge::get_network_policy_ladder().unwrap_or_default(),
+    )?;
+
+    Ok(())
+}
+
+/// Whether one egress fragment carries an SSH allowance (M1): an allow-all,
+/// a host entry covering port 22, or a domain entry scoped to port 22.
+/// Deny entries never count (they restrict). Protocol-agnostic by design —
+/// port-22 presence is the M1 approximation of "SSH allowance".
+fn egress_fragment_covers_ssh(fragment: &crate::config::EgressPolicyFragment) -> bool {
+    let Some(allow) = &fragment.allow else {
+        return false;
+    };
+    if allow.all == Some(true) {
+        return true;
+    }
+    if allow.host.iter().any(|h| h.ports.contains(&22)) {
+        return true;
+    }
+    if allow.domain.iter().any(|d| d.port == Some(22)) {
+        return true;
+    }
+    false
+}
+
+/// Whether the effective egress policy for `workload_name` carries an SSH
+/// allowance: the home rung, every layer rung (global), and this workload's
+/// capsule rungs.
+fn effective_egress_covers_ssh(
+    workload_name: &str,
+    network_ladder: &crate::merge::NetworkPolicyLadder,
+) -> bool {
+    if network_ladder
+        .egress_home
+        .as_ref()
+        .is_some_and(|(_, f)| egress_fragment_covers_ssh(f))
+    {
+        return true;
+    }
+    if network_ladder
+        .egress_layers
+        .iter()
+        .any(|(_, f)| egress_fragment_covers_ssh(f))
+    {
+        return true;
+    }
+    if network_ladder
+        .egress_workloads
+        .get(workload_name)
+        .is_some_and(|rungs| rungs.iter().any(|(_, f)| egress_fragment_covers_ssh(f)))
+    {
+        return true;
+    }
+    false
+}
+
+/// Effective SSH confinement for one workload: the `[policy.ssh]` ladder
+/// rungs in authority-ascending order (home, layers, this workload's
+/// capsule rungs), walked with the same final-freeze semantics as the
+/// secrets ladder.
+fn effective_ssh_strict(
+    workload_name: &str,
+    ssh_ladder: &crate::merge::SshPolicyLadder,
+) -> (bool, String) {
+    let mut rungs: Vec<(String, crate::config::SshPolicyFragment)> = Vec::new();
+    if let Some((origin, fragment)) = &ssh_ladder.home {
+        rungs.push((origin.clone(), fragment.clone()));
+    }
+    for (origin, fragment) in &ssh_ladder.layers {
+        rungs.push((origin.clone(), fragment.clone()));
+    }
+    if let Some(workload_rungs) = ssh_ladder.workloads.get(workload_name) {
+        for (origin, fragment) in workload_rungs {
+            rungs.push((origin.clone(), fragment.clone()));
+        }
+    }
+    let rung_refs: Vec<(&str, &crate::config::SshPolicyFragment)> =
+        rungs.iter().map(|(o, f)| (o.as_str(), f)).collect();
+    crate::microsandbox::workload::credentials::resolve_ssh_strict(&rung_refs)
+}
+
+/// Validate the M1 credential-broker surface (fail-closed): catalog entries
+/// must reference existing secrets and carry their required scope;
+/// workload grant refs must name catalog entries; `strict` confinement
+/// without any SSH grant or SSH egress allowance is a config error.
+///
+/// `bound = "guest"` needs NO new machinery here — it keeps the existing
+/// secret-delivery semantics validated by the env/secret arms above.
+fn validate_credentials(
+    config: &ConfigFile,
+    ssh_ladder: &crate::merge::SshPolicyLadder,
+    network_ladder: &crate::merge::NetworkPolicyLadder,
+) -> Result<()> {
+    // Catalog: SSH entries.
+    let mut ssh_names: Vec<&String> = config.credentials.ssh.keys().collect();
+    ssh_names.sort();
+    for name in ssh_names {
+        let entry = &config.credentials.ssh[name];
+        if entry.material.is_empty() {
+            anyhow::bail!(
+                "credential ssh '{name}' must declare material (a [secrets.<N>] entry name)"
+            );
+        }
+        if !config.secrets.contains_key(&entry.material) {
+            anyhow::bail!(
+                "credential ssh '{name}' references undefined secret '{}'",
+                entry.material
+            );
+        }
+        if entry.hosts.is_empty() {
+            anyhow::bail!("credential ssh '{name}' must declare hosts (at least one host)");
+        }
+        if entry.hosts.iter().any(|h| h.is_empty()) {
+            anyhow::bail!("credential ssh '{name}' declares an empty host entry");
+        }
+        if entry.users.is_empty() {
+            anyhow::bail!("credential ssh '{name}' must declare users (at least one user)");
+        }
+        if entry.users.iter().any(|u| u.is_empty()) {
+            anyhow::bail!("credential ssh '{name}' declares an empty user entry");
+        }
+        if let Some(ports) = &entry.ports {
+            if ports.is_empty() {
+                anyhow::bail!(
+                    "credential ssh '{name}' declares an empty ports list (omit ports for the default [22])"
+                );
+            }
+            if ports.contains(&0) {
+                anyhow::bail!(
+                    "credential ssh '{name}' declares port 0 (ports must be in 1..=65535)"
+                );
+            }
+        }
+    }
+
+    // Catalog: signing entries.
+    let mut signing_names: Vec<&String> = config.credentials.signing.ssh.keys().collect();
+    signing_names.sort();
+    for name in signing_names {
+        let entry = &config.credentials.signing.ssh[name];
+        if entry.material.is_empty() {
+            anyhow::bail!(
+                "credential signing '{name}' must declare material (a [secrets.<N>] entry name)"
+            );
+        }
+        if !config.secrets.contains_key(&entry.material) {
+            anyhow::bail!(
+                "credential signing '{name}' references undefined secret '{}'",
+                entry.material
+            );
+        }
+        if entry.namespace.is_empty() {
+            anyhow::bail!("credential signing '{name}' must declare namespace");
+        }
+    }
+
+    // Workload grant references must name catalog entries.
+    let mut workload_names: Vec<&String> = config.workloads.keys().collect();
+    workload_names.sort();
+    for workload_name in workload_names {
+        let workload = &config.workloads[workload_name];
+        let mut ssh_refs = workload.credentials.ssh.clone();
+        ssh_refs.sort();
+        for grant in ssh_refs {
+            if !config.credentials.ssh.contains_key(&grant) {
+                anyhow::bail!(
+                    "workload '{workload_name}' credentials.ssh references undefined credential '{grant}'"
+                );
+            }
+        }
+        let mut signing_refs = workload.credentials.signing.clone();
+        signing_refs.sort();
+        for grant in signing_refs {
+            if !config.credentials.signing.ssh.contains_key(&grant) {
+                anyhow::bail!(
+                    "workload '{workload_name}' credentials.signing references undefined credential '{grant}'"
+                );
+            }
+        }
+
+        // Confinement coherence: strict=true requires at least one SSH
+        // credential grant OR at least one SSH egress allowance in the same
+        // effective policy — else every recognized SSH flow would fail
+        // closed with no legal path, so the config itself is the error.
+        let (strict, origin) = effective_ssh_strict(workload_name, ssh_ladder);
+        if strict
+            && workload.credentials.ssh.is_empty()
+            && !effective_egress_covers_ssh(workload_name, network_ladder)
+        {
+            anyhow::bail!(
+                "workload '{workload_name}' enables [policy.ssh] strict=true (from '{origin}') but declares no credentials.ssh grant and no SSH egress allowance (port 22): strict confinement with no legal SSH path is a config error"
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -2646,5 +2849,330 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
                 "virtualization typo must fail closed-vocab at parse (ADR 0036): {err}"
             );
         }
+    }
+
+    // ---- M1 credential broker: deny_unknown_fields ----
+
+    /// `users`/`ports` on a SIGNING entry are a parse error (signing
+    /// entries carry namespace, never users/ports) — as is any unknown
+    /// field on any credentials surface (`via`/`recipe`/`bound` included:
+    /// there is no parallel config language).
+    #[test]
+    fn credentials_deny_unknown_fields_everywhere() {
+        let base = "schema_version = 1\n\n[secrets.DEPLOY_KEY]\n";
+        for (label, fragment) in [
+            (
+                "signing users",
+                "[credentials.signing.ssh.rel]\nmaterial = \"DEPLOY_KEY\"\nnamespace = \"release\"\nusers = [\"root\"]\n",
+            ),
+            (
+                "signing ports",
+                "[credentials.signing.ssh.rel]\nmaterial = \"DEPLOY_KEY\"\nnamespace = \"release\"\nports = [22]\n",
+            ),
+            (
+                "signing via",
+                "[credentials.signing.ssh.rel]\nmaterial = \"DEPLOY_KEY\"\nnamespace = \"release\"\nvia = \"proxy\"\n",
+            ),
+            (
+                "ssh via",
+                "[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\nvia = \"proxy\"\n",
+            ),
+            (
+                "ssh recipe",
+                "[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\nrecipe = \"https\"\n",
+            ),
+            (
+                "ssh bound",
+                "[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\nbound = \"guest\"\n",
+            ),
+            (
+                "workload credentials unknown",
+                "[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.credentials]\nssh = [\"deploy\"]\nvia = [\"x\"]\n",
+            ),
+            (
+                "policy.ssh unknown",
+                "[policy.ssh]\nstrict = true\nrecipe = \"https\"\n",
+            ),
+        ] {
+            let toml = format!("{base}{fragment}");
+            let err = toml::from_str::<ConfigFile>(&toml).unwrap_err().to_string();
+            assert!(
+                err.contains("unknown field"),
+                "{label} must fail deny_unknown_fields at parse: {err}"
+            );
+        }
+    }
+
+    /// A fully-populated, legal credentials surface parses AND validates
+    /// clean (the new deny rules must not reject any known field).
+    #[test]
+    fn credentials_accepts_all_known_fields() {
+        let toml = "schema_version = 1\n\n[secrets.DEPLOY_KEY]\n[secrets.SIGN_KEY]\n\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\nports = [22, 2222]\n\n[credentials.signing.ssh.rel]\nmaterial = \"SIGN_KEY\"\nnamespace = \"release\"\non_violation = \"block\"\n\n[policy.ssh]\nstrict = true\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.credentials]\nssh = [\"deploy\"]\nsigning = [\"rel\"]\n\n[[workloads.pi.policy.egress.allow.host]]\nports = [22]\nprotocols = [\"tcp\"]\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n";
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        // The [policy.ssh] rung is collected by loading.rs (never merged),
+        // so ladder-less validate_config sees strict=false here — the grant
+        // and catalog arms are what this exercises (the strict arm is
+        // covered with explicit ladders below).
+        validate_config(&config)
+            .unwrap_or_else(|e| panic!("legal credentials surface must pass: {e}"));
+    }
+
+    // ---- M1 credential broker: material + grant validation ----
+
+    /// A material reference to a missing secret fails closed naming BOTH
+    /// the credential and the secret (ssh and signing alike).
+    #[test]
+    fn credentials_material_missing_secret_names_both() {
+        for (credential, kind) in [
+            (
+                "[credentials.ssh.deploy]\nmaterial = \"MISSING_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n",
+                "ssh",
+            ),
+            (
+                "[credentials.signing.ssh.rel]\nmaterial = \"MISSING_KEY\"\nnamespace = \"release\"\n",
+                "signing",
+            ),
+        ] {
+            let toml = format!(
+                "schema_version = 1\n\n[secrets.DEPLOY_KEY]\n{credential}\n[workloads.pi]\nkind = \"agent\"\nimage = {{ recipe = \"registry\", ref = \"node:24\" }}\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n"
+            );
+            let config: ConfigFile = toml::from_str(&toml).unwrap();
+            let err = validate_config(&config).unwrap_err().to_string();
+            assert!(
+                err.contains("MISSING_KEY"),
+                "{kind} material error must name the secret: {err}"
+            );
+            assert!(
+                err.contains("deploy") || err.contains("rel"),
+                "{kind} material error must name the credential: {err}"
+            );
+        }
+    }
+
+    /// SSH entries without material/hosts/users (or with empty/zero ports)
+    /// fail closed at validation naming the credential and the constraint;
+    /// signing entries without material/namespace fail the same way.
+    #[test]
+    fn credentials_scope_requirements_fail_closed() {
+        let base = "schema_version = 1\n\n[secrets.DEPLOY_KEY]\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n";
+        for (label, fragment, keyword) in [
+            (
+                "missing material",
+                "[credentials.ssh.deploy]\nhosts = [\"github.com\"]\nusers = [\"git\"]\n",
+                "material",
+            ),
+            (
+                "missing hosts",
+                "[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nusers = [\"git\"]\n",
+                "hosts",
+            ),
+            (
+                "missing users",
+                "[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\n",
+                "users",
+            ),
+            (
+                "port zero",
+                "[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\nports = [0]\n",
+                "port 0",
+            ),
+            (
+                "empty ports",
+                "[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\nports = []\n",
+                "ports",
+            ),
+            (
+                "missing namespace",
+                "[credentials.signing.ssh.rel]\nmaterial = \"DEPLOY_KEY\"\n",
+                "namespace",
+            ),
+            (
+                "signing missing material",
+                "[credentials.signing.ssh.rel]\nnamespace = \"release\"\n",
+                "material",
+            ),
+        ] {
+            let toml = format!("{base}{fragment}");
+            let config: ConfigFile = toml::from_str(&toml).unwrap_or_else(|e| {
+                panic!("{label} must parse (required-ness is validation-level): {e}")
+            });
+            let err = validate_config(&config).unwrap_err().to_string();
+            assert!(
+                err.contains(keyword),
+                "{label} must fail closed at validation naming the constraint: {err}"
+            );
+        }
+    }
+
+    /// Workload grant refs to unknown catalog entries fail closed naming
+    /// the workload and the credential.
+    #[test]
+    fn workload_grant_refs_must_exist() {
+        let toml = "schema_version = 1\n\n[secrets.DEPLOY_KEY]\n\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.credentials]\nssh = [\"ghost\"]\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n";
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("'pi'") && err.contains("ghost"),
+            "unknown grant must name workload and credential: {err}"
+        );
+
+        let toml = "schema_version = 1\n\n[secrets.DEPLOY_KEY]\n\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.credentials]\nsigning = [\"ghost-sign\"]\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n";
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("'pi'") && err.contains("ghost-sign"),
+            "unknown signing grant must name workload and credential: {err}"
+        );
+    }
+
+    // ---- M1 credential broker: strict confinement coherence ----
+
+    fn ssh_ladder_with(strict: Option<bool>, origin: &str) -> crate::merge::SshPolicyLadder {
+        crate::merge::SshPolicyLadder {
+            home: None,
+            layers: vec![(
+                origin.to_string(),
+                crate::config::SshPolicyFragment {
+                    strict,
+                    r#final: false,
+                },
+            )],
+            workloads: Default::default(),
+        }
+    }
+
+    fn strict_test_config() -> ConfigFile {
+        toml::from_str(
+            "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n",
+        )
+        .unwrap()
+    }
+
+    /// strict=true with NEITHER an ssh grant NOR an ssh egress allowance is
+    /// a config error naming the workload.
+    #[test]
+    fn strict_without_grants_or_egress_is_rejected() {
+        let config = strict_test_config();
+        let ssh_ladder = ssh_ladder_with(Some(true), "team");
+        let err = validate_credentials(
+            &config,
+            &ssh_ladder,
+            &crate::merge::NetworkPolicyLadder::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("'pi'") && err.contains("strict=true"),
+            "strict-without-grants must name workload and confinement: {err}"
+        );
+    }
+
+    /// strict=true with an ssh grant passes; strict=false (or absent) never
+    /// fires — even with no grants at all.
+    #[test]
+    fn strict_with_grant_or_relaxed_passes() {
+        // Grant path.
+        let config: ConfigFile = toml::from_str(
+            "schema_version = 1\n\n[secrets.DEPLOY_KEY]\n\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.credentials]\nssh = [\"deploy\"]\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n",
+        )
+        .unwrap();
+        validate_credentials(
+            &config,
+            &ssh_ladder_with(Some(true), "team"),
+            &crate::merge::NetworkPolicyLadder::default(),
+        )
+        .unwrap_or_else(|e| panic!("strict with a grant must pass: {e}"));
+
+        // Relaxed path: no grants, no strict.
+        let config = strict_test_config();
+        validate_credentials(
+            &config,
+            &crate::merge::SshPolicyLadder::default(),
+            &crate::merge::NetworkPolicyLadder::default(),
+        )
+        .unwrap_or_else(|e| panic!("relaxed confinement must pass: {e}"));
+    }
+
+    /// strict=true with a port-22 egress allowance (host entry, domain
+    /// entry, or allow-all) passes without any grant.
+    #[test]
+    fn strict_with_ssh_egress_allowance_passes() {
+        let config = strict_test_config();
+        let ssh_ladder = ssh_ladder_with(Some(true), "team");
+        for (label, fragment) in [
+            (
+                "host port 22",
+                crate::config::EgressPolicyFragment {
+                    allow: Some(crate::config::EgressAllowTable {
+                        host: vec![crate::config::HostEntry {
+                            ports: vec![22],
+                            protocols: vec!["tcp".to_string()],
+                            r#final: false,
+                        }],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                "domain port 22",
+                crate::config::EgressPolicyFragment {
+                    allow: Some(crate::config::EgressAllowTable {
+                        domain: vec![crate::config::DomainEntry {
+                            domains: vec!["github.com".to_string()],
+                            port: Some(22),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                "allow-all",
+                crate::config::EgressPolicyFragment {
+                    allow: Some(crate::config::EgressAllowTable {
+                        all: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let network_ladder = crate::merge::NetworkPolicyLadder {
+                egress_layers: vec![("team".to_string(), fragment)],
+                ..Default::default()
+            };
+            validate_credentials(&config, &ssh_ladder, &network_ladder)
+                .unwrap_or_else(|e| panic!("strict with {label} allowance must pass: {e}"));
+        }
+    }
+
+    // ---- M1 credential broker: bound="guest" backward compat ----
+
+    /// A `bound = "guest"` env consumption keeps the EXISTING secret
+    /// semantics untouched when credentials are present: the guest-bound
+    /// real-value plan entry still resolves, and the catalog entry it
+    /// shares material with does not disturb it.
+    #[test]
+    fn guest_binding_keeps_existing_secret_semantics() {
+        let toml = "schema_version = 1\n\n[secrets.DEPLOY_KEY]\nallowed_hosts = [\"github.com\"]\n\n[secrets.PLAIN]\n\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.credentials]\nssh = [\"deploy\"]\n\n[workloads.pi.env]\nSSH_KEY = { secret = \"DEPLOY_KEY\", bound = \"guest\" }\nPLAIN = true\n\n[workloads.pi.network.defaults]\negress = \"deny\"\n";
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        validate_config(&config)
+            .unwrap_or_else(|e| panic!("guest-bound consumption must validate: {e}"));
+        // The pre-existing env/secret plan path resolves identically with
+        // the catalog present: one real-value is-secret env entry (guest)
+        // plus the same-name host-bound placeholder entry.
+        let secrets =
+            crate::microsandbox::workload::secrets::build_secret_definitions(&config).unwrap();
+        let workload = config.workloads.get("pi").unwrap();
+        let (env, secret_env) =
+            crate::microsandbox::workload::secrets::build_env_and_secret_env(workload, &secrets)
+                .unwrap();
+        assert_eq!(env.len(), 1);
+        assert_eq!(env[0].name, "SSH_KEY");
+        assert!(env[0].is_secret);
+        assert_eq!(secret_env.len(), 1);
+        assert_eq!(secret_env[0].name, "PLAIN");
     }
 }

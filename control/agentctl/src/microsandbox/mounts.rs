@@ -650,6 +650,7 @@ mod tests {
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports: vec![],
             mounts,
             network: NetworkPlan {

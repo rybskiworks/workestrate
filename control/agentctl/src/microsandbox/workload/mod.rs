@@ -12,6 +12,7 @@ use crate::microsandbox::plan::SandboxPlan;
 use anyhow::Result;
 
 mod config;
+pub(crate) mod credentials;
 pub(crate) mod secrets;
 mod show_source;
 mod validate;

@@ -19,6 +19,18 @@
       "format": "uint8",
       "minimum": 0.0
     },
+    "credentials": {
+      "description": "Credential-broker grants (`workloads.<name>.credentials`; M1): the allowlist of catalog entry names this workload may use (`ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries). Unknown names are a validation error. Merges whole-unit (last layer wins), like `ports`/`mounts`: a higher layer restates the full allowlist.",
+      "default": {
+        "signing": [],
+        "ssh": []
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkloadCredentials"
+        }
+      ]
+    },
     "depends_on": {
       "description": "Dependency declarations (`workloads.<name>.depends_on.<dep>`; ADR 0026(d)): each entry names another workload whose address is resolved from the port registry and injected as the declared env var at plan time. Layers merge union-by-dependency-name, last layer wins per dep.",
       "default": {},
@@ -120,6 +132,7 @@
         "ingress": null,
         "mounts": null,
         "secrets": null,
+        "ssh": null,
         "virtualization": null
       },
       "allOf": [
@@ -1292,6 +1305,18 @@
             }
           ]
         },
+        "ssh": {
+          "description": "SSH confinement-policy rung (`[policy.ssh]`; M1). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SshPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "virtualization": {
           "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
           "default": null,
@@ -1575,6 +1600,26 @@
       },
       "additionalProperties": false
     },
+    "SshPolicyFragment": {
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`; M1): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "strict": {
+          "description": "Confinement switch this rung declares. `strict = true` means recognized SSH flows are checked against SSH grants/egress even when a generic TCP allowance would match. Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "VirtualizationConfig": {
       "description": "`[workloads.<name>.virtualization]` — the workload's nested-virt ASK (ADR 0036 §3, ask-vs-grant: the workload asks with strength require|prefer|off, like firewall allow-rules; home grants/restricts via [`VirtualizationPolicyFragment`]). `None` (absent table) = omitted → Off. An explicit `nested≠off` stands alone — no entitlement gate (the entitlements mechanism was removed 2026-09-04; review + home-final suffice). Merges whole-unit like [`InstancePolicy`]: a higher layer re-declaring the table replaces it wholesale.",
       "type": "object",
@@ -1610,6 +1655,27 @@
           "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
           "default": false,
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadCredentials": {
+      "description": "Workload credential-broker consumption (`workloads.<name>.credentials`; M1): the allowlist of catalog entry names this workload may use. `ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries; an unknown name is a validation error. Binding stays at consumption via the EXISTING env idiom: omission of any guest binding renders the grant broker-bound (the default, secure); `bound = \"guest\"` on the corresponding secret consumption delivers real material via the existing secret-delivery path. There is deliberately NO `bound` (and no `via`/`recipe` vocabulary) here — `deny_unknown_fields` rejects them.",
+      "type": "object",
+      "properties": {
+        "signing": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ssh": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false

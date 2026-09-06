@@ -1,0 +1,34 @@
+schema_version = 1
+
+# (b) guest-bound via the EXISTING env binding: the workload consumes the
+# grant's material with `bound = "guest"`, so the same grant resolves
+# guest-bound (real material via the existing secret-delivery path) while
+# the catalog entry itself is untouched.
+
+[secrets.DEPLOY_KEY]
+env_var = "DEPLOY_KEY"
+allowed_hosts = ["github.com"]
+required = false
+
+[credentials.ssh.deploy]
+material = "DEPLOY_KEY"
+hosts = ["github.com"]
+users = ["git"]
+
+[workloads.verifier]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.verifier.credentials]
+ssh = ["deploy"]
+
+[workloads.verifier.env]
+SSH_KEY = { secret = "DEPLOY_KEY", bound = "guest" }
+
+[workloads.verifier.network.defaults]
+egress = "deny"
+
+[[workloads.verifier.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]

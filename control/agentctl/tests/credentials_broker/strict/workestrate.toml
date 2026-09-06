@@ -1,0 +1,37 @@
+schema_version = 1
+
+# (c) strict confinement + ssh egress allowance: layer-level [policy.ssh]
+# strict=true with NO ssh grant — legal because the workload's effective
+# egress carries a port-22 allowance. The plan renders the confinement
+# flag with its ladder origin.
+
+[secrets.DEPLOY_KEY]
+env_var = "DEPLOY_KEY"
+allowed_hosts = ["github.com"]
+required = false
+
+[policy.ssh]
+strict = true
+
+[credentials.signing.ssh.rel]
+material = "DEPLOY_KEY"
+namespace = "release"
+
+[workloads.hardened]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.hardened.credentials]
+signing = ["rel"]
+
+[workloads.hardened.network.defaults]
+egress = "deny"
+
+[[workloads.hardened.policy.egress.allow.host]]
+ports = [22]
+protocols = ["tcp"]
+
+[[workloads.hardened.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]

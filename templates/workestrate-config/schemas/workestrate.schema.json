@@ -4,6 +4,20 @@
   "description": "Top-level schema root of a `workestrate.toml` layer: `schema_version` (must equal `EXPECTED_SCHEMA_VERSION`; absent warns and is treated as legacy), plus the `secrets` and `workloads` maps. Layers are merged by `merge::merge_layers` into one effective `ConfigFile`.",
   "type": "object",
   "properties": {
+    "credentials": {
+      "description": "Repo-global credentials catalog (`credentials`; M1). Merged union-by-name across layers, like `secrets`.",
+      "default": {
+        "signing": {
+          "ssh": {}
+        },
+        "ssh": {}
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/CredentialsConfig"
+        }
+      ]
+    },
     "policy": {
       "default": {
         "egress": null,
@@ -11,6 +25,7 @@
         "ingress": null,
         "mounts": null,
         "secrets": null,
+        "ssh": null,
         "virtualization": null
       },
       "allOf": [
@@ -155,6 +170,30 @@
           ]
         }
       ]
+    },
+    "CredentialsConfig": {
+      "description": "The repo-global credentials catalog (`credentials`; M1, directory-mode aware): `[credentials.ssh.<name>]` SSH grants plus the `[credentials.signing]` namespace. Declared in `default.toml` (or `secrets.toml` — every directory-mode file parses as a full layer, so no new file is needed); merged union-by-name across layers like `secrets`. There is deliberately NO `via`/`recipe` vocabulary anywhere on this surface — `deny_unknown_fields` rejects it.",
+      "type": "object",
+      "properties": {
+        "signing": {
+          "default": {
+            "ssh": {}
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/SigningCredentialsConfig"
+            }
+          ]
+        },
+        "ssh": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/SshCredentialDef"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "DefaultAction": {
       "description": "Default per-direction action for a workload's network policy (`[...network.defaults] egress|ingress = \"allow\" | \"deny\"`). `Deny` is the fail-closed default; `Allow` is an explicit opt-in that stands alone (absent = deny; home `final` seals still veto).",
@@ -1171,6 +1210,18 @@
             }
           ]
         },
+        "ssh": {
+          "description": "SSH confinement-policy rung (`[policy.ssh]`; M1). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SshPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "virtualization": {
           "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
           "default": null,
@@ -1501,6 +1552,110 @@
       },
       "additionalProperties": false
     },
+    "SigningCredentialsConfig": {
+      "description": "The `[credentials.signing]` namespace (M1): currently SSH signing only (`[credentials.signing.ssh.<name>]`).",
+      "type": "object",
+      "properties": {
+        "ssh": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/SigningSshCredentialDef"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SigningSshCredentialDef": {
+      "description": "One SSH signing credential catalog entry (`credentials.signing.ssh.<name>`; M1): key material for signatures scoped to a `namespace`. Deliberately has NO `users`/`ports` fields — `deny_unknown_fields` rejects them at parse time. Like [`SshCredentialDef`], fields are omittable per layer (per-field merge) with required-ness enforced at validation.",
+      "type": "object",
+      "properties": {
+        "material": {
+          "description": "Name of the `[secrets.<N>]` entry holding the key material (REQUIRED).",
+          "default": "",
+          "type": "string"
+        },
+        "namespace": {
+          "description": "Signature namespace (REQUIRED, non-empty).",
+          "default": "",
+          "type": "string"
+        },
+        "on_violation": {
+          "description": "Violation policy for this signing use. `None` inherits the material secret's ladder-resolved policy at grant resolution (same defaults-after-merge idiom as `SshCredentialDef.ports`).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretViolationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SshCredentialDef": {
+      "description": "One SSH credential catalog entry (`credentials.ssh.<name>`; M1): an explicit first-class reference (`material` names an existing `[secrets.<N>]` entry — no same-name magic) plus the confinement scope (`hosts`/`users` required, `ports` defaulting to `[22]` post-merge). Merged union-by-name across layers (per-field, last layer wins when present), like [`SecretDefConfig`]: every field is omittable per layer and required-ness is enforced at VALIDATION (fail-closed, naming the credential) rather than at parse, so a higher layer can override one field without restating the entry.",
+      "type": "object",
+      "properties": {
+        "hosts": {
+          "description": "Hosts the key may authenticate to (REQUIRED, non-empty).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "material": {
+          "description": "Name of the `[secrets.<N>]` entry holding the key material (REQUIRED). Validation fails closed naming both the credential and the secret when the secret does not exist.",
+          "default": "",
+          "type": "string"
+        },
+        "ports": {
+          "description": "Ports the key may reach. `None` (absent) defaults to `[22]` at grant resolution (defaults-after-merge — it stays `None` through parse and merge, the same idiom as `EnvSecretRef.bound`).",
+          "default": null,
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          }
+        },
+        "users": {
+          "description": "Remote users the key may authenticate as (REQUIRED, non-empty).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SshPolicyFragment": {
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`; M1): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "strict": {
+          "description": "Confinement switch this rung declares. `strict = true` means recognized SSH flows are checked against SSH grants/egress even when a generic TCP allowance would match. Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "VirtualizationConfig": {
       "description": "`[workloads.<name>.virtualization]` — the workload's nested-virt ASK (ADR 0036 §3, ask-vs-grant: the workload asks with strength require|prefer|off, like firewall allow-rules; home grants/restricts via [`VirtualizationPolicyFragment`]). `None` (absent table) = omitted → Off. An explicit `nested≠off` stands alone — no entitlement gate (the entitlements mechanism was removed 2026-09-04; review + home-final suffice). Merges whole-unit like [`InstancePolicy`]: a higher layer re-declaring the table replaces it wholesale.",
       "type": "object",
@@ -1558,6 +1713,18 @@
           ],
           "format": "uint8",
           "minimum": 0.0
+        },
+        "credentials": {
+          "description": "Credential-broker grants (`workloads.<name>.credentials`; M1): the allowlist of catalog entry names this workload may use (`ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries). Unknown names are a validation error. Merges whole-unit (last layer wins), like `ports`/`mounts`: a higher layer restates the full allowlist.",
+          "default": {
+            "signing": [],
+            "ssh": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadCredentials"
+            }
+          ]
         },
         "depends_on": {
           "description": "Dependency declarations (`workloads.<name>.depends_on.<dep>`; ADR 0026(d)): each entry names another workload whose address is resolved from the port registry and injected as the declared env var at plan time. Layers merge union-by-dependency-name, last layer wins per dep.",
@@ -1660,6 +1827,7 @@
             "ingress": null,
             "mounts": null,
             "secrets": null,
+            "ssh": null,
             "virtualization": null
           },
           "allOf": [
@@ -1699,6 +1867,27 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadCredentials": {
+      "description": "Workload credential-broker consumption (`workloads.<name>.credentials`; M1): the allowlist of catalog entry names this workload may use. `ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries; an unknown name is a validation error. Binding stays at consumption via the EXISTING env idiom: omission of any guest binding renders the grant broker-bound (the default, secure); `bound = \"guest\"` on the corresponding secret consumption delivers real material via the existing secret-delivery path. There is deliberately NO `bound` (and no `via`/`recipe` vocabulary) here — `deny_unknown_fields` rejects them.",
+      "type": "object",
+      "properties": {
+        "signing": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ssh": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false

@@ -82,6 +82,15 @@ pub struct SandboxPlan {
     pub memory_mib: Option<u32>,
     pub env: Vec<EnvVar>,
     pub secret_env: Vec<HostBoundSecret>,
+    /// Credential-broker grants for this workload (M1): the compiled
+    /// per-workload view — SSH/signing grants with material→secret
+    /// resolution, binding resolution (broker-bound default vs the explicit
+    /// `bound = "guest"` opt-in), and the SSH confinement flag. `None` = no
+    /// grants and no confinement — silent, so legacy plan output (including
+    /// every golden) stays byte-identical. Additive serde default so legacy
+    /// plan JSON parses cleanly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<CredentialsPlan>,
     pub ports: Vec<PortMapping>,
     pub mounts: Vec<MountPlan>,
     pub network: NetworkPlan,
@@ -466,6 +475,88 @@ pub struct HostBoundSecret {
     pub on_violation: SecretViolationPolicy,
 }
 
+/// Exposure of one credential-broker grant (M1): `Broker` (the default,
+/// secure — omission of any guest binding; the workload never sees real
+/// material) or `Guest` (the explicit `bound = "guest"` opt-in on the
+/// corresponding secret consumption, delivering real material via the
+/// existing secret-delivery path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum CredentialBinding {
+    Broker,
+    Guest,
+}
+
+impl fmt::Display for CredentialBinding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CredentialBinding::Broker => write!(f, "broker-bound"),
+            CredentialBinding::Guest => write!(f, "guest-bound"),
+        }
+    }
+}
+
+/// One compiled SSH credential grant (M1): the catalog entry's
+/// material→secret resolution plus its confinement scope and binding.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SshGrantPlan {
+    /// Catalog entry name (`credentials.ssh.<name>`).
+    pub name: String,
+    /// Resolved material: the `[secrets.<N>]` entry name.
+    pub material: String,
+    pub hosts: Vec<String>,
+    pub users: Vec<String>,
+    /// Effective ports (the entry's `ports`, or `[22]` when absent).
+    pub ports: Vec<u16>,
+    pub binding: CredentialBinding,
+}
+
+/// One compiled SSH signing grant (M1).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SigningGrantPlan {
+    /// Catalog entry name (`credentials.signing.ssh.<name>`).
+    pub name: String,
+    /// Resolved material: the `[secrets.<N>]` entry name.
+    pub material: String,
+    pub namespace: String,
+    /// Effective violation policy (the entry's `on_violation`, else the
+    /// material secret's ladder-resolved policy).
+    pub on_violation: SecretViolationPolicy,
+    pub binding: CredentialBinding,
+}
+
+/// The compiled credential-broker view for ONE workload (M1): its grants
+/// plus the SSH confinement flag. Rendered by the plan display ONLY when
+/// present (no grants and no confinement stays silent).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CredentialsPlan {
+    #[serde(default)]
+    pub ssh: Vec<SshGrantPlan>,
+    #[serde(default)]
+    pub signing: Vec<SigningGrantPlan>,
+    /// Effective SSH confinement (`[policy.ssh] strict` ladder resolution).
+    #[serde(default)]
+    pub strict: bool,
+    /// Origin label of the deciding ladder rung, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_origin: Option<String>,
+}
+
+/// Kebab-case name of a [`SecretViolationPolicy`] variant (the TOML wire
+/// vocabulary): passthrough | block | block-and-log | block-and-terminate.
+pub(crate) fn secret_violation_policy_name(policy: SecretViolationPolicy) -> &'static str {
+    match policy {
+        SecretViolationPolicy::Passthrough => "passthrough",
+        SecretViolationPolicy::Block => "block",
+        SecretViolationPolicy::BlockAndLog => "block-and-log",
+        SecretViolationPolicy::BlockAndTerminate => "block-and-terminate",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct EnvVar {
@@ -639,6 +730,42 @@ impl fmt::Display for SandboxPlan {
                 se.allowed_hosts.join(", "),
                 req
             )?;
+        }
+        // M1 credential broker: the compiled per-workload grants plus the
+        // SSH confinement flag. Renders ONLY when present (no grants and no
+        // confinement stays silent, so legacy plan output — including every
+        // golden — is byte-identical).
+        if let Some(creds) = &self.credentials {
+            if creds.strict {
+                let origin = creds.strict_origin.as_deref().unwrap_or("built-in");
+                writeln!(f, "ssh: strict=true (origin {origin})")?;
+            } else {
+                writeln!(f, "ssh: strict=false")?;
+            }
+            for g in &creds.ssh {
+                let ports: Vec<String> = g.ports.iter().map(u16::to_string).collect();
+                writeln!(
+                    f,
+                    "credential: ssh {} material={} hosts=[{}] users=[{}] ports=[{}] binding={}",
+                    g.name,
+                    g.material,
+                    g.hosts.join(","),
+                    g.users.join(","),
+                    ports.join(","),
+                    g.binding
+                )?;
+            }
+            for g in &creds.signing {
+                writeln!(
+                    f,
+                    "credential: signing {} material={} namespace={} on_violation={} binding={}",
+                    g.name,
+                    g.material,
+                    g.namespace,
+                    secret_violation_policy_name(g.on_violation),
+                    g.binding
+                )?;
+            }
         }
         for p in &self.ports {
             // ADR 0026/C2: render the bind ONLY when it is not the default
@@ -969,6 +1096,7 @@ mod tests {
                 reject_placeholder: None,
                 on_violation: SecretViolationPolicy::Passthrough,
             }],
+            credentials: None,
             ports: vec![PortMapping::new(8080, 80)],
             mounts: vec![
                 MountPlan {
@@ -1041,6 +1169,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports,
             mounts: vec![],
             network: NetworkPlan {
@@ -1096,6 +1225,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports,
             mounts: vec![],
             network: NetworkPlan {
@@ -1187,6 +1317,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
@@ -1218,6 +1349,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
@@ -1360,6 +1492,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
@@ -1471,6 +1604,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
@@ -1539,6 +1673,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
@@ -1578,6 +1713,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
@@ -1656,6 +1792,7 @@ network: egress_default=deny ingress_default=deny
             memory_mib: None,
             env: vec![],
             secret_env: vec![],
+            credentials: None,
             ports: vec![],
             mounts: vec![],
             network: NetworkPlan {
