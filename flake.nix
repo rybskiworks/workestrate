@@ -13,7 +13,7 @@
     };
 
     microsandbox-fork = {
-      # Pinned fork rev 6ea0b117b90978db01b597c4f4e1d6bd8827dd50 —
+      # Pinned fork rev f8947076b7e355a6df58e5d4ee4608cad03f5fdc —
       # feat/nested-virt-port: SSH gateway wiring, brokerd service, and
       # the epoch protocol family (#6) on deb99d26. Supersedes the deleted
       # feat/ssh-gateway-wiring branch tip
@@ -36,7 +36,7 @@
       # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
       # wait → hard MicrosandboxError::Runtime). The transient build-time
       # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
-      url = "github:rybskiworks/microsandbox/6ea0b117b90978db01b597c4f4e1d6bd8827dd50";
+      url = "github:rybskiworks/microsandbox/f8947076b7e355a6df58e5d4ee4608cad03f5fdc";
       flake = false;
     };
 
