@@ -2,7 +2,7 @@ name: verifier
 image: node:24
 env: SSH_KEY=(redacted)
 ssh: strict=false
-credential: ssh deploy material=DEPLOY_KEY hosts=[github.com] users=[git] ports=[22] binding=guest-bound
+credential: ssh deploy material=DEPLOY_KEY hosts=[github.com] users=[git] ports=[22] on_violation=passthrough binding=guest-bound
 network: egress_default=deny ingress_default=deny
   egress: tcp:53 -> host
   egress: udp:53 -> host

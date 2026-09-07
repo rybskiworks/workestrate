@@ -92,6 +92,7 @@ mod tests {
             users: vec!["git".to_string()],
             ports,
             binding: CredentialBinding::Broker,
+            on_violation: crate::config::SecretViolationPolicy::Passthrough,
         }
     }
 

@@ -17,6 +17,9 @@ material = "DEPLOY_KEY"
 hosts = ["github.com"]
 users = ["git"]
 # ports absent → [22]
+# Non-default policy so the goldens pin the full chain (catalog entry →
+# grant plan → rendered plan + guest policy slot).
+on_violation = "block"
 
 [workloads.diverter]
 kind = "agent"

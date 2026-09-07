@@ -474,6 +474,7 @@ mod tests {
                 users: vec!["git".to_string()],
                 ports: vec![port],
                 binding: CredentialBinding::Broker,
+                on_violation: crate::config::SecretViolationPolicy::Passthrough,
             }],
             signing: Vec::new(),
             strict: false,

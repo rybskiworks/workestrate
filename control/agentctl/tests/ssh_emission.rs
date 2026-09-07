@@ -49,7 +49,7 @@ fn ssh_divert_fixture_emits_exact_guest_policy() {
             "grants": [
                 {"host": {"exact": "github.com"}, "ports": [{"start": 22, "end": 22}]},
             ],
-            "on_violation": "block-and-log",
+            "on_violation": "block",
         }),
         "the emitted guest policy must match the fork's SshConfig shape exactly"
     );

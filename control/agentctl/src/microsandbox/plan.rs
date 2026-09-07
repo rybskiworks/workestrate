@@ -511,6 +511,9 @@ pub struct SshGrantPlan {
     /// Effective ports (the entry's `ports`, or `[22]` when absent).
     pub ports: Vec<u16>,
     pub binding: CredentialBinding,
+    /// Effective violation policy (the entry's `on_violation`, else the
+    /// material secret's ladder-resolved policy).
+    pub on_violation: SecretViolationPolicy,
 }
 
 /// One compiled SSH signing grant (M1).
@@ -746,12 +749,13 @@ impl fmt::Display for SandboxPlan {
                 let ports: Vec<String> = g.ports.iter().map(u16::to_string).collect();
                 writeln!(
                     f,
-                    "credential: ssh {} material={} hosts=[{}] users=[{}] ports=[{}] binding={}",
+                    "credential: ssh {} material={} hosts=[{}] users=[{}] ports=[{}] on_violation={} binding={}",
                     g.name,
                     g.material,
                     g.hosts.join(","),
                     g.users.join(","),
                     ports.join(","),
+                    secret_violation_policy_name(g.on_violation),
                     g.binding
                 )?;
             }
