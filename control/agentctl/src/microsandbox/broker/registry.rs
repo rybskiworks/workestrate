@@ -42,6 +42,21 @@ pub const MIN_GUEST_CID: u32 = 3;
 /// Directory name under `${state_dir}/var/run/` holding CID entries.
 pub const BROKER_DIR_NAME: &str = "broker";
 
+/// File name of the broker unix socket under the broker dir (singleton
+/// topology — one socket per state dir, no port glob).
+pub const BROKER_SOCKET_FILE_NAME: &str = "broker.sock";
+
+/// Resolve the host-side broker socket path: the shim listens here and the
+/// runtime dials it for diverted sessions. Host-side only — this path must
+/// never enter the guest-visible network spec.
+pub fn broker_socket_path(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("var")
+        .join("run")
+        .join(BROKER_DIR_NAME)
+        .join(BROKER_SOCKET_FILE_NAME)
+}
+
 /// File holding the synthetic allocator's next-candidate CID.
 const NEXT_CID_FILE_NAME: &str = "next-cid";
 

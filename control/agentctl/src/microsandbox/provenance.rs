@@ -40,6 +40,14 @@
 //!    change vs the pre-ingress format) + egress / deny / ingress rules
 //!    SORTED by their canonical encoding (rule sets are semantically
 //!    unordered; domain lists inside a rule are sorted too)
+//! 10. `sshpolicy` — SSH divert/confinement policy, appended AFTER the
+//!     network group ONLY when `plan.credentials` is present: the strict
+//!     bit plus per-grant canonical segments SORTED (hosts sorted, ports
+//!     sorted numerically, users sorted, binding, material name). Secret
+//!     VALUES never enter (material names only, consistent with group 6).
+//!     SSH grants and strict change guest-visible enforcement, so omitting
+//!     them would let the reuse path adopt a sandbox with stale SSH
+//!     confinement — they MUST be hashed.
 //!
 //! # Explicitly NOT hashed (each would churn on non-runtime edits)
 //!
@@ -65,6 +73,9 @@
 //!   `reject_placeholder`) — pinned name/value-only scope;
 //! - **egress `derived_from`** — depends_on display provenance; the RULES
 //!   themselves are hashed;
+//! - **`strict_origin` display provenance** — the ladder-origin label of the
+//!   SSH strict decision (like egress `derived_from`); the strict BIT
+//!   itself is hashed via `sshpolicy`;
 //! - **comments / docs / formatting / unrelated-workload edits** — cannot
 //!   reach a plan, so they cannot churn the hash by construction.
 //!
@@ -260,6 +271,22 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
     s.push(UNIT);
     s.push_str(&network_canonical(&plan.network));
 
+    // 10. sshpolicy — SSH divert/confinement policy, conditional on the
+    //     credentials view being present (keeps the pinned empty-plan
+    //     vector stable: grant-less plans never reach this group).
+    if let Some(credentials) = &plan.credentials {
+        s.push(REC);
+        s.push_str("sshpolicy");
+        s.push(UNIT);
+        s.push_str(if credentials.strict { "1" } else { "0" });
+        let mut grants: Vec<String> = credentials.ssh.iter().map(ssh_grant_canonical).collect();
+        grants.sort();
+        for grant in grants {
+            s.push(UNIT);
+            s.push_str(&grant);
+        }
+    }
+
     s
 }
 
@@ -383,6 +410,33 @@ fn network_canonical(n: &NetworkPlan) -> String {
     s
 }
 
+/// One SSH grant's canonical segment: hosts sorted, ports sorted
+/// numerically, users sorted, binding, material name. Users ride the hash
+/// as declared allowance intent even though the guest wire policy carries
+/// no user field; the grant name stays out (display identity, not
+/// enforcement). Secret values never enter — the material NAME only.
+fn ssh_grant_canonical(grant: &crate::microsandbox::plan::SshGrantPlan) -> String {
+    let mut hosts: Vec<&str> = grant.hosts.iter().map(String::as_str).collect();
+    hosts.sort_unstable();
+    let mut ports: Vec<u16> = grant.ports.clone();
+    ports.sort_unstable();
+    let mut users: Vec<&str> = grant.users.iter().map(String::as_str).collect();
+    users.sort_unstable();
+    let ports = ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "hosts={}|ports={}|users={}|binding={}|material={}",
+        hosts.join(","),
+        ports,
+        users.join(","),
+        grant.binding,
+        grant.material
+    )
+}
+
 fn egress_rule_canonical(rule: &crate::microsandbox::plan::EgressRule) -> String {
     // derived_from is display provenance (which dependency produced the
     // rule), not a runtime input — excluded; the RULE itself is hashed.
@@ -412,8 +466,8 @@ mod tests {
     use super::*;
     use crate::config::SecretViolationPolicy;
     use crate::microsandbox::plan::{
-        DenyDomainRule, EgressRule, EnvVar, HostBoundSecret, IngressRule, MountMode, MountPlan,
-        PortMapping, Protocol, Scope,
+        CredentialBinding, CredentialsPlan, DenyDomainRule, EgressRule, EnvVar, HostBoundSecret,
+        IngressRule, MountMode, MountPlan, PortMapping, Protocol, Scope, SshGrantPlan,
     };
     use crate::mount_policy::PolicyValue;
 
@@ -805,6 +859,229 @@ mod tests {
             scope: Scope::Local,
         }];
         assert_ne!(config_hash_of_plan(&ing), base_hash, "ingress rule");
+    }
+
+    /// SSH policy (`sshpolicy` group 10): enforcement-relevant edits churn.
+    #[test]
+    fn ssh_policy_edits_churn_the_hash() {
+        let base = ssh_plan(
+            false,
+            vec![test_ssh_grant(
+                "deploy",
+                &["github.com"],
+                vec![22],
+                CredentialBinding::Broker,
+            )],
+        );
+        let base_hash = config_hash_of_plan(&base);
+
+        // Strict flip (guest-visible confinement).
+        assert_ne!(
+            config_hash_of_plan(&ssh_plan(
+                true,
+                vec![test_ssh_grant(
+                    "deploy",
+                    &["github.com"],
+                    vec![22],
+                    CredentialBinding::Broker
+                )]
+            )),
+            base_hash,
+            "strict bit"
+        );
+        // Host edit.
+        assert_ne!(
+            config_hash_of_plan(&ssh_plan(
+                false,
+                vec![test_ssh_grant(
+                    "deploy",
+                    &["evil.example"],
+                    vec![22],
+                    CredentialBinding::Broker
+                )]
+            )),
+            base_hash,
+            "grant host"
+        );
+        // Port edit.
+        assert_ne!(
+            config_hash_of_plan(&ssh_plan(
+                false,
+                vec![test_ssh_grant(
+                    "deploy",
+                    &["github.com"],
+                    vec![2222],
+                    CredentialBinding::Broker
+                )]
+            )),
+            base_hash,
+            "grant port"
+        );
+        // Binding edit (key custody changes the guest view).
+        assert_ne!(
+            config_hash_of_plan(&ssh_plan(
+                false,
+                vec![test_ssh_grant(
+                    "deploy",
+                    &["github.com"],
+                    vec![22],
+                    CredentialBinding::Guest
+                )]
+            )),
+            base_hash,
+            "grant binding"
+        );
+        // Material-name edit (a different key backs the grant).
+        let mut material_edited = ssh_plan(
+            false,
+            vec![test_ssh_grant(
+                "deploy",
+                &["github.com"],
+                vec![22],
+                CredentialBinding::Broker,
+            )],
+        );
+        if let Some(credentials) = material_edited.credentials.as_mut() {
+            credentials.ssh[0].material = "OTHER_KEY".to_string();
+        }
+        assert_ne!(
+            config_hash_of_plan(&material_edited),
+            base_hash,
+            "grant material name"
+        );
+        // Grant added/removed.
+        assert_ne!(
+            config_hash_of_plan(&ssh_plan(false, Vec::new())),
+            base_hash,
+            "grant removal"
+        );
+    }
+
+    /// SSH display provenance never churns: origin labels, grant names,
+    /// and instance labels are not enforcement inputs.
+    #[test]
+    fn ssh_display_provenance_edits_do_not_churn_the_hash() {
+        let base = ssh_plan(
+            false,
+            vec![test_ssh_grant(
+                "deploy",
+                &["github.com"],
+                vec![22],
+                CredentialBinding::Broker,
+            )],
+        );
+        let base_hash = config_hash_of_plan(&base);
+
+        // strict_origin label edit.
+        let mut origin_edited = base.clone();
+        if let Some(credentials) = origin_edited.credentials.as_mut() {
+            credentials.strict_origin = Some("home-registry".to_string());
+        }
+        assert_eq!(
+            config_hash_of_plan(&origin_edited),
+            base_hash,
+            "strict_origin is display provenance"
+        );
+
+        // Grant rename (same allowance, different catalog name).
+        let renamed = ssh_plan(
+            false,
+            vec![test_ssh_grant(
+                "deploy-renamed",
+                &["github.com"],
+                vec![22],
+                CredentialBinding::Broker,
+            )],
+        );
+        assert_eq!(
+            config_hash_of_plan(&renamed),
+            base_hash,
+            "grant names are display identity, not enforcement"
+        );
+
+        // Instance label edit (orchestration policy, not a build input).
+        let mut labeled = base.clone();
+        labeled.instance_policy = Some(crate::config::InstancePolicy {
+            strategy: crate::config::InstanceStrategy::Singleton,
+            on_conflict: None,
+            port: None,
+            on_skew: None,
+            label: Some("canary".to_string()),
+        });
+        assert_eq!(
+            config_hash_of_plan(&labeled),
+            base_hash,
+            "instance labels are orchestration policy"
+        );
+    }
+
+    /// SSH grant declaration order never churns (allowance sets sort).
+    #[test]
+    fn ssh_grant_order_does_not_churn_the_hash() {
+        let grant_a = test_ssh_grant("a", &["b.example"], vec![22], CredentialBinding::Broker);
+        let grant_b = test_ssh_grant("b", &["a.example"], vec![2222], CredentialBinding::Broker);
+        // Host/port declaration order inside one grant is canonical too.
+        let unordered = test_ssh_grant(
+            "deploy",
+            &["z.example", "a.example"],
+            vec![2222, 22],
+            CredentialBinding::Broker,
+        );
+        let ordered = test_ssh_grant(
+            "deploy",
+            &["a.example", "z.example"],
+            vec![22, 2222],
+            CredentialBinding::Broker,
+        );
+        assert_eq!(
+            config_hash_of_plan(&ssh_plan(false, vec![grant_a.clone(), grant_b.clone()])),
+            config_hash_of_plan(&ssh_plan(false, vec![grant_b, grant_a])),
+            "grant declaration order"
+        );
+        assert_eq!(
+            config_hash_of_plan(&ssh_plan(false, vec![unordered])),
+            config_hash_of_plan(&ssh_plan(false, vec![ordered])),
+            "host/port declaration order within a grant"
+        );
+    }
+
+    /// The credentials view's PRESENCE churns: a plan carrying the view
+    /// (even non-strict with no grants) hashes differently from a plan
+    /// without it — the group is presence-gated, not content-gated.
+    #[test]
+    fn ssh_credentials_presence_churns_the_hash() {
+        assert_ne!(
+            config_hash_of_plan(&ssh_plan(false, Vec::new())),
+            config_hash_of_plan(&empty_plan()),
+            "presence of the credentials view is itself an input"
+        );
+    }
+
+    fn test_ssh_grant(
+        name: &str,
+        hosts: &[&str],
+        ports: Vec<u16>,
+        binding: CredentialBinding,
+    ) -> SshGrantPlan {
+        SshGrantPlan {
+            name: name.to_string(),
+            material: "DEPLOY_KEY".to_string(),
+            hosts: hosts.iter().map(|h| h.to_string()).collect(),
+            users: vec!["git".to_string()],
+            ports,
+            binding,
+        }
+    }
+
+    fn ssh_plan(strict: bool, grants: Vec<SshGrantPlan>) -> SandboxPlan {
+        let mut plan = empty_plan();
+        plan.credentials = Some(CredentialsPlan {
+            ssh: grants,
+            signing: Vec::new(),
+            strict,
+            strict_origin: Some("local".to_string()),
+        });
+        plan
     }
 
     fn empty_plan_with_env_a1() -> SandboxPlan {

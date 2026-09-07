@@ -20,7 +20,7 @@
 //! optimization, out of scope for this change.
 
 use crate::microsandbox::broker::audit::{AuditLog, AuditRecord, payload_digest_hex};
-use crate::microsandbox::plan::{CredentialsPlan, SigningGrantPlan};
+use crate::microsandbox::plan::{CredentialsPlan, SigningGrantPlan, SshGrantPlan};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -209,6 +209,11 @@ impl std::error::Error for Denial {}
 #[derive(Debug, Clone, Default)]
 pub struct InstanceGrants {
     pub signing: HashMap<String, SigningGrantPlan>,
+    /// Compiled SSH destination allowances. Indexed for EVERY binding:
+    /// binding governs where key material lives (broker custody vs guest
+    /// delivery), not which destinations the workload may dial, so a
+    /// guest-bound grant still allows its destinations at the divert check.
+    pub ssh: Vec<SshGrantPlan>,
 }
 
 /// The broker's grant store: instance → compiled grants. Built once at
@@ -232,6 +237,7 @@ impl GrantStore {
                     .iter()
                     .map(|g| (g.name.clone(), g.clone()))
                     .collect(),
+                ssh: plan.ssh.clone(),
             };
             store.instances.insert((*instance).to_string(), grants);
         }
@@ -241,6 +247,27 @@ impl GrantStore {
     /// Whether the store knows this instance at all.
     pub fn knows_instance(&self, instance: &str) -> bool {
         self.instances.contains_key(instance)
+    }
+
+    /// Whether `instance` may open an SSH session to `host:port`: some
+    /// compiled SSH grant covers the destination. Host entries match via
+    /// the fork's [`HostPattern`](microsandbox_types::HostPattern) parsing
+    /// (case-insensitive exact/wildcard); an empty port list matches any
+    /// port, mirroring the guest policy's empty-range semantics so the
+    /// shim check and the emitted policy can never disagree. Unknown
+    /// instances fail closed.
+    pub fn ssh_authorized(&self, instance: &str, host: &str, port: u16) -> bool {
+        let Some(grants) = self.instances.get(instance) else {
+            return false;
+        };
+        grants.ssh.iter().any(|grant| {
+            let host_ok = grant
+                .hosts
+                .iter()
+                .any(|pattern| microsandbox_types::HostPattern::parse(pattern).matches(host));
+            let port_ok = grant.ports.is_empty() || grant.ports.contains(&port);
+            host_ok && port_ok
+        })
     }
 }
 
@@ -781,6 +808,119 @@ mod tests {
         svc.release("personal-pi");
         assert!(svc.try_acquire("personal-pi"), "released slot reusable");
         svc.release("personal-pi");
+    }
+
+    fn ssh_grant(hosts: &[&str], ports: Vec<u16>, binding: CredentialBinding) -> SshGrantPlan {
+        SshGrantPlan {
+            name: "deploy".to_string(),
+            material: "DEPLOY_KEY".to_string(),
+            hosts: hosts.iter().map(|h| h.to_string()).collect(),
+            users: vec!["git".to_string()],
+            ports,
+            binding,
+        }
+    }
+
+    fn ssh_store(grants: Vec<SshGrantPlan>) -> GrantStore {
+        let plan = CredentialsPlan {
+            ssh: grants,
+            signing: Vec::new(),
+            strict: false,
+            strict_origin: None,
+        };
+        GrantStore::compile(&[("personal-pi", &plan)])
+    }
+
+    #[test]
+    fn ssh_authorized_exact_and_case_insensitive() {
+        let store = ssh_store(vec![ssh_grant(
+            &["github.com"],
+            vec![22],
+            CredentialBinding::Broker,
+        )]);
+        assert!(store.ssh_authorized("personal-pi", "github.com", 22));
+        assert!(
+            store.ssh_authorized("personal-pi", "GITHUB.com", 22),
+            "exact host matching is case-insensitive"
+        );
+        assert!(
+            !store.ssh_authorized("personal-pi", "github.com", 2222),
+            "wrong port must deny"
+        );
+        assert!(
+            !store.ssh_authorized("personal-pi", "evil.com", 22),
+            "ungranted host must deny"
+        );
+        assert!(
+            !store.ssh_authorized("unknown-box", "github.com", 22),
+            "unknown instances fail closed"
+        );
+    }
+
+    #[test]
+    fn ssh_authorized_single_port_grants_deny_other_ports() {
+        let store = ssh_store(vec![ssh_grant(
+            &["github.com"],
+            vec![22],
+            CredentialBinding::Broker,
+        )]);
+        for port in [1, 21, 23, 2222, 443] {
+            assert!(
+                !store.ssh_authorized("personal-pi", "github.com", port),
+                "single-port grant must deny port {port}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_authorized_wildcard_covers_subdomains() {
+        let store = ssh_store(vec![ssh_grant(
+            &["*.example.com"],
+            vec![22],
+            CredentialBinding::Broker,
+        )]);
+        assert!(store.ssh_authorized("personal-pi", "host.example.com", 22));
+        assert!(
+            store.ssh_authorized("personal-pi", "HOST.EXAMPLE.COM", 22),
+            "wildcard matching is case-insensitive"
+        );
+        assert!(!store.ssh_authorized("personal-pi", "example.com.evil", 22));
+        assert!(!store.ssh_authorized("personal-pi", "other.org", 22));
+    }
+
+    #[test]
+    fn ssh_authorized_empty_ports_match_any_port() {
+        // A grant plan with no ports matches any port — the same rule the
+        // emitted guest policy applies to an empty port-range set, so the
+        // shim check and the guest enforcement can never disagree.
+        let store = ssh_store(vec![ssh_grant(
+            &["github.com"],
+            Vec::new(),
+            CredentialBinding::Broker,
+        )]);
+        assert!(store.ssh_authorized("personal-pi", "github.com", 22));
+        assert!(store.ssh_authorized("personal-pi", "github.com", 2222));
+    }
+
+    #[test]
+    fn ssh_authorized_ignores_binding() {
+        // Binding governs key custody, not destination allowance: a
+        // guest-bound grant still allows its destinations at the divert
+        // check.
+        let store = ssh_store(vec![ssh_grant(
+            &["github.com"],
+            vec![22],
+            CredentialBinding::Guest,
+        )]);
+        assert!(store.ssh_authorized("personal-pi", "github.com", 22));
+        assert!(!store.ssh_authorized("personal-pi", "evil.com", 22));
+    }
+
+    #[test]
+    fn ssh_authorized_any_host_grant() {
+        let store = ssh_store(vec![ssh_grant(&["*"], vec![22], CredentialBinding::Broker)]);
+        assert!(store.ssh_authorized("personal-pi", "anything.example", 22));
+        assert!(!store.ssh_authorized("personal-pi", "anything.example", 2222));
     }
 
     #[test]
