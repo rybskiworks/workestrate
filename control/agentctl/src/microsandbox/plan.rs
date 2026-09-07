@@ -511,6 +511,9 @@ pub struct SshGrantPlan {
     /// Effective ports (the entry's `ports`, or `[22]` when absent).
     pub ports: Vec<u16>,
     pub binding: CredentialBinding,
+    /// Effective violation policy (the entry's `on_violation`, else the
+    /// material secret's ladder-resolved policy).
+    pub on_violation: SecretViolationPolicy,
 }
 
 /// One compiled SSH signing grant (M1).
@@ -746,12 +749,13 @@ impl fmt::Display for SandboxPlan {
                 let ports: Vec<String> = g.ports.iter().map(u16::to_string).collect();
                 writeln!(
                     f,
-                    "credential: ssh {} material={} hosts=[{}] users=[{}] ports=[{}] binding={}",
+                    "credential: ssh {} material={} hosts=[{}] users=[{}] ports=[{}] on_violation={} binding={}",
                     g.name,
                     g.material,
                     g.hosts.join(","),
                     g.users.join(","),
                     ports.join(","),
+                    secret_violation_policy_name(g.on_violation),
                     g.binding
                 )?;
             }
@@ -1572,6 +1576,37 @@ network: egress_default=deny ingress_default=deny
     }
 
     // ---- HostBoundSecret ----
+
+    #[test]
+    fn ssh_grant_plan_on_violation_round_trips_kebab_case() {
+        for (wire, policy) in [
+            ("passthrough", SecretViolationPolicy::Passthrough),
+            ("block", SecretViolationPolicy::Block),
+            ("block-and-log", SecretViolationPolicy::BlockAndLog),
+            (
+                "block-and-terminate",
+                SecretViolationPolicy::BlockAndTerminate,
+            ),
+        ] {
+            let grant = SshGrantPlan {
+                name: "deploy".to_string(),
+                material: "DEPLOY_KEY".to_string(),
+                hosts: vec!["github.com".to_string()],
+                users: vec!["git".to_string()],
+                ports: vec![22],
+                binding: CredentialBinding::Broker,
+                on_violation: policy,
+            };
+            let value = serde_json::to_value(&grant).expect("grant serializes");
+            assert_eq!(
+                value.get("on_violation").and_then(|v| v.as_str()),
+                Some(wire),
+                "grant policy must serialize kebab-case"
+            );
+            let back: SshGrantPlan = serde_json::from_value(value).expect("grant deserializes");
+            assert_eq!(back, grant);
+        }
+    }
 
     #[test]
     fn host_bound_secret_from_definition_templates_value_and_propagates_meta() {

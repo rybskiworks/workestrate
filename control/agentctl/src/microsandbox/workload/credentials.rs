@@ -87,9 +87,11 @@ fn resolve_binding(workload: &WorkloadConfig, material: &str) -> CredentialBindi
 
 /// Compile a workload's grant allowlist against the catalog: SSH grants
 /// resolve material→secret plus the confinement scope (hosts/users/ports,
-/// ports defaulting to `[22]`); signing grants resolve material→secret plus
-/// namespace and violation policy (the entry's `on_violation`, else the
-/// material secret's ladder-resolved policy).
+/// ports defaulting to `[22]`) and the violation policy (the entry's
+/// `on_violation`, else the material secret's ladder-resolved policy —
+/// the SSH edition of the signing grant's inheritance); signing grants
+/// resolve material→secret plus namespace and violation policy (the entry's
+/// `on_violation`, else the material secret's ladder-resolved policy).
 ///
 /// Unknown grant names and unknown material secrets are hard errors naming
 /// the workload and the credential — [`crate::config::validate_config`]
@@ -114,7 +116,6 @@ pub(crate) fn build_credential_grants(
                 entry.material
             )
         })?;
-        let _ = def;
         ssh.push(SshGrantPlan {
             name: name.clone(),
             material: entry.material.clone(),
@@ -125,6 +126,7 @@ pub(crate) fn build_credential_grants(
                 .clone()
                 .unwrap_or_else(|| DEFAULT_SSH_PORTS.to_vec()),
             binding: resolve_binding(workload, &entry.material),
+            on_violation: entry.on_violation.unwrap_or(def.on_violation),
         });
     }
 
@@ -327,6 +329,33 @@ mod tests {
         assert_eq!(
             signing[1].on_violation,
             SecretViolationPolicy::BlockAndTerminate
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ssh_grant_inherits_material_policy_unless_overridden() -> Result<()> {
+        let layer = crate::merge::Layer::from_string(
+            "base",
+            &ssh_toml(
+                "[secrets.DEPLOY_KEY]\non_violation = \"block\"\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n[credentials.ssh.deploy-strict]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\non_violation = \"block-and-terminate\"\n",
+                "[workloads.pi.credentials]\nssh = [\"deploy\", \"deploy-strict\"]\n",
+            ),
+        )?;
+        let (config, _) = crate::merge::merge_layers(&[layer])?;
+        let secrets = secrets_for(&config);
+        let workload = config.workloads.get("pi").unwrap();
+        let (ssh, _) = build_credential_grants(&config, "pi", workload, &secrets)?;
+        assert_eq!(ssh.len(), 2);
+        assert_eq!(
+            ssh[0].on_violation,
+            SecretViolationPolicy::Block,
+            "absent entry policy inherits the material secret's ladder-resolved policy"
+        );
+        assert_eq!(
+            ssh[1].on_violation,
+            SecretViolationPolicy::BlockAndTerminate,
+            "a declared entry policy wins over the material ladder"
         );
         Ok(())
     }

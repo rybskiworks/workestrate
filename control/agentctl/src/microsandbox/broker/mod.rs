@@ -38,6 +38,7 @@ pub mod shim;
 pub mod signing;
 pub mod ssh_emit;
 pub mod ssh_lifecycle;
+pub mod ssh_patterns;
 
 pub use audit::{AuditLog, AuditRecord, AuditResult, payload_digest_hex};
 pub use broker_vm::{BrokerVmHandle, broker_has_broker_bound_grants, ensure_broker_vm};
@@ -71,4 +72,8 @@ pub use ssh_emit::{apply_ssh_policy, ssh_config_for_plan, ssh_overlay_patch};
 pub use ssh_lifecycle::{
     SshShimHandle, ensure_ssh_shim, provision_epoch_via_console, reprovision_epoch,
     ssh_broker_socket_for_plan,
+};
+pub use ssh_patterns::{
+    DlpAction, DlpDecoder, DlpExclusion, DlpExclusionReason, DlpSeverity, PatternId, SshPattern,
+    SshPatterns, SshPatternsExt, apply_ssh_patterns, compile_ssh_patterns, policy_to_action,
 };

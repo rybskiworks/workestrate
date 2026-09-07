@@ -855,6 +855,7 @@ mod tests {
             users: vec!["git".to_string()],
             ports,
             binding,
+            on_violation: SecretViolationPolicy::Passthrough,
         }
     }
 

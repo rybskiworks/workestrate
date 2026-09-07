@@ -1170,6 +1170,7 @@ mod tests {
                 users: vec!["git".to_string()],
                 ports: vec![22],
                 binding: CredentialBinding::Broker,
+                on_violation: SecretViolationPolicy::Passthrough,
             }],
             signing: vec![],
             strict: false,
@@ -1655,6 +1656,7 @@ mod tests {
                     users: vec!["git".to_string()],
                     ports: vec![22],
                     binding: CredentialBinding::Broker,
+                    on_violation: SecretViolationPolicy::Passthrough,
                 },
                 SshGrantPlan {
                     name: "local".to_string(),
@@ -1663,6 +1665,7 @@ mod tests {
                     users: vec!["git".to_string()],
                     ports: vec![tcp_port],
                     binding: CredentialBinding::Guest,
+                    on_violation: SecretViolationPolicy::Passthrough,
                 },
             ],
             signing: Vec::new(),

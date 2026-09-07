@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+# DLP pattern compilation: base64-std derived scan patterns
+# (0.22.x already in the lockfile — promoted to a direct dep, no new package).
+base64 = "0.22"
 # Credential broker: CBOR wire codec (same 0.2.x already in the lockfile
 # via the microsandbox SDK — promoted to a direct dep, no new package).
 ciborium = "0.2"

@@ -6,8 +6,60 @@
 //! enter the spec: they live in the shim handle and the CID registry, and
 //! the runtime joins them with this policy view at enforcement time.
 
+use crate::config::SecretViolationPolicy;
 use crate::microsandbox::plan::CredentialsPlan;
 use microsandbox_types::{HostPattern, PortRange, SshConfig, SshGrant, ViolationAction};
+
+/// Map one grant's effective violation policy onto the fork's guest SSH
+/// deny strength. `Passthrough` carries no host set on the SSH view (the
+/// divert prelude has no placeholder to forward), so it emits an empty
+/// passthrough set; the network engine coerces that to `Block` at
+/// enforcement, keeping the wire intent distinct from the deny default.
+pub fn ssh_violation_action(policy: SecretViolationPolicy) -> ViolationAction {
+    match policy {
+        SecretViolationPolicy::Passthrough => ViolationAction::Passthrough(Vec::new()),
+        SecretViolationPolicy::Block => ViolationAction::Block,
+        SecretViolationPolicy::BlockAndLog => ViolationAction::BlockAndLog,
+        SecretViolationPolicy::BlockAndTerminate => ViolationAction::BlockAndTerminate,
+    }
+}
+
+/// Severity rank for the single-slot SSH deny strength: passthrough is no
+/// enforcement (weakest), then block-and-log below block below
+/// block-and-terminate. Matches the broker scan ordering so the SSH view
+/// and the DLP action reduction agree on which policy is strictest.
+fn ssh_policy_priority(policy: SecretViolationPolicy) -> u8 {
+    match policy {
+        SecretViolationPolicy::Passthrough => 0,
+        SecretViolationPolicy::BlockAndLog => 1,
+        SecretViolationPolicy::Block => 2,
+        SecretViolationPolicy::BlockAndTerminate => 3,
+    }
+}
+
+/// Reduce a grant set's effective policies to the single guest deny
+/// strength: the strictest grant wins, so one tightening grant tightens
+/// the whole SSH view. Order-independent (a pure max over the rank).
+/// Empty input falls back to the [`ViolationAction`] default, preserving
+/// the strict-only emission.
+pub fn ssh_violation_for_grants(
+    policies: impl IntoIterator<Item = SecretViolationPolicy>,
+) -> ViolationAction {
+    let mut best: Option<SecretViolationPolicy> = None;
+    for policy in policies {
+        let replace = match best {
+            None => true,
+            Some(current) => ssh_policy_priority(policy) > ssh_policy_priority(current),
+        };
+        if replace {
+            best = Some(policy);
+        }
+    }
+    match best {
+        None => ViolationAction::default(),
+        Some(policy) => ssh_violation_action(policy),
+    }
+}
 
 /// Compile the workload's SSH credential view into the guest-visible SSH
 /// policy, or `None` when the workload carries neither SSH grants nor
@@ -17,8 +69,10 @@ use microsandbox_types::{HostPattern, PortRange, SshConfig, SshGrant, ViolationA
 /// - Each grant plan fans out to one [`SshGrant`] per declared host entry
 ///   (parsed via [`HostPattern::parse`]); each declared port becomes a
 ///   single-port [`PortRange`].
-/// - The plan carries no SSH violation policy, so the deny strength is the
-///   [`ViolationAction`] default.
+/// - The guest view carries a single deny strength, so the grants'
+///   effective policies reduce strictest-wins
+///   ([`ssh_violation_for_grants`]); a grant-less strict-only plan keeps
+///   the [`ViolationAction`] default.
 /// - Grant `users` have no counterpart in the guest policy (the divert
 ///   prelude carries only host and port), so they are dropped here. They
 ///   still ride the provenance hash as declared allowance intent.
@@ -43,7 +97,7 @@ pub fn ssh_config_for_plan(plan: &CredentialsPlan) -> Option<SshConfig> {
     Some(SshConfig {
         strict: plan.strict,
         grants,
-        on_violation: ViolationAction::default(),
+        on_violation: ssh_violation_for_grants(plan.ssh.iter().map(|g| g.on_violation)),
     })
 }
 
@@ -92,6 +146,7 @@ mod tests {
             users: vec!["git".to_string()],
             ports,
             binding: CredentialBinding::Broker,
+            on_violation: crate::config::SecretViolationPolicy::Passthrough,
         }
     }
 
@@ -184,5 +239,75 @@ mod tests {
             Some(&plain),
         );
         assert!(builder.spec().network.ssh.is_none());
+    }
+
+    fn ssh_grant_with_policy(
+        hosts: &[&str],
+        ports: Vec<u16>,
+        policy: crate::config::SecretViolationPolicy,
+    ) -> SshGrantPlan {
+        SshGrantPlan {
+            on_violation: policy,
+            ..ssh_grant(hosts, ports)
+        }
+    }
+
+    #[test]
+    fn single_grant_policy_threads_to_guest_deny_strength() {
+        use crate::config::SecretViolationPolicy as Policy;
+        for (policy, expected) in [
+            (Policy::Block, ViolationAction::Block),
+            (Policy::BlockAndLog, ViolationAction::BlockAndLog),
+            (
+                Policy::BlockAndTerminate,
+                ViolationAction::BlockAndTerminate,
+            ),
+        ] {
+            let plan = plan_with(
+                vec![ssh_grant_with_policy(&["github.com"], vec![22], policy)],
+                false,
+            );
+            let config = ssh_config_for_plan(&plan).expect("grants emit");
+            assert_eq!(
+                config.on_violation, expected,
+                "policy {policy:?} must thread"
+            );
+        }
+        let plan = plan_with(
+            vec![ssh_grant_with_policy(
+                &["github.com"],
+                vec![22],
+                Policy::Passthrough,
+            )],
+            false,
+        );
+        let config = ssh_config_for_plan(&plan).expect("grants emit");
+        assert_eq!(
+            config.on_violation,
+            ViolationAction::Passthrough(Vec::new()),
+            "passthrough keeps its wire shape (the engine coerces it to block)"
+        );
+    }
+
+    #[test]
+    fn strictest_grant_wins_independent_of_order() {
+        use crate::config::SecretViolationPolicy as Policy;
+        let forward = vec![
+            ssh_grant_with_policy(&["a.example"], vec![22], Policy::BlockAndLog),
+            ssh_grant_with_policy(&["b.example"], vec![22], Policy::Block),
+            ssh_grant_with_policy(&["c.example"], vec![22], Policy::Passthrough),
+        ];
+        let mut reverse = forward.clone();
+        reverse.reverse();
+        let first = ssh_config_for_plan(&plan_with(forward, false)).expect("grants emit");
+        let second = ssh_config_for_plan(&plan_with(reverse, false)).expect("grants emit");
+        assert_eq!(first.on_violation, ViolationAction::Block);
+        assert_eq!(second.on_violation, first.on_violation);
+        let terminating = vec![
+            ssh_grant_with_policy(&["a.example"], vec![22], Policy::Block),
+            ssh_grant_with_policy(&["b.example"], vec![22], Policy::BlockAndTerminate),
+        ];
+        let config = ssh_config_for_plan(&plan_with(terminating, false)).expect("grants emit");
+        assert_eq!(config.on_violation, ViolationAction::BlockAndTerminate);
     }
 }

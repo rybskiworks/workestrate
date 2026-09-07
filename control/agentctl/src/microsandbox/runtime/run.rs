@@ -1395,6 +1395,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
         },
         None => builder,
     };
+    // Broker DLP patterns: compile broker-bound SSH material into literal
+    // match patterns and stage them host-side (never the guest spec).
+    // Grant-less, guest-only, and fully-excluded plans leave the builder
+    // untouched, preserving pass-through relay behavior.
+    let builder = crate::microsandbox::broker::apply_ssh_patterns(
+        builder,
+        plan.credentials.as_ref(),
+        &secrets,
+    );
     let sandbox = builder.create().await?;
 
     let created_at = super::time::current_rfc3339_utc();

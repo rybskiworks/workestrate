@@ -411,10 +411,14 @@ fn network_canonical(n: &NetworkPlan) -> String {
 }
 
 /// One SSH grant's canonical segment: hosts sorted, ports sorted
-/// numerically, users sorted, binding, material name. Users ride the hash
-/// as declared allowance intent even though the guest wire policy carries
-/// no user field; the grant name stays out (display identity, not
-/// enforcement). Secret values never enter — the material NAME only.
+/// numerically, users sorted, binding, material name, violation policy.
+/// Users ride the hash as declared allowance intent even though the guest
+/// wire policy carries no user field; the grant name stays out (display
+/// identity, not enforcement). Secret values never enter — the material
+/// NAME only. The policy rides the hash: two grants differing only in
+/// `on_violation` Hash differently (a policy-only tightening must churn
+/// staleness), closing the hash-collision gap the field's introduction
+/// would otherwise open.
 fn ssh_grant_canonical(grant: &crate::microsandbox::plan::SshGrantPlan) -> String {
     let mut hosts: Vec<&str> = grant.hosts.iter().map(String::as_str).collect();
     hosts.sort_unstable();
@@ -428,12 +432,13 @@ fn ssh_grant_canonical(grant: &crate::microsandbox::plan::SshGrantPlan) -> Strin
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "hosts={}|ports={}|users={}|binding={}|material={}",
+        "hosts={}|ports={}|users={}|binding={}|material={}|on_violation={}",
         hosts.join(","),
         ports,
         users.join(","),
         grant.binding,
-        grant.material
+        grant.material,
+        crate::microsandbox::plan::secret_violation_policy_name(grant.on_violation)
     )
 }
 
@@ -955,6 +960,24 @@ mod tests {
             base_hash,
             "grant removal"
         );
+        // Policy-only edit (no host/port/user/binding/material change).
+        let mut policy_edited = ssh_plan(
+            false,
+            vec![test_ssh_grant(
+                "deploy",
+                &["github.com"],
+                vec![22],
+                CredentialBinding::Broker,
+            )],
+        );
+        if let Some(credentials) = policy_edited.credentials.as_mut() {
+            credentials.ssh[0].on_violation = SecretViolationPolicy::BlockAndTerminate;
+        }
+        assert_ne!(
+            config_hash_of_plan(&policy_edited),
+            base_hash,
+            "grant violation policy"
+        );
     }
 
     /// SSH display provenance never churns: origin labels, grant names,
@@ -1070,6 +1093,7 @@ mod tests {
             users: vec!["git".to_string()],
             ports,
             binding,
+            on_violation: SecretViolationPolicy::Passthrough,
         }
     }
 
