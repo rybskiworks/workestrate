@@ -1,9 +1,10 @@
 //! Epoch tokens: per-sandbox-launch unguessable handshake preludes.
 //!
 //! Each workload VM gets a fresh 256-bit token at launch, provisioned over
-//! the existing console agent handshake (provisioning over that handshake
-//! remains follow-up work; here is the token type + issue/verify core).
-//! Every broker request must present
+//! the console agent channel ([`crate::microsandbox::broker::epoch_provision`]
+//! sends the guest-visible wire sequence; the token itself stays the
+//! shim-side authentication secret verified by dispatch). Every broker
+//! request must present
 //! the current epoch for its CID as a vsock handshake prelude. A stale
 //! (post-restart reuse) or forked (snapshot-clone) epoch is rejected with a
 //! re-attestation signal, never silently accepted.

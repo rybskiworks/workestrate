@@ -24,11 +24,15 @@ use crate::microsandbox::broker::signing::{
     Denial, GrantStore, KeyBackend, SignRequest, SignResponse, SigningService, decode_cbor,
     encode_cbor,
 };
-use microsandbox_network::ssh::gateway::{SshDivertPrelude, decode_ssh_divert_prelude};
+use microsandbox_network::ssh::gateway::{
+    SshDivertPrelude, decode_ssh_divert_prelude, encode_ssh_divert_prelude,
+};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// Default broker port (guest dials `CID 2:<port>`; msb bridges to the host
 /// unix socket). This may become config in follow-up work; this change fixes the constant.
@@ -319,9 +323,15 @@ pub trait SshRelay: Send + Sync + std::fmt::Debug {
     ) -> std::io::Result<()>;
 }
 
+/// Bound on one upstream TCP dial (seconds). A diverted session must fail
+/// closed fast when the granted upstream is unroutable — an unbounded
+/// connect would park the relay worker and leave the guest hanging instead
+/// of closing the session.
+pub const TCP_UPSTREAM_CONNECT_TIMEOUT_SECS: u64 = 10;
+
 /// Test relay: echoes accepted bytes back until EOF. Proves the hook hands
 /// over a live stream; not a production upstream path.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct EchoRelay;
 
 impl SshRelay for EchoRelay {
@@ -337,6 +347,272 @@ impl SshRelay for EchoRelay {
                 return Ok(());
             }
             stream.write_all(&buf[..n])?;
+        }
+    }
+}
+
+/// Production relay: reoriginates a fresh TCP dial to the decided
+/// destination and pumps bytes both ways until EOF or error.
+///
+/// Framing note: the divert prelude lives ONLY on the guest→shim leg (the
+/// msb proxy sends it, [`UnixSocketTransport::accept_divert`] consumes
+/// it). The upstream is a real SSH server expecting a fresh SSH stream,
+/// so no prelude or other framing is sent there — the guest observes the
+/// upstream banner a second time through this pump (the diverted
+/// session's double-banner fingerprint). The shim's own broker socket is
+/// the accept side and is never dialed here: a self-dial would loop back
+/// into the divert accept path instead of reaching an SSH server.
+///
+/// Half-close propagates both ways: guest EOF shuts the upstream write
+/// half (sshd sees EOF) and upstream EOF shuts the guest write half.
+#[derive(Debug, Clone)]
+pub struct TcpUpstreamRelay {
+    connect_timeout: Duration,
+}
+
+impl TcpUpstreamRelay {
+    /// Build a relay with an explicit bound on one upstream dial.
+    pub fn new(connect_timeout: Duration) -> Self {
+        Self { connect_timeout }
+    }
+
+    /// Dial the decided destination, trying each resolved address in order
+    /// until one connects (the [`TcpStream::connect`] behavior) with the
+    /// configured timeout bounding every attempt.
+    fn dial(dest: &DivertDestination, timeout: Duration) -> std::io::Result<TcpStream> {
+        let addrs = (dest.dest_host.as_str(), dest.dest_port)
+            .to_socket_addrs()
+            .map_err(|e| {
+                std::io::Error::other(format!(
+                    "ssh divert upstream resolve failed for {}:{}: {e}",
+                    dest.dest_host, dest.dest_port
+                ))
+            })?;
+        let mut last_err = None;
+        for addr in addrs {
+            match TcpStream::connect_timeout(&addr, timeout) {
+                Ok(stream) => return Ok(stream),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            std::io::Error::other(format!(
+                "ssh divert upstream resolve returned no addresses for {}:{}",
+                dest.dest_host, dest.dest_port
+            ))
+        }))
+    }
+}
+
+impl Default for TcpUpstreamRelay {
+    fn default() -> Self {
+        Self::new(Duration::from_secs(TCP_UPSTREAM_CONNECT_TIMEOUT_SECS))
+    }
+}
+
+impl SshRelay for TcpUpstreamRelay {
+    fn relay(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+    ) -> std::io::Result<()> {
+        let upstream = Self::dial(dest, self.connect_timeout)?;
+        let mut guest_in = stream.try_clone()?;
+        let mut guest_out = stream;
+        let mut upstream_in = upstream.try_clone()?;
+        let mut upstream_out = upstream;
+        // Upstream→guest runs on a worker; guest→upstream runs here. Each
+        // side shuts the far write half when its copy ends so EOF
+        // propagates instead of half-hanging the session.
+        let worker = std::thread::Builder::new()
+            .name(format!("ssh-relay-up-{}-{}", dest.instance, dest.cid))
+            .spawn(move || {
+                let res = std::io::copy(&mut upstream_in, &mut guest_out);
+                let _ = guest_out.shutdown(Shutdown::Write);
+                res
+            })
+            .map_err(|e| {
+                std::io::Error::other(format!("ssh divert relay worker spawn failed: {e}"))
+            })?;
+        let downstream = std::io::copy(&mut guest_in, &mut upstream_out);
+        let _ = upstream_out.shutdown(Shutdown::Write);
+        let upstream_res = match worker.join() {
+            Ok(res) => res,
+            Err(_) => Err(std::io::Error::other(
+                "ssh divert relay worker did not finish",
+            )),
+        };
+        downstream?;
+        upstream_res?;
+        Ok(())
+    }
+}
+
+/// Bound on one broker-socket dial. A diverted session must fail closed fast
+/// when the broker VM is down — an unbounded connect would park the relay
+/// worker and leave the guest hanging instead of closing the session.
+pub const BROKER_SOCKET_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// Custody relay: hands a decided session to the broker VM over its host
+/// divert socket.
+///
+/// Dials the broker VM socket, sends the framed divert prelude, then pumps
+/// bytes both ways (guest→shim→broker). The broker terminates the session
+/// and reoriginates upstream under sealed custody; the shim never dials
+/// upstream TCP itself on this path. A missing or unreachable broker socket
+/// (no broker VM running) fails the relay, and the caller drops the guest
+/// stream — fail-closed, never a direct-TCP fallback for broker-bound
+/// sessions.
+#[derive(Debug, Clone)]
+pub struct BrokerSocketRelay {
+    broker_socket: PathBuf,
+    connect_timeout: Duration,
+}
+
+impl BrokerSocketRelay {
+    /// Build a relay dialing `broker_socket` for every decided session.
+    pub fn new(broker_socket: PathBuf) -> Self {
+        Self {
+            broker_socket,
+            connect_timeout: Duration::from_secs(BROKER_SOCKET_CONNECT_TIMEOUT_SECS),
+        }
+    }
+
+    /// Build a relay with an explicit bound on one broker-socket dial.
+    pub fn with_timeout(broker_socket: PathBuf, connect_timeout: Duration) -> Self {
+        Self {
+            broker_socket,
+            connect_timeout,
+        }
+    }
+
+    /// Dial the broker socket with a bounded wait. Unix connects carry no
+    /// timeout knob, so the dial runs on a worker joined with the bound —
+    /// an unresponsive listener fails closed instead of parking the relay.
+    fn dial(&self) -> std::io::Result<std::os::unix::net::UnixStream> {
+        let path = self.broker_socket.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("ssh-broker-dial".to_string())
+            .spawn(move || {
+                let _ = tx.send(std::os::unix::net::UnixStream::connect(&path));
+            })
+            .map_err(|e| std::io::Error::other(format!("broker dial worker spawn failed: {e}")))?;
+        match rx.recv_timeout(self.connect_timeout) {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(e)) => Err(std::io::Error::other(format!(
+                "ssh broker dial failed for {}: {e}",
+                self.broker_socket.display()
+            ))),
+            Err(_) => Err(std::io::Error::other(format!(
+                "ssh broker dial timed out for {}",
+                self.broker_socket.display()
+            ))),
+        }
+    }
+}
+
+impl SshRelay for BrokerSocketRelay {
+    fn relay(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+    ) -> std::io::Result<()> {
+        let mut broker = self.dial()?;
+        // Re-stamp the prelude for the broker leg: the destination and
+        // transport attribution carry over, the epoch is now (the broker
+        // checks freshness against its provisioned floor).
+        let prelude = SshDivertPrelude {
+            dest_host: dest.dest_host.clone(),
+            dest_port: dest.dest_port,
+            transport_cid: u64::from(dest.cid),
+            epoch: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        broker.write_all(&encode_ssh_divert_prelude(&prelude))?;
+        broker.flush()?;
+        pump_unix_streams(
+            stream,
+            broker,
+            &format!("ssh-broker-{}-{}", dest.instance, dest.cid),
+        )
+    }
+}
+
+/// Pump bytes both ways between two unix streams until EOF or error,
+/// propagating half-close both ways.
+fn pump_unix_streams(
+    guest: std::os::unix::net::UnixStream,
+    broker: std::os::unix::net::UnixStream,
+    label: &str,
+) -> std::io::Result<()> {
+    let mut guest_in = guest.try_clone()?;
+    let mut guest_out = guest;
+    let mut broker_in = broker.try_clone()?;
+    let mut broker_out = broker;
+    let worker = std::thread::Builder::new()
+        .name(format!("{label}-up"))
+        .spawn(move || {
+            let res = std::io::copy(&mut broker_in, &mut guest_out);
+            let _ = guest_out.shutdown(Shutdown::Write);
+            res
+        })
+        .map_err(|e| std::io::Error::other(format!("broker pump worker spawn failed: {e}")))?;
+    let downstream = std::io::copy(&mut guest_in, &mut broker_out);
+    let _ = broker_out.shutdown(Shutdown::Write);
+    let upstream_res = match worker.join() {
+        Ok(res) => res,
+        Err(_) => Err(std::io::Error::other("broker pump worker did not finish")),
+    };
+    downstream?;
+    upstream_res?;
+    Ok(())
+}
+
+/// Binding-aware divert relay: broker-bound sessions ride broker custody,
+/// guest-bound sessions relay direct.
+///
+/// Broker-bound key material lives in the broker VM, so those sessions must
+/// reach [`BrokerSocketRelay`] — a missing broker fails the relay closed
+/// with no direct-TCP fallback. Guest-bound material lives in the guest
+/// itself, so those sessions relay direct through [`TcpUpstreamRelay`]
+/// exactly as before. The binding comes from the compiled
+/// [`GrantStore`](super::signing::GrantStore): any broker-bound covering
+/// grant selects custody.
+#[derive(Debug, Clone)]
+pub struct BrokerFirstRelay {
+    broker: BrokerSocketRelay,
+    grants: GrantStore,
+    direct: TcpUpstreamRelay,
+}
+
+impl BrokerFirstRelay {
+    /// Build the dispatcher: `broker_socket` names the broker VM divert
+    /// socket, `grants` is the compiled store the divert decision used.
+    pub fn new(broker_socket: PathBuf, grants: GrantStore) -> Self {
+        Self {
+            broker: BrokerSocketRelay::new(broker_socket),
+            grants,
+            direct: TcpUpstreamRelay::default(),
+        }
+    }
+}
+
+impl SshRelay for BrokerFirstRelay {
+    fn relay(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+    ) -> std::io::Result<()> {
+        if self
+            .grants
+            .ssh_is_broker_bound(&dest.instance, &dest.dest_host, dest.dest_port)
+        {
+            self.broker.relay(stream, dest)
+        } else {
+            self.direct.relay(stream, dest)
         }
     }
 }
@@ -476,10 +752,32 @@ pub fn decide_divert(
     DivertDecision::Allow { dest }
 }
 
+/// Accept one divert connection and decide it, returning the kept stream
+/// with its decision. Accept/protocol failures (no vouched CID,
+/// undecodable prelude) carry no trustworthy fields, so they fail without
+/// an audit record — the signing path's undecodable-frame rule. Shared by
+/// the single-shot server and the loop below.
+fn accept_and_decide<R: CidResolver>(
+    transport: &UnixSocketTransport<R>,
+    registry: &CidRegistry,
+    grants: &GrantStore,
+    audit: &AuditLog,
+    timestamp: &str,
+    now_secs: u64,
+) -> std::io::Result<(std::os::unix::net::UnixStream, DivertDecision)> {
+    let (peer, stream, prelude) = transport.accept_divert()?;
+    let decision = decide_divert(
+        registry, grants, audit, peer.cid, &prelude, now_secs, timestamp,
+    );
+    Ok((stream, decision))
+}
+
 /// Serve one divert connection: accept, decide, then relay on allow or
 /// close on deny. Accept/protocol failures (no vouched CID, undecodable
 /// prelude) carry no trustworthy fields, so they close stderr-loud
 /// without an audit record — the signing path's undecodable-frame rule.
+/// The relay runs INLINE here (the single-shot and test path); the loop
+/// in [`run_divert_until`] relays on worker threads instead.
 pub fn serve_divert_once<R: CidResolver>(
     transport: &UnixSocketTransport<R>,
     registry: &CidRegistry,
@@ -489,10 +787,8 @@ pub fn serve_divert_once<R: CidResolver>(
     timestamp: &str,
     now_secs: u64,
 ) -> std::io::Result<DivertDecision> {
-    let (peer, stream, prelude) = transport.accept_divert()?;
-    let decision = decide_divert(
-        registry, grants, audit, peer.cid, &prelude, now_secs, timestamp,
-    );
+    let (stream, decision) =
+        accept_and_decide(transport, registry, grants, audit, timestamp, now_secs)?;
     match &decision {
         DivertDecision::Allow { dest } => {
             if let Err(e) = relay.relay(stream, dest) {
@@ -515,12 +811,20 @@ pub fn serve_divert_once<R: CidResolver>(
 /// after any accept/protocol failure a set `stop` exits instead — the
 /// shutdown dummy connection surfaces exactly such a failure to unblock
 /// `accept`.
-pub fn run_divert_until<R: CidResolver>(
+///
+/// Allowed sessions relay on detached worker threads: the relay blocks for
+/// the whole session (a full SSH login), so serving it inline would stall
+/// every later divert behind it. Each worker owns its stream, decision,
+/// and relay clone — nothing borrowed — so the loop keeps accepting while
+/// sessions flow. Shutdown still only joins this loop thread: in-flight
+/// sessions drain on their own EOF after the socket is removed instead of
+/// hanging teardown.
+pub fn run_divert_until<R: CidResolver, L: SshRelay + Clone + 'static>(
     transport: &UnixSocketTransport<R>,
     registry: &CidRegistry,
     grants: &GrantStore,
     audit: &AuditLog,
-    relay: &dyn SshRelay,
+    relay: L,
     stop: &AtomicBool,
 ) {
     while !stop.load(Ordering::Relaxed) {
@@ -529,16 +833,44 @@ pub fn run_divert_until<R: CidResolver>(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        match serve_divert_once(
-            transport, registry, grants, audit, relay, &timestamp, now_secs,
-        ) {
-            Ok(_) => {}
-            Err(e) if stop.load(Ordering::Relaxed) => {
-                let _ = e;
-                break;
+        let (stream, decision) =
+            match accept_and_decide(transport, registry, grants, audit, &timestamp, now_secs) {
+                Ok(v) => v,
+                Err(e) if stop.load(Ordering::Relaxed) => {
+                    let _ = e;
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("WARNING: ssh divert accept failed: {e}");
+                    continue;
+                }
+            };
+        match decision {
+            DivertDecision::Allow { dest } => {
+                let worker_relay = relay.clone();
+                let label = format!("ssh-relay-{}-{}", dest.instance, dest.cid);
+                match std::thread::Builder::new()
+                    .name(label.clone())
+                    .spawn(move || {
+                        if let Err(e) = worker_relay.relay(stream, &dest) {
+                            eprintln!(
+                                "WARNING: ssh divert relay failed for instance '{}': {e}",
+                                dest.instance
+                            );
+                        }
+                    }) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        // Spawn failure fails closed: the unspawned closure
+                        // drops the stream unrelayed (the allow audit already
+                        // records the decision).
+                        eprintln!("WARNING: {label} spawn failed: {e} (session closed)");
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!("WARNING: ssh divert accept failed: {e}");
+            DivertDecision::Deny { .. } => {
+                // Close: dropping the stream refuses the session.
+                drop(stream);
             }
         }
     }
@@ -1099,6 +1431,298 @@ mod tests {
         });
         assert_eq!(audit.len(), 1);
         assert!(matches!(audit.snapshot()[0].result, AuditResult::Allow));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- TCP upstream relay ----
+
+    fn tcp_dest(port: u16) -> DivertDestination {
+        DivertDestination {
+            instance: "real-instance".to_string(),
+            cid: 7,
+            dest_host: "127.0.0.1".to_string(),
+            dest_port: port,
+        }
+    }
+
+    /// A local TCP stub stands in for the upstream SSH server: it checks
+    /// the guest-bound bytes, answers, then expects the guest half-close
+    /// as EOF before closing (which the guest must observe as its EOF).
+    #[test]
+    fn tcp_relay_pumps_both_directions_and_propagates_eof() {
+        let stub = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = stub.local_addr().unwrap().port();
+        let stub_worker = std::thread::spawn(move || {
+            let (mut conn, _) = stub.accept().unwrap();
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+                .unwrap();
+            // Guest→upstream direction arrives first.
+            let mut hello = [0u8; 5];
+            conn.read_exact(&mut hello).unwrap();
+            assert_eq!(&hello, b"hello");
+            // Upstream→guest direction flows back.
+            conn.write_all(b"world").unwrap();
+            // The guest half-close arrives as EOF; anything else is a leak.
+            let mut rest = Vec::new();
+            conn.read_to_end(&mut rest).unwrap();
+            assert!(rest.is_empty(), "guest must send nothing after its reply");
+        });
+        let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+        guest
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .unwrap();
+        let relay = TcpUpstreamRelay::default();
+        let dest = tcp_dest(port);
+        std::thread::scope(|s| {
+            let server = s.spawn(|| relay.relay(shuttle, &dest));
+            guest.write_all(b"hello").unwrap();
+            let mut reply = [0u8; 5];
+            guest.read_exact(&mut reply).unwrap();
+            assert_eq!(&reply, b"world");
+            guest.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut tail = Vec::new();
+            guest.read_to_end(&mut tail).unwrap();
+            assert!(tail.is_empty(), "upstream close must surface as guest EOF");
+            server.join().unwrap().unwrap();
+        });
+        stub_worker.join().unwrap();
+    }
+
+    #[test]
+    fn tcp_relay_refused_upstream_fails_closed_with_guest_eof() {
+        // Reserve then release a loopback port so the dial refuses.
+        let closed = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+        let relay = TcpUpstreamRelay::new(std::time::Duration::from_millis(500));
+        let err = relay.relay(shuttle, &tcp_dest(port)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
+        // Fail-closed: the guest side observes EOF, never a hang.
+        let mut buf = [0u8; 1];
+        assert_eq!(guest.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test]
+    fn tcp_relay_resolves_hostnames_before_dialing() {
+        let stub = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = stub.local_addr().unwrap().port();
+        let stub_worker = std::thread::spawn(move || {
+            let (mut conn, _) = stub.accept().unwrap();
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+                .unwrap();
+            let mut ping = [0u8; 4];
+            conn.read_exact(&mut ping).unwrap();
+            assert_eq!(&ping, b"ping");
+        });
+        let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+        // `localhost` exercises hostname resolution (and the multi-address
+        // fallback when it resolves to ::1 first) before the dial.
+        let dest = DivertDestination {
+            instance: "real-instance".to_string(),
+            cid: 7,
+            dest_host: "localhost".to_string(),
+            dest_port: port,
+        };
+        let relay = TcpUpstreamRelay::new(std::time::Duration::from_secs(5));
+        let worker = std::thread::spawn(move || relay.relay(shuttle, &dest));
+        guest.write_all(b"ping").unwrap();
+        // Half-close so the guest→upstream copy reaches EOF: the stub
+        // closes after its read, ending the other direction.
+        guest.shutdown(std::net::Shutdown::Write).unwrap();
+        worker.join().unwrap().unwrap();
+        stub_worker.join().unwrap();
+    }
+
+    // ---- Broker-socket relay ----
+
+    /// A broker stub stands in for the broker VM: it reads the framed
+    /// divert prelude, checks the attribution, then echoes post-prelude
+    /// bytes until the guest half-close.
+    fn broker_stub_path(dir: &std::path::Path) -> PathBuf {
+        dir.join("broker-stub.sock")
+    }
+
+    fn run_broker_stub(socket_path: PathBuf, expect_host: String, expect_port: u16) {
+        use microsandbox_network::ssh::gateway::decode_ssh_divert_prelude;
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        let (mut conn, _) = listener.accept().unwrap();
+        conn.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .unwrap();
+        let mut len_buf = [0u8; 4];
+        conn.read_exact(&mut len_buf).unwrap();
+        let len = u32::from_be_bytes(len_buf) as usize;
+        let mut payload = vec![0u8; len];
+        conn.read_exact(&mut payload).unwrap();
+        let mut framed = Vec::with_capacity(4 + payload.len());
+        framed.extend_from_slice(&len_buf);
+        framed.extend_from_slice(&payload);
+        let (prelude, consumed) = decode_ssh_divert_prelude(&framed).unwrap();
+        assert_eq!(consumed, framed.len(), "prelude must be exactly one frame");
+        assert_eq!(prelude.dest_host, expect_host);
+        assert_eq!(prelude.dest_port, expect_port);
+        assert_eq!(prelude.transport_cid, 7);
+        assert!(prelude.epoch > 0, "prelude must carry a wall-clock epoch");
+        let mut ping = [0u8; 4];
+        conn.read_exact(&mut ping).unwrap();
+        assert_eq!(&ping, b"ping");
+        conn.write_all(b"pong").unwrap();
+        let mut rest = Vec::new();
+        conn.read_to_end(&mut rest).unwrap();
+        assert!(rest.is_empty(), "guest must send nothing after its reply");
+    }
+
+    #[test]
+    fn broker_socket_relay_forwards_prelude_and_pumps() {
+        let dir = crate::config::test_support::unique_state_dir("broker-relay");
+        let socket_path = broker_stub_path(&dir);
+        let stub_worker = std::thread::spawn({
+            let socket_path = socket_path.clone();
+            move || run_broker_stub(socket_path, "broker.example".to_string(), 22)
+        });
+        let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+        guest
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .unwrap();
+        let relay = BrokerSocketRelay::new(socket_path);
+        let dest = DivertDestination {
+            instance: "real-instance".to_string(),
+            cid: 7,
+            dest_host: "broker.example".to_string(),
+            dest_port: 22,
+        };
+        std::thread::scope(|s| {
+            let server = s.spawn(|| relay.relay(shuttle, &dest));
+            guest.write_all(b"ping").unwrap();
+            let mut reply = [0u8; 4];
+            guest.read_exact(&mut reply).unwrap();
+            assert_eq!(&reply, b"pong");
+            guest.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut tail = Vec::new();
+            guest.read_to_end(&mut tail).unwrap();
+            assert!(tail.is_empty(), "broker close must surface as guest EOF");
+            server.join().unwrap().unwrap();
+        });
+        stub_worker.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn broker_socket_relay_missing_socket_fails_closed_with_guest_eof() {
+        let dir = crate::config::test_support::unique_state_dir("broker-relay-missing");
+        let missing = dir.join("no-broker.sock");
+        let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+        let relay = BrokerSocketRelay::with_timeout(missing, std::time::Duration::from_millis(500));
+        let dest = DivertDestination {
+            instance: "real-instance".to_string(),
+            cid: 7,
+            dest_host: "broker.example".to_string(),
+            dest_port: 22,
+        };
+        relay.relay(shuttle, &dest).unwrap_err();
+        // Fail-closed: the guest side observes EOF, never a hang and never
+        // a direct-TCP dial.
+        let mut buf = [0u8; 1];
+        assert_eq!(guest.read(&mut buf).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn mixed_binding_store(tcp_port: u16) -> GrantStore {
+        let plan = CredentialsPlan {
+            ssh: vec![
+                SshGrantPlan {
+                    name: "brokered".to_string(),
+                    material: "BROKER_KEY".to_string(),
+                    hosts: vec!["broker.example".to_string()],
+                    users: vec!["git".to_string()],
+                    ports: vec![22],
+                    binding: CredentialBinding::Broker,
+                },
+                SshGrantPlan {
+                    name: "local".to_string(),
+                    material: "LOCAL_KEY".to_string(),
+                    hosts: vec!["127.0.0.1".to_string()],
+                    users: vec!["git".to_string()],
+                    ports: vec![tcp_port],
+                    binding: CredentialBinding::Guest,
+                },
+            ],
+            signing: Vec::new(),
+            strict: false,
+            strict_origin: None,
+        };
+        GrantStore::compile(&[("real-instance", &plan)])
+    }
+
+    #[test]
+    fn broker_first_relay_routes_broker_bound_to_broker_socket() {
+        let dir = crate::config::test_support::unique_state_dir("broker-first-custody");
+        let socket_path = broker_stub_path(&dir);
+        let stub_worker = std::thread::spawn({
+            let socket_path = socket_path.clone();
+            move || run_broker_stub(socket_path, "broker.example".to_string(), 22)
+        });
+        // The guest-bound port is unused here; any free port keeps the
+        // store shape realistic.
+        let relay = BrokerFirstRelay::new(socket_path, mixed_binding_store(1));
+        let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+        guest
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .unwrap();
+        let dest = DivertDestination {
+            instance: "real-instance".to_string(),
+            cid: 7,
+            dest_host: "broker.example".to_string(),
+            dest_port: 22,
+        };
+        std::thread::scope(|s| {
+            let server = s.spawn(|| relay.relay(shuttle, &dest));
+            guest.write_all(b"ping").unwrap();
+            let mut reply = [0u8; 4];
+            guest.read_exact(&mut reply).unwrap();
+            assert_eq!(&reply, b"pong", "broker-bound must ride the broker socket");
+            guest.shutdown(std::net::Shutdown::Write).unwrap();
+            server.join().unwrap().unwrap();
+        });
+        stub_worker.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn broker_first_relay_routes_guest_bound_direct() {
+        let stub = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = stub.local_addr().unwrap().port();
+        let stub_worker = std::thread::spawn(move || {
+            let (mut conn, _) = stub.accept().unwrap();
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+                .unwrap();
+            let mut hello = [0u8; 5];
+            conn.read_exact(&mut hello).unwrap();
+            assert_eq!(&hello, b"hello");
+            conn.write_all(b"world").unwrap();
+        });
+        let dir = crate::config::test_support::unique_state_dir("broker-first-direct");
+        // No broker stub binds here: a guest-bound session must reach its
+        // TCP upstream without touching the (absent) broker socket.
+        let relay = BrokerFirstRelay::new(dir.join("no-broker.sock"), mixed_binding_store(port));
+        let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+        guest
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .unwrap();
+        let dest = tcp_dest(port);
+        std::thread::scope(|s| {
+            let server = s.spawn(|| relay.relay(shuttle, &dest));
+            guest.write_all(b"hello").unwrap();
+            let mut reply = [0u8; 5];
+            guest.read_exact(&mut reply).unwrap();
+            assert_eq!(&reply, b"world", "guest-bound must relay direct");
+            guest.shutdown(std::net::Shutdown::Write).unwrap();
+            server.join().unwrap().unwrap();
+        });
+        stub_worker.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

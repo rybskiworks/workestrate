@@ -57,6 +57,37 @@ pub fn broker_socket_path(state_dir: &Path) -> PathBuf {
         .join(BROKER_SOCKET_FILE_NAME)
 }
 
+/// File name of the broker VM divert socket under the broker dir: the shim
+/// dials here to hand a decided session to the broker VM, whose guest
+/// brokerd listens on its divert vsock port. Singleton per state dir, like
+/// [`broker_socket_path`].
+pub const BROKER_VM_SOCKET_FILE_NAME: &str = "broker-vm.sock";
+
+/// Resolve the host-side broker VM divert socket path. Host-side only —
+/// this path must never enter the guest-visible network spec.
+pub fn broker_vm_socket_path(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("var")
+        .join("run")
+        .join(BROKER_DIR_NAME)
+        .join(BROKER_VM_SOCKET_FILE_NAME)
+}
+
+/// File name of the broker egress socket under the broker dir: the broker
+/// VM dials here for upstream TCP egress and the host-side forwarder
+/// answers. Singleton per state dir. This is the only egress path for the
+/// broker VM, whose guest IP stack stays down.
+pub const BROKER_EGRESS_SOCKET_FILE_NAME: &str = "broker-egress.sock";
+
+/// Resolve the host-side broker egress socket path. Host-side only.
+pub fn broker_egress_socket_path(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("var")
+        .join("run")
+        .join(BROKER_DIR_NAME)
+        .join(BROKER_EGRESS_SOCKET_FILE_NAME)
+}
+
 /// File holding the synthetic allocator's next-candidate CID.
 const NEXT_CID_FILE_NAME: &str = "next-cid";
 
@@ -73,6 +104,23 @@ pub struct CidEntry {
     /// blocks rebinding until the TTL elapses.
     #[serde(default)]
     pub expired_at_secs: Option<u64>,
+    /// Last console-provisioned wire epoch for this CID (0 = never
+    /// provisioned — the unprovisioned sentinel, never emitted on the wire).
+    ///
+    /// Mapping note: the console `core.ssh_epoch.provision` frame carries a
+    /// `u64` epoch while the launch [`EpochToken`] is 32 bytes of opaque
+    /// entropy, so the two are NOT interchangeable encodings of one value.
+    /// The token stays the shim-side authentication secret (presented in
+    /// every signing envelope and verified by dispatch); this counter is
+    /// the guest-visible sequence number provisioned over the console agent
+    /// channel. It is monotonic within one binding: initialized to 0 at
+    /// bind and bumped (persisted) by every provision emission, so a
+    /// retried or re-issued provision always supersedes — never replays —
+    /// the previous one. A rebind after the tombstone ages out starts a new
+    /// sequence under a new token. Missing in entries written before this
+    /// field existed ([`serde(default)`] → 0: unprovisioned).
+    #[serde(default)]
+    pub wire_epoch: u64,
 }
 
 impl CidEntry {
@@ -233,6 +281,11 @@ impl CidRegistry {
             epoch_hex: epoch.to_hex(),
             bound_at_secs: now_secs,
             expired_at_secs: None,
+            // A fresh binding starts unprovisioned; every provision emission
+            // bumps this via [`Self::bump_wire_epoch`] (see the field docs).
+            // Rebinding over an aged-out tombstone restarts the sequence
+            // under the new token.
+            wire_epoch: 0,
         };
         write_entry(&self.broker_dir(), &entry)?;
         entries.insert(cid, entry);
@@ -275,6 +328,9 @@ impl CidRegistry {
             epoch_hex: epoch.to_hex(),
             bound_at_secs: now_secs,
             expired_at_secs: None,
+            // Fresh binding (or a new sequence over an aged-out tombstone
+            // slot): starts unprovisioned, see [`Self::bind_at`].
+            wire_epoch: 0,
         };
         write_entry(&self.broker_dir(), &entry)?;
         entries.insert(candidate, entry);
@@ -285,6 +341,35 @@ impl CidRegistry {
             })?,
         )?;
         Ok(candidate)
+    }
+
+    /// Bump the console wire epoch for a live `cid` and persist it,
+    /// returning the new (emittable, nonzero) sequence value.
+    ///
+    /// Every console provision emission — initial and re-issue — goes
+    /// through here BEFORE sending, so a value is never emitted twice even
+    /// across a failed send followed by a retry: at-least-once delivery
+    /// stays monotonic and newer provisions always supersede older ones.
+    /// Refuses unknown or tombstoned CIDs (re-provisioning a dead binding
+    /// is a caller error, never silently provisioned).
+    pub fn bump_wire_epoch(&self, cid: u32) -> anyhow::Result<u64> {
+        let _lock =
+            crate::microsandbox::port_registry::lock::PortRegistryLock::acquire(&self.state_dir)?;
+        let mut entries = self.lock_entries()?;
+        // Re-read under the lock so a concurrent process's bind is visible.
+        *entries = read_all_entries(&self.broker_dir())?;
+        let entry = entries.get_mut(&cid).ok_or_else(|| {
+            anyhow::anyhow!("CID registry bump refused: CID {cid} has no binding")
+        })?;
+        if !entry.is_live() {
+            anyhow::bail!("CID registry bump refused: CID {cid} is expired (tombstoned)");
+        }
+        entry.wire_epoch = entry.wire_epoch.checked_add(1).ok_or_else(|| {
+            anyhow::anyhow!("CID registry bump refused: wire epoch for CID {cid} exhausted u64")
+        })?;
+        let updated = entry.clone();
+        write_entry(&self.broker_dir(), &updated)?;
+        Ok(updated.wire_epoch)
     }
 
     /// Expire the binding for `cid` (tombstone; missing CID is a no-op).
@@ -579,6 +664,111 @@ mod tests {
             h.join().expect("worker panicked").unwrap();
         }
         assert_eq!(reg.live_count().unwrap(), 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fresh_bindings_start_unprovisioned() {
+        let dir = crate::config::test_support::unique_state_dir("broker-wireinit");
+        let reg = CidRegistry::open(&dir).unwrap();
+        reg.bind(7, "personal-pi", &token(1)).unwrap();
+        let entry = reg.lookup(7).unwrap().expect("bound CID must resolve");
+        assert_eq!(entry.wire_epoch, 0, "fresh binds start unprovisioned");
+        let allocated = reg.allocate("work-pi", &token(2)).unwrap();
+        let entry = reg
+            .lookup(allocated)
+            .unwrap()
+            .expect("allocated CID must resolve");
+        assert_eq!(entry.wire_epoch, 0, "fresh allocations start unprovisioned");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bump_wire_epoch_is_monotonic_and_persisted() {
+        let dir = crate::config::test_support::unique_state_dir("broker-wirebump");
+        let reg = CidRegistry::open(&dir).unwrap();
+        reg.bind(7, "personal-pi", &token(1)).unwrap();
+        assert_eq!(reg.bump_wire_epoch(7).unwrap(), 1);
+        assert_eq!(reg.bump_wire_epoch(7).unwrap(), 2);
+        // The bump survives reopen (at-least-once retries never replay).
+        let reg2 = CidRegistry::open(&dir).unwrap();
+        assert_eq!(reg2.bump_wire_epoch(7).unwrap(), 3);
+        let entry = reg2.lookup(7).unwrap().expect("binding must survive");
+        assert_eq!(entry.wire_epoch, 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn idempotent_rebind_preserves_wire_epoch() {
+        let dir = crate::config::test_support::unique_state_dir("broker-wireidem");
+        let reg = CidRegistry::open(&dir).unwrap();
+        reg.bind(7, "personal-pi", &token(1)).unwrap();
+        assert_eq!(reg.bump_wire_epoch(7).unwrap(), 1);
+        // The identical re-bind is a no-op: it must not reset the sequence
+        // under a guest that already acked it.
+        reg.bind(7, "personal-pi", &token(1)).unwrap();
+        let entry = reg.lookup(7).unwrap().expect("binding must survive");
+        assert_eq!(entry.wire_epoch, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bump_refuses_unknown_and_tombstoned_cids() {
+        let dir = crate::config::test_support::unique_state_dir("broker-wiredeny");
+        let reg = CidRegistry::open_with_ttl(&dir, 60).unwrap();
+        let err = reg.bump_wire_epoch(4242).unwrap_err();
+        assert!(err.to_string().contains("no binding"), "got: {err}");
+        reg.bind_at(7, "personal-pi", &token(1), 1000).unwrap();
+        reg.expire_at(7, 1100).unwrap();
+        let err = reg.bump_wire_epoch(7).unwrap_err();
+        assert!(err.to_string().contains("tombstoned"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rebind_after_ttl_restarts_the_sequence() {
+        let dir = crate::config::test_support::unique_state_dir("broker-wirerebind");
+        let reg = CidRegistry::open_with_ttl(&dir, 60).unwrap();
+        reg.bind_at(7, "personal-pi", &token(1), 1000).unwrap();
+        assert_eq!(reg.bump_wire_epoch(7).unwrap(), 1);
+        reg.expire_at(7, 1100).unwrap();
+        assert_eq!(reg.sweep_expired_at(1200).unwrap(), 1);
+        // A new binding after the tombstone ages out starts a new sequence
+        // under the new token (monotonic within a binding, not across).
+        reg.bind_at(7, "work-pi", &token(2), 1200).unwrap();
+        let entry = reg.lookup(7).unwrap().expect("rebound CID must resolve");
+        assert_eq!(entry.wire_epoch, 0);
+        assert_eq!(reg.bump_wire_epoch(7).unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_entries_without_wire_epoch_read_as_unprovisioned() {
+        let dir = crate::config::test_support::unique_state_dir("broker-wirelegacy");
+        std::fs::create_dir_all(dir.join("var").join("run").join("broker")).unwrap();
+        // An entry written before the field existed carries no wire_epoch.
+        std::fs::write(
+            dir.join("var")
+                .join("run")
+                .join("broker")
+                .join("cid-7.json"),
+            serde_json::json!({
+                "cid": 7,
+                "instance": "personal-pi",
+                "epoch_hex": token(1).to_hex(),
+                "bound_at_secs": 1000,
+                "expired_at_secs": null,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reg = CidRegistry::open(&dir).unwrap();
+        let entry = reg.lookup(7).unwrap().expect("legacy entry must load");
+        assert_eq!(
+            entry.wire_epoch, 0,
+            "missing field defaults to unprovisioned"
+        );
+        assert_eq!(reg.bump_wire_epoch(7).unwrap(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

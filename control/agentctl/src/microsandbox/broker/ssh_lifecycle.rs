@@ -8,9 +8,14 @@
 
 use crate::microsandbox::broker::audit::AuditLog;
 use crate::microsandbox::broker::epoch::EpochToken;
-use crate::microsandbox::broker::registry::{CidRegistry, broker_socket_path};
+use crate::microsandbox::broker::epoch_provision::{
+    AgentConsoleChannel, EpochProvisionError, provision_now,
+};
+use crate::microsandbox::broker::registry::{
+    CidRegistry, broker_socket_path, broker_vm_socket_path,
+};
 use crate::microsandbox::broker::shim::{
-    DivertDestination, FixedCidResolver, SshRelay, UnixSocketTransport, run_divert_until,
+    BrokerFirstRelay, FixedCidResolver, UnixSocketTransport, run_divert_until,
 };
 use crate::microsandbox::broker::signing::GrantStore;
 use crate::microsandbox::plan::CredentialsPlan;
@@ -20,66 +25,47 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-/// Epoch delivery failure: the console agent handshake that carries the
-/// launch epoch to the guest is not wired yet, so delivery always fails
-/// until that channel lands.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EpochProvisionError {
-    /// The console handshake channel is not wired: no epoch material
-    /// crosses to the guest by any other path (fail-closed — guests
-    /// simply cannot present an epoch until the handshake lands).
-    NotWired { instance: String, cid: u32 },
-}
-
-impl std::fmt::Display for EpochProvisionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EpochProvisionError::NotWired { instance, cid } => write!(
-                f,
-                "epoch delivery for instance '{instance}' (CID {cid}) is not wired: \
-                 the console agent handshake does not exist yet"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for EpochProvisionError {}
-
-/// Deliver the launch epoch to the guest over the console agent
-/// handshake. That channel does not exist yet and is gated on KVM, so
-/// this always returns [`EpochProvisionError::NotWired`]: epoch material
-/// never crosses to the guest by any other path.
-pub fn provision_epoch_via_console(
-    instance: &str,
+/// Deliver the launch epoch to the guest over the console agent channel:
+/// bump the CID's persisted wire sequence (every emission goes through the
+/// bump, so a value is never sent twice even across a failed send followed
+/// by a retry), dial the sandbox's agent relay, gate on the negotiated
+/// generation, send the provision, and check the ack. The sandbox identity
+/// for the dial and the provision payload both come from the CID's live
+/// registry binding (single source of truth — the caller only names the
+/// CID). Returns the provisioned wire epoch.
+///
+/// Unknown or tombstoned CIDs fail with [`EpochProvisionError::NotBound`]
+/// before any dial — there is nothing to provision.
+pub async fn provision_epoch_via_console(
+    registry: &CidRegistry,
     cid: u32,
-    _epoch: &EpochToken,
-) -> Result<(), EpochProvisionError> {
-    Err(EpochProvisionError::NotWired {
-        instance: instance.to_string(),
-        cid,
-    })
+) -> Result<u64, EpochProvisionError> {
+    let entry = registry
+        .lookup(cid)
+        .map_err(|e| EpochProvisionError::SendFailed {
+            detail: format!("CID {cid} lookup failed: {e}"),
+        })?
+        .ok_or(EpochProvisionError::NotBound { cid })?;
+    let wire_epoch =
+        registry
+            .bump_wire_epoch(cid)
+            .map_err(|e| EpochProvisionError::SendFailed {
+                detail: format!("wire epoch bump for CID {cid} failed after live lookup: {e}"),
+            })?;
+    let channel = AgentConsoleChannel::connect(&entry.instance).await?;
+    provision_now(&channel, &entry.instance, cid, wire_epoch).await
 }
 
-/// Fail-closed placeholder relay: divert decisions are enforced and
-/// audited, but no production upstream path exists yet, so allowed
-/// sessions close instead of flowing anywhere. The in-VM relay replaces
-/// this behind the [`SshRelay`] trait without touching the loop.
-#[derive(Debug, Default)]
-struct FailClosedRelay;
-
-impl SshRelay for FailClosedRelay {
-    fn relay(
-        &self,
-        stream: std::os::unix::net::UnixStream,
-        dest: &DivertDestination,
-    ) -> std::io::Result<()> {
-        eprintln!(
-            "WARNING: ssh divert to {}:{} for instance '{}' closed: no upstream relay is wired",
-            dest.dest_host, dest.dest_port, dest.instance
-        );
-        drop(stream);
-        Ok(())
-    }
+/// Re-issue the epoch for a live CID over the console agent channel: the
+/// repeatable provision path for re-attestation and fork recovery. Bumps the
+/// persisted wire sequence first, so the re-issue always supersedes — never
+/// replays — the previous provision. Fails with
+/// [`EpochProvisionError::NotBound`] when the CID has no live binding.
+pub async fn reprovision_epoch(state_dir: &Path, cid: u32) -> Result<u64, EpochProvisionError> {
+    let registry = CidRegistry::open(state_dir).map_err(|e| EpochProvisionError::SendFailed {
+        detail: format!("CID registry open failed: {e}"),
+    })?;
+    provision_epoch_via_console(&registry, cid).await
 }
 
 /// Owns one workload's SSH shim: the bound socket, the allocated
@@ -147,10 +133,15 @@ impl SshShimHandle {
 /// workload carries no SSH grants (strict-only confinement emits a policy
 /// but binds no listener — nothing can divert to it).
 ///
-/// The epoch handshake is not wired yet, so delivery is noticed and
-/// skipped: the registry bind and listener still stand, keeping the
-/// shim-side checks live while guest-initiated requests fail closed.
-pub fn ensure_ssh_shim(
+/// The launch epoch is provisioned over the console agent channel right
+/// after the CID is allocated. A failed provision warns and continues the
+/// host-side setup: the guest agent boots with the VM and may simply not
+/// answer yet, and blocking the whole launch on it (up to the connect
+/// timeout) would stall every SSH-enabled up on the agent boot race.
+/// Enforcement stays fail-closed meanwhile — an unprovisioned guest fails
+/// the shim-side checks — and [`reprovision_epoch`] retries explicitly on
+/// re-attestation.
+pub async fn ensure_ssh_shim(
     state_dir: &Path,
     instance: &str,
     credentials: &CredentialsPlan,
@@ -164,10 +155,11 @@ pub fn ensure_ssh_shim(
         .map_err(|e| anyhow::anyhow!("ssh shim: epoch issue failed: {e}"))?;
     let registry = CidRegistry::open(state_dir)?;
     let cid = registry.allocate(instance, &epoch)?;
-    match provision_epoch_via_console(instance, cid, &epoch) {
-        Ok(()) => {}
+    match provision_epoch_via_console(&registry, cid).await {
+        Ok(_) => {}
         Err(e) => eprintln!(
-            "WARNING: ssh shim for instance '{instance}': {e} (continuing host-side setup)"
+            "WARNING: ssh shim for instance '{instance}': {e} (continuing host-side setup; \
+             guest checks stay fail-closed until the epoch is re-provisioned)"
         ),
     }
     let socket_path = broker_socket_path(state_dir);
@@ -181,6 +173,9 @@ pub fn ensure_ssh_shim(
     let grants = GrantStore::compile(&[(instance, credentials)]);
     let audit = Arc::new(AuditLog::with_state_dir(state_dir));
     let stop = Arc::new(AtomicBool::new(false));
+    // Custody-first relay: broker-bound sessions ride the broker VM socket
+    // (fail-closed while it is absent), guest-bound sessions relay direct.
+    let broker_socket = broker_vm_socket_path(state_dir);
     let join = std::thread::Builder::new()
         .name(format!("ssh-shim-{instance}"))
         .spawn({
@@ -198,13 +193,13 @@ pub fn ensure_ssh_shim(
                         return;
                     }
                 };
-                let relay = FailClosedRelay;
+                let relay = BrokerFirstRelay::new(broker_socket, grants.clone());
                 run_divert_until(
                     &transport,
                     &loop_registry,
                     &grants,
                     &loop_audit,
-                    &relay,
+                    relay,
                     &loop_stop,
                 );
             }
@@ -242,8 +237,8 @@ pub fn ssh_broker_socket_for_plan(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::microsandbox::broker::epoch::EPOCH_BYTES;
     use crate::microsandbox::plan::CredentialBinding;
+    use std::io::{Read, Write};
 
     fn ssh_credentials() -> CredentialsPlan {
         CredentialsPlan {
@@ -261,21 +256,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn provision_epoch_is_not_wired() {
-        let epoch = EpochToken::from_bytes([1u8; EPOCH_BYTES]);
-        let err = provision_epoch_via_console("personal-pi", 7, &epoch).unwrap_err();
-        assert_eq!(
-            err,
-            EpochProvisionError::NotWired {
-                instance: "personal-pi".to_string(),
-                cid: 7,
-            }
-        );
+    #[tokio::test]
+    async fn reprovision_unknown_cid_fails_closed_without_dialing() {
+        use crate::microsandbox::broker::epoch_provision::EpochProvisionError;
+        let dir = crate::config::test_support::unique_state_dir("ssh-reprov-unknown");
+        // No binding exists: typed rejection before any console dial (there
+        // is no sandbox here at all — this must not hang or dial).
+        let err = reprovision_epoch(&dir, 4242).await.unwrap_err();
+        assert_eq!(err, EpochProvisionError::NotBound { cid: 4242 });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn ensure_returns_none_without_ssh_grants() {
+    #[tokio::test]
+    async fn ensure_returns_none_without_ssh_grants() {
         let dir = crate::config::test_support::unique_state_dir("ssh-shim-none");
         let strict_only = CredentialsPlan {
             ssh: Vec::new(),
@@ -285,6 +278,7 @@ mod tests {
         };
         assert!(
             ensure_ssh_shim(&dir, "personal-pi", &strict_only)
+                .await
                 .unwrap()
                 .is_none()
         );
@@ -321,11 +315,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn ensure_binds_socket_and_registry_then_shutdown_releases() {
+    #[tokio::test]
+    async fn ensure_binds_socket_and_registry_then_shutdown_releases() {
         let dir = crate::config::test_support::unique_state_dir("ssh-shim-life");
         let credentials = ssh_credentials();
         let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
+            .await
             .unwrap()
             .expect("grants bind a shim");
         assert_eq!(handle.socket_path, broker_socket_path(&dir));
@@ -363,6 +358,304 @@ mod tests {
             registry.lookup(cid).unwrap().is_none(),
             "shutdown expires the binding"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ensure_provision_failure_does_not_fail_launch() {
+        // No sandbox agent answers in the test env, so the console
+        // provision always fails here — the launch setup must still stand
+        // (warn-and-continue; enforcement stays fail-closed).
+        let dir = crate::config::test_support::unique_state_dir("ssh-shim-nocons");
+        let credentials = ssh_credentials();
+        let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
+            .await
+            .unwrap()
+            .expect("grants bind a shim even when the console is unreachable");
+        assert!(handle.socket_path.exists(), "listener still binds");
+        let registry = CidRegistry::open(&dir).unwrap();
+        assert!(
+            registry.lookup(handle.cid).unwrap().is_some(),
+            "CID still binds"
+        );
+        let cid = handle.cid;
+        handle.shutdown();
+        assert!(
+            CidRegistry::open(&dir)
+                .unwrap()
+                .lookup(cid)
+                .unwrap()
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ensure_recovers_from_stale_socket_file() {
+        // A leftover regular file at the socket path (unclean shutdown)
+        // must not wedge the next launch: bind unlinks before listening.
+        // A stale path is a dead route (bind failure is silent-skip in the
+        // guest muxer), so recovery here is load-bearing, not cosmetic.
+        let dir = crate::config::test_support::unique_state_dir("ssh-shim-stale");
+        let socket_path = broker_socket_path(&dir);
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&socket_path, b"stale").unwrap();
+        let credentials = ssh_credentials();
+        let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
+            .await
+            .unwrap()
+            .expect("stale socket file must not wedge the bind");
+        assert_eq!(handle.socket_path, socket_path);
+        let file_type = std::fs::symlink_metadata(&socket_path).unwrap().file_type();
+        assert!(
+            std::os::unix::fs::FileTypeExt::is_socket(&file_type),
+            "the stale file is replaced by a live socket"
+        );
+        handle.shutdown();
+        assert!(
+            !socket_path.exists(),
+            "shutdown removes the socket it bound over the stale file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn shutdown_without_socket_file_is_quiet() {
+        // Shutdown when the socket file is already gone (crashed listener,
+        // double teardown): no panic, and the CID binding still expires.
+        let dir = crate::config::test_support::unique_state_dir("ssh-shim-nosock");
+        let credentials = ssh_credentials();
+        let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
+            .await
+            .unwrap()
+            .expect("grants bind a shim");
+        let cid = handle.cid;
+        std::fs::remove_file(&handle.socket_path).unwrap();
+        handle.shutdown();
+        let registry = CidRegistry::open(&dir).unwrap();
+        assert!(
+            registry.lookup(cid).unwrap().is_none(),
+            "shutdown expires the binding even with the socket already gone"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SSH grants covering one loopback TCP port (the upstream stub below).
+    /// Guest-bound: the key lives in the guest, so the divert thread relays
+    /// these sessions direct to the granted upstream.
+    fn loopback_credentials(port: u16) -> CredentialsPlan {
+        CredentialsPlan {
+            ssh: vec![crate::microsandbox::plan::SshGrantPlan {
+                name: "stub".to_string(),
+                material: "TEST_KEY".to_string(),
+                hosts: vec!["127.0.0.1".to_string()],
+                users: vec!["git".to_string()],
+                ports: vec![port],
+                binding: CredentialBinding::Guest,
+            }],
+            signing: Vec::new(),
+            strict: false,
+            strict_origin: None,
+        }
+    }
+
+    /// Broker-bound grants covering one loopback TCP port. The key lives in
+    /// broker custody, so these sessions must ride the broker VM socket.
+    fn broker_bound_credentials(port: u16) -> CredentialsPlan {
+        CredentialsPlan {
+            ssh: vec![crate::microsandbox::plan::SshGrantPlan {
+                name: "stub".to_string(),
+                material: "TEST_KEY".to_string(),
+                hosts: vec!["127.0.0.1".to_string()],
+                users: vec!["git".to_string()],
+                ports: vec![port],
+                binding: CredentialBinding::Broker,
+            }],
+            signing: Vec::new(),
+            strict: false,
+            strict_origin: None,
+        }
+    }
+
+    /// The divert thread the launch binds hands allowed guest-bound sessions
+    /// to the direct TCP relay: a full guest→shim→stub round trip through
+    /// [`ensure_ssh_shim`], ending with exactly one persisted allow record.
+    /// Broker-bound sessions never take this path (they ride the broker VM
+    /// socket instead — see below).
+    #[tokio::test]
+    async fn ensure_divert_thread_relays_allowed_sessions_to_the_granted_upstream() {
+        use microsandbox_network::ssh::gateway::{SshDivertPrelude, encode_ssh_divert_prelude};
+
+        // The granted upstream: a local TCP stub speaking fixed banners.
+        // Nonblocking accept with a deadline so a never-dialing relay
+        // fails the test instead of hanging it.
+        let stub = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let stub_port = stub.local_addr().unwrap().port();
+        stub.set_nonblocking(true).unwrap();
+        let stub_worker = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let (mut conn, _) = loop {
+                match stub.accept() {
+                    Ok(v) => break v,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() > deadline {
+                            panic!("upstream stub accepted nothing: the relay never dialed");
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("upstream stub accept failed: {e}"),
+                }
+            };
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+                .unwrap();
+            let mut banner = [0u8; 9];
+            conn.read_exact(&mut banner).unwrap();
+            assert_eq!(&banner, b"SSH-GUEST");
+            conn.write_all(b"SSH-STUB!").unwrap();
+            let mut rest = Vec::new();
+            conn.read_to_end(&mut rest).unwrap();
+            assert!(rest.is_empty(), "guest must send nothing after its banner");
+        });
+
+        let dir = crate::config::test_support::unique_state_dir("ssh-relay-wire");
+        let credentials = loopback_credentials(stub_port);
+        let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
+            .await
+            .unwrap()
+            .expect("grants bind a shim");
+        let socket_path = handle.socket_path.clone();
+        let cid = handle.cid;
+
+        // Guest side: connect to the shim socket and divert to the stub.
+        let mut guest = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+        guest
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .unwrap();
+        let prelude = SshDivertPrelude {
+            dest_host: "127.0.0.1".to_string(),
+            dest_port: stub_port,
+            transport_cid: u64::from(cid),
+            epoch: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        guest
+            .write_all(&encode_ssh_divert_prelude(&prelude))
+            .unwrap();
+        // Post-prelude bytes reach the upstream through the relay, and the
+        // upstream answer flows back: the second banner of a diverted session.
+        guest.write_all(b"SSH-GUEST").unwrap();
+        let mut answer = [0u8; 9];
+        guest.read_exact(&mut answer).unwrap();
+        assert_eq!(&answer, b"SSH-STUB!");
+        // The guest half-close propagates to the stub; the stub close
+        // surfaces here as EOF.
+        guest.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut tail = Vec::new();
+        guest.read_to_end(&mut tail).unwrap();
+        assert!(tail.is_empty(), "upstream close must surface as guest EOF");
+        stub_worker.join().unwrap();
+
+        handle.shutdown();
+
+        // Relay establishment audits exactly one allow record: the handoff
+        // from decision to relay is observable in the persisted log.
+        let log =
+            std::fs::read_to_string(crate::microsandbox::broker::audit::audit_file_path(&dir))
+                .unwrap();
+        let records: Vec<serde_json::Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            records.len(),
+            1,
+            "one divert decision per session: {records:?}"
+        );
+        assert_eq!(records[0]["instance"], "personal-pi");
+        assert_eq!(
+            records[0]["key_id"],
+            format!("127.0.0.1:{stub_port}").as_str()
+        );
+        assert_eq!(records[0]["scheme"], "ssh-divert");
+        assert_eq!(records[0]["namespace"], "divert");
+        assert_eq!(records[0]["result"], "allow");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Broker-bound sessions fail closed while no broker VM serves its
+    /// socket: the decision still allows (exactly one persisted allow
+    /// record), but the custody relay cannot dial and the guest observes
+    /// EOF — never a direct-TCP dial to the granted upstream.
+    #[tokio::test]
+    async fn ensure_divert_thread_fails_broker_bound_sessions_closed_without_broker() {
+        use microsandbox_network::ssh::gateway::{SshDivertPrelude, encode_ssh_divert_prelude};
+
+        // No TCP stub listens here on purpose: any direct dial would refuse
+        // loudly, but the custody path must not dial at all — the guest
+        // must see EOF from the dropped relay stream.
+        let closed = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+
+        let dir = crate::config::test_support::unique_state_dir("ssh-relay-nobroker");
+        // No broker VM socket exists under this state dir.
+        assert!(
+            !crate::microsandbox::broker::registry::broker_vm_socket_path(&dir).exists(),
+            "the test needs no broker VM running"
+        );
+        let credentials = broker_bound_credentials(port);
+        let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
+            .await
+            .unwrap()
+            .expect("grants bind a shim");
+        let socket_path = handle.socket_path.clone();
+        let cid = handle.cid;
+
+        let mut guest = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+        guest
+            .set_read_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
+        let prelude = SshDivertPrelude {
+            dest_host: "127.0.0.1".to_string(),
+            dest_port: port,
+            transport_cid: u64::from(cid),
+            epoch: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        guest
+            .write_all(&encode_ssh_divert_prelude(&prelude))
+            .unwrap();
+        // The custody relay drops the session: EOF, not upstream bytes.
+        let mut tail = Vec::new();
+        guest.read_to_end(&mut tail).unwrap();
+        assert!(
+            tail.is_empty(),
+            "broker-bound session without a broker must close"
+        );
+
+        // Give the worker a moment to finish its audit write, then shut down.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        handle.shutdown();
+
+        let log =
+            std::fs::read_to_string(crate::microsandbox::broker::audit::audit_file_path(&dir))
+                .unwrap();
+        let records: Vec<serde_json::Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            records.len(),
+            1,
+            "one divert decision per session: {records:?}"
+        );
+        assert_eq!(records[0]["result"], "allow");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
