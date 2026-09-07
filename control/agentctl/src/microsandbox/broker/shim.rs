@@ -1543,12 +1543,25 @@ mod tests {
         dir.join("broker-stub.sock")
     }
 
-    fn run_broker_stub(socket_path: PathBuf, expect_host: String, expect_port: u16) {
-        use microsandbox_network::ssh::gateway::decode_ssh_divert_prelude;
+    /// Bind the broker stub listener on the CALLING thread and serve it on
+    /// a worker: the relay under test dials as soon as it runs, so binding
+    /// inside the spawned stub worker raced the dial under parallel load.
+    /// When the dial won, it failed with ENOENT, the relay dropped the
+    /// session, and the guest observed ECONNRESET instead of the stub
+    /// reply. Binding first makes stub readiness deterministic.
+    fn bind_broker_stub(socket_path: &std::path::Path) -> std::os::unix::net::UnixListener {
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        std::os::unix::net::UnixListener::bind(socket_path).unwrap()
+    }
+
+    fn serve_broker_stub(
+        listener: std::os::unix::net::UnixListener,
+        expect_host: String,
+        expect_port: u16,
+    ) {
+        use microsandbox_network::ssh::gateway::decode_ssh_divert_prelude;
         let (mut conn, _) = listener.accept().unwrap();
         conn.set_read_timeout(Some(std::time::Duration::from_secs(15)))
             .unwrap();
@@ -1579,9 +1592,11 @@ mod tests {
     fn broker_socket_relay_forwards_prelude_and_pumps() {
         let dir = crate::config::test_support::unique_state_dir("broker-relay");
         let socket_path = broker_stub_path(&dir);
-        let stub_worker = std::thread::spawn({
-            let socket_path = socket_path.clone();
-            move || run_broker_stub(socket_path, "broker.example".to_string(), 22)
+        // Bind before spawning so the stub socket exists before the relay
+        // dials (see `bind_broker_stub`).
+        let stub_listener = bind_broker_stub(&socket_path);
+        let stub_worker = std::thread::spawn(move || {
+            serve_broker_stub(stub_listener, "broker.example".to_string(), 22)
         });
         let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
         guest
@@ -1661,9 +1676,11 @@ mod tests {
     fn broker_first_relay_routes_broker_bound_to_broker_socket() {
         let dir = crate::config::test_support::unique_state_dir("broker-first-custody");
         let socket_path = broker_stub_path(&dir);
-        let stub_worker = std::thread::spawn({
-            let socket_path = socket_path.clone();
-            move || run_broker_stub(socket_path, "broker.example".to_string(), 22)
+        // Bind before spawning so the stub socket exists before the relay
+        // dials (see `bind_broker_stub`).
+        let stub_listener = bind_broker_stub(&socket_path);
+        let stub_worker = std::thread::spawn(move || {
+            serve_broker_stub(stub_listener, "broker.example".to_string(), 22)
         });
         // The guest-bound port is unused here; any free port keeps the
         // store shape realistic.
