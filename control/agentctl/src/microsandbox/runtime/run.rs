@@ -1432,7 +1432,8 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // listener (nothing can divert to it).
     let ssh_shim = match plan.credentials.as_ref() {
         Some(credentials) if !credentials.ssh.is_empty() => {
-            crate::microsandbox::broker::ensure_ssh_shim(&state_dir, &spec.instance, credentials)?
+            crate::microsandbox::broker::ensure_ssh_shim(&state_dir, &spec.instance, credentials)
+                .await?
         }
         _ => None,
     };

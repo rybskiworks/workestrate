@@ -56,6 +56,11 @@ zeroize = "1"
 
 schemars = { version = "0.8", optional = true }
 serde = { version = "1", features = ["derive"] }
+# Epoch provisioning: the console envelope's `p` field is a CBOR byte string
+# (the fork protocol crate's envelope shape — an array-of-ints encoding would
+# fail the guest's envelope decode). 0.11.x already in the lockfile via the
+# fork's protocol crate — promoted to a direct dep, no new package.
+serde_bytes = "0.11"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 toml = "0.8"

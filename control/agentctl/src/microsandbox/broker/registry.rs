@@ -717,7 +717,10 @@ mod tests {
         std::fs::create_dir_all(dir.join("var").join("run").join("broker")).unwrap();
         // An entry written before the field existed carries no wire_epoch.
         std::fs::write(
-            dir.join("var").join("run").join("broker").join("cid-7.json"),
+            dir.join("var")
+                .join("run")
+                .join("broker")
+                .join("cid-7.json"),
             serde_json::json!({
                 "cid": 7,
                 "instance": "personal-pi",
@@ -730,7 +733,10 @@ mod tests {
         .unwrap();
         let reg = CidRegistry::open(&dir).unwrap();
         let entry = reg.lookup(7).unwrap().expect("legacy entry must load");
-        assert_eq!(entry.wire_epoch, 0, "missing field defaults to unprovisioned");
+        assert_eq!(
+            entry.wire_epoch, 0,
+            "missing field defaults to unprovisioned"
+        );
         assert_eq!(reg.bump_wire_epoch(7).unwrap(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
