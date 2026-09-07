@@ -12,9 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-# DLP pattern compilation: base64-std derived scan patterns
-# (0.22.x already in the lockfile — promoted to a direct dep, no new package).
-base64 = "0.22"
 # Credential broker: CBOR wire codec (same 0.2.x already in the lockfile
 # via the microsandbox SDK — promoted to a direct dep, no new package).
 ciborium = "0.2"
@@ -35,6 +32,12 @@ microsandbox = { version = "=0.6.16", features = ["net"] }
 # the .cargo patch table, so they resolve to the vendored fork.
 microsandbox-network = "=0.6.16"
 microsandbox-types = "=0.6.16"
+# Broker DLP emission: the fork's typed bootstrap (`BrokerPatterns`) and the
+# scan vocabulary (`Decoder`, `ActionSet`) the emission is built from. Both
+# crates are already in the .cargo patch table, so they resolve to the
+# vendored fork.
+microsandbox-protocol = "=0.6.16"
+microsandbox-scan = "=0.6.16"
 # Credential broker: SHA-256 payload digests for the audit log
 # (0.10.x already in the lockfile — promoted to direct, no new package).
 sha2 = "0.10"

@@ -100,6 +100,7 @@ rustPlatform.buildRustPackage {
     microsandbox-network = { path = "vendor/microsandbox-fork/crates/network" }
     microsandbox-protocol = { path = "vendor/microsandbox-fork/crates/protocol" }
     microsandbox-runtime = { path = "vendor/microsandbox-fork/crates/runtime" }
+    microsandbox-scan = { path = "vendor/microsandbox-fork/crates/scan" }
     microsandbox-types = { path = "vendor/microsandbox-fork/packages/microsandbox-types/rust" }
     microsandbox-utils = { path = "vendor/microsandbox-fork/crates/utils" }
     CARGO_CONFIG

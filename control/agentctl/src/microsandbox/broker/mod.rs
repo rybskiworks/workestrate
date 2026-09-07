@@ -74,6 +74,5 @@ pub use ssh_lifecycle::{
     ssh_broker_socket_for_plan,
 };
 pub use ssh_patterns::{
-    DlpAction, DlpDecoder, DlpExclusion, DlpExclusionReason, DlpSeverity, PatternId, SshPattern,
-    SshPatterns, SshPatternsExt, apply_ssh_patterns, compile_ssh_patterns, policy_to_action,
+    DlpExclusion, DlpExclusionReason, apply_ssh_patterns, compile_ssh_patterns, policy_to_action,
 };
