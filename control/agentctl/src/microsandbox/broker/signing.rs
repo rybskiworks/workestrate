@@ -810,11 +810,7 @@ mod tests {
         svc.release("personal-pi");
     }
 
-    fn ssh_grant(
-        hosts: &[&str],
-        ports: Vec<u16>,
-        binding: CredentialBinding,
-    ) -> SshGrantPlan {
+    fn ssh_grant(hosts: &[&str], ports: Vec<u16>, binding: CredentialBinding) -> SshGrantPlan {
         SshGrantPlan {
             name: "deploy".to_string(),
             material: "DEPLOY_KEY".to_string(),
@@ -928,7 +924,8 @@ mod tests {
     }
 
     #[test]
-    fn request_cbor_round_trip() {        let req = SignRequest {
+    fn request_cbor_round_trip() {
+        let req = SignRequest {
             operation_id: "op-9".to_string(),
             key_reference: "rel".to_string(),
             signature_scheme: SignatureScheme::SshSig,

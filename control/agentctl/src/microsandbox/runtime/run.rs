@@ -692,9 +692,11 @@ fn write_mount_policy_files<W: Workload>(
 /// slot was REUSED (already running healthy/booting) and has nothing to do.
 ///
 /// `Sandbox` is boxed so the enum is small (the `Reused` variant carries no
-/// data; an unboxed `Sandbox` would make the whole enum ~1.4KB).
+/// data; an unboxed `Sandbox` would make the whole enum ~1.4KB). The config
+/// rides boxed too since it owns the SSH shim handle (socket path, thread
+/// join handle, registry bindings).
 pub(crate) enum BuildOutcome {
-    Ready(Box<Sandbox>, ForegroundConfig),
+    Ready(Box<Sandbox>, Box<ForegroundConfig>),
     Reused,
 }
 
@@ -1239,7 +1241,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
                 .iter()
                 .map(|m| (m.host.clone(), m.guest.clone()))
                 .collect();
-            return Ok(BuildOutcome::Ready(Box::new(sandbox), config));
+            return Ok(BuildOutcome::Ready(Box::new(sandbox), Box::new(config)));
         }
         super::reconcile::ChainStep::Replace => {
             // msb state generations gate: refuse BEFORE the teardown
@@ -1348,8 +1350,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // builder as the fork's first-class `network.ssh` spec option (policy
     // only — the socket path stays host-side). Grant-less plans leave the
     // builder untouched.
-    let builder =
-        crate::microsandbox::broker::apply_ssh_policy(builder, plan.credentials.as_ref());
+    let builder = crate::microsandbox::broker::apply_ssh_policy(builder, plan.credentials.as_ref());
     let sandbox = builder.create().await?;
 
     let created_at = super::time::current_rfc3339_utc();
@@ -1424,7 +1425,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
             .collect(),
         ssh_shim,
     };
-    Ok(BuildOutcome::Ready(Box::new(sandbox), config))
+    Ok(BuildOutcome::Ready(Box::new(sandbox), Box::new(config)))
 }
 
 /// ADR 0030 Phase 0 `start` element: start a stopped/crashed sandbox via
@@ -1646,7 +1647,7 @@ pub async fn up_service_with_spec<W: Workload>(
         return Ok(());
     }
     match build_sandbox(workload, spec).await? {
-        BuildOutcome::Ready(sandbox, config) => run_service_foreground(&sandbox, config).await,
+        BuildOutcome::Ready(sandbox, config) => run_service_foreground(&sandbox, *config).await,
         BuildOutcome::Reused => {
             println!("instance '{}' is already running — reusing", spec.instance);
             Ok(())
@@ -1656,7 +1657,7 @@ pub async fn up_service_with_spec<W: Workload>(
 
 pub async fn exec_agent_with_spec<W: Workload>(workload: &W, spec: &InstanceSpec) -> Result<()> {
     match build_sandbox(workload, spec).await? {
-        BuildOutcome::Ready(sandbox, config) => run_service_interactive(&sandbox, config).await,
+        BuildOutcome::Ready(sandbox, config) => run_service_interactive(&sandbox, *config).await,
         BuildOutcome::Reused => {
             println!("instance '{}' is already running — reusing", spec.instance);
             Ok(())

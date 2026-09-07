@@ -491,13 +491,7 @@ pub fn serve_divert_once<R: CidResolver>(
 ) -> std::io::Result<DivertDecision> {
     let (peer, stream, prelude) = transport.accept_divert()?;
     let decision = decide_divert(
-        registry,
-        grants,
-        audit,
-        peer.cid,
-        &prelude,
-        now_secs,
-        timestamp,
+        registry, grants, audit, peer.cid, &prelude, now_secs, timestamp,
     );
     match &decision {
         DivertDecision::Allow { dest } => {
@@ -535,7 +529,9 @@ pub fn run_divert_until<R: CidResolver>(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        match serve_divert_once(transport, registry, grants, audit, relay, &timestamp, now_secs) {
+        match serve_divert_once(
+            transport, registry, grants, audit, relay, &timestamp, now_secs,
+        ) {
             Ok(_) => {}
             Err(e) if stop.load(Ordering::Relaxed) => {
                 let _ = e;
@@ -550,7 +546,8 @@ pub fn run_divert_until<R: CidResolver>(
 
 /// Host-side broker shim: owns the socket path plus the dispatch handles.
 /// `run_until` serves one envelope per connection until `stop` is set.
-pub struct BrokerShim<B: KeyBackend> {    pub socket_path: PathBuf,
+pub struct BrokerShim<B: KeyBackend> {
+    pub socket_path: PathBuf,
     registry: CidRegistry,
     service: SigningService<B>,
     audit: AuditLog,
@@ -877,7 +874,15 @@ mod tests {
         let registry = bound_registry(&dir);
         let audit = AuditLog::memory();
         let prelude = divert_prelude("github.com", 22, 7, DIVERT_NOW);
-        let decision = decide_divert(&registry, &divert_store(), &audit, 7, &prelude, DIVERT_NOW, "t");
+        let decision = decide_divert(
+            &registry,
+            &divert_store(),
+            &audit,
+            7,
+            &prelude,
+            DIVERT_NOW,
+            "t",
+        );
         assert_eq!(
             decision,
             DivertDecision::Allow {
@@ -934,7 +939,15 @@ mod tests {
         let registry = bound_registry(&dir);
         let audit = AuditLog::memory();
         let prelude = divert_prelude("github.com", 22, u64::from(u32::MAX) + 1, DIVERT_NOW);
-        let decision = decide_divert(&registry, &divert_store(), &audit, 7, &prelude, DIVERT_NOW, "t");
+        let decision = decide_divert(
+            &registry,
+            &divert_store(),
+            &audit,
+            7,
+            &prelude,
+            DIVERT_NOW,
+            "t",
+        );
         match &decision {
             DivertDecision::Deny { re_attest, .. } => assert!(!re_attest),
             DivertDecision::Allow { .. } => panic!("overflowing transport CID must deny"),
@@ -1000,7 +1013,15 @@ mod tests {
         let registry = bound_registry(&dir);
         let audit = AuditLog::memory();
         let prelude = divert_prelude("evil.example", 22, 7, DIVERT_NOW);
-        let decision = decide_divert(&registry, &divert_store(), &audit, 7, &prelude, DIVERT_NOW, "t");
+        let decision = decide_divert(
+            &registry,
+            &divert_store(),
+            &audit,
+            7,
+            &prelude,
+            DIVERT_NOW,
+            "t",
+        );
         match decision {
             DivertDecision::Deny { reason, re_attest } => {
                 assert!(!re_attest);
@@ -1029,13 +1050,18 @@ mod tests {
         let mut client = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
         let framed = encode_ssh_divert_prelude(&divert_prelude("evil.example", 22, 7, DIVERT_NOW));
         client.write_all(&framed).unwrap();
-        let decision =
-            serve_divert_once(&transport, &registry, &store, &audit, &relay, "t", DIVERT_NOW)
-                .unwrap();
+        let decision = serve_divert_once(
+            &transport, &registry, &store, &audit, &relay, "t", DIVERT_NOW,
+        )
+        .unwrap();
         assert!(matches!(decision, DivertDecision::Deny { .. }));
         // Deny closes: the client reads EOF.
         let mut buf = [0u8; 1];
-        assert_eq!(client.read(&mut buf).unwrap(), 0, "denied stream must close");
+        assert_eq!(
+            client.read(&mut buf).unwrap(),
+            0,
+            "denied stream must close"
+        );
         assert_eq!(audit.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1051,7 +1077,9 @@ mod tests {
         let relay = EchoRelay;
         std::thread::scope(|s| {
             let server = s.spawn(|| {
-                serve_divert_once(&transport, &registry, &store, &audit, &relay, "t", DIVERT_NOW)
+                serve_divert_once(
+                    &transport, &registry, &store, &audit, &relay, "t", DIVERT_NOW,
+                )
             });
             let mut client = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
             let framed =
@@ -1070,10 +1098,7 @@ mod tests {
             );
         });
         assert_eq!(audit.len(), 1);
-        assert!(matches!(
-            audit.snapshot()[0].result,
-            AuditResult::Allow
-        ));
+        assert!(matches!(audit.snapshot()[0].result, AuditResult::Allow));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

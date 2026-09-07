@@ -125,13 +125,13 @@ impl SshShimHandle {
                 self.instance
             );
         }
-        if let Err(e) = std::fs::remove_file(&self.socket_path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "WARNING: failed to remove ssh shim socket {}: {e}",
-                    self.socket_path.display()
-                );
-            }
+        if let Err(e) = std::fs::remove_file(&self.socket_path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "WARNING: failed to remove ssh shim socket {}: {e}",
+                self.socket_path.display()
+            );
         }
         match CidRegistry::open(&self.state_dir).and_then(|registry| registry.expire(self.cid)) {
             Ok(()) => {}
@@ -166,15 +166,18 @@ pub fn ensure_ssh_shim(
     let cid = registry.allocate(instance, &epoch)?;
     match provision_epoch_via_console(instance, cid, &epoch) {
         Ok(()) => {}
-        Err(e) => eprintln!("WARNING: ssh shim for instance '{instance}': {e} (continuing host-side setup)"),
+        Err(e) => eprintln!(
+            "WARNING: ssh shim for instance '{instance}': {e} (continuing host-side setup)"
+        ),
     }
     let socket_path = broker_socket_path(state_dir);
-    let transport = UnixSocketTransport::bind(&socket_path, FixedCidResolver(cid)).map_err(|e| {
-        anyhow::anyhow!(
-            "ssh shim: socket bind failed for {}: {e}",
-            socket_path.display()
-        )
-    })?;
+    let transport =
+        UnixSocketTransport::bind(&socket_path, FixedCidResolver(cid)).map_err(|e| {
+            anyhow::anyhow!(
+                "ssh shim: socket bind failed for {}: {e}",
+                socket_path.display()
+            )
+        })?;
     let grants = GrantStore::compile(&[(instance, credentials)]);
     let audit = Arc::new(AuditLog::with_state_dir(state_dir));
     let stop = Arc::new(AtomicBool::new(false));

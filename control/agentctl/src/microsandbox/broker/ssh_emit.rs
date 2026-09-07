@@ -141,7 +141,10 @@ mod tests {
                 grant.ports,
                 vec![
                     PortRange { start: 22, end: 22 },
-                    PortRange { start: 2222, end: 2222 },
+                    PortRange {
+                        start: 2222,
+                        end: 2222
+                    },
                 ]
             );
         }
@@ -159,8 +162,7 @@ mod tests {
     fn overlay_patch_lands_on_the_built_spec() {
         let plan = plan_with(vec![ssh_grant(&["github.com"], vec![22])], true);
         let config = ssh_config_for_plan(&plan).expect("grants emit");
-        let builder =
-            apply_ssh_policy(microsandbox::Sandbox::builder("ssh-emit"), Some(&plan));
+        let builder = apply_ssh_policy(microsandbox::Sandbox::builder("ssh-emit"), Some(&plan));
         let ssh = builder
             .spec()
             .network
@@ -174,8 +176,7 @@ mod tests {
 
     #[test]
     fn apply_ssh_policy_leaves_grant_less_builder_untouched() {
-        let builder =
-            apply_ssh_policy(microsandbox::Sandbox::builder("ssh-emit-none"), None);
+        let builder = apply_ssh_policy(microsandbox::Sandbox::builder("ssh-emit-none"), None);
         assert!(builder.spec().network.ssh.is_none());
         let plain = plan_with(Vec::new(), false);
         let builder = apply_ssh_policy(
