@@ -102,6 +102,57 @@ impl AuditRecord {
             payload_digest: payload_digest.into(),
         }
     }
+
+    /// Build an allow record for one SSH divert decision. The diverted
+    /// destination (`host:port`) rides `key_id` as the routing identity —
+    /// the same way signing records carry the key reference there — while
+    /// the digest field carries only the digest of that string, never raw
+    /// bytes. Note the destination is low-entropy (a dictionary attack
+    /// recovers it trivially): the digest keeps the record shape uniform,
+    /// it is not secrecy.
+    pub fn ssh_divert_allow(
+        timestamp: impl Into<String>,
+        instance: impl Into<String>,
+        cid: u32,
+        host: &str,
+        port: u16,
+    ) -> Self {
+        let destination = format!("{host}:{port}");
+        let digest = payload_digest_hex(destination.as_bytes());
+        Self::allow(
+            timestamp,
+            instance,
+            cid,
+            destination,
+            "ssh-divert",
+            "divert",
+            digest,
+        )
+    }
+
+    /// Build a deny record for one SSH divert decision (same destination
+    /// and digest conventions as [`Self::ssh_divert_allow`]).
+    pub fn ssh_divert_deny(
+        timestamp: impl Into<String>,
+        instance: impl Into<String>,
+        cid: u32,
+        host: &str,
+        port: u16,
+        reason: impl Into<String>,
+    ) -> Self {
+        let destination = format!("{host}:{port}");
+        let digest = payload_digest_hex(destination.as_bytes());
+        Self::deny(
+            timestamp,
+            instance,
+            cid,
+            destination,
+            "ssh-divert",
+            "divert",
+            reason,
+            digest,
+        )
+    }
 }
 
 /// Thread-safe append-only audit sink: in-memory records plus an optional

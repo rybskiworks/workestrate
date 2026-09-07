@@ -199,6 +199,11 @@ pub struct ForegroundConfig {
     /// dir mounted into the guest (e.g. a `${CWD}`-template host) is never
     /// ambiguous to the operator.
     pub mounts: Vec<(String, String)>,
+    /// The workload's SSH shim when it emits an SSH policy with grants
+    /// (`None` for grant-less workloads and restarted sandboxes). Owned
+    /// here so the foreground service's end shuts it down (socket, thread,
+    /// CID binding) on every exit path.
+    pub ssh_shim: Option<super::broker::SshShimHandle>,
 }
 
 /// Resolved identity + flags for a single `up`/`exec` invocation (ADR 0021).

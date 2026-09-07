@@ -9,6 +9,9 @@
 //! - (c) `strict`: layer-level `[policy.ssh] strict = true` with no ssh
 //!   grant — legal via a port-22 egress allowance; the plan renders the
 //!   confinement flag with its ladder origin.
+//! - (d) `ssh-divert`: an ssh grant under `[policy.ssh] strict = true` —
+//!   the plan renders both the confinement flag and the grant; the sandbox
+//!   gets the guest SSH policy plus a host-side divert listener.
 //!
 //! Hermetic like `golden_plans.rs`: each case points
 //! `WORKESTRATE_CONFIG_DIR` at its fixture dir (single dev layer, no
@@ -32,10 +35,11 @@ use workestrate::microsandbox::workload::{ConfigWorkload, Workload};
 
 /// (fixture dir, workload name): the rendered plan must match the committed
 /// `tests/credentials_broker/<case>.plan.txt` byte-for-byte.
-const CASES: [(&str, &str); 3] = [
+const CASES: [(&str, &str); 4] = [
     ("broker-bound", "deployer"),
     ("guest-bound", "verifier"),
     ("strict", "hardened"),
+    ("ssh-divert", "diverter"),
 ];
 
 fn case_dir(case: &str) -> PathBuf {

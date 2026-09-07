@@ -21,8 +21,10 @@ use crate::microsandbox::broker::audit::{AuditLog, AuditRecord, payload_digest_h
 use crate::microsandbox::broker::epoch::EpochToken;
 use crate::microsandbox::broker::registry::CidRegistry;
 use crate::microsandbox::broker::signing::{
-    Denial, KeyBackend, SignRequest, SignResponse, SigningService, decode_cbor, encode_cbor,
+    Denial, GrantStore, KeyBackend, SignRequest, SignResponse, SigningService, decode_cbor,
+    encode_cbor,
 };
+use microsandbox_network::ssh::gateway::{SshDivertPrelude, decode_ssh_divert_prelude};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -36,6 +38,13 @@ pub const BROKER_PORT: u32 = 22099;
 /// default payload cap plus envelope overhead; a fail-closed abuse bound on
 /// the socket read, checked BEFORE allocation loops).
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum accepted wall-clock skew between a divert prelude's epoch and
+/// the broker clock (seconds, in EITHER direction). Past it the prelude is
+/// stale (replay) or from the future (clock lie); either way fail closed.
+/// A zero broker clock also fails closed — without a clock, freshness is
+/// unverifiable.
+pub const MAX_DIVERT_EPOCH_SKEW_SECS: u64 = 300;
 
 /// The peer identity the transport vouches for. The CID comes from the
 /// transport (vsock bridge metadata in production, the test/fake transport
@@ -174,6 +183,36 @@ impl<R: CidResolver + Send + Sync> BrokerTransport for UnixSocketTransport<R> {
     }
 }
 
+impl<R: CidResolver> UnixSocketTransport<R> {
+    /// Accept one connection and read its SSH divert prelude, KEEPING the
+    /// stream for the relay (unlike [`BrokerTransport::accept`], which
+    /// consumes it). The prelude decoder consumes the framed
+    /// (length-prefixed) form, so the prefix stripped by the shared
+    /// bounds-checked read is re-attached before decoding.
+    pub fn accept_divert(
+        &self,
+    ) -> std::io::Result<(
+        TransportPeer,
+        std::os::unix::net::UnixStream,
+        SshDivertPrelude,
+    )> {
+        let (mut stream, _) = self.listener.accept()?;
+        let cid = self.resolver.resolve_cid(&stream).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "broker: no CID vouched",
+            )
+        })?;
+        let payload = Self::read_frame(&mut stream)?;
+        let mut framed = Vec::with_capacity(4 + payload.len());
+        framed.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        framed.extend_from_slice(&payload);
+        let (prelude, _) = decode_ssh_divert_prelude(&framed)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        Ok((TransportPeer { cid }, stream, prelude))
+    }
+}
+
 /// Core dispatch: stamp the authoritative instance from the transport CID,
 /// verify the epoch prelude, then hand to the service. Pure over the
 /// registry/service/audit handles — the socket loop and the tests share it.
@@ -246,6 +285,262 @@ pub fn dispatch<B: KeyBackend>(
     match service.sign(&instance, peer.cid, &envelope.body, audit, timestamp) {
         Ok(resp) => DispatchOutcome::Signed(resp),
         Err(denial) => DispatchOutcome::Denied(denial),
+    }
+}
+
+/// Allowed divert target: the registry-resolved instance plus the
+/// prelude's destination. The relay dials `dest_host:dest_port` upstream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DivertDestination {
+    pub instance: String,
+    pub cid: u32,
+    pub dest_host: String,
+    pub dest_port: u16,
+}
+
+/// Outcome of one divert decision: an allowed destination (hand the kept
+/// stream to the [`SshRelay`]) or a denial (close the stream). Every
+/// outcome audits via the `ssh-divert` record constructors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DivertDecision {
+    Allow { dest: DivertDestination },
+    Deny { reason: String, re_attest: bool },
+}
+
+/// Byte relay for an allowed divert: carries the guest session between the
+/// accepted broker stream and a freshly dialed upstream. The production
+/// in-VM relay plugs in behind this trait; the divert decision and its
+/// audit stay untouched.
+pub trait SshRelay: Send + Sync + std::fmt::Debug {
+    fn relay(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+    ) -> std::io::Result<()>;
+}
+
+/// Test relay: echoes accepted bytes back until EOF. Proves the hook hands
+/// over a live stream; not a production upstream path.
+#[derive(Debug, Default)]
+pub struct EchoRelay;
+
+impl SshRelay for EchoRelay {
+    fn relay(
+        &self,
+        mut stream: std::os::unix::net::UnixStream,
+        _dest: &DivertDestination,
+    ) -> std::io::Result<()> {
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = stream.read(&mut buf)?;
+            if n == 0 {
+                return Ok(());
+            }
+            stream.write_all(&buf[..n])?;
+        }
+    }
+}
+
+/// Core divert decision: resolve the authoritative instance from the
+/// transport CID, range-check the prelude's transport CID, verify epoch
+/// freshness, then check the destination against the instance's SSH
+/// grants. Pure over the registry/grant/audit handles — the socket loop
+/// and the tests share it.
+///
+/// Denials close the connection at the call site; only the unknown-CID
+/// denial asks the guest to re-attest (its binding is gone — a fresh
+/// launch re-binds). Stale/future epochs and ungranted destinations do
+/// not: re-attestation provisions a new epoch token, which cannot fix a
+/// wall clock or a grant set.
+pub fn decide_divert(
+    registry: &CidRegistry,
+    grants: &GrantStore,
+    audit: &AuditLog,
+    cid: u32,
+    prelude: &SshDivertPrelude,
+    now_secs: u64,
+    timestamp: &str,
+) -> DivertDecision {
+    // Deny helper: audits under the resolved instance when known, else
+    // under a synthetic `cid-<n>` label (no registry binding vouches an
+    // identity there), then returns the denial. Audit-write failure is
+    // stderr-loud but never masks the denial itself.
+    let deny = |instance: &str, reason: String, re_attest: bool| -> DivertDecision {
+        let record = AuditRecord::ssh_divert_deny(
+            timestamp,
+            instance,
+            cid,
+            &prelude.dest_host,
+            prelude.dest_port,
+            reason.clone(),
+        );
+        if let Err(e) = audit.append(record) {
+            eprintln!("WARNING: broker audit append failed: {e}");
+        }
+        DivertDecision::Deny { reason, re_attest }
+    };
+    // Cross-process visibility: a concurrent launch may have bound this CID.
+    if registry.refresh().is_err() {
+        return deny(
+            &format!("cid-{cid}"),
+            "CID registry unavailable".to_string(),
+            false,
+        );
+    }
+    // Transport CID is AUTHORITATIVE: resolve, never trust a claim.
+    let instance = match registry.lookup(cid) {
+        Ok(Some(entry)) => entry.instance,
+        Ok(None) => {
+            return deny(
+                &format!("cid-{cid}"),
+                format!("unknown CID {cid}: no live binding; re-attestation required"),
+                true,
+            );
+        }
+        Err(e) => {
+            return deny(
+                &format!("cid-{cid}"),
+                format!("CID lookup failed: {e}"),
+                false,
+            );
+        }
+    };
+    // The prelude's transport CID must fit the 32-bit CID space (fail
+    // closed — an overflowing attribution claim is never honored).
+    if u32::try_from(prelude.transport_cid).is_err() {
+        return deny(
+            &instance,
+            format!(
+                "divert prelude transport CID {} exceeds the u32 CID range",
+                prelude.transport_cid
+            ),
+            false,
+        );
+    }
+    // Epoch freshness: a zero broker clock fails closed (freshness is
+    // unverifiable without one); otherwise the prelude must sit within
+    // the skew window in EITHER direction (stale = replay, future =
+    // clock lie).
+    if now_secs == 0 {
+        return deny(
+            &instance,
+            "divert prelude rejected: broker clock unavailable, freshness cannot be verified"
+                .to_string(),
+            false,
+        );
+    }
+    let skew = prelude.epoch.abs_diff(now_secs);
+    if skew > MAX_DIVERT_EPOCH_SKEW_SECS {
+        let direction = if prelude.epoch > now_secs {
+            "in the future"
+        } else {
+            "stale"
+        };
+        return deny(
+            &instance,
+            format!(
+                "divert prelude epoch {} is {direction} (skew {skew}s exceeds {MAX_DIVERT_EPOCH_SKEW_SECS}s)",
+                prelude.epoch
+            ),
+            false,
+        );
+    }
+    // Destination allowance: the instance's SSH grants must cover the
+    // dialed host and port.
+    if !grants.ssh_authorized(&instance, &prelude.dest_host, prelude.dest_port) {
+        return deny(
+            &instance,
+            format!(
+                "SSH destination {}:{} is not granted for instance '{instance}'",
+                prelude.dest_host, prelude.dest_port
+            ),
+            false,
+        );
+    }
+    let dest = DivertDestination {
+        instance: instance.clone(),
+        cid,
+        dest_host: prelude.dest_host.clone(),
+        dest_port: prelude.dest_port,
+    };
+    let record = AuditRecord::ssh_divert_allow(
+        timestamp,
+        &instance,
+        cid,
+        &prelude.dest_host,
+        prelude.dest_port,
+    );
+    if let Err(e) = audit.append(record) {
+        eprintln!("WARNING: broker audit append failed: {e}");
+    }
+    DivertDecision::Allow { dest }
+}
+
+/// Serve one divert connection: accept, decide, then relay on allow or
+/// close on deny. Accept/protocol failures (no vouched CID, undecodable
+/// prelude) carry no trustworthy fields, so they close stderr-loud
+/// without an audit record — the signing path's undecodable-frame rule.
+pub fn serve_divert_once<R: CidResolver>(
+    transport: &UnixSocketTransport<R>,
+    registry: &CidRegistry,
+    grants: &GrantStore,
+    audit: &AuditLog,
+    relay: &dyn SshRelay,
+    timestamp: &str,
+    now_secs: u64,
+) -> std::io::Result<DivertDecision> {
+    let (peer, stream, prelude) = transport.accept_divert()?;
+    let decision = decide_divert(
+        registry, grants, audit, peer.cid, &prelude, now_secs, timestamp,
+    );
+    match &decision {
+        DivertDecision::Allow { dest } => {
+            if let Err(e) = relay.relay(stream, dest) {
+                eprintln!(
+                    "WARNING: ssh divert relay failed for instance '{}': {e}",
+                    dest.instance
+                );
+            }
+        }
+        DivertDecision::Deny { .. } => {
+            // Close: dropping the stream refuses the session.
+            drop(stream);
+        }
+    }
+    Ok(decision)
+}
+
+/// Serve divert connections until `stop` is set (the divert counterpart to
+/// [`BrokerShim::run_until`]). Decided connections never kill the loop;
+/// after any accept/protocol failure a set `stop` exits instead — the
+/// shutdown dummy connection surfaces exactly such a failure to unblock
+/// `accept`.
+pub fn run_divert_until<R: CidResolver>(
+    transport: &UnixSocketTransport<R>,
+    registry: &CidRegistry,
+    grants: &GrantStore,
+    audit: &AuditLog,
+    relay: &dyn SshRelay,
+    stop: &AtomicBool,
+) {
+    while !stop.load(Ordering::Relaxed) {
+        let timestamp = crate::microsandbox::runtime::time::current_rfc3339_utc();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        match serve_divert_once(
+            transport, registry, grants, audit, relay, &timestamp, now_secs,
+        ) {
+            Ok(_) => {}
+            Err(e) if stop.load(Ordering::Relaxed) => {
+                let _ = e;
+                break;
+            }
+            Err(e) => {
+                eprintln!("WARNING: ssh divert accept failed: {e}");
+            }
+        }
     }
 }
 
@@ -330,7 +625,10 @@ mod tests {
     use crate::microsandbox::broker::signing::{
         GrantStore, LimitsConfig, SignatureScheme, TestBackend,
     };
-    use crate::microsandbox::plan::{CredentialBinding, CredentialsPlan, SigningGrantPlan};
+    use crate::microsandbox::plan::{
+        CredentialBinding, CredentialsPlan, SigningGrantPlan, SshGrantPlan,
+    };
+    use microsandbox_network::ssh::gateway::{SshDivertPrelude, encode_ssh_divert_prelude};
 
     fn test_service() -> SigningService<TestBackend> {
         let plan = CredentialsPlan {
@@ -523,6 +821,284 @@ mod tests {
             .unwrap();
         let err = transport.accept().unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- SSH divert decisions ----
+
+    /// Fixed wall clock for divert tests (explicit `now_secs`, no time I/O).
+    const DIVERT_NOW: u64 = 1_700_000_000;
+
+    fn divert_store() -> GrantStore {
+        let plan = CredentialsPlan {
+            ssh: vec![SshGrantPlan {
+                name: "deploy".to_string(),
+                material: "DEPLOY_KEY".to_string(),
+                hosts: vec!["github.com".to_string()],
+                users: vec!["git".to_string()],
+                ports: vec![22],
+                binding: CredentialBinding::Broker,
+            }],
+            signing: vec![],
+            strict: false,
+            strict_origin: None,
+        };
+        // Only "real-instance" holds SSH grants.
+        GrantStore::compile(&[("real-instance", &plan)])
+    }
+
+    fn divert_prelude(host: &str, port: u16, transport_cid: u64, epoch: u64) -> SshDivertPrelude {
+        SshDivertPrelude {
+            dest_host: host.to_string(),
+            dest_port: port,
+            transport_cid,
+            epoch,
+        }
+    }
+
+    fn bound_registry(dir: &std::path::Path) -> CidRegistry {
+        let registry = CidRegistry::open(dir).unwrap();
+        registry
+            .bind(
+                7,
+                "real-instance",
+                &EpochToken::from_bytes([7u8; EPOCH_BYTES]),
+            )
+            .unwrap();
+        registry
+    }
+
+    #[test]
+    fn decide_divert_allows_granted_destination_and_audits_allow() {
+        let dir = crate::config::test_support::unique_state_dir("divert-allow");
+        let registry = bound_registry(&dir);
+        let audit = AuditLog::memory();
+        let prelude = divert_prelude("github.com", 22, 7, DIVERT_NOW);
+        let decision = decide_divert(
+            &registry,
+            &divert_store(),
+            &audit,
+            7,
+            &prelude,
+            DIVERT_NOW,
+            "t",
+        );
+        assert_eq!(
+            decision,
+            DivertDecision::Allow {
+                dest: DivertDestination {
+                    instance: "real-instance".to_string(),
+                    cid: 7,
+                    dest_host: "github.com".to_string(),
+                    dest_port: 22,
+                }
+            }
+        );
+        let records = audit.snapshot();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].scheme, "ssh-divert");
+        assert_eq!(records[0].namespace, "divert");
+        assert_eq!(records[0].key_id, "github.com:22");
+        assert_eq!(
+            records[0].payload_digest,
+            payload_digest_hex("github.com:22".as_bytes())
+        );
+        assert!(matches!(records[0].result, AuditResult::Allow));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decide_divert_rejects_unknown_cid_with_re_attest_and_audits() {
+        let dir = crate::config::test_support::unique_state_dir("divert-unknowncid");
+        let registry = CidRegistry::open(&dir).unwrap();
+        let audit = AuditLog::memory();
+        let prelude = divert_prelude("github.com", 22, 4242, DIVERT_NOW);
+        let decision = decide_divert(
+            &registry,
+            &divert_store(),
+            &audit,
+            4242,
+            &prelude,
+            DIVERT_NOW,
+            "t",
+        );
+        match &decision {
+            DivertDecision::Deny { re_attest, .. } => assert!(*re_attest),
+            DivertDecision::Allow { .. } => panic!("unknown CID must deny: {decision:?}"),
+        }
+        let records = audit.snapshot();
+        assert_eq!(records.len(), 1, "unknown-CID diverts audit");
+        assert!(matches!(records[0].result, AuditResult::Deny { .. }));
+        assert_eq!(records[0].instance, "cid-4242");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decide_divert_rejects_transport_cid_overflow_fail_closed() {
+        let dir = crate::config::test_support::unique_state_dir("divert-overflow");
+        let registry = bound_registry(&dir);
+        let audit = AuditLog::memory();
+        let prelude = divert_prelude("github.com", 22, u64::from(u32::MAX) + 1, DIVERT_NOW);
+        let decision = decide_divert(
+            &registry,
+            &divert_store(),
+            &audit,
+            7,
+            &prelude,
+            DIVERT_NOW,
+            "t",
+        );
+        match &decision {
+            DivertDecision::Deny { re_attest, .. } => assert!(!re_attest),
+            DivertDecision::Allow { .. } => panic!("overflowing transport CID must deny"),
+        }
+        assert_eq!(audit.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decide_divert_rejects_stale_and_future_epochs() {
+        let dir = crate::config::test_support::unique_state_dir("divert-skew");
+        let registry = bound_registry(&dir);
+        let store = divert_store();
+        for epoch in [
+            DIVERT_NOW - MAX_DIVERT_EPOCH_SKEW_SECS - 1,
+            DIVERT_NOW + MAX_DIVERT_EPOCH_SKEW_SECS + 1,
+        ] {
+            let audit = AuditLog::memory();
+            let prelude = divert_prelude("github.com", 22, 7, epoch);
+            let decision = decide_divert(&registry, &store, &audit, 7, &prelude, DIVERT_NOW, "t");
+            assert!(
+                matches!(decision, DivertDecision::Deny { .. }),
+                "epoch {epoch} must deny"
+            );
+            assert_eq!(audit.len(), 1, "skewed preludes audit");
+        }
+        // The window edge itself still allows.
+        for epoch in [
+            DIVERT_NOW - MAX_DIVERT_EPOCH_SKEW_SECS,
+            DIVERT_NOW + MAX_DIVERT_EPOCH_SKEW_SECS,
+        ] {
+            let audit = AuditLog::memory();
+            let prelude = divert_prelude("github.com", 22, 7, epoch);
+            let decision = decide_divert(&registry, &store, &audit, 7, &prelude, DIVERT_NOW, "t");
+            assert!(
+                matches!(decision, DivertDecision::Allow { .. }),
+                "epoch {epoch} sits on the window edge and must allow"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decide_divert_rejects_zero_clock_fail_closed() {
+        let dir = crate::config::test_support::unique_state_dir("divert-zeroclock");
+        let registry = bound_registry(&dir);
+        let audit = AuditLog::memory();
+        let prelude = divert_prelude("github.com", 22, 7, 0);
+        let decision = decide_divert(&registry, &divert_store(), &audit, 7, &prelude, 0, "t");
+        match decision {
+            DivertDecision::Deny { reason, .. } => assert!(reason.contains("clock")),
+            DivertDecision::Allow { .. } => {
+                panic!("a zero broker clock cannot verify freshness and must deny")
+            }
+        }
+        assert_eq!(audit.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decide_divert_denies_ungranted_destination() {
+        let dir = crate::config::test_support::unique_state_dir("divert-ungranted");
+        let registry = bound_registry(&dir);
+        let audit = AuditLog::memory();
+        let prelude = divert_prelude("evil.example", 22, 7, DIVERT_NOW);
+        let decision = decide_divert(
+            &registry,
+            &divert_store(),
+            &audit,
+            7,
+            &prelude,
+            DIVERT_NOW,
+            "t",
+        );
+        match decision {
+            DivertDecision::Deny { reason, re_attest } => {
+                assert!(!re_attest);
+                assert!(reason.contains("evil.example"));
+            }
+            DivertDecision::Allow { .. } => panic!("ungranted destination must deny"),
+        }
+        let records = audit.snapshot();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].instance, "real-instance");
+        assert!(matches!(records[0].result, AuditResult::Deny { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serve_divert_once_closes_denied_connection() {
+        let dir = crate::config::test_support::unique_state_dir("divert-close");
+        let socket_path = dir.join("broker.sock");
+        let transport = UnixSocketTransport::bind(&socket_path, FixedCidResolver(7)).unwrap();
+        let registry = bound_registry(&dir);
+        let store = divert_store();
+        let audit = AuditLog::memory();
+        let relay = EchoRelay;
+        // Client side: connect + send an ungranted prelude before the
+        // server accepts (listener backlog makes this deterministic).
+        let mut client = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+        let framed = encode_ssh_divert_prelude(&divert_prelude("evil.example", 22, 7, DIVERT_NOW));
+        client.write_all(&framed).unwrap();
+        let decision = serve_divert_once(
+            &transport, &registry, &store, &audit, &relay, "t", DIVERT_NOW,
+        )
+        .unwrap();
+        assert!(matches!(decision, DivertDecision::Deny { .. }));
+        // Deny closes: the client reads EOF.
+        let mut buf = [0u8; 1];
+        assert_eq!(
+            client.read(&mut buf).unwrap(),
+            0,
+            "denied stream must close"
+        );
+        assert_eq!(audit.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serve_divert_once_relays_allowed_connection_via_echo() {
+        let dir = crate::config::test_support::unique_state_dir("divert-echo");
+        let socket_path = dir.join("broker.sock");
+        let transport = UnixSocketTransport::bind(&socket_path, FixedCidResolver(7)).unwrap();
+        let registry = bound_registry(&dir);
+        let store = divert_store();
+        let audit = AuditLog::memory();
+        let relay = EchoRelay;
+        std::thread::scope(|s| {
+            let server = s.spawn(|| {
+                serve_divert_once(
+                    &transport, &registry, &store, &audit, &relay, "t", DIVERT_NOW,
+                )
+            });
+            let mut client = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+            let framed =
+                encode_ssh_divert_prelude(&divert_prelude("github.com", 22, 7, DIVERT_NOW));
+            client.write_all(&framed).unwrap();
+            // Post-prelude bytes flow through the relay (echoed here).
+            client.write_all(b"ping").unwrap();
+            let mut echo = [0u8; 4];
+            client.read_exact(&mut echo).unwrap();
+            assert_eq!(&echo, b"ping");
+            client.shutdown(std::net::Shutdown::Write).unwrap();
+            let decision = server.join().unwrap().unwrap();
+            assert!(
+                matches!(decision, DivertDecision::Allow { .. }),
+                "granted destination must relay: {decision:?}"
+            );
+        });
+        assert_eq!(audit.len(), 1);
+        assert!(matches!(audit.snapshot()[0].result, AuditResult::Allow));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
