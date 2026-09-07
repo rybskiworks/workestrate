@@ -182,12 +182,25 @@ pub(crate) fn apply_plan_envs(
 
 pub(crate) async fn run_service_foreground(
     sandbox: &Sandbox,
-    config: ForegroundConfig,
+    mut config: ForegroundConfig,
 ) -> Result<()> {
-    let mut exec_handle = sandbox
+    // Taken before `exec_stream` moves the command args below: the shim is
+    // relinquished on every exit path via `shutdown_ssh_shim`.
+    let mut ssh_shim = config.ssh_shim.take();
+    let mut exec_handle = match sandbox
         .exec_stream(&config.command.binary, config.command.arguments)
         .await
-        .map_err(|e| anyhow::anyhow!("failed to start {} process: {}", config.service_label, e))?;
+    {
+        Ok(handle) => handle,
+        Err(e) => {
+            shutdown_ssh_shim(&mut ssh_shim);
+            return Err(anyhow::anyhow!(
+                "failed to start {} process: {}",
+                config.service_label,
+                e
+            ));
+        }
+    };
 
     match exec_handle.recv().await {
         Some(ExecEvent::Started { pid }) => {
@@ -200,6 +213,7 @@ pub(crate) async fn run_service_foreground(
             if let Err(stop_err) = sandbox.stop().await {
                 eprintln!("failed to stop sandbox after service failure: {}", stop_err);
             }
+            shutdown_ssh_shim(&mut ssh_shim);
             return Err(anyhow::anyhow!(
                 "{} process failed to start: {:?}",
                 config.service_label,
@@ -213,6 +227,7 @@ pub(crate) async fn run_service_foreground(
                     stop_err
                 );
             }
+            shutdown_ssh_shim(&mut ssh_shim);
             return Err(anyhow::anyhow!(
                 "unexpected exec event waiting for {} start: {:?}",
                 config.service_label,
@@ -256,6 +271,7 @@ pub(crate) async fn run_service_foreground(
         // before propagating the error.
         let _ = sandbox.stop().await;
         let _ = drain_handle.await;
+        shutdown_ssh_shim(&mut ssh_shim);
         return Err(anyhow::anyhow!("signal handler error: {}", e));
     }
     // Post-session teardown is REQUIRED: a failed stop means a silently
@@ -275,6 +291,10 @@ pub(crate) async fn run_service_foreground(
     // Drain any remaining buffered log events before returning.
     // Use a timeout so a hung exec channel doesn't block forever.
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain_handle).await;
+
+    // The foreground service ends here on every path below: relinquish the
+    // SSH shim (socket, thread, CID binding) with the sandbox.
+    shutdown_ssh_shim(&mut ssh_shim);
 
     match stop_err {
         None => {
@@ -306,6 +326,7 @@ pub(crate) async fn run_service_interactive(
         command,
         log_stop_errors,
         mounts,
+        ssh_shim,
     } = config;
     let SandboxCommand { binary, arguments } = command;
 
@@ -346,6 +367,12 @@ pub(crate) async fn run_service_interactive(
             Some(e)
         }
     };
+
+    // The interactive service ends here: relinquish the SSH shim (socket,
+    // thread, CID binding) with the sandbox.
+    if let Some(shim) = ssh_shim {
+        shim.shutdown();
+    }
 
     match (outcome, stop_err) {
         (Ok(()), None) => {
@@ -916,6 +943,15 @@ fn apply_nested_virt(builder: SandboxBuilder, nested_on: bool) -> SandboxBuilder
     builder.nested_virt(nested_on)
 }
 
+/// Release the foreground SSH shim, if any. Best-effort (see
+/// [`crate::microsandbox::broker::SshShimHandle::shutdown`]): teardown
+/// must not fail the service exit it follows.
+fn shutdown_ssh_shim(shim: &mut Option<crate::microsandbox::broker::SshShimHandle>) {
+    if let Some(shim) = shim.take() {
+        shim.shutdown();
+    }
+}
+
 /// Prepare, resolve, and create the sandbox plus the foreground config used
 /// to run the workload's real command.
 pub(crate) async fn build_sandbox<W: Workload>(
@@ -1308,6 +1344,12 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let nested_on =
         check_nested_up_gate(workload, &crate::microsandbox::nested::read_nested_probe())?;
     let builder = apply_nested_virt(builder, nested_on);
+    // Guest SSH policy: thread the workload's credential view into the
+    // builder as the fork's first-class `network.ssh` spec option (policy
+    // only — the socket path stays host-side). Grant-less plans leave the
+    // builder untouched.
+    let builder =
+        crate::microsandbox::broker::apply_ssh_policy(builder, plan.credentials.as_ref());
     let sandbox = builder.create().await?;
 
     let created_at = super::time::current_rfc3339_utc();
@@ -1360,6 +1402,16 @@ pub(crate) async fn build_sandbox<W: Workload>(
     if let Some(dir) = &generation_dir {
         mark_generation_booted(dir);
     }
+    // SSH shim: bind the divert listener only once the sandbox identity is
+    // durably registered — a failed create or registration must never leave
+    // a live listener for a dead sandbox. Strict-only confinement needs no
+    // listener (nothing can divert to it).
+    let ssh_shim = match plan.credentials.as_ref() {
+        Some(credentials) if !credentials.ssh.is_empty() => {
+            crate::microsandbox::broker::ensure_ssh_shim(&state_dir, &spec.instance, credentials)?
+        }
+        _ => None,
+    };
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
         service_label: workload.name().to_string(),
@@ -1370,6 +1422,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
             .iter()
             .map(|m| (m.host.clone(), m.guest.clone()))
             .collect(),
+        ssh_shim,
     };
     Ok(BuildOutcome::Ready(Box::new(sandbox), config))
 }
@@ -1429,6 +1482,9 @@ async fn start_existing_sandbox<W: Workload>(
         command: workload.exec(),
         log_stop_errors: workload.log_stop_errors(),
         mounts: Vec::new(),
+        // Restarting a stopped sandbox reuses its prior identity without a
+        // fresh launch epoch or CID: no new listener is bound here.
+        ssh_shim: None,
     };
     Ok((sandbox, config))
 }
