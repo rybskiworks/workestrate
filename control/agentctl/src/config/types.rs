@@ -1442,7 +1442,7 @@ pub struct WorkloadConfig {
     /// time. Layers merge union-by-dependency-name, last layer wins per dep.
     #[serde(default)]
     pub depends_on: HashMap<String, DependsOnSpec>,
-    /// Credential-broker grants (`workloads.<name>.credentials`; M1): the
+    /// Credential-broker grants (`workloads.<name>.credentials`): the
     /// allowlist of catalog entry names this workload may use (`ssh` names
     /// `[credentials.ssh.<name>]` entries, `signing` names
     /// `[credentials.signing.ssh.<name>]` entries). Unknown names are a
@@ -1452,8 +1452,8 @@ pub struct WorkloadConfig {
     pub credentials: WorkloadCredentials,
 }
 
-/// Workload credential-broker consumption (`workloads.<name>.credentials`;
-/// M1): the allowlist of catalog entry names this workload may use. `ssh`
+/// Workload credential-broker consumption (`workloads.<name>.credentials`):
+/// the allowlist of catalog entry names this workload may use. `ssh`
 /// names `[credentials.ssh.<name>]` entries, `signing` names
 /// `[credentials.signing.ssh.<name>]` entries; an unknown name is a
 /// validation error. Binding stays at consumption via the EXISTING env
@@ -1472,7 +1472,7 @@ pub struct WorkloadCredentials {
     pub signing: Vec<String>,
 }
 
-/// One SSH credential catalog entry (`credentials.ssh.<name>`; M1): an
+/// One SSH credential catalog entry (`credentials.ssh.<name>`): an
 /// explicit first-class reference (`material` names an existing
 /// `[secrets.<N>]` entry — no same-name magic) plus the confinement scope
 /// (`hosts`/`users` required, `ports` defaulting to `[22]` post-merge).
@@ -1509,7 +1509,7 @@ pub struct SshCredentialDef {
 }
 
 /// One SSH signing credential catalog entry
-/// (`credentials.signing.ssh.<name>`; M1): key material for signatures
+/// (`credentials.signing.ssh.<name>`): key material for signatures
 /// scoped to a `namespace`. Deliberately has NO `users`/`ports` fields —
 /// `deny_unknown_fields` rejects them at parse time. Like
 /// [`SshCredentialDef`], fields are omittable per layer (per-field merge)
@@ -1531,7 +1531,7 @@ pub struct SigningSshCredentialDef {
     pub on_violation: Option<SecretViolationPolicy>,
 }
 
-/// The `[credentials.signing]` namespace (M1): currently SSH signing only
+/// The `[credentials.signing]` namespace: currently SSH signing only
 /// (`[credentials.signing.ssh.<name>]`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1541,7 +1541,7 @@ pub struct SigningCredentialsConfig {
     pub ssh: HashMap<String, SigningSshCredentialDef>,
 }
 
-/// The repo-global credentials catalog (`credentials`; M1, directory-mode
+/// The repo-global credentials catalog (`credentials`; directory-mode
 /// aware): `[credentials.ssh.<name>]` SSH grants plus the
 /// `[credentials.signing]` namespace. Declared in `default.toml` (or
 /// `secrets.toml` — every directory-mode file parses as a full layer, so no
@@ -1558,7 +1558,7 @@ pub struct CredentialsConfig {
     pub signing: SigningCredentialsConfig,
 }
 
-/// One rung of the SSH confinement-policy ladder (`[policy.ssh]`; M1):
+/// One rung of the SSH confinement-policy ladder (`[policy.ssh]`):
 /// the fragment declared at the home-registry, config-repo-layer, or
 /// workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder
 /// pattern exactly: collected per rung (never merged — no policy field
@@ -1700,7 +1700,7 @@ pub struct ConfigFile {
     pub schema_version: u32,
     #[serde(default)]
     pub secrets: HashMap<String, SecretDefConfig>,
-    /// Repo-global credentials catalog (`credentials`; M1). Merged
+    /// Repo-global credentials catalog (`credentials`). Merged
     /// union-by-name across layers, like `secrets`.
     #[serde(default)]
     pub credentials: CredentialsConfig,
@@ -1748,7 +1748,7 @@ pub struct PolicyConfig {
     /// secrets/egress ladders. `final` seals a denial, never enables.
     #[serde(default)]
     pub virtualization: Option<VirtualizationPolicyFragment>,
-    /// SSH confinement-policy rung (`[policy.ssh]`; M1). Collected per scope
+    /// SSH confinement-policy rung (`[policy.ssh]`). Collected per scope
     /// (home registry, config layers, workload capsule — a bare
     /// directory-mode capsule's top-level `[policy.ssh]` lands on the
     /// workload rung via the workload wrapper), never merged — the same

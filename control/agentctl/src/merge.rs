@@ -459,7 +459,7 @@ pub fn get_virtualization_ladder() -> Option<VirtualizationLadder> {
 }
 
 // ---------------------------------------------------------------------------
-// SSH confinement-policy ladder process-global storage (M1 credential broker)
+// SSH confinement-policy ladder process-global storage
 // ---------------------------------------------------------------------------
 //
 // The collected `[policy.ssh]` fragments for the most recent config load,
@@ -471,7 +471,7 @@ pub fn get_virtualization_ladder() -> Option<VirtualizationLadder> {
 // directory-mode capsule's top-level `[policy.ssh]` lands there via the
 // workload wrapper. Same Mutex rationale as above.
 
-/// The collected SSH confinement-policy ladder rungs (M1). Each entry
+/// The collected SSH confinement-policy ladder rungs. Each entry
 /// carries the ORIGIN label used in resolution provenance (home-registry
 /// scope label, or the declaring layer's name).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -580,7 +580,7 @@ fn merge_secret_def(
     Ok(())
 }
 
-/// Merge the repo-global credentials catalog (M1): union-by-name across
+/// Merge the repo-global credentials catalog: union-by-name across
 /// layers, mirroring [`merge_secrets`] — each catalog entry merges
 /// per-field (last layer wins when present), brand-new names are appended.
 fn merge_credentials(
@@ -939,7 +939,7 @@ fn merge_workload(
     }
 
     if table.contains_key("credentials") {
-        // M1 credential-broker consumption: the grant allowlist is ONE unit
+        // credential-broker consumption: the grant allowlist is ONE unit
         // — a higher layer re-declaring `[workloads.<name>.credentials]`
         // replaces the WHOLE allowlist (last layer wins), the same
         // whole-spec reset semantics the instance block applies.
@@ -2033,7 +2033,7 @@ mod tests {
         Ok(())
     }
 
-    // ---- M1 credential broker: catalog merge union-by-name ----
+    // ---- credential broker: catalog merge union-by-name ----
 
     #[test]
     fn credentials_catalog_merges_union_by_name() -> Result<()> {

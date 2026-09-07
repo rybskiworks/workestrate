@@ -2,10 +2,8 @@
 //!
 //! Topology: guests dial CID 2:<port> (HOST_CID); the msb bridge maps
 //! that to a host unix socket. The shim listens on that socket and hands
-//! decoded requests to the [`SigningService`](super::signing::SigningService).
-//! The [`BrokerTransport`] trait separates the shim from the in-VM service
-//! path so follow-up work can plug a relay transport into the broker VM without
-//! touching dispatch logic.
+//! decoded requests to the service. The [`BrokerTransport`] trait separates
+//! the shim from the in-VM path.
 //!
 //! Authoritative identity: [`dispatch`] stamps the transport-supplied CID
 //! and resolves the instance via the [`CidRegistry`](super::registry::CidRegistry),
@@ -35,7 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Default broker port (guest dials `CID 2:<port>`; msb bridges to the host
-/// unix socket). This may become config in follow-up work; this change fixes the constant.
+/// unix socket).
 pub const BROKER_PORT: u32 = 22099;
 
 /// Maximum single envelope frame (8 MiB — comfortably above the 1 MiB
@@ -89,8 +87,7 @@ impl DispatchOutcome {
     }
 }
 
-/// Byte transport between the shim and the in-VM side. This change ships
-/// [`UnixSocketTransport`]; follow-up work adds the in-VM relay behind this trait.
+/// Byte transport separating the shim from the in-VM path.
 pub trait BrokerTransport: Send + Sync {
     /// Accept one connection: the vouched peer CID plus the decoded
     /// envelope. Implementations perform framing + CBOR decode; CID
@@ -154,7 +151,6 @@ impl<R: CidResolver> UnixSocketTransport<R> {
         Ok(buf)
     }
 
-    /// Write one length-prefixed frame.
     pub fn write_frame(
         stream: &mut std::os::unix::net::UnixStream,
         bytes: &[u8],
@@ -900,10 +896,7 @@ impl<B: KeyBackend> BrokerShim<B> {
         }
     }
 
-    /// Serve connections until `stop` is set. Each connection carries one
-    /// envelope; the outcome is framed back on the same connection
-    /// (CBOR `DispatchReply`). Transport errors on one connection never
-    /// kill the loop — they are stderr-loud and the loop continues.
+    /// Serve until stop; transport errors never kill loop — stderr-loud, continue.
     pub fn run_until<R: CidResolver + Send + Sync>(
         &self,
         transport: &UnixSocketTransport<R>,
@@ -931,14 +924,11 @@ impl<B: KeyBackend> BrokerShim<B> {
                 &timestamp,
             );
             let _ = outcome;
-            // This skeleton serves dispatch only; reply framing over the
-            // accepted stream inside the transport remains follow-up work
-            // (the accepted `UnixStream` is consumed by `accept`).
+            // Dispatch only; reply framing not yet implemented.
         }
     }
 }
 
-/// CBOR response frame helpers (kept beside the transport framing).
 pub fn encode_envelope(envelope: &WireEnvelope) -> anyhow::Result<Vec<u8>> {
     encode_cbor(envelope)
 }
