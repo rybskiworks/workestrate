@@ -27,6 +27,11 @@ globset = "0.4"
 hex = "0.4"
 idna = "1.1"
 microsandbox = { version = "=0.6.16", features = ["net"] }
+# SSH gateway handoff: the fork's network engine (divert prelude framing)
+# and shared domain types (guest SSH policy). Both crates are already in
+# the .cargo patch table, so they resolve to the vendored fork.
+microsandbox-network = "=0.6.16"
+microsandbox-types = "=0.6.16"
 # Credential broker: SHA-256 payload digests for the audit log
 # (0.10.x already in the lockfile — promoted to direct, no new package).
 sha2 = "0.10"

@@ -12,6 +12,7 @@
 //! - [`registry`]: CID→instance mapping, persisted under the state dir.
 //! - [`signing`]: grant-enforcement pipeline + [`signing::KeyBackend`].
 //! - [`shim`]: host-side unix-socket listener + transport trait.
+//! - [`ssh_emit`]: credential-plan → guest SSH policy compilation.
 //! - [`audit`]: append-only audit records (digests, never payloads).
 //!
 //! Identity model (normative): the transport-supplied CID is AUTHORITATIVE.
@@ -24,6 +25,7 @@ pub mod epoch;
 pub mod registry;
 pub mod shim;
 pub mod signing;
+pub mod ssh_emit;
 
 pub use audit::{AuditLog, AuditRecord, AuditResult, payload_digest_hex};
 pub use epoch::{EpochError, EpochToken};
@@ -33,3 +35,4 @@ pub use signing::{
     Denial, GrantStore, KeyBackend, LimitsConfig, SignRequest, SignResponse, SignatureScheme,
     SigningService, TestBackend,
 };
+pub use ssh_emit::{apply_ssh_policy, ssh_config_for_plan, ssh_overlay_patch};
