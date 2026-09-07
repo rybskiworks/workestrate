@@ -1351,6 +1351,29 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // only — the socket path stays host-side). Grant-less plans leave the
     // builder untouched.
     let builder = crate::microsandbox::broker::apply_ssh_policy(builder, plan.credentials.as_ref());
+    // SSH divert dial path: hand the builder the socket path the shim binds
+    // after durable registration, so divert-intended flows dial the live
+    // listener. Only the path crosses here — no bind, thread, or CID
+    // allocation — so a failed create still leaves no live listener behind
+    // (the bind stays after registration below, at the same derived path).
+    // Grant-less plans pass nothing and keep the fail-closed deny.
+    let builder = match crate::microsandbox::broker::ssh_broker_socket_for_plan(
+        &state_dir,
+        plan.credentials.as_ref(),
+    ) {
+        Some(socket) => match socket.to_str() {
+            Some(address) => builder.ssh_broker_endpoint(address),
+            None => {
+                eprintln!(
+                    "WARNING: ssh divert disabled for instance '{}': broker socket path {} is not valid UTF-8 (divert-intended flows deny fail-closed)",
+                    spec.instance,
+                    socket.display()
+                );
+                builder
+            }
+        },
+        None => builder,
+    };
     let sandbox = builder.create().await?;
 
     let created_at = super::time::current_rfc3339_utc();

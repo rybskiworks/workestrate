@@ -44,4 +44,5 @@ pub use signing::{
 pub use ssh_emit::{apply_ssh_policy, ssh_config_for_plan, ssh_overlay_patch};
 pub use ssh_lifecycle::{
     EpochProvisionError, SshShimHandle, ensure_ssh_shim, provision_epoch_via_console,
+    ssh_broker_socket_for_plan,
 };

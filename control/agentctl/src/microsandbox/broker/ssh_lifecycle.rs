@@ -221,6 +221,23 @@ pub fn ensure_ssh_shim(
     }))
 }
 
+/// Resolve the broker socket path the sandbox builder must dial for SSH
+/// divert, or `None` when the workload carries no SSH grants.
+///
+/// Pure derivation: the path is a fixed function of the state dir, so the
+/// pre-create builder input and the post-registration bind agree without
+/// binding anything early. Strict-only confinement resolves to `None` — its
+/// policy needs no listener because nothing can divert to it.
+pub fn ssh_broker_socket_for_plan(
+    state_dir: &Path,
+    credentials: Option<&CredentialsPlan>,
+) -> Option<PathBuf> {
+    match credentials {
+        Some(credentials) if !credentials.ssh.is_empty() => Some(broker_socket_path(state_dir)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -275,6 +292,32 @@ mod tests {
             !broker_socket_path(&dir).exists(),
             "strict-only workloads bind no listener"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn broker_socket_resolves_for_grant_plans_only() {
+        let dir = crate::config::test_support::unique_state_dir("ssh-broker-socket");
+        let credentials = ssh_credentials();
+        // Grants resolve to the same host-side path the shim binds: the
+        // pre-create builder input and the post-registration bind agree.
+        let socket = ssh_broker_socket_for_plan(&dir, Some(&credentials))
+            .expect("grants resolve a dial path");
+        assert_eq!(socket, broker_socket_path(&dir));
+        assert!(
+            socket.is_absolute(),
+            "the dial path must be absolute for the builder endpoint"
+        );
+        // Strict-only confinement takes no listener, so it resolves none.
+        let strict_only = CredentialsPlan {
+            ssh: Vec::new(),
+            signing: Vec::new(),
+            strict: true,
+            strict_origin: None,
+        };
+        assert_eq!(ssh_broker_socket_for_plan(&dir, Some(&strict_only)), None);
+        // Absent policy resolves none (fail-closed unchanged).
+        assert_eq!(ssh_broker_socket_for_plan(&dir, None), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
