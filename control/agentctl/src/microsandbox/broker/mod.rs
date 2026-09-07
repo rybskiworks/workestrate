@@ -30,7 +30,11 @@ pub mod ssh_emit;
 pub use audit::{AuditLog, AuditRecord, AuditResult, payload_digest_hex};
 pub use epoch::{EpochError, EpochToken};
 pub use registry::{CidEntry, CidRegistry, GRANT_CACHE_TTL_SECS};
-pub use shim::{BrokerShim, BrokerTransport, DispatchOutcome, TransportPeer, WireEnvelope};
+pub use shim::{
+    BrokerShim, BrokerTransport, DispatchOutcome, DivertDecision, DivertDestination, EchoRelay,
+    MAX_DIVERT_EPOCH_SKEW_SECS, SshRelay, TransportPeer, WireEnvelope, decide_divert,
+    run_divert_until, serve_divert_once,
+};
 pub use signing::{
     Denial, GrantStore, KeyBackend, LimitsConfig, SignRequest, SignResponse, SignatureScheme,
     SigningService, TestBackend,
