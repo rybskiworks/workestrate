@@ -671,6 +671,13 @@ fn merge_ssh_credential_def(
             layer_ctx.name.clone(),
         );
     }
+    if table.contains_key("on_violation") {
+        merged.on_violation = layer.on_violation;
+        provenance.insert(
+            format!("credentials.ssh.{name}.on_violation"),
+            layer_ctx.name.clone(),
+        );
+    }
 
     Ok(())
 }
@@ -2082,6 +2089,68 @@ mod tests {
             Some(&"base".to_string()),
             "untouched field keeps the base layer provenance"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ssh_catalog_merges_on_violation_last_layer_wins() -> Result<()> {
+        // `on_violation` merges per-field like the other ssh entry fields:
+        // absent stays None through merge (the material ladder resolves it
+        // at grant time), a declaring layer wins with its own provenance.
+        let base = Layer::from_string(
+            "base",
+            "schema_version = 1\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\n",
+        )?;
+        let team = Layer::from_string(
+            "team",
+            "schema_version = 1\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\non_violation = \"block-and-terminate\"\n",
+        )?;
+
+        let (merged, provenance) = merge_layers(&[base, team])?;
+        let deploy = &merged.credentials.ssh["deploy"];
+        assert_eq!(deploy.hosts, vec!["github.com".to_string()]);
+        assert_eq!(
+            deploy.on_violation,
+            Some(crate::config::SecretViolationPolicy::BlockAndTerminate)
+        );
+        assert_eq!(
+            provenance.get("credentials.ssh.deploy.on_violation"),
+            Some(&"team".to_string())
+        );
+        assert_eq!(
+            provenance.get("credentials.ssh.deploy.hosts"),
+            Some(&"base".to_string()),
+            "untouched field keeps the base layer provenance"
+        );
+
+        // Kebab-case round-trip: every policy variant parses from its TOML
+        // wire string and serializes back to it.
+        for (wire, policy) in [
+            ("passthrough", crate::config::SecretViolationPolicy::Passthrough),
+            ("block", crate::config::SecretViolationPolicy::Block),
+            (
+                "block-and-log",
+                crate::config::SecretViolationPolicy::BlockAndLog,
+            ),
+            (
+                "block-and-terminate",
+                crate::config::SecretViolationPolicy::BlockAndTerminate,
+            ),
+        ] {
+            let layer = Layer::from_string(
+                "case",
+                &format!(
+                    "schema_version = 1\n[credentials.ssh.deploy]\nmaterial = \"DEPLOY_KEY\"\nhosts = [\"github.com\"]\nusers = [\"git\"]\non_violation = \"{wire}\"\n"
+                ),
+            )?;
+            let (merged, _) = merge_layers(&[layer])?;
+            assert_eq!(merged.credentials.ssh["deploy"].on_violation, Some(policy));
+            let back = toml::to_string(&merged.credentials.ssh["deploy"])?;
+            assert!(
+                back.contains(&format!("on_violation = \"{wire}\"")),
+                "ssh on_violation must serialize kebab-case, got: {back}"
+            );
+        }
         Ok(())
     }
 

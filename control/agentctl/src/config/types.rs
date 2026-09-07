@@ -1501,6 +1501,11 @@ pub struct SshCredentialDef {
     /// merge, the same idiom as `EnvSecretRef.bound`).
     #[serde(default)]
     pub ports: Option<Vec<u16>>,
+    /// Violation policy for this SSH use. `None` inherits the material
+    /// secret's ladder-resolved policy at grant resolution (same
+    /// defaults-after-merge idiom as `ports`).
+    #[serde(default)]
+    pub on_violation: Option<SecretViolationPolicy>,
 }
 
 /// One SSH signing credential catalog entry
