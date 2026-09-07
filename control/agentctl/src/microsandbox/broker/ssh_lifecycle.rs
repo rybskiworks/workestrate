@@ -13,7 +13,7 @@ use crate::microsandbox::broker::epoch_provision::{
 };
 use crate::microsandbox::broker::registry::{CidRegistry, broker_socket_path};
 use crate::microsandbox::broker::shim::{
-    DivertDestination, FixedCidResolver, SshRelay, UnixSocketTransport, run_divert_until,
+    FixedCidResolver, TcpUpstreamRelay, UnixSocketTransport, run_divert_until,
 };
 use crate::microsandbox::broker::signing::GrantStore;
 use crate::microsandbox::plan::CredentialsPlan;
@@ -64,28 +64,6 @@ pub async fn reprovision_epoch(state_dir: &Path, cid: u32) -> Result<u64, EpochP
         detail: format!("CID registry open failed: {e}"),
     })?;
     provision_epoch_via_console(&registry, cid).await
-}
-
-/// Fail-closed placeholder relay: divert decisions are enforced and
-/// audited, but no production upstream path exists yet, so allowed
-/// sessions close instead of flowing anywhere. The in-VM relay replaces
-/// this behind the [`SshRelay`] trait without touching the loop.
-#[derive(Debug, Default)]
-struct FailClosedRelay;
-
-impl SshRelay for FailClosedRelay {
-    fn relay(
-        &self,
-        stream: std::os::unix::net::UnixStream,
-        dest: &DivertDestination,
-    ) -> std::io::Result<()> {
-        eprintln!(
-            "WARNING: ssh divert to {}:{} for instance '{}' closed: no upstream relay is wired",
-            dest.dest_host, dest.dest_port, dest.instance
-        );
-        drop(stream);
-        Ok(())
-    }
 }
 
 /// Owns one workload's SSH shim: the bound socket, the allocated
@@ -210,13 +188,13 @@ pub async fn ensure_ssh_shim(
                         return;
                     }
                 };
-                let relay = FailClosedRelay;
+                let relay = TcpUpstreamRelay::default();
                 run_divert_until(
                     &transport,
                     &loop_registry,
                     &grants,
                     &loop_audit,
-                    &relay,
+                    relay,
                     &loop_stop,
                 );
             }
@@ -255,6 +233,7 @@ pub fn ssh_broker_socket_for_plan(
 mod tests {
     use super::*;
     use crate::microsandbox::plan::CredentialBinding;
+    use std::io::{Read, Write};
 
     fn ssh_credentials() -> CredentialsPlan {
         CredentialsPlan {
@@ -455,6 +434,130 @@ mod tests {
             registry.lookup(cid).unwrap().is_none(),
             "shutdown expires the binding even with the socket already gone"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SSH grants covering one loopback TCP port (the upstream stub below).
+    fn loopback_credentials(port: u16) -> CredentialsPlan {
+        CredentialsPlan {
+            ssh: vec![crate::microsandbox::plan::SshGrantPlan {
+                name: "stub".to_string(),
+                material: "TEST_KEY".to_string(),
+                hosts: vec!["127.0.0.1".to_string()],
+                users: vec!["git".to_string()],
+                ports: vec![port],
+                binding: CredentialBinding::Broker,
+            }],
+            signing: Vec::new(),
+            strict: false,
+            strict_origin: None,
+        }
+    }
+
+    /// The divert thread the launch binds must hand allowed sessions to the
+    /// TCP upstream relay: a full guest→shim→stub round trip through
+    /// [`ensure_ssh_shim`], ending with exactly one persisted allow record.
+    /// With the previous fail-closed relay this session closes instead of
+    /// flowing, so the banner exchange below proves the switch.
+    #[tokio::test]
+    async fn ensure_divert_thread_relays_allowed_sessions_to_the_granted_upstream() {
+        use microsandbox_network::ssh::gateway::{SshDivertPrelude, encode_ssh_divert_prelude};
+
+        // The granted upstream: a local TCP stub speaking fixed banners.
+        // Nonblocking accept with a deadline so a never-dialing relay
+        // fails the test instead of hanging it.
+        let stub = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let stub_port = stub.local_addr().unwrap().port();
+        stub.set_nonblocking(true).unwrap();
+        let stub_worker = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let (mut conn, _) = loop {
+                match stub.accept() {
+                    Ok(v) => break v,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() > deadline {
+                            panic!("upstream stub accepted nothing: the relay never dialed");
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("upstream stub accept failed: {e}"),
+                }
+            };
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+                .unwrap();
+            let mut banner = [0u8; 9];
+            conn.read_exact(&mut banner).unwrap();
+            assert_eq!(&banner, b"SSH-GUEST");
+            conn.write_all(b"SSH-STUB!").unwrap();
+            let mut rest = Vec::new();
+            conn.read_to_end(&mut rest).unwrap();
+            assert!(rest.is_empty(), "guest must send nothing after its banner");
+        });
+
+        let dir = crate::config::test_support::unique_state_dir("ssh-relay-wire");
+        let credentials = loopback_credentials(stub_port);
+        let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
+            .await
+            .unwrap()
+            .expect("grants bind a shim");
+        let socket_path = handle.socket_path.clone();
+        let cid = handle.cid;
+
+        // Guest side: connect to the shim socket and divert to the stub.
+        let mut guest = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+        guest
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .unwrap();
+        let prelude = SshDivertPrelude {
+            dest_host: "127.0.0.1".to_string(),
+            dest_port: stub_port,
+            transport_cid: u64::from(cid),
+            epoch: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        guest
+            .write_all(&encode_ssh_divert_prelude(&prelude))
+            .unwrap();
+        // Post-prelude bytes reach the upstream through the relay, and the
+        // upstream answer flows back: the second banner of a diverted session.
+        guest.write_all(b"SSH-GUEST").unwrap();
+        let mut answer = [0u8; 9];
+        guest.read_exact(&mut answer).unwrap();
+        assert_eq!(&answer, b"SSH-STUB!");
+        // The guest half-close propagates to the stub; the stub close
+        // surfaces here as EOF.
+        guest.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut tail = Vec::new();
+        guest.read_to_end(&mut tail).unwrap();
+        assert!(tail.is_empty(), "upstream close must surface as guest EOF");
+        stub_worker.join().unwrap();
+
+        handle.shutdown();
+
+        // Relay establishment audits exactly one allow record: the handoff
+        // from decision to relay is observable in the persisted log.
+        let log =
+            std::fs::read_to_string(crate::microsandbox::broker::audit::audit_file_path(&dir))
+                .unwrap();
+        let records: Vec<serde_json::Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            records.len(),
+            1,
+            "one divert decision per session: {records:?}"
+        );
+        assert_eq!(records[0]["instance"], "personal-pi");
+        assert_eq!(
+            records[0]["key_id"],
+            format!("127.0.0.1:{stub_port}").as_str()
+        );
+        assert_eq!(records[0]["scheme"], "ssh-divert");
+        assert_eq!(records[0]["namespace"], "divert");
+        assert_eq!(records[0]["result"], "allow");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

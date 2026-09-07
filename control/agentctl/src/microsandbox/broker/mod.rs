@@ -47,8 +47,8 @@ pub use key_material::{
 pub use registry::{CidEntry, CidRegistry, GRANT_CACHE_TTL_SECS, broker_socket_path};
 pub use shim::{
     BrokerShim, BrokerTransport, DispatchOutcome, DivertDecision, DivertDestination, EchoRelay,
-    MAX_DIVERT_EPOCH_SKEW_SECS, SshRelay, TransportPeer, WireEnvelope, decide_divert,
-    run_divert_until, serve_divert_once,
+    MAX_DIVERT_EPOCH_SKEW_SECS, SshRelay, TCP_UPSTREAM_CONNECT_TIMEOUT_SECS, TcpUpstreamRelay,
+    TransportPeer, WireEnvelope, decide_divert, run_divert_until, serve_divert_once,
 };
 pub use signing::{
     Denial, GrantStore, KeyBackend, LimitsConfig, SignRequest, SignResponse, SignatureScheme,
