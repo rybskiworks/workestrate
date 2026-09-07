@@ -11,9 +11,11 @@ use crate::microsandbox::broker::epoch::EpochToken;
 use crate::microsandbox::broker::epoch_provision::{
     AgentConsoleChannel, EpochProvisionError, provision_now,
 };
-use crate::microsandbox::broker::registry::{CidRegistry, broker_socket_path};
+use crate::microsandbox::broker::registry::{
+    CidRegistry, broker_socket_path, broker_vm_socket_path,
+};
 use crate::microsandbox::broker::shim::{
-    FixedCidResolver, TcpUpstreamRelay, UnixSocketTransport, run_divert_until,
+    BrokerFirstRelay, FixedCidResolver, UnixSocketTransport, run_divert_until,
 };
 use crate::microsandbox::broker::signing::GrantStore;
 use crate::microsandbox::plan::CredentialsPlan;
@@ -171,6 +173,9 @@ pub async fn ensure_ssh_shim(
     let grants = GrantStore::compile(&[(instance, credentials)]);
     let audit = Arc::new(AuditLog::with_state_dir(state_dir));
     let stop = Arc::new(AtomicBool::new(false));
+    // Custody-first relay: broker-bound sessions ride the broker VM socket
+    // (fail-closed while it is absent), guest-bound sessions relay direct.
+    let broker_socket = broker_vm_socket_path(state_dir);
     let join = std::thread::Builder::new()
         .name(format!("ssh-shim-{instance}"))
         .spawn({
@@ -188,7 +193,7 @@ pub async fn ensure_ssh_shim(
                         return;
                     }
                 };
-                let relay = TcpUpstreamRelay::default();
+                let relay = BrokerFirstRelay::new(broker_socket, grants.clone());
                 run_divert_until(
                     &transport,
                     &loop_registry,
@@ -438,7 +443,27 @@ mod tests {
     }
 
     /// SSH grants covering one loopback TCP port (the upstream stub below).
+    /// Guest-bound: the key lives in the guest, so the divert thread relays
+    /// these sessions direct to the granted upstream.
     fn loopback_credentials(port: u16) -> CredentialsPlan {
+        CredentialsPlan {
+            ssh: vec![crate::microsandbox::plan::SshGrantPlan {
+                name: "stub".to_string(),
+                material: "TEST_KEY".to_string(),
+                hosts: vec!["127.0.0.1".to_string()],
+                users: vec!["git".to_string()],
+                ports: vec![port],
+                binding: CredentialBinding::Guest,
+            }],
+            signing: Vec::new(),
+            strict: false,
+            strict_origin: None,
+        }
+    }
+
+    /// Broker-bound grants covering one loopback TCP port. The key lives in
+    /// broker custody, so these sessions must ride the broker VM socket.
+    fn broker_bound_credentials(port: u16) -> CredentialsPlan {
         CredentialsPlan {
             ssh: vec![crate::microsandbox::plan::SshGrantPlan {
                 name: "stub".to_string(),
@@ -454,11 +479,11 @@ mod tests {
         }
     }
 
-    /// The divert thread the launch binds must hand allowed sessions to the
-    /// TCP upstream relay: a full guest→shim→stub round trip through
+    /// The divert thread the launch binds hands allowed guest-bound sessions
+    /// to the direct TCP relay: a full guest→shim→stub round trip through
     /// [`ensure_ssh_shim`], ending with exactly one persisted allow record.
-    /// With the previous fail-closed relay this session closes instead of
-    /// flowing, so the banner exchange below proves the switch.
+    /// Broker-bound sessions never take this path (they ride the broker VM
+    /// socket instead — see below).
     #[tokio::test]
     async fn ensure_divert_thread_relays_allowed_sessions_to_the_granted_upstream() {
         use microsandbox_network::ssh::gateway::{SshDivertPrelude, encode_ssh_divert_prelude};
@@ -557,6 +582,79 @@ mod tests {
         );
         assert_eq!(records[0]["scheme"], "ssh-divert");
         assert_eq!(records[0]["namespace"], "divert");
+        assert_eq!(records[0]["result"], "allow");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Broker-bound sessions fail closed while no broker VM serves its
+    /// socket: the decision still allows (exactly one persisted allow
+    /// record), but the custody relay cannot dial and the guest observes
+    /// EOF — never a direct-TCP dial to the granted upstream.
+    #[tokio::test]
+    async fn ensure_divert_thread_fails_broker_bound_sessions_closed_without_broker() {
+        use microsandbox_network::ssh::gateway::{SshDivertPrelude, encode_ssh_divert_prelude};
+
+        // No TCP stub listens here on purpose: any direct dial would refuse
+        // loudly, but the custody path must not dial at all — the guest
+        // must see EOF from the dropped relay stream.
+        let closed = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+
+        let dir = crate::config::test_support::unique_state_dir("ssh-relay-nobroker");
+        // No broker VM socket exists under this state dir.
+        assert!(
+            !crate::microsandbox::broker::registry::broker_vm_socket_path(&dir).exists(),
+            "the test needs no broker VM running"
+        );
+        let credentials = broker_bound_credentials(port);
+        let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
+            .await
+            .unwrap()
+            .expect("grants bind a shim");
+        let socket_path = handle.socket_path.clone();
+        let cid = handle.cid;
+
+        let mut guest = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+        guest
+            .set_read_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
+        let prelude = SshDivertPrelude {
+            dest_host: "127.0.0.1".to_string(),
+            dest_port: port,
+            transport_cid: u64::from(cid),
+            epoch: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        guest
+            .write_all(&encode_ssh_divert_prelude(&prelude))
+            .unwrap();
+        // The custody relay drops the session: EOF, not upstream bytes.
+        let mut tail = Vec::new();
+        guest.read_to_end(&mut tail).unwrap();
+        assert!(
+            tail.is_empty(),
+            "broker-bound session without a broker must close"
+        );
+
+        // Give the worker a moment to finish its audit write, then shut down.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        handle.shutdown();
+
+        let log =
+            std::fs::read_to_string(crate::microsandbox::broker::audit::audit_file_path(&dir))
+                .unwrap();
+        let records: Vec<serde_json::Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            records.len(),
+            1,
+            "one divert decision per session: {records:?}"
+        );
         assert_eq!(records[0]["result"], "allow");
         let _ = std::fs::remove_dir_all(&dir);
     }

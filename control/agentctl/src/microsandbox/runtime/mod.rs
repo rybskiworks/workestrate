@@ -204,6 +204,11 @@ pub struct ForegroundConfig {
     /// here so the foreground service's end shuts it down (socket, thread,
     /// CID binding) on every exit path.
     pub ssh_shim: Option<super::broker::SshShimHandle>,
+    /// The shared broker VM reservation when the workload carries
+    /// broker-bound SSH credentials (`None` otherwise and for restarted
+    /// sandboxes). Owned here so the foreground service's end tears down
+    /// the broker reservation and its egress forwarder on every exit path.
+    pub broker: Option<super::broker::BrokerVmHandle>,
 }
 
 /// Resolved identity + flags for a single `up`/`exec` invocation (ADR 0021).

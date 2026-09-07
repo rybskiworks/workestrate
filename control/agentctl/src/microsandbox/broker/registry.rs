@@ -57,6 +57,37 @@ pub fn broker_socket_path(state_dir: &Path) -> PathBuf {
         .join(BROKER_SOCKET_FILE_NAME)
 }
 
+/// File name of the broker VM divert socket under the broker dir: the shim
+/// dials here to hand a decided session to the broker VM, whose guest
+/// brokerd listens on its divert vsock port. Singleton per state dir, like
+/// [`broker_socket_path`].
+pub const BROKER_VM_SOCKET_FILE_NAME: &str = "broker-vm.sock";
+
+/// Resolve the host-side broker VM divert socket path. Host-side only —
+/// this path must never enter the guest-visible network spec.
+pub fn broker_vm_socket_path(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("var")
+        .join("run")
+        .join(BROKER_DIR_NAME)
+        .join(BROKER_VM_SOCKET_FILE_NAME)
+}
+
+/// File name of the broker egress socket under the broker dir: the broker
+/// VM dials here for upstream TCP egress and the host-side forwarder
+/// answers. Singleton per state dir. This is the only egress path for the
+/// broker VM, whose guest IP stack stays down.
+pub const BROKER_EGRESS_SOCKET_FILE_NAME: &str = "broker-egress.sock";
+
+/// Resolve the host-side broker egress socket path. Host-side only.
+pub fn broker_egress_socket_path(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("var")
+        .join("run")
+        .join(BROKER_DIR_NAME)
+        .join(BROKER_EGRESS_SOCKET_FILE_NAME)
+}
+
 /// File holding the synthetic allocator's next-candidate CID.
 const NEXT_CID_FILE_NAME: &str = "next-cid";
 

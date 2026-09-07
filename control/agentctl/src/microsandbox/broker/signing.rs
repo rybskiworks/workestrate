@@ -269,6 +269,43 @@ impl GrantStore {
             host_ok && port_ok
         })
     }
+
+    /// Whether ANY instance in the store may open an SSH session to
+    /// `host:port`. The shared broker VM egress forwarder carries no
+    /// instance identity (its connect request names only the destination),
+    /// so it enforces the union of all compiled grants: allowed when at
+    /// least one instance's grants cover the destination, denied otherwise.
+    pub fn ssh_authorized_any(&self, host: &str, port: u16) -> bool {
+        self.instances.keys().any(|instance| {
+            // Borrow discipline: `ssh_authorized` re-borrows per instance;
+            // the key clone is avoided by iterating keys and looking up.
+            self.ssh_authorized(instance, host, port)
+        })
+    }
+
+    /// Whether `instance`'s covering grant for `host:port` is broker-bound
+    /// (key material lives in broker custody). Returns `false` when no
+    /// grant covers the destination (the divert decision already denied
+    /// there) or when the covering grant is guest-bound (material lives in
+    /// the guest, so the session relays direct). When several grants
+    /// cover, broker-bound wins: any broker-bound covering grant routes
+    /// the session through broker custody fail-closed.
+    pub fn ssh_is_broker_bound(&self, instance: &str, host: &str, port: u16) -> bool {
+        let Some(grants) = self.instances.get(instance) else {
+            return false;
+        };
+        grants.ssh.iter().any(|grant| {
+            if grant.binding != crate::microsandbox::plan::CredentialBinding::Broker {
+                return false;
+            }
+            let host_ok = grant
+                .hosts
+                .iter()
+                .any(|pattern| microsandbox_types::HostPattern::parse(pattern).matches(host));
+            let port_ok = grant.ports.is_empty() || grant.ports.contains(&port);
+            host_ok && port_ok
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

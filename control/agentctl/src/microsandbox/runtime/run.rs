@@ -184,9 +184,11 @@ pub(crate) async fn run_service_foreground(
     sandbox: &Sandbox,
     mut config: ForegroundConfig,
 ) -> Result<()> {
-    // Taken before `exec_stream` moves the command args below: the shim is
-    // relinquished on every exit path via `shutdown_ssh_shim`.
+    // Taken before `exec_stream` moves the command args below: the shim and
+    // the broker reservation are relinquished on every exit path via
+    // `shutdown_ssh_shim` / `shutdown_broker_vm`.
     let mut ssh_shim = config.ssh_shim.take();
+    let mut broker = config.broker.take();
     let mut exec_handle = match sandbox
         .exec_stream(&config.command.binary, config.command.arguments)
         .await
@@ -194,6 +196,7 @@ pub(crate) async fn run_service_foreground(
         Ok(handle) => handle,
         Err(e) => {
             shutdown_ssh_shim(&mut ssh_shim);
+            shutdown_broker_vm(&mut broker);
             return Err(anyhow::anyhow!(
                 "failed to start {} process: {}",
                 config.service_label,
@@ -214,6 +217,7 @@ pub(crate) async fn run_service_foreground(
                 eprintln!("failed to stop sandbox after service failure: {}", stop_err);
             }
             shutdown_ssh_shim(&mut ssh_shim);
+            shutdown_broker_vm(&mut broker);
             return Err(anyhow::anyhow!(
                 "{} process failed to start: {:?}",
                 config.service_label,
@@ -228,6 +232,7 @@ pub(crate) async fn run_service_foreground(
                 );
             }
             shutdown_ssh_shim(&mut ssh_shim);
+            shutdown_broker_vm(&mut broker);
             return Err(anyhow::anyhow!(
                 "unexpected exec event waiting for {} start: {:?}",
                 config.service_label,
@@ -272,6 +277,7 @@ pub(crate) async fn run_service_foreground(
         let _ = sandbox.stop().await;
         let _ = drain_handle.await;
         shutdown_ssh_shim(&mut ssh_shim);
+        shutdown_broker_vm(&mut broker);
         return Err(anyhow::anyhow!("signal handler error: {}", e));
     }
     // Post-session teardown is REQUIRED: a failed stop means a silently
@@ -293,8 +299,10 @@ pub(crate) async fn run_service_foreground(
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain_handle).await;
 
     // The foreground service ends here on every path below: relinquish the
-    // SSH shim (socket, thread, CID binding) with the sandbox.
+    // SSH shim (socket, thread, CID binding) and the broker reservation
+    // with the sandbox.
     shutdown_ssh_shim(&mut ssh_shim);
+    shutdown_broker_vm(&mut broker);
 
     match stop_err {
         None => {
@@ -327,6 +335,7 @@ pub(crate) async fn run_service_interactive(
         log_stop_errors,
         mounts,
         ssh_shim,
+        broker,
     } = config;
     let SandboxCommand { binary, arguments } = command;
 
@@ -369,9 +378,12 @@ pub(crate) async fn run_service_interactive(
     };
 
     // The interactive service ends here: relinquish the SSH shim (socket,
-    // thread, CID binding) with the sandbox.
+    // thread, CID binding) and the broker reservation with the sandbox.
     if let Some(shim) = ssh_shim {
         shim.shutdown();
+    }
+    if let Some(broker) = broker {
+        broker.shutdown();
     }
 
     match (outcome, stop_err) {
@@ -954,6 +966,15 @@ fn shutdown_ssh_shim(shim: &mut Option<crate::microsandbox::broker::SshShimHandl
     }
 }
 
+/// Release the foreground broker VM reservation, if any. Best-effort (see
+/// [`crate::microsandbox::broker::BrokerVmHandle::shutdown`]): teardown
+/// must not fail the service exit it follows.
+fn shutdown_broker_vm(broker: &mut Option<crate::microsandbox::broker::BrokerVmHandle>) {
+    if let Some(broker) = broker.take() {
+        broker.shutdown();
+    }
+}
+
 /// Prepare, resolve, and create the sandbox plus the foreground config used
 /// to run the workload's real command.
 pub(crate) async fn build_sandbox<W: Workload>(
@@ -1437,6 +1458,17 @@ pub(crate) async fn build_sandbox<W: Workload>(
         }
         _ => None,
     };
+    // Broker VM: reserve the shared host handles only once the sandbox
+    // identity is durably registered, beside the shim. Grant-less and
+    // guest-bound-only plans take no reservation. The KVM boot itself is
+    // still deferred: until it lands, the custody relay fails broker-bound
+    // sessions closed.
+    let broker = match plan.credentials.as_ref() {
+        Some(credentials) => {
+            crate::microsandbox::broker::ensure_broker_vm(&state_dir, &spec.instance, credentials)?
+        }
+        _ => None,
+    };
     let config = ForegroundConfig {
         sandbox_name: sandbox.name().to_string(),
         service_label: workload.name().to_string(),
@@ -1448,6 +1480,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
             .map(|m| (m.host.clone(), m.guest.clone()))
             .collect(),
         ssh_shim,
+        broker,
     };
     Ok(BuildOutcome::Ready(Box::new(sandbox), Box::new(config)))
 }
@@ -1510,6 +1543,9 @@ async fn start_existing_sandbox<W: Workload>(
         // Restarting a stopped sandbox reuses its prior identity without a
         // fresh launch epoch or CID: no new listener is bound here.
         ssh_shim: None,
+        // Same for the broker reservation: a restart claims no new host
+        // handles.
+        broker: None,
     };
     Ok((sandbox, config))
 }
