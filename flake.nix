@@ -13,12 +13,12 @@
     };
 
     microsandbox-fork = {
-      # Pinned fork rev 0b0bba90c17aadce56c60ecee57a7c6d0d5f8201 —
-      # feat/ssh-gateway-wiring: SandboxBuilder::ssh_broker_endpoint joins
-      # the host-side broker endpoint with the leased network slot as the
-      # transport identifier on the resolved network config, so
-      # divert-intended flows reach the broker with per-sandbox
-      # attribution; the guest-visible spec never names the host socket.
+      # Pinned fork rev 6ea0b117b90978db01b597c4f4e1d6bd8827dd50 —
+      # feat/nested-virt-port: SSH gateway wiring, brokerd service, and
+      # the epoch protocol family (#6) on deb99d26. Supersedes the deleted
+      # feat/ssh-gateway-wiring branch tip
+      # 0b0bba90c17aadce56c60ecee57a7c6d0d5f8201 (same merge-base
+      # deb99d26; 0b0bba90 is not an ancestor of this rev).
       # Descendant of 8e53de7e (the first-class default-off nested_virt
       # spec option on top of b2c672c8), which itself sits on 78fb3ed
       # (F1 approved-root fix, write.allow evaluator arm, stop-exit-wait
@@ -36,7 +36,7 @@
       # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
       # wait → hard MicrosandboxError::Runtime). The transient build-time
       # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
-      url = "github:rybskiworks/microsandbox/0b0bba90c17aadce56c60ecee57a7c6d0d5f8201";
+      url = "github:rybskiworks/microsandbox/6ea0b117b90978db01b597c4f4e1d6bd8827dd50";
       flake = false;
     };
 
