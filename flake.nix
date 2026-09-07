@@ -13,16 +13,16 @@
     };
 
     microsandbox-fork = {
-      # Pinned fork rev 8e53de7e377aa888d6d3684475f9c56b37ee4974 — the
-      # feat/nested-virt-port tip: the first-class default-off nested_virt
-      # spec option (09aeb8ae) + docs (8e53de7e) on top of b2c672c8 (the
-      # former always-on port) on top of
-      # 78fb3ed12623526ad02f5999047c12953013c395, the merge of
-      # fix/stop-process-exit-wait onto develop (0-conflict --no-ff merge
-      # on top of 205a7b95), verified pushed to origin via
-      # `git ls-remote origin`. Moves to `develop` tracking or a
-      # signed rev later per the merge runbook (signing currently deferred
-      # by user).
+      # Pinned fork rev 0b0bba90c17aadce56c60ecee57a7c6d0d5f8201 —
+      # feat/ssh-gateway-wiring: SandboxBuilder::ssh_broker_endpoint joins
+      # the host-side broker endpoint with the leased network slot as the
+      # transport identifier on the resolved network config, so
+      # divert-intended flows reach the broker with per-sandbox
+      # attribution; the guest-visible spec never names the host socket.
+      # Descendant of 8e53de7e (the first-class default-off nested_virt
+      # spec option on top of b2c672c8), which itself sits on 78fb3ed
+      # (F1 approved-root fix, write.allow evaluator arm, stop-exit-wait
+      # fix; the transient mount-policy-approved-root patch stays dropped).
       # 2026-08-31: repo transferred to the rybskiworks org (georgrybski ->
       # rybskiworks, same rev).
       #
@@ -36,7 +36,7 @@
       # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
       # wait → hard MicrosandboxError::Runtime). The transient build-time
       # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
-      url = "github:rybskiworks/microsandbox/8e53de7e377aa888d6d3684475f9c56b37ee4974";
+      url = "github:rybskiworks/microsandbox/0b0bba90c17aadce56c60ecee57a7c6d0d5f8201";
       flake = false;
     };
 
