@@ -35,7 +35,24 @@ microsandbox-types = "=0.6.16"
 # Credential broker: SHA-256 payload digests for the audit log
 # (0.10.x already in the lockfile — promoted to direct, no new package).
 sha2 = "0.10"
+# Credential broker: sealed key custody (SealedKeyBackend) — OpenSSH key
+# parsing plus SSHSIG sign/verify/armor. Ed25519-only crypto surface:
+# `ed25519` is the production signing backend; `getrandom` enables the OS
+# RNG (`ssh_key::rand_core::OsRng`) so tests generate keys in-memory (never
+# committed); `rsa` + `encryption` exist so the loader can tell a real RSA
+# key or a passphrase-encrypted key apart from garbage and fail closed with
+# the typed WrongKeyType error (neither ever signs).
+ssh-key = { version = "0.6", default-features = false, features = [
+    "std",
+    "ed25519",
+    "rsa",
+    "encryption",
+    "getrandom",
+] }
 unicode-security = "0.1"
+# Credential broker: zeroizing custody for resolved key material
+# (1.x already in the lockfile — promoted to direct, no new package).
+zeroize = "1"
 
 schemars = { version = "0.8", optional = true }
 serde = { version = "1", features = ["derive"] }
