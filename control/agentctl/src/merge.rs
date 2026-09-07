@@ -2126,7 +2126,10 @@ mod tests {
         // Kebab-case round-trip: every policy variant parses from its TOML
         // wire string and serializes back to it.
         for (wire, policy) in [
-            ("passthrough", crate::config::SecretViolationPolicy::Passthrough),
+            (
+                "passthrough",
+                crate::config::SecretViolationPolicy::Passthrough,
+            ),
             ("block", crate::config::SecretViolationPolicy::Block),
             (
                 "block-and-log",
