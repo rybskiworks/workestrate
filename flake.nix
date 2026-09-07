@@ -13,30 +13,18 @@
     };
 
     microsandbox-fork = {
-      # Pinned fork rev f8947076b7e355a6df58e5d4ee4608cad03f5fdc —
-      # feat/nested-virt-port: SSH gateway wiring, brokerd service, and
-      # the epoch protocol family (#6) on deb99d26. Supersedes the deleted
-      # feat/ssh-gateway-wiring branch tip
-      # 0b0bba90c17aadce56c60ecee57a7c6d0d5f8201 (same merge-base
-      # deb99d26; 0b0bba90 is not an ancestor of this rev).
-      # Descendant of 8e53de7e (the first-class default-off nested_virt
-      # spec option on top of b2c672c8), which itself sits on 78fb3ed
-      # (F1 approved-root fix, write.allow evaluator arm, stop-exit-wait
-      # fix; the transient mount-policy-approved-root patch stays dropped).
-      # 2026-08-31: repo transferred to the rybskiworks org (georgrybski ->
-      # rybskiworks, same rev).
-      #
-      # The 78fb3ed base carries ALL THREE: (1) the F1 approved-root fix, (2) the
-      # write.allow evaluator arm with union semantics (allow∪deny
-      # authority-ascending, deny-before-allow within scope, last non-frozen
-      # match wins, default Allow, terminal freeze both directions, protect
-      # short-circuit), and (3) the stop-exit-wait fix
-      # (stop_with_timeout/kill_with_timeout now await the recorded runtime
-      # process exit via reap.rs await_recorded_runtime_exit: bounded 30s
-      # RUNTIME_EXIT_GRACE pid-exit wait → direct SIGKILL escalation + 5s
-      # wait → hard MicrosandboxError::Runtime). The transient build-time
-      # patch (nix/patches/mount-policy-approved-root.patch) stays dropped.
-      url = "github:rybskiworks/microsandbox/f8947076b7e355a6df58e5d4ee4608cad03f5fdc";
+      # Pinned fork rev 012519792ea99c5afaf870bb78465daf75b6ef15 —
+      # feat/nested-virt-port: the scan crate (streaming DLP matcher:
+      # sealed patterns compiled once into raw/hex/base64 literal
+      # needles, hit ids + digests only) plus brokerd enforcement on
+      # guest-originated channel data and the typed pattern bootstrap
+      # (BrokerPatterns/BrokerPattern threaded host-side through the
+      # builder into spawn, kept out of the guest-visible spec) on the
+      # fully-merged tip. Direct child of f8947076 (brokerd service:
+      # epoch, divert/reoriginate, bootstrap threading), which sits on
+      # 6ea0b117 (SSH gateway wiring, brokerd service, epoch protocol
+      # family) on deb99d26.
+      url = "github:rybskiworks/microsandbox/012519792ea99c5afaf870bb78465daf75b6ef15";
       flake = false;
     };
 

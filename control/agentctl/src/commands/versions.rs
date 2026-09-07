@@ -25,7 +25,7 @@ pub const MSB_VERSION_PIN: &str = "0.6.16";
 /// Hand-maintained fork rev pin (full rev). Must agree with the
 /// `microsandbox-fork` input in `flake.nix` / `flake.lock` (enforced by
 /// `scripts/check-msb-versions.sh`).
-pub const FORK_REV_PIN: &str = "f8947076b7e355a6df58e5d4ee4608cad03f5fdc";
+pub const FORK_REV_PIN: &str = "012519792ea99c5afaf870bb78465daf75b6ef15";
 
 /// Expected libkrunfw soname (ABI 5, version 5.6.1 — see
 /// `nix/packages/microsandbox.nix`).
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn fork_short_rev_is_the_first_eight_chars() {
-        assert_eq!(fork_rev_short(), "f8947076");
+        assert_eq!(fork_rev_short(), "01251979");
         assert_eq!(fork_rev_short().len(), 8);
     }
 

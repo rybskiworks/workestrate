@@ -108,14 +108,15 @@ pub fn doctor_check_kvm() -> DoctorCheck {
 /// vmx|svm flag + nested parameter affirmatively enabled; WARN = KVM works
 /// but nested is disabled/unknown; FAIL = no /dev/kvm. Each carries
 /// remediation. The trailing pin note records what the pinned fork rev
-/// actually carries: pin f8947076 carries the mount-policy stack plus the
+/// actually carries: pin 01251979 carries the mount-policy stack plus the
 /// first-class `nested_virt` spec option (default off; 09aeb8ae + docs
 /// 8e53de7e, superseding the former always-on Track 1 VMM flag) plus the
-/// brokerd/ssh gateway line (gateway wiring, brokerd epoch/divert/bootstrap) — nested
+/// brokerd/ssh gateway line (gateway wiring, brokerd epoch/divert/bootstrap) plus the
+/// DLP registration line (ssh on_violation + pattern compile/coalesce/emit) — nested
 /// stays inert until the Phase 2 firmware (libkrunfw CONFIG_KVM) lands
 /// (plan D6: no "nested works" claim until Track 3).
 pub fn doctor_check_nested_virt() -> DoctorCheck {
-    const PIN_NOTE: &str = "pin f8947076 carries the mount-policy stack, the first-class nested_virt spec option (default off, driven per-sandbox via builder.nested_virt; supersedes the always-on VMM flag), and the brokerd/ssh gateway line (gateway wiring, brokerd epoch/divert/bootstrap); nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
+    const PIN_NOTE: &str = "pin 01251979 carries the mount-policy stack, the first-class nested_virt spec option (default off, driven per-sandbox via builder.nested_virt; supersedes the always-on VMM flag), the brokerd/ssh gateway line (gateway wiring, brokerd epoch/divert/bootstrap), and the DLP registration line (ssh on_violation + pattern compile/coalesce/emit); nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
     const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
          sudo usermod -aG kvm $USER (re-login); guest nesting additionally needs the host \
          kvm_intel/kvm_amd nested parameter at Y (sudo modprobe kvm_intel nested=1)";
@@ -1142,7 +1143,7 @@ mod tests {
             check
         );
         assert!(
-            check.message.contains("f8947076"),
+            check.message.contains("01251979"),
             "every verdict carries the fork pin note: {check:?}"
         );
         // Honest pin strings: the pin carries the mount-policy stack + the
