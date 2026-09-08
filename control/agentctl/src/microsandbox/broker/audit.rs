@@ -5,9 +5,8 @@
 //! construction API only accepts a precomputed digest string, so a full
 //! payload cannot reach the log by accident: there is no field for it.
 //!
-//! Persistence: JSONL appended under `${state_dir}/var/log/broker-audit.jsonl`
-//! (the `var/` state-tree convention the port registry's `var/run/` lives
-//! in; no prior audit/log infra existed to reuse). In-memory records are
+//! Persistence: JSONL appended under `${state_dir}/var/log/broker-audit.jsonl`.
+//! In-memory records are
 //! always kept (tests + `ps`-style inspection); the file is best-effort —
 //! an append failure is reported to the caller but never fails the signing
 //! decision it records.
@@ -28,7 +27,6 @@ pub fn payload_digest_hex(payload: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// The outcome recorded for one signing decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditResult {
@@ -226,18 +224,15 @@ impl AuditLog {
         self.records.lock().map(|r| r.clone()).unwrap_or_default()
     }
 
-    /// Number of in-memory records.
     pub fn len(&self) -> usize {
         self.records.lock().map(|r| r.len()).unwrap_or(0)
     }
 
-    /// Whether any in-memory records exist.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
-/// Resolve the JSONL audit path for a state dir.
 pub fn audit_file_path(state_dir: &Path) -> PathBuf {
     state_dir.join("var").join("log").join(AUDIT_FILE_NAME)
 }

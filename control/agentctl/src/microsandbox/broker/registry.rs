@@ -4,7 +4,7 @@
 //! state dir, mutated under an exclusive file lock — see
 //! `port_registry/store.rs` + `lock.rs`).
 //!
-//! Two deliberate deviations, documented:
+//! Two deliberate deviations:
 //!
 //! 1. Location is `${state_dir}/var/run/broker/` (a SUBDIRECTORY), not
 //!    `var/run/` directly: the port registry globs `var/run/*.json` and
@@ -88,7 +88,6 @@ pub fn broker_egress_socket_path(state_dir: &Path) -> PathBuf {
         .join(BROKER_EGRESS_SOCKET_FILE_NAME)
 }
 
-/// File holding the synthetic allocator's next-candidate CID.
 const NEXT_CID_FILE_NAME: &str = "next-cid";
 
 /// One CID→instance binding with its launch epoch.
@@ -124,7 +123,6 @@ pub struct CidEntry {
 }
 
 impl CidEntry {
-    /// Whether the entry is live (not tombstoned).
     pub fn is_live(&self) -> bool {
         self.expired_at_secs.is_none()
     }
@@ -221,7 +219,6 @@ impl CidRegistry {
             .cloned())
     }
 
-    /// Number of live entries in the snapshot.
     pub fn live_count(&self) -> anyhow::Result<usize> {
         Ok(self
             .lock_entries()?
@@ -237,7 +234,6 @@ impl CidRegistry {
         self.bind_at(cid, instance, epoch, now_secs())
     }
 
-    /// [`Self::bind`] with an explicit clock (tests).
     pub fn bind_at(
         &self,
         cid: u32,
@@ -298,7 +294,6 @@ impl CidRegistry {
         self.allocate_at(instance, epoch, now_secs())
     }
 
-    /// [`Self::allocate`] with an explicit clock (tests).
     pub fn allocate_at(
         &self,
         instance: &str,
@@ -378,7 +373,6 @@ impl CidRegistry {
         self.expire_at(cid, now_secs())
     }
 
-    /// [`Self::expire`] with an explicit clock (tests).
     pub fn expire_at(&self, cid: u32, now_secs: u64) -> anyhow::Result<()> {
         let _lock =
             crate::microsandbox::port_registry::lock::PortRegistryLock::acquire(&self.state_dir)?;
@@ -392,13 +386,11 @@ impl CidRegistry {
         Ok(())
     }
 
-    /// Expire every binding for `instance` (launch-teardown path).
     /// Returns the number of entries tombstoned.
     pub fn expire_instance(&self, instance: &str) -> anyhow::Result<usize> {
         self.expire_instance_at(instance, now_secs())
     }
 
-    /// [`Self::expire_instance`] with an explicit clock (tests).
     pub fn expire_instance_at(&self, instance: &str, now_secs: u64) -> anyhow::Result<usize> {
         let _lock =
             crate::microsandbox::port_registry::lock::PortRegistryLock::acquire(&self.state_dir)?;
@@ -417,12 +409,10 @@ impl CidRegistry {
         Ok(count)
     }
 
-    /// Delete tombstones older than the TTL. Returns the number removed.
     pub fn sweep_expired(&self) -> anyhow::Result<usize> {
         self.sweep_expired_at(now_secs())
     }
 
-    /// [`Self::sweep_expired`] with an explicit clock (tests).
     pub fn sweep_expired_at(&self, now_secs: u64) -> anyhow::Result<usize> {
         let _lock =
             crate::microsandbox::port_registry::lock::PortRegistryLock::acquire(&self.state_dir)?;
@@ -448,7 +438,7 @@ impl CidRegistry {
 
 /// Read every `cid-*.json` file in `dir` (missing dir = empty snapshot).
 /// A corrupt entry file is a loud warning + skip — the port registry's
-/// WP10/A12 `read_record_loud` idiom, applied to the broker subtree.
+/// `read_record_loud` idiom, applied to broker subtree.
 fn read_all_entries(dir: &Path) -> anyhow::Result<HashMap<u32, CidEntry>> {
     let mut out = HashMap::new();
     if !dir.exists() {

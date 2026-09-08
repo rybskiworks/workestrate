@@ -9,9 +9,7 @@
 //! (post-restart reuse) or forked (snapshot-clone) epoch is rejected with a
 //! re-attestation signal, never silently accepted.
 //!
-//! Entropy source: [`getrandom`] — the platform secure-random source,
-//! already in the dependency graph (promoted to a direct dep). No
-//! new RNG dependency was introduced.
+//! Entropy source is [`getrandom`].
 
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +48,6 @@ impl EpochToken {
         hex::encode(self.0)
     }
 
-    /// Parse [`Self::to_hex`] output.
     pub fn from_hex(s: &str) -> anyhow::Result<Self> {
         let raw =
             hex::decode(s).map_err(|e| anyhow::anyhow!("epoch from_hex: invalid hex: {e}"))?;
@@ -84,9 +81,8 @@ impl EpochToken {
     }
 }
 
-/// Constant-time byte equality (accumulates the XOR diff — no early exit).
-/// Hand-rolled over std so this change adds no `subtle`-family dependency for one
-/// 32-byte comparison; the shape mirrors `subtle::ConstantTimeEq`.
+/// Constant-time byte equality: hand-rolled constant-time compare mirroring
+/// `subtle::ConstantTimeEq` (accumulates the XOR diff — no early exit).
 fn constant_time_eq(a: &[u8; EPOCH_BYTES], b: &[u8; EPOCH_BYTES]) -> bool {
     let mut diff = 0u8;
     for i in 0..EPOCH_BYTES {
@@ -109,7 +105,6 @@ pub enum EpochError {
 }
 
 impl EpochError {
-    /// Whether the guest should re-attest (always true by construction).
     pub fn re_attest(&self) -> bool {
         match self {
             EpochError::StaleEpoch { re_attest } | EpochError::CidMismatch { re_attest } => {

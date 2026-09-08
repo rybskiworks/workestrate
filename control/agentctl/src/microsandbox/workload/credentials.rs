@@ -1,4 +1,4 @@
-//! Credential-broker grant resolution (M1): compile a workload's
+//! Credential-broker grant resolution: compile a workload's
 //! `[workloads.<name>.credentials]` allowlist against the repo-global
 //! `[credentials.*]` catalog into the plan's [`CredentialsPlan`].
 //!

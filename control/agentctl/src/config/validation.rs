@@ -658,7 +658,7 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
         }
     }
 
-    // M1 credential broker: catalog integrity + grant references + SSH
+    // credential broker: catalog integrity + grant references + SSH
     // confinement coherence. The ladders come from the process-global stores
     // populated by loading.rs BEFORE validate_config runs; synthetic/test
     // paths without a load degrade to empty ladders (strict defaults false).
@@ -671,10 +671,10 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     Ok(())
 }
 
-/// Whether one egress fragment carries an SSH allowance (M1): an allow-all,
+/// Whether one egress fragment carries an SSH allowance: an allow-all,
 /// a host entry covering port 22, or a domain entry scoped to port 22.
 /// Deny entries never count (they restrict). Protocol-agnostic by design —
-/// port-22 presence is the M1 approximation of "SSH allowance".
+/// port-22 presence is the approximation of "SSH allowance".
 fn egress_fragment_covers_ssh(fragment: &crate::config::EgressPolicyFragment) -> bool {
     let Some(allow) = &fragment.allow else {
         return false;
@@ -747,7 +747,7 @@ fn effective_ssh_strict(
     crate::microsandbox::workload::credentials::resolve_ssh_strict(&rung_refs)
 }
 
-/// Validate the M1 credential-broker surface (fail-closed): catalog entries
+/// Validate the credential-broker surface (fail-closed): catalog entries
 /// must reference existing secrets and carry their required scope;
 /// workload grant refs must name catalog entries; `strict` confinement
 /// without any SSH grant or SSH egress allowance is a config error.
@@ -2851,7 +2851,7 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
         }
     }
 
-    // ---- M1 credential broker: deny_unknown_fields ----
+    // ---- credential broker: deny_unknown_fields ----
 
     /// `users`/`ports` on a SIGNING entry are a parse error (signing
     /// entries carry namespace, never users/ports) — as is any unknown
@@ -2917,7 +2917,7 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
             .unwrap_or_else(|e| panic!("legal credentials surface must pass: {e}"));
     }
 
-    // ---- M1 credential broker: material + grant validation ----
+    // ---- credential broker: material + grant validation ----
 
     /// A material reference to a missing secret fails closed naming BOTH
     /// the credential and the secret (ssh and signing alike).
@@ -3025,7 +3025,7 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
         );
     }
 
-    // ---- M1 credential broker: strict confinement coherence ----
+    // ---- credential broker: strict confinement coherence ----
 
     fn ssh_ladder_with(strict: Option<bool>, origin: &str) -> crate::merge::SshPolicyLadder {
         crate::merge::SshPolicyLadder {
@@ -3148,7 +3148,7 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
         }
     }
 
-    // ---- M1 credential broker: bound="guest" backward compat ----
+    // ---- credential broker: bound="guest" backward compat ----
 
     /// A `bound = "guest"` env consumption keeps the EXISTING secret
     /// semantics untouched when credentials are present: the guest-bound

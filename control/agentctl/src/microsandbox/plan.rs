@@ -82,7 +82,7 @@ pub struct SandboxPlan {
     pub memory_mib: Option<u32>,
     pub env: Vec<EnvVar>,
     pub secret_env: Vec<HostBoundSecret>,
-    /// Credential-broker grants for this workload (M1): the compiled
+    /// Credential-broker grants for this workload: the compiled
     /// per-workload view — SSH/signing grants with material→secret
     /// resolution, binding resolution (broker-bound default vs the explicit
     /// `bound = "guest"` opt-in), and the SSH confinement flag. `None` = no
@@ -475,7 +475,7 @@ pub struct HostBoundSecret {
     pub on_violation: SecretViolationPolicy,
 }
 
-/// Exposure of one credential-broker grant (M1): `Broker` (the default,
+/// Exposure of one credential-broker grant: `Broker` (the default,
 /// secure — omission of any guest binding; the workload never sees real
 /// material) or `Guest` (the explicit `bound = "guest"` opt-in on the
 /// corresponding secret consumption, delivering real material via the
@@ -497,7 +497,7 @@ impl fmt::Display for CredentialBinding {
     }
 }
 
-/// One compiled SSH credential grant (M1): the catalog entry's
+/// One compiled SSH credential grant: the catalog entry's
 /// material→secret resolution plus its confinement scope and binding.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -516,7 +516,7 @@ pub struct SshGrantPlan {
     pub on_violation: SecretViolationPolicy,
 }
 
-/// One compiled SSH signing grant (M1).
+/// One compiled SSH signing grant.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SigningGrantPlan {
@@ -531,7 +531,7 @@ pub struct SigningGrantPlan {
     pub binding: CredentialBinding,
 }
 
-/// The compiled credential-broker view for ONE workload (M1): its grants
+/// The compiled credential-broker view for ONE workload: its grants
 /// plus the SSH confinement flag. Rendered by the plan display ONLY when
 /// present (no grants and no confinement stays silent).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -734,7 +734,7 @@ impl fmt::Display for SandboxPlan {
                 req
             )?;
         }
-        // M1 credential broker: the compiled per-workload grants plus the
+        // credential broker: the compiled per-workload grants plus the
         // SSH confinement flag. Renders ONLY when present (no grants and no
         // confinement stays silent, so legacy plan output — including every
         // golden — is byte-identical).

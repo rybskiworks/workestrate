@@ -11,13 +11,10 @@
 //! the existing credential-schema grant vocabulary ([`crate::microsandbox::plan::SigningGrantPlan`])
 //! carries no scheme field, so no grant can authorize raw: fail-closed.
 //!
-//! CBOR: [`SignRequest`]/[`SignResponse`] are plain serde structs decoded
-//! with [`ciborium`] (already in the lockfile via the microsandbox SDK —
-//! promoted to a direct dep). Codec helpers ([`encode_cbor`]/[`decode_cbor`])
-//! are the single wiring point the shim uses. Note: `payload: Vec<u8>`
-//! encodes as a CBOR array of ints (correct, slightly verbose); switching
-//! to `serde_bytes::ByteBuf` for a byte-string encoding is a future
-//! optimization, out of scope for this change.
+//! CBOR: [`SignRequest`]/[`SignResponse`] go through [`ciborium`] via the
+//! [`encode_cbor`]/[`decode_cbor`] helpers (the single wiring point the shim
+//! uses). Note: `payload: Vec<u8>` encodes as a CBOR array of ints;
+//! `serde_bytes::ByteBuf` would encode a byte string instead.
 
 use crate::microsandbox::broker::audit::{AuditLog, AuditRecord, payload_digest_hex};
 use crate::microsandbox::plan::{CredentialsPlan, SigningGrantPlan, SshGrantPlan};
@@ -42,15 +39,12 @@ pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 /// Sliding-window length for rate limiting (seconds).
 pub const RATE_WINDOW_SECS: u64 = 60;
 
-/// Tunable request limits. `Default` yields the `DEFAULT_*` constants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LimitsConfig {
     pub max_payload_bytes: usize,
     pub max_requests_per_minute: u32,
     pub max_concurrent_per_instance: usize,
-    /// Sync-backend enforcement here is post-hoc (elapsed > timeout ⇒
-    /// [`Denial::Timeout`], signature discarded — fail-closed). True
-    /// cancellation of a hung backend is follow-up async work.
+    /// True cancellation requires async support.
     pub request_timeout: Duration,
 }
 
@@ -103,7 +97,6 @@ pub struct SignRequest {
     pub optional_context: Option<String>,
 }
 
-/// One signing response (broker → guest).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignResponse {
     pub operation_id: String,
@@ -111,7 +104,6 @@ pub struct SignResponse {
     pub key_id: String,
 }
 
-/// Encode any serde value to CBOR bytes (the wire codec).
 pub fn encode_cbor<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
     let mut buf = Vec::new();
     ciborium::into_writer(value, &mut buf)
@@ -119,7 +111,6 @@ pub fn encode_cbor<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Decode CBOR bytes into any serde value.
 pub fn decode_cbor<T: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
     ciborium::from_reader(bytes).map_err(|e| anyhow::anyhow!("CBOR decode failed: {e}"))
 }
@@ -133,30 +124,43 @@ pub fn decode_cbor<T: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Denial {
     /// No grant store entry for this instance at all.
-    UnknownInstance { instance: String },
+    UnknownInstance {
+        instance: String,
+    },
     /// Instance known but holds zero signing grants.
-    NoGrant { instance: String },
+    NoGrant {
+        instance: String,
+    },
     /// Instance holds signing grants, but none for this key reference.
-    UnknownKey { key_reference: String },
+    UnknownKey {
+        key_reference: String,
+    },
     /// The matching grant is guest-bound: real material already lives in
     /// the guest via secret delivery, so the broker path stays closed
     /// (avoids dual custody of one key).
-    GuestBoundMaterial { key_reference: String },
+    GuestBoundMaterial {
+        key_reference: String,
+    },
     /// Only `ssh-sig` is authorizable; `raw` has no grant vocabulary.
-    SchemeNotAuthorized { scheme: String },
+    SchemeNotAuthorized {
+        scheme: String,
+    },
     /// Exact-match namespace failure (SSHSIG domain separation).
-    NamespaceMismatch { expected: String, got: String },
-    /// Payload exceeds the configured cap.
-    PayloadTooLarge { bytes: usize, max: usize },
-    /// Sliding-window rate exceeded.
+    NamespaceMismatch {
+        expected: String,
+        got: String,
+    },
+    PayloadTooLarge {
+        bytes: usize,
+        max: usize,
+    },
     RateLimited,
-    /// Per-instance in-flight cap reached.
     ConcurrencyExhausted,
-    /// Backend exceeded the request timeout (signature discarded).
     Timeout,
-    /// The key backend itself failed (no real crypto in this change — only the
-    /// test backend's synthetic failures).
-    BackendError { detail: String },
+    /// The key backend itself failed.
+    BackendError {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for Denial {
@@ -205,7 +209,6 @@ impl std::error::Error for Denial {}
 // Grant store (compiled from the existing credential-schema plan types — consumed, never modified)
 // ---------------------------------------------------------------------------
 
-/// Per-instance compiled signing grants.
 #[derive(Debug, Clone, Default)]
 pub struct InstanceGrants {
     pub signing: HashMap<String, SigningGrantPlan>,
@@ -244,7 +247,6 @@ impl GrantStore {
         store
     }
 
-    /// Whether the store knows this instance at all.
     pub fn knows_instance(&self, instance: &str) -> bool {
         self.instances.contains_key(instance)
     }
@@ -312,8 +314,7 @@ impl GrantStore {
 // Key backends (no real crypto in this change)
 // ---------------------------------------------------------------------------
 
-/// Signs authorized payloads. This change ships only [`TestBackend`]; a real
-/// SSH-agent/HSM backend implements this trait as follow-up work.
+/// Signs authorized payloads. Only [`TestBackend`] implemented.
 pub trait KeyBackend: Send + Sync + std::fmt::Debug {
     fn sign(
         &self,
@@ -326,7 +327,7 @@ pub trait KeyBackend: Send + Sync + std::fmt::Debug {
 
 /// Deterministic fake signatures for tests and control-plane bring-up:
 /// `TESTSIGv1:<key_ref>:<namespace>:<hex-sha256(payload)>`. Deterministic
-/// so golden assertions are possible; obviously not a signature.
+/// so golden assertions are possible; not a signature.
 #[derive(Debug, Clone, Default)]
 pub struct TestBackend;
 
@@ -350,12 +351,10 @@ impl KeyBackend for TestBackend {
 // Service
 // ---------------------------------------------------------------------------
 
-/// Mutable limit state (behind the service's `Mutex`).
 #[derive(Debug, Default)]
 struct ServiceState {
     /// Per-instance sliding-window request timestamps (epoch secs, ascending).
     windows: HashMap<String, VecDeque<u64>>,
-    /// Per-instance in-flight signing count.
     in_flight: HashMap<String, usize>,
 }
 
@@ -400,7 +399,6 @@ impl<B: KeyBackend> SigningService<B> {
         self.sign_at(instance, cid, request, audit, timestamp, current_secs())
     }
 
-    /// [`Self::sign`] with an explicit clock (tests drive the rate window).
     pub fn sign_at(
         &self,
         instance: &str,
@@ -569,6 +567,7 @@ impl<B: KeyBackend> SigningService<B> {
     }
 }
 
+/// Current Unix secs (prod default; tests use sign_at).
 fn current_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

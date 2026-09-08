@@ -1070,7 +1070,7 @@ fn replace_workload_virtualization_rungs_from_layer(
 }
 
 /// Collect the SSH confinement-policy ladder rungs in the loader's actual
-/// order (M1 credential broker) — the SSH edition of
+/// order — the SSH edition of
 /// [`collect_secret_policy_ladder`]: `[policy.ssh]` fragments are collected
 /// per scope, never merged, and the resolution walks them
 /// authority-ascending. Rung 1 is the home registry's fragment (operator
@@ -3377,7 +3377,7 @@ write.deny = ["sugar-write-deny"]
         Ok(())
     }
 
-    /// M1: a bare directory-mode capsule's top-level `[policy.ssh]` lands
+    /// A bare directory-mode capsule's top-level `[policy.ssh]` lands
     /// on the workload rung via the workload wrapper (the same path the
     /// `[policy.secrets]` capsule rung takes), and layer-level
     /// `[policy.ssh]` lands on the layer rung.
