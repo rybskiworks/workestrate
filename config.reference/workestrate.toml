@@ -74,6 +74,16 @@ allowed_hosts = ["github.com", "api.github.com"]
 required = false
 on_violation = "passthrough"  # default; placeholder text may leave the sandbox unsubstituted — real values still only go to allowed_hosts
 
+# Machine-identity SSH key (M1 broker-bound grant material): key BYTES are
+# never stored here — the operator provisions them later via the host env var
+# above (or the secrets workflow into .env.enc). required = false so absent
+# material warns-and-skips at runtime instead of refusing (mirrors
+# GITHUB_TOKEN); validate-config passes with the value absent.
+[secrets.GITHUB_MACHINE_IDENTITY_SSH_KEY]
+env_var = "GITHUB_MACHINE_IDENTITY_SSH_KEY"
+allowed_hosts = ["github.com"]
+required = false
+
 # Credential-broker catalog (M1, repo-global): [credentials.ssh.<name>]
 # SSH grants plus [credentials.signing.ssh.<name>] signing grants. `material`
 # is an explicit first-class reference to an existing [secrets.<N>] entry
@@ -84,6 +94,17 @@ on_violation = "passthrough"  # default; placeholder text may leave the sandbox 
 # are unaffected — they document the catalog shape.
 [credentials.ssh.deploy]
 material = "GITHUB_TOKEN"
+hosts = ["github.com"]
+users = ["git"]
+# ports = [22]  # absent = [22] (defaults-after-merge)
+
+# Machine-identity SSH grant shape for consumer config repos (codex /
+# prime-agent / pi wire this name via [workloads.<name>.credentials]
+# ssh = ["github-machine-identity"] plus a github.com:22 egress allowance;
+# those workloads live outside this repo, so like `deploy` above this entry
+# is unconsumed here and the golden plans are unaffected).
+[credentials.ssh.github-machine-identity]
+material = "GITHUB_MACHINE_IDENTITY_SSH_KEY"
 hosts = ["github.com"]
 users = ["git"]
 # ports = [22]  # absent = [22] (defaults-after-merge)

@@ -3323,6 +3323,7 @@ version = "0.6.16"
 dependencies = [
  "chrono",
  "ciborium",
+ "microsandbox-scan",
  "microsandbox-types",
  "serde",
  "serde_bytes",
@@ -3362,6 +3363,18 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "microsandbox-scan"
+version = "0.6.16"
+dependencies = [
+ "base64 0.23.1",
+ "hex",
+ "percent-encoding",
+ "serde",
+ "sha2 0.11.0",
  "zeroize",
 ]
 
@@ -7035,7 +7048,6 @@ name = "workestrate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "ciborium",
  "clap",
  "clap_complete",
@@ -7047,6 +7059,8 @@ dependencies = [
  "microsandbox",
  "microsandbox-image",
  "microsandbox-network",
+ "microsandbox-protocol",
+ "microsandbox-scan",
  "microsandbox-types",
  "schemars",
  "serde",

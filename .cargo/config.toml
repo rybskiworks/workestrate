@@ -16,5 +16,6 @@ microsandbox-migration = { path = "control/agentctl/vendor/microsandbox-fork/cra
 microsandbox-network = { path = "control/agentctl/vendor/microsandbox-fork/crates/network" }
 microsandbox-protocol = { path = "control/agentctl/vendor/microsandbox-fork/crates/protocol" }
 microsandbox-runtime = { path = "control/agentctl/vendor/microsandbox-fork/crates/runtime" }
+microsandbox-scan = { path = "control/agentctl/vendor/microsandbox-fork/crates/scan" }
 microsandbox-types = { path = "control/agentctl/vendor/microsandbox-fork/packages/microsandbox-types/rust" }
 microsandbox-utils = { path = "control/agentctl/vendor/microsandbox-fork/crates/utils" }

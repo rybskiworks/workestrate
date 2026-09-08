@@ -1,7 +1,7 @@
 # microsandbox — msb CLI + runtime libraries, built from the user's fork.
 #
 # Source provenance: fork branch fix/filesystem-agentd-path-override, pinned
-# via the `microsandbox-fork` flake input at validated rev 8e53de7e (the nested-virt spec-field rev). The fork is a 0.6.16 workspace
+# via the `microsandbox-fork` flake input at validated rev 01251979 (the dlp line atop the brokerd/ssh gateway rev). The fork is a 0.6.16 workspace
 # (edition 2024, resolver 3). msb is built from source via buildRustPackage
 # with the fenix-pinned toolchain (same as agentctl.nix) for host-toolchain
 # consistency. agentd is built separately (nix/packages/agentd.nix, musl
@@ -32,7 +32,7 @@ let
   # §3 corresponding-source offer obligation. The exact corresponding source
   # is the upstream fork repo https://github.com/superradcompany/libkrunfw
   # (branch krunfw; at the time of writing resolving to 21cb6dce), pinned as
-  # the fork's vendor/libkrunfw submodule (recorded gitlink c5503d82).
+  # the fork's vendor/libkrunfw submodule (recorded gitlink 21cb6dce19a615f63e41ecb913334d18560c1364).
   #
   # Branch A (default): fetch the upstream v0.6.8 release tarball and extract
   # ONLY libkrunfw.so* from it. The tar sha256 below (line ~44) is REAL and
@@ -41,12 +41,12 @@ let
   # Branch B becomes mandatory.
   #
   # Branch B (spike, NOT implemented): build libkrunfw from the fork's
-  # vendor/libkrunfw submodule (gitlink commit c5503d82, repo
+  # vendor/libkrunfw submodule (gitlink commit 21cb6dce19a615f63e41ecb913334d18560c1364, repo
   # https://github.com/superradcompany/libkrunfw.git branch krunfw). The
   # submodule is NOT populated locally. Building it requires kernel build
   # deps (gcc, make, flex, bison, libelf) and produces libkrunfw.so.5.6.1.
   # TODO: if Branch A fails, implement a libkrunfw.nix that fetchGit's the
-  # submodule repo at c5503d82 and builds via `make` (see fork justfile
+  # submodule repo at 21cb6dce19a615f63e41ecb913334d18560c1364 and builds via `make` (see fork justfile
   # build-libkrunfw recipe).
   #
   # The fork's LIBKRUNFW_VERSION is "5.6.1" (ABI "5") — NOT 5.2.1 as in the
