@@ -384,10 +384,12 @@ Shape of the live definition:
   when they are not cached; bootstrap does not require them.
 - Both shells disable automatic Git-hook installation and tree formatting.
   Install hooks explicitly with `nix run .#install-hooks` when intended.
-- Both export
-  `CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
-  to keep Cargo outputs outside the source tree. Shell entry does not itself
-  create or populate that target directory.
+- Both preserve a nonempty explicit `CARGO_TARGET_DIR`, otherwise selecting
+  `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target`.
+  The shared `scripts/cargo-target.sh` validator requires an absolute target
+  outside the evaluated checkout root, resolving existing symlink aliases
+  and `..` with GNU `realpath -m`. Invalid targets abort before shell setup.
+  Neither validation nor shell entry creates or populates that directory.
 - Default `enterShell` supplies `MSB_BUILD_RUNTIME` pointing at the immutable
   Microsandbox package, its `MSB_AGENTD_PATH`, and `WORKESTRATE_DEVSHELL=1`.
   The SDK validates explicit build inputs without downloading a replacement.
@@ -637,11 +639,20 @@ Consult the recipe before assuming it enters a shell. No `.envrc` or
 
 ```nix
 # From flake.nix, devenv.shells.default.enterShell
-export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
+CARGO_TARGET_DIR="$(${pkgs.bash}/bin/bash ${./scripts/cargo-target.sh} ${pkgs.lib.escapeShellArg config.devenv.shells.default.devenv.root})" || exit 1
+export CARGO_TARGET_DIR
 ```
 
-Cargo creates its target directory when compilation runs; entering the shell
-only exports this location.
+Bootstrap uses the same helper with its own evaluated `devenv.root`. Keeping
+assignment separate from `export` preserves validation failures. Bare `just`
+uses the same validation at parse time; a nested shell or recipe therefore
+retains an already valid caller-owned target. Empty overrides use the existing
+XDG/HOME fallback. See [the purity contract](../nix-purity.md#the-rules) for
+alias, missing-directory and missing-HOME behavior.
+
+Cargo creates its target directory when compilation runs; shell entry only
+exports the validated location. This does not make mutable development
+artifacts safe inputs to Nix package builds.
 
 ### Workestrate devshell excerpt (packages)
 
