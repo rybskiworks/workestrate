@@ -280,11 +280,16 @@ hard gate on licenses/bans/sources, soft on advisories). CODEOWNERS covers
 
 ## Runtime status
 
-Everything above is implemented and cargo-verified. KVM runtime is
-host-validated for pi/prime (microVM boot, egress + secret substitution,
-kernel env; 2026-08-13); other workload runtime parity remains
-host-unvalidated. This container has no `/dev/kvm` — host runs happen on a
-KVM host. Nested virtualization is opt-in (`virtualization.nested`) but
-guest `/dev/kvm` arrives with the Phase-2 firmware rebuild (ADR 0036).
-LiteLLM runs in-memory (no Postgres, no virtual keys, no persistent spend
-tracking) in the current milestone.
+Repository checks validate the generic CLI, configuration and pinned package
+contracts. They do not certify deployment of a particular fleet. Runnable
+baseline, communications and nested fixtures and their independent validation
+instructions live in the [personal fleet repository](https://github.com/rybskiworks/workestrate-fleet-georgrybski),
+under `tests/workloads/`; application validation belongs to each workload owner.
+
+Nested virtualization is requested per workload with `virtualization.nested`.
+A compatible Linux runtime can boot a nested child, but that positive result
+does not prove nesting is unavailable when omitted or disabled. Validate both
+directions against the exact selected runtime. Lifecycle readiness/cleanup,
+mount-policy enforcement, SSH custody and the complete agent/memory-service
+stack have separate outstanding runtime gates. A successful build or an older
+Pi/Prime startup result must not be used as proof of those properties.

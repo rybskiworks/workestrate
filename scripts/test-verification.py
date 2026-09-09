@@ -14,6 +14,12 @@ JUSTFILE = Path(__file__).resolve().parent.parent / "justfile"
 
 
 class VerificationTests(unittest.TestCase):
+    def test_repository_gate_does_not_depend_on_workload_fixtures(self):
+        text = JUSTFILE.read_text()
+        self.assertNotIn("examples/workloads", text)
+        self.assertNotIn("smoke-runner-check", text)
+        self.assertNotIn("workestrate-fleet-", text)
+
     def run_gate(self, nix_status=0, git_status=0, recipe="verify"):
         with tempfile.TemporaryDirectory(prefix="workestrate-verify-") as directory:
             root = Path(directory)

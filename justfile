@@ -111,9 +111,6 @@ verification-check:
 purity-check:
     python3 ./scripts/test-nix-paths.py
 
-smoke-runner-check:
-    python3 ./examples/workloads/test_smoke.py
-
 check:
     @just _check-inner
 [private]
@@ -156,7 +153,7 @@ _spec-examples-inner:
 # homes. Nix checks use the pinned toolchain, offline dependencies and isolated
 # test state. Unit checks include spec examples, goldens, schema drift and the
 # native scaffold; KVM, Nix-daemon and Copier integration remain separate gates.
-verify: lock-guard versions-check hooks-check shell-arguments-check store-audit-check verification-check purity-check smoke-runner-check lint-nix
+verify: lock-guard versions-check hooks-check shell-arguments-check store-audit-check verification-check purity-check lint-nix
     #!/usr/bin/env bash
     set -euo pipefail
     nix build --no-link --no-update-lock-file --keep-going \

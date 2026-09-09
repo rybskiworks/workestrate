@@ -52,46 +52,26 @@ Registry-image workloads retain registry acquisition: merely adding a flake does
 not switch them to a Nix-built image. Explicitly choose `nix-layered` and the
 matching package name when migrating that behavior.
 
-## Examples and validation
+## Workload ownership and validation
 
-- [Baseline](../examples/workloads/baseline/README.md): a reusable, minimal
-  workload template with a named image, exact tooling pin, lock and static check.
-- [Communication fixture](../examples/workloads/comms/README.md): two services
-  sharing one image, exercising a required dependency and a narrow local port.
-- [Nested fixture](../examples/workloads/nested/README.md): a pinned Workestrate
-  runtime launches, execs into, and removes a child VM inside a workload. This
-  requires nested host KVM and build-time access to the private source input;
-  it does not mount the host store or Nix daemon into the guest.
+Runnable examples, application packages and their black-box tests belong in
+fleet or workload repositories. The baseline, dependency-communication and
+nested-Workestrate fixtures are maintained under `tests/workloads/` in the
+[personal fleet repository](https://github.com/rybskiworks/workestrate-fleet-georgrybski).
+Each fixture has its own locked flake, image check and operating instructions.
+Copy a complete fixture directory, including its lock, to use it independently.
 
-Build and check each flake without entering a development shell. Validate all
-example configs against a particular installed CLI using disposable homes:
+Workestrate retains generic configuration, provenance, policy and orchestration
+regressions. `just verify` does not require a fleet checkout, build application
+images or invoke a fleet's VM suite. The external runner accepts an explicitly
+selected Workestrate binary; it is not a dependency of the tool's build.
 
-```sh
-python3 examples/workloads/validate-config.py /absolute/path/to/workestrate
-```
-
-For a real host-KVM test, explicitly select the CLI and Nix binaries:
-
-```sh
-python3 examples/workloads/smoke.py baseline --run \
-  --workestrate /absolute/path/to/workestrate --nix /absolute/path/to/nix
-python3 examples/workloads/smoke.py comms --run \
-  --workestrate /absolute/path/to/workestrate --nix /absolute/path/to/nix
-```
-
-The runner builds/imports through Workestrate, checks guest markers, and stops
-only its exact test instances. It creates fresh short paths under `/tmp`, clears
-ambient backend/home/credential variables, supplies an empty Microsandbox JSON
-config, and retains logs and state for diagnosis. Commands and readiness waits
-are bounded. Inspect any reported cleanup failure before removing test artifacts.
-`python3 examples/workloads/test_smoke.py` checks isolation and cleanup behavior
-without KVM or launching a process through Workestrate.
-
-Static image checks and config validation do not start VMs. Runtime tests require
-an explicitly selected isolated Workestrate home and microsandbox store. The
-examples name their expected markers and teardown order; no personal mounts or
-credentials belong in these fixtures. Keep an explicit guest `workdir`: the
-default `/app` need not exist in a minimal image.
+Keep static image checks, disposable configuration validation and opt-in VM
+tests separate. Runtime tests need fresh tool, state and Microsandbox roots,
+an explicitly empty backend configuration, bounded readiness and exact teardown.
+They must not inherit personal mounts or credentials. Image builds alone do not
+prove startup, guest service health, nested confinement or cleanup. Set an
+explicit guest `workdir`: the default `/app` need not exist in a minimal image.
 
 ## Not yet implemented
 
