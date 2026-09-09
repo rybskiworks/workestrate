@@ -1,7 +1,7 @@
 {
   pkgs,
   microsandbox,
-  microsandbox-filesystem-patched,
+  microsandboxSource,
   rustToolchain,
   rev ? "dirty",
 }:
@@ -50,7 +50,12 @@ let
     inherit (rustToolchain) rustc;
     inherit (rustToolchain) cargo;
   };
+  manifest = builtins.fromTOML (builtins.readFile (agentctlSrc + "/Cargo.toml"));
 in
+assert pkgs.lib.assertMsg (
+  manifest.dependencies.microsandbox.version == "=${microsandbox.version}"
+  && manifest.dev-dependencies.microsandbox-image == "=${microsandbox.version}"
+) "Workestrate SDK dependencies must match the Microsandbox runtime version";
 rustPlatform.buildRustPackage {
   pname = "workestrate";
   version = "0.1.0";
@@ -67,14 +72,12 @@ rustPlatform.buildRustPackage {
 
   cargoLock = {
     lockFile = ../../control/agentctl/Cargo.lock;
+    # The Git dependency is selected by this lock independently of SDK patches.
+    outputHashes."msb_krun-0.1.32" = "sha256-Wb5oaUkmp68FnrOVMxVimevXaWxfAPo34qVbuyLvKM0=";
   };
 
-  # The vendored `microsandbox-filesystem` crate is
-  # `microsandbox-filesystem-patched`, sourced from the user's fork branch
-  # `fix/filesystem-agentd-path-override` (the MSB_AGENTD_PATH fix is carried
-  # natively — no patch step). preBuild (below) symlinks it into vendor/ and
-  # stages MSB_HOME + MSB_AGENTD_PATH so its build.rs finds the prebuilt msb
-  # and agentd without network downloads.
+  # All SDK patches use the same fork input as the runtime packages. Stage
+  # runtime artifacts only inside this build so prebuilt features stay offline.
 
   nativeBuildInputs = with pkgs; [
     makeWrapper
@@ -86,24 +89,9 @@ rustPlatform.buildRustPackage {
   ];
 
   preBuild = ''
-    mkdir -p vendor
-    ln -sfn "${microsandbox-filesystem-patched}" vendor/microsandbox-fork
-    cat > .cargo/config.toml <<'CARGO_CONFIG'
-    [patch.crates-io]
-    microsandbox = { path = "vendor/microsandbox-fork/sdk/rust" }
-    microsandbox-agent-client = { path = "vendor/microsandbox-fork/packages/agent-client/rust" }
-    microsandbox-db = { path = "vendor/microsandbox-fork/crates/db" }
-    microsandbox-filesystem = { path = "vendor/microsandbox-fork/crates/filesystem" }
-    microsandbox-image = { path = "vendor/microsandbox-fork/crates/image" }
-    microsandbox-metrics = { path = "vendor/microsandbox-fork/crates/metrics" }
-    microsandbox-migration = { path = "vendor/microsandbox-fork/crates/migration" }
-    microsandbox-network = { path = "vendor/microsandbox-fork/crates/network" }
-    microsandbox-protocol = { path = "vendor/microsandbox-fork/crates/protocol" }
-    microsandbox-runtime = { path = "vendor/microsandbox-fork/crates/runtime" }
-    microsandbox-scan = { path = "vendor/microsandbox-fork/crates/scan" }
-    microsandbox-types = { path = "vendor/microsandbox-fork/packages/microsandbox-types/rust" }
-    microsandbox-utils = { path = "vendor/microsandbox-fork/crates/utils" }
-    CARGO_CONFIG
+    mkdir -p vendor .cargo
+    ln -sfn "${microsandboxSource}" vendor/microsandbox-fork
+    cp ${../../control/agentctl/.cargo/config.toml} .cargo/config.toml
 
     # Stage the Nix-managed Microsandbox runtime so the fork's build.rs
     # finds msb + agentd locally. The fork's filesystem build.rs uses the
@@ -136,9 +124,8 @@ rustPlatform.buildRustPackage {
     # mirrors the SDK's resolve_home semantics (empty treated as unset).
     # --set-default would NOT handle the empty-string case (it only fires
     # when unset), so the explicit `[ -z ... ]` guard is required. The
-    # 12-char generation keys exist because the total MSB_HOME path length
-    # is a fork hard limit of 59 chars (the unix-socket paths derived
-    # beneath MSB_HOME must fit sun_path). Shell expansion of $HOME happens
+    # 12-char generation keys keep derived Unix socket endpoints short
+    # enough for the platform's sun_path byte limit. Shell expansion of $HOME happens
     # at wrapper execution time, not at build time.
     wrapProgram $out/bin/workestrate \
       --set MSB_PATH "${microsandbox}/bin/msb" \

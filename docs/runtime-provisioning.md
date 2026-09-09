@@ -109,7 +109,7 @@ wrapProgram $out/bin/workestrate \
   --run 'if [ -z "${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox/current"; fi'
 ```
 
-- **`--set MSB_PATH`** — baked `0.6.16` `msb` binary path (`nix/packages/microsandbox.nix:54`, fork rev `78fb3ed1`). The SDK spawns `MSB_PATH`; it must be a live-resize-capable `msb` (linux `libkrunfw.so.5.6.1` from the `v0.6.8` release tarball, `nix/packages/microsandbox.nix` Branch A).
+- **`--set MSB_PATH`** — binary from `microsandbox-fork.packages.<system>.microsandbox`. The SDK patches, runtime and static agentd all come from this same pinned flake input; Workestrate no longer duplicates the fork's runtime build recipes. The fork package currently bundles `libkrunfw.so.5.6.1` from the fixed-hash `v0.6.8` release tarball. Building the separate libkrunfw fork does not automatically replace that firmware.
 - **`--set MSB_AGENTD_PATH`** — baked musl static `agentd` path for the fork's filesystem crate prebuilt branch.
 - **`--run MSB_HOME`** — guarded default: honors an explicit non-empty `MSB_HOME` override while defaulting unset AND empty to `$HOME/.microsandbox/current` (the `current` generation symlink) at wrapper execution time so `$HOME` expands per-user (not per-build). Neither the devshell staging dir nor the build `$TMPDIR/.microsandbox` is baked here.
 - **`--prefix PATH : sops`** — `sops` binary for `workestrate secrets` (ADR 0034).

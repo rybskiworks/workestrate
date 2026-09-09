@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::commands::versions::{MSB_VERSION_PIN, collect_versions};
+use crate::commands::versions::{MSB_VERSION_PIN, collect_versions, fork_rev_short};
 use crate::config;
 use crate::images::state::{ImageRecord, ImagesState};
 use crate::scaffold;
@@ -107,22 +107,20 @@ pub fn doctor_check_kvm() -> DoctorCheck {
 /// (`microsandbox::nested::read_nested_probe`): OK = /dev/kvm accessible +
 /// vmx|svm flag + nested parameter affirmatively enabled; WARN = KVM works
 /// but nested is disabled/unknown; FAIL = no /dev/kvm. Each carries
-/// remediation. The trailing pin note records what the pinned fork rev
-/// actually carries: pin 01251979 carries the mount-policy stack plus the
-/// first-class `nested_virt` spec option (default off; 09aeb8ae + docs
-/// 8e53de7e, superseding the former always-on Track 1 VMM flag) plus the
-/// brokerd/ssh gateway line (gateway wiring, brokerd epoch/divert/bootstrap) plus the
-/// DLP registration line (ssh on_violation + pattern compile/coalesce/emit) — nested
-/// stays inert until the Phase 2 firmware (libkrunfw CONFIG_KVM) lands
-/// (plan D6: no "nested works" claim until Track 3).
+/// remediation. The trailing note identifies the same fork revision as
+/// `versions`. A host probe does not establish that the packaged firmware
+/// supports nested guests or that the SSH gateway is operational.
 pub fn doctor_check_nested_virt() -> DoctorCheck {
-    const PIN_NOTE: &str = "pin 01251979 carries the mount-policy stack, the first-class nested_virt spec option (default off, driven per-sandbox via builder.nested_virt; supersedes the always-on VMM flag), the brokerd/ssh gateway line (gateway wiring, brokerd epoch/divert/bootstrap), and the DLP registration line (ssh on_violation + pattern compile/coalesce/emit); nested still inert until firmware (libkrunfw CONFIG_KVM) lands — Phase 2";
+    let pin_note = format!(
+        "pin {} carries the mount-policy stack, the first-class nested_virt spec option (default off, driven per-sandbox via builder.nested_virt), and the brokerd/ssh gateway and DLP registration code; nested remains inert until firmware with guest KVM support is integrated and tested",
+        fork_rev_short()
+    );
     const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
          sudo usermod -aG kvm $USER (re-login); guest nesting additionally needs the host \
          kvm_intel/kvm_amd nested parameter at Y (sudo modprobe kvm_intel nested=1)";
     let probe = crate::microsandbox::nested::read_nested_probe();
     if !probe.kvm_present {
-        return DoctorCheck::new("nested_virt", "FAIL", format!("no /dev/kvm; {PIN_NOTE}"))
+        return DoctorCheck::new("nested_virt", "FAIL", format!("no /dev/kvm; {pin_note}"))
             .with_remediation(REMEDIATION);
     }
     if !probe.kvm_accessible {
@@ -132,7 +130,7 @@ pub fn doctor_check_nested_virt() -> DoctorCheck {
         return DoctorCheck::new(
             "nested_virt",
             "WARN",
-            format!("host /dev/kvm exists but not accessible (nested asks refuse); {PIN_NOTE}"),
+            format!("host /dev/kvm exists but not accessible (nested asks refuse); {pin_note}"),
         )
         .with_remediation(REMEDIATION);
     }
@@ -140,7 +138,7 @@ pub fn doctor_check_nested_virt() -> DoctorCheck {
         (true, Some(true)) => DoctorCheck::new(
             "nested_virt",
             "OK",
-            format!("kvm + vmx/svm + nested=Y; {PIN_NOTE}"),
+            format!("kvm + vmx/svm + nested=Y; {pin_note}"),
         ),
         (_, nested) => {
             let detail = match nested {
@@ -155,7 +153,7 @@ pub fn doctor_check_nested_virt() -> DoctorCheck {
             DoctorCheck::new(
                 "nested_virt",
                 "WARN",
-                format!("kvm ok ({cpu}), {detail}; {PIN_NOTE}"),
+                format!("kvm ok ({cpu}), {detail}; {pin_note}"),
             )
             .with_remediation(REMEDIATION)
         }
@@ -1143,7 +1141,7 @@ mod tests {
             check
         );
         assert!(
-            check.message.contains("01251979"),
+            check.message.contains(&fork_rev_short()),
             "every verdict carries the fork pin note: {check:?}"
         );
         // Honest pin strings: the pin carries the mount-policy stack + the

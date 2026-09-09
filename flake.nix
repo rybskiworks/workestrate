@@ -2,64 +2,19 @@
   description = "workestrate — control plane for sandboxed agent/service workloads on Microsandbox microVMs";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/a799d3e3886da994fa307f817a6bc705ae538eeb";
-
-    fenix = {
-      # Pinned to same rev as nix-tooling (fa09e647...) for reproducible rustc 1.97.1.
-      # This is an OWNED pin — nix-tooling also pins this rev, and consumers should not
-      # follows-override the toolchain via `tooling.inputs.fenix`.
-      url = "github:nix-community/fenix/fa09e6473a0dfd673e6cb9a37741aec513b4bb2a";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # Shared build tools and development modules have one version authority.
+    tooling.url = "github:rybskiworks/nix-tooling/eae927a0da5fd04d2dfd2e7876042c6243adba65";
+    nixpkgs.follows = "tooling/nixpkgs";
+    fenix.follows = "tooling/fenix";
+    flake-parts.follows = "tooling/flake-parts";
+    devenv.follows = "tooling/devenv";
+    treefmt-nix.follows = "tooling/treefmt-nix";
+    git-hooks.follows = "tooling/git-hooks";
 
     microsandbox-fork = {
-      # Pinned fork rev 012519792ea99c5afaf870bb78465daf75b6ef15 —
-      # feat/nested-virt-port: the scan crate (streaming DLP matcher:
-      # sealed patterns compiled once into raw/hex/base64 literal
-      # needles, hit ids + digests only) plus brokerd enforcement on
-      # guest-originated channel data and the typed pattern bootstrap
-      # (BrokerPatterns/BrokerPattern threaded host-side through the
-      # builder into spawn, kept out of the guest-visible spec) on the
-      # fully-merged tip. Direct child of f8947076 (brokerd service:
-      # epoch, divert/reoriginate, bootstrap threading), which sits on
-      # 6ea0b117 (SSH gateway wiring, brokerd service, epoch protocol
-      # family) on deb99d26.
-      url = "github:rybskiworks/microsandbox/012519792ea99c5afaf870bb78465daf75b6ef15";
-      flake = false;
-    };
-
-    # Shared tooling: github:rybskiworks/nix-tooling pinned to 18f8b85.
-    # For local development use `--override-input tooling path:../nix-tooling`.
-    # Follows discipline: share consumer's nixpkgs, but don't override owned pins (fenix/tombi).
-    # Therefore we set `tooling.inputs.nixpkgs.follows = "nixpkgs"` but do NOT set
-    # `tooling.inputs.fenix.follows` — tooling owns the rust toolchain version.
-    tooling = {
-      url = "github:rybskiworks/nix-tooling/18f8b85f6777240a0ecef4e93ebee69313802aed";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    flake-parts = {
-      url = "github:hercules-ci/flake-parts/9d0d87172c374f89da73c1cfe6d81ae62feac1f1";
-      inputs.nixpkgs-lib.follows = "nixpkgs";
-    };
-
-    devenv = {
-      url = "github:cachix/devenv/97135e80b6e432f41f84f72383e1b8147f33ef0c";
-      inputs = {
-        nixpkgs.follows = "nixpkgs";
-        git-hooks.follows = "git-hooks";
-        flake-parts.follows = "flake-parts";
-      };
-    };
-
-    treefmt-nix = {
-      url = "github:numtide/treefmt-nix/27b3b12a8e6375f28ebe122f07d230ca5459bbfa";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    git-hooks = {
-      url = "github:cachix/git-hooks.nix/27555e2624241fb116b49095df4caaee85a25691";
-      inputs.nixpkgs.follows = "nixpkgs";
+      # Runtime packages and SDK patches must come from this same source.
+      url = "github:rybskiworks/microsandbox/783afdf207c0b8e2adc58b72b746399b29167005";
+      inputs.tooling.follows = "tooling";
     };
 
     nix2container = {
@@ -224,7 +179,12 @@
         };
 
       perSystem =
-        { system, ... }:
+        {
+          system,
+          inputs',
+          config,
+          ...
+        }:
         let
           pkgs = import inputs.nixpkgs {
             inherit system;
@@ -240,17 +200,28 @@
 
           referenceConfig = import ./nix/lib/config.nix { };
 
-          agentd = pkgs.callPackage ./nix/packages/agentd.nix { inherit (inputs) microsandbox-fork; };
-          microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {
-            inherit rustToolchain agentd;
-            inherit (inputs) microsandbox-fork;
-          };
+          microsandboxSource = inputs'.microsandbox-fork.packages.microsandbox.src;
+          forkVersion =
+            (builtins.fromTOML (builtins.readFile (microsandboxSource + "/Cargo.toml")))
+            .workspace.package.version;
+          agentd =
+            assert pkgs.lib.assertMsg (
+              inputs'.microsandbox-fork.packages.agentd.version == forkVersion
+            ) "Microsandbox agentd package and SDK source versions disagree";
+            inputs'.microsandbox-fork.packages.agentd;
+          microsandbox =
+            assert pkgs.lib.assertMsg (
+              inputs'.microsandbox-fork.packages.microsandbox.version == forkVersion
+            ) "Microsandbox runtime package and SDK source versions disagree";
+            inputs'.microsandbox-fork.packages.microsandbox;
           tombi = inputs.tooling.packages.${system}.tombi;
-          microsandbox-filesystem-patched =
-            pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix
-              { inherit (inputs) microsandbox-fork; };
+          # Retain the source-package output for downstream development tools;
+          # compilation shares the fork package's filtered Rust workspace.
+          microsandbox-filesystem-patched = pkgs.runCommand "microsandbox-filesystem-patched-${forkVersion}" {
+            version = forkVersion;
+          } "ln -s ${microsandboxSource} $out";
           workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
-            inherit microsandbox microsandbox-filesystem-patched rustToolchain;
+            inherit microsandbox microsandboxSource rustToolchain;
             rev =
               inputs.self.shortRev
                 or (if inputs.self ? rev then builtins.substring 0 8 inputs.self.rev else "dirty");
@@ -265,6 +236,18 @@
             # unset, so --set-default would not handle empty.
             makeWrapper ${microsandbox}/bin/msb $out/bin/msb \
               --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox/current"; fi'
+          '';
+
+          install-hooks = pkgs.writeShellScriptBin "install-hooks" ''
+            set -e
+            export PATH=${
+              pkgs.lib.makeBinPath [
+                pkgs.coreutils
+                pkgs.nix
+                config.pre-commit.settings.gitPackage
+              ]
+            }:$PATH
+            ${config.pre-commit.installationScript}
           '';
 
           decrypt-env = pkgs.writeShellApplication {
@@ -367,6 +350,7 @@
               rustfmt = {
                 enable = true;
                 edition = "2024";
+                package = rustToolchain.rustfmt;
               };
             };
             settings.formatter.tombi = {
@@ -427,9 +411,90 @@
             program = "${workestrate}/bin/workestrate";
           };
 
+          apps.install-hooks = {
+            type = "app";
+            program = "${install-hooks}/bin/install-hooks";
+          };
+
           # Expose lib per system for backward compat via `config.packages`? Instead we set `flake.lib` above.
           # For `nix flake check` we also provide tombiCheck and treefmt checks.
           checks = {
+            rust = config.checks.unit.overrideAttrs (old: {
+              pname = "workestrate-rust-check";
+              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+                rustToolchain.rustfmt
+                rustToolchain.clippy
+              ];
+              buildPhase = ''
+                runHook preBuild
+                cargo fmt -- --check
+                cargo clippy --jobs "$NIX_BUILD_CORES" --locked --offline --all-targets -- -D warnings
+                cargo check --jobs "$NIX_BUILD_CORES" --locked --offline
+                runHook postBuild
+              '';
+              doCheck = false;
+              installPhase = "mkdir -p $out";
+            });
+
+            package =
+              pkgs.runCommand "workestrate-package-check"
+                {
+                  nativeBuildInputs = [ pkgs.jq ];
+                }
+                ''
+                  export MSB_HOME="$TMPDIR/msb-state"
+                  ${workestrate}/bin/workestrate --version
+                  ${workestrate}/bin/workestrate --help > /dev/null
+                  ${workestrate}/bin/workestrate --json versions > versions.json
+                  jq -e \
+                    --arg msb "${microsandbox}/bin/msb" \
+                    --arg version "msb ${forkVersion}" \
+                    --arg agentd "${microsandbox}/libexec/agentd" \
+                    '.msb.path_used == $msb and .msb.version == $version and .agentd.path == $agentd' \
+                    versions.json
+                  test ! -e "$MSB_HOME"
+                  mkdir -p $out
+                  cp versions.json $out/
+                '';
+
+            # Reuse the package's offline SDK/runtime staging. Test-only fixtures
+            # stay out of the production source; existing KVM ignores remain intact.
+            unit = workestrate.overrideAttrs (old: {
+              pname = "workestrate-tests";
+              src = pkgs.runCommand "source" { } ''
+                mkdir -p $out/docs/migration $out/templates
+                cp -r ${old.src}/. $out/
+                cp -r ${./config.reference} $out/config.reference
+                cp ${./docs/migration/20-target-system-spec.md} $out/docs/migration/
+                cp -r ${./templates/workestrate-config} $out/templates/workestrate-config
+                cp ${./flake.nix} $out/flake.nix
+              '';
+              cargoBuildType = "debug";
+              cargoCheckType = "debug";
+              doCheck = true;
+              cargoTestFlags = [ "--locked" ];
+              nativeCheckInputs = [
+                pkgs.git
+                pkgs.sops
+                pkgs.age
+                tombi
+              ];
+              preCheck = ''
+                export HOME="$TMPDIR/test-home"
+                export XDG_CONFIG_HOME="$HOME/.config"
+                export XDG_DATA_HOME="$HOME/.local/share"
+                export XDG_STATE_HOME="$HOME/.local/state"
+                export XDG_CACHE_HOME="$HOME/.cache"
+                mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+                export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                export TOMBI_OFFLINE=true
+                export GIT_CONFIG_NOSYSTEM=1
+                export GIT_CONFIG_GLOBAL=/dev/null
+                # Daemon-backed image tests and optional Copier round trips have
+                # separate host gates; do not install their tools in this sandbox.
+              '';
+            });
+
             # treefmt and pre-commit are auto-generated; add tombiCheck for completeness
             tombiCheck = pkgs.runCommand "tombi-check" { nativeBuildInputs = [ tombi ]; } ''
               mkdir -p $out
@@ -448,6 +513,33 @@
               tombi format --check
               tombi lint --error-on-warnings
               touch $out/ok
+            '';
+          };
+
+          # Tooling-only shell: usable even when the application or runtime does
+          # not build. It deliberately does not mark runtime staging complete.
+          devenv.shells.bootstrap = {
+            imports = [
+              inputs.tooling.devenvModules.base
+              inputs.tooling.devenvModules.nix
+              inputs.tooling.devenvModules.toml
+              inputs.tooling.devenvModules.rust
+            ];
+            packages = with pkgs; [
+              cargo-deny
+              gcc
+              just
+              libcap_ng
+              nix
+              pkg-config
+              python3
+            ];
+            # Bootstrap must not install hooks or run worktree formatting.
+            git-hooks.enable = false;
+            treefmt.enable = false;
+            enterShell = ''
+              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
+              echo "workestrate bootstrap shell (tooling only)"
             '';
           };
 
@@ -574,7 +666,7 @@
                 fi
                 vendor_dir="$repo_root/control/agentctl/vendor"
                 vendor_link="$vendor_dir/microsandbox-fork"
-                target="${microsandbox-filesystem-patched}"
+                target="${microsandboxSource}"
                 mkdir -p "$vendor_dir"
                 if [ -L "$vendor_link" ]; then
                   local current

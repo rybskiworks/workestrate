@@ -1,35 +1,26 @@
 #!/usr/bin/env bash
-# check-msb-versions.sh — Phase-0 observability pin check (build-time assert).
+# check-msb-versions.sh — check the SDK version and runtime source pins.
 #
-# The microsandbox version pin ("0.6.16") and the fork rev pin are
-# hand-maintained strings in several places. This bash+python3-stdlib script
-# asserts they agree, with NO cargo/nix/network calls, and runs in <1s.
+# Cargo dependency pins and the reported runtime pins must agree with the
+# Microsandbox flake input. This bash+python3-stdlib script checks that contract
+# without cargo/nix/network calls. Nix separately checks the consumed fork's
+# package and SDK versions; runtime packaging belongs to the fork.
 #
 # Checks:
-#   V1. version "0.6.16" in nix/packages/microsandbox.nix +
-#       nix/packages/agentd.nix +
-#       nix/packages/microsandbox-filesystem-patched.nix (each `version = "X"`).
-#   V2. control/agentctl/Cargo.toml `=X` pins ([dependencies] microsandbox +
-#       [dev-dependencies] microsandbox-image — never literals here).
-#   V3. control/agentctl/src/commands/versions.rs MSB_VERSION_PIN.
-#   R1. fork rev in flake.lock (microsandbox-fork locked.rev + original.rev).
-#   R2. fork rev in flake.nix (the microsandbox-fork url + pin comment).
-#   R3. control/agentctl/src/commands/versions.rs FORK_REV_PIN.
+#   - Exact Microsandbox dependency versions match MSB_VERSION_PIN.
+#   - The literal microsandbox-fork URL pins a full commit revision.
+#   - The resolved flake.lock input and FORK_REV_PIN match that source.
 #
 # Overrides (for synthetic fixtures — never dirty the real tree):
 #   REPO (repo root; default: script dir's parent)
 #
-# Wired into `just versions-check`, in the `verify` chain after
-# `toolchain-check`.
+# Wired into `just versions-check`, before the devshell-dependent verify gates.
 #
 # Exit 1 with an actionable message on drift; exit 0 OK.
 
 set -euo pipefail
 
 REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
-MSB_NIX="$REPO/nix/packages/microsandbox.nix"
-AGENTD_NIX="$REPO/nix/packages/agentd.nix"
-FS_NIX="$REPO/nix/packages/microsandbox-filesystem-patched.nix"
 MANIFEST="$REPO/control/agentctl/Cargo.toml"
 VERSIONS_RS="$REPO/control/agentctl/src/commands/versions.rs"
 FLAKE_NIX="$REPO/flake.nix"
@@ -40,25 +31,23 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 
-python3 - "$MSB_NIX" "$AGENTD_NIX" "$FS_NIX" "$MANIFEST" "$VERSIONS_RS" "$FLAKE_NIX" "$FLAKE_LOCK" <<'PY'
+python3 - "$MANIFEST" "$VERSIONS_RS" "$FLAKE_NIX" "$FLAKE_LOCK" <<'PY'
 import json
 import re
 import sys
 import tomllib
 
-msb_nix, agentd_nix, fs_nix, manifest_path, versions_rs, flake_nix, flake_lock = sys.argv[1:8]
+manifest_path, versions_rs, flake_nix, flake_lock = sys.argv[1:5]
 failures = []
 
 FIX = (
-    "fix: update ALL of these to the same pin, then re-run "
+    "fix: align the SDK version and fork source pins, then re-run "
     "./scripts/check-msb-versions.sh:\n"
-    "  nix/packages/microsandbox.nix, nix/packages/agentd.nix,\n"
-    "  nix/packages/microsandbox-filesystem-patched.nix (version = \"X\"),\n"
-    "  control/agentctl/Cargo.toml (=X pins, then `cargo update -w` inside "
-    "`just shell` ONLY),\n"
-    "  control/agentctl/src/commands/versions.rs (MSB_VERSION_PIN),\n"
-    "  flake.nix + flake.lock (fork rev, via "
-    "`nix flake lock --update-input microsandbox-fork` on a nix-capable host)"
+    "  control/agentctl/Cargo.toml (exact =X.Y.Z dependency pins),\n"
+    "  control/agentctl/src/commands/versions.rs (MSB_VERSION_PIN and FORK_REV_PIN),\n"
+    "  flake.nix + flake.lock (full fork revision; relock with "
+    "`nix flake update microsandbox-fork` on a nix-capable host)\n"
+    "  Runtime package and SDK versions are checked during Nix evaluation."
 )
 
 
@@ -71,101 +60,103 @@ def read(path):
         return ""
 
 
-def nix_version(path, text):
-    m = re.search(r'version\s*=\s*"([^"]+)"', text)
-    if not m:
-        failures.append(f'{path}: no `version = "X"` found')
-        return None
-    return m.group(1)
-
-
-# --- V1: the three nix package versions ---
-nix_versions = {}
-for path in (msb_nix, agentd_nix, fs_nix):
-    v = nix_version(path, read(path))
-    if v is not None:
-        nix_versions[path] = v
-
-# --- V2: Cargo.toml =X pins (never literals) ---
-with open(manifest_path, "rb") as f:
-    manifest = tomllib.load(f)
+# Exact Cargo pins must identify a complete version, not a compatible range.
 try:
-    dep_pin = manifest["dependencies"]["microsandbox"]["version"]
-except KeyError:
-    dep_pin = None
-try:
-    dev_pin = manifest["dev-dependencies"]["microsandbox-image"]
-    if isinstance(dev_pin, dict):
-        dev_pin = dev_pin.get("version")
-except KeyError:
-    dev_pin = None
-cargo_versions = []
-if not dep_pin or not dev_pin:
-    failures.append(
-        "Cargo.toml: could not parse =X pins for microsandbox "
-        f"([dependencies]) / microsandbox-image ([dev-dependencies]) "
-        f"(got {dep_pin!r} / {dev_pin!r})"
-    )
-else:
-    if not dep_pin.startswith("=") or not dev_pin.startswith("="):
-        failures.append(
-            "Cargo.toml pins must be exact (=X style), got "
-            f"microsandbox={dep_pin!r} microsandbox-image={dev_pin!r}"
-        )
-    else:
-        cargo_versions = [dep_pin[1:], dev_pin[1:]]
+    manifest = tomllib.loads(read(manifest_path))
+except tomllib.TOMLDecodeError as e:
+    failures.append(f"Cargo.toml: cannot parse manifest: {e}")
+    manifest = {}
+cargo_versions = {}
+for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+    entries = manifest.get(section, {})
+    if not isinstance(entries, dict):
+        failures.append(f"Cargo.toml: [{section}] must be a table")
+        continue
+    required = {"dependencies": "microsandbox", "dev-dependencies": "microsandbox-image"}.get(section)
+    if required and required not in entries:
+        failures.append(f"Cargo.toml: [{section}] {required} version pin missing")
+    for name, dependency in entries.items():
+        if name != "microsandbox" and not name.startswith("microsandbox-"):
+            continue
+        pin = dependency.get("version") if isinstance(dependency, dict) else dependency
+        match = re.fullmatch(
+            r"=([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)",
+            pin,
+        ) if isinstance(pin, str) else None
+        if not match:
+            failures.append(f"Cargo.toml: [{section}] {name} pin must be exact (=X.Y.Z), got {pin!r}")
+        else:
+            cargo_versions[f"{section}.{name}"] = match.group(1)
 
-# --- V3: versions.rs MSB_VERSION_PIN ---
 rs_text = read(versions_rs)
-m = re.search(r'MSB_VERSION_PIN\s*:\s*&str\s*=\s*"([^"]+)"', rs_text)
-rs_version = m.group(1) if m else None
-if rs_version is None:
-    failures.append(f"{versions_rs}: MSB_VERSION_PIN not found")
 
-# --- V1+V2+V3 agreement ---
-seen_versions = set(nix_versions.values()) | set(cargo_versions)
+
+def rust_pin(name):
+    values = re.findall(rf'(?m)^\s*(?:pub\s+)?const\s+{name}\s*:\s*&str\s*=\s*"([^\"]+)"', rs_text)
+    if len(values) != 1:
+        failures.append(f"{versions_rs}: expected one {name} string constant")
+        return None
+    return values[0]
+
+
+rs_version = rust_pin("MSB_VERSION_PIN")
+seen_versions = set(cargo_versions.values())
 if rs_version is not None:
     seen_versions.add(rs_version)
 if len(seen_versions) > 1:
     detail = ", ".join(
-        [f"{p}={v}" for p, v in sorted(nix_versions.items())]
-        + [f"Cargo.toml={v}" for v in cargo_versions]
+        [f"Cargo.toml:{name}={v}" for name, v in cargo_versions.items()]
         + ([f"versions.rs={rs_version}"] if rs_version else [])
     )
     failures.append(f"msb version pins disagree: {detail}")
 
-# --- R1: flake.lock microsandbox-fork revs ---
+# Inspect the actual input declaration, not an unrelated URL or pin comment.
+flake_text = re.sub(
+    r'("(?:\\.|[^"\\])*")|#[^\n]*|/\*.*?\*/',
+    lambda match: match.group(1) or "",
+    read(flake_nix),
+    flags=re.DOTALL,
+)
+urls = re.findall(
+    r'\bmicrosandbox-fork\s*(?:\.\s*url\s*=\s*"([^"]+)"|=\s*\{[^{}]*?\burl\s*=\s*"([^"]+)")',
+    flake_text,
+)
+fork_url = next((value for value in urls[0] if value), None) if len(urls) == 1 else None
+url_match = re.fullmatch(r"github:([^/]+)/microsandbox/([0-9a-f]{40})", fork_url or "")
+if url_match is None:
+    failures.append("flake.nix: microsandbox-fork URL must pin one full 40-hex GitHub revision")
+flake_rev = url_match.group(2) if url_match else None
+
+# Resolve the root input's node, whose lockfile name need not match the input.
 lock_revs = []
 try:
-    with open(flake_lock, encoding="utf-8") as f:
-        lock = json.load(f)
-    fork = lock["nodes"]["microsandbox-fork"]
+    lock = json.loads(read(flake_lock))
+    nodes = lock["nodes"]
+    fork_node = nodes[lock["root"]]["inputs"]["microsandbox-fork"]
+    fork = nodes[fork_node]
+    if fork.get("flake") is False:
+        failures.append("flake.lock: microsandbox-fork must provide flake packages (flake=false is stale)")
     for key in ("locked", "original"):
-        rev = fork.get(key, {}).get("rev")
-        if rev:
-            lock_revs.append(rev)
+        source = fork.get(key, {})
+        rev = source.get("rev")
+        if not isinstance(rev, str) or not re.fullmatch(r"[0-9a-f]{40}", rev):
+            failures.append(f"flake.lock: microsandbox-fork {key}.rev must be a full 40-hex revision")
         else:
-            failures.append(f"flake.lock: microsandbox-fork {key}.rev missing")
-except (OSError, KeyError, ValueError) as e:
+            lock_revs.append(rev)
+        if url_match and (
+            source.get("type"), source.get("owner"), source.get("repo")
+        ) != ("github", url_match.group(1), "microsandbox"):
+            failures.append(f"flake.lock: microsandbox-fork {key} source does not match flake.nix URL")
+except (KeyError, TypeError, ValueError, AttributeError) as e:
     failures.append(f"flake.lock: cannot parse microsandbox-fork rev: {e}")
 
-# --- R2: flake.nix fork revs (url + pin comment only, not every input pin) ---
-flake_text = read(flake_nix)
-flake_revs = set(re.findall(r"microsandbox/([0-9a-f]{40})", flake_text))
-flake_revs |= set(re.findall(r"[Pp]inned fork rev ([0-9a-f]{40})", flake_text))
-if not flake_revs:
-    failures.append("flake.nix: no microsandbox-fork rev found (url or pin comment)")
-
-# --- R3: versions.rs FORK_REV_PIN ---
-m = re.search(r'FORK_REV_PIN\s*:\s*&str\s*=\s*"([^"]+)"', rs_text)
-rs_rev = m.group(1) if m else None
-if rs_rev is None:
-    failures.append(f"{versions_rs}: FORK_REV_PIN not found")
-elif not re.fullmatch(r"[0-9a-f]{40}", rs_rev):
+rs_rev = rust_pin("FORK_REV_PIN")
+if rs_rev is not None and not re.fullmatch(r"[0-9a-f]{40}", rs_rev):
     failures.append(f"{versions_rs}: FORK_REV_PIN is not a full 40-hex rev: {rs_rev!r}")
 
-# --- R1+R2+R3 agreement ---
-seen_revs = set(lock_revs) | set(flake_revs)
+seen_revs = set(lock_revs)
+if flake_rev is not None:
+    seen_revs.add(flake_rev)
 if rs_rev is not None:
     seen_revs.add(rs_rev)
 if len(seen_revs) > 1:
@@ -173,7 +164,7 @@ if len(seen_revs) > 1:
         "fork rev pins disagree: "
         + ", ".join(
             [f"flake.lock={r}" for r in lock_revs]
-            + [f"flake.nix={r}" for r in sorted(flake_revs)]
+            + ([f"flake.nix={flake_rev}"] if flake_rev else [])
             + ([f"versions.rs={rs_rev}"] if rs_rev else [])
         )
     )

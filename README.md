@@ -203,6 +203,10 @@ workloads that verify the credential (e.g. the LiteLLM proxy itself).
 
 ## Development workflow
 
+See [Nix builds and dependency ownership](docs/nix-build.md) for package
+integration, offline dependency staging and the tooling-only `just bootstrap`
+shell used when the application is not yet buildable.
+
 **just-first.** Run `just <recipe>` from a plain host shell — recipes
 self-enshell (`nix develop`) as needed. Key recipes:
 

@@ -10,6 +10,7 @@ export CARGO_TARGET_DIR := `echo "${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/a
 # worktree: dotfile/state land in the gitignored in-tree .devenv/, not a
 # read-only store copy (bare `nix develop` cannot see PWD under pure eval).
 # Extra args pass through, e.g. `just shell -c <cmd>` for one-shot commands.
+[positional-arguments]
 shell *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -18,7 +19,14 @@ shell *args:
     _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
     _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
     printf '%s' "$_repo_root" > "$_devenv_root_file"
-    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" {{args}}
+    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" "$@"
+
+# Enter tools without realizing the application or Microsandbox packages.
+[positional-arguments]
+bootstrap *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    exec just shell .#bootstrap "$@"
 
 # Lock-guard: pre-resolution fork-pin check for control/agentctl/Cargo.lock
 # (A1 no-registry-source, A2 ==X pins from Cargo.toml, A3 smoltcp vs fork).
@@ -67,35 +75,25 @@ toolchain-check:
     fi
     echo "OK: rustc $actual matches pinned toolchain"
 
-# Phase-0 observability pin check: the hand-maintained msb version pin
-# ("0.6.16") and fork rev pin must agree across the nix packages,
-# control/agentctl/Cargo.toml, control/agentctl/src/commands/versions.rs,
-# flake.nix, and flake.lock. Bash+python3 only (no cargo/nix), runs in <1s.
-# Wired into `verify` after toolchain-check.
+# Check SDK version and fork source pins without realizing the runtime packages.
+# The fixture suite exercises missing, nonexact, and mismatched declarations.
 versions-check:
     ./scripts/check-msb-versions.sh
+    python3 ./scripts/test-msb-versions.py
+
+# Verify fallback hook chaining without changing this checkout's Git hooks.
+hooks-check:
+    python3 ./scripts/test-pre-commit-hook.py
+
+# Verify exact argument forwarding without entering a Nix development shell.
+shell-arguments-check:
+    python3 ./scripts/test-shell-arguments.py
 
 check:
     @just _check-inner
 [private]
 _check-inner:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
-        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
-        export _WS_REENTERED=1
-        # Pure-eval devenv root: override the flake's devenv-root placeholder
-        # input with a file holding this worktree's abs path (see `shell`).
-        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
-        mkdir -p "$_devenv_root_dir"
-        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
-        printf '%s' "$_repo_root" > "$_devenv_root_file"
-        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _check-inner
-    fi
-    cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
-    cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
-    cargo check --manifest-path control/agentctl/Cargo.toml
+    nix build --no-link --no-update-lock-file .#checks.x86_64-linux.rust
 
 # Supply-chain gates (cargo-deny, config at repo-root deny.toml): licenses,
 # bans (wildcard deps), sources (unknown registries/git). advisories are
@@ -155,7 +153,7 @@ _spec-examples-inner:
 # that needs the pinned toolchain is a dep of _verify-inner, i.e. runs after
 # `nix develop` has exported WORKESTRATE_DEVSHELL (inner recipes then skip
 # their own re-enshell guards).
-verify: lock-guard versions-check
+verify: lock-guard versions-check hooks-check shell-arguments-check
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
