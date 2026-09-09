@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """store-audit report — extracted from the justfile `store-audit` recipe.
 
-Reads `nix path-info --all --json` output from stdin and prints the top-20
+Reads `nix path-info --all --json --json-format 1 --closure-size` output
+from stdin and prints the top-20
 store paths by closure size.
 
 With ``--warn-if-source-over <MB>`` the script additionally scans for
@@ -44,11 +45,14 @@ LOCAL_COPY_RE = re.compile(
 
 
 def path_size(info: object) -> int:
-    """Return the closure size (or size) of a path-info entry, 0 on error."""
+    """Return the requested closure size, rejecting incomplete entries."""
     try:
-        return int(info.get("closureSize", info.get("size", 0)) or 0)  # type: ignore[union-attr]
-    except Exception:
-        return 0
+        value = info["closureSize"]  # type: ignore[index]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("closureSize must be a nonnegative integer")
+        return value
+    except (KeyError, TypeError) as error:
+        raise ValueError("closureSize missing; request --closure-size") from error
 
 
 def main() -> None:
@@ -75,9 +79,13 @@ def main() -> None:
         print(f"(could not read nix path-info: {e})")
         return
 
-    paths = []
-    for p, info in data.items():
-        paths.append((path_size(info), p))
+    try:
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object; request --json-format 1")
+        paths = [(path_size(info), p) for p, info in data.items()]
+    except ValueError as error:
+        print(f"(could not read nix path-info: {error})")
+        return
 
     paths.sort(reverse=True)
     for size, p in paths[:20]:

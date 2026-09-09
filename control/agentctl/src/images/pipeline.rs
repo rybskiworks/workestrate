@@ -271,6 +271,7 @@ impl ImageBuilder for NixCliBuilder {
                 "build",
                 &reference,
                 "--no-link",
+                "--no-update-lock-file",
                 "--print-out-paths",
                 "--extra-experimental-features",
                 "nix-command flakes",
@@ -876,6 +877,22 @@ mod tests {
     use super::test_fakes::*;
     use super::*;
     use crate::config::test_support::unique_state_dir;
+
+    #[cfg(unix)]
+    #[test]
+    fn nix_build_refuses_implicit_lock_updates() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let program = tmp.path().join("nix");
+        std::fs::write(&program, "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = --no-update-lock-file ]; then\n    echo /nix/store/fixture-image\n    exit 0\n  fi\ndone\nexit 9\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut builder = NixCliBuilder::with_program(program.to_str().unwrap());
+        assert_eq!(
+            builder.build_out_path(tmp.path(), "image").unwrap(),
+            "/nix/store/fixture-image"
+        );
+        assert!(!tmp.path().join("flake.lock").exists());
+    }
 
     fn job_fixture() -> BuildJob {
         BuildJob {

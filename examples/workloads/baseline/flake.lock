@@ -125,30 +125,6 @@
         "url": "file:///dev/null"
       }
     },
-    "devenv-root_2": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-d6xi4mKdjkX2JFicDIv5niSzpyI0m/Hnm8GGAIU04kY=",
-        "type": "file",
-        "url": "file:///dev/null"
-      },
-      "original": {
-        "type": "file",
-        "url": "file:///dev/null"
-      }
-    },
-    "devenv-root_3": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-d6xi4mKdjkX2JFicDIv5niSzpyI0m/Hnm8GGAIU04kY=",
-        "type": "file",
-        "url": "file:///dev/null"
-      },
-      "original": {
-        "type": "file",
-        "url": "file:///dev/null"
-      }
-    },
     "fenix": {
       "inputs": {
         "nixpkgs": [
@@ -265,92 +241,6 @@
         "type": "github"
       }
     },
-    "microsandbox-fork": {
-      "inputs": {
-        "devenv": [
-          "microsandbox-fork",
-          "tooling",
-          "devenv"
-        ],
-        "devenv-root": "devenv-root_2",
-        "fenix": [
-          "microsandbox-fork",
-          "tooling",
-          "fenix"
-        ],
-        "flake-parts": [
-          "microsandbox-fork",
-          "tooling",
-          "flake-parts"
-        ],
-        "git-hooks": [
-          "microsandbox-fork",
-          "tooling",
-          "git-hooks"
-        ],
-        "mk-shell-bin": "mk-shell-bin",
-        "nix2container": "nix2container",
-        "nixpkgs": [
-          "microsandbox-fork",
-          "tooling",
-          "nixpkgs"
-        ],
-        "tooling": [
-          "tooling"
-        ],
-        "treefmt-nix": [
-          "microsandbox-fork",
-          "tooling",
-          "treefmt-nix"
-        ]
-      },
-      "locked": {
-        "lastModified": 1788920296,
-        "narHash": "sha256-t/CKg1mGC+m3kVAg7EGJpeIxlqjPeIspgZ0Jf6Oq+Bs=",
-        "owner": "rybskiworks",
-        "repo": "microsandbox",
-        "rev": "a1dad1bf2e17df62c80510d070d1a1aa41ef2224",
-        "type": "github"
-      },
-      "original": {
-        "owner": "rybskiworks",
-        "repo": "microsandbox",
-        "rev": "a1dad1bf2e17df62c80510d070d1a1aa41ef2224",
-        "type": "github"
-      }
-    },
-    "mk-shell-bin": {
-      "locked": {
-        "lastModified": 1677004959,
-        "narHash": "sha256-/uEkr1UkJrh11vD02aqufCxtbF5YnhRTIKlx5kyvf+I=",
-        "owner": "rrbutani",
-        "repo": "nix-mk-shell-bin",
-        "rev": "ff5d8bd4d68a347be5042e2f16caee391cd75887",
-        "type": "github"
-      },
-      "original": {
-        "owner": "rrbutani",
-        "repo": "nix-mk-shell-bin",
-        "rev": "ff5d8bd4d68a347be5042e2f16caee391cd75887",
-        "type": "github"
-      }
-    },
-    "mk-shell-bin_2": {
-      "locked": {
-        "lastModified": 1677004959,
-        "narHash": "sha256-/uEkr1UkJrh11vD02aqufCxtbF5YnhRTIKlx5kyvf+I=",
-        "owner": "rrbutani",
-        "repo": "nix-mk-shell-bin",
-        "rev": "ff5d8bd4d68a347be5042e2f16caee391cd75887",
-        "type": "github"
-      },
-      "original": {
-        "owner": "rrbutani",
-        "repo": "nix-mk-shell-bin",
-        "rev": "ff5d8bd4d68a347be5042e2f16caee391cd75887",
-        "type": "github"
-      }
-    },
     "nix": {
       "inputs": {
         "flake-compat": [
@@ -394,49 +284,6 @@
         "owner": "cachix",
         "ref": "devenv-2.35",
         "repo": "nix",
-        "type": "github"
-      }
-    },
-    "nix2container": {
-      "inputs": {
-        "nixpkgs": [
-          "microsandbox-fork",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1775487831,
-        "narHash": "sha256-2lguQpLPQaxpQCJjXhmEEAfabwsAhkP29Z7fgLzHARA=",
-        "owner": "nlewo",
-        "repo": "nix2container",
-        "rev": "76be9608a7f4d6c985d28b0e7be903ae2547df3e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nlewo",
-        "repo": "nix2container",
-        "rev": "76be9608a7f4d6c985d28b0e7be903ae2547df3e",
-        "type": "github"
-      }
-    },
-    "nix2container_2": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1775487831,
-        "narHash": "sha256-2lguQpLPQaxpQCJjXhmEEAfabwsAhkP29Z7fgLzHARA=",
-        "owner": "nlewo",
-        "repo": "nix2container",
-        "rev": "76be9608a7f4d6c985d28b0e7be903ae2547df3e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nlewo",
-        "repo": "nix2container",
-        "rev": "76be9608a7f4d6c985d28b0e7be903ae2547df3e",
         "type": "github"
       }
     },
@@ -486,35 +333,15 @@
     },
     "root": {
       "inputs": {
-        "devenv": [
-          "tooling",
-          "devenv"
-        ],
-        "devenv-root": "devenv-root",
-        "fenix": [
-          "tooling",
-          "fenix"
-        ],
         "flake-parts": [
           "tooling",
           "flake-parts"
         ],
-        "git-hooks": [
-          "tooling",
-          "git-hooks"
-        ],
-        "microsandbox-fork": "microsandbox-fork",
-        "mk-shell-bin": "mk-shell-bin_2",
-        "nix2container": "nix2container_2",
         "nixpkgs": [
           "tooling",
           "nixpkgs"
         ],
-        "tooling": "tooling",
-        "treefmt-nix": [
-          "tooling",
-          "treefmt-nix"
-        ]
+        "tooling": "tooling"
       }
     },
     "rust-analyzer-src": {
@@ -560,7 +387,7 @@
       "inputs": {
         "beads": "beads",
         "devenv": "devenv",
-        "devenv-root": "devenv-root_3",
+        "devenv-root": "devenv-root",
         "fenix": "fenix",
         "flake-parts": "flake-parts",
         "git-hooks": "git-hooks",

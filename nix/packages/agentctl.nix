@@ -50,7 +50,9 @@ let
     inherit (rustToolchain) rustc;
     inherit (rustToolchain) cargo;
   };
-  manifest = builtins.fromTOML (builtins.readFile (agentctlSrc + "/Cargo.toml"));
+  # Read metadata before filtering: read-only evaluation cannot realize a new
+  # filtered source copy merely to inspect the unchanged manifest inside it.
+  manifest = builtins.fromTOML (builtins.readFile ../../control/agentctl/Cargo.toml);
 in
 assert pkgs.lib.assertMsg (
   manifest.dependencies.microsandbox.version == "=${microsandbox.version}"
@@ -76,8 +78,8 @@ rustPlatform.buildRustPackage {
     outputHashes."msb_krun-0.1.32" = "sha256-Wb5oaUkmp68FnrOVMxVimevXaWxfAPo34qVbuyLvKM0=";
   };
 
-  # All SDK patches use the same fork input as the runtime packages. Stage
-  # runtime artifacts only inside this build so prebuilt features stay offline.
+  # All SDK patches use the same fork input as the runtime packages. Explicit
+  # immutable runtime inputs keep the prebuilt features offline.
 
   nativeBuildInputs = with pkgs; [
     makeWrapper
@@ -93,23 +95,10 @@ rustPlatform.buildRustPackage {
     ln -sfn "${microsandboxSource}" vendor/microsandbox-fork
     cp ${../../control/agentctl/.cargo/config.toml} .cargo/config.toml
 
-    # Stage the Nix-managed Microsandbox runtime so the fork's build.rs
-    # finds msb + agentd locally. The fork's filesystem build.rs uses the
-    # MSB_AGENTD_PATH override (prebuilt feature); the staged MSB_HOME + the
-    # explicit MSB_AGENTD_PATH below satisfy it without network downloads.
-    export MSB_HOME=$TMPDIR/.microsandbox
-    mkdir -p $MSB_HOME/bin $MSB_HOME/lib
-    cp ${microsandbox}/bin/msb $MSB_HOME/bin/msb
-
-    # Provide the agentd guest-init binary to the fork's
-    # microsandbox-filesystem build.rs via the explicit MSB_AGENTD_PATH var.
+    # Build inputs are immutable, independent of mutable runtime state. The
+    # SDK validates the explicit runtime directory without any downloads.
+    export MSB_BUILD_RUNTIME=${microsandbox}
     export MSB_AGENTD_PATH=${microsandbox}/libexec/agentd
-
-    for f in ${microsandbox}/lib/libkrunfw.so*; do
-      if [ -f "$f" ] || [ -L "$f" ]; then
-        cp -P "$f" $MSB_HOME/lib/
-      fi
-    done
   '';
 
   postInstall = ''

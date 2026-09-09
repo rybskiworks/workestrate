@@ -137,6 +137,7 @@ impl NixCliEvaluator {
             .args([
                 "eval",
                 "--raw",
+                "--no-update-lock-file",
                 "--extra-experimental-features",
                 "nix-command flakes",
                 &reference,
@@ -432,6 +433,20 @@ mod tests {
     }
 
     // ---- NixCliEvaluator error mapping (hermetic) ----
+
+    #[cfg(unix)]
+    #[test]
+    fn nix_evaluation_refuses_implicit_lock_updates() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let program = tmp.path().join("nix");
+        std::fs::write(&program, "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = --no-update-lock-file ]; then\n    echo /nix/store/fixture-image.drv\n    exit 0\n  fi\ndone\nexit 9\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut evaluator = NixCliEvaluator::with_program(program.to_str().unwrap());
+        assert!(evaluator.eval_drv_path(tmp.path(), "image").is_ok());
+        assert!(evaluator.eval_out_path(tmp.path(), "image").is_ok());
+        assert!(!tmp.path().join("flake.lock").exists());
+    }
 
     /// §7 mapping: a nix binary that cannot be spawned maps to NixAbsent
     /// (the caller's degrade/hard-error ladder keys on this variant).

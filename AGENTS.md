@@ -18,7 +18,8 @@ tool pins all flow through the flake).
 
 ## Workflow
 
-- Run `just <recipe>` from a plain host shell — recipes self-enshell.
+- Run `just <recipe>` from a plain host shell. Repository verification builds
+  pinned Nix checks directly; interactive Cargo recipes enter the development shell.
 - `just shell` opens the interactive devshell (extra args pass through, e.g. `just shell -c <cmd>`).
 - `just verify` is the gate before pushing.
 - Plain `cargo` works inside recipes and the devshell.

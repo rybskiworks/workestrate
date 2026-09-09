@@ -121,10 +121,8 @@ impl Layer {
 /// — callers then apply the documented fallback (flake project root, else
 /// cwd) explicitly.
 ///
-/// DESIGN NOTE (phases 1-4): later approved phases move image builds into
-/// config-repo flakes, making the config repo the flake root. This map is
-/// the plumbing those phases should reuse to locate each layer's content
-/// root — do not duplicate the layer-name → dir derivation.
+/// Image flakes use [`layer_source_dirs_from`] instead: a capsule may own a
+/// flake below this shared content root without rebasing its mounts or seeds.
 pub fn layer_dirs_from(layers: &[Layer]) -> HashMap<String, PathBuf> {
     layers
         .iter()
@@ -133,6 +131,19 @@ pub fn layer_dirs_from(layers: &[Layer]) -> HashMap<String, PathBuf> {
                 .source_path
                 .as_ref()
                 .and_then(|p| content_root_for_layer_file(p).map(|dir| (layer.name.clone(), dir)))
+        })
+        .collect()
+}
+
+/// Map each file-backed layer to its immediate source directory. Unlike
+/// [`layer_dirs_from`], this preserves capsule directories for nearest-flake
+/// discovery. Archived layers retain their archived source directory.
+pub fn layer_source_dirs_from(layers: &[Layer]) -> HashMap<String, PathBuf> {
+    layers
+        .iter()
+        .filter_map(|layer| {
+            let parent = layer.source_path.as_ref()?.parent()?;
+            Some((layer.name.clone(), parent.to_path_buf()))
         })
         .collect()
 }
@@ -279,6 +290,24 @@ pub fn set_layer_dirs(dirs: Option<HashMap<String, PathBuf>>) {
 /// by every workload constructed after a load, so the accessor is a clone.)
 pub fn get_layer_dirs() -> Option<HashMap<String, PathBuf>> {
     LAYER_DIRS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Immediate source directories for the most recent config load, kept
+/// separate from mount/seed content roots and runtime repository identity.
+static LAYER_SOURCE_DIRS: std::sync::Mutex<Option<HashMap<String, PathBuf>>> =
+    std::sync::Mutex::new(None);
+
+/// Store source directories together with the most recent loaded layer set.
+pub fn set_layer_source_dirs(dirs: Option<HashMap<String, PathBuf>>) {
+    *LAYER_SOURCE_DIRS.lock().unwrap_or_else(|e| e.into_inner()) = dirs;
+}
+
+/// Clone source directories without consuming their load-time provenance.
+pub fn get_layer_source_dirs() -> Option<HashMap<String, PathBuf>> {
+    LAYER_SOURCE_DIRS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 // ---------------------------------------------------------------------------

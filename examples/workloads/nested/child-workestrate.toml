@@ -1,0 +1,17 @@
+schema_version = 1
+
+[workloads.child]
+kind = "service"
+image = { recipe = "registry", ref = "workestrate-smoke:latest" }
+cpus = 1
+memory_mib = 256
+workdir = "/tmp"
+command = ["/bin/sh", "-c", "echo INNER_BOOT_OK; sleep 180"]
+log_stop_errors = true
+
+[workloads.child.network.defaults]
+egress = "deny"
+ingress = "deny"
+
+[workloads.child.instance]
+on_conflict = "fail"

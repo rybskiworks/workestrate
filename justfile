@@ -28,6 +28,19 @@ bootstrap *args:
     set -euo pipefail
     exec just shell .#bootstrap "$@"
 
+# Use the shared pinned tracker without entering the runtime shell. Embedded
+# Dolt permits one writer; coordinate writes and keep remote synchronization
+# explicit. This command does not initialize a tracker or install hooks.
+[positional-arguments]
+beads *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export BEADS_DIR="$PWD/.beads"
+    export DOLT_ROOT_PATH="$BEADS_DIR/dolt-global"
+    export BD_DISABLE_METRICS=1
+    export BD_DISABLE_EVENT_FLUSH=1
+    exec nix run --no-update-lock-file .#beads -- --sandbox -C "$PWD" "$@"
+
 # Lock-guard: pre-resolution fork-pin check for control/agentctl/Cargo.lock
 # (A1 no-registry-source, A2 ==X pins from Cargo.toml, A3 smoltcp vs fork).
 # A broken lock breaks cargo resolution itself, so this bash+python3 script
@@ -45,8 +58,8 @@ lock-guard:
 # the marker comment to the live line and fails closed on zero or multiple
 # hits (unanchored match or bare -oP extraction would silently accept drift
 # or duplicates).
-# Wired into `verify` as the SECOND gate (after lock-guard) — a toolchain
-# mismatch invalidates all downstream cargo results.
+# This is a standalone check for interactive Cargo work. Repository verification
+# uses the Fenix packages directly in its sandboxed derivations.
 toolchain-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -89,6 +102,18 @@ hooks-check:
 shell-arguments-check:
     python3 ./scripts/test-shell-arguments.py
 
+store-audit-check:
+    python3 ./scripts/test-store-audit.py
+
+verification-check:
+    python3 ./scripts/test-verification.py
+
+purity-check:
+    python3 ./scripts/test-nix-paths.py
+
+smoke-runner-check:
+    python3 ./examples/workloads/test_smoke.py
+
 check:
     @just _check-inner
 [private]
@@ -103,21 +128,7 @@ deny-check:
     @just _deny-check-inner
 [private]
 _deny-check-inner:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
-        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
-        export _WS_REENTERED=1
-        # Pure-eval devenv root: override the flake's devenv-root placeholder
-        # input with a file holding this worktree's abs path (see `shell`).
-        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
-        mkdir -p "$_devenv_root_dir"
-        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
-        printf '%s' "$_repo_root" > "$_devenv_root_file"
-        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _deny-check-inner
-    fi
-    cargo deny --locked --manifest-path control/agentctl/Cargo.toml check licenses bans sources
+    nix build --no-link --no-update-lock-file .#checks.x86_64-linux.deny
 
 # Parse every fenced toml block in docs/migration/20-target-system-spec.md
 # against the ConfigFile schema shape (WP4 / D1 standing guard).
@@ -141,43 +152,28 @@ _spec-examples-inner:
     fi
     cargo test --manifest-path control/agentctl/Cargo.toml --test spec_examples_parse
 
-# Full pre-merge validation: format, lint, compile-check, test, spec-examples,
-# golden-check, schema drift, lock-file stability, AND nix-purity lint.
-#
-# Self-enshells FIRST, then runs the chain INSIDE the devshell: just runs a
-# recipe's dependencies in the invoking (outer) environment, so as a
-# `verify` dep `toolchain-check` measured the HOST rustc (rustup) instead of
-# the fenix-pinned shell toolchain — a canary firing on the wrong binary.
-# Pure-script gates (lock-guard, versions-check: bash+python3 only,
-# env-agnostic) stay as outer deps so they still run anywhere; everything
-# that needs the pinned toolchain is a dep of _verify-inner, i.e. runs after
-# `nix develop` has exported WORKESTRATE_DEVSHELL (inner recipes then skip
-# their own re-enshell guards).
-verify: lock-guard versions-check hooks-check shell-arguments-check
+# Repository verification never enters the runtime shell or reads consumer
+# homes. Nix checks use the pinned toolchain, offline dependencies and isolated
+# test state. Unit checks include spec examples, goldens, schema drift and the
+# native scaffold; KVM, Nix-daemon and Copier integration remain separate gates.
+verify: lock-guard versions-check hooks-check shell-arguments-check store-audit-check verification-check purity-check smoke-runner-check lint-nix
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
-        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
-        export _WS_REENTERED=1
-        # Pure-eval devenv root: override the flake's devenv-root placeholder
-        # input with a file holding this worktree's abs path (see `shell`).
-        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
-        mkdir -p "$_devenv_root_dir"
-        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
-        printf '%s' "$_repo_root" > "$_devenv_root_file"
-        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _verify-inner
-    fi
-    just _verify-inner
-[private]
-_verify-inner: toolchain-check check test spec-examples tombi-check golden-check schema-check schema-sync-check scaffold-check lint-nix deny-check store-audit
+    nix build --no-link --no-update-lock-file \
+      .#checks.x86_64-linux.rust \
+      .#checks.x86_64-linux.unit \
+      .#checks.x86_64-linux.package \
+      .#checks.x86_64-linux.pre-commit \
+      .#checks.x86_64-linux.treefmt \
+      .#checks.x86_64-linux.tombiCheck \
+      .#checks.x86_64-linux.schemaSync \
+      .#checks.x86_64-linux.deny
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
+    just store-audit
 
-# Heaviest validation: verify plus Nix build. `verify` self-enshells first,
-# so the whole chain runs inside the devshell; `nix build` itself stays
-# host-side (a nix command, env-agnostic).
+# Verification already builds the package for its installed CLI smoke check.
 verify-full: verify
-    nix build .#workestrate
+    nix build --no-link --no-update-lock-file .#workestrate
 
 # Generate golden plan files for all workloads
 golden-generate:
@@ -588,7 +584,7 @@ store-audit:
     # rather than aborting the recipe. The report + source-path scan logic
     # lives in scripts/store-audit.py (stdlib-only) — kept out of the
     # justfile because just's parser choked on the inline python.
-    path_info=$(nix path-info --all --json 2>/dev/null || true)
+    path_info=$(nix path-info --all --json --json-format 1 --closure-size 2>/dev/null || true)
     if [ -z "$path_info" ]; then
         echo "(nix path-info failed unexpectedly — non-blocking)"
         exit 0

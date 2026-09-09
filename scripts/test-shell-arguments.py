@@ -101,6 +101,27 @@ class ShellArgumentsTest(unittest.TestCase):
             with self.subTest(recipe=recipe):
                 self.check_recipe(recipe, ["-c", "false"], exit_code=23)
 
+    def test_beads_uses_pinned_app_and_preserves_arguments(self):
+        arguments = ["create", "title with spaces", "--description", "$(do not expand)"]
+        result = subprocess.run(
+            [str(self.bin / "just"), "beads", *arguments],
+            cwd=self.root,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        forwarded = json.loads((self.root / "nix-argv.json").read_text())
+        self.assertEqual(
+            forwarded,
+            [
+                "run", "--no-update-lock-file", ".#beads", "--", "--sandbox",
+                "-C", str(self.root), *arguments,
+            ],
+        )
+        self.assertFalse((self.root / ".beads").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

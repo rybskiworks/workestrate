@@ -17,7 +17,7 @@ alias for that source.
 
 Cargo registry and Git dependencies are fetched through Nix's locked Cargo
 dependency support before compilation. Git sources have explicit output
-hashes. Build phases use sandbox-local runtime staging; they must not fetch
+hashes. Build phases use explicit Nix-managed runtime artifacts; they must not fetch
 dependencies from the network. The native libkrun Rust crates are selected
 by `Cargo.lock`; they are not replaced by building a standalone libkrun C
 library. Firmware selection belongs to the Microsandbox package.
@@ -27,6 +27,7 @@ library. Firmware selection belongs to the Microsandbox package.
 ```sh
 nix build .#workestrate
 nix build .#checks.x86_64-linux.package .#checks.x86_64-linux.unit
+just verify
 just bootstrap
 just bootstrap -c rustc --version
 just shell
@@ -35,13 +36,15 @@ just shell
 `just bootstrap` enters a tooling-only devenv shell without requiring a
 working application or Microsandbox build. It does not stage a runtime,
 change the SDK symlink, install Git hooks or mark runtime setup complete.
-Use it for Nix and source investigation; it is not the runtime-aware Cargo
-environment used by `just verify`.
+Use it for Nix and source investigation; it does not configure SDK build inputs.
 
-`just shell` retains the full development environment, including runtime
-staging and the SDK symlink. Both entry points pass an explicit worktree
-root to devenv for pure evaluation and keep Cargo outputs outside the
-source tree.
+`just shell` provides the full development environment and the SDK symlink.
+`MSB_BUILD_RUNTIME` points the SDK build script at the immutable runtime
+package independently of `MSB_HOME`, which remains a runtime-state selector.
+An invalid explicit build runtime fails without downloading a replacement.
+Shell entry does not build workloads, clean runtime directories, install
+hooks or format the checkout. Both entry points pass an explicit worktree
+root to devenv for pure evaluation and keep Cargo outputs outside the source tree.
 
 Shell entry points preserve command argument boundaries, including quoted
 shell programs and empty arguments. `just shell-arguments-check` exercises
@@ -61,14 +64,20 @@ pin contains those fixes; publish and pin the reviewed fork change before
 claiming a reproducible remote build.
 
 `just versions-check`, `just lock-guard` and `just lint-nix` check version,
-Cargo source and purity invariants. `just verify` remains the broader
-validation gate. Neither building nor entering the bootstrap shell runs
+Cargo source and purity invariants. `just verify` is the broader
+validation gate. Neither building nor entering either shell runs
 state migration or starts sandboxes.
 
 `just check` runs the sandboxed `checks.x86_64-linux.rust` gate: formatting,
 Clippy with warnings denied, and Cargo checking with locked, offline
 dependencies. It does not enter the runtime-aware shell, so Git's pre-push
-check cannot trigger that shell's unrelated staging or local agent builds.
+check is independent of interactive development setup.
+
+`just verify` builds the sandboxed checks directly, without entering devenv or
+reading consumer homes. Its schema-copy check compares only repository-owned
+template files; deployed consumers can be inspected separately with
+`workestrate --home <tool-home> schemas update --check`. The store audit is
+informational and requests closure sizes explicitly.
 
 `nix run .#install-hooks` explicitly installs the flake-managed Git hooks
 without entering devenv. The generated configuration is protected from Nix

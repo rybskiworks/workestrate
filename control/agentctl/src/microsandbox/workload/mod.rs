@@ -293,6 +293,12 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         None
     }
 
+    /// Immediate directory of the layer declaring the image or local build.
+    /// Used only to locate its flake, never to rebase mount or seed paths.
+    fn flake_source_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// The feature requiring a flake project root at sandbox-build time, if
     /// any — a human-readable label used in the gate's error message
     /// ("workload '<name>' uses <feature>, which requires a flake project

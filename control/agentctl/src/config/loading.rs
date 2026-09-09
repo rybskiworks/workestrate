@@ -357,6 +357,7 @@ pub fn load_config() -> Result<ConfigFile> {
             let virt_ladder = collect_virtualization_ladder(None, std::slice::from_ref(&layer));
             let ssh_ladder = collect_ssh_policy_ladder(None, std::slice::from_ref(&layer));
             let layer_dirs = crate::merge::layer_dirs_from(std::slice::from_ref(&layer));
+            let source_dirs = crate::merge::layer_source_dirs_from(std::slice::from_ref(&layer));
             let (merged, provenance) = crate::merge::merge_layers(&[layer])?;
             crate::mount_policy::set_collected_policy(Some(collected));
             crate::merge::set_secret_policy_ladder(Some(ladder));
@@ -365,6 +366,7 @@ pub fn load_config() -> Result<ConfigFile> {
             crate::merge::set_ssh_policy_ladder(Some(ssh_ladder));
             crate::merge::set_provenance(Some(provenance));
             crate::merge::set_layer_dirs(Some(layer_dirs));
+            crate::merge::set_layer_source_dirs(Some(source_dirs));
             validate_config(&merged)?;
             return Ok(merged);
         }
@@ -470,6 +472,7 @@ pub fn load_config() -> Result<ConfigFile> {
     }
 
     let mut layer_dirs = crate::merge::layer_dirs_from(&layers);
+    let mut source_dirs = crate::merge::layer_source_dirs_from(&layers);
     let (mut merged, mut provenance) = crate::merge::merge_layers(&layers)?;
     // A5 Session 3b (ADR 0032 addendum §Selection ladder rung 3): the ARMED
     // inline `name:ref` override substitutes the named workload's
@@ -499,6 +502,9 @@ pub fn load_config() -> Result<ConfigFile> {
     let mut virt_ladder = collect_virtualization_ladder(registry.as_ref(), &layers);
     let mut ssh_ladder = collect_ssh_policy_ladder(registry.as_ref(), &layers);
     if let Some((workload, layer)) = substituted_layer {
+        source_dirs.extend(crate::merge::layer_source_dirs_from(std::slice::from_ref(
+            &layer,
+        )));
         // The policy collection must reflect the substitution: the home
         // collection above saw the PRE-substitution declaration, which
         // would silently drop the ref's `policy.mounts` fragment while
@@ -518,6 +524,7 @@ pub fn load_config() -> Result<ConfigFile> {
     crate::merge::set_ssh_policy_ladder(Some(ssh_ladder));
     crate::merge::set_provenance(Some(provenance));
     crate::merge::set_layer_dirs(Some(layer_dirs));
+    crate::merge::set_layer_source_dirs(Some(source_dirs));
     validate_config(&merged)?;
     Ok(merged)
 }
@@ -4243,6 +4250,12 @@ write.deny = ["sugar-write-deny"]
                     .as_path()
             ),
             "the declaring layer's content root must be the feat-x archive"
+        );
+        let source_dirs = crate::merge::get_layer_source_dirs().expect("source dirs set");
+        assert_eq!(
+            source_dirs.get(layer_key),
+            Some(&crate::config::archive_dir(&sha_feat)?.join("workestrate/workloads/prime")),
+            "inline ref flake discovery must use the archived capsule directory"
         );
         let provenance = crate::merge::get_provenance().expect("provenance set");
         assert_eq!(

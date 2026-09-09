@@ -3,7 +3,7 @@
 
   inputs = {
     # Shared build tools and development modules have one version authority.
-    tooling.url = "github:rybskiworks/nix-tooling/eae927a0da5fd04d2dfd2e7876042c6243adba65";
+    tooling.url = "github:rybskiworks/nix-tooling/34c287290245c20e9103f7cd0fcdaa244edd310b";
     nixpkgs.follows = "tooling/nixpkgs";
     fenix.follows = "tooling/fenix";
     flake-parts.follows = "tooling/flake-parts";
@@ -13,7 +13,7 @@
 
     microsandbox-fork = {
       # Runtime packages and SDK patches must come from this same source.
-      url = "github:rybskiworks/microsandbox/783afdf207c0b8e2adc58b72b746399b29167005";
+      url = "github:rybskiworks/microsandbox/a1dad1bf2e17df62c80510d070d1a1aa41ef2224";
       inputs.tooling.follows = "tooling";
     };
 
@@ -198,11 +198,11 @@
           # so the marker cannot silently drift onto a dead line.
           rustToolchain = inputs.fenix.packages.${system}.stable; # RUST_TOOLCHAIN_VERSION = "1.97"
 
-          referenceConfig = import ./nix/lib/config.nix { };
-
           microsandboxSource = inputs'.microsandbox-fork.packages.microsandbox.src;
+          # Metadata comes from the already-fetched input; reading the filtered
+          # package source would require a store write during cold read-only eval.
           forkVersion =
-            (builtins.fromTOML (builtins.readFile (microsandboxSource + "/Cargo.toml")))
+            (builtins.fromTOML (builtins.readFile (inputs.microsandbox-fork.outPath + "/Cargo.toml")))
             .workspace.package.version;
           agentd =
             assert pkgs.lib.assertMsg (
@@ -312,29 +312,6 @@
             '';
           };
 
-          localBuildNames = referenceConfig.localBuilds;
-          recipeCmd =
-            lb:
-            if lb.recipe == "pip-install" then
-              let
-                req = lb.requirements_file or "requirements.txt";
-              in
-              ''REQ=$([ -f requirements.lock ] && echo requirements.lock || echo ${req}) && python3.12 -m pip install --only-binary=:all: --break-system-packages --target ./.deps -r "$REQ"''
-            else if lb.recipe == "bun-install" then
-              "HUSKY=0 bun install"
-            else if lb.recipe == "npm-build" then
-              "npm install && npm run build"
-            else
-              throw "unknown local_build recipe: ${lb.recipe}";
-          buildAgentCommands = builtins.concatStringsSep "\n" (
-            map (
-              name:
-              let
-                lb = referenceConfig.workloads.${name}.local_build;
-              in
-              ''_build_if_needed "${name}" "${recipeCmd lb}" "${lb.gating_file or ""}"''
-            ) localBuildNames
-          );
         in
         {
           _module.args.pkgs = pkgs;
@@ -392,6 +369,7 @@
           };
 
           packages = {
+            beads = inputs'.tooling.packages.beads;
             inherit
               agentd
               workestrate
@@ -406,19 +384,51 @@
             default = workestrate;
           };
 
-          apps.default = {
-            type = "app";
-            program = "${workestrate}/bin/workestrate";
-          };
-
-          apps.install-hooks = {
-            type = "app";
-            program = "${install-hooks}/bin/install-hooks";
+          apps = {
+            default = {
+              type = "app";
+              program = "${workestrate}/bin/workestrate";
+              meta.description = "Run the pinned Workestrate CLI";
+            };
+            install-hooks = {
+              type = "app";
+              program = "${install-hooks}/bin/install-hooks";
+              meta.description = "Install the pinned repository validation hooks";
+            };
+            beads = {
+              type = "app";
+              program = "${inputs'.tooling.packages.beads}/bin/bd";
+              meta.description = "Run the shared pinned Beads tracker CLI";
+            };
           };
 
           # Expose lib per system for backward compat via `config.packages`? Instead we set `flake.lib` above.
           # For `nix flake check` we also provide tombiCheck and treefmt checks.
           checks = {
+            deny = config.checks.unit.overrideAttrs (old: {
+              pname = "workestrate-deny-check";
+              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.cargo-deny ];
+              buildPhase = ''
+                runHook preBuild
+                cargo deny --locked --offline --manifest-path Cargo.toml check \
+                  --config ${./deny.toml} licenses bans sources
+                runHook postBuild
+              '';
+              doCheck = false;
+              installPhase = "mkdir -p $out";
+              postInstall = "";
+            });
+
+            # Consumer homes are deployment state, not repository fixtures.
+            # Unit tests cover schema generation and distribution into scratch
+            # homes; this checks the copies actually shipped by this repository.
+            schemaSync = pkgs.runCommand "workestrate-schema-sync-check" { } ''
+              for name in workestrate.schema.json workestrate-workload.schema.json registry.schema.json; do
+                cmp ${./schemas}/"$name" ${./templates/workestrate-config/schemas}/"$name"
+              done
+              mkdir -p $out
+            '';
+
             rust = config.checks.unit.overrideAttrs (old: {
               pname = "workestrate-rust-check";
               nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
@@ -457,7 +467,7 @@
                   cp versions.json $out/
                 '';
 
-            # Reuse the package's offline SDK/runtime staging. Test-only fixtures
+            # Reuse the package's offline SDK/runtime inputs. Test-only fixtures
             # stay out of the production source; existing KVM ignores remain intact.
             unit = workestrate.overrideAttrs (old: {
               pname = "workestrate-tests";
@@ -523,6 +533,7 @@
           # not build. It deliberately does not mark runtime staging complete.
           devenv.shells.bootstrap = {
             imports = [
+              inputs.tooling.devenvModules.beads
               inputs.tooling.devenvModules.base
               inputs.tooling.devenvModules.nix
               inputs.tooling.devenvModules.toml
@@ -572,6 +583,7 @@
             # root fallback.
 
             imports = [
+              inputs.tooling.devenvModules.beads
               inputs.tooling.devenvModules.base
               inputs.tooling.devenvModules.nix
               inputs.tooling.devenvModules.toml
@@ -612,43 +624,21 @@
               zizmor
             ];
 
-            # Preserve the extensive shellHook from the previous mkShell (staging msb, vendor, agent builds)
+            # Hook installation is explicit (nix run .#install-hooks). Entering
+            # a shell must not format files, build workloads or clean VM state.
+            git-hooks.enable = false;
+            treefmt.enable = false;
+
             enterShell = ''
               echo "workestrate dev shell"
               echo "msb version: $(msb --version 2>/dev/null || echo 'not available')"
               echo "secrets workflow: docs/secrets.md"
 
-              # Build-time-only MSB staging for offline cargo check (NOT a
-              # second runtime home). The canonical runtime home is
-              # $HOME/.microsandbox (the SDK default; see the workestrate +
-              # msb-wrapped --run guards). This block only stages the msb
-              # binary + libkrunfw libs under the legacy cache path so
-              # build.rs finds them offline; it deliberately does NOT export
-              # MSB_HOME/MSB_PATH, so msb state always lands in the canonical
-              # home. Only MSB_AGENTD_PATH is exported (build.rs needs it).
-              _msb_home="$HOME/.cache/ai-workbench-msb"
-              mkdir -p "$_msb_home/bin" "$_msb_home/lib"
-              for _old in /run/user/*/ai-workbench-msb-*; do
-                if [ -e "$_old" ]; then
-                  rm -rf "$_old" 2>/dev/null || true
-                fi
-              done
-              ln -sfn ${microsandbox}/bin/msb "$_msb_home/bin/msb"
-              for f in ${microsandbox}/lib/libkrunfw.so*; do
-                if [ -f "$f" ] && [ ! -L "$f" ]; then
-                  cp -f "$f" "$_msb_home/lib/$(basename "$f")"
-                fi
-              done
-              for f in ${microsandbox}/lib/libkrunfw.so*; do
-                if [ -L "$f" ]; then
-                  _base=$(basename "$f")
-                  _target=$(readlink "$f")
-                  ln -sfn "$(basename "$_target")" "$_msb_home/lib/$_base"
-                fi
-              done
-              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
-              mkdir -p "$CARGO_TARGET_DIR"
+              # Build inputs are immutable and separate from runtime state.
+              # The SDK validates this explicit directory without downloading.
+              export MSB_BUILD_RUNTIME="${microsandbox}"
               export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
+              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
               export WORKESTRATE_DEVSHELL=1
 
               _tool_repo_root() {
@@ -692,53 +682,6 @@
               }
               _setup_vendor_link
               unset -f _setup_vendor_link
-              _build_agents() {
-                local repo_root agents_dir
-                repo_root=$(_tool_repo_root)
-                [ -z "$repo_root" ] && return 0
-                agents_dir="$repo_root/agents"
-                _build_if_needed() {
-                  local name="$1" build_cmd="$2" gating_file="''${3:-}"
-                  local repo_dir build_dir stamp hash_file
-                  repo_dir="$agents_dir/$name/repo"
-                  build_dir="$agents_dir/$name/build"
-                  [ -d "$repo_dir" ] || return 0
-                  stamp="$build_dir/.ai-workbench-built"
-                  hash_file="$agents_dir/$name/.build-hash"
-                  local current_hash="" stored_hash=""
-                  if [ -n "$gating_file" ]; then
-                    if [ -f "$repo_dir/$gating_file" ]; then
-                      current_hash=$(sha256sum "$repo_dir/$gating_file" 2>/dev/null || true)
-                    fi
-                    [ -f "$hash_file" ] && stored_hash=$(cat "$hash_file" 2>/dev/null || true)
-                    if [ -f "$stamp" ] && [ -n "$current_hash" ] && [ "$current_hash" = "$stored_hash" ]; then
-                      return 0
-                    fi
-                  else
-                    [ -f "$stamp" ] && return 0
-                  fi
-                  echo "workestrate: building $name into agents/$name/build..." >&2
-                  rm -rf "$build_dir"
-                  cp -r "$repo_dir" "$build_dir"
-                  chmod -R u+w "$build_dir"
-                  rm -rf "$build_dir/.git" "$build_dir/node_modules" "$build_dir/.deps"
-                  if (cd "$build_dir" && eval "$build_cmd"); then
-                    touch "$stamp"
-                    if [ -n "$gating_file" ] && [ -n "$current_hash" ]; then
-                      echo "$current_hash" > "$hash_file"
-                    fi
-                    echo "workestrate: $name built successfully" >&2
-                  else
-                    rm -rf "$build_dir"
-                    echo "workestrate: WARNING: $name build failed; the agent may not work" >&2
-                    echo "workestrate: You can retry: rm -rf agents/$name/build && just shell" >&2
-                  fi
-                }
-                ${buildAgentCommands}
-                unset -f _build_if_needed
-              }
-              _build_agents
-              unset -f _build_agents
               unset -f _tool_repo_root
             '';
           };

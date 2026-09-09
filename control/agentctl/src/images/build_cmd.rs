@@ -165,6 +165,7 @@ pub fn select_eligible(
     config: &ConfigFile,
     provenance: &MergeProvenance,
     layer_dirs: &HashMap<String, PathBuf>,
+    source_dirs: &HashMap<String, PathBuf>,
     registered: &[(String, PathBuf)],
     only: Option<&str>,
 ) -> Result<(Vec<BuildTarget>, Vec<SelectSkip>)> {
@@ -209,7 +210,10 @@ pub fn select_eligible(
                  '{layer}' has no source path (spec 17 provenance)"
             )
         })?;
-        match repo_identity_for(&declaring_dir, registered) {
+        // Image ownership follows the source file, while persisted repo keys
+        // retain their content-root identity (including archived layers).
+        let source_dir = source_dirs.get(layer).unwrap_or(&declaring_dir);
+        match repo_identity_for(&declaring_dir, source_dir, registered) {
             Some(repo) => targets.push(BuildTarget {
                 name: name.clone(),
                 attr,
@@ -239,13 +243,29 @@ pub fn resolve_targets(scope: BuildScope) -> Result<(Vec<BuildTarget>, Vec<Selec
             }
             let provenance = crate::merge::get_provenance().unwrap_or_default();
             let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
-            select_eligible(&config, &provenance, &layer_dirs, &registered, Some(name))
+            let source_dirs = crate::merge::get_layer_source_dirs().unwrap_or_default();
+            select_eligible(
+                &config,
+                &provenance,
+                &layer_dirs,
+                &source_dirs,
+                &registered,
+                Some(name),
+            )
         }
         BuildScope::ActiveContext => {
             let config = crate::config::load_config()?;
             let provenance = crate::merge::get_provenance().unwrap_or_default();
             let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
-            select_eligible(&config, &provenance, &layer_dirs, &registered, None)
+            let source_dirs = crate::merge::get_layer_source_dirs().unwrap_or_default();
+            select_eligible(
+                &config,
+                &provenance,
+                &layer_dirs,
+                &source_dirs,
+                &registered,
+                None,
+            )
         }
         BuildScope::Repo(name) => {
             let registry = crate::config::load_registry()?.ok_or_else(|| {
@@ -314,9 +334,17 @@ fn targets_for_repo(
         return Ok((Vec::new(), Vec::new()));
     }
     let layer_dirs = crate::merge::layer_dirs_from(&layers);
+    let source_dirs = crate::merge::layer_source_dirs_from(&layers);
     let (config, provenance) = crate::merge::merge_layers(&layers)
         .with_context(|| format!("failed to merge config repo '{name}'"))?;
-    select_eligible(&config, &provenance, &layer_dirs, registered, None)
+    select_eligible(
+        &config,
+        &provenance,
+        &layer_dirs,
+        &source_dirs,
+        registered,
+        None,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -860,7 +888,8 @@ mod tests {
         let (tmp, checkout, registered) = repo_fixture(label);
         let declaring = checkout.join("workestrate").join("workloads").join(name);
         std::fs::create_dir_all(&declaring).unwrap();
-        let repo = repo_identity_for(&declaring, &registered).expect("flake root resolves");
+        let repo =
+            repo_identity_for(&declaring, &declaring, &registered).expect("flake root resolves");
         let attr = format!("img-{name}");
         let target = BuildTarget {
             name: name.to_string(),
@@ -873,6 +902,100 @@ mod tests {
     }
 
     // ---- selector core ----
+
+    #[test]
+    fn capsule_flakes_are_selected_without_rebasing_content_or_repo_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let content = repo.join("workestrate");
+        std::fs::create_dir_all(content.join("workloads/local")).unwrap();
+        std::fs::create_dir_all(content.join("workloads/fallback")).unwrap();
+        std::fs::write(repo.join("flake.nix"), "{}\n").unwrap();
+        std::fs::write(content.join("default.toml"), "schema_version = 1\n").unwrap();
+        let local = content.join("workloads/local");
+        std::fs::write(local.join("flake.nix"), "{}\n").unwrap();
+        for name in ["local", "fallback"] {
+            std::fs::write(
+                content.join("workloads").join(name).join("workload.toml"),
+                format!(
+                    "kind = \"service\"\nimage = {{ recipe = \"nix-layered\", name = \"img-{name}\" }}\ncommand = []\n\n[[seed_files]]\nsource = \"workloads/{name}/seed.json\"\ntarget = \"workspaces/{name}-state/seed.json\"\n"
+                ),
+            ).unwrap();
+        }
+        let layers = crate::config::loading::load_config_repo_layers("fleet", repo).unwrap();
+        let content_dirs = crate::merge::layer_dirs_from(&layers);
+        let source_dirs = crate::merge::layer_source_dirs_from(&layers);
+        let (config, provenance) = crate::merge::merge_layers(&layers).unwrap();
+        let registered = vec![("fleet".to_string(), repo.to_path_buf())];
+        let (targets, skips) = select_eligible(
+            &config,
+            &provenance,
+            &content_dirs,
+            &source_dirs,
+            &registered,
+            None,
+        )
+        .unwrap();
+        assert!(skips.is_empty());
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].name, "fallback");
+        assert_eq!(targets[0].repo.flake_root, repo.canonicalize().unwrap());
+        assert_eq!(targets[1].name, "local");
+        assert_eq!(targets[1].repo.flake_root, local.canonicalize().unwrap());
+        for target in &targets {
+            assert_eq!(target.repo.name, "fleet");
+            assert_eq!(target.repo.path, repo.canonicalize().unwrap());
+            let layer = &provenance[&format!("workloads.{}.image", target.name)];
+            assert_eq!(content_dirs[layer], content);
+            assert_eq!(
+                config.workloads[&target.name].seed_files[0].source,
+                Some(format!("workloads/{}/seed.json", target.name)),
+            );
+        }
+        // Archive/unregistered identity must also remain the old content-root
+        // key, not become a different image record namespace per capsule.
+        let (unregistered, _) =
+            select_eligible(&config, &provenance, &content_dirs, &source_dirs, &[], None).unwrap();
+        for target in unregistered {
+            assert_eq!(
+                target.repo.name,
+                content.canonicalize().unwrap().to_string_lossy()
+            );
+        }
+    }
+
+    #[test]
+    fn image_override_uses_its_own_source_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("workestrate/workloads/svc");
+        let overlay = tmp.path().join("overrides");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&overlay).unwrap();
+        std::fs::write(base.join("flake.nix"), "{}\n").unwrap();
+        std::fs::write(overlay.join("flake.nix"), "{}\n").unwrap();
+        let layers = [
+            crate::merge::Layer::from_string_with_path(
+                "base", "schema_version = 1\n[workloads.svc]\nkind = \"service\"\nimage = { recipe = \"nix-layered\", name = \"base\" }\ncommand = []\n",
+                Some(base.join("workload.toml")),
+            ).unwrap(),
+            crate::merge::Layer::from_string_with_path(
+                "overlay", "[workloads.svc]\nimage = { recipe = \"nix-layered\", name = \"override\" }\n",
+                Some(overlay.join("workestrate.toml")),
+            ).unwrap(),
+        ];
+        let (config, provenance) = crate::merge::merge_layers(&layers).unwrap();
+        let (targets, _) = select_eligible(
+            &config,
+            &provenance,
+            &crate::merge::layer_dirs_from(&layers),
+            &crate::merge::layer_source_dirs_from(&layers),
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(targets[0].attr, "override");
+        assert_eq!(targets[0].repo.flake_root, overlay.canonicalize().unwrap());
+    }
 
     /// Bare scope: only nix-layered workloads are selected; registry /
     /// local_build-only workloads are skipped silently (spec §2.3/§5.1).
@@ -889,8 +1012,15 @@ mod tests {
         let provenance = provenance_for(&["pi", "web", "tempest"], "personal#workestrate");
         let layer_dirs = HashMap::from([("personal#workestrate".to_string(), declaring)]);
 
-        let (targets, skips) =
-            select_eligible(&config, &provenance, &layer_dirs, &registered, None).unwrap();
+        let (targets, skips) = select_eligible(
+            &config,
+            &provenance,
+            &layer_dirs,
+            &layer_dirs,
+            &registered,
+            None,
+        )
+        .unwrap();
 
         let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["pi", "tempest"], "sorted, nix-layered only");
@@ -916,13 +1046,27 @@ mod tests {
         let provenance = provenance_for(&["pi", "web"], "personal");
         let layer_dirs = HashMap::from([("personal".to_string(), declaring)]);
 
-        let (targets, _) =
-            select_eligible(&config, &provenance, &layer_dirs, &registered, Some("pi")).unwrap();
+        let (targets, _) = select_eligible(
+            &config,
+            &provenance,
+            &layer_dirs,
+            &layer_dirs,
+            &registered,
+            Some("pi"),
+        )
+        .unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].name, "pi");
 
-        let (targets, _) =
-            select_eligible(&config, &provenance, &layer_dirs, &registered, Some("web")).unwrap();
+        let (targets, _) = select_eligible(
+            &config,
+            &provenance,
+            &layer_dirs,
+            &layer_dirs,
+            &registered,
+            Some("web"),
+        )
+        .unwrap();
         assert!(
             targets.is_empty(),
             "a registry-recipe name is skipped → zero-eligible note path"
@@ -944,7 +1088,7 @@ mod tests {
         let layer_dirs = HashMap::from([("adhoc".to_string(), declaring.clone())]);
 
         let (targets, skips) =
-            select_eligible(&config, &provenance, &layer_dirs, &[], None).unwrap();
+            select_eligible(&config, &provenance, &layer_dirs, &layer_dirs, &[], None).unwrap();
         assert!(targets.is_empty());
         match &skips[..] {
             [

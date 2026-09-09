@@ -283,6 +283,7 @@ gating_file = "package-lock.json"
             &config,
             &provenance,
             &layer_dirs,
+            &layer_dirs,
             &registered,
             None,
         )
@@ -318,7 +319,8 @@ gating_file = "package-lock.json"
         let registered = vec![("personal".to_string(), checkout.clone())];
         let declaring = checkout.join("workestrate").join("workloads").join(name);
         std::fs::create_dir_all(&declaring).unwrap();
-        let repo = repo_identity_for(&declaring, &registered).expect("flake root resolves");
+        let repo =
+            repo_identity_for(&declaring, &declaring, &registered).expect("flake root resolves");
         let attr = format!("img-{name}");
         let target = BuildTarget {
             name: name.to_string(),

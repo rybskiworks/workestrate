@@ -1,0 +1,23 @@
+schema_version = 1
+
+[policy.virtualization]
+allow_nested = true
+
+[workloads.outer]
+kind = "service"
+image = { recipe = "nix-layered", name = "workestrate-nested-smoke", tag = "latest" }
+cpus = 2
+memory_mib = 2048
+workdir = "/tmp"
+command = ["/bin/timeout", "-k", "5s", "180s", "/bin/nested-smoke"]
+log_stop_errors = true
+
+[workloads.outer.virtualization]
+nested = "require"
+
+[workloads.outer.network.defaults]
+egress = "deny"
+ingress = "deny"
+
+[workloads.outer.instance]
+on_conflict = "fail"

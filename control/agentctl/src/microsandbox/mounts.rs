@@ -263,18 +263,24 @@ pub(crate) fn resolve_mount_roots_owned<W: crate::microsandbox::workload::Worklo
     //   1. `AGENTCTL_ROOT` — EXPLICIT override only, and only when it
     //      contains flake.nix (`source::flake_root_override`). It is never
     //      *required* for declaring-repo-derived roots.
-    //   2. The DECLARING config repo's flake root — the nearest flake.nix
-    //      ancestor of the declaring layer's content root (`mount_content_root`
-    //      + `source::find_flake_root`; the same resolution `build_cmd` /
-    //      `repo_key::repo_identity_for` uses). Directory-mode config repos
-    //      carry flake.nix at their own root, so exec/up/plan work from ANY
-    //      CWD — the CWD is never the origin (ADR 0028 §Decision 2).
+    //   2. The nearest flake above the local-build source directory (or the
+    //      image source when there is no local build), then the mount content
+    //      root for older or synthetic workloads. Image builds independently
+    //      select their own source; an image override cannot rebase artifacts.
+    //      Capsule-local flakes do not change the content root used below
+    //      for ordinary relative mount hosts or seed files.
     //   3. Legacy `project_root()` hard gate — synthetic / single-file layers
     //      with no declaring dir (CWD tier preserved; the exact error wording
     //      contract for the no-declaring-root case is unchanged).
     let project_root: Option<PathBuf> = match workload.flake_root_requirement(plan) {
         Some(feature) => {
             let root = crate::commands::source::flake_root_override()
+                .or_else(|| {
+                    workload
+                        .flake_source_dir()
+                        .as_deref()
+                        .and_then(crate::commands::source::find_flake_root)
+                })
                 .or_else(|| {
                     workload
                         .mount_content_root()

@@ -1,0 +1,17 @@
+schema_version = 1
+
+[workloads.smoke]
+kind = "service"
+image = { recipe = "nix-layered", name = "workestrate-smoke", tag = "latest" }
+cpus = 1
+memory_mib = 256
+workdir = "/tmp"
+command = ["/bin/sh", "-c", "echo SMOKE_OK; exec sleep 300"]
+log_stop_errors = true
+
+[workloads.smoke.network.defaults]
+egress = "deny"
+ingress = "deny"
+
+[workloads.smoke.instance]
+on_conflict = "fail"

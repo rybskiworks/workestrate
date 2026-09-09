@@ -126,7 +126,7 @@ pub fn resolve_repo_key(declaring_dir: &Path) -> String {
 
 /// Build the [`RepoIdentity`] for a record: the repo_key rule for `name`, the
 /// matched checkout (or the declaring dir when unregistered) for `path`, and
-/// the nearest-ancestor `flake.nix` walk for `flake_root` (reuses
+/// the nearest-ancestor `flake.nix` walk from `source_dir` for `flake_root` (reuses
 /// [`crate::commands::source::find_flake_root`], the same helper `source
 /// clone` uses).
 ///
@@ -136,10 +136,11 @@ pub fn resolve_repo_key(declaring_dir: &Path) -> String {
 /// skip-with-note).
 pub fn repo_identity_for(
     declaring_dir: &Path,
+    source_dir: &Path,
     registered: &[(String, PathBuf)],
 ) -> Option<RepoIdentity> {
     let declaring_canon = canonicalize_or_self(declaring_dir);
-    let flake_root = crate::commands::source::find_flake_root(&declaring_canon)?;
+    let flake_root = crate::commands::source::find_flake_root(&canonicalize_or_self(source_dir))?;
     let (name, path) = match match_registered(&declaring_canon, registered) {
         Some((name, checkout)) => (name, checkout),
         None => {
@@ -244,7 +245,8 @@ mod tests {
         std::fs::write(checkout.join("flake.nix"), "{}\n").unwrap();
         let registered = vec![("personal".to_string(), checkout.clone())];
 
-        let identity = repo_identity_for(&declaring, &registered).expect("flake root found");
+        let identity =
+            repo_identity_for(&declaring, &declaring, &registered).expect("flake root found");
         assert_eq!(identity.name, "personal");
         assert_eq!(identity.path, checkout.canonicalize().unwrap());
         assert_eq!(identity.flake_root, checkout.canonicalize().unwrap());
@@ -259,7 +261,7 @@ mod tests {
         std::fs::create_dir_all(&declaring).unwrap();
         std::fs::write(tmp.join("repo").join("flake.nix"), "{}\n").unwrap();
 
-        let identity = repo_identity_for(&declaring, &[]).expect("flake root found");
+        let identity = repo_identity_for(&declaring, &declaring, &[]).expect("flake root found");
         let canon = declaring.canonicalize().unwrap();
         assert_eq!(identity.name, canon.to_string_lossy());
         assert_eq!(identity.path, canon);
@@ -281,7 +283,8 @@ mod tests {
         // No flake.nix anywhere in the temp tree; assert against the tree
         // itself so ancestors above /tmp cannot leak in.
         assert!(
-            repo_identity_for(&declaring, &[]).is_none_or(|id| !id.flake_root.starts_with(&tmp)),
+            repo_identity_for(&declaring, &declaring, &[])
+                .is_none_or(|id| !id.flake_root.starts_with(&tmp)),
             "no flake.nix inside the temp tree must not resolve into it"
         );
 

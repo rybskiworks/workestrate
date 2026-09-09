@@ -1,6 +1,4 @@
 # cargo-deny configuration — supply-chain gates for workestrate.
-# Empirically tuned 2026-09-06 against the real control/agentctl tree
-# (cargo-deny 0.20.2, ~539 crates): bans/sources/licenses all green.
 # CDLA-Permissive-2.0 is required by webpki-root-certs/webpki-roots
 # (permissive Linux Foundation data license). No `ring` clarify block:
 # ring 0.17.14 publishes SPDX "Apache-2.0 AND ISC" — both terms allowed.
@@ -32,3 +30,7 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# The runtime fork inherits these crates from this one reviewed repository.
+# Cargo.lock and the Nix fixed-output hash pin the exact source contents.
+allow-git = ["https://github.com/rybskiworks/libkrun"]
+required-git-spec = "rev"
