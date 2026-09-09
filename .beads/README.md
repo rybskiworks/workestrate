@@ -58,9 +58,58 @@ These operations can replace local state; exports do not contain full Dolt
 history. [Beads release notes](https://github.com/gastownhall/beads/releases/tag/v1.2.2)
 explain why this version is pinned instead of the retracted 1.2.0/1.2.1 releases.
 
-No Dolt remote has been configured for this clone. Adding a remote and publishing
-`refs/dolt/data` are explicit operations, separate from ordinary Git pushes.
-Do not install Beads Git hooks over this repository's existing validation hooks.
+## Explicit remote synchronization
+
+Native Dolt history is shared through the existing private Workestrate Git
+repository. Dolt uses `refs/dolt/data`, separate from code branches and tags;
+an ordinary code push does not publish database changes. The original checkout
+uses the Dolt remote name `workestrate`:
+
+```sh
+just beads dolt remote list
+just beads backup sync
+just beads dolt commit -m 'chore: preserve tracker updates'
+just beads dolt push --remote workestrate
+```
+
+The corresponding remote URL is
+`git+ssh://git@github.com/rybskiworks/workestrate.git`. Remote configuration is
+clone-local. Register that explicit name only when it is missing:
+
+```sh
+just beads dolt remote add workestrate git+ssh://git@github.com/rybskiworks/workestrate.git
+```
+
+Use an explicit remote name. In Beads 1.2.2, adding `origin` or letting a bare
+`dolt push` adopt Git origin can also stage and commit `config.yaml`. The
+explicit `workestrate` registration does not make a Git commit. Keep automatic
+push disabled and do not install Beads Git hooks over existing validation hooks.
+
+For a **fresh clone with no local database**, inspect the bootstrap plan before
+restoring native history:
+
+```sh
+just beads bootstrap --dry-run --json
+just beads bootstrap --yes
+just beads context --json
+just beads vc status --json
+just beads branch --json
+just beads list --all --json
+just beads dolt remote list
+```
+
+Bootstrap discovers `refs/dolt/data` through Git origin and normally names its
+Dolt remote `origin`; use `--remote origin` in that clone. Do not bootstrap or
+pull over unpublished local work. Stop writers, take a native backup and an
+issue export, and compare histories in a separate checkout before integrating
+another writer's changes. Never resolve divergence with a force push or by
+deleting the database without an explicit recovery decision.
+
+The first publication was verified by native local-backup restoration and a
+separate empty checkout bootstrapped from the private remote. Both recovered
+the same 70 issue records byte-for-byte, the same project identity, and the same
+sole `main` branch and content-addressed Dolt commit. This is a historical
+verification result, not a fixed expected issue count for future clones.
 
 ## Issue workflow
 
