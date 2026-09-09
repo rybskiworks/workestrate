@@ -108,11 +108,14 @@ pub fn doctor_check_kvm() -> DoctorCheck {
 /// vmx|svm flag + nested parameter affirmatively enabled; WARN = KVM works
 /// but nested is disabled/unknown; FAIL = no /dev/kvm. Each carries
 /// remediation. The trailing note identifies the same fork revision as
-/// `versions`. A host probe does not establish that the packaged firmware
-/// supports nested guests or that the SSH gateway is operational.
+/// `versions`. Host capability and per-sandbox requests are distinct from
+/// guest execution, off-policy enforcement and SSH broker custody evidence.
 pub fn doctor_check_nested_virt() -> DoctorCheck {
     let pin_note = format!(
-        "pin {} carries the mount-policy stack, the first-class nested_virt spec option (default off, driven per-sandbox via builder.nested_virt), and the brokerd/ssh gateway and DLP registration code; nested remains inert until firmware with guest KVM support is integrated and tested",
+        "pin {} supports per-sandbox nested_virt requests (default off); bundled runtime/firmware \
+         can run nested guests on suitable hosts, but this host inventory does not test guest \
+         nested-on execution or off-policy enforcement; the current Linux off flag is not an \
+         enforced confinement boundary; SSH broker custody is not verified",
         fork_rev_short()
     );
     const REMEDIATION: &str = "Enable virtualization in BIOS + sudo modprobe kvm(_intel|_amd) + \
@@ -1144,14 +1147,20 @@ mod tests {
             check.message.contains(&fork_rev_short()),
             "every verdict carries the fork pin note: {check:?}"
         );
-        // Honest pin strings: the pin carries the mount-policy stack + the
-        // nested_virt spec option + the brokerd/ssh gateway line, but nested
-        // is inert until firmware — no nested-works
-        // claim.
-        assert!(
-            check.message.contains("inert until firmware"),
-            "pin note states firmware honesty: {check:?}"
-        );
+        // This host-independent inventory must not claim to have tested a
+        // guest's nesting behavior or the broker's credential custody.
+        for expected in [
+            "per-sandbox nested_virt requests (default off)",
+            "can run nested guests on suitable hosts",
+            "host inventory does not test guest nested-on execution or off-policy enforcement",
+            "current Linux off flag is not an enforced confinement boundary",
+            "SSH broker custody is not verified",
+        ] {
+            assert!(
+                check.message.contains(expected),
+                "pin note distinguishes capability from runtime evidence ({expected}): {check:?}"
+            );
+        }
         if check.status != "OK" {
             assert!(
                 check
