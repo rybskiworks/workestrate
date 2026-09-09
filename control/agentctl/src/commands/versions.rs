@@ -1,17 +1,19 @@
-//! `workestrate versions` — Phase-0 observability quadruple.
+//! `workestrate versions` — runtime artifact identities and provenance.
 //!
 //! Prints the four versioned runtime artifacts plus provenance in one place:
 //! the baked workestrate rev (`WORKESTRATE_VERSION`), the msb binary version,
-//! the agentd version (or content hash), and the libkrunfw soname, plus the
+//! the agentd content hash, and the libkrunfw soname, plus the
 //! msb store DB schema marker and the pinned fork rev.
 //!
 //! Every probe is read-only and degrades gracefully: a missing binary, a
 //! missing DB, or a missing `sqlite3` yields an `"unavailable"`-style marker,
 //! never an error. Nothing here migrates or writes anything.
 
+use std::io::Read;
 use std::path::Path;
 
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 
 use crate::commands::doctor::{msb_binary, probe_version, resolve_msb_home};
 
@@ -22,7 +24,7 @@ pub const MSB_VERSION_PIN: &str = "0.6.16";
 /// Hand-maintained fork rev pin (full rev). Must agree with the
 /// `microsandbox-fork` input in `flake.nix` / `flake.lock` (enforced by
 /// `scripts/check-msb-versions.sh`).
-pub const FORK_REV_PIN: &str = "67807cd587ea50a4054659a2989dea5886b40e8a";
+pub const FORK_REV_PIN: &str = "53ec61407f27498c9a05ed82035f7062d9b21224";
 
 /// Expected libkrunfw soname shipped by the fork's runtime package.
 pub const LIBKRUNFW_SONAME: &str = "libkrunfw.so.5.6.1";
@@ -99,39 +101,35 @@ fn resolve_on_path(bin: &str) -> Option<String> {
     None
 }
 
-/// True when the path exists and has any executable bit set (unix) or
-/// merely exists (non-unix fallback). Read-only metadata stat.
+/// True for a regular file with any executable bit set. Read-only metadata stat.
 #[cfg(unix)]
 fn is_executable(path: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path)
-        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
 }
 
-/// True when the path exists and has any executable bit set (unix) or
-/// merely exists (non-unix fallback). Read-only metadata stat.
+/// Non-Unix fallback: a regular file. Read-only metadata stat.
 #[cfg(not(unix))]
 fn is_executable(path: &str) -> bool {
     Path::new(path).is_file()
 }
 
-/// Short content hash of an executable via `sha256sum` (first 12 hex chars).
-/// Returns `None` when `sha256sum` is missing, fails, or yields no digest.
+/// Short content hash (first 12 hex characters), without spawning a process.
+/// Reads with bounded memory and returns `None` if the file cannot be read.
 fn short_sha256(path: &str) -> Option<String> {
-    let out = std::process::Command::new("sha256sum")
-        .arg(path)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = file.read(&mut buffer).ok()?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let digest = stdout.split_whitespace().next().unwrap_or("");
-    if digest.is_empty() {
-        return None;
-    }
-    Some(digest.chars().take(12).collect())
+    Some(format!("{:x}", digest.finalize())[..12].to_owned())
 }
 
 /// The agentd binary path: `MSB_AGENTD_PATH` when set and non-empty, else an
@@ -148,15 +146,13 @@ pub fn agentd_path() -> String {
     "unavailable (MSB_AGENTD_PATH unset, agentd not on PATH)".to_string()
 }
 
-/// The agentd version-or-identity string: `<agentd> --version` first; else a
-/// `sha256:<12>` content hash when executable; else `executable:<bool>`.
+/// The agentd identity: a `sha256:<12>` content hash when executable, otherwise
+/// `executable:<bool>`. Never execute agentd: it is a guest bootstrap binary,
+/// not a command with a version-only entry point.
 /// Never fails — degrades to `"unavailable"` for non-path inputs.
 pub fn agentd_version_or_sha(path: &str) -> String {
     if path.is_empty() || path.starts_with("unavailable") {
         return "unavailable".to_string();
-    }
-    if let Some(v) = probe_version(path) {
-        return v;
     }
     let executable = is_executable(path);
     if executable && let Some(sha) = short_sha256(path) {
@@ -471,8 +467,80 @@ mod tests {
 
     #[test]
     fn fork_short_rev_is_the_first_eight_chars() {
-        assert_eq!(fork_rev_short(), "67807cd5");
+        assert_eq!(fork_rev_short(), "53ec6140");
         assert_eq!(fork_rev_short().len(), 8);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agentd_identity_hashes_without_executing_the_guest_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("agentd");
+        std::fs::write(&binary, b"#!/bin/sh\nprintf executed > \"$0.executed\"\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let expected = format!("sha256:{}", short_sha256(binary.to_str().unwrap()).unwrap());
+        let marker = binary.with_extension("executed");
+
+        // Prove the synthetic fixture would expose the old execution path;
+        // a missing interpreter must not make the negative assertion vacuous.
+        assert!(
+            std::process::Command::new(&binary)
+                .arg("--version")
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(marker.is_file());
+        std::fs::remove_file(&marker).unwrap();
+
+        assert_eq!(agentd_version_or_sha(binary.to_str().unwrap()), expected);
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn agentd_hash_matches_known_sha256() {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("agentd");
+        std::fs::write(&binary, b"abc").unwrap();
+        assert_eq!(
+            short_sha256(binary.to_str().unwrap()),
+            Some("ba7816bf8f01".to_owned())
+        );
+    }
+
+    #[test]
+    fn absent_agentd_and_directories_have_no_executable_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(agentd_version_or_sha(""), "unavailable");
+        assert_eq!(
+            agentd_version_or_sha("unavailable (no agentd)"),
+            "unavailable"
+        );
+        assert_eq!(
+            agentd_version_or_sha(directory.path().to_str().unwrap()),
+            "executable:false"
+        );
+        assert_eq!(
+            agentd_version_or_sha(directory.path().join("missing").to_str().unwrap()),
+            "executable:false"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonexecutable_agentd_remains_a_metadata_result() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("agentd");
+        std::fs::write(&binary, b"abc").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            agentd_version_or_sha(binary.to_str().unwrap()),
+            "executable:false"
+        );
     }
 
     // ---- collect_versions shape (host-independent) ----
