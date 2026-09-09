@@ -67,9 +67,9 @@ class VerificationTests(unittest.TestCase):
         result, calls = self.run_gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         build = calls[0]
-        self.assertEqual(build[:4], ["nix", "build", "--no-link", "--no-update-lock-file"])
+        self.assertEqual(build[:5], ["nix", "build", "--no-link", "--no-update-lock-file", "--keep-going"])
         self.assertEqual(
-            set(build[4:]),
+            set(build[5:]),
             {
                 f".#checks.x86_64-linux.{name}"
                 for name in (

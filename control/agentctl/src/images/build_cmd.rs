@@ -905,8 +905,8 @@ mod tests {
 
     #[test]
     fn capsule_flakes_are_selected_without_rebasing_content_or_repo_identity() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path();
+        let tmp = unique_state_dir("select-capsule-flakes");
+        let repo = tmp.as_path();
         let content = repo.join("workestrate");
         std::fs::create_dir_all(content.join("workloads/local")).unwrap();
         std::fs::create_dir_all(content.join("workloads/fallback")).unwrap();
@@ -962,13 +962,14 @@ mod tests {
                 content.canonicalize().unwrap().to_string_lossy()
             );
         }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn image_override_uses_its_own_source_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().join("workestrate/workloads/svc");
-        let overlay = tmp.path().join("overrides");
+        let tmp = unique_state_dir("select-image-override");
+        let base = tmp.join("workestrate/workloads/svc");
+        let overlay = tmp.join("overrides");
         std::fs::create_dir_all(&base).unwrap();
         std::fs::create_dir_all(&overlay).unwrap();
         std::fs::write(base.join("flake.nix"), "{}\n").unwrap();
@@ -995,6 +996,7 @@ mod tests {
         .unwrap();
         assert_eq!(targets[0].attr, "override");
         assert_eq!(targets[0].repo.flake_root, overlay.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Bare scope: only nix-layered workloads are selected; registry /

@@ -159,7 +159,7 @@ _spec-examples-inner:
 verify: lock-guard versions-check hooks-check shell-arguments-check store-audit-check verification-check purity-check smoke-runner-check lint-nix
     #!/usr/bin/env bash
     set -euo pipefail
-    nix build --no-link --no-update-lock-file \
+    nix build --no-link --no-update-lock-file --keep-going \
       .#checks.x86_64-linux.rust \
       .#checks.x86_64-linux.unit \
       .#checks.x86_64-linux.package \

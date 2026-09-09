@@ -438,14 +438,16 @@ mod tests {
     #[test]
     fn nix_evaluation_refuses_implicit_lock_updates() {
         use std::os::unix::fs::PermissionsExt;
-        let tmp = tempfile::tempdir().unwrap();
-        let program = tmp.path().join("nix");
+        let tmp = crate::config::test_support::unique_state_dir("eval-lock-updates");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let program = tmp.join("nix");
         std::fs::write(&program, "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = --no-update-lock-file ]; then\n    echo /nix/store/fixture-image.drv\n    exit 0\n  fi\ndone\nexit 9\n").unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut evaluator = NixCliEvaluator::with_program(program.to_str().unwrap());
-        assert!(evaluator.eval_drv_path(tmp.path(), "image").is_ok());
-        assert!(evaluator.eval_out_path(tmp.path(), "image").is_ok());
-        assert!(!tmp.path().join("flake.lock").exists());
+        assert!(evaluator.eval_drv_path(&tmp, "image").is_ok());
+        assert!(evaluator.eval_out_path(&tmp, "image").is_ok());
+        assert!(!tmp.join("flake.lock").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// §7 mapping: a nix binary that cannot be spawned maps to NixAbsent

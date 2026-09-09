@@ -35,6 +35,11 @@ the guest. `workload build outer` builds and imports the image; then start
 `workload up outer --instance selfhost`. Stop only that instance with
 `workload down outer --instance selfhost`, including after a failed test.
 
+When using the pinned older host runner from another directory, also set
+`AGENTCTL_ROOT` to this complete standalone directory. Newer runners that derive
+the flake root from the workload declaration do not need this compatibility
+override.
+
 The guest uses fresh `/tmp/inner` roots and an explicitly empty backend config,
 imports the embedded child image without a registry pull, validates/plans the
 child, boots it, resolves its actual backend name, executes a command, and

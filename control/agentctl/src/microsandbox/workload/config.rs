@@ -2546,12 +2546,12 @@ egress = "deny"
             "WORKESTRATE_STATE_DIR",
             "WORKESTRATE_SVC_BUILD",
         ]);
-        let tmp = tempfile::tempdir()?;
-        let base = tmp.path().join("base");
+        let tmp = crate::config::test_support::unique_state_dir("mixed-artifact-provenance");
+        let base = tmp.join("base");
         let content = base.join("workestrate");
         let capsule = content.join("workloads/svc");
-        let image_capsule = tmp.path().join("images/workestrate/workloads/svc");
-        let state = tmp.path().join("state");
+        let image_capsule = tmp.join("images/workestrate/workloads/svc");
+        let state = tmp.join("state");
         // SAFETY: serialized by ENV_TEST_LOCK and restored by the guard.
         unsafe {
             std::env::remove_var("AGENTCTL_ROOT");
@@ -2659,6 +2659,7 @@ ingress = "deny"
             artifact_flake_source_dir(&workload.workload, &provenance, &source_dirs, "svc"),
             Some(image_capsule)
         );
+        let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
     }
 
@@ -2668,8 +2669,8 @@ ingress = "deny"
         let _guard = crate::config::test_support::EnvGuard::capture(&["AGENTCTL_ROOT"]);
         // SAFETY: serialized by ENV_TEST_LOCK and restored by the guard.
         unsafe { std::env::remove_var("AGENTCTL_ROOT") };
-        let tmp = tempfile::tempdir()?;
-        let content = tmp.path().join("workestrate");
+        let tmp = crate::config::test_support::unique_state_dir("capsule-root-gate");
+        let content = tmp.join("workestrate");
         let capsule = content.join("workloads/svc");
         std::fs::create_dir_all(&capsule)?;
         std::fs::write(capsule.join("flake.nix"), "{}\n")?;
@@ -2685,6 +2686,7 @@ ingress = "deny"
         assert_eq!(roots.project_root, Some(capsule));
         assert_eq!(roots.content_root, content);
         assert_eq!(workload.seed_content_root, Some(content));
+        let _ = std::fs::remove_dir_all(&tmp);
         Ok(())
     }
 

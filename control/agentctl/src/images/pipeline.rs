@@ -882,16 +882,18 @@ mod tests {
     #[test]
     fn nix_build_refuses_implicit_lock_updates() {
         use std::os::unix::fs::PermissionsExt;
-        let tmp = tempfile::tempdir().unwrap();
-        let program = tmp.path().join("nix");
+        let tmp = unique_state_dir("build-lock-updates");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let program = tmp.join("nix");
         std::fs::write(&program, "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = --no-update-lock-file ]; then\n    echo /nix/store/fixture-image\n    exit 0\n  fi\ndone\nexit 9\n").unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut builder = NixCliBuilder::with_program(program.to_str().unwrap());
         assert_eq!(
-            builder.build_out_path(tmp.path(), "image").unwrap(),
+            builder.build_out_path(&tmp, "image").unwrap(),
             "/nix/store/fixture-image"
         );
-        assert!(!tmp.path().join("flake.lock").exists());
+        assert!(!tmp.join("flake.lock").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     fn job_fixture() -> BuildJob {
