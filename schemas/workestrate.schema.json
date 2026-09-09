@@ -766,6 +766,59 @@
       },
       "additionalProperties": false
     },
+    "InitConfig": {
+      "description": "Explicit guest PID 1 selection, independent of the workload command. A higher layer replaces this entire block; `agentd` resets an inherited handoff. Handoff arguments and environment are nonsecret guest literals.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "agentd"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "cmd",
+            "mode"
+          ],
+          "properties": {
+            "args": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cmd": {
+              "type": "string"
+            },
+            "env": {
+              "default": {},
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "handoff"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "InstancePolicy": {
       "description": "`[workloads.<name>.instance]` — the per-workload instance policy (ADR 0030 §4.1): the instance model the workload defaults to, the conflict chain when the target slot is occupied, the port strategy, and an optional display label. Absent = current behavior. NOTE: named `InstancePolicy` (not \"InstanceSpec\") to avoid colliding with the runtime `InstanceSpec`.",
       "type": "object",
@@ -1769,6 +1822,16 @@
           "allOf": [
             {
               "$ref": "#/definitions/ImageSpec"
+            }
+          ]
+        },
+        "init": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InitConfig"
+            },
+            {
+              "type": "null"
             }
           ]
         },

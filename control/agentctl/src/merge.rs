@@ -847,6 +847,10 @@ fn merge_workload(
         merged.workdir = layer.workdir.clone();
         provenance.insert(format!("workloads.{name}.workdir"), layer_ctx.name.clone());
     }
+    if table.contains_key("init") {
+        merged.init = layer.init.clone();
+        provenance.insert(format!("workloads.{name}.init"), layer_ctx.name.clone());
+    }
     if table.contains_key("cpus") {
         merged.cpus = layer.cpus;
         provenance.insert(format!("workloads.{name}.cpus"), layer_ctx.name.clone());

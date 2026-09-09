@@ -287,6 +287,16 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
         }
     }
 
+    // Append only explicit init declarations so existing configuration hashes
+    // remain stable. JSON framing preserves argv boundaries and escapes record
+    // separators; the environment's BTreeMap gives deterministic key ordering.
+    if let Some(init) = &plan.init {
+        s.push(REC);
+        s.push_str("init");
+        s.push(UNIT);
+        s.push_str(&init.to_string());
+    }
+
     s
 }
 
@@ -500,6 +510,7 @@ mod tests {
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         }
     }
 
@@ -511,6 +522,42 @@ mod tests {
             policy: None,
             policy_file: None,
         }
+    }
+
+    #[test]
+    fn explicit_init_identity_is_stable_and_preserves_argument_boundaries() {
+        let baseline = empty_plan();
+        let mut a = baseline.clone();
+        a.init = Some(crate::config::InitConfig::Handoff {
+            cmd: "/init".into(),
+            args: vec!["a b".into()],
+            env: std::collections::BTreeMap::from([
+                ("Z".into(), "last".into()),
+                ("A".into(), "first".into()),
+            ]),
+        });
+        assert_ne!(config_hash_of_plan(&baseline), config_hash_of_plan(&a));
+        let mut b = a.clone();
+        if let Some(crate::config::InitConfig::Handoff { args, env, .. }) = &mut b.init {
+            *env = [("A".into(), "first".into()), ("Z".into(), "last".into())].into();
+            assert_eq!(args, &["a b"]);
+        }
+        assert_eq!(config_hash_of_plan(&a), config_hash_of_plan(&b));
+        if let Some(crate::config::InitConfig::Handoff { args, .. }) = &mut b.init {
+            *args = vec!["a".into(), "b".into()];
+        }
+        assert_ne!(config_hash_of_plan(&a), config_hash_of_plan(&b));
+        b.init = Some(crate::config::InitConfig::Agentd {});
+        assert_ne!(config_hash_of_plan(&baseline), config_hash_of_plan(&b));
+
+        let serialized = serde_json::to_value(&baseline).unwrap();
+        assert!(serialized.get("init").is_none());
+        let decoded: SandboxPlan = serde_json::from_value(serialized).unwrap();
+        assert_eq!(decoded.init, None);
+        assert_eq!(
+            config_hash_of_plan(&baseline),
+            config_hash_of_plan(&decoded)
+        );
     }
 
     #[test]

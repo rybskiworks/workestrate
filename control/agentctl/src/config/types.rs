@@ -11,7 +11,7 @@
 
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, de};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -1390,6 +1390,31 @@ pub struct VirtualizationPolicyFragment {
     pub r#final: bool,
 }
 
+/// Explicit guest PID 1 selection, independent of the workload command.
+/// A higher layer replaces this entire block; `agentd` resets an inherited
+/// handoff. Handoff arguments and environment are nonsecret guest literals.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InitConfig {
+    // An empty struct variant enforces deny_unknown_fields; a unit variant
+    // would silently accept handoff fields in an internally tagged enum.
+    Agentd {},
+    Handoff {
+        cmd: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+    },
+}
+
+impl fmt::Display for InitConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = serde_json::to_string(self).map_err(|_| fmt::Error)?;
+        f.write_str(&value)
+    }
+}
+
 /// A single workload definition (`workloads.<name>` in workestrate.toml).
 /// `kind` is `"agent"` (interactive TUI attach) or `"service"` (headless,
 /// detached by default); the remaining fields describe the image, resources,
@@ -1405,6 +1430,8 @@ pub struct WorkloadConfig {
     #[serde(default)]
     pub image: ImageSpec,
     pub workdir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init: Option<InitConfig>,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
     #[serde(default)]
@@ -2044,6 +2071,7 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
     "kind",
     "image",
     "workdir",
+    "init",
     "cpus",
     "memory_mib",
     "command",
@@ -4129,6 +4157,10 @@ strategy = "per-dir"
     /// overrides on `instance` warned as typos).
     #[test]
     fn workload_fields_covers_virtualization_and_instance() {
+        assert!(
+            WORKLOAD_FIELDS.contains(&"init"),
+            "WORKLOAD_FIELDS must list init: {WORKLOAD_FIELDS:?}"
+        );
         assert!(
             WORKLOAD_FIELDS.contains(&"virtualization"),
             "WORKLOAD_FIELDS must list virtualization: {WORKLOAD_FIELDS:?}"
