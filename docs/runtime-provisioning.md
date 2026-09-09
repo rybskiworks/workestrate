@@ -7,29 +7,36 @@
 msb (microsandbox) discovers its home via `MSB_HOME`, resolved per
 `microsandbox_utils::resolve_home`: **non-empty `MSB_HOME` verbatim** (empty
 treated as unset), else **`$HOME/.microsandbox`**, else `./.microsandbox`.
-workestrate converges every flow on that ONE root — but state beneath it is
-**generation-keyed** (see the next section): the runtime home is the
-`$HOME/.microsandbox/current` symlink, flipped atomically between
-`generations/<hash12>` dirs as the pinned msb build changes.
+The packaged Workestrate and `msb-wrapped` entry points default that variable
+to a **generation-keyed** home (see the next section): the runtime home is the
+`$HOME/.microsandbox/current` symlink. Explicit generation convergence flips
+it atomically between `generations/<hash12>` dirs when adopting a different
+pinned msb build; building or entering a shell does not perform that flip.
 
 | # | Home | Path | When active | Purpose |
 |---|------|------|-------------|---------|
-| 1 | **canonical runtime** | `$HOME/.microsandbox/current` → `generations/<hash12>` | Runtime (guarded `wrapProgram --run` in `nix/packages/agentctl.nix` postInstall) | **The only runtime home** — cache, db, state, `sandboxes/`, one dir per pinned msb build. The guard (`if [ -z "${MSB_HOME:-}" ]; ...`) defaults unset AND empty to the canonical home while honoring an explicit non-empty caller override. `--set-default` would NOT handle the empty-string case, hence the explicit guard. Shell expansion at wrapper execution time (not build time). |
+| 1 | **canonical runtime default** | `$HOME/.microsandbox/current` → `generations/<hash12>` | Runtime (guarded `wrapProgram --run` in `nix/packages/agentctl.nix` postInstall) | Cache, db, state and `sandboxes/`, normally one dir per pinned msb build. The guard defaults unset AND empty `MSB_HOME` while honoring an explicit non-empty caller override. Shell expansion happens at wrapper execution time, not build time. |
 
-Build-time-only staging (NOT homes — no msb state ever lands here):
+## Immutable build inputs are not runtime homes
 
-- **devshell staging** (`_msb_home="$HOME/.cache/ai-workbench-msb"` in
-  `flake.nix` `devenv.shells.default` `enterShell`) — stages the `msb`
-  binary + `libkrunfw.so*` symlinks/copies so offline `cargo check` builds
-  find the runtime without network. The devshell deliberately does **not**
-  export `MSB_HOME`/`MSB_PATH` (no second runtime home); it exports only
-  `MSB_AGENTD_PATH` (musl static `agentd`, needed by the fork's filesystem
-  crate `build.rs` prebuilt branch) plus `CARGO_TARGET_DIR`, the vendor
-  link, and agent builds.
-- **nix build TMPDIR** (`export MSB_HOME=$TMPDIR/.microsandbox` in
-  `nix/packages/agentctl.nix:111` preBuild) — hermetic build: the fork's
-  `build.rs` finds `msb` + `agentd` via `MSB_HOME`/`MSB_AGENTD_PATH`
-  without network downloads. Wiped after build.
+Nix builds and the default development shell supply the SDK with
+`MSB_BUILD_RUNTIME=${microsandbox}` and
+`MSB_AGENTD_PATH=${microsandbox}/libexec/agentd`. The former is an immutable
+package directory containing the runtime and its libraries; the latter is the
+static guest agent. An invalid explicit build runtime fails rather than
+downloading a replacement. Neither variable selects mutable VM state.
+
+There is no SDK runtime staging under `$HOME/.cache/ai-workbench-msb` or a
+build-time `$TMPDIR/.microsandbox`. The Nix build prepares its SDK source
+symlink and Cargo configuration inside its build tree. `just shell` prepares
+the checkout's SDK symlink and exports these build inputs plus
+`CARGO_TARGET_DIR`; it does not create a runtime home, export `MSB_HOME`, build
+agent workloads, install hooks or run migrations. An inherited `MSB_HOME`
+remains the caller's runtime-state choice.
+
+`just bootstrap` supplies pinned tools without application/runtime packages,
+SDK link setup or SDK build-input variables. Use it when the application does
+not yet build. See [Nix builds](nix-build.md) for both entry points.
 
 Pre-convergence hosts may still carry state under the legacy devshell path
 (`$HOME/.cache/ai-workbench-msb/db/msb.db`): `scripts/migrate-msb-home.sh`
@@ -41,7 +48,11 @@ between binary sync and doctor — the converge script delegates the
 cache-home migration to `migrate-msb-home.sh` first, then absorbs any
 pre-generation root as `generations/legacy`.
 
-Additional override: `MSB_AGENTD_PATH = ${microsandbox}/libexec/agentd` (musl static `agentd`) satisfies the fork's filesystem crate `build.rs` prebuilt branch (`nix/packages/agentctl.nix:117`).
+These migration scripts are explicit provisioning operations, not build or
+shell hooks. Their presence does not mean an existing host has been migrated.
+Review their dry-run/check output and rollback behavior before applying them
+to existing state; successful package checks do not establish live migration
+or SSH custody readiness.
 
 ## MSB state generations
 
@@ -89,9 +100,14 @@ current                                       symlink; atomic flip = tmp symlink
   msb resolves the symlink itself. The generation IDENTITY check (doctor
   row + fail-closed `up` gate) canonicalizes through the symlink rather
   than trusting the literal value.
-- **Socket budget**: the fork derives unix-socket paths beneath MSB_HOME
-  that must fit `sun_path`, making the total MSB_HOME length a hard 59-char
-  limit — 12-char keys keep generation paths inside it.
+- **Socket budget**: Unix endpoints must fit the platform's `sun_path` byte
+  limit. The remaining root budget depends on the specific endpoint suffix,
+  encoded instance name and any canonicalization/short-path indirection; there
+  is no universal 59-character `MSB_HOME` limit. Short generation keys help,
+  but do not prove that every endpoint fits. Validate the actual constructed
+  endpoints when choosing a custom runtime root, especially with non-ASCII or
+  long instance names. Keep reloadable image/cache storage distinct from short
+  runtime socket paths where the backend configuration supports it.
 - **Observability**: the `workestrate doctor` `generation` row (OK/WARN/
   FAIL with remediation naming `scripts/host-provision.sh`) reports the
   baked key vs the resolved generation, debris under `generations/`, and
@@ -110,28 +126,58 @@ wrapProgram $out/bin/workestrate \
 ```
 
 - **`--set MSB_PATH`** — binary from `microsandbox-fork.packages.<system>.microsandbox`. The SDK patches, runtime and static agentd all come from this same pinned flake input; Workestrate no longer duplicates the fork's runtime build recipes. The fork package currently bundles `libkrunfw.so.5.6.1` from the fixed-hash `v0.6.8` release tarball. Building the separate libkrunfw fork does not automatically replace that firmware.
-- **`--set MSB_AGENTD_PATH`** — baked musl static `agentd` path for the fork's filesystem crate prebuilt branch.
-- **`--run MSB_HOME`** — guarded default: honors an explicit non-empty `MSB_HOME` override while defaulting unset AND empty to `$HOME/.microsandbox/current` (the `current` generation symlink) at wrapper execution time so `$HOME` expands per-user (not per-build). Neither the devshell staging dir nor the build `$TMPDIR/.microsandbox` is baked here.
+- **`--set MSB_AGENTD_PATH`** — baked musl static `agentd` path paired with the runtime. Nix builds and the default shell also supply this path directly for the filesystem crate's prebuilt branch.
+- **`--run MSB_HOME`** — guarded default: honors an explicit non-empty `MSB_HOME` override while defaulting unset AND empty to `$HOME/.microsandbox/current` (the `current` generation symlink) at wrapper execution time so `$HOME` expands per-user, not per-build. No build-staging path is baked here.
 - **`--prefix PATH : sops`** — `sops` binary for `workestrate secrets` (ADR 0034).
 
-The devshell (`flake.nix` `devenv.shells.default` `enterShell`) stages the
-same runtime for offline builds but exports **only** `MSB_AGENTD_PATH`:
+The default devshell (`flake.nix` `devenv.shells.default` `enterShell`) exports
+immutable SDK build inputs without staging or selecting runtime state:
 
 ```bash
-_msb_home="$HOME/.cache/ai-workbench-msb"   # build-time staging only, NOT a runtime home
-mkdir -p "$_msb_home/bin" "$_msb_home/lib"  # no rm -rf of live dirs, no MSB_HOME/MSB_PATH exports
+export MSB_BUILD_RUNTIME="${microsandbox}"
 export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
 ```
 
 ## Env override matrix
 
-| Env var | Set by | Precedence | Effect |
+| Path control | Set by | Precedence | Effect |
 |---------|--------|------------|--------|
-| `MSB_HOME` | caller env, else wrapper `--run` guard | non-empty `MSB_HOME` > `$HOME/.microsandbox/current` > `./.microsandbox/current` (SDK `resolve_home` + workestrate default; empty treated as unset) | Where msb reads/writes cache, db, `sandboxes/` — the canonical home, resolving through the `current` generation symlink |
-| `MSB_PATH` | wrapper `--set` | Explicit path to `msb` binary; `cargo` build.rs and SDK use it | Must point at the pinned `0.6.16` binary; its store-path hash segment keys the state generation |
-| `MSB_AGENTD_PATH` | wrapper `--set` / build preBuild / devshell `enterShell` | Guest init binary path | Fork's `build.rs` prebuilt branch; musl static `agentd` |
-| `WORKESTRATE_HOME` / `--home` | user / `workestrate --home` flag | `--home` flag > `WORKESTRATE_HOME` env > `~/.workestrate` | Tool home (registry `config.toml`, `PolicyConfig`); orthogonal to the MSB home |
+| `MSB_HOME` | caller env, else wrapper `--run` guard | Non-empty caller value wins; packaged entry points default unset/empty to `$HOME/.microsandbox/current`. Direct unwrapped SDK use instead defaults to the `.microsandbox` root described above. | Mutable runtime home, independent of SDK compilation |
+| `MSB_BUILD_RUNTIME` | Nix build / default devshell | Explicit immutable package directory, validated by the SDK build script | Offline compilation input; never a mutable state directory |
+| `MSB_PATH` | wrapper `--set` | The packaged wrapper fixes the runtime executable rather than honoring a caller replacement | Its store-path hash segment keys the managed state generation |
+| `MSB_AGENTD_PATH` | wrapper `--set` / build preBuild / default devshell | Exact paired static guest agent | SDK filesystem prebuilt input and runtime pairing |
+| `WORKESTRATE_HOME` / `--home` | user / `workestrate --home` flag | `--home` > non-empty `WORKESTRATE_HOME` > explicit legacy XDG selectors > `~/.workestrate` | Tool home/registry; orthogonal to the MSB home |
+| `WORKESTRATE_STATE_DIR` | caller env | Non-empty env > registry `settings.state_dir` > active home's state default | Workload state, runtime registries and Workestrate image bookkeeping |
+| registry `settings.store_dir` | selected tool-home registry | Explicit setting > active home's store default | Managed config-repo and source checkouts, not the SDK runtime package |
+| `MSB_CONFIG_PATH` | caller env | Explicit backend configuration file | Selects Microsandbox backend configuration separately from Workestrate's tool home |
 | `HOME` | user / OS | Expands at wrapper execution time for `MSB_HOME=$HOME/.microsandbox/current` | Must not be baked at nix build time |
+
+These path controls are already implemented; changing them does not migrate
+existing data. Workestrate's `images.json` bookkeeping is under its selected
+state directory, while the loaded image store belongs to the selected
+Microsandbox backend. A build in the Nix store, an imported runtime image and
+persisted workload data have different owners and lifetimes.
+
+Microsandbox backend JSON may select custom roots in addition to `MSB_HOME`.
+Inspect the effective backend configuration before assuming every operation
+uses one directory; changing Workestrate's `--home` alone is not full isolation.
+Disposable tests should supply a separate `MSB_CONFIG_PATH` containing `{}`,
+explicit tool/state/MSB roots and a scrubbed environment. Path reconciliation
+and migration/query side effects still require dedicated regression coverage.
+
+## Nested virtualization and deployment limits
+
+The fork family can run nested workloads on suitable Linux x86_64 hosts with
+the bundled firmware; guest KVM is not categorically a future-only feature.
+Request it explicitly through `virtualization.nested`, and evaluate host
+capability and operator policy for the exact runtime/firmware pair.
+
+The current Linux libkrun implementation does not enforce the forwarded off
+flag, so a default/off request is not proof that usable guest KVM is absent.
+Successful permitted nested execution does not validate default-off confinement,
+reuse after policy changes, SSH broker custody or safe credential deployment.
+ADR 0036 retains the design history; historical future-firmware wording is not
+an observation of the current running artifact.
 
 ## Schema flow (Rust types → committed schema → distribution)
 
@@ -140,22 +186,34 @@ Rust types (serde + schemars)
   control/agentctl/src/config/types.rs        PolicyConfig, WorkloadConfig, ...
   control/agentctl/src/config/registry.rs    Registry.policy
          │
-         ▼ generate_schema_pair()
-  control/agentctl/src/commands/diagnostics.rs:1017
+         ▼ generate_schema_triple()
+  control/agentctl/src/commands/diagnostics.rs
          │
          ├─► workestrate generate-schema --output schemas/workestrate.schema.json
-         │   workestrate generate-schema --output-workload schemas/workestrate-workload.schema.json
-         │   (also: workestrate schemas update — distributes to every consumer location)
+         │     --output-workload schemas/workestrate-workload.schema.json
+         │     --output-registry schemas/registry.schema.json
          │
          ├─► schemas/workestrate.schema.json  (committed, §4 of ADR 0035)
          │   schemas/workestrate-workload.schema.json
+         │   schemas/registry.schema.json
          │
-         └─► validate-config staleness warning (P3)
-             control/agentctl/src/config/validation.rs — warns when committed schema drifts
-             from generate_schema_pair(); not a hard error (format-only drift is P3).
+         └─► schemas update / schemas update --check
+             template, initialized tool home and qualifying registered config repos
 ```
 
-Follow-up gap (ADR 0035 §12): `Registry.policy` (`<home>/config.toml`) derives `schemars::JsonSchema` but no `registry.schema.json` is yet distributed — `validate-config --home` schema check is deferred.
+All three schemas are generated and committed. `registry.schema.json` describes
+the tool-home `config.toml`, including its policy. Rust types remain the runtime
+validator; JSON Schemas are editor/tooling projections, not a separate source
+of policy truth.
+
+`workestrate schemas update` distributes all three artifacts idempotently to
+the tool template when available, an existing tool home, and registered config
+repos already carrying a `schemas/` directory. Missing/unmanaged destinations
+are skipped. `--repo <name>` selects only that registered repo, excluding the
+template and home. `--check` reports missing/stale copies without writing and
+fails on drift. Use an explicit tool home when checking deployed consumers.
+Repository `just verify` checks repository-owned schema copies separately;
+neither it nor shell entry updates live consumers.
 
 ## Formatting standardization — tombi
 
@@ -178,6 +236,6 @@ Run `tombi format` / `tombi lint` (or `nix fmt`) — the ADR 0035 policy example
 - **ADR 0035** — `docs/migration/50-decisions/0035-hierarchical-egress-ingress-policy.md` (network ladder).
 - **ADR 0029/0031 + mount-policy docs** — precedent for collect-and-compile + `deny_unknown_fields`.
 - **ADR 0034** — secrets ladder precedent for rungs + provenance.
-- **`nix/packages/agentctl.nix:111-136`** — authoritative wrapper contract.
-- **`flake.nix` (`msb-wrapped` + `devenv.shells.default` `enterShell`)** — msb wrapper guard + devshell MSB staging.
+- **`nix/packages/agentctl.nix`** — immutable SDK build inputs and wrapper contract.
+- **`flake.nix` (`msb-wrapped` + `devenv.shells.default` `enterShell`)** — runtime wrapper guard and development build-input exports.
 - **msb state model (both ends)** — `docs/nix/msb-state-model.md` (consumer side) → fork `nix/README.md` (producer side).

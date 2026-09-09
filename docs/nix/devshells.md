@@ -36,8 +36,8 @@ up, modify, or debug Nix devshells should follow these rules.
   — https://nix.dev/manual/nix/2.34/command-ref/new-cli/nix3-run
 - Crawl file: `docs/nix/.crawl/67-nixpkgs-mkShell.md`
   — https://nixos.org/manual/nixpkgs/stable/#sec-mkShell
-- Project file: `flake.nix` — flake outputs and `devenv.shells.default`
-  (flake.nix:588–787) — the workestrator devenv shell (real-world example)
+- Project files: `flake.nix` and `justfile` — shared-tooling inputs,
+  `devenv.shells.{bootstrap,default}` and the explicit shell entry points
 
 ## Core guidance
 
@@ -202,7 +202,7 @@ shellHook = ''
 ```
 
 `shellHook` is a bash script run on shell entry. It is used for environment
-setup, toolchain configuration, and staging runtime artifacts. For protected
+setup and toolchain configuration. For protected
 env vars like `PS1`, use `shellHook` instead of direct attributes (crawl 07
 warning).
 
@@ -305,14 +305,19 @@ canonical entry is a single command:
 just shell
 ```
 
-for an interactive shell, or `just shell -c <cmd>` for a one-shot command
-(crawl 63). Additionally, every toolchain-consuming `just` recipe is
-self-enshelling: it re-execs itself via `nix develop` with the `devenv-root`
-input overridden (worktree path in a root file under
-$HOME/.cache/workestrate/devenv-root/) when
-`$WORKESTRATE_DEVSHELL` (exported by the devshell `enterShell`) is unset, so
-a bare `just <recipe>` from a plain host shell just works — no direnv, no
-`.envrc`, no `direnv allow`.
+for an interactive shell, or `just shell -c <cmd>` for a one-shot command.
+`just bootstrap` selects the tooling-only shell when the application/runtime
+is not needed or does not yet build. Both recipes pass a `devenv-root` input
+override: a file under `$HOME/.cache/workestrate/devenv-root/`, keyed by the
+checkout path, contains the absolute worktree root. Argument boundaries are
+preserved, including quoted command strings and empty arguments.
+
+Repository `just check`, `just deny-check` and `just verify` build pinned Nix
+checks directly; they do not enter the runtime-aware shell. Some interactive
+Cargo recipes still re-enter the default shell when
+`WORKESTRATE_DEVSHELL` is unset. That marker is supplied by the default shell,
+not bootstrap, and should not be injected to bypass setup. No direnv,
+`.envrc` or `direnv allow` is required.
 
 (Background, retained for reference: crawl 36 describes direnv
 auto-reloading a declarative shell on directory entry — `use nix` /
@@ -350,16 +355,17 @@ flake-utils.lib.eachDefaultSystem (system:
   })
 ```
 
-The workestrator flake uses a single system (`systems = [ "x86_64-linux" ]`,
-flake.nix:97, via flake-parts) instead — this is a project-specific decision
+The Workestrate flake uses a single system (`systems = [ "x86_64-linux" ]`,
+via flake-parts) instead — this is a project-specific decision
 (see `flake.nix`).
 
-### Real-world example: the workestrator devshell
+### Real-world example: the Workestrate shells
 
-Source: `flake.nix` — `devenv.shells.default` (flake.nix:588–787). The
-shell is a devenv (flake-parts) module config rather than a standalone
-`mkShell` file; devenv's flake-parts module (devenv input pinned at
-flake.nix:56–64) generates `devShells.x86_64-linux.default` from it.
+Source: `flake.nix` — `devenv.shells.bootstrap` and `devenv.shells.default`.
+These are devenv modules rather than standalone `mkShell` files. Shared
+`nix-tooling` owns the nixpkgs/Fenix/devenv versions, and Workestrate follows
+those inputs. See [Nix builds](../nix-build.md) for package ownership and
+verification boundaries.
 
 Shape of the live definition:
 
@@ -367,37 +373,48 @@ Shape of the live definition:
   module derives it from the `devenv-root` input placeholder; entry points
   pass `--override-input devenv-root "file+file://<rootfile>"` (the root
   file under `$HOME/.cache/workestrate/devenv-root/` holds the worktree abs
-  path), so pure eval resolves `devenv.root` to the worktree. Impure eval
-  falls back to devenv's `mkDefault` (`$PWD`).
+  path), so pure eval resolves `devenv.root` to the worktree without impurity.
 - `devenv.dotfile` / `devenv.state`: devenv defaults — dotfile =
   `<root>/.devenv` (gitignored in-tree; the task cache lives here too on
   the pinned devenv), state = `<dotfile>/state`.
-- `imports` (flake.nix:626–631): the shared tooling modules
-  `inputs.tooling.devenvModules.{base,nix,toml,rust}`.
-- `packages` (flake.nix:633–662): fenix stable Rust toolchain
-  (`rustToolchain.cargo`/`clippy`/`rustc`/`rust-analyzer`/`rustfmt`;
-  `rustToolchain = inputs.fenix.packages.${system}.stable` at
-  flake.nix:249), `nodejs_24`, `bun`, `python3`/`python312`, `sops`, `age`,
-  `tombi`, `gcc`, `git`, `jq`, `just`, `openssl`, `pkg-config`, `curl`,
-  `libcap_ng`, plus project-specific derivations `workestrate`,
-  `msb-wrapped`, `decrypt-env`, `write-env`, `setup-secrets`.
-- `enterShell` (flake.nix:665–786) — the devenv equivalent of `shellHook` —
-  performs:
-  1. **Microsandbox build-time staging** — stages the `msb` binary and
-     `libkrunfw` libs under `$HOME/.cache/ai-workbench-msb` (persistent
-     home cache instead of per-shell tmpfs; build-time only — the canonical
-     msb runtime home stays `$HOME/.microsandbox`).
-  2. **CARGO_TARGET_DIR relocation** —
-     `export CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
-     — keeps the ~5–25 GB clean-build target dir out of the source tree.
-  3. **Devshell marker** — exports `WORKESTRATE_DEVSHELL=1` (drives the
-     self-enshelling `just` recipes) and `MSB_AGENTD_PATH`.
-  4. **Vendor symlink** — `control/agentctl/vendor/microsandbox-fork` → the
-     patched filesystem derivation (stale links refreshed).
-  5. **Agent builds** — config-driven `_build_if_needed` for each workload
-     with a `local_build` recipe (`pip-install`, `bun-install`,
-     `npm-build`); the calls are generated at flake.nix:478–487.
-  6. **Cleanup** — helper functions removed with `unset -f` after use.
+- `imports`: shared `inputs.tooling.devenvModules.{beads,base,nix,toml,rust}`
+  modules in both shells. Bootstrap adds only toolchain/build-investigation
+  tools; default also supplies the Workestrate and paired Microsandbox
+  packages and development helpers. Realizing default may build those packages
+  when they are not cached; bootstrap does not require them.
+- Both shells disable automatic Git-hook installation and tree formatting.
+  Install hooks explicitly with `nix run .#install-hooks` when intended.
+- Both export
+  `CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
+  to keep Cargo outputs outside the source tree. Shell entry does not itself
+  create or populate that target directory.
+- Default `enterShell` supplies `MSB_BUILD_RUNTIME` pointing at the immutable
+  Microsandbox package, its `MSB_AGENTD_PATH`, and `WORKESTRATE_DEVSHELL=1`.
+  The SDK validates explicit build inputs without downloading a replacement.
+  `MSB_HOME` remains a separate runtime-state selector; shell entry does not
+  set it or create runtime staging/cache homes.
+- Default creates or refreshes only the SDK source symlink
+  `control/agentctl/vendor/microsandbox-fork`, pointing at the pinned runtime
+  package's filtered source. A real directory at that path is deliberately
+  left alone and reported as unlocked. Existing workload source/build
+  directories are not replaced.
+- Bootstrap does not set the default-shell marker, configure SDK runtime
+  inputs or refresh the SDK source link. It is not a substitute for default
+  shell setup before interactive SDK compilation.
+- Default removes its temporary shell helper functions after link setup.
+  Neither shell clones/builds agents, installs workload dependencies, starts
+  VMs, cleans runtime state or performs home/schema migration.
+
+Normal devenv profile/task-cache bookkeeping can change `.devenv` on entry;
+that is different from modifying hooks, workload builds or VM state. Neither
+shell is an environment scrubber: use an explicitly isolated caller environment
+when validating that no ambient HOME/XDG/runtime state is accessed.
+
+There is a known build-identity limitation: the transient `devenv-root`
+override can remove clean Git revision metadata, causing the application to
+be rebuilt with a `dirty` display revision even when its filtered source is
+unchanged. This does not justify faking the revision or using `--impure`.
+Bootstrap avoids requiring the application when only tools are needed.
 
 ## Practical rules
 
@@ -414,13 +431,15 @@ Shape of the live definition:
    are invisible to flake refs.
 7. Use `nix develop -c <cmd>` for non-interactive commands in the devshell
    (crawl 63).
-8. Use `--pure`/`--impure` deliberately; omit `--pure` for dev, add for
-   CI/isolation (crawl 06).
+8. Distinguish legacy `nix-shell --pure` environment isolation from Nix
+   evaluation purity. Workestrate flake builds and shell entry remain pure;
+   do not add `--impure` to work around missing root/input declarations.
 9. In this repo enter via `just shell` (`just shell -c <cmd>`
    non-interactive); bare `nix develop` fails pure eval on the
-   `devenv.root` assertion (the override is wired in `just shell`); `just`
-   recipes self-enshell via `$WORKESTRATE_DEVSHELL`, so no direnv is needed
-   (crawl 36 background only).
+   `devenv.root` assertion (the override is wired in `just shell`). Some
+   interactive Cargo recipes self-enshell via `$WORKESTRATE_DEVSHELL`,
+   while repository verification directly builds sandboxed checks. No direnv
+   is needed. Use `just bootstrap` for tooling-only work.
 10. Relocate large build outputs (e.g. `CARGO_TARGET_DIR`) out of the source
     tree in `shellHook`.
 11. Use `inputsFrom` to inherit build dependencies from existing derivations
@@ -438,10 +457,10 @@ Shape of the live definition:
 - [ ] Large build outputs relocated out of source tree?
 - [ ] `shellHook` functions unset after use?
 - [ ] Untracked files `git add -N`'d before eval?
-- [ ] No `.envrc`/direnv — toolchain `just` recipes self-enshell via `$WORKESTRATE_DEVSHELL`?
+- [ ] No `.envrc`/direnv — explicit bootstrap/default entry points and direct verification checks?
 - [ ] `inputsFrom` used to inherit deps from existing derivations where applicable?
 - [ ] `just shell -c` used for non-interactive commands?
-- [ ] `--pure`/`--impure` chosen deliberately, not by accident?
+- [ ] Workestrate flake evaluation remains pure, without `--impure` workarounds?
 
 ## Implementation checklist
 
@@ -455,24 +474,28 @@ Shape of the live definition:
 - [ ] For multi-system: use `flake-utils.lib.eachDefaultSystem`.
 - [ ] Relocate large build outputs (`CARGO_TARGET_DIR`) in `shellHook`.
 - [ ] `unset -f` any helper functions defined in `shellHook`.
-- [ ] Do NOT add `.envrc` — recipes auto-enter via `nix develop` + the devenv-root override (self-enshelling; `just shell` for interactive entry).
+- [ ] Do NOT add `.envrc` — use explicit `just shell`/`just bootstrap`; keep verification independent of runtime shell setup.
 - [ ] `git add -N` new files before first `nix develop`.
 
 ## Runtime / debugging checklist
 
 - [ ] `just shell` enters the shell (check prompt changes).
 - [ ] `just shell -c <tool> --version` verifies tools are available.
-- [ ] `nix flake check --no-build --override-input devenv-root "file+file://$HOME/.cache/workestrate/devenv-root/workestrate"` validates flake outputs.
-- [ ] `nix develop --impure` only when mutable paths needed.
+- [ ] `just verify` validates the repository's explicit check outputs without entering the default shell.
+- [ ] Use the root override supplied by `just shell`/`just bootstrap`, not `--impure`, for shell entry.
 - [ ] `shellHook` errors: check stderr on shell entry.
 - [ ] Missing packages: `just shell -c which <tool>` to verify PATH.
-- [ ] Store growth: `nix-collect-garbage` after devshell changes.
+- [ ] Store growth: inspect live roots and retained outputs before considering garbage collection; shell entry does not perform it.
 - [ ] Untracked-file errors: `git add -N <file>` then retry.
-- [ ] Stale `flake.lock`: `nix flake update` (not deprecated `--update-input`).
+- [ ] Unexpected lock changes: inspect the input graph; use `nix flake update <input>` only for an intentional dependency update.
 
 ## Validation hooks
 
-- `nix flake check --no-build` — validates flake structure.
+- `nix flake check --no-build` — evaluates outputs, not their build success;
+  Workestrate's development shells also require the root input supplied by
+  the explicit shell entry points.
+- `just verify` — builds the repository's check outputs and runs its script
+  fixtures without entering the default shell.
 - `just shell -c <tool> --version` — verifies tool availability.
 - `just shell` — enters shell; check `shellHook` output.
 - `nix build .#devShells.<system>.default` — builds the devshell derivation
@@ -604,24 +627,28 @@ just shell             # interactive shell
 just shell -c <cmd>    # one-shot command in the devshell
 ```
 
-Bare `just <recipe>` also works from a plain host shell: toolchain recipes
-self-enshell (re-exec via `nix develop --override-input devenv-root ... -c
-just _<recipe>-inner`) when
-`$WORKESTRATE_DEVSHELL` is unset. No `.envrc`, no `direnv allow`.
+`just bootstrap -c <cmd>` enters the tooling-only shell. `just check`,
+`just deny` and `just verify` directly build sandboxed checks; some interactive
+Cargo recipes still self-enshell when `$WORKESTRATE_DEVSHELL` is unset.
+Consult the recipe before assuming it enters a shell. No `.envrc` or
+`direnv allow` is required.
 
-### Workestrator devshell excerpt (enterShell — CARGO_TARGET_DIR relocation)
+### Workestrate devshell excerpt (enterShell — CARGO_TARGET_DIR relocation)
 
 ```nix
-# From flake.nix:698–699, devenv.shells.default.enterShell (workestrator project)
+# From flake.nix, devenv.shells.default.enterShell
 export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
-mkdir -p "$CARGO_TARGET_DIR"
 ```
 
-### Workestrator devshell excerpt (packages)
+Cargo creates its target directory when compilation runs; entering the shell
+only exports this location.
+
+### Workestrate devshell excerpt (packages)
 
 ```nix
-# From flake.nix:633–662, devenv.shells.default (workestrator project)
+# From flake.nix, devenv.shells.default
 packages = with pkgs; [
+  actionlint
   age
   workestrate
   rustToolchain.cargo
@@ -636,6 +663,7 @@ packages = with pkgs; [
   msb-wrapped
   nodejs_24
   bun
+  cargo-deny
   openssl
   pkg-config
   (python3.withPackages (p: [ p.pip ]))
@@ -650,6 +678,7 @@ packages = with pkgs; [
   tombi
   write-env
   setup-secrets
+  zizmor
 ];
 ```
 
@@ -663,12 +692,13 @@ packages = with pkgs; [
   toolchain (crawl 67).
 - Not relocating `CARGO_TARGET_DIR` — 5–25 GB of build artifacts in the
   source tree.
-- Running `nix develop --impure` unnecessarily — copies raw working tree into
-  store.
+- Using `nix develop --impure` to hide undeclared evaluation inputs instead of
+  supplying Workestrate's explicit root input.
 - Forgetting `direnv allow` after changing `.envrc`.
 - Not unsetting `shellHook` functions — leaks into interactive shell.
 - Using deprecated `--update-input` instead of `nix flake update` (crawl 63).
-- Expecting `nix develop` to see uncommitted flake changes without `git add`.
+- Expecting a Git flake to see untracked files before `git add -N`; edits to
+  already tracked files are visible without staging.
 
 ## Strict vs contextual guidance
 
