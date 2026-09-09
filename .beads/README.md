@@ -138,3 +138,38 @@ their history, then update the intended work against current code before acting.
 
 Issue text and Git artifacts should describe the project and its behavior,
 without secrets or implementation-session metadata.
+
+## Continuing cross-repository work
+
+Start with `just beads ready --json`, then inspect the selected issue and its
+prerequisites with `just beads show <id> --json`. Read the owning repository's
+instructions and current source before executing historical commands. Claim
+only the bounded work being performed; a parent epic is a grouping, not a
+reason to block every independent child.
+
+The current ownership map is:
+
+| Area | Tracker scope | Implementation owner |
+| --- | --- | --- |
+| Runtime build inputs and fork provenance | `wrk-2n0` | Microsandbox, libkrun, libkrunfw; consumer pins in Workestrate |
+| Lifecycle, nesting policy and mount mediation | `wrk-0ew`, `wrk-fwb` | Workestrate and the applicable runtime fork |
+| Native services and client adapters | `wrk-lcj.7`, `wrk-lcj.8` | ai-memory source; application configuration and integration tests in the personal fleet |
+| OpenCode Go conversation headers | `wrk-lcj.7.12` | LiteLLM workload plugin and tests in the personal fleet |
+| Shared image and guest Nix foundations | `wrk-8pl` | nix-tooling, with consumer-owned workload tests |
+| Remote builder and signed binary cache | `wrk-lcj.16` | Shared profiles in nix-tooling; builder/cache deployment and integration tests in the fleet |
+| External workload imports and independent test catalog | `wrk-lcj`, `wrk-lcj.10` | Generic import behavior in Workestrate; workload-specific packaging/tests in fleet or workload repositories |
+| SSH custody and state migration | `wrk-dcy`, `wrk-d40` | Source fixes plus separately reviewed operator configuration |
+| Publication, promotion and recovery | `wrk-847`, `wrk-d06` | Each repository's normal PR flow; native tracker publication separately |
+
+Native two-client capture/recall, built workload images, full Workestrate guest
+startup and live deployment are distinct acceptance gates. Keep exact revisions
+and remaining coverage in the leaf issue, rather than treating an intermediate
+pass as completion of its parent. Likewise, a merged integration PR is not a
+promotion to `main`; inspect the actual branch ancestry and checks first.
+
+Remote issue history is recoverable from `refs/dolt/data`; the checked-in JSONL
+is its independently published review snapshot. Neither contains application
+databases, credentials, Nix store outputs, or local runtime logs. Retain needed
+sanitized test reports in their owning repository and rebuild immutable outputs
+from their recorded pins. Local operator state requires its own backup and
+explicit migration decision.
