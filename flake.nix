@@ -465,7 +465,7 @@
                 mkdir -p $out/docs/migration $out/templates
                 cp -r ${old.src}/. $out/
                 cp -r ${./config.reference} $out/config.reference
-                cp ${./docs/migration/20-target-system-spec.md} $out/docs/migration/
+                cp ${./docs/migration/20-target-system-spec.md} $out/docs/migration/20-target-system-spec.md
                 cp -r ${./templates/workestrate-config} $out/templates/workestrate-config
                 cp ${./flake.nix} $out/flake.nix
               '';
