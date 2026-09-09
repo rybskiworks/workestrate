@@ -49,11 +49,11 @@ sha2 = "0.10"
 # key or a passphrase-encrypted key apart from garbage and fail closed with
 # the typed WrongKeyType error (neither ever signs).
 ssh-key = { version = "0.6", default-features = false, features = [
-    "std",
-    "ed25519",
-    "rsa",
-    "encryption",
-    "getrandom",
+  "std",
+  "ed25519",
+  "rsa",
+  "encryption",
+  "getrandom",
 ] }
 unicode-security = "0.1"
 # Credential broker: zeroizing custody for resolved key material

@@ -82,7 +82,7 @@ pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
         // repo that declares this workload), not by the tool flake. Resolve
         // the declaring layer's content dir via the phase-0
         // provenance/layer-dir machinery, then walk up to its flake root.
-        match config_repo_content_dir(name) {
+        match config_repo_source_dir(name) {
             Some(content_dir) => match find_flake_root(&content_dir) {
                 Some(root) => match locked_source_from_flake_lock(&root, input) {
                     Some(locked) => {
@@ -118,7 +118,7 @@ pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
                 },
                 None => {
                     println!(
-                        "The config repo declaring workload '{}' (content dir: {}) has no flake.nix.",
+                        "The config repo declaring workload '{}' (source dir: {}) has no flake.nix.",
                         name,
                         content_dir.display()
                     );
@@ -186,7 +186,7 @@ pub fn flake_root_override() -> Option<PathBuf> {
     }
 }
 
-/// Pure core of [`config_repo_content_dir`]: resolve the content dir of the
+/// Pure core of [`config_repo_source_dir`]: resolve the source directory of the
 /// layer that DECLARED `workload`'s local_build, from an explicit
 /// provenance + layer-dirs pair.
 ///
@@ -194,8 +194,7 @@ pub fn flake_root_override() -> Option<PathBuf> {
 /// engine records local_build wholesale, so the `.source` sub-key is probed
 /// first only for forward compatibility). Values are layer names; for
 /// directory-mode config repos the layer name is `<repo>#<relpath>` and the
-/// layer-dirs map carries its content dir (parent of the layer's source
-/// file, per [`crate::merge::layer_dirs_from`]).
+/// map preserves its immediate source directory for workload-local flakes.
 fn declaring_layer_content_dir_from(
     provenance: &Provenance,
     layer_dirs: &HashMap<String, PathBuf>,
@@ -207,13 +206,12 @@ fn declaring_layer_content_dir_from(
     layer_dirs.get(layer).cloned()
 }
 
-/// Content dir of the config-repo layer that declared `workload`'s
-/// local_build, resolved from the process-global provenance + layer dirs
-/// captured by the most recent `load_config` (phase 0). Returns `None` for
+/// Source directory of the layer that declared `workload`'s local_build,
+/// resolved from the most recent config load. Returns `None` for
 /// synthetic layers or when no load has recorded the state.
-pub fn config_repo_content_dir(workload: &str) -> Option<PathBuf> {
+pub fn config_repo_source_dir(workload: &str) -> Option<PathBuf> {
     let provenance = crate::merge::get_provenance()?;
-    let layer_dirs = crate::merge::get_layer_dirs()?;
+    let layer_dirs = crate::merge::get_layer_source_dirs()?;
     declaring_layer_content_dir_from(&provenance, &layer_dirs, workload)
 }
 

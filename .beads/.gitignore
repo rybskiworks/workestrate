@@ -1,6 +1,11 @@
 # Dolt database (managed by Dolt, not git)
 dolt/
 embeddeddolt/
+dolt-global/
+xdg-config/
+xdg-cache/
+dolt-backup.json
+dolt-backup-state.json
 
 # Runtime files
 bd.sock

@@ -28,6 +28,25 @@ fn field_content_root(
     layer_dirs.get(layer).cloned()
 }
 
+/// Local-build artifacts belong to their declaring flake even when another
+/// layer overrides the image. The image pipeline resolves its own provenance;
+/// its source is only the fallback for the image-only runtime prerequisite.
+fn artifact_flake_source_dir(
+    workload: &WorkloadConfig,
+    provenance: &crate::merge::Provenance,
+    source_dirs: &std::collections::HashMap<String, PathBuf>,
+    name: &str,
+) -> Option<PathBuf> {
+    let field = if workload.local_build.is_some() {
+        "local_build"
+    } else if workload.image.recipe == "nix-layered" {
+        "image"
+    } else {
+        return None;
+    };
+    field_content_root(Some(provenance), source_dirs, name, field)
+}
+
 /// Workload implementation driven by `workestrate.toml`. This replaces the
 /// per-agent `workloads/*.rs` modules with a single generic implementation.
 #[derive(Debug)]
@@ -48,6 +67,8 @@ pub struct ConfigWorkload {
     /// directory of the config layer that declared
     /// `workloads.<name>.seed_files`.
     pub(super) seed_content_root: Option<PathBuf>,
+    /// Source directory for local-build artifacts, or the image-only flake gate.
+    pub(super) flake_source_dir: Option<PathBuf>,
     /// ADR 0026(d) discovery-lite: depends_on resolutions computed at
     /// construction (declaration triggers resolution on every up/exec/plan
     /// path). `plan()` appends the injected env AFTER the declared env and
@@ -237,6 +258,9 @@ impl ConfigWorkload {
         let mount_content_root = field_content_root(Some(&provenance), &layer_dirs, name, "mounts");
         let seed_content_root =
             field_content_root(Some(&provenance), &layer_dirs, name, "seed_files");
+        let source_dirs = crate::merge::get_layer_source_dirs().unwrap_or_default();
+        let flake_source_dir =
+            artifact_flake_source_dir(&workload, &provenance, &source_dirs, name);
 
         // ADR 0030 Phase 2 T1: the workload's declaring config-repo namespace
         // (from provenance) — the registry-record namespace its instances
@@ -279,6 +303,7 @@ impl ConfigWorkload {
             provenance: Some(provenance),
             mount_content_root,
             seed_content_root,
+            flake_source_dir,
             depends_resolved,
             mount_policies,
             namespace,
@@ -822,11 +847,14 @@ impl Workload for ConfigWorkload {
         self.mount_content_root.clone()
     }
 
+    fn flake_source_dir(&self) -> Option<PathBuf> {
+        self.flake_source_dir.clone()
+    }
+
     /// F2 lazy gate: `build_sandbox` calls `project_root()` ONLY when the
     /// workload genuinely needs the flake checkout. The triggers:
     ///
-    /// (a) a `nix-layered` image recipe (image build artifacts live in the
-    ///     tool flake);
+    /// (a) a `nix-layered` image recipe (its declaring layer owns the flake);
     /// (b) a `local_build` config (recipes — including `flake://` sources —
     ///     execute against the flake checkout);
     /// (c) a mount whose host, after `${WORKESTRATE_<NAME>_BUILD}` template
@@ -2501,6 +2529,7 @@ egress = "deny"
             provenance: None,
             mount_content_root: None,
             seed_content_root: None,
+            flake_source_dir: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
             namespace: crate::microsandbox::port_registry::default_namespace(),
@@ -2508,6 +2537,163 @@ egress = "deny"
     }
 
     // ---- F2: the lazy flake-root gate predicate ----
+
+    #[test]
+    fn image_override_keeps_local_build_artifacts_at_their_declaring_flake() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = crate::config::test_support::EnvGuard::capture(&[
+            "AGENTCTL_ROOT",
+            "WORKESTRATE_STATE_DIR",
+            "WORKESTRATE_SVC_BUILD",
+        ]);
+        let tmp = crate::config::test_support::unique_state_dir("mixed-artifact-provenance");
+        let base = tmp.join("base");
+        let content = base.join("workestrate");
+        let capsule = content.join("workloads/svc");
+        let image_capsule = tmp.join("images/workestrate/workloads/svc");
+        let state = tmp.join("state");
+        // SAFETY: serialized by ENV_TEST_LOCK and restored by the guard.
+        unsafe {
+            std::env::remove_var("AGENTCTL_ROOT");
+            std::env::remove_var("WORKESTRATE_SVC_BUILD");
+            std::env::set_var("WORKESTRATE_STATE_DIR", &state);
+        }
+        for dir in [
+            &capsule,
+            &image_capsule,
+            &content.join("assets"),
+            &base.join("agents/svc/build"),
+            &state.join("workspaces/svc-state"),
+        ] {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(base.join("flake.nix"), "{}\n")?;
+        std::fs::write(image_capsule.join("flake.nix"), "{}\n")?;
+        std::fs::write(content.join("assets/settings.txt"), "fixture\n")?;
+        let base_toml = r#"
+schema_version = 1
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "fixture:latest" }
+command = []
+[workloads.svc.local_build]
+recipe = "npm-build"
+source = "flake://agent-src"
+fallback = "agents/svc/build"
+[[workloads.svc.mounts]]
+host = "${WORKESTRATE_SVC_BUILD}"
+guest = "/app"
+mode = "ro"
+[[workloads.svc.mounts]]
+host = "assets"
+guest = "/assets"
+mode = "ro"
+[[workloads.svc.mounts]]
+host = "workspaces/svc-state"
+guest = "/data"
+mode = "rw"
+[[workloads.svc.seed_files]]
+source = "assets/settings.txt"
+target = "workspaces/svc-state/settings.txt"
+[workloads.svc.network.defaults]
+egress = "deny"
+ingress = "deny"
+"#;
+        let layers = [
+            crate::merge::Layer::from_string_with_path(
+                "base",
+                base_toml,
+                Some(capsule.join("workload.toml")),
+            )?,
+            crate::merge::Layer::from_string_with_path(
+                "images",
+                "[workloads.svc]\nimage = { recipe = \"nix-layered\", name = \"svc-image\" }\n",
+                Some(image_capsule.join("workload.toml")),
+            )?,
+        ];
+        let (config, provenance) = crate::merge::merge_layers(&layers)?;
+        crate::config::validate_config(&config)?;
+        let content_dirs = crate::merge::layer_dirs_from(&layers);
+        let source_dirs = crate::merge::layer_source_dirs_from(&layers);
+        let (images, skipped) = crate::images::build_cmd::select_eligible(
+            &config,
+            &provenance,
+            &content_dirs,
+            &source_dirs,
+            &[],
+            Some("svc"),
+        )?;
+        assert!(skipped.is_empty());
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].repo.flake_root, image_capsule.canonicalize()?);
+
+        let mut workload = synthetic_workload(base_toml, "svc");
+        workload.workload = config.workloads["svc"].clone();
+        workload.mount_content_root =
+            field_content_root(Some(&provenance), &content_dirs, "svc", "mounts");
+        workload.seed_content_root =
+            field_content_root(Some(&provenance), &content_dirs, "svc", "seed_files");
+        workload.flake_source_dir =
+            artifact_flake_source_dir(&workload.workload, &provenance, &source_dirs, "svc");
+        let plan = workload.plan();
+        let owned = crate::microsandbox::mounts::resolve_mount_roots_owned(&workload, &plan)?;
+        let roots = owned.as_roots();
+        assert_eq!(owned.project_root, Some(base.clone()));
+        assert_eq!(owned.content_root, content);
+        assert_eq!(workload.seed_content_root, Some(content.clone()));
+        assert_eq!(
+            crate::microsandbox::mounts::resolve_mount_host(&roots, &plan.mounts[0].host)?,
+            base.join("agents/svc/build")
+        );
+        assert_eq!(
+            crate::microsandbox::mounts::resolve_mount_host(&roots, "assets")?,
+            content.join("assets")
+        );
+        assert_eq!(
+            crate::microsandbox::mounts::resolve_mount_host(&roots, "workspaces/svc-state")?,
+            state.join("workspaces/svc-state")
+        );
+        assert_eq!(
+            crate::microsandbox::mounts::resolve_mount_host(&roots, "var/cache")?,
+            state.join("var/cache")
+        );
+        assert!(workload.preflight_existence(&plan, true)?.is_empty());
+
+        workload.workload.local_build = None;
+        assert_eq!(
+            artifact_flake_source_dir(&workload.workload, &provenance, &source_dirs, "svc"),
+            Some(image_capsule)
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn capsule_flake_satisfies_root_gate_without_rebasing_mounts() -> Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = crate::config::test_support::EnvGuard::capture(&["AGENTCTL_ROOT"]);
+        // SAFETY: serialized by ENV_TEST_LOCK and restored by the guard.
+        unsafe { std::env::remove_var("AGENTCTL_ROOT") };
+        let tmp = crate::config::test_support::unique_state_dir("capsule-root-gate");
+        let content = tmp.join("workestrate");
+        let capsule = content.join("workloads/svc");
+        std::fs::create_dir_all(&capsule)?;
+        std::fs::write(capsule.join("flake.nix"), "{}\n")?;
+        let mut workload = synthetic_workload(
+            "schema_version = 1\n[workloads.svc]\nkind = \"service\"\nimage = { recipe = \"nix-layered\", name = \"svc-image\" }\ncommand = []\n",
+            "svc",
+        );
+        workload.mount_content_root = Some(content.clone());
+        workload.seed_content_root = Some(content.clone());
+        workload.flake_source_dir = Some(capsule.clone());
+        let roots =
+            crate::microsandbox::mounts::resolve_mount_roots_owned(&workload, &workload.plan())?;
+        assert_eq!(roots.project_root, Some(capsule));
+        assert_eq!(roots.content_root, content);
+        assert_eq!(workload.seed_content_root, Some(content));
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
 
     /// Registry image, no local_build, no build-path mounts → NO
     /// requirement: build_sandbox must never call project_root for
@@ -2637,6 +2823,7 @@ egress = "deny"
             provenance: None,
             mount_content_root: Some(repo.clone()),
             seed_content_root: None,
+            flake_source_dir: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
             namespace: crate::microsandbox::port_registry::default_namespace(),
@@ -2859,6 +3046,7 @@ egress = "deny"
             provenance: None,
             mount_content_root: None,
             seed_content_root: None,
+            flake_source_dir: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
             namespace: crate::microsandbox::port_registry::default_namespace(),

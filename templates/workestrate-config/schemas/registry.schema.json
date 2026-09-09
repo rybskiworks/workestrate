@@ -554,7 +554,7 @@
           ]
         },
         "ssh": {
-          "description": "SSH confinement-policy rung (`[policy.ssh]`; M1). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "description": "SSH confinement-policy rung (`[policy.ssh]`). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
           "default": null,
           "anyOf": [
             {
@@ -744,7 +744,7 @@
       "additionalProperties": false
     },
     "SshPolicyFragment": {
-      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`; M1): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
       "type": "object",
       "properties": {
         "final": {

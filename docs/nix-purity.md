@@ -6,8 +6,8 @@ builds pure in the workestrate flake. It records the two purity axes
 29 GB-per-eval incident that motivated the rules, the store-growth model
 that explains why impurity balloons the store, the `just lint-nix`
 enforcement guard, a checklist for adding new derivations, recipe
-patterns for fixed-output and image derivations, and the one sanctioned
-impure zone (devshell in-tree agent builds). Every contributor adding or
+patterns for fixed-output and image derivations, and the boundary for explicit
+non-Nix development builds. Every contributor adding or
 editing a nix derivation under `nix/` or `flake.nix` is expected to read
 this first.
 
@@ -51,7 +51,9 @@ every evaluation regardless of whether the build runs.
 1. Never reference the repo root as a path. Use
    `builtins.path { name = ...; path = ./subdir; filter = ...; }` with
    an explicit `name` and `filter` so only intended files enter the
-   store. Bare `./.` or `toString ./.` is forbidden.
+   store. Bare `./.` or `toString ./.` is forbidden. Read individual metadata
+   files directly with `builtins.readFile`; do not force a filtered source copy
+   merely to read its manifest during read-only evaluation.
 2. No unfiltered `cleanSourceWith` / `lib.cleanSource` over the whole
    repo. Always pass a `filter` predicate that excludes `target/`,
    `result*`, `node_modules/`, `agents/*/build/`, `.workestrate/`, and
@@ -130,7 +132,11 @@ consume space until deduplication runs.
 - Run `just store-audit` when the store feels large, to audit what is
   consuming space and find stale roots.
 
-> **Confirmed:** `just store-audit` reports the top-20 store paths by closure size (via `nix path-info --all --json` + a python reducer) and flags any `*-source` paths referencing `ai-workbench` (via `nix path-info --all | grep -E "ai-workbench.*-source$"`). Non-empty `*-source` output indicates an unbounded source copy that should be bounded by a `cleanSourceWith` filter.
+`just store-audit` requests `nix path-info --all --json --json-format 1
+--closure-size` and reports the largest closures. Its informational local-copy
+warning recognizes named Workestrate, personal, duelbits and nix-tooling sources;
+generic `*-source` paths cannot establish local provenance. Missing closure
+sizes are reported as incomplete input, not zero-sized paths.
 
 - `auto-optimise-store` is advisory: it deduplicates identical content
   but is **not** a substitute for the purity rules. It reduces vector
@@ -142,7 +148,10 @@ consume space until deduplication runs.
 as the `lint-nix` recipe. The guard uses bash `case` patterns (not grep)
 to scan for forbidden patterns and fails the gate on any match.
 
-> **Confirmed:** `scripts/check-nix-paths.sh` is a bash `case`-pattern guard (not grep) wired into `just verify` as the `lint-nix` recipe. It scans `*.nix` under `flake.nix`/`nix`/`templates` plus `*.sh` under `scripts/` and the `justfile`. Allowlist: lines containing `# allow: <reason>` are skipped.
+`scripts/check-nix-paths.sh` is wired into `just verify` as `lint-nix`. It scans
+Nix files in `flake.nix`, `nix/`, `templates/` and `examples/`, plus shell scripts,
+the justfile and relevant documentation. Lines containing `# allow: <reason>`
+are explicit reviewed exceptions.
 
 The guard catches:
 
@@ -150,7 +159,7 @@ The guard catches:
 - `builtins.getFlake` combined with `toString` on the same line (impure self-referential flake fetching)
 - `builtins.path { ... }` without a `filter =` field in the following 15 lines (unbounded store copy)
 - `cleanSourceWith { ... }` without a `filter =` field in the following 15 lines (same problem via lib)
-- `../` (parent-directory) path literals in nix assignments, outside the bounded `src =` / `lockFile =` / `path =` escape-hatch fields
+- `../` (parent-directory) path literals in nix assignments, outside the bounded `src =` / `lockFile =` / `path =` escape-hatch fields and explicit single-file `builtins.readFile` metadata reads
 
 The guard does NOT catch `src = ./.` (current-dir literal): check 5 matches `../` only. Rule 1 above still forbids bare `src = ./.` — the guard is a static heuristic, not a prover, and rule 1 remains authoritative even when the guard passes.
 
@@ -178,9 +187,9 @@ guard passes.
 
    > **Confirmed:** `just update-hashes` runs `nix run nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json` (tempest `npmDepsHash`) and `nix build .#opencode-built` / `.#odysseus-built --no-link` to surface the `got:` sha256 for opencode `bunDeps.outputHash` and odysseus `pipDeps.outputHash`. It prints the hashes; the operator manually inlines each `got:` value into the matching `nix/packages/*.nix` file (the recipe prints step-by-step instructions). It does not auto-rewrite the files.
 
-8. **Add a HOST-GATE note** if the build can only be verified on a host
-   with nix. This container has no nix; any `nix build` claim here is
-   based on documented Nix semantics, not runtime verification.
+8. **Record actual validation** and any required host capability. Distinguish
+   evaluation, sandboxed compilation, unit tests and real KVM execution; none
+   of these automatically establishes the others.
 
 ## Recipe patterns
 
@@ -272,29 +281,21 @@ For the full image-building guidance (when to use `streamLayeredImage`
 vs `buildLayeredImage` vs `buildImage`, layer caching, digest pinning),
 see [`.agents/skills/nix-docker-images/SKILL.md`](../.agents/skills/nix-docker-images/SKILL.md).
 
-## Sanctioned impure zone: devshell in-tree agent builds
+## Explicit non-Nix development builds
 
-The dev shell (`nix develop`) building agents in-tree
-(`agents/<name>/build`, `just dev-build-pi`) is the **one** sanctioned
-impure zone. It is acceptable because:
+Entering either development shell does not build workloads, install package
+dependencies or remove existing runtime/build directories. The default shell
+only supplies pinned tools, immutable SDK build inputs and the SDK source link;
+see [Nix builds and dependency ownership](nix-build.md).
 
-- **Tree-side, not store-side.** The build output lives in the working
-  tree (`agents/<name>/build`), not in `/nix/store`. It is never a store
-  path.
-- **Store-inert.** Because it is not a store path, it does not
-  participate in GC root accounting and does not produce content-addressed
-  copies.
-- **Does not feed back into flake evaluation**, as long as the source
-  filters exclude `agents/*/build/`. The dev shell's in-tree build is a
-  developer convenience loop (fast, hashless, editable), not a purity
-  claim.
+An explicitly requested local source build may use writable outputs for an
+interactive edit/test loop. Such outputs are not reproducible Nix build inputs:
+keep them outside the flake source closure, or in ignored directories excluded
+by every relevant source filter. Existing ignored `agents/*/build` trees are
+preserved, not automatically refreshed or deleted by shell entry.
 
-This is a developer convenience loop, not a purity claim. The moment
-such an output is referenced by a nix derivation (e.g. a derivation that
-does `src = agents/pi/build`), the purity rules in "THE RULES" apply in
-full: that reference is forbidden, and the build output must instead be
-produced by a proper FOD-backed derivation (`.#pi-bun`, etc.) or
-relocated out of the flake-visible source tree into the managed sources
-store.
-
-> **Confirmed (partial):** the `CARGO_TARGET_DIR` relocation has landed (see rule 8). The relocation of `agents/<name>/build` outputs into the managed sources store (`~/.local/share/workestrate/sources/<name>/`) is **deferred** — it requires config-repo changes (the `source build`/`source clone` commands and `WORKESTRATE_<NAME>_BUILD` resolution path must point at the sources store). See `docs/migration/70-open-items.md` ("Agent build-output relocation"). Until relocation lands, `agents/<name>/build` remains the sanctioned in-tree dev zone (`just dev-build-pi` writes there), kept out of the flake source closure by `.gitignore` (`agents/*/build`) and the `agentctl.nix` `cleanSourceWith` filter (for the `control/agentctl` tree). The purity rules above hold regardless: the rules require only that the source filters exclude these paths, which they do.
+Production workload image dependencies belong in their locked image flakes.
+Never feed a local `node_modules`, `.deps`, Cargo target or ignored agent build
+back into a derivation. Fetch dependency inputs through Nix, and keep source
+ownership and state migration explicit when moving workloads into separate
+repositories.

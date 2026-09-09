@@ -1,0 +1,95 @@
+# Nix builds and dependency ownership
+
+`nix-tooling` owns the shared nixpkgs, Fenix, devenv and formatting input
+versions. Workestrate follows those inputs, including for its Microsandbox
+dependency. Compiler and formatter packages use the same Fenix toolchain.
+
+The `microsandbox-fork` flake owns the `microsandbox` and static `agentd`
+packages. Workestrate re-exports those packages and compiles against the SDK
+source from that package's filtered Rust workspace. Nix evaluation asserts
+that their versions match the SDK pins in `control/agentctl/Cargo.toml`.
+
+`control/agentctl/.cargo/config.toml` supplies the SDK path patches for both
+development and Nix builds. The `vendor/microsandbox-fork` path is a symlink
+to the pinned source, not a checked-in copy of third-party crates. The
+`microsandbox-filesystem-patched` package output remains a compatibility
+alias for that source.
+
+Cargo registry and Git dependencies are fetched through Nix's locked Cargo
+dependency support before compilation. Git sources have explicit output
+hashes. Build phases use explicit Nix-managed runtime artifacts; they must not fetch
+dependencies from the network. The native libkrun Rust crates are selected
+by `Cargo.lock`; they are not replaced by building a standalone libkrun C
+library. Firmware selection belongs to the Microsandbox package.
+
+## Build and development entry points
+
+```sh
+nix build .#workestrate
+nix build .#checks.x86_64-linux.package .#checks.x86_64-linux.unit
+just verify
+just bootstrap
+just bootstrap -c rustc --version
+just shell
+```
+
+`just bootstrap` enters a tooling-only devenv shell without requiring a
+working application or Microsandbox build. It does not stage a runtime,
+change the SDK symlink, install Git hooks or mark runtime setup complete.
+Use it for Nix and source investigation; it does not configure SDK build inputs.
+
+`just shell` provides the full development environment and the SDK symlink.
+`MSB_BUILD_RUNTIME` points the SDK build script at the immutable runtime
+package independently of `MSB_HOME`, which remains a runtime-state selector.
+An invalid explicit build runtime fails without downloading a replacement.
+Shell entry does not build workloads, clean runtime directories, install
+hooks or format the checkout. Both entry points pass an explicit worktree
+root to devenv for pure evaluation and keep Cargo outputs outside the source tree.
+
+Shell entry points preserve command argument boundaries, including quoted
+shell programs and empty arguments. `just shell-arguments-check` exercises
+that contract without entering devenv.
+
+To test an unpublished fork packaging change locally:
+
+```sh
+nix build .#workestrate --no-link --no-write-lock-file \
+  --override-input microsandbox-fork /absolute/path/to/microsandbox
+```
+
+Use a Git checkout reference so ignored build artifacts stay outside the
+flake source. Add new required files to Git's index before evaluation. A
+successful local override build does not prove that the unchanged remote
+pin contains those fixes; publish and pin the reviewed fork change before
+claiming a reproducible remote build.
+
+`just versions-check`, `just lock-guard` and `just lint-nix` check version,
+Cargo source and purity invariants. `just verify` is the broader
+validation gate. Neither building nor entering either shell runs
+state migration or starts sandboxes.
+
+`just check` runs the sandboxed `checks.x86_64-linux.rust` gate: formatting,
+Clippy with warnings denied, and Cargo checking with locked, offline
+dependencies. It does not enter the runtime-aware shell, so Git's pre-push
+check is independent of interactive development setup.
+
+`just verify` builds the sandboxed checks directly, without entering devenv or
+reading consumer homes. Its schema-copy check compares only repository-owned
+template files; deployed consumers can be inspected separately with
+`workestrate --home <tool-home> schemas update --check`. The store audit is
+informational and requests closure sizes explicitly.
+
+`nix run .#install-hooks` explicitly installs the flake-managed Git hooks
+without entering devenv. The generated configuration is protected from Nix
+garbage collection. Existing custom legacy hooks remain part of the chain;
+stale generated hooks pointing to removed tools may need a backed-up local
+repair before reinstalling.
+
+`just hooks-check` verifies legacy hook chaining and the unconditional secret
+guard in isolated Git fixtures.
+
+The package check verifies the installed CLI and its runtime pairing without
+creating runtime state. The unit check reuses the package's offline build
+environment with test fixtures and an isolated home. Existing ignored KVM
+tests, daemon-backed Nix image tests and optional Copier round trips remain
+separate host gates; a passing sandbox test check is not a VM deployment test.

@@ -203,14 +203,28 @@ workloads that verify the credential (e.g. the LiteLLM proxy itself).
 
 ## Development workflow
 
+Tasks are tracked in the existing [Beads project](.beads/README.md).
+`just beads ready` lists actionable work; `just beads show <id>` includes
+acceptance criteria and dependencies. The CLI is pinned by `nix-tooling` and
+available in both development shells. Embedded storage permits one writer at
+a time; coordinate mutations and keep remote synchronization explicit.
+
+See [Nix builds and dependency ownership](docs/nix-build.md) for package
+integration, offline dependency staging and the tooling-only `just bootstrap`
+shell used when the application is not yet buildable.
+
+See [workload flakes and repositories](docs/workloads.md) for image ownership,
+the standalone baseline and communication examples, and the remaining limits
+on composing external workload repositories.
+
 **just-first.** Run `just <recipe>` from a plain host shell — recipes
 self-enshell (`nix develop`) as needed. Key recipes:
 
 | Recipe | What it does |
 |---|---|
 | `just shell` | Interactive devshell (`just shell -c <cmd>` passes through) |
-| `just verify` | **The gate before pushing/review**: lock-guard, toolchain/versions checks, fmt/clippy/check/test, spec-examples, tombi, golden/schema/scaffold drift guards, lint-nix, **deny-check**, store-audit |
-| `just verify-full` | `verify` plus `nix build .#workestrate` |
+| `just verify` | **The gate before pushing/review**: script guards plus sandboxed package, Rust, unit, TOML, formatting, template-schema and dependency-policy checks; no runtime shell or consumer-home access |
+| `just verify-full` | `verify` plus an explicit package build |
 | `just check` / `just test` | fmt + clippy + check / unit tests for `control/agentctl` |
 | `just deny-check` | cargo-deny supply-chain gates (config: `deny.toml`) |
 | `just host-check` / `just host-provision` / `just provision-check` | Host prerequisites / provisioning / read-only provisioning check |
@@ -221,8 +235,15 @@ self-enshell (`nix develop`) as needed. Key recipes:
 Derivation purity rules live in `docs/nix-purity.md`; devshell rules in
 `docs/nix/devshells.md`.
 
-**Git hooks.** Install from `scripts/git-hooks/` (pure-sh fallbacks:
-pre-commit runs the tier-1/2 gates, pre-push the tier-3 gate). Hooks are
+The unit check includes specification examples, golden plans, schema drift and
+native scaffolding. VM tests, daemon-backed image integration, Copier round
+trips and live consumer-schema freshness are separate integration gates; a
+green package build does not establish that those integrations work. Run
+`workestrate --home <tool-home> schemas update --check` explicitly to inspect
+deployed schema copies without making the repository gate depend on them.
+
+**Git hooks.** Run `nix run .#install-hooks` to install the pinned hooks explicitly;
+the installer preserves the fallback chain from `scripts/git-hooks/`. Hooks are
 check-only — **never commit with `--no-verify`**; fix findings properly.
 
 **Commit conventions.** Conventional commit prefixes (`feat:`, `fix:`,
@@ -259,11 +280,16 @@ hard gate on licenses/bans/sources, soft on advisories). CODEOWNERS covers
 
 ## Runtime status
 
-Everything above is implemented and cargo-verified. KVM runtime is
-host-validated for pi/prime (microVM boot, egress + secret substitution,
-kernel env; 2026-08-13); other workload runtime parity remains
-host-unvalidated. This container has no `/dev/kvm` — host runs happen on a
-KVM host. Nested virtualization is opt-in (`virtualization.nested`) but
-guest `/dev/kvm` arrives with the Phase-2 firmware rebuild (ADR 0036).
-LiteLLM runs in-memory (no Postgres, no virtual keys, no persistent spend
-tracking) in the current milestone.
+Repository checks validate the generic CLI, configuration and pinned package
+contracts. They do not certify deployment of a particular fleet. Runnable
+baseline, communications and nested fixtures and their independent validation
+instructions live in the [personal fleet repository](https://github.com/rybskiworks/workestrate-fleet-georgrybski),
+under `tests/workloads/`; application validation belongs to each workload owner.
+
+Nested virtualization is requested per workload with `virtualization.nested`.
+A compatible Linux runtime can boot a nested child, but that positive result
+does not prove nesting is unavailable when omitted or disabled. Validate both
+directions against the exact selected runtime. Lifecycle readiness/cleanup,
+mount-policy enforcement, SSH custody and the complete agent/memory-service
+stack have separate outstanding runtime gates. A successful build or an older
+Pi/Prime startup result must not be used as proof of those properties.

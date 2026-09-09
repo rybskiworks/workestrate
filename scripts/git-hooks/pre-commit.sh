@@ -6,12 +6,12 @@
 # Reinstall after cloning:
 #   cp scripts/git-hooks/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 #
-# CAUTION (devenv clobber): entering a devenv shell would run git-hooks.nix's
-# installer, which moves this fallback to .git/hooks/pre-commit.legacy and
-# installs a store-path'd generated hook (dangles after GC; no secret gate).
-# That clobber is DISABLED by default via nix-tooling devenvModules/base.nix
-# `git-hooks.install.enable = false`. The CAUTION applies only if a consumer
-# re-enables installation — then re-run the cp above after shell entry.
+# A pre-commit installation can move this fallback to
+# .git/hooks/pre-commit.legacy and chain it before its configured checks.
+# The secret and formatting gates below still run in that mode; only the
+# delegation back to the hook runner is suppressed to prevent recursion.
+# nix-tooling disables git-hooks.nix's shell installer; devenv's separate
+# install task can still install a generated hook.
 #
 # Background: a previous `prek install` wrote a shim that exec'd a hardcoded
 # nix-store prek binary against a generated .pre-commit-config.yaml. Nix
@@ -28,10 +28,8 @@
 #       warns and skips — never fails);
 #   (4) tier-2 in-devshell rustfmt --check at edition 2024 (codebase is
 #       edition-2024-clean) when rustfmt is on PATH and .rs files are staged;
-#   (5) prek delegation only when BOTH the prek binary AND a non-dangling
-#       repo-root config are present.
-# `.git/hooks/pre-commit.legacy`, when present, is a historical backup left
-# by `prek install`, not part of the chain (same as pre-commit semantics).
+#   (5) prek delegation only outside pre-commit's legacy chain, when BOTH
+#       the prek binary AND a non-dangling repo-root config are present.
 
 label="$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null)"
 [ -n "$label" ] || label="repo"
@@ -150,7 +148,8 @@ if [ -n "$root" ]; then
         fi
     done
 fi
-if [ -n "$cfg" ]; then
+# The outer runner already executes its configured checks after this hook.
+if [ -n "$cfg" ] && [ -z "${PRE_COMMIT_RUNNING_LEGACY:-}" ]; then
     if command -v prek >/dev/null 2>&1; then
         here="$(cd "$(dirname "$0")" && pwd)"
         # Flags mirror the previously generated shim (minus the dead store path).

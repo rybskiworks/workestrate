@@ -10,15 +10,15 @@
 #       copy into the store (closes the B14 class of disk-exhausting evals).
 #   (4) `cleanSourceWith { ... }` without a `filter =` field — same problem
 #       via the lib helper.
-#   (5) Bare repo-root path literals in nix code (outside `src =`/`lockFile =`
-#       fields, which are the bounded escape hatches).
+#   (5) Bare repo-root path literals in nix code (outside bounded source fields
+#       and explicit single-file `builtins.readFile` metadata reads).
 #   (6) Impure-pattern references in docs/**/*.md (including docs/migration/):
 #       `getFlake ... toString`, `nix eval --impure <arg>`, `toString ./.`.
 #       Docs are where these patterns historically leaked into subagent-run
 #       regression gates (see docs/nix-store-accumulation-report.md), so the
 #       docs tree is scanned too.
 #
-# Files scanned: *.nix under the repo root (flake.nix, nix/, templates/),
+# Files scanned: *.nix under flake.nix, nix/, templates/, and examples/,
 #                plus *.sh under scripts/ and the justfile,
 #                plus *.md under docs/ (Check 6).
 #
@@ -75,7 +75,7 @@ self_path="scripts/check-nix-paths.sh"
 nix_files=()
 while IFS= read -r -d '' f; do
     nix_files+=("$f")
-done < <(find flake.nix nix templates -type f -name "*.nix" -print0 2>/dev/null)
+done < <(find flake.nix nix templates examples -type f -name "*.nix" -print0 2>/dev/null)
 
 sh_files=()
 while IFS= read -r -d '' f; do
@@ -172,7 +172,7 @@ for f in "${nix_files[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# Check 5: repo-root path literals in nix code (outside src=/lockFile= fields).
+# Check 5: repo-root path literals outside bounded fields and metadata reads.
 # Uses process substitution so add_violation mutates the parent shell's array
 # (a `cmd | while read` form would silently lose violations to a subshell).
 # ---------------------------------------------------------------------------
@@ -195,6 +195,13 @@ for f in "${nix_files[@]}"; do
             # the lines inside rarely have a top-level nix `=` assignment.
             gsub(/"[^"]*"/, "", line)
             gsub(/'\''[^'\'']*'\''/, "", line)
+            # readFile consumes one file, not a source tree. Recognize only a
+            # direct literal with a named, extension-bearing leaf (Cargo.toml,
+            # flake.lock, etc.), not a directory/root or indirect expression.
+            # Remove that CALL only: another ../ literal on the same line
+            # must still be checked. This survives nixfmt joining metadata
+            # assignments without granting a whole-line readFile exemption.
+            gsub(/(^|[[:space:](])builtins[.]readFile[[:space:]]+(\.\.\/)+([[:alnum:]_.+-]+\/)*[[:alnum:]_+-]+[.][[:alnum:]_.+-]+([[:space:];)}]|$)/, "", line)
             # Only flag lines that have a nix assignment AND a ../ literal
             # on the RHS. This filters out shell commands like `cd ../..`
             # inside buildPhase strings (no `=` on those lines).

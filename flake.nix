@@ -2,64 +2,19 @@
   description = "workestrate — control plane for sandboxed agent/service workloads on Microsandbox microVMs";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/a799d3e3886da994fa307f817a6bc705ae538eeb";
-
-    fenix = {
-      # Pinned to same rev as nix-tooling (fa09e647...) for reproducible rustc 1.97.1.
-      # This is an OWNED pin — nix-tooling also pins this rev, and consumers should not
-      # follows-override the toolchain via `tooling.inputs.fenix`.
-      url = "github:nix-community/fenix/fa09e6473a0dfd673e6cb9a37741aec513b4bb2a";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # Shared build tools and development modules have one version authority.
+    tooling.url = "github:rybskiworks/nix-tooling/34c287290245c20e9103f7cd0fcdaa244edd310b";
+    nixpkgs.follows = "tooling/nixpkgs";
+    fenix.follows = "tooling/fenix";
+    flake-parts.follows = "tooling/flake-parts";
+    devenv.follows = "tooling/devenv";
+    treefmt-nix.follows = "tooling/treefmt-nix";
+    git-hooks.follows = "tooling/git-hooks";
 
     microsandbox-fork = {
-      # Pinned fork rev 012519792ea99c5afaf870bb78465daf75b6ef15 —
-      # feat/nested-virt-port: the scan crate (streaming DLP matcher:
-      # sealed patterns compiled once into raw/hex/base64 literal
-      # needles, hit ids + digests only) plus brokerd enforcement on
-      # guest-originated channel data and the typed pattern bootstrap
-      # (BrokerPatterns/BrokerPattern threaded host-side through the
-      # builder into spawn, kept out of the guest-visible spec) on the
-      # fully-merged tip. Direct child of f8947076 (brokerd service:
-      # epoch, divert/reoriginate, bootstrap threading), which sits on
-      # 6ea0b117 (SSH gateway wiring, brokerd service, epoch protocol
-      # family) on deb99d26.
-      url = "github:rybskiworks/microsandbox/012519792ea99c5afaf870bb78465daf75b6ef15";
-      flake = false;
-    };
-
-    # Shared tooling: github:rybskiworks/nix-tooling pinned to 18f8b85.
-    # For local development use `--override-input tooling path:../nix-tooling`.
-    # Follows discipline: share consumer's nixpkgs, but don't override owned pins (fenix/tombi).
-    # Therefore we set `tooling.inputs.nixpkgs.follows = "nixpkgs"` but do NOT set
-    # `tooling.inputs.fenix.follows` — tooling owns the rust toolchain version.
-    tooling = {
-      url = "github:rybskiworks/nix-tooling/18f8b85f6777240a0ecef4e93ebee69313802aed";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    flake-parts = {
-      url = "github:hercules-ci/flake-parts/9d0d87172c374f89da73c1cfe6d81ae62feac1f1";
-      inputs.nixpkgs-lib.follows = "nixpkgs";
-    };
-
-    devenv = {
-      url = "github:cachix/devenv/97135e80b6e432f41f84f72383e1b8147f33ef0c";
-      inputs = {
-        nixpkgs.follows = "nixpkgs";
-        git-hooks.follows = "git-hooks";
-        flake-parts.follows = "flake-parts";
-      };
-    };
-
-    treefmt-nix = {
-      url = "github:numtide/treefmt-nix/27b3b12a8e6375f28ebe122f07d230ca5459bbfa";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    git-hooks = {
-      url = "github:cachix/git-hooks.nix/27555e2624241fb116b49095df4caaee85a25691";
-      inputs.nixpkgs.follows = "nixpkgs";
+      # Runtime packages and SDK patches must come from this same source.
+      url = "github:rybskiworks/microsandbox/a1dad1bf2e17df62c80510d070d1a1aa41ef2224";
+      inputs.tooling.follows = "tooling";
     };
 
     nix2container = {
@@ -224,7 +179,12 @@
         };
 
       perSystem =
-        { system, ... }:
+        {
+          system,
+          inputs',
+          config,
+          ...
+        }:
         let
           pkgs = import inputs.nixpkgs {
             inherit system;
@@ -238,19 +198,30 @@
           # so the marker cannot silently drift onto a dead line.
           rustToolchain = inputs.fenix.packages.${system}.stable; # RUST_TOOLCHAIN_VERSION = "1.97"
 
-          referenceConfig = import ./nix/lib/config.nix { };
-
-          agentd = pkgs.callPackage ./nix/packages/agentd.nix { inherit (inputs) microsandbox-fork; };
-          microsandbox = pkgs.callPackage ./nix/packages/microsandbox.nix {
-            inherit rustToolchain agentd;
-            inherit (inputs) microsandbox-fork;
-          };
+          microsandboxSource = inputs'.microsandbox-fork.packages.microsandbox.src;
+          # Metadata comes from the already-fetched input; reading the filtered
+          # package source would require a store write during cold read-only eval.
+          forkVersion =
+            (builtins.fromTOML (builtins.readFile (inputs.microsandbox-fork.outPath + "/Cargo.toml")))
+            .workspace.package.version;
+          agentd =
+            assert pkgs.lib.assertMsg (
+              inputs'.microsandbox-fork.packages.agentd.version == forkVersion
+            ) "Microsandbox agentd package and SDK source versions disagree";
+            inputs'.microsandbox-fork.packages.agentd;
+          microsandbox =
+            assert pkgs.lib.assertMsg (
+              inputs'.microsandbox-fork.packages.microsandbox.version == forkVersion
+            ) "Microsandbox runtime package and SDK source versions disagree";
+            inputs'.microsandbox-fork.packages.microsandbox;
           tombi = inputs.tooling.packages.${system}.tombi;
-          microsandbox-filesystem-patched =
-            pkgs.callPackage ./nix/packages/microsandbox-filesystem-patched.nix
-              { inherit (inputs) microsandbox-fork; };
+          # Retain the source-package output for downstream development tools;
+          # compilation shares the fork package's filtered Rust workspace.
+          microsandbox-filesystem-patched = pkgs.runCommand "microsandbox-filesystem-patched-${forkVersion}" {
+            version = forkVersion;
+          } "ln -s ${microsandboxSource} $out";
           workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
-            inherit microsandbox microsandbox-filesystem-patched rustToolchain;
+            inherit microsandbox microsandboxSource rustToolchain;
             rev =
               inputs.self.shortRev
                 or (if inputs.self ? rev then builtins.substring 0 8 inputs.self.rev else "dirty");
@@ -265,6 +236,18 @@
             # unset, so --set-default would not handle empty.
             makeWrapper ${microsandbox}/bin/msb $out/bin/msb \
               --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox/current"; fi'
+          '';
+
+          install-hooks = pkgs.writeShellScriptBin "install-hooks" ''
+            set -e
+            export PATH=${
+              pkgs.lib.makeBinPath [
+                pkgs.coreutils
+                pkgs.nix
+                config.pre-commit.settings.gitPackage
+              ]
+            }:$PATH
+            ${config.pre-commit.installationScript}
           '';
 
           decrypt-env = pkgs.writeShellApplication {
@@ -329,29 +312,6 @@
             '';
           };
 
-          localBuildNames = referenceConfig.localBuilds;
-          recipeCmd =
-            lb:
-            if lb.recipe == "pip-install" then
-              let
-                req = lb.requirements_file or "requirements.txt";
-              in
-              ''REQ=$([ -f requirements.lock ] && echo requirements.lock || echo ${req}) && python3.12 -m pip install --only-binary=:all: --break-system-packages --target ./.deps -r "$REQ"''
-            else if lb.recipe == "bun-install" then
-              "HUSKY=0 bun install"
-            else if lb.recipe == "npm-build" then
-              "npm install && npm run build"
-            else
-              throw "unknown local_build recipe: ${lb.recipe}";
-          buildAgentCommands = builtins.concatStringsSep "\n" (
-            map (
-              name:
-              let
-                lb = referenceConfig.workloads.${name}.local_build;
-              in
-              ''_build_if_needed "${name}" "${recipeCmd lb}" "${lb.gating_file or ""}"''
-            ) localBuildNames
-          );
         in
         {
           _module.args.pkgs = pkgs;
@@ -367,6 +327,7 @@
               rustfmt = {
                 enable = true;
                 edition = "2024";
+                package = rustToolchain.rustfmt;
               };
             };
             settings.formatter.tombi = {
@@ -408,6 +369,7 @@
           };
 
           packages = {
+            beads = inputs'.tooling.packages.beads;
             inherit
               agentd
               workestrate
@@ -422,14 +384,130 @@
             default = workestrate;
           };
 
-          apps.default = {
-            type = "app";
-            program = "${workestrate}/bin/workestrate";
+          apps = {
+            default = {
+              type = "app";
+              program = "${workestrate}/bin/workestrate";
+              meta.description = "Run the pinned Workestrate CLI";
+            };
+            install-hooks = {
+              type = "app";
+              program = "${install-hooks}/bin/install-hooks";
+              meta.description = "Install the pinned repository validation hooks";
+            };
+            beads = {
+              type = "app";
+              program = "${inputs'.tooling.packages.beads}/bin/bd";
+              meta.description = "Run the shared pinned Beads tracker CLI";
+            };
           };
 
           # Expose lib per system for backward compat via `config.packages`? Instead we set `flake.lib` above.
           # For `nix flake check` we also provide tombiCheck and treefmt checks.
           checks = {
+            deny = config.checks.unit.overrideAttrs (old: {
+              pname = "workestrate-deny-check";
+              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.cargo-deny ];
+              buildPhase = ''
+                runHook preBuild
+                cargo deny --locked --offline --manifest-path Cargo.toml check \
+                  --config ${./deny.toml} licenses bans sources
+                runHook postBuild
+              '';
+              doCheck = false;
+              installPhase = "mkdir -p $out";
+              postInstall = "";
+            });
+
+            # Consumer homes are deployment state, not repository fixtures.
+            # Unit tests cover schema generation and distribution into scratch
+            # homes; this checks the copies actually shipped by this repository.
+            schemaSync = pkgs.runCommand "workestrate-schema-sync-check" { } ''
+              for name in workestrate.schema.json workestrate-workload.schema.json registry.schema.json; do
+                cmp ${./schemas}/"$name" ${./templates/workestrate-config/schemas}/"$name"
+              done
+              mkdir -p $out
+            '';
+
+            rust = config.checks.unit.overrideAttrs (old: {
+              pname = "workestrate-rust-check";
+              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+                rustToolchain.rustfmt
+                rustToolchain.clippy
+              ];
+              buildPhase = ''
+                runHook preBuild
+                cargo fmt -- --check
+                cargo clippy --jobs "$NIX_BUILD_CORES" --locked --offline --all-targets -- -D warnings
+                cargo check --jobs "$NIX_BUILD_CORES" --locked --offline
+                runHook postBuild
+              '';
+              doCheck = false;
+              installPhase = "mkdir -p $out";
+            });
+
+            package =
+              pkgs.runCommand "workestrate-package-check"
+                {
+                  nativeBuildInputs = [ pkgs.jq ];
+                }
+                ''
+                  export MSB_HOME="$TMPDIR/msb-state"
+                  ${workestrate}/bin/workestrate --version
+                  ${workestrate}/bin/workestrate --help > /dev/null
+                  ${workestrate}/bin/workestrate --json versions > versions.json
+                  jq -e \
+                    --arg msb "${microsandbox}/bin/msb" \
+                    --arg version "msb ${forkVersion}" \
+                    --arg agentd "${microsandbox}/libexec/agentd" \
+                    '.msb.path_used == $msb and .msb.version == $version and .agentd.path == $agentd' \
+                    versions.json
+                  test ! -e "$MSB_HOME"
+                  mkdir -p $out
+                  cp versions.json $out/
+                '';
+
+            # Reuse the package's offline SDK/runtime inputs. Test-only fixtures
+            # stay out of the production source; existing KVM ignores remain intact.
+            unit = workestrate.overrideAttrs (old: {
+              pname = "workestrate-tests";
+              src = pkgs.runCommand "source" { } ''
+                mkdir -p $out/docs/migration $out/templates
+                cp -r ${old.src}/. $out/
+                cp -r ${./config.reference} $out/config.reference
+                cp ${./docs/migration/20-target-system-spec.md} $out/docs/migration/20-target-system-spec.md
+                cp -r ${./templates/workestrate-config} $out/templates/workestrate-config
+                cp ${./flake.nix} $out/flake.nix
+              '';
+              cargoBuildType = "debug";
+              cargoCheckType = "debug";
+              doCheck = true;
+              cargoTestFlags = [
+                "--locked"
+                "--no-fail-fast"
+              ];
+              nativeCheckInputs = [
+                pkgs.git
+                pkgs.sops
+                pkgs.age
+                tombi
+              ];
+              preCheck = ''
+                export HOME="$TMPDIR/test-home"
+                export XDG_CACHE_HOME="$HOME/.cache"
+                # These variables select legacy home resolution; tests set them
+                # explicitly when exercising that compatibility behavior.
+                unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
+                mkdir -p "$HOME" "$XDG_CACHE_HOME"
+                export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                export TOMBI_OFFLINE=true
+                export GIT_CONFIG_NOSYSTEM=1
+                export GIT_CONFIG_GLOBAL=/dev/null
+                # Daemon-backed image tests and optional Copier round trips have
+                # separate host gates; do not install their tools in this sandbox.
+              '';
+            });
+
             # treefmt and pre-commit are auto-generated; add tombiCheck for completeness
             tombiCheck = pkgs.runCommand "tombi-check" { nativeBuildInputs = [ tombi ]; } ''
               mkdir -p $out
@@ -448,6 +526,34 @@
               tombi format --check
               tombi lint --error-on-warnings
               touch $out/ok
+            '';
+          };
+
+          # Tooling-only shell: usable even when the application or runtime does
+          # not build. It deliberately does not mark runtime staging complete.
+          devenv.shells.bootstrap = {
+            imports = [
+              inputs.tooling.devenvModules.beads
+              inputs.tooling.devenvModules.base
+              inputs.tooling.devenvModules.nix
+              inputs.tooling.devenvModules.toml
+              inputs.tooling.devenvModules.rust
+            ];
+            packages = with pkgs; [
+              cargo-deny
+              gcc
+              just
+              libcap_ng
+              nix
+              pkg-config
+              python3
+            ];
+            # Bootstrap must not install hooks or run worktree formatting.
+            git-hooks.enable = false;
+            treefmt.enable = false;
+            enterShell = ''
+              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
+              echo "workestrate bootstrap shell (tooling only)"
             '';
           };
 
@@ -477,6 +583,7 @@
             # root fallback.
 
             imports = [
+              inputs.tooling.devenvModules.beads
               inputs.tooling.devenvModules.base
               inputs.tooling.devenvModules.nix
               inputs.tooling.devenvModules.toml
@@ -517,43 +624,21 @@
               zizmor
             ];
 
-            # Preserve the extensive shellHook from the previous mkShell (staging msb, vendor, agent builds)
+            # Hook installation is explicit (nix run .#install-hooks). Entering
+            # a shell must not format files, build workloads or clean VM state.
+            git-hooks.enable = false;
+            treefmt.enable = false;
+
             enterShell = ''
               echo "workestrate dev shell"
               echo "msb version: $(msb --version 2>/dev/null || echo 'not available')"
               echo "secrets workflow: docs/secrets.md"
 
-              # Build-time-only MSB staging for offline cargo check (NOT a
-              # second runtime home). The canonical runtime home is
-              # $HOME/.microsandbox (the SDK default; see the workestrate +
-              # msb-wrapped --run guards). This block only stages the msb
-              # binary + libkrunfw libs under the legacy cache path so
-              # build.rs finds them offline; it deliberately does NOT export
-              # MSB_HOME/MSB_PATH, so msb state always lands in the canonical
-              # home. Only MSB_AGENTD_PATH is exported (build.rs needs it).
-              _msb_home="$HOME/.cache/ai-workbench-msb"
-              mkdir -p "$_msb_home/bin" "$_msb_home/lib"
-              for _old in /run/user/*/ai-workbench-msb-*; do
-                if [ -e "$_old" ]; then
-                  rm -rf "$_old" 2>/dev/null || true
-                fi
-              done
-              ln -sfn ${microsandbox}/bin/msb "$_msb_home/bin/msb"
-              for f in ${microsandbox}/lib/libkrunfw.so*; do
-                if [ -f "$f" ] && [ ! -L "$f" ]; then
-                  cp -f "$f" "$_msb_home/lib/$(basename "$f")"
-                fi
-              done
-              for f in ${microsandbox}/lib/libkrunfw.so*; do
-                if [ -L "$f" ]; then
-                  _base=$(basename "$f")
-                  _target=$(readlink "$f")
-                  ln -sfn "$(basename "$_target")" "$_msb_home/lib/$_base"
-                fi
-              done
-              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
-              mkdir -p "$CARGO_TARGET_DIR"
+              # Build inputs are immutable and separate from runtime state.
+              # The SDK validates this explicit directory without downloading.
+              export MSB_BUILD_RUNTIME="${microsandbox}"
               export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
+              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
               export WORKESTRATE_DEVSHELL=1
 
               _tool_repo_root() {
@@ -574,7 +659,7 @@
                 fi
                 vendor_dir="$repo_root/control/agentctl/vendor"
                 vendor_link="$vendor_dir/microsandbox-fork"
-                target="${microsandbox-filesystem-patched}"
+                target="${microsandboxSource}"
                 mkdir -p "$vendor_dir"
                 if [ -L "$vendor_link" ]; then
                   local current
@@ -597,53 +682,6 @@
               }
               _setup_vendor_link
               unset -f _setup_vendor_link
-              _build_agents() {
-                local repo_root agents_dir
-                repo_root=$(_tool_repo_root)
-                [ -z "$repo_root" ] && return 0
-                agents_dir="$repo_root/agents"
-                _build_if_needed() {
-                  local name="$1" build_cmd="$2" gating_file="''${3:-}"
-                  local repo_dir build_dir stamp hash_file
-                  repo_dir="$agents_dir/$name/repo"
-                  build_dir="$agents_dir/$name/build"
-                  [ -d "$repo_dir" ] || return 0
-                  stamp="$build_dir/.ai-workbench-built"
-                  hash_file="$agents_dir/$name/.build-hash"
-                  local current_hash="" stored_hash=""
-                  if [ -n "$gating_file" ]; then
-                    if [ -f "$repo_dir/$gating_file" ]; then
-                      current_hash=$(sha256sum "$repo_dir/$gating_file" 2>/dev/null || true)
-                    fi
-                    [ -f "$hash_file" ] && stored_hash=$(cat "$hash_file" 2>/dev/null || true)
-                    if [ -f "$stamp" ] && [ -n "$current_hash" ] && [ "$current_hash" = "$stored_hash" ]; then
-                      return 0
-                    fi
-                  else
-                    [ -f "$stamp" ] && return 0
-                  fi
-                  echo "workestrate: building $name into agents/$name/build..." >&2
-                  rm -rf "$build_dir"
-                  cp -r "$repo_dir" "$build_dir"
-                  chmod -R u+w "$build_dir"
-                  rm -rf "$build_dir/.git" "$build_dir/node_modules" "$build_dir/.deps"
-                  if (cd "$build_dir" && eval "$build_cmd"); then
-                    touch "$stamp"
-                    if [ -n "$gating_file" ] && [ -n "$current_hash" ]; then
-                      echo "$current_hash" > "$hash_file"
-                    fi
-                    echo "workestrate: $name built successfully" >&2
-                  else
-                    rm -rf "$build_dir"
-                    echo "workestrate: WARNING: $name build failed; the agent may not work" >&2
-                    echo "workestrate: You can retry: rm -rf agents/$name/build && just shell" >&2
-                  fi
-                }
-                ${buildAgentCommands}
-                unset -f _build_if_needed
-              }
-              _build_agents
-              unset -f _build_agents
               unset -f _tool_repo_root
             '';
           };

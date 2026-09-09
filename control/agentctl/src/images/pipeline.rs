@@ -271,6 +271,7 @@ impl ImageBuilder for NixCliBuilder {
                 "build",
                 &reference,
                 "--no-link",
+                "--no-update-lock-file",
                 "--print-out-paths",
                 "--extra-experimental-features",
                 "nix-command flakes",
@@ -877,6 +878,24 @@ mod tests {
     use super::*;
     use crate::config::test_support::unique_state_dir;
 
+    #[cfg(unix)]
+    #[test]
+    fn nix_build_refuses_implicit_lock_updates() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = unique_state_dir("build-lock-updates");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let program = tmp.join("nix");
+        std::fs::write(&program, "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = --no-update-lock-file ]; then\n    echo /nix/store/fixture-image\n    exit 0\n  fi\ndone\nexit 9\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut builder = NixCliBuilder::with_program(program.to_str().unwrap());
+        assert_eq!(
+            builder.build_out_path(&tmp, "image").unwrap(),
+            "/nix/store/fixture-image"
+        );
+        assert!(!tmp.join("flake.lock").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     fn job_fixture() -> BuildJob {
         BuildJob {
             workload: "pi".to_string(),
@@ -1352,13 +1371,13 @@ mod tests {
     fn msb_failure_modes_map_to_named_errors() {
         let out_path = Path::new("/definitely/not/a/tarball.tar.gz");
 
-        let mut loader = MsbCliLoader::with_programs("/bin/true", "/bin/false");
+        let mut loader = MsbCliLoader::with_programs("true", "false");
         match loader.load(out_path, "t:latest") {
             Err(LoadError::Failed { tag, .. }) => assert_eq!(tag, "t:latest"),
             other => panic!("expected Failed, got {other:?}"),
         }
 
-        let mut loader = MsbCliLoader::with_programs("/bin/true", "/definitely/not/msb");
+        let mut loader = MsbCliLoader::with_programs("true", "/definitely/not/msb");
         match loader.load(out_path, "t:latest") {
             Err(LoadError::MsbAbsent { program }) => {
                 assert_eq!(program, "/definitely/not/msb")
@@ -1366,7 +1385,7 @@ mod tests {
             other => panic!("expected MsbAbsent, got {other:?}"),
         }
 
-        let mut loader = MsbCliLoader::with_programs("/bin/false", "/bin/true");
+        let mut loader = MsbCliLoader::with_programs("false", "true");
         match loader.load(out_path, "t:latest") {
             Err(LoadError::GunzipFailed { .. }) => {}
             other => panic!("expected GunzipFailed, got {other:?}"),

@@ -15,20 +15,16 @@ use anyhow::Result;
 
 use crate::commands::doctor::{msb_binary, probe_version, resolve_msb_home};
 
-/// Hand-maintained microsandbox version pin. Must agree with
-/// `nix/packages/microsandbox.nix`, `nix/packages/agentd.nix`,
-/// `nix/packages/microsandbox-filesystem-patched.nix`, and the `=X` pins in
-/// `control/agentctl/Cargo.toml` (enforced by
-/// `scripts/check-msb-versions.sh`).
+/// Expected Microsandbox version. The static pin guard checks the Cargo
+/// dependency pins; Nix also checks the fork's package and SDK versions.
 pub const MSB_VERSION_PIN: &str = "0.6.16";
 
 /// Hand-maintained fork rev pin (full rev). Must agree with the
 /// `microsandbox-fork` input in `flake.nix` / `flake.lock` (enforced by
 /// `scripts/check-msb-versions.sh`).
-pub const FORK_REV_PIN: &str = "012519792ea99c5afaf870bb78465daf75b6ef15";
+pub const FORK_REV_PIN: &str = "a1dad1bf2e17df62c80510d070d1a1aa41ef2224";
 
-/// Expected libkrunfw soname (ABI 5, version 5.6.1 — see
-/// `nix/packages/microsandbox.nix`).
+/// Expected libkrunfw soname shipped by the fork's runtime package.
 pub const LIBKRUNFW_SONAME: &str = "libkrunfw.so.5.6.1";
 
 /// Short (8-char) form of [`FORK_REV_PIN`] for human output.
@@ -475,7 +471,7 @@ mod tests {
 
     #[test]
     fn fork_short_rev_is_the_first_eight_chars() {
-        assert_eq!(fork_rev_short(), "01251979");
+        assert_eq!(fork_rev_short(), "a1dad1bf");
         assert_eq!(fork_rev_short().len(), 8);
     }
 
