@@ -26,8 +26,10 @@ force-import or delete an existing database to resolve unpublished history.
 Take a native backup and full export before integrating another writer. Keep
 automatic push and automatic hook replacement disabled.
 
-The current graph preserves 159 issues, 159 blocking edges and 134 parent
-links. These are checkpoint counts, not fixed requirements for future work.
+The reviewed Git JSONL snapshot preserves 159 issues, 159 blocking edges and
+134 parent links. Native history has since advanced with additional workload,
+Determinate, init, and fork-maintenance tasks. Query the recovered database for
+current counts; an older Git export must not overwrite the newer native plan.
 Issue notes retain earlier failures; later exact-input results supersede their
 status without making unexecuted acceptance tests pass.
 
@@ -35,7 +37,10 @@ status without making unexecuted acceptance tests pass.
 
 - Workestrate's documented `just verify` gate: eight pinned Nix checks,
   48 generic script fixtures and 1,708 Rust tests, with five existing ignores.
-  Tracking-only changes do not imply runtime or CLI behavior changes.
+  The normal repaired-runtime adoption passed this full gate, followed by the
+  unchanged external microVM denied-file regression and clean signed-source
+  pre-push Rust check. PR #14 landed at
+  `7cbb8ab28802e28e43b2d51a510bc6151d5334b0` on `migration/tool-model`.
 - Microsandbox's read-only traversal admission repair: all 701 filesystem
   tests, coherent runtime/static-agent packages and the unchanged external
   guest regression. The full isolated default workspace suite passed 3,228
@@ -58,26 +63,36 @@ status without making unexecuted acceptance tests pass.
   service checks; the unchanged copied-executable reinstall/uninstall smoke
   and real two-session Prime capture/recall/cleanup both passed. These new
   results do not change the shared fleet test's a8 provenance.
-- Personal fleet test updates are on `main` at
-  `89b3ecc6761e4e477640254397c6b530b7cc550c`; operator configuration docs are on
-  `main` at `3110361eb87500f3da7b0cb1522e1c8a8529c1a5`. No live configuration
+- The personal fleet's native ai-memory capsule and pinned LiteLLM readiness
+  profile landed on `main` at `c96be9005636e6b7bd6836a4484d4d5cccf4578a`.
+  The native image/archive, immutable effective configuration, bearer/Host
+  checks, 23 memory fixtures and 96 LiteLLM fixtures passed. This is not guest
+  startup or a four-VM result; the effective-config test uses native SIGINT.
+- Runtime-neutral shared image/NixOS constructors landed in nix-tooling at
+  `5d4317ded007433951d33603057768119e818f61`. Seven normal checks, two opt-in
+  image checks, 18 contract assertions and 11 archive-oracle fixtures passed.
+  No guest engine, NixOS activation, daemon or cache deployment is implied.
+- Operator configuration docs are on `main` at
+  `3110361eb87500f3da7b0cb1522e1c8a8529c1a5`. No live configuration
   synchronization, state migration or credential-bearing rollout followed.
 
 ## Next work and repository ownership
 
 | Area | Next concrete boundary |
 | --- | --- |
-| Workestrate runtime adoption | Update the normal flake, lock, SDK/runtime pairing and declared fork revision to the tested repair; revalidate the consumer. The passing guest probe used an immutable override, not normal pin adoption. |
+| Workestrate runtime adoption | Normal immutable pin/lock/diagnostic/package provenance adoption and its unchanged guest regression are complete. Existing VMs still need explicit recreation; the personal fleet must separately adopt the new consumer pin. |
 | Microsandbox Nix verification | Package a source-owned xattr-capable full-workspace gate, preferably using standard NixOS test infrastructure. The passing isolated host suite does not make the ordinary Nix syscall-filter failure disappear. Preserve all test targets, strictness and explicit capability prerequisites. |
 | ai-memory source | The immutable support-script repair and Linux native packaging are validated at `109e54579539842b7a26766129c7b583871e82fe`. Keep the analogous legacy `setup-agent` copier as a separate repair, with its own immutable-source and platform tests. Per-file replacement is not whole-bundle atomicity or hostile ancestor-race confinement. |
-| ai-memory promotion | Follow compatibility → native packaging → Prime adapter → main. Windows execution remains required for changed path/quoting behavior; the `windows` label is applied but Actions is disabled pending the operator decision. Reconcile upstream main's changelog and marker/session changes, then test the combined source. |
-| Personal fleet clients | Run the four independently packaged workloads through actual `depends_on`; extend restart, refinement, trust, identity, redaction, queue and MCP failure tests. Fresh-state native capture/recall does not close these matrices. |
+| ai-memory contribution history | Do not merge the compatibility, native-packaging or Prime-adapter PRs into the fork. Preserve them for upstream contribution and consume exact published revisions. Windows execution and reconciliation with newer upstream changelog/marker/session changes still need their own reviewed tests; Actions remains disabled. |
+| Personal fleet clients | First adopt the repaired Workestrate and shared-image pins, then wire the native installer into fresh Prime/Codex profiles and run the four independently packaged workloads through actual `depends_on`. Keep hook trust and tool approval explicit. Extend restart, refinement, identity, redaction, queue and MCP failure tests separately. |
 | LiteLLM workload | The credential-scoped OpenCode session-header callback and nonstreaming wire tests are published but unactivated. Finish actual client identity emission, cache-enabled/streaming negatives, retry/fallback/redirect behavior and bounded error mapping before rollout. |
 | Runtime policy and lifecycle | Enforce nested-off across launch/reuse/restart; fix write ordering, sensitive guest path normalization, lifecycle readiness/rollback/orphans and exact teardown. Preserve the read-only repair's admitted-handle/snapshot semantics. |
 | Fleet regression suite | Extend direct and nested mount masking, differential/property/stateful cases, networking, ports, dependencies, storage and credentials. Keep workload-specific tests outside Workestrate; distinguish authored tests from final passing runtime gates. |
 | Optional workload repositories | Generic source/content/runtime provenance exists, but pinned external workload imports and layout-aware scaffolding still need implementation. Capsule-owned flakes can advance independently of repository imports or state migration. |
-| nix-tooling shared images | Extract a package-set-aligned minimal constructor and profiles; prove bounded registration/recovery and a guest-owned daemon with build users and sandboxing. Standard NixOS tests, current Microsandbox command boot and full PID1 activation are different gates. |
+| nix-tooling shared images | Adopt the merged package-set-aligned constructors without changing image identity. Select the supported Determinate distribution boundary, prove it under standard NixOS first, then actual Microsandbox activation and guest-owned sandboxed builds. Installing a CLI or using the current command-boot shim is not this daemon proof. |
+| Explicit init and shutdown | Forward Microsandbox's existing typed init API through generic Workestrate configuration. Repair the source-confirmed mixed-libc shutdown signal mismatch: static-musl agentd derives signal 39 while glibc systemd treats it as reboot, not poweroff. Require actual receiver/init tests and clean owned teardown. |
 | Builder and signed cache | Implement the existing builder/cache epic: isolated writable build store, separate reviewed publisher, read-only signed cache. Reuse shared image/daemon profiles and package versions. Start with independent local positive/negative cache tests; Cachix account/backend adoption is a separate decision. |
+| Fork maintenance | Keep operational libkrun `krun`, with independent exact fast-forward mirrors for Superradcompany and original libkrun upstreams; one upstream mirror is sufficient for Microsandbox. Resolve organization-disabled Actions before automation, apply additive protections and runnable pinned Nix gates, and give public Microsandbox its own public-safe Beads project. Never copy the private program database into the public fork or auto-backmerge upstream changes. |
 | Storage and SSH | Rehearse explicit roots, preview/no-write inspection, partial recovery and rollback. Broker boot/routing/ownership/timeout and synthetic SSH gates remain unfinished. Do not migrate live state or introduce real keys implicitly. |
 | Later fleet rollout | Personal workloads first; then separately bind ai-memory, LiteLLM and Tempo into Duelbits. Preserve existing user customization and separate personal/company credentials and publication domains. |
 
