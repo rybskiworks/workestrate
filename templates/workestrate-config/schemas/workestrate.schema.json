@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "credentials": {
-      "description": "Repo-global credentials catalog (`credentials`; M1). Merged union-by-name across layers, like `secrets`.",
+      "description": "Repo-global credentials catalog (`credentials`). Merged union-by-name across layers, like `secrets`.",
       "default": {
         "signing": {
           "ssh": {}
@@ -172,7 +172,7 @@
       ]
     },
     "CredentialsConfig": {
-      "description": "The repo-global credentials catalog (`credentials`; M1, directory-mode aware): `[credentials.ssh.<name>]` SSH grants plus the `[credentials.signing]` namespace. Declared in `default.toml` (or `secrets.toml` — every directory-mode file parses as a full layer, so no new file is needed); merged union-by-name across layers like `secrets`. There is deliberately NO `via`/`recipe` vocabulary anywhere on this surface — `deny_unknown_fields` rejects it.",
+      "description": "The repo-global credentials catalog (`credentials`; directory-mode aware): `[credentials.ssh.<name>]` SSH grants plus the `[credentials.signing]` namespace. Declared in `default.toml` (or `secrets.toml` — every directory-mode file parses as a full layer, so no new file is needed); merged union-by-name across layers like `secrets`. There is deliberately NO `via`/`recipe` vocabulary anywhere on this surface — `deny_unknown_fields` rejects it.",
       "type": "object",
       "properties": {
         "signing": {
@@ -1211,7 +1211,7 @@
           ]
         },
         "ssh": {
-          "description": "SSH confinement-policy rung (`[policy.ssh]`; M1). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "description": "SSH confinement-policy rung (`[policy.ssh]`). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
           "default": null,
           "anyOf": [
             {
@@ -1553,7 +1553,7 @@
       "additionalProperties": false
     },
     "SigningCredentialsConfig": {
-      "description": "The `[credentials.signing]` namespace (M1): currently SSH signing only (`[credentials.signing.ssh.<name>]`).",
+      "description": "The `[credentials.signing]` namespace: currently SSH signing only (`[credentials.signing.ssh.<name>]`).",
       "type": "object",
       "properties": {
         "ssh": {
@@ -1567,7 +1567,7 @@
       "additionalProperties": false
     },
     "SigningSshCredentialDef": {
-      "description": "One SSH signing credential catalog entry (`credentials.signing.ssh.<name>`; M1): key material for signatures scoped to a `namespace`. Deliberately has NO `users`/`ports` fields — `deny_unknown_fields` rejects them at parse time. Like [`SshCredentialDef`], fields are omittable per layer (per-field merge) with required-ness enforced at validation.",
+      "description": "One SSH signing credential catalog entry (`credentials.signing.ssh.<name>`): key material for signatures scoped to a `namespace`. Deliberately has NO `users`/`ports` fields — `deny_unknown_fields` rejects them at parse time. Like [`SshCredentialDef`], fields are omittable per layer (per-field merge) with required-ness enforced at validation.",
       "type": "object",
       "properties": {
         "material": {
@@ -1596,7 +1596,7 @@
       "additionalProperties": false
     },
     "SshCredentialDef": {
-      "description": "One SSH credential catalog entry (`credentials.ssh.<name>`; M1): an explicit first-class reference (`material` names an existing `[secrets.<N>]` entry — no same-name magic) plus the confinement scope (`hosts`/`users` required, `ports` defaulting to `[22]` post-merge). Merged union-by-name across layers (per-field, last layer wins when present), like [`SecretDefConfig`]: every field is omittable per layer and required-ness is enforced at VALIDATION (fail-closed, naming the credential) rather than at parse, so a higher layer can override one field without restating the entry.",
+      "description": "One SSH credential catalog entry (`credentials.ssh.<name>`): an explicit first-class reference (`material` names an existing `[secrets.<N>]` entry — no same-name magic) plus the confinement scope (`hosts`/`users` required, `ports` defaulting to `[22]` post-merge). Merged union-by-name across layers (per-field, last layer wins when present), like [`SecretDefConfig`]: every field is omittable per layer and required-ness is enforced at VALIDATION (fail-closed, naming the credential) rather than at parse, so a higher layer can override one field without restating the entry.",
       "type": "object",
       "properties": {
         "hosts": {
@@ -1611,6 +1611,18 @@
           "description": "Name of the `[secrets.<N>]` entry holding the key material (REQUIRED). Validation fails closed naming both the credential and the secret when the secret does not exist.",
           "default": "",
           "type": "string"
+        },
+        "on_violation": {
+          "description": "Violation policy for this SSH use. `None` inherits the material secret's ladder-resolved policy at grant resolution (same defaults-after-merge idiom as `ports`).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretViolationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "ports": {
           "description": "Ports the key may reach. `None` (absent) defaults to `[22]` at grant resolution (defaults-after-merge — it stays `None` through parse and merge, the same idiom as `EnvSecretRef.bound`).",
@@ -1637,7 +1649,7 @@
       "additionalProperties": false
     },
     "SshPolicyFragment": {
-      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`; M1): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
       "type": "object",
       "properties": {
         "final": {
@@ -1715,7 +1727,7 @@
           "minimum": 0.0
         },
         "credentials": {
-          "description": "Credential-broker grants (`workloads.<name>.credentials`; M1): the allowlist of catalog entry names this workload may use (`ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries). Unknown names are a validation error. Merges whole-unit (last layer wins), like `ports`/`mounts`: a higher layer restates the full allowlist.",
+          "description": "Credential-broker grants (`workloads.<name>.credentials`): the allowlist of catalog entry names this workload may use (`ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries). Unknown names are a validation error. Merges whole-unit (last layer wins), like `ports`/`mounts`: a higher layer restates the full allowlist.",
           "default": {
             "signing": [],
             "ssh": []
@@ -1872,7 +1884,7 @@
       "additionalProperties": false
     },
     "WorkloadCredentials": {
-      "description": "Workload credential-broker consumption (`workloads.<name>.credentials`; M1): the allowlist of catalog entry names this workload may use. `ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries; an unknown name is a validation error. Binding stays at consumption via the EXISTING env idiom: omission of any guest binding renders the grant broker-bound (the default, secure); `bound = \"guest\"` on the corresponding secret consumption delivers real material via the existing secret-delivery path. There is deliberately NO `bound` (and no `via`/`recipe` vocabulary) here — `deny_unknown_fields` rejects them.",
+      "description": "Workload credential-broker consumption (`workloads.<name>.credentials`): the allowlist of catalog entry names this workload may use. `ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries; an unknown name is a validation error. Binding stays at consumption via the EXISTING env idiom: omission of any guest binding renders the grant broker-bound (the default, secure); `bound = \"guest\"` on the corresponding secret consumption delivers real material via the existing secret-delivery path. There is deliberately NO `bound` (and no `via`/`recipe` vocabulary) here — `deny_unknown_fields` rejects them.",
       "type": "object",
       "properties": {
         "signing": {

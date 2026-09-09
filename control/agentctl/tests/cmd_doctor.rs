@@ -14,7 +14,27 @@
 
 mod common;
 
-use common::IsolatedHome;
+use common::{IsolatedHome, TempDir};
+
+/// Give schema checks their own writable template instead of resolving the
+/// checkout through the child process's inherited CARGO_MANIFEST_DIR.
+fn scratch_root_with_schemas() -> TempDir {
+    let root = TempDir::new("cmd-doctor-root");
+    std::fs::write(root.path().join("flake.nix"), "").expect("write flake.nix");
+    let template = root.path().join("templates/workestrate-config/schemas");
+    std::fs::create_dir_all(&template).expect("create template schemas dir");
+    let canonical = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas");
+    for name in [
+        "workestrate.schema.json",
+        "workestrate-workload.schema.json",
+        "registry.schema.json",
+    ] {
+        let bytes = std::fs::read(canonical.join(name)).expect("read canonical schema");
+        std::fs::write(template.join(name), bytes).expect("write scratch template schema");
+    }
+    root
+}
+
 /// `doctor --json` emits parseable JSON with a checks array and an overall
 /// verdict; every check carries name/status/message.
 #[test]
@@ -261,11 +281,12 @@ fn doctor_json_reports_schema_check_row() {
 /// A stale consumer copy (tool home carries a hand-written workestrate.schema.json
 /// and NO workload file) makes the schemas check WARN with a per-target STALE
 /// entry; the human report carries the remediation. The tool-template target
-/// (the real checkout, P1-synced) stays FRESH, so exactly the home copy is
-/// stale.
+/// uses fresh schemas in a per-test scratch root, so exactly the home copy
+/// is stale.
 #[test]
 fn doctor_schemas_reports_stale_home_copy() {
     let home = IsolatedHome::new("cmd-doctor");
+    let root = scratch_root_with_schemas();
     let store = home.dir.join(".workestrate");
     std::fs::create_dir_all(store.join("schemas")).expect("create store schemas dir");
     std::fs::write(
@@ -277,6 +298,7 @@ fn doctor_schemas_reports_stale_home_copy() {
 
     let out = home
         .cmd()
+        .env("AGENTCTL_ROOT", root.path())
         .env("WORKESTRATE_HOME", &store)
         .args(["doctor", "--json"])
         .output()
@@ -327,12 +349,13 @@ fn doctor_schemas_reports_stale_home_copy() {
         .expect("tool template target must be reported");
     assert_eq!(
         template_entry["status"], "OK",
-        "the P1-synced template copy must be fresh: {template_entry}"
+        "the scratch template copy must be fresh: {template_entry}"
     );
 
     // Human report carries the remediation for the stale copy.
     let out_h = home
         .cmd()
+        .env("AGENTCTL_ROOT", root.path())
         .env("WORKESTRATE_HOME", &store)
         .args(["doctor"])
         .output()
@@ -349,6 +372,7 @@ fn doctor_schemas_reports_stale_home_copy() {
 #[test]
 fn doctor_schemas_is_ok_after_schemas_update() {
     let home = IsolatedHome::new("cmd-doctor");
+    let root = scratch_root_with_schemas();
     let store = home.dir.join(".workestrate");
     std::fs::create_dir_all(store.join("schemas")).expect("create store schemas dir");
     std::fs::write(
@@ -359,6 +383,7 @@ fn doctor_schemas_is_ok_after_schemas_update() {
 
     let up = home
         .cmd()
+        .env("AGENTCTL_ROOT", root.path())
         .env("WORKESTRATE_HOME", &store)
         .args(["schemas", "update"])
         .output()
@@ -372,6 +397,7 @@ fn doctor_schemas_is_ok_after_schemas_update() {
 
     let out = home
         .cmd()
+        .env("AGENTCTL_ROOT", root.path())
         .env("WORKESTRATE_HOME", &store)
         .args(["doctor", "--json"])
         .output()

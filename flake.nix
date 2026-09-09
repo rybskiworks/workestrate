@@ -472,7 +472,10 @@
               cargoBuildType = "debug";
               cargoCheckType = "debug";
               doCheck = true;
-              cargoTestFlags = [ "--locked" ];
+              cargoTestFlags = [
+                "--locked"
+                "--no-fail-fast"
+              ];
               nativeCheckInputs = [
                 pkgs.git
                 pkgs.sops
