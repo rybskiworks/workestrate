@@ -13,7 +13,7 @@
 
     microsandbox-fork = {
       # Runtime packages and SDK patches must come from this same source.
-      url = "github:rybskiworks/microsandbox/a1dad1bf2e17df62c80510d070d1a1aa41ef2224";
+      url = "github:rybskiworks/microsandbox/67807cd587ea50a4054659a2989dea5886b40e8a";
       inputs.tooling.follows = "tooling";
     };
 
@@ -460,7 +460,8 @@
                     --arg msb "${microsandbox}/bin/msb" \
                     --arg version "msb ${forkVersion}" \
                     --arg agentd "${microsandbox}/libexec/agentd" \
-                    '.msb.path_used == $msb and .msb.version == $version and .agentd.path == $agentd' \
+                    --arg fork "${inputs.microsandbox-fork.rev}" \
+                    '.msb.path_used == $msb and .msb.version == $version and .agentd.path == $agentd and .fork_rev_pin == $fork' \
                     versions.json
                   test ! -e "$MSB_HOME"
                   mkdir -p $out
@@ -481,6 +482,10 @@
               '';
               cargoBuildType = "debug";
               cargoCheckType = "debug";
+              # Keep debug assertions and the normal test profile, but avoid
+              # full symbol tables in disposable verification artifacts.
+              CARGO_PROFILE_DEV_DEBUG = "0";
+              CARGO_PROFILE_TEST_DEBUG = "0";
               doCheck = true;
               cargoTestFlags = [
                 "--locked"
