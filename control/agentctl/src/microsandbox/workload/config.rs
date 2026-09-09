@@ -2563,6 +2563,7 @@ egress = "deny"
             &image_capsule,
             &content.join("assets"),
             &base.join("agents/svc/build"),
+            &state.join("workspaces/svc-state"),
         ] {
             std::fs::create_dir_all(dir)?;
         }
@@ -2587,6 +2588,10 @@ mode = "ro"
 host = "assets"
 guest = "/assets"
 mode = "ro"
+[[workloads.svc.mounts]]
+host = "workspaces/svc-state"
+guest = "/data"
+mode = "rw"
 [[workloads.svc.seed_files]]
 source = "assets/settings.txt"
 target = "workspaces/svc-state/settings.txt"
