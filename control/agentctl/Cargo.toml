@@ -85,6 +85,7 @@ schema = ["dep:schemars"]
 # a local approximation. Already in the build graph transitively via the
 # microsandbox SDK, so it adds no new packages.
 microsandbox-image = "=0.6.16"
+tempfile = "3"
 
 [profile.release]
 opt-level = 3

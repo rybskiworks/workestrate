@@ -59,6 +59,19 @@ Nix daemon/application. Check those services separately. Guest-init shutdown is
 owned by the pinned runtime; successful forwarding alone does not certify clean
 systemd poweroff or the runtime's mixed-libc shutdown behavior.
 
+The pinned runtime now prepares a volatile `/run` before runtime writers and
+uses receiver-owned systemd poweroff for init handoffs. Existing runtime mounts
+and explicit user mounts retain their documented precedence. These changes do
+not activate an arbitrary image or prove completed service startup/shutdown;
+validate the exact image and observe guest service flush and runtime termination.
+
+`workestrate versions` identifies the paired agentd by a content hash without
+executing it. Agentd has no version-only command: invoking it starts guest
+bootstrap. The existing JSON `agentd.version_or_sha` field is retained and reports
+`sha256:<12 hexadecimal characters>` for a readable executable regular file,
+or an availability/executable marker otherwise. Microsandbox's host CLI still
+supports its ordinary `--version` probe.
+
 ## Immutable build inputs are not runtime homes
 
 Nix builds and the default development shell supply the SDK with

@@ -3,7 +3,7 @@
 
   inputs = {
     # Shared build tools and development modules have one version authority.
-    tooling.url = "github:rybskiworks/nix-tooling/34c287290245c20e9103f7cd0fcdaa244edd310b";
+    tooling.url = "github:rybskiworks/nix-tooling/9328806188461bd0fef0eb4f566860afef0d180e";
     nixpkgs.follows = "tooling/nixpkgs";
     fenix.follows = "tooling/fenix";
     flake-parts.follows = "tooling/flake-parts";
@@ -13,7 +13,7 @@
 
     microsandbox-fork = {
       # Runtime packages and SDK patches must come from this same source.
-      url = "github:rybskiworks/microsandbox/67807cd587ea50a4054659a2989dea5886b40e8a";
+      url = "github:rybskiworks/microsandbox/53ec61407f27498c9a05ed82035f7062d9b21224";
       inputs.tooling.follows = "tooling";
     };
 
@@ -456,12 +456,14 @@
                   ${workestrate}/bin/workestrate --version
                   ${workestrate}/bin/workestrate --help > /dev/null
                   ${workestrate}/bin/workestrate --json versions > versions.json
+                  agentd_hash=$(sha256sum ${microsandbox}/libexec/agentd)
                   jq -e \
                     --arg msb "${microsandbox}/bin/msb" \
                     --arg version "msb ${forkVersion}" \
                     --arg agentd "${microsandbox}/libexec/agentd" \
+                    --arg agentd_identity "sha256:''${agentd_hash:0:12}" \
                     --arg fork "${inputs.microsandbox-fork.rev}" \
-                    '.msb.path_used == $msb and .msb.version == $version and .agentd.path == $agentd and .fork_rev_pin == $fork' \
+                    '.msb.path_used == $msb and .msb.version == $version and .agentd.path == $agentd and .agentd.version_or_sha == $agentd_identity and .fork_rev_pin == $fork' \
                     versions.json
                   test ! -e "$MSB_HOME"
                   mkdir -p $out
