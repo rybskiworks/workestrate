@@ -557,7 +557,8 @@
             git-hooks.enable = false;
             treefmt.enable = false;
             enterShell = ''
-              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
+              CARGO_TARGET_DIR="$(${pkgs.bash}/bin/bash ${./scripts/cargo-target.sh} ${pkgs.lib.escapeShellArg config.devenv.shells.bootstrap.devenv.root})" || exit 1
+              export CARGO_TARGET_DIR
               echo "workestrate bootstrap shell (tooling only)"
             '';
           };
@@ -635,6 +636,8 @@
             treefmt.enable = false;
 
             enterShell = ''
+              CARGO_TARGET_DIR="$(${pkgs.bash}/bin/bash ${./scripts/cargo-target.sh} ${pkgs.lib.escapeShellArg config.devenv.shells.default.devenv.root})" || exit 1
+              export CARGO_TARGET_DIR
               echo "workestrate dev shell"
               echo "msb version: $(msb --version 2>/dev/null || echo 'not available')"
               echo "secrets workflow: docs/secrets.md"
@@ -643,7 +646,6 @@
               # The SDK validates this explicit directory without downloading.
               export MSB_BUILD_RUNTIME="${microsandbox}"
               export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
-              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"
               export WORKESTRATE_DEVSHELL=1
 
               _tool_repo_root() {

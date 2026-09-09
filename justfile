@@ -1,8 +1,8 @@
 # Relocate cargo's target dir out of the source tree (closes the
 # nix-purity anti-accumulation finding for target/). Evaluated at just-parse
-# time so the running user's $HOME / $XDG_CACHE_HOME are resolved. Recipes
-# that invoke cargo inherit this env automatically.
-export CARGO_TARGET_DIR := `echo "${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target"`
+# time so explicit caller paths or the XDG/HOME fallback are validated before
+# any recipe runs. Recipes inherit the literal external path automatically.
+export CARGO_TARGET_DIR := `bash ./scripts/cargo-target.sh "$(pwd -P)"`
 
 # Enter the devenv shell interactively from a plain host shell. Writes the
 # devenv-root override file (this worktree's abs path) and passes
@@ -35,8 +35,8 @@ bootstrap *args:
 beads *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    export BEADS_DIR="$PWD/.beads"
-    export DOLT_ROOT_PATH="$BEADS_DIR/dolt-global"
+    export BEADS_DIR="${BEADS_DIR:-$PWD/.beads}"
+    export DOLT_ROOT_PATH="${DOLT_ROOT_PATH:-$BEADS_DIR/dolt-global}"
     export BD_DISABLE_METRICS=1
     export BD_DISABLE_EVENT_FLUSH=1
     exec nix run --no-update-lock-file .#beads -- --sandbox -C "$PWD" "$@"

@@ -73,11 +73,32 @@ every evaluation regardless of whether the build runs.
    `node_modules/`) must NEVER be referenced by nix code — not even
    transitively via a parent `src = ./.`.
 8. `CARGO_TARGET_DIR` for any in-tree cargo invocation must point outside
-   the source tree the flake sees (canonical:
+   the source tree the flake sees (default:
    `~/.cache/ai-workbench/agentctl-target`), so cargo artifacts never
    become part of the nix source closure.
 
-> **Confirmed:** the canonical `CARGO_TARGET_DIR` is `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target` (default `~/.cache/ai-workbench/agentctl-target` when `XDG_CACHE_HOME` is unset). It is exported by the Nix devshell `enterShell` (`flake.nix` `devenv.shells.default`) and by the top-level `justfile` (`export CARGO_TARGET_DIR := ...` evaluated at just-parse time), so both `nix develop` sessions and bare `just` invocations relocate cargo artifacts out of the source tree.
+The default `CARGO_TARGET_DIR` remains
+`${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target`. A nonempty
+explicit `CARGO_TARGET_DIR` takes precedence and retains its literal spelling.
+Both development shells and the top-level justfile use
+`scripts/cargo-target.sh` to validate the selected path before other setup;
+the justfile does so at parse time, before any recipe runs.
+
+The selected target must be absolute and resolve outside the checkout.
+The helper uses GNU `realpath -m`, so missing target directories are allowed,
+but `..` and existing symlink aliases cannot hide an in-checkout destination.
+Unresolved symlink loops and newline-containing paths are refused. Validation
+also applies to the XDG/HOME fallback: an in-checkout or relative cache root
+does not become acceptable merely because it was selected by default. Missing
+or empty HOME is an error only when that fallback is needed.
+
+The helper only reads path metadata and prints the selected value; it does not
+create, clean or migrate a cache. Shell entry exports it, and Cargo creates
+artifacts when a build actually runs. This is a development purity guard, not
+filesystem confinement: callers must not retarget aliases after validation.
+An explicit per-worktree target can avoid accidental cache sharing between
+independent development contexts. It remains a mutable local development
+cache, never an input to a reproducible Nix derivation.
 
 ## Why: the 29GB-per-eval incident
 

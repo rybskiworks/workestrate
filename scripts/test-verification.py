@@ -22,10 +22,12 @@ class VerificationTests(unittest.TestCase):
 
     def run_gate(self, nix_status=0, git_status=0, recipe="verify"):
         with tempfile.TemporaryDirectory(prefix="workestrate-verify-") as directory:
-            root = Path(directory)
+            outer = Path(directory)
+            root = outer / "checkout"
+            root.mkdir()
             binary_dir = root / "bin"
             binary_dir.mkdir()
-            for name in ("just", "bash", "sh", "python3"):
+            for name in ("just", "bash", "sh", "python3", "realpath"):
                 executable = shutil.which(name)
                 self.assertIsNotNone(executable, f"fixture tool missing: {name}")
                 (binary_dir / name).symlink_to(executable)
@@ -34,6 +36,10 @@ class VerificationTests(unittest.TestCase):
             shutil.copyfile(
                 JUSTFILE.parent / "scripts/store-audit.py",
                 root / "scripts/store-audit.py",
+            )
+            shutil.copyfile(
+                JUSTFILE.parent / "scripts/cargo-target.sh",
+                root / "scripts/cargo-target.sh",
             )
             stub = (
                 f"#!{sys.executable}\n"
@@ -56,7 +62,7 @@ class VerificationTests(unittest.TestCase):
                 cwd=root,
                 env={
                     "PATH": str(binary_dir),
-                    "HOME": str(root / "home"),
+                    "HOME": str(outer / "home"),
                     "CALL_LOG": str(log),
                     "NIX_STATUS": str(nix_status),
                     "GIT_STATUS": str(git_status),
@@ -66,7 +72,7 @@ class VerificationTests(unittest.TestCase):
                 timeout=10,
             )
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertFalse((root / "home").exists(), result.stderr)
+            self.assertFalse((outer / "home").exists(), result.stderr)
             return result, calls
 
     def test_all_declared_repository_gates_are_built_without_develop(self):

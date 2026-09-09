@@ -209,9 +209,22 @@ acceptance criteria and dependencies. The CLI is pinned by `nix-tooling` and
 available in both development shells. Embedded storage permits one writer at
 a time; coordinate mutations and keep remote synchronization explicit.
 
+`just beads` preserves nonempty caller-provided `BEADS_DIR` and
+`DOLT_ROOT_PATH`. Missing or empty values default to `$PWD/.beads` and
+`$BEADS_DIR/dolt-global`, respectively. Use explicit absolute paths when
+selecting existing shared state; this wrapper does not initialize a tracker,
+create remote bindings or coordinate concurrent writers for you.
+
 See [Nix builds and dependency ownership](docs/nix-build.md) for package
 integration, offline dependency staging and the tooling-only `just bootstrap`
 shell used when the application is not yet buildable.
+
+Both shells and bare `just` preserve an explicit external absolute
+`CARGO_TARGET_DIR`. Without it, the default is
+`${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target`. Relative targets
+and targets inside the checkout, including symlink aliases, are rejected
+before setup. The selector creates no directories; see the
+[Cargo purity contract](docs/nix-purity.md#the-rules) for details.
 
 See [workload flakes and repositories](docs/workloads.md) for image ownership,
 the standalone baseline and communication examples, and the remaining limits
