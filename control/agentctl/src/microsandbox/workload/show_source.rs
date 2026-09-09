@@ -54,6 +54,14 @@ impl ConfigWorkload {
                 source_of(&format!("workloads.{}.workdir", self.name)),
             );
         }
+        if let Some(init) = &plan.init {
+            write_line(
+                &mut out,
+                "",
+                &format!("init: {init}"),
+                source_of(&format!("workloads.{}.init", self.name)),
+            );
+        }
         if !plan.command.is_empty() {
             write_line(
                 &mut out,

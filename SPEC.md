@@ -48,6 +48,15 @@ flake's `lib` recipes (`buildImagesFromConfig`, `bun-compile`,
 `npm-build`, `image.nix-layered`); the `WORKESTRATE_<NAME>_BUILD` env
 override (`Workload::build_path()`) can point the CLI at any built tree.
 
+Workloads may explicitly select guest PID 1 with an optional `init` block.
+`mode = "handoff"` requires an absolute Linux guest executable `cmd`, with
+optional ordered literal `args` and nonsecret literal `env`. `mode = "agentd"`
+resets an inherited handoff; omission preserves the existing agentd behavior.
+Layers replace this whole block, never field-merge an executable with another
+layer's arguments. Init is separate from the workload's `command`/exec-stream.
+See [guest init](docs/runtime-provisioning.md#explicit-guest-init) for activation,
+readiness and recreation boundaries.
+
 ### Microsandbox
 
 MicroVM runtime. SDK version 0.6.16 with the `net` feature, source-built

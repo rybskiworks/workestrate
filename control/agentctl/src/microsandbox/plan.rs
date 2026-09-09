@@ -77,6 +77,9 @@ pub struct SandboxPlan {
     pub name: String,
     pub image: Option<String>,
     pub workdir: Option<String>,
+    /// Explicit PID 1 choice; omission preserves legacy plan bytes and behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init: Option<crate::config::InitConfig>,
     pub command: Vec<String>,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
@@ -712,6 +715,9 @@ impl fmt::Display for SandboxPlan {
         if let Some(wd) = &self.workdir {
             writeln!(f, "workdir: {}", wd)?;
         }
+        if let Some(init) = &self.init {
+            writeln!(f, "init: {init}")?;
+        }
         if !self.command.is_empty() {
             writeln!(f, "command: {}", self.command.join(" "))?;
         }
@@ -1136,6 +1142,7 @@ mod tests {
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
         let expected = "\
 name: demo
@@ -1187,6 +1194,7 @@ network: egress_default=deny ingress_default=deny
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
 
         // Non-default bind → three-field line with the bind IP.
@@ -1243,6 +1251,7 @@ network: egress_default=deny ingress_default=deny
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
 
         // Named port on the default bind → `port: <name>:<host>:<guest>`.
@@ -1335,6 +1344,7 @@ network: egress_default=deny ingress_default=deny
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
         assert_eq!(
             format!("{plan}"),
@@ -1367,6 +1377,7 @@ network: egress_default=deny ingress_default=deny
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
         // Both relaxed → both NOTEs.
         let plan = base(false, false);
@@ -1510,6 +1521,7 @@ network: egress_default=deny ingress_default=deny
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
         let rendered = format!(
             "{}",
@@ -1675,6 +1687,7 @@ network: egress_default=deny ingress_default=deny
                 label: Some("dev".to_string()),
             }),
             virtualization: None,
+            init: None,
         };
         let rendered = format!("{plan}");
         assert!(
@@ -1722,6 +1735,7 @@ network: egress_default=deny ingress_default=deny
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
         let rendered = format!("{plan}");
         assert_eq!(
@@ -1762,6 +1776,7 @@ network: egress_default=deny ingress_default=deny
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
         let rendered = format!("{}", base());
         assert!(
@@ -1841,6 +1856,7 @@ network: egress_default=deny ingress_default=deny
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         };
         // Unsealed: no frozen line anywhere (byte-identical legacy render).
         let rendered = format!("{}", base());

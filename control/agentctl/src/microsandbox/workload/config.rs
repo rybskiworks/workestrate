@@ -612,6 +612,7 @@ impl Workload for ConfigWorkload {
             name: self.sandbox_instance_name(),
             image: self.resolve_image(),
             workdir: self.workload.workdir.clone(),
+            init: self.workload.init.clone(),
             command: self.workload.command.clone(),
             cpus: self.workload.cpus,
             memory_mib: self.workload.memory_mib,

@@ -11,6 +11,29 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 
+/// Forward explicit PID 1 selection without changing the separate exec-stream
+/// command. Agentd remains the default; no OCI auto-detection is requested.
+pub(crate) fn apply_plan_init(
+    builder: SandboxBuilder,
+    plan: &SandboxPlan,
+) -> Result<SandboxBuilder> {
+    let Some(init) = &plan.init else {
+        return Ok(builder);
+    };
+    crate::config::validation::validate_init(init)?;
+    Ok(match init {
+        crate::config::InitConfig::Agentd {} => builder,
+        crate::config::InitConfig::Handoff { cmd, args, env } => {
+            builder.init_with(cmd, |options| {
+                env.iter()
+                    .fold(options.args(args), |options, (name, value)| {
+                        options.env(name, value)
+                    })
+            })
+        }
+    })
+}
+
 /// Resolve the host bind IP for the slot `instance` runs in (ADR 0026(a)).
 ///
 /// - PARALLEL slot (`<slot>@<id>`): a per-instance loopback (`127.0.0.N`,
@@ -1317,6 +1340,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // can start the service. `tail -f /dev/null` blocks forever regardless of
     // any appended CMD, keeping the sandbox alive for the relay's exec_stream.
     builder = builder.entrypoint(["/bin/sh", "-c", "tail -f /dev/null"]);
+    builder = apply_plan_init(builder, &plan)?;
 
     // ADR 0026(a): the singleton publishes on the shared bind via `.port`
     // (`.port_bind(127.0.0.1, ...)`); parallel slots publish on their
@@ -1931,6 +1955,7 @@ mod tests {
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         }
     }
 
@@ -1939,6 +1964,56 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn explicit_init_reaches_sdk_without_replacing_workload_entrypoint() {
+        let mut plan = empty_plan_with_env(vec![]);
+        plan.command = vec!["/app/workload".into()];
+        plan.init = Some(crate::config::InitConfig::Handoff {
+            cmd: "/init".into(),
+            args: vec!["a b".into(), "${literal}".into()],
+            env: std::collections::BTreeMap::from([
+                ("Z".into(), "last".into()),
+                ("A".into(), "first".into()),
+            ]),
+        });
+        let builder =
+            Sandbox::builder("init-test").entrypoint(["/bin/sh", "-c", "tail -f /dev/null"]);
+        let builder = apply_plan_init(builder, &plan).unwrap();
+        let init = builder.spec().init.as_ref().unwrap();
+        assert_eq!(init.cmd, "/init");
+        assert_eq!(init.args, ["a b", "${literal}"]);
+        assert_eq!(
+            init.env,
+            [("A".into(), "first".into()), ("Z".into(), "last".into())]
+        );
+        assert_eq!(
+            builder.spec().runtime.entrypoint.as_ref().unwrap(),
+            &["/bin/sh", "-c", "tail -f /dev/null"]
+        );
+        assert_eq!(plan.command, ["/app/workload"]);
+    }
+
+    #[test]
+    fn omitted_or_agentd_init_keeps_default_sdk_pid_one() {
+        let mut plan = empty_plan_with_env(vec![]);
+        for init in [None, Some(crate::config::InitConfig::Agentd {})] {
+            plan.init = init;
+            let builder = apply_plan_init(Sandbox::builder("init-default"), &plan).unwrap();
+            assert!(builder.spec().init.is_none());
+        }
+    }
+
+    #[test]
+    fn invalid_init_plan_is_rejected_at_sdk_boundary() {
+        let mut plan = empty_plan_with_env(vec![]);
+        plan.init = Some(crate::config::InitConfig::Handoff {
+            cmd: "auto".into(),
+            args: vec![],
+            env: Default::default(),
+        });
+        assert!(apply_plan_init(Sandbox::builder("init-invalid"), &plan).is_err());
     }
 
     fn empty_plan_with_secrets(secret_env: Vec<HostBoundSecret>) -> SandboxPlan {
@@ -1965,6 +2040,7 @@ mod tests {
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         }
     }
 

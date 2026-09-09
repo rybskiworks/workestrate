@@ -259,6 +259,7 @@ mod tests {
             },
             instance_policy: None,
             virtualization: None,
+            init: None,
         }
     }
 

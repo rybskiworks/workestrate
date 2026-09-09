@@ -63,13 +63,13 @@ pub use types::{
     CredentialsConfig, DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, DomainEntry,
     EgressAllowTable, EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef,
     EnvVarConfig, HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable,
-    IngressDenyTable, IngressPolicyFragment, InstancePolicy, InstancePort, InstanceStrategy,
-    LocalBuildConfig, NestedMode, NetworkConfig, NetworkDefaultsConfig, OnConflict, OnSkew,
-    PolicyConfig, PortEntry, PortOccupiedBare, PortOccupiedChain, PortOccupiedStep, Registry,
-    RegistrySettings, SecretDefConfig, SecretViolationPolicy, SecretsLayer, SecretsPolicyFragment,
-    SeedFileConfig, SigningCredentialsConfig, SigningSshCredentialDef, SshCredentialDef,
-    SshPolicyFragment, TrustedProject, VirtualizationConfig, VirtualizationPolicyFragment,
-    WorkloadConfig, WorkloadCredentials,
+    IngressDenyTable, IngressPolicyFragment, InitConfig, InstancePolicy, InstancePort,
+    InstanceStrategy, LocalBuildConfig, NestedMode, NetworkConfig, NetworkDefaultsConfig,
+    OnConflict, OnSkew, PolicyConfig, PortEntry, PortOccupiedBare, PortOccupiedChain,
+    PortOccupiedStep, Registry, RegistrySettings, SecretDefConfig, SecretViolationPolicy,
+    SecretsLayer, SecretsPolicyFragment, SeedFileConfig, SigningCredentialsConfig,
+    SigningSshCredentialDef, SshCredentialDef, SshPolicyFragment, TrustedProject,
+    VirtualizationConfig, VirtualizationPolicyFragment, WorkloadConfig, WorkloadCredentials,
 };
 #[allow(unused_imports)]
 pub use validation::{EXPECTED_SCHEMA_VERSION, validate_config, validate_config_name};

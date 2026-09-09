@@ -115,6 +115,32 @@ fn is_valid_env_var_name(name: &str) -> bool {
     ) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Validate guest literals without interpreting paths on the host or expanding
+/// shell/environment templates. The plan-to-SDK boundary repeats this check.
+pub(crate) fn validate_init(init: &super::InitConfig) -> Result<()> {
+    if let super::InitConfig::Handoff { cmd, args, env } = init {
+        anyhow::ensure!(
+            cmd.starts_with('/') && cmd != "/" && !cmd.contains(['\\', '\0']),
+            "init.cmd must be an absolute Linux guest executable path without backslashes or NUL"
+        );
+        anyhow::ensure!(
+            args.iter().all(|arg| !arg.contains('\0')),
+            "init.args must not contain NUL"
+        );
+        for (name, value) in env {
+            anyhow::ensure!(
+                is_valid_env_var_name(name),
+                "init.env has an invalid environment variable name"
+            );
+            anyhow::ensure!(
+                !value.contains('\0'),
+                "init.env values must not contain NUL"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Whether `name` is a syntactically valid named-port slug:
 /// `^[a-z0-9][a-z0-9-]*$` — first char `[a-z0-9]`, remaining chars
 /// `[a-z0-9-]`, empty invalid. Named ports are referenced by
@@ -177,6 +203,9 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // enum already fails unknown variants at TOML parse), so they must be
     // validated here.
     for (workload_name, workload) in &config.workloads {
+        if let Some(init) = &workload.init {
+            validate_init(init).map_err(|e| anyhow::anyhow!("workload '{workload_name}': {e}"))?;
+        }
         if !workload.image.recipe.is_empty()
             && !ALLOWED_IMAGE_RECIPES.contains(&workload.image.recipe.as_str())
         {

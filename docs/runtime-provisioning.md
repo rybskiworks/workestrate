@@ -17,6 +17,48 @@ pinned msb build; building or entering a shell does not perform that flip.
 |---|------|------|-------------|---------|
 | 1 | **canonical runtime default** | `$HOME/.microsandbox/current` → `generations/<hash12>` | Runtime (guarded `wrapProgram --run` in `nix/packages/agentctl.nix` postInstall) | Cache, db, state and `sandboxes/`, normally one dir per pinned msb build. The guard defaults unset AND empty `MSB_HOME` while honoring an explicit non-empty caller override. Shell expansion happens at wrapper execution time, not build time. |
 
+## Explicit guest init
+
+The optional workload `init` block forwards Microsandbox's existing typed PID 1
+handoff. It does not change the separate workload command run through exec-stream:
+
+```toml
+[workloads.example]
+kind = "service"
+image = { recipe = "registry", ref = "example:latest" }
+workdir = "/"
+command = ["/bin/example-service"]
+
+[workloads.example.init]
+mode = "handoff"
+cmd = "/init"
+args = []
+env = { container = "microsandbox" }
+```
+
+The image must supply the executable and its closure. For NixOS, use the image's
+generated stage-2 entry point, not a later `exec` of bare systemd. Init currently
+inherits the SDK workdir; choose a directory that exists before activation.
+Arguments and environment are guest literals: no host lookup, shell expansion,
+secret resolution or OCI auto-detection is performed. Do not put credentials in
+this public plan/config block. Unknown fields/modes, nonabsolute executable paths,
+backslashes, NUL bytes and invalid environment names are rejected.
+
+Omitting `init` preserves existing plan bytes, configuration hashes and agentd
+behavior. A higher layer's entire init block replaces the lower declaration;
+`init = { mode = "agentd" }` explicitly resets a handoff. The declared block
+appears in plan JSON/text and source provenance, and changes its configuration
+identity. Explicit reset and omission are distinct declarations even though both
+use the default PID 1.
+
+This is a create-time setting. Reusing or starting an existing sandbox retains
+its persisted SDK specification; the existing skew policy may only warn.
+Explicitly recreate an owned instance to apply a new init/image configuration.
+A returned sandbox handle proves neither completed NixOS activation nor a ready
+Nix daemon/application. Check those services separately. Guest-init shutdown is
+owned by the pinned runtime; successful forwarding alone does not certify clean
+systemd poweroff or the runtime's mixed-libc shutdown behavior.
+
 ## Immutable build inputs are not runtime homes
 
 Nix builds and the default development shell supply the SDK with
