@@ -1352,13 +1352,13 @@ mod tests {
     fn msb_failure_modes_map_to_named_errors() {
         let out_path = Path::new("/definitely/not/a/tarball.tar.gz");
 
-        let mut loader = MsbCliLoader::with_programs("/bin/true", "/bin/false");
+        let mut loader = MsbCliLoader::with_programs("true", "false");
         match loader.load(out_path, "t:latest") {
             Err(LoadError::Failed { tag, .. }) => assert_eq!(tag, "t:latest"),
             other => panic!("expected Failed, got {other:?}"),
         }
 
-        let mut loader = MsbCliLoader::with_programs("/bin/true", "/definitely/not/msb");
+        let mut loader = MsbCliLoader::with_programs("true", "/definitely/not/msb");
         match loader.load(out_path, "t:latest") {
             Err(LoadError::MsbAbsent { program }) => {
                 assert_eq!(program, "/definitely/not/msb")
@@ -1366,7 +1366,7 @@ mod tests {
             other => panic!("expected MsbAbsent, got {other:?}"),
         }
 
-        let mut loader = MsbCliLoader::with_programs("/bin/false", "/bin/true");
+        let mut loader = MsbCliLoader::with_programs("false", "true");
         match loader.load(out_path, "t:latest") {
             Err(LoadError::GunzipFailed { .. }) => {}
             other => panic!("expected GunzipFailed, got {other:?}"),

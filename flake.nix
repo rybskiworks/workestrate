@@ -481,11 +481,11 @@
               ];
               preCheck = ''
                 export HOME="$TMPDIR/test-home"
-                export XDG_CONFIG_HOME="$HOME/.config"
-                export XDG_DATA_HOME="$HOME/.local/share"
-                export XDG_STATE_HOME="$HOME/.local/state"
                 export XDG_CACHE_HOME="$HOME/.cache"
-                mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+                # These variables select legacy home resolution; tests set them
+                # explicitly when exercising that compatibility behavior.
+                unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
+                mkdir -p "$HOME" "$XDG_CACHE_HOME"
                 export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
                 export TOMBI_OFFLINE=true
                 export GIT_CONFIG_NOSYSTEM=1
