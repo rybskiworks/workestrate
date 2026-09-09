@@ -167,6 +167,13 @@ and migration/query side effects still require dedicated regression coverage.
 
 ## Nested virtualization and deployment limits
 
+The pinned runtime distinguishes traversal-only directories from denied
+regular files. Allowing a directory's descendant does not make a denied
+regular file traversable, listable or readable. Already admitted file handles
+and directory snapshots retain their admission semantics; this is not live
+revocation. Existing VMs do not acquire a new runtime or policy merely because
+the CLI pin changes: recreation is a separate, explicit lifecycle operation.
+
 The fork family can run nested workloads on suitable Linux x86_64 hosts with
 the bundled firmware; guest KVM is not categorically a future-only feature.
 Request it explicitly through `virtualization.nested`, and evaluate host

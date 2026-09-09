@@ -88,8 +88,14 @@ repair before reinstalling.
 `just hooks-check` verifies legacy hook chaining and the unconditional secret
 guard in isolated Git fixtures.
 
-The package check verifies the installed CLI and its runtime pairing without
-creating runtime state. The unit check reuses the package's offline build
+The package check verifies the installed CLI, runtime pairing and reported
+fork revision against the immutable flake input without creating runtime
+state. It requires a revision-bearing fork input; an uncommitted local override
+can exercise the package build but does not certify published provenance.
+The unit check reuses the package's offline build
 environment with test fixtures and an isolated home. Existing ignored KVM
 tests, daemon-backed Nix image tests and optional Copier round trips remain
 separate host gates; a passing sandbox test check is not a VM deployment test.
+The unit derivation omits development/test debug symbols to bound temporary
+artifact size. Debug assertions, test selection, optimization defaults and the
+production package profile are unchanged; interactive Cargo keeps its defaults.
