@@ -22,6 +22,7 @@ use crate::microsandbox::broker::signing::{
     Denial, GrantStore, KeyBackend, SignRequest, SignResponse, SigningService, decode_cbor,
     encode_cbor,
 };
+use crate::microsandbox::plan::{CredentialBinding, SshGrantPlan};
 use microsandbox_network::ssh::gateway::{
     SshDivertPrelude, decode_ssh_divert_prelude, encode_ssh_divert_prelude,
 };
@@ -292,14 +293,20 @@ pub fn dispatch<B: KeyBackend>(
     }
 }
 
-/// Allowed divert target: the registry-resolved instance plus the
-/// prelude's destination. The relay dials `dest_host:dest_port` upstream.
+/// Endpoint decision handed from the shim to its relay.
+///
+/// The credential records come from the registry-resolved instance's compiled
+/// plan, never from the guest's prelude. They retain all available information
+/// for later session authorization; an allowed endpoint is not permission to
+/// authenticate with any of its keys or usernames. This in-process context is
+/// not a wire message and contains material references, not secret bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DivertDestination {
     pub instance: String,
     pub cid: u32,
     pub dest_host: String,
     pub dest_port: u16,
+    pub credentials: Vec<SshGrantPlan>,
 }
 
 /// Outcome of one divert decision: an allowed destination (hand the kept
@@ -578,23 +585,21 @@ fn pump_unix_streams(
 /// reach [`BrokerSocketRelay`] — a missing broker fails the relay closed
 /// with no direct-TCP fallback. Guest-bound material lives in the guest
 /// itself, so those sessions relay direct through [`TcpUpstreamRelay`]
-/// exactly as before. The binding comes from the compiled
-/// [`GrantStore`](super::signing::GrantStore): any broker-bound covering
-/// grant selects custody.
+/// exactly as before. The binding comes from the complete credential records
+/// retained by the endpoint decision: any broker-bound covering record selects
+/// custody. This does not select an upstream username or key.
 #[derive(Debug, Clone)]
 pub struct BrokerFirstRelay {
     broker: BrokerSocketRelay,
-    grants: GrantStore,
     direct: TcpUpstreamRelay,
 }
 
 impl BrokerFirstRelay {
     /// Build the dispatcher: `broker_socket` names the broker VM divert
-    /// socket, `grants` is the compiled store the divert decision used.
-    pub fn new(broker_socket: PathBuf, grants: GrantStore) -> Self {
+    /// socket. The endpoint decision supplies the credential context.
+    pub fn new(broker_socket: PathBuf) -> Self {
         Self {
             broker: BrokerSocketRelay::new(broker_socket),
-            grants,
             direct: TcpUpstreamRelay::default(),
         }
     }
@@ -606,9 +611,16 @@ impl SshRelay for BrokerFirstRelay {
         stream: std::os::unix::net::UnixStream,
         dest: &DivertDestination,
     ) -> std::io::Result<()> {
-        if self
-            .grants
-            .ssh_is_broker_bound(&dest.instance, &dest.dest_host, dest.dest_port)
+        if dest.credentials.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "SSH relay lacks compiled credential context",
+            ));
+        }
+        if dest
+            .credentials
+            .iter()
+            .any(|credential| credential.binding == CredentialBinding::Broker)
         {
             self.broker.relay(stream, dest)
         } else {
@@ -723,7 +735,11 @@ pub fn decide_divert(
     }
     // Destination allowance: the instance's SSH grants must cover the
     // dialed host and port.
-    if !grants.ssh_authorized(&instance, &prelude.dest_host, prelude.dest_port) {
+    let credentials: Vec<_> = grants
+        .ssh_credentials_for_destination(&instance, &prelude.dest_host, prelude.dest_port)
+        .cloned()
+        .collect();
+    if credentials.is_empty() {
         return deny(
             &instance,
             format!(
@@ -738,6 +754,7 @@ pub fn decide_divert(
         cid,
         dest_host: prelude.dest_host.clone(),
         dest_port: prelude.dest_port,
+        credentials,
     };
     let record = AuditRecord::ssh_divert_allow(
         timestamp,
@@ -1286,6 +1303,10 @@ mod tests {
                     cid: 7,
                     dest_host: "github.com".to_string(),
                     dest_port: 22,
+                    credentials: divert_store()
+                        .ssh_credentials_for_destination("real-instance", "github.com", 22)
+                        .cloned()
+                        .collect(),
                 }
             }
         );
@@ -1299,6 +1320,55 @@ mod tests {
             payload_digest_hex("github.com:22".as_bytes())
         );
         assert!(matches!(records[0].result, AuditResult::Allow));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decide_divert_carries_complete_credential_context_to_relay() {
+        let dir = crate::config::test_support::unique_state_dir("divert-context");
+        let registry = bound_registry(&dir);
+        let broker = SshGrantPlan {
+            name: "broker-key".to_string(),
+            material: "BROKER_MATERIAL".to_string(),
+            hosts: vec!["github.com".to_string(), "*.internal".to_string()],
+            users: vec!["git".to_string(), "review".to_string()],
+            ports: vec![22, 2222],
+            binding: CredentialBinding::Broker,
+            on_violation: SecretViolationPolicy::BlockAndLog,
+        };
+        let guest = SshGrantPlan {
+            name: "guest-key".to_string(),
+            material: "GUEST_MATERIAL".to_string(),
+            users: vec!["deploy".to_string()],
+            binding: CredentialBinding::Guest,
+            on_violation: SecretViolationPolicy::BlockAndTerminate,
+            ..broker.clone()
+        };
+        let unrelated = SshGrantPlan {
+            hosts: vec!["unrelated.example".to_string()],
+            ..broker.clone()
+        };
+        let plan = CredentialsPlan {
+            ssh: vec![broker.clone(), guest.clone(), unrelated],
+            signing: vec![],
+            strict: false,
+            strict_origin: None,
+        };
+        let store = GrantStore::compile(&[("real-instance", &plan)]);
+        let decision = decide_divert(
+            &registry,
+            &store,
+            &AuditLog::memory(),
+            7,
+            &divert_prelude("github.com", 22, 7, DIVERT_NOW),
+            DIVERT_NOW,
+            "t",
+        );
+        let DivertDecision::Allow { dest } = decision else {
+            panic!("configured endpoint must be allowed");
+        };
+        assert_eq!(dest.instance, "real-instance");
+        assert_eq!(dest.credentials, vec![broker, guest]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1562,6 +1632,10 @@ mod tests {
             cid: 7,
             dest_host: "127.0.0.1".to_string(),
             dest_port: port,
+            credentials: mixed_binding_store(port)
+                .ssh_credentials_for_destination("real-instance", "127.0.0.1", port)
+                .cloned()
+                .collect(),
         }
     }
 
@@ -1643,6 +1717,7 @@ mod tests {
             cid: 7,
             dest_host: "localhost".to_string(),
             dest_port: port,
+            credentials: Vec::new(),
         };
         let relay = TcpUpstreamRelay::new(std::time::Duration::from_secs(5));
         let worker = std::thread::spawn(move || relay.relay(shuttle, &dest));
@@ -1728,6 +1803,10 @@ mod tests {
             cid: 7,
             dest_host: "broker.example".to_string(),
             dest_port: 22,
+            credentials: mixed_binding_store(1)
+                .ssh_credentials_for_destination("real-instance", "broker.example", 22)
+                .cloned()
+                .collect(),
         };
         std::thread::scope(|s| {
             let server = s.spawn(|| relay.relay(shuttle, &dest));
@@ -1756,6 +1835,10 @@ mod tests {
             cid: 7,
             dest_host: "broker.example".to_string(),
             dest_port: 22,
+            credentials: mixed_binding_store(1)
+                .ssh_credentials_for_destination("real-instance", "broker.example", 22)
+                .cloned()
+                .collect(),
         };
         relay.relay(shuttle, &dest).unwrap_err();
         // Fail-closed: the guest side observes EOF, never a hang and never
@@ -1804,9 +1887,7 @@ mod tests {
         let stub_worker = std::thread::spawn(move || {
             serve_broker_stub(stub_listener, "broker.example".to_string(), 22)
         });
-        // The guest-bound port is unused here; any free port keeps the
-        // store shape realistic.
-        let relay = BrokerFirstRelay::new(socket_path, mixed_binding_store(1));
+        let relay = BrokerFirstRelay::new(socket_path);
         let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
         guest
             .set_read_timeout(Some(std::time::Duration::from_secs(15)))
@@ -1816,6 +1897,10 @@ mod tests {
             cid: 7,
             dest_host: "broker.example".to_string(),
             dest_port: 22,
+            credentials: mixed_binding_store(1)
+                .ssh_credentials_for_destination("real-instance", "broker.example", 22)
+                .cloned()
+                .collect(),
         };
         std::thread::scope(|s| {
             let server = s.spawn(|| relay.relay(shuttle, &dest));
@@ -1827,6 +1912,68 @@ mod tests {
             server.join().unwrap().unwrap();
         });
         stub_worker.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn broker_first_relay_without_credential_context_never_dials() {
+        let stub = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        stub.set_nonblocking(true).unwrap();
+        let mut dest = tcp_dest(stub.local_addr().unwrap().port());
+        dest.credentials.clear();
+        let dir = crate::config::test_support::unique_state_dir("broker-no-context");
+        let socket = broker_stub_path(&dir);
+        let broker = bind_broker_stub(&socket);
+        broker.set_nonblocking(true).unwrap();
+        let relay = BrokerFirstRelay::new(socket);
+        let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+        guest
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        assert_eq!(
+            relay.relay(shuttle, &dest).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(guest.read(&mut [0]).unwrap(), 0);
+        assert_eq!(
+            stub.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            broker.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(broker);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn broker_first_relay_mixed_custody_never_falls_back_to_direct() {
+        let stub = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        stub.set_nonblocking(true).unwrap();
+        let mut dest = tcp_dest(stub.local_addr().unwrap().port());
+        let brokered = SshGrantPlan {
+            name: "broker-key".to_string(),
+            material: "BROKER_KEY".to_string(),
+            binding: CredentialBinding::Broker,
+            ..dest.credentials[0].clone()
+        };
+        dest.credentials.push(brokered);
+        let dir = crate::config::test_support::unique_state_dir("broker-mixed-context");
+        let relay = BrokerFirstRelay::new(dir.join("absent.sock"));
+        for _ in 0..2 {
+            let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
+            guest
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            relay.relay(shuttle, &dest).unwrap_err();
+            assert_eq!(guest.read(&mut [0]).unwrap(), 0);
+            assert_eq!(
+                stub.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+            dest.credentials.reverse();
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1846,7 +1993,7 @@ mod tests {
         let dir = crate::config::test_support::unique_state_dir("broker-first-direct");
         // No broker stub binds here: a guest-bound session must reach its
         // TCP upstream without touching the (absent) broker socket.
-        let relay = BrokerFirstRelay::new(dir.join("no-broker.sock"), mixed_binding_store(port));
+        let relay = BrokerFirstRelay::new(dir.join("no-broker.sock"));
         let (mut guest, shuttle) = std::os::unix::net::UnixStream::pair().unwrap();
         guest
             .set_read_timeout(Some(std::time::Duration::from_secs(15)))

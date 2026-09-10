@@ -205,7 +205,7 @@ pub async fn ensure_ssh_shim(
                         return;
                     }
                 };
-                let relay = BrokerFirstRelay::new(broker_socket, grants.clone());
+                let relay = BrokerFirstRelay::new(broker_socket);
                 run_divert_until(
                     &transport,
                     &loop_registry,

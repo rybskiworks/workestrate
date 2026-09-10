@@ -275,6 +275,31 @@ deadlines, relay-worker quotas/cancellation and bounded upstream resolution are
 also separate from frame receipt. In particular, listener shutdown is not proof
 that all previously admitted sessions have drained.
 
+## SSH credential context
+
+SSH continues to flow from configuration into the compiled `CredentialsPlan`;
+there is no separate user-maintained routing or grant catalog. The implemented
+`credentials.ssh` representation contains independent host and username lists.
+Their existence does not settle the destination–username binding semantics of
+the proposed scope-local `ssh.toml` format. That schema and its migration need
+an explicit design decision before implementation.
+
+The host shim selects complete compiled credential records for the resolved
+instance and endpoint, then hands those records to its relay. Names, material
+references, host/user/port lists, custody bindings and per-credential violation
+policies remain separate and unchanged. Endpoint selection is not authorization
+to authenticate as a username or use a key. Missing credential context refuses
+relay; any matching broker-bound record retains the existing broker-first
+behavior, without a direct fallback if the broker is unavailable.
+
+This context is currently an in-process Rust contract, not a new serialized
+configuration or protocol. The older Microsandbox network projection and broker
+prelude still do not carry all this information. Completing those contracts,
+checking session A's requested username against trusted instance context, and
+selecting session B's key remain necessary before SSH custody is operational.
+Do not infer pairing rules, combine separate credentials' permissions, or
+interpret an endpoint allow decision as a successful SSH authorization test.
+
 ## Schema flow (Rust types → committed schema → distribution)
 
 ```
