@@ -53,6 +53,11 @@ pub const MAX_PROVISION_CLOCK_SKEW_SECS: u64 = 300;
 /// client's own default handshake timeout.
 pub const CONSOLE_CONNECT_TIMEOUT_SECS: u64 = 10;
 
+/// Total asynchronous budget for one console provision: dialing, handshake,
+/// request write and acknowledgement share this deadline. Registry persistence
+/// happens before this budget begins.
+pub const CONSOLE_PROVISION_TIMEOUT_SECS: u64 = 10;
+
 /// Wire name of the host-to-guest provision message.
 pub const SSH_EPOCH_PROVISION_WIRE: &str = "core.ssh_epoch.provision";
 
@@ -116,6 +121,9 @@ pub enum EpochProvisionError {
     /// Dialing the agent relay, the handshake, the pre-send registry bump,
     /// or the send itself failed. Covers everything before an ack exists.
     SendFailed { detail: String },
+    /// The complete console exchange exceeded its deadline. The owned
+    /// one-shot connection is dropped; a retry must allocate a new wire epoch.
+    DeadlineExceeded,
     /// An ack arrived but is unusable: undecodable envelope, wrong wire
     /// type, or a cid/epoch/`ok` that does not match the provision
     /// (stale echo, spoof, or guest-side rejection).
@@ -141,6 +149,9 @@ impl std::fmt::Display for EpochProvisionError {
             }
             EpochProvisionError::SendFailed { detail } => {
                 write!(f, "epoch provision send failed: {detail}")
+            }
+            EpochProvisionError::DeadlineExceeded => {
+                write!(f, "epoch provision console deadline exceeded")
             }
             EpochProvisionError::AckMismatch { detail } => {
                 write!(f, "epoch provision ack rejected: {detail}")
@@ -418,6 +429,42 @@ pub async fn provision_now(
     )
     .await
 }
+
+/// Connect and provision within one absolute deadline. Ownership matters:
+/// cancelling just a borrowed `request_raw` future would leave the SDK client
+/// and its background tasks alive. Here timeout, external cancellation and
+/// normal completion all drop the one-shot channel. `AgentClient::drop` aborts
+/// its reader and writer tasks, which release the transport when polled.
+pub(super) async fn provision_with_deadline<C: ConsoleChannel>(
+    connect: impl Future<Output = Result<C, EpochProvisionError>>,
+    instance: &str,
+    cid: u32,
+    wire_epoch: u64,
+    deadline: tokio::time::Instant,
+) -> Result<u64, EpochProvisionError> {
+    // timeout_at polls a ready inner future before checking its timer. Do not
+    // dial an already-expired attempt or accept a late, immediately-ready ack.
+    if tokio::time::Instant::now() >= deadline {
+        return Err(EpochProvisionError::DeadlineExceeded);
+    }
+    let result = tokio::time::timeout_at(deadline, async move {
+        let channel = connect.await?;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(EpochProvisionError::DeadlineExceeded);
+        }
+        provision_now(&channel, instance, cid, wire_epoch).await
+    })
+    .await
+    .map_err(|_| EpochProvisionError::DeadlineExceeded)?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(EpochProvisionError::DeadlineExceeded);
+    }
+    result
+}
+
+#[cfg(test)]
+#[path = "epoch_provision_deadline_tests.rs"]
+mod deadline_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

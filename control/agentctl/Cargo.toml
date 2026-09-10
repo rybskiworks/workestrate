@@ -86,6 +86,7 @@ schema = ["dep:schemars"]
 # microsandbox SDK, so it adds no new packages.
 microsandbox-image = "=0.6.16"
 tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 opt-level = 3
