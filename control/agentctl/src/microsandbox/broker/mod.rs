@@ -73,7 +73,6 @@ pub use signing::{
 pub use ssh_emit::{apply_ssh_policy, ssh_config_for_plan, ssh_overlay_patch};
 pub use ssh_lifecycle::{
     SshShimHandle, ensure_ssh_shim, provision_epoch_via_console, reprovision_epoch,
-    ssh_broker_socket_for_plan,
 };
 pub use ssh_patterns::{
     DlpExclusion, DlpExclusionReason, apply_ssh_patterns, compile_ssh_patterns, policy_to_action,

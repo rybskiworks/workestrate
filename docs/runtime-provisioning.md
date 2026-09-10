@@ -269,8 +269,9 @@ are outside this console budget. Low-level helpers using a borrowed console
 channel do not impose this ownership or timeout contract themselves.
 
 These bounds do not establish operational SSH custody. Broker boot, trusted
-instance/generation routing, pre-protocol diversion, exact credential selection
-and shared listener ownership still need their own integration. Other response
+instance/generation routing, exact credential selection and shared broker
+ownership still need their own integration. The pinned Microsandbox dispatches
+configured SSH endpoints before direct upstream connection or bytes. Other response
 deadlines, relay-worker quotas/cancellation and bounded upstream resolution are
 also separate from frame receipt. In particular, listener shutdown is not proof
 that all previously admitted sessions have drained.
@@ -299,6 +300,34 @@ checking session A's requested username against trusted instance context, and
 selecting session B's key remain necessary before SSH custody is operational.
 Do not infer pairing rules, combine separate credentials' permissions, or
 interpret an endpoint allow decision as a successful SSH authorization test.
+
+## SSH launch identity
+
+For fresh workloads with compiled SSH credentials, Workestrate reserves a CID
+under its existing registry lock before creating the VM. It prepares a distinct
+`divert-<cid>.sock` endpoint and passes the endpoint and reserved CID together to
+the SDK. Microsandbox assigns that CID to libkrun and checks it before guest
+execution; network slots only select network addresses. The host shim rejects
+a divert prelude whose CID differs from its reserved runtime context.
+
+The launch setup handle owns its listener and registry binding. Failed create,
+registration or cancellation drops that handle; stopping one launch does not
+remove another launch's listener. Cleanup expires only the exact instance and
+launch token, not a replacement that has acquired the same numeric CID. Existing
+files at a newly reserved endpoint are refused, not overwritten. Shutdown wakes
+the owned thread directly, including when its socket pathname has disappeared;
+cleanup preserves a replacement inode at that pathname. This is an
+internal path/lifetime change: old running workloads using the singleton endpoint
+are not automatically attached to the new listener. No live-home migration is
+performed by a build.
+
+Host dispatch setup is not broker readiness. It no longer tries to provision the
+workload's console as though that were the shared broker's control channel.
+Acknowledged multi-instance policy installation, broker boot/supervision,
+generation-bound session context, managed SSH host-certificate trust and reuse/
+restart reconciliation remain required before claiming operational custody.
+The current timestamped prelude is not a launch-generation proof, and listener
+teardown does not yet cancel every admitted relay worker.
 
 ## Schema flow (Rust types → committed schema → distribution)
 

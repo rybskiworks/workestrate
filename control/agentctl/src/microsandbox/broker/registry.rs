@@ -29,10 +29,8 @@ use std::sync::Mutex;
 /// (seconds). Monotonic no-reuse horizon for restart/fork races.
 pub const GRANT_CACHE_TTL_SECS: u64 = 300;
 
-/// Synthetic allocator base: real guest CIDs come from libkrun
-/// (small integers); broker-side synthetic allocation stays out of that
-/// range. [`CidRegistry::allocate`] is for tests and future bookkeeping —
-/// production binds arrive via [`CidRegistry::bind`] with the libkrun CID.
+/// Supervisor allocation base. Reserve before creating a VM, then assign the
+/// returned CID to libkrun through the SDK's per-launch `guest_cid` input.
 pub const CID_ALLOC_BASE: u32 = 1 << 16;
 
 /// Minimum bindable CID: 0 (invalid), 1 (hypervisor), and 2 (host) are
@@ -288,8 +286,8 @@ impl CidRegistry {
         Ok(())
     }
 
-    /// Allocate a fresh synthetic CID (≥ [`CID_ALLOC_BASE`], monotonic) and
-    /// bind it. Production launches use [`Self::bind`] with the libkrun CID.
+    /// Allocate a fresh CID (≥ [`CID_ALLOC_BASE`], monotonic) and bind it.
+    /// The caller must assign this reservation to the VM before guest execution.
     pub fn allocate(&self, instance: &str, epoch: &EpochToken) -> anyhow::Result<u32> {
         self.allocate_at(instance, epoch, now_secs())
     }
@@ -384,6 +382,29 @@ impl CidRegistry {
             write_entry(&self.broker_dir(), &updated)?;
         }
         Ok(())
+    }
+
+    /// Expire only the exact owned launch. A delayed cleanup must not revoke
+    /// a replacement that has since acquired the same numeric CID.
+    pub fn expire_binding(
+        &self,
+        cid: u32,
+        instance: &str,
+        epoch: &EpochToken,
+    ) -> anyhow::Result<bool> {
+        let _lock =
+            crate::microsandbox::port_registry::lock::PortRegistryLock::acquire(&self.state_dir)?;
+        let mut entries = self.lock_entries()?;
+        *entries = read_all_entries(&self.broker_dir())?;
+        let Some(entry) = entries.get_mut(&cid) else {
+            return Ok(false);
+        };
+        if !entry.is_live() || entry.instance != instance || entry.epoch_hex != epoch.to_hex() {
+            return Ok(false);
+        }
+        entry.expired_at_secs = Some(now_secs());
+        write_entry(&self.broker_dir(), entry)?;
+        Ok(true)
     }
 
     /// Returns the number of entries tombstoned.
@@ -551,6 +572,22 @@ mod tests {
         // Same instance, rotated epoch (restart without expire) also refused.
         let err = reg.bind(7, "personal-pi", &token(9)).unwrap_err();
         assert!(err.to_string().contains("no-reuse"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_owner_cleanup_cannot_expire_a_replacement_binding() {
+        let dir = crate::config::test_support::unique_state_dir("broker-owner-cleanup");
+        let reg = CidRegistry::open_with_ttl(&dir, 0).unwrap();
+        reg.bind(7, "personal-pi", &token(1)).unwrap();
+        assert!(!reg.expire_binding(7, "other", &token(1)).unwrap());
+        assert!(!reg.expire_binding(7, "personal-pi", &token(2)).unwrap());
+        assert!(reg.expire_binding(7, "personal-pi", &token(1)).unwrap());
+        reg.bind(7, "personal-pi", &token(2)).unwrap();
+        assert!(!reg.expire_binding(7, "personal-pi", &token(1)).unwrap());
+        assert_eq!(reg.lookup(7).unwrap().unwrap().epoch_hex, token(2).to_hex());
+        assert!(reg.expire_binding(7, "personal-pi", &token(2)).unwrap());
+        assert!(!reg.expire_binding(7, "personal-pi", &token(2)).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

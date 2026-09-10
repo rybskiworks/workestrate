@@ -10,7 +10,10 @@ source from that package's filtered Rust workspace. Nix evaluation asserts
 that their versions match the SDK pins in `control/agentctl/Cargo.toml`.
 
 `control/agentctl/.cargo/config.toml` supplies the SDK path patches for both
-development and Nix builds. The `vendor/microsandbox-fork` path is a symlink
+development and Nix builds, including the fork's exact `msb-vm-memory` Git
+patch. Cargo does not inherit a dependency workspace's patches, so updating
+the fork requires checking these root patches as well as the version pins.
+The `vendor/microsandbox-fork` path is a symlink
 to the pinned source, not a checked-in copy of third-party crates. The
 `microsandbox-filesystem-patched` package output remains a compatibility
 alias for that source.
@@ -20,7 +23,10 @@ dependency support before compilation. Git sources have explicit output
 hashes. Build phases use explicit Nix-managed runtime artifacts; they must not fetch
 dependencies from the network. The native libkrun Rust crates are selected
 by `Cargo.lock`; they are not replaced by building a standalone libkrun C
-library. Firmware selection belongs to the Microsandbox package.
+library. Workestrate imports the pinned Microsandbox input's `nix/cargo-lock.nix`
+helper with its own lockfile, so the fork owns the hashes of its Git sources
+instead of duplicating those hashes here. Firmware selection belongs to the
+Microsandbox package.
 
 ## Build and development entry points
 

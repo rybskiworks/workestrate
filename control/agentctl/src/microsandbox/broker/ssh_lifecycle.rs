@@ -1,9 +1,10 @@
 //! SSH shim lifecycle: per-launch listener setup and teardown.
 //!
 //! When a workload emits an SSH policy with at least one grant,
-//! [`ensure_ssh_shim`] allocates the sandbox's transport CID, binds the
-//! broker socket, and serves divert decisions on a background thread until
-//! the foreground service ends. Strict-only confinement emits a policy but
+//! [`ensure_ssh_shim`] reserves the sandbox's transport CID before VM creation,
+//! binds its launch-specific socket, and serves divert decisions on a background
+//! thread. Its handle releases the reservation on failed launch or service end.
+//! Strict-only confinement emits a policy but
 //! binds no listener — nothing can divert to it, so it takes no handle.
 
 use crate::microsandbox::broker::audit::AuditLog;
@@ -20,6 +21,7 @@ use crate::microsandbox::broker::shim::{
 };
 use crate::microsandbox::broker::signing::GrantStore;
 use crate::microsandbox::plan::CredentialsPlan;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -86,7 +88,6 @@ pub async fn reprovision_epoch(state_dir: &Path, cid: u32) -> Result<u64, EpochP
 /// socket, thread, and CID binding are all relinquished there. The divert
 /// path needs no signing backend, so this type is deliberately
 /// non-generic.
-#[derive(Debug)]
 pub struct SshShimHandle {
     /// Host-side broker socket path (never guest-visible).
     pub socket_path: PathBuf,
@@ -96,34 +97,47 @@ pub struct SshShimHandle {
     pub instance: String,
     /// Allocated CID (teardown).
     pub cid: u32,
-    state_dir: PathBuf,
+    registry: Arc<CidRegistry>,
+    epoch: EpochToken,
+    socket_identity: (u64, u64),
     stop: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
+impl std::fmt::Debug for SshShimHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshShimHandle")
+            .field("socket_path", &self.socket_path)
+            .field("instance", &self.instance)
+            .field("cid", &self.cid)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SshShimHandle {
-    /// Stop the divert loop (stop flag plus a dummy connection to unblock
-    /// `accept`), join the thread, remove the socket, and expire the CID
+    /// Stop and wake the divert loop, join the thread, remove its owned socket,
+    /// and expire the CID
     /// binding. Best-effort throughout: failures are stderr-loud, never
     /// propagated — teardown must not fail the service exit it follows.
     pub fn shutdown(mut self) {
+        self.stop_owned_listener();
+    }
+
+    fn stop_owned_listener(&mut self) {
+        if self.join.is_none() {
+            return;
+        }
         self.stop.store(true, Ordering::Relaxed);
-        // Unblock the loop's `accept`: the dummy connection wakes it, the
-        // resulting EOF fails the frame read, and the loop sees `stop`.
-        // `connect` queues in the listener backlog, so this cannot hang
-        // even if the loop already exited.
-        if let Ok(stream) = std::os::unix::net::UnixStream::connect(&self.socket_path) {
-            drop(stream);
+        if let Some(join) = self.join.take() {
+            join.thread().unpark();
+            if join.join().is_err() {
+                eprintln!(
+                    "WARNING: ssh shim thread for instance '{}' failed during shutdown",
+                    self.instance
+                );
+            }
         }
-        if let Some(join) = self.join.take()
-            && join.join().is_err()
-        {
-            eprintln!(
-                "WARNING: ssh shim thread for instance '{}' failed during shutdown",
-                self.instance
-            );
-        }
-        if let Err(e) = std::fs::remove_file(&self.socket_path)
+        if let Err(e) = remove_owned_socket(&self.socket_path, self.socket_identity)
             && e.kind() != std::io::ErrorKind::NotFound
         {
             eprintln!(
@@ -131,8 +145,11 @@ impl SshShimHandle {
                 self.socket_path.display()
             );
         }
-        match CidRegistry::open(&self.state_dir).and_then(|registry| registry.expire(self.cid)) {
-            Ok(()) => {}
+        match self
+            .registry
+            .expire_binding(self.cid, &self.instance, &self.epoch)
+        {
+            Ok(_) => {}
             Err(e) => eprintln!(
                 "WARNING: failed to expire CID {} for instance '{}': {e}",
                 self.cid, self.instance
@@ -141,18 +158,30 @@ impl SshShimHandle {
     }
 }
 
+impl Drop for SshShimHandle {
+    fn drop(&mut self) {
+        self.stop_owned_listener();
+    }
+}
+
+// The state directory is host-owned. Preserve a replacement at this pathname
+// during normal lifecycle races; this is not a defense against a hostile host UID.
+fn remove_owned_socket(path: &Path, identity: (u64, u64)) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if (metadata.dev(), metadata.ino()) == identity {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 /// Set up the SSH shim for one workload launch, or `None` when the
 /// workload carries no SSH grants (strict-only confinement emits a policy
 /// but binds no listener — nothing can divert to it).
 ///
-/// The launch epoch is provisioned over the console agent channel right
-/// after the CID is allocated. A failed provision warns and continues the
-/// host-side setup: the guest agent boots with the VM and may simply not
-/// answer yet. The complete asynchronous exchange is bounded, including an
-/// accepted console connection that never acknowledges the provision.
-/// Enforcement stays fail-closed meanwhile — an unprovisioned guest fails
-/// the shim-side checks — and [`reprovision_epoch`] retries explicitly on
-/// re-attestation.
+/// Call before VM creation and pass the returned CID and endpoint together to
+/// the SDK. The owned handle cleans up even when creation fails or is cancelled.
+/// This prepares host dispatch only: it does not install policy in brokerd or
+/// establish broker readiness. A workload's console is not the broker console.
 pub async fn ensure_ssh_shim(
     state_dir: &Path,
     instance: &str,
@@ -165,23 +194,37 @@ pub async fn ensure_ssh_shim(
     // entropy); the real (instance, CID) binding persists at allocate.
     let epoch = EpochToken::issue(instance, 0)
         .map_err(|e| anyhow::anyhow!("ssh shim: epoch issue failed: {e}"))?;
-    let registry = CidRegistry::open(state_dir)?;
+    let registry = Arc::new(CidRegistry::open(state_dir)?);
     let cid = registry.allocate(instance, &epoch)?;
-    match provision_epoch_via_console(&registry, cid).await {
-        Ok(_) => {}
-        Err(e) => eprintln!(
-            "WARNING: ssh shim for instance '{instance}': {e} (continuing host-side setup; \
-             guest checks stay fail-closed until the epoch is re-provisioned)"
-        ),
-    }
-    let socket_path = broker_socket_path(state_dir);
-    let transport =
-        UnixSocketTransport::bind(&socket_path, FixedCidResolver(cid)).map_err(|e| {
-            anyhow::anyhow!(
-                "ssh shim: socket bind failed for {}: {e}",
+    // A dedicated endpoint binds this host network context to its reservation.
+    // A second launch cannot overwrite the first launch's listener or identity.
+    let socket_path = broker_socket_path(state_dir).with_file_name(format!("divert-{cid}.sock"));
+    let transport = match UnixSocketTransport::bind_fresh(&socket_path, FixedCidResolver(cid)) {
+        Ok(transport) => transport,
+        Err(error) => {
+            registry.expire_binding(cid, instance, &epoch)?;
+            return Err(anyhow::anyhow!(
+                "ssh shim: socket bind failed for {}: {error}",
                 socket_path.display()
-            )
-        })?;
+            ));
+        }
+    };
+    let setup = (|| {
+        let metadata = std::fs::symlink_metadata(&socket_path)?;
+        let identity = (metadata.dev(), metadata.ino());
+        if let Err(error) = transport.set_nonblocking() {
+            let _ = remove_owned_socket(&socket_path, identity);
+            return Err(error);
+        }
+        Ok::<_, std::io::Error>(identity)
+    })();
+    let socket_identity = match setup {
+        Ok(identity) => identity,
+        Err(error) => {
+            registry.expire_binding(cid, instance, &epoch)?;
+            return Err(anyhow::anyhow!("ssh shim: listener setup failed: {error}"));
+        }
+    };
     let grants = GrantStore::compile(&[(instance, credentials)]);
     let audit = Arc::new(AuditLog::with_state_dir(state_dir));
     let stop = Arc::new(AtomicBool::new(false));
@@ -191,20 +234,10 @@ pub async fn ensure_ssh_shim(
     let join = std::thread::Builder::new()
         .name(format!("ssh-shim-{instance}"))
         .spawn({
-            let state_dir = state_dir.to_path_buf();
-            let instance = instance.to_string();
+            let loop_registry = Arc::clone(&registry);
             let loop_stop = Arc::clone(&stop);
             let loop_audit = Arc::clone(&audit);
             move || {
-                let loop_registry = match CidRegistry::open(&state_dir) {
-                    Ok(loop_registry) => loop_registry,
-                    Err(e) => {
-                        eprintln!(
-                            "WARNING: ssh shim for instance '{instance}': registry open failed: {e}"
-                        );
-                        return;
-                    }
-                };
                 let relay = BrokerFirstRelay::new(broker_socket);
                 run_divert_until(
                     &transport,
@@ -215,34 +248,29 @@ pub async fn ensure_ssh_shim(
                     &loop_stop,
                 );
             }
-        })
-        .map_err(|e| anyhow::anyhow!("ssh shim: divert thread spawn failed: {e}"))?;
+        });
+    let join = match join {
+        Ok(join) => join,
+        Err(error) => {
+            let cleanup = remove_owned_socket(&socket_path, socket_identity);
+            registry.expire_binding(cid, instance, &epoch)?;
+            cleanup?;
+            return Err(anyhow::anyhow!(
+                "ssh shim: divert thread spawn failed: {error}"
+            ));
+        }
+    };
     Ok(Some(SshShimHandle {
         socket_path,
         transport_cid: u64::from(cid),
         instance: instance.to_string(),
         cid,
-        state_dir: state_dir.to_path_buf(),
+        registry,
+        epoch,
+        socket_identity,
         stop,
         join: Some(join),
     }))
-}
-
-/// Resolve the broker socket path the sandbox builder must dial for SSH
-/// divert, or `None` when the workload carries no SSH grants.
-///
-/// Pure derivation: the path is a fixed function of the state dir, so the
-/// pre-create builder input and the post-registration bind agree without
-/// binding anything early. Strict-only confinement resolves to `None` — its
-/// policy needs no listener because nothing can divert to it.
-pub fn ssh_broker_socket_for_plan(
-    state_dir: &Path,
-    credentials: Option<&CredentialsPlan>,
-) -> Option<PathBuf> {
-    match credentials {
-        Some(credentials) if !credentials.ssh.is_empty() => Some(broker_socket_path(state_dir)),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -302,29 +330,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn broker_socket_resolves_for_grant_plans_only() {
+    #[tokio::test]
+    async fn concurrent_launches_have_distinct_owned_endpoints_and_cids() {
         let dir = crate::config::test_support::unique_state_dir("ssh-broker-socket");
         let credentials = ssh_credentials();
-        // Grants resolve to the same host-side path the shim binds: the
-        // pre-create builder input and the post-registration bind agree.
-        let socket = ssh_broker_socket_for_plan(&dir, Some(&credentials))
-            .expect("grants resolve a dial path");
-        assert_eq!(socket, broker_socket_path(&dir));
-        assert!(
-            socket.is_absolute(),
-            "the dial path must be absolute for the builder endpoint"
+        let first = ensure_ssh_shim(&dir, "first", &credentials)
+            .await
+            .unwrap()
+            .unwrap();
+        let second = ensure_ssh_shim(&dir, "second", &credentials)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(first.cid, second.cid);
+        assert_ne!(first.socket_path, second.socket_path);
+        let first_path = first.socket_path.clone();
+        let first_cid = first.cid;
+        drop(first);
+        assert!(!first_path.exists());
+        assert!(second.socket_path.exists());
+        let registry = CidRegistry::open(&dir).unwrap();
+        assert!(registry.lookup(first_cid).unwrap().is_none());
+        assert_eq!(
+            registry.lookup(second.cid).unwrap().unwrap().instance,
+            "second"
         );
-        // Strict-only confinement takes no listener, so it resolves none.
-        let strict_only = CredentialsPlan {
-            ssh: Vec::new(),
-            signing: Vec::new(),
-            strict: true,
-            strict_origin: None,
-        };
-        assert_eq!(ssh_broker_socket_for_plan(&dir, Some(&strict_only)), None);
-        // Absent policy resolves none (fail-closed unchanged).
-        assert_eq!(ssh_broker_socket_for_plan(&dir, None), None);
+        second.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -336,7 +367,8 @@ mod tests {
             .await
             .unwrap()
             .expect("grants bind a shim");
-        assert_eq!(handle.socket_path, broker_socket_path(&dir));
+        let socket_path = handle.socket_path.clone();
+        assert_ne!(socket_path, broker_socket_path(&dir));
         assert!(handle.socket_path.exists(), "listener socket file exists");
         assert_eq!(handle.transport_cid, u64::from(handle.cid));
         // The registry lookup resolves the allocated CID to the instance.
@@ -362,10 +394,7 @@ mod tests {
         // Shutdown removes the socket and expires the binding.
         let cid = handle.cid;
         handle.shutdown();
-        assert!(
-            !broker_socket_path(&dir).exists(),
-            "shutdown removes the socket"
-        );
+        assert!(!socket_path.exists(), "shutdown removes the socket");
         let registry = CidRegistry::open(&dir).unwrap();
         assert!(
             registry.lookup(cid).unwrap().is_none(),
@@ -375,18 +404,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_provision_failure_does_not_fail_launch() {
-        // No sandbox agent answers in the test env, so the console
-        // provision always fails here — the launch setup must still stand
-        // (warn-and-continue; enforcement stays fail-closed).
+    async fn preboot_setup_does_not_provision_the_workload_console() {
+        // There is no workload VM yet. Host setup reserves identity without
+        // pretending its console is the shared broker's control channel.
         let dir = crate::config::test_support::unique_state_dir("ssh-shim-nocons");
         let credentials = ssh_credentials();
         let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
             .await
             .unwrap()
-            .expect("grants bind a shim even when the console is unreachable");
+            .expect("host setup does not require an already-running workload");
         assert!(handle.socket_path.exists(), "listener still binds");
         let registry = CidRegistry::open(&dir).unwrap();
+        assert_eq!(registry.lookup(handle.cid).unwrap().unwrap().wire_epoch, 0);
         assert!(
             registry.lookup(handle.cid).unwrap().is_some(),
             "CID still binds"
@@ -404,32 +433,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_recovers_from_stale_socket_file() {
-        // A leftover regular file at the socket path (unclean shutdown)
-        // must not wedge the next launch: bind unlinks before listening.
-        // A stale path is a dead route (bind failure is silent-skip in the
-        // guest muxer), so recovery here is load-bearing, not cosmetic.
+    async fn ensure_refuses_an_existing_launch_endpoint_without_overwriting_it() {
         let dir = crate::config::test_support::unique_state_dir("ssh-shim-stale");
-        let socket_path = broker_socket_path(&dir);
+        let cid = crate::microsandbox::broker::registry::CID_ALLOC_BASE;
+        let socket_path = broker_socket_path(&dir).with_file_name(format!("divert-{cid}.sock"));
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(&socket_path, b"stale").unwrap();
         let credentials = ssh_credentials();
-        let handle = ensure_ssh_shim(&dir, "personal-pi", &credentials)
-            .await
-            .unwrap()
-            .expect("stale socket file must not wedge the bind");
-        assert_eq!(handle.socket_path, socket_path);
-        let file_type = std::fs::symlink_metadata(&socket_path).unwrap().file_type();
         assert!(
-            std::os::unix::fs::FileTypeExt::is_socket(&file_type),
-            "the stale file is replaced by a live socket"
+            ensure_ssh_shim(&dir, "personal-pi", &credentials)
+                .await
+                .is_err()
         );
-        handle.shutdown();
+        assert_eq!(std::fs::read(&socket_path).unwrap(), b"stale");
         assert!(
-            !socket_path.exists(),
-            "shutdown removes the socket it bound over the stale file"
+            CidRegistry::open(&dir)
+                .unwrap()
+                .lookup(cid)
+                .unwrap()
+                .is_none()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -446,11 +470,85 @@ mod tests {
             .expect("grants bind a shim");
         let cid = handle.cid;
         std::fs::remove_file(&handle.socket_path).unwrap();
-        handle.shutdown();
+        shutdown_with_deadline(handle);
         let registry = CidRegistry::open(&dir).unwrap();
         assert!(
             registry.lookup(cid).unwrap().is_none(),
             "shutdown expires the binding even with the socket already gone"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn shutdown_with_deadline(handle: SshShimHandle) {
+        let (done, wait) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            handle.shutdown();
+            let _ = done.send(());
+        });
+        wait.recv_timeout(std::time::Duration::from_secs(2))
+            .expect("listener shutdown must not depend on its socket pathname");
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_preserves_a_replacement_at_the_old_socket_path() {
+        let dir = crate::config::test_support::unique_state_dir("ssh-shim-replaced-socket");
+        let handle = ensure_ssh_shim(&dir, "personal-pi", &ssh_credentials())
+            .await
+            .unwrap()
+            .unwrap();
+        let path = handle.socket_path.clone();
+        let cid = handle.cid;
+        // Keep the old socket inode alive so allocation cannot reuse it.
+        let retired = path.with_extension("retired");
+        std::fs::rename(&path, &retired).unwrap();
+        let replacement = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        replacement.set_nonblocking(true).unwrap();
+        shutdown_with_deadline(handle);
+        assert!(path.exists(), "old owner must not unlink the replacement");
+        assert_eq!(
+            replacement.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "old owner must not dial the replacement to wake itself"
+        );
+        assert!(
+            CidRegistry::open(&dir)
+                .unwrap()
+                .lookup(cid)
+                .unwrap()
+                .is_none()
+        );
+        drop(replacement);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_pending_launch_releases_the_owned_listener_and_cid() {
+        let dir = crate::config::test_support::unique_state_dir("ssh-shim-cancel-launch");
+        let launch_dir = dir.clone();
+        let (ready, wait) = tokio::sync::oneshot::channel();
+        let launch = tokio::spawn(async move {
+            let handle = ensure_ssh_shim(&launch_dir, "personal-pi", &ssh_credentials())
+                .await
+                .unwrap()
+                .unwrap();
+            ready
+                .send((handle.socket_path.clone(), handle.cid))
+                .unwrap();
+            std::future::pending::<()>().await;
+            drop(handle);
+        });
+        let (path, cid) = wait.await.unwrap();
+        assert!(path.exists());
+        launch.abort();
+        assert!(launch.await.unwrap_err().is_cancelled());
+        assert!(!path.exists());
+        assert!(
+            CidRegistry::open(&dir)
+                .unwrap()
+                .lookup(cid)
+                .unwrap()
+                .is_none()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -19,12 +19,12 @@ use crate::commands::doctor::{msb_binary, probe_version, resolve_msb_home};
 
 /// Expected Microsandbox version. The static pin guard checks the Cargo
 /// dependency pins; Nix also checks the fork's package and SDK versions.
-pub const MSB_VERSION_PIN: &str = "0.6.16";
+pub const MSB_VERSION_PIN: &str = "0.6.18";
 
 /// Hand-maintained fork rev pin (full rev). Must agree with the
 /// `microsandbox-fork` input in `flake.nix` / `flake.lock` (enforced by
 /// `scripts/check-msb-versions.sh`).
-pub const FORK_REV_PIN: &str = "53ec61407f27498c9a05ed82035f7062d9b21224";
+pub const FORK_REV_PIN: &str = "41b5ad697b1c683efdfebfc1d3b7e8a01f917457";
 
 /// Expected libkrunfw soname shipped by the fork's runtime package.
 pub const LIBKRUNFW_SONAME: &str = "libkrunfw.so.5.6.1";
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn fork_short_rev_is_the_first_eight_chars() {
-        assert_eq!(fork_rev_short(), "53ec6140");
+        assert_eq!(fork_rev_short(), "41b5ad69");
         assert_eq!(fork_rev_short().len(), 8);
     }
 
