@@ -18,7 +18,7 @@ use crate::microsandbox::broker::audit::{AuditLog, AuditRecord};
 use crate::microsandbox::broker::registry::broker_egress_socket_path;
 use crate::microsandbox::broker::signing::GrantStore;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -88,18 +88,11 @@ pub fn encode_egress_connect(request: &EgressConnect) -> Vec<u8> {
 
 /// Read one framed connect request from the tunnel stream (fail-closed at
 /// [`MAX_EGRESS_FRAME_BYTES`]).
-fn read_connect(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result<EgressConnect> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-    if len == 0 || len > MAX_EGRESS_FRAME_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("egress frame length {len} out of bounds (max {MAX_EGRESS_FRAME_BYTES})"),
-        ));
-    }
-    let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload)?;
+fn read_connect(
+    stream: &mut std::os::unix::net::UnixStream,
+    stop: Option<&AtomicBool>,
+) -> std::io::Result<EgressConnect> {
+    let payload = super::frame_io::read_frame(stream, MAX_EGRESS_FRAME_BYTES, stop)?;
     crate::microsandbox::broker::signing::decode_cbor(&payload)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
 }
@@ -227,7 +220,7 @@ pub fn serve_egress_once(
     audit: &AuditLog,
     timestamp: &str,
 ) -> bool {
-    let request = match read_connect(&mut stream) {
+    let request = match read_connect(&mut stream, None) {
         Ok(request) => request,
         Err(e) => {
             eprintln!("WARNING: egress connect read failed: {e}");
@@ -305,7 +298,7 @@ pub fn run_egress_until(
                 continue;
             }
         };
-        let request = match read_connect(&mut stream) {
+        let request = match read_connect(&mut stream, Some(stop)) {
             Ok(request) => request,
             Err(e) if stop.load(Ordering::Relaxed) => {
                 let _ = e;
@@ -464,6 +457,7 @@ pub fn ensure_egress_forwarder(
 mod tests {
     use super::*;
     use crate::microsandbox::plan::{CredentialBinding, CredentialsPlan, SshGrantPlan};
+    use std::io::Read;
 
     fn granted_store(port: u16) -> GrantStore {
         let plan = CredentialsPlan {
@@ -512,6 +506,24 @@ mod tests {
         let framed = encode_egress_ack(&ack);
         let decoded: EgressAck = ciborium::from_reader(&framed[4..]).unwrap();
         assert_eq!(decoded, ack);
+    }
+
+    #[test]
+    fn egress_connect_receipt_is_cancellable_with_the_peer_still_open() {
+        for prefix in [vec![], vec![0, 0], vec![0, 0, 0, 5, 1]] {
+            let (mut reader, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            peer.write_all(&prefix).unwrap();
+            let stop = AtomicBool::new(true);
+            let (done, wait) = std::sync::mpsc::channel::<()>();
+            let watchdog = std::thread::spawn(move || {
+                let _ = wait.recv_timeout(Duration::from_secs(2));
+                drop(peer);
+            });
+            let result = read_connect(&mut reader, Some(&stop));
+            let _ = done.send(());
+            watchdog.join().unwrap();
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
+        }
     }
 
     #[test]

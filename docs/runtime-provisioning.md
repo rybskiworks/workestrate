@@ -241,6 +241,31 @@ reuse after policy changes, SSH broker custody or safe credential deployment.
 ADR 0036 retains the design history; historical future-firmware wording is not
 an observation of the current running artifact.
 
+## SSH broker receipt bounds
+
+The host broker's signing, divert and egress ingress paths allow ten seconds
+to receive one complete length-prefixed frame. Header and payload share one
+deadline; partial progress does not restart it. Existing size limits remain
+8 MiB for signing/divert and 64 KiB for egress. Incomplete frames are closed,
+not retried as direct connections. A stop request is checked during frame
+receipt, at intervals of at most 100 ms of socket wait, so a stalled accepted
+peer does not require EOF before the listener can stop. Scheduler delays are
+not covered by that polling interval.
+
+Receipt restores the stream's previous read timeout before a successful
+handoff, so these limits do not impose a ten-second SSH session lifetime or
+idle timeout. Divert freshness and audit timestamps are sampled after the
+complete prelude is received; the existing 300-second skew limit and the
+unavailable-clock refusal are unchanged. CLI options, credential schemas and
+wire encodings are unchanged.
+
+These bounds do not establish operational SSH custody. Broker boot, trusted
+instance/generation routing, pre-protocol diversion, exact credential selection
+and shared listener ownership still need their own integration. Response
+deadlines, relay-worker quotas/cancellation and bounded upstream resolution are
+also separate from frame receipt. In particular, listener shutdown is not proof
+that all previously admitted sessions have drained.
+
 ## Schema flow (Rust types → committed schema → distribution)
 
 ```
