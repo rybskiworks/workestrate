@@ -405,6 +405,21 @@
           # Expose lib per system for backward compat via `config.packages`? Instead we set `flake.lib` above.
           # For `nix flake check` we also provide tombiCheck and treefmt checks.
           checks = {
+            buildRevision =
+              pkgs.runCommand "workestrate-build-revision-check"
+                {
+                  nativeBuildInputs = [ pkgs.python3 ];
+                }
+                ''
+                  python3 ${./scripts/test-build-revision.py} \
+                    --build-script ${./control/agentctl/build.rs} \
+                    --cargo ${rustToolchain.cargo}/bin/cargo \
+                    --rustc ${rustToolchain.rustc}/bin/rustc \
+                    --sysroot ${rustToolchain.rust-std} \
+                    --linker ${pkgs.stdenv.cc}/bin/cc
+                  mkdir -p $out
+                '';
+
             deny = config.checks.unit.overrideAttrs (old: {
               pname = "workestrate-deny-check";
               nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.cargo-deny ];

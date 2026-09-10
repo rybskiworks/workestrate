@@ -99,3 +99,14 @@ separate host gates; a passing sandbox test check is not a VM deployment test.
 The unit derivation omits development/test debug symbols to bound temporary
 artifact size. Debug assertions, test selection, optimization defaults and the
 production package profile are unchanged; interactive Cargo keeps its defaults.
+
+The build script tracks `WORKESTRATE_REV` explicitly, so a retained Cargo target
+refreshes the compiled version when that variable changes or is removed. Plain
+Cargo builds without it report the `dev` suffix; production Nix builds retain
+the selected source revision. The dependency-free `buildRevision` check copies
+the real script into a tiny fixture, rebuilds the same target for two revisions
+and then the unset variable, and confirms that an unchanged repeat stays fresh.
+A negative control without environment tracking demonstrates the stale-version
+failure. Run it independently with
+`nix build --no-link --no-update-lock-file .#checks.x86_64-linux.buildRevision`;
+it also runs under `just verify`, without compiling the application.
