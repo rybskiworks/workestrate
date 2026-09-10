@@ -377,11 +377,16 @@ Shape of the live definition:
 - `devenv.dotfile` / `devenv.state`: devenv defaults — dotfile =
   `<root>/.devenv` (gitignored in-tree; the task cache lives here too on
   the pinned devenv), state = `<dotfile>/state`.
-- `imports`: shared `inputs.tooling.devenvModules.{beads,base,nix,toml,rust}`
+- `imports`: shared `inputs.tooling.devenvModules.{beads,base,determinate,nix,toml,rust}`
   modules in both shells. Bootstrap adds only toolchain/build-investigation
   tools; default also supplies the Workestrate and paired Microsandbox
   packages and development helpers. Realizing default may build those packages
   when they are not cached; bootstrap does not require them.
+- Both shells and the explicit hook installer select the shared supplier's
+  pinned Determinate Nix binary output. The formatter module remains separate.
+  Shell entry does not install or replace a daemon, select a different store,
+  or alter daemon trust/sandbox settings. Guest daemon configuration belongs to
+  the guest image; changing the host daemon is a separate operation.
 - Both shells disable automatic Git-hook installation and tree formatting.
   Install hooks explicitly with `nix run .#install-hooks` when intended.
 - Both preserve a nonempty explicit `CARGO_TARGET_DIR`, otherwise selecting
@@ -417,6 +422,30 @@ override can remove clean Git revision metadata, causing the application to
 be rebuilt with a `dirty` display revision even when its filtered source is
 unchanged. This does not justify faking the revision or using `--impure`.
 Bootstrap avoids requiring the application when only tools are needed.
+
+### Cold shell dependencies
+
+The pinned devenv task module intentionally uses its own locked build inputs
+so its binary matches the supplier cache. On a cold store, its source imports
+require shell-only import-from-derivation; repository application and check
+gates remain independent and can keep IFD disabled. Do not replace the task
+package's inputs merely to eliminate these source imports: that changes its
+binary-cache identity.
+
+When the supplier cache is not already configured, it can be selected explicitly
+for one shell invocation, using the public key declared by the pinned devenv
+source:
+
+```sh
+just bootstrap \
+  --option extra-substituters https://devenv.cachix.org \
+  --option extra-trusted-public-keys 'devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw='
+```
+
+This grants trust to that cache for the command; it does not install a signing
+key or alter global daemon configuration. A guest may instead declare reviewed
+cache endpoints and public keys in its NixOS configuration. Inspect a dry run
+before a cold build, and distinguish substituted artifacts from local builds.
 
 ## Practical rules
 

@@ -164,6 +164,7 @@ verify: lock-guard versions-check hooks-check shell-arguments-check store-audit-
       .#checks.x86_64-linux.treefmt \
       .#checks.x86_64-linux.tombiCheck \
       .#checks.x86_64-linux.schemaSync \
+      .#checks.x86_64-linux.buildRevision \
       .#checks.x86_64-linux.deny
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
     just store-audit

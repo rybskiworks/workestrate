@@ -3,7 +3,7 @@
 
   inputs = {
     # Shared build tools and development modules have one version authority.
-    tooling.url = "github:rybskiworks/nix-tooling/9328806188461bd0fef0eb4f566860afef0d180e";
+    tooling.url = "github:rybskiworks/nix-tooling/c99bc5af3511952241f3955bd4326e128084ee30";
     nixpkgs.follows = "tooling/nixpkgs";
     fenix.follows = "tooling/fenix";
     flake-parts.follows = "tooling/flake-parts";
@@ -198,6 +198,8 @@
           # so the marker cannot silently drift onto a dead line.
           rustToolchain = inputs.fenix.packages.${system}.stable; # RUST_TOOLCHAIN_VERSION = "1.97"
 
+          determinateNix = pkgs.lib.getBin inputs'.tooling.packages.determinate-nix;
+
           microsandboxSource = inputs'.microsandbox-fork.packages.microsandbox.src;
           # Metadata comes from the already-fetched input; reading the filtered
           # package source would require a store write during cold read-only eval.
@@ -243,7 +245,7 @@
             export PATH=${
               pkgs.lib.makeBinPath [
                 pkgs.coreutils
-                pkgs.nix
+                determinateNix
                 config.pre-commit.settings.gitPackage
               ]
             }:$PATH
@@ -405,6 +407,21 @@
           # Expose lib per system for backward compat via `config.packages`? Instead we set `flake.lib` above.
           # For `nix flake check` we also provide tombiCheck and treefmt checks.
           checks = {
+            buildRevision =
+              pkgs.runCommand "workestrate-build-revision-check"
+                {
+                  nativeBuildInputs = [ pkgs.python3 ];
+                }
+                ''
+                  python3 ${./scripts/test-build-revision.py} \
+                    --build-script ${./control/agentctl/build.rs} \
+                    --cargo ${rustToolchain.cargo}/bin/cargo \
+                    --rustc ${rustToolchain.rustc}/bin/rustc \
+                    --sysroot ${rustToolchain.rust-std} \
+                    --linker ${pkgs.stdenv.cc}/bin/cc
+                  mkdir -p $out
+                '';
+
             deny = config.checks.unit.overrideAttrs (old: {
               pname = "workestrate-deny-check";
               nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.cargo-deny ];
@@ -542,6 +559,7 @@
             imports = [
               inputs.tooling.devenvModules.beads
               inputs.tooling.devenvModules.base
+              inputs.tooling.devenvModules.determinate
               inputs.tooling.devenvModules.nix
               inputs.tooling.devenvModules.toml
               inputs.tooling.devenvModules.rust
@@ -551,7 +569,6 @@
               gcc
               just
               libcap_ng
-              nix
               pkg-config
               python3
             ];
@@ -593,6 +610,7 @@
             imports = [
               inputs.tooling.devenvModules.beads
               inputs.tooling.devenvModules.base
+              inputs.tooling.devenvModules.determinate
               inputs.tooling.devenvModules.nix
               inputs.tooling.devenvModules.toml
               inputs.tooling.devenvModules.rust
