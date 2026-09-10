@@ -13,8 +13,8 @@ fn main() {
     let pkg_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.1.0".into());
     let rev = std::env::var("WORKESTRATE_REV").unwrap_or_else(|_| "dev".into());
     println!("cargo:rustc-env=WORKESTRATE_VERSION={pkg_version}-{rev}");
-    // Re-run only when this script changes; the inputs (CARGO_PKG_VERSION is
-    // constant from Cargo.toml; WORKESTRATE_REV comes from the nix env, which
-    // is a fresh process per build) are stable across source edits.
+    // Retained Cargo targets must refresh provenance when the caller changes
+    // or removes the revision, even if the source files are unchanged.
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=WORKESTRATE_REV");
 }
