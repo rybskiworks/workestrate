@@ -259,9 +259,18 @@ complete prelude is received; the existing 300-second skew limit and the
 unavailable-clock refusal are unchanged. CLI options, credential schemas and
 wire encodings are unchanged.
 
+Console epoch provisioning also has a ten-second asynchronous budget, shared
+by dialing, handshake, request write and acknowledgement. Timeout or caller
+cancellation drops the one-shot SDK client and aborts its transport tasks;
+a successful handshake does not leave an unlimited reply wait. The persisted
+wire sequence is bumped before this exchange and is not rolled back on failure,
+so an explicit retry gets a new epoch. Synchronous registry locking and disk I/O
+are outside this console budget. Low-level helpers using a borrowed console
+channel do not impose this ownership or timeout contract themselves.
+
 These bounds do not establish operational SSH custody. Broker boot, trusted
 instance/generation routing, pre-protocol diversion, exact credential selection
-and shared listener ownership still need their own integration. Response
+and shared listener ownership still need their own integration. Other response
 deadlines, relay-worker quotas/cancellation and bounded upstream resolution are
 also separate from frame receipt. In particular, listener shutdown is not proof
 that all previously admitted sessions have drained.

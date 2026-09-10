@@ -9,7 +9,8 @@
 use crate::microsandbox::broker::audit::AuditLog;
 use crate::microsandbox::broker::epoch::EpochToken;
 use crate::microsandbox::broker::epoch_provision::{
-    AgentConsoleChannel, EpochProvisionError, provision_now,
+    AgentConsoleChannel, CONSOLE_PROVISION_TIMEOUT_SECS, EpochProvisionError,
+    provision_with_deadline,
 };
 use crate::microsandbox::broker::registry::{
     CidRegistry, broker_socket_path, broker_vm_socket_path,
@@ -36,6 +37,9 @@ use std::sync::{
 ///
 /// Unknown or tombstoned CIDs fail with [`EpochProvisionError::NotBound`]
 /// before any dial — there is nothing to provision.
+/// After the registry bump, one deadline bounds the asynchronous connection,
+/// handshake, write and acknowledgement. A timeout consumes that wire epoch;
+/// retries still bump the sequence rather than replaying it.
 pub async fn provision_epoch_via_console(
     registry: &CidRegistry,
     cid: u32,
@@ -52,8 +56,16 @@ pub async fn provision_epoch_via_console(
             .map_err(|e| EpochProvisionError::SendFailed {
                 detail: format!("wire epoch bump for CID {cid} failed after live lookup: {e}"),
             })?;
-    let channel = AgentConsoleChannel::connect(&entry.instance).await?;
-    provision_now(&channel, &entry.instance, cid, wire_epoch).await
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(CONSOLE_PROVISION_TIMEOUT_SECS);
+    provision_with_deadline(
+        AgentConsoleChannel::connect(&entry.instance),
+        &entry.instance,
+        cid,
+        wire_epoch,
+        deadline,
+    )
+    .await
 }
 
 /// Re-issue the epoch for a live CID over the console agent channel: the
@@ -136,8 +148,8 @@ impl SshShimHandle {
 /// The launch epoch is provisioned over the console agent channel right
 /// after the CID is allocated. A failed provision warns and continues the
 /// host-side setup: the guest agent boots with the VM and may simply not
-/// answer yet, and blocking the whole launch on it (up to the connect
-/// timeout) would stall every SSH-enabled up on the agent boot race.
+/// answer yet. The complete asynchronous exchange is bounded, including an
+/// accepted console connection that never acknowledges the provision.
 /// Enforcement stays fail-closed meanwhile — an unprovisioned guest fails
 /// the shim-side checks — and [`reprovision_epoch`] retries explicitly on
 /// re-attestation.
