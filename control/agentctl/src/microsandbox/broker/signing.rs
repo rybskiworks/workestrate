@@ -251,25 +251,45 @@ impl GrantStore {
         self.instances.contains_key(instance)
     }
 
-    /// Whether `instance` may open an SSH session to `host:port`: some
-    /// compiled SSH grant covers the destination. Host entries match via
+    /// Complete credential records covering an instance's destination.
+    ///
+    /// This is endpoint selection, not SSH session or key-use authorization:
+    /// the requested SSH username is not known at this point. Keep records
+    /// separate and intact so subsequent checks retain each credential's
+    /// users, material reference, custody binding and violation policy.
+    /// The input is the existing compiled plan, not a new configuration schema.
+    pub fn ssh_credentials_for_destination<'a>(
+        &'a self,
+        instance: &str,
+        host: &'a str,
+        port: u16,
+    ) -> impl Iterator<Item = &'a SshGrantPlan> + 'a {
+        self.instances
+            .get(instance)
+            .into_iter()
+            .flat_map(|grants| grants.ssh.iter())
+            .filter(move |grant| {
+                let host_ok = grant
+                    .hosts
+                    .iter()
+                    .any(|pattern| microsandbox_types::HostPattern::parse(pattern).matches(host));
+                let port_ok = grant.ports.is_empty() || grant.ports.contains(&port);
+                host_ok && port_ok
+            })
+    }
+
+    /// Whether some compiled credential covers `instance`'s `host:port`.
+    /// This endpoint-only check does not authorize an SSH username or key.
+    /// Host entries match via
     /// the fork's [`HostPattern`](microsandbox_types::HostPattern) parsing
     /// (case-insensitive exact/wildcard); an empty port list matches any
     /// port, mirroring the guest policy's empty-range semantics so the
     /// shim check and the emitted policy can never disagree. Unknown
     /// instances fail closed.
     pub fn ssh_authorized(&self, instance: &str, host: &str, port: u16) -> bool {
-        let Some(grants) = self.instances.get(instance) else {
-            return false;
-        };
-        grants.ssh.iter().any(|grant| {
-            let host_ok = grant
-                .hosts
-                .iter()
-                .any(|pattern| microsandbox_types::HostPattern::parse(pattern).matches(host));
-            let port_ok = grant.ports.is_empty() || grant.ports.contains(&port);
-            host_ok && port_ok
-        })
+        self.ssh_credentials_for_destination(instance, host, port)
+            .next()
+            .is_some()
     }
 
     /// Whether ANY instance in the store may open an SSH session to
@@ -293,20 +313,8 @@ impl GrantStore {
     /// cover, broker-bound wins: any broker-bound covering grant routes
     /// the session through broker custody fail-closed.
     pub fn ssh_is_broker_bound(&self, instance: &str, host: &str, port: u16) -> bool {
-        let Some(grants) = self.instances.get(instance) else {
-            return false;
-        };
-        grants.ssh.iter().any(|grant| {
-            if grant.binding != crate::microsandbox::plan::CredentialBinding::Broker {
-                return false;
-            }
-            let host_ok = grant
-                .hosts
-                .iter()
-                .any(|pattern| microsandbox_types::HostPattern::parse(pattern).matches(host));
-            let port_ok = grant.ports.is_empty() || grant.ports.contains(&port);
-            host_ok && port_ok
-        })
+        self.ssh_credentials_for_destination(instance, host, port)
+            .any(|grant| grant.binding == crate::microsandbox::plan::CredentialBinding::Broker)
     }
 }
 
@@ -958,6 +966,94 @@ mod tests {
         let store = ssh_store(vec![ssh_grant(&["*"], vec![22], CredentialBinding::Broker)]);
         assert!(store.ssh_authorized("personal-pi", "anything.example", 22));
         assert!(!store.ssh_authorized("personal-pi", "anything.example", 2222));
+    }
+
+    #[test]
+    fn ssh_destination_selection_preserves_complete_separate_records() {
+        let broker = SshGrantPlan {
+            name: "broker-key".to_string(),
+            material: "BROKER_MATERIAL".to_string(),
+            users: vec!["git".to_string(), "review".to_string()],
+            on_violation: SecretViolationPolicy::BlockAndLog,
+            ..ssh_grant(
+                &["git.example", "*.internal"],
+                vec![22, 2222],
+                CredentialBinding::Broker,
+            )
+        };
+        let guest = SshGrantPlan {
+            name: "guest-key".to_string(),
+            material: "GUEST_MATERIAL".to_string(),
+            users: vec!["deploy".to_string()],
+            on_violation: SecretViolationPolicy::BlockAndTerminate,
+            ..ssh_grant(&["git.example"], vec![22], CredentialBinding::Guest)
+        };
+        let other = ssh_grant(&["other.example"], vec![22], CredentialBinding::Broker);
+        let store = ssh_store(vec![broker.clone(), guest.clone(), other.clone()]);
+
+        for (host, port, expected) in [
+            ("git.example", 22, vec![broker.clone(), guest]),
+            ("GIT.EXAMPLE", 2222, vec![broker.clone()]),
+            ("build.internal", 22, vec![broker]),
+            ("other.example", 22, vec![other]),
+            ("git.example", 443, vec![]),
+            ("unconfigured.example", 22, vec![]),
+        ] {
+            let actual: Vec<_> = store
+                .ssh_credentials_for_destination("personal-pi", host, port)
+                .cloned()
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "{host}:{port} must not flatten credential scope"
+            );
+            assert_eq!(
+                store.ssh_authorized("personal-pi", host, port),
+                !expected.is_empty()
+            );
+            assert_eq!(
+                store.ssh_is_broker_bound("personal-pi", host, port),
+                expected
+                    .iter()
+                    .any(|entry| entry.binding == CredentialBinding::Broker)
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_destination_selection_is_instance_scoped_without_username_defaults() {
+        let mut first = CredentialsPlan {
+            ssh: vec![ssh_grant(
+                &["git.example"],
+                vec![22],
+                CredentialBinding::Broker,
+            )],
+            signing: Vec::new(),
+            strict: false,
+            strict_origin: None,
+        };
+        // Preserve what the compiled input actually contains. Endpoint
+        // selection must not invent a username or authorize key use.
+        first.ssh[0].users.clear();
+        let mut second = first.clone();
+        second.ssh[0].users = vec!["other-user".to_string()];
+        second.ssh[0].material = "OTHER_KEY".to_string();
+        let store = GrantStore::compile(&[("first", &first), ("second", &second)]);
+        for (instance, expected) in [("first", first.ssh), ("second", second.ssh)] {
+            assert_eq!(
+                store
+                    .ssh_credentials_for_destination(instance, "git.example", 22)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        assert!(
+            store
+                .ssh_credentials_for_destination("missing", "git.example", 22)
+                .next()
+                .is_none()
+        );
     }
 
     #[test]
