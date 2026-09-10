@@ -20,8 +20,10 @@
 //! CID-reuse-after-restart inside the grant-cache window.
 
 use crate::microsandbox::broker::epoch::EpochToken;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -239,12 +241,7 @@ impl CidRegistry {
         epoch: &EpochToken,
         now_secs: u64,
     ) -> anyhow::Result<()> {
-        if cid < MIN_GUEST_CID {
-            anyhow::bail!("CID registry bind refused: CID {cid} is reserved (vsock 0/1/2)");
-        }
-        if instance.is_empty() {
-            anyhow::bail!("CID registry bind refused: instance name must not be empty");
-        }
+        validate_binding(cid, instance)?;
         let _lock =
             crate::microsandbox::port_registry::lock::PortRegistryLock::acquire(&self.state_dir)?;
         let mut entries = self.lock_entries()?;
@@ -281,6 +278,11 @@ impl CidRegistry {
             // under the new token.
             wire_epoch: 0,
         };
+        // Even an explicitly bound CID initializes allocator state before its
+        // first record. Losing an established counter must not look like a
+        // fresh registry on the next automatic allocation.
+        let next = read_next_cid(&self.next_cid_path(), &entries)?.max(cid + 1);
+        write_next_cid(&self.next_cid_path(), next)?;
         write_entry(&self.broker_dir(), &entry)?;
         entries.insert(cid, entry);
         Ok(())
@@ -298,22 +300,26 @@ impl CidRegistry {
         epoch: &EpochToken,
         now_secs: u64,
     ) -> anyhow::Result<u32> {
+        self.allocate_with_writer(instance, epoch, now_secs, write_entry)
+    }
+
+    fn allocate_with_writer(
+        &self,
+        instance: &str,
+        epoch: &EpochToken,
+        now_secs: u64,
+        persist_entry: impl FnOnce(&Path, &CidEntry) -> anyhow::Result<()>,
+    ) -> anyhow::Result<u32> {
+        if instance.is_empty() {
+            anyhow::bail!("CID registry allocate refused: instance name must not be empty");
+        }
         let _lock =
             crate::microsandbox::port_registry::lock::PortRegistryLock::acquire(&self.state_dir)?;
         let mut entries = self.lock_entries()?;
         *entries = read_all_entries(&self.broker_dir())?;
-        let mut candidate = read_next_cid(&self.next_cid_path())?;
-        loop {
-            let blocked = match entries.get(&candidate) {
-                None => false,
-                Some(e) => e.is_live() || !e.tombstone_aged_out(now_secs, self.ttl_secs),
-            };
-            if !blocked {
-                break;
-            }
-            candidate = candidate.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!("CID registry allocate: synthetic CID space exhausted")
-            })?;
+        let candidate = read_next_cid(&self.next_cid_path(), &entries)?;
+        if candidate == u32::MAX {
+            anyhow::bail!("CID registry allocate: guest CID space exhausted");
         }
         let entry = CidEntry {
             cid: candidate,
@@ -325,14 +331,17 @@ impl CidRegistry {
             // slot): starts unprovisioned, see [`Self::bind_at`].
             wire_epoch: 0,
         };
-        write_entry(&self.broker_dir(), &entry)?;
-        entries.insert(candidate, entry);
+        // Reserve durably before publishing the binding. A failed entry write
+        // may leave a gap, but must never permit a later launch to reuse a CID
+        // whose reservation might already have escaped this process.
         write_next_cid(
             &self.next_cid_path(),
             candidate.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!("CID registry allocate: synthetic CID space exhausted")
+                anyhow::anyhow!("CID registry allocate: guest CID space exhausted")
             })?,
         )?;
+        persist_entry(&self.broker_dir(), &entry)?;
+        entries.insert(candidate, entry);
         Ok(candidate)
     }
 
@@ -351,7 +360,7 @@ impl CidRegistry {
         let mut entries = self.lock_entries()?;
         // Re-read under the lock so a concurrent process's bind is visible.
         *entries = read_all_entries(&self.broker_dir())?;
-        let entry = entries.get_mut(&cid).ok_or_else(|| {
+        let mut entry = entries.get(&cid).cloned().ok_or_else(|| {
             anyhow::anyhow!("CID registry bump refused: CID {cid} has no binding")
         })?;
         if !entry.is_live() {
@@ -360,9 +369,10 @@ impl CidRegistry {
         entry.wire_epoch = entry.wire_epoch.checked_add(1).ok_or_else(|| {
             anyhow::anyhow!("CID registry bump refused: wire epoch for CID {cid} exhausted u64")
         })?;
-        let updated = entry.clone();
-        write_entry(&self.broker_dir(), &updated)?;
-        Ok(updated.wire_epoch)
+        write_entry(&self.broker_dir(), &entry)?;
+        let next = entry.wire_epoch;
+        entries.insert(cid, entry);
+        Ok(next)
     }
 
     /// Expire the binding for `cid` (tombstone; missing CID is a no-op).
@@ -458,14 +468,16 @@ impl CidRegistry {
 }
 
 /// Read every `cid-*.json` file in `dir` (missing dir = empty snapshot).
-/// A corrupt entry file is a loud warning + skip — the port registry's
-/// `read_record_loud` idiom, applied to broker subtree.
+/// A missing, unreadable, malformed or misnamed entry fails the whole snapshot.
+/// Silently dropping an authorization record could make its CID reusable.
 fn read_all_entries(dir: &Path) -> anyhow::Result<HashMap<u32, CidEntry>> {
     let mut out = HashMap::new();
-    if !dir.exists() {
-        return Ok(out);
-    }
-    for entry in std::fs::read_dir(dir)? {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(error) => return Err(error).context("read broker CID registry directory"),
+    };
+    for entry in entries {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
@@ -478,55 +490,89 @@ fn read_all_entries(dir: &Path) -> anyhow::Result<HashMap<u32, CidEntry>> {
         {
             continue;
         }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                eprintln!(
-                    "WARNING: unreadable broker CID record {}: {e}",
-                    path.display()
-                );
-                continue;
-            }
-        };
-        match serde_json::from_str::<CidEntry>(&content) {
-            Ok(record) => {
-                out.insert(record.cid, record);
-            }
-            Err(e) => {
-                eprintln!("WARNING: corrupt broker CID record {}: {e}", path.display());
-            }
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("read broker CID record {}", path.display()))?;
+        let record: CidEntry = serde_json::from_str(&content)
+            .with_context(|| format!("decode broker CID record {}", path.display()))?;
+        validate_binding(record.cid, &record.instance)
+            .with_context(|| format!("invalid broker CID record {}", path.display()))?;
+        EpochToken::from_hex(&record.epoch_hex)
+            .with_context(|| format!("invalid launch token in {}", path.display()))?;
+        if path.file_name().and_then(|name| name.to_str())
+            != Some(format!("cid-{}.json", record.cid).as_str())
+        {
+            anyhow::bail!(
+                "broker CID record filename does not match its CID: {}",
+                path.display()
+            );
+        }
+        if out.insert(record.cid, record).is_some() {
+            anyhow::bail!("duplicate broker CID record: {}", path.display());
         }
     }
     Ok(out)
 }
 
-/// Persist one entry (plain write under the already-held file lock — the
-/// port registry's `store.rs` idiom).
-fn write_entry(dir: &Path, entry: &CidEntry) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let path = dir.join(format!("cid-{}.json", entry.cid));
-    let content = serde_json::to_string_pretty(entry)?;
-    std::fs::write(&path, content)?;
+fn validate_binding(cid: u32, instance: &str) -> anyhow::Result<()> {
+    if cid < MIN_GUEST_CID || cid == u32::MAX {
+        anyhow::bail!("CID registry bind refused: CID {cid} is reserved");
+    }
+    if instance.is_empty() {
+        anyhow::bail!("CID registry bind refused: instance name must not be empty");
+    }
     Ok(())
 }
 
-/// Read the allocator counter (missing/corrupt = [`CID_ALLOC_BASE`],
-/// fail-open to the base — allocation scans for a free CID regardless).
-fn read_next_cid(path: &Path) -> anyhow::Result<u32> {
+/// Persist one complete entry under the already-held registry lock.
+fn write_entry(dir: &Path, entry: &CidEntry) -> anyhow::Result<()> {
+    let path = dir.join(format!("cid-{}.json", entry.cid));
+    let content = serde_json::to_string_pretty(entry)?;
+    write_atomic(&path, content.as_bytes())
+}
+
+/// A fresh empty registry may initialize its counter. Existing records without
+/// a counter require explicit repair; malformed counters never reset allocation.
+/// `u32::MAX` is the persisted exhaustion sentinel, not an allocatable CID.
+fn read_next_cid(path: &Path, entries: &HashMap<u32, CidEntry>) -> anyhow::Result<u32> {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(CID_ALLOC_BASE),
-        Err(_) => return Ok(CID_ALLOC_BASE),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && entries.is_empty() => {
+            return Ok(CID_ALLOC_BASE);
+        }
+        Err(e) => return Err(e).context("read broker CID allocation counter"),
     };
-    Ok(content.trim().parse().unwrap_or(CID_ALLOC_BASE))
+    let next: u32 = content
+        .trim()
+        .parse()
+        .context("invalid broker CID allocation counter")?;
+    if next < CID_ALLOC_BASE {
+        anyhow::bail!("broker CID allocation counter is below its reserved range");
+    }
+    // Both live and tombstoned records prove that their numbers were already
+    // reserved. A parseable but rolled-back counter is not a fresh allocator.
+    if entries.keys().any(|cid| *cid >= next) {
+        anyhow::bail!("broker CID allocation counter is behind existing reservations");
+    }
+    Ok(next)
 }
 
 fn write_next_cid(path: &Path, next: u32) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, next.to_string())?;
+    write_atomic(path, next.to_string().as_bytes())
+}
+
+/// Publish a complete owner-only file by same-directory rename. Sync the file
+/// before publication and its parent before reporting success. Existing readers
+/// see the old or new complete value, never a truncated record/counter.
+fn write_atomic(path: &Path, content: &[u8]) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .context("broker registry path has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(content)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    std::fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -595,7 +641,7 @@ mod tests {
     fn reserved_cids_and_empty_instance_refused() {
         let dir = crate::config::test_support::unique_state_dir("broker-reserved");
         let reg = CidRegistry::open(&dir).unwrap();
-        for cid in [0, 1, 2] {
+        for cid in [0, 1, 2, u32::MAX] {
             assert!(reg.bind(cid, "personal-pi", &token(1)).is_err());
         }
         assert!(reg.bind(7, "", &token(1)).is_err());
@@ -666,8 +712,8 @@ mod tests {
     fn broker_files_do_not_pollute_port_registry_glob() {
         let dir = crate::config::test_support::unique_state_dir("broker-isolation");
         let reg = CidRegistry::open(&dir).unwrap();
-        reg.bind(7, "personal-pi", &token(1)).unwrap();
         reg.allocate("work-pi", &token(2)).unwrap();
+        reg.bind(7, "personal-pi", &token(1)).unwrap();
         let records = crate::microsandbox::port_registry::list_records(&dir).unwrap();
         assert!(
             records.is_empty(),
@@ -692,6 +738,157 @@ mod tests {
         }
         assert_eq!(reg.live_count().unwrap(), 8);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn allocator_refuses_empty_owner_without_publishing_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = CidRegistry::open(dir.path()).unwrap();
+        assert!(reg.allocate("", &token(1)).is_err());
+        assert!(!reg.next_cid_path().exists());
+        assert_eq!(reg.live_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn allocator_refuses_corrupt_out_of_range_and_missing_counters() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = CidRegistry::open(dir.path()).unwrap();
+        let cid = reg.allocate("first", &token(1)).unwrap();
+        for invalid in ["", "broken", "0", "2", "65535", "65536", "4294967296"] {
+            std::fs::write(reg.next_cid_path(), invalid).unwrap();
+            assert!(reg.allocate("second", &token(2)).is_err(), "{invalid:?}");
+            assert_eq!(
+                std::fs::read_to_string(reg.next_cid_path()).unwrap(),
+                invalid
+            );
+            assert_eq!(reg.live_count().unwrap(), 1);
+            assert_eq!(reg.lookup(cid).unwrap().unwrap().instance, "first");
+        }
+        std::fs::remove_file(reg.next_cid_path()).unwrap();
+        assert!(reg.allocate("second", &token(2)).is_err());
+        assert!(!reg.next_cid_path().exists());
+    }
+
+    #[test]
+    fn exhausted_counter_never_publishes_the_wildcard_cid() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = CidRegistry::open(dir.path()).unwrap();
+        write_next_cid(&reg.next_cid_path(), u32::MAX - 1).unwrap();
+        assert_eq!(reg.allocate("last", &token(1)).unwrap(), u32::MAX - 1);
+        assert_eq!(
+            read_next_cid(&reg.next_cid_path(), &HashMap::new()).unwrap(),
+            u32::MAX
+        );
+        assert!(reg.allocate("overflow", &token(2)).is_err());
+        assert!(!reg.entry_path(u32::MAX).exists());
+        assert_eq!(reg.live_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn counter_io_failure_cannot_publish_a_new_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = CidRegistry::open(dir.path()).unwrap();
+        std::fs::create_dir_all(reg.next_cid_path()).unwrap();
+        assert!(reg.allocate("first", &token(1)).is_err());
+        assert!(!reg.entry_path(CID_ALLOC_BASE).exists());
+        assert_eq!(reg.live_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn explicit_high_binding_advances_the_same_allocator() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = CidRegistry::open(dir.path()).unwrap();
+        let explicit = CID_ALLOC_BASE + 37;
+        reg.bind(explicit, "explicit", &token(1)).unwrap();
+        assert_eq!(reg.allocate("automatic", &token(2)).unwrap(), explicit + 1);
+    }
+
+    #[test]
+    fn failed_binding_publication_consumes_the_reservation_without_returning_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = CidRegistry::open(dir.path()).unwrap();
+        let error = reg.allocate_with_writer("failed", &token(1), 1000, |_, _| {
+            anyhow::bail!("injected entry publication failure")
+        });
+        assert!(error.is_err());
+        assert_eq!(reg.live_count().unwrap(), 0);
+        assert!(!reg.entry_path(CID_ALLOC_BASE).exists());
+        assert_eq!(
+            read_next_cid(&reg.next_cid_path(), &HashMap::new()).unwrap(),
+            CID_ALLOC_BASE + 1
+        );
+        let reopened = CidRegistry::open(dir.path()).unwrap();
+        assert_eq!(
+            reopened.allocate("next", &token(2)).unwrap(),
+            CID_ALLOC_BASE + 1
+        );
+    }
+
+    #[test]
+    fn failed_atomic_replacement_preserves_the_target_and_cleans_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("occupied");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("marker"), b"preserved").unwrap();
+        assert!(write_atomic(&target, b"replacement").is_err());
+        assert_eq!(std::fs::read(target.join("marker")).unwrap(), b"preserved");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn corrupt_or_misattributed_records_fail_the_entire_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = CidRegistry::open(dir.path()).unwrap();
+        let cid = reg.allocate("first", &token(1)).unwrap();
+        let original = reg.lookup(cid).unwrap().unwrap();
+        let path = reg.entry_path(cid);
+        std::fs::write(&path, "{").unwrap();
+        assert!(reg.refresh().is_err());
+        assert!(CidRegistry::open(dir.path()).is_err());
+        assert!(reg.allocate("second", &token(2)).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{");
+
+        let mut malformed = original.clone();
+        malformed.cid += 1;
+        let mut wildcard = original.clone();
+        wildcard.cid = u32::MAX;
+        let mut unnamed = original.clone();
+        unnamed.instance.clear();
+        let mut invalid_token = original;
+        invalid_token.epoch_hex = "bad-token".into();
+        for record in [malformed, wildcard, unnamed, invalid_token] {
+            let content = serde_json::to_string(&record).unwrap();
+            std::fs::write(&path, &content).unwrap();
+            assert!(reg.refresh().is_err());
+            assert!(reg.allocate("second", &token(2)).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_records_are_owner_only_and_leave_no_scratch_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let reg = CidRegistry::open(dir.path()).unwrap();
+        let cid = reg.allocate("first", &token(1)).unwrap();
+        reg.bump_wire_epoch(cid).unwrap();
+        for path in [reg.entry_path(cid), reg.next_cid_path()] {
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert_eq!(std::fs::read_dir(reg.broker_dir()).unwrap().count(), 2);
+        assert_eq!(
+            CidRegistry::open(dir.path())
+                .unwrap()
+                .lookup(cid)
+                .unwrap()
+                .unwrap()
+                .wire_epoch,
+            1
+        );
     }
 
     #[test]
