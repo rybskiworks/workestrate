@@ -329,6 +329,28 @@ restart reconciliation remain required before claiming operational custody.
 The current timestamped prelude is not a launch-generation proof, and listener
 teardown does not yet cancel every admitted relay worker.
 
+CID registry records are authorization state, not optional diagnostics. A corrupt,
+unreadable, misnamed or invalid record now prevents loading the registry; it is
+never skipped to make a number appear free. Allocation also refuses malformed,
+out-of-range, exhausted or rolled-back counters and a missing counter when
+records already exist. Explicit bindings and automatic allocations share the
+same counter; reserved CIDs, including the wildcard, cannot identify a launch.
+
+Writers publish complete owner-only files using a synced temporary file and
+same-directory rename, then sync the parent. Allocation advances its durable
+counter before publishing a binding, so a failed publication consumes a number
+rather than reusing it. Existing valid record shapes still decode. These
+guarantees require updated writers: do not run older registry writers against
+the same state concurrently. The existing lock-recovery implementation still
+needs separate concurrency validation.
+
+On a registry error, stop launches and preserve the files for inspection. Do not
+delete a counter or broken record to bypass the error: first quiesce all writers
+and reconcile reservations against actual running VMs, then restore a verified
+backup or explicitly repair the affected state. There is no automatic live-state
+repair or migration, and a fresh empty state directory is a new authority domain,
+not a way to recover still-running workloads.
+
 ## Schema flow (Rust types → committed schema → distribution)
 
 ```
