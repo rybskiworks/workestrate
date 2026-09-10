@@ -79,6 +79,7 @@ default = ["schema"]
 schema = ["dep:schemars"]
 
 [dev-dependencies]
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 # The vendored fork's image crate (patched in via .cargo/config.toml) — used
 # ONLY by the host-Bug-B regression test in images::state, which validates
 # computed store tags against the REAL docker/OCI reference parser

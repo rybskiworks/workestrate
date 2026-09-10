@@ -42,6 +42,9 @@ pub mod ssh_emit;
 pub mod ssh_lifecycle;
 pub mod ssh_patterns;
 
+#[cfg(test)]
+mod property_tests;
+
 pub use audit::{AuditLog, AuditRecord, AuditResult, payload_digest_hex};
 pub use broker_vm::{BrokerVmHandle, broker_has_broker_bound_grants, ensure_broker_vm};
 pub use epoch::{EpochError, EpochToken};

@@ -58,7 +58,7 @@ Configuration is supplied via the `#![proptest_config(...)]` inner attribute ins
 
 ```rust
 use proptest::prelude::*;
-use proptest::test_runner::ProptestConfig;
+use proptest::test_runner::Config as ProptestConfig;
 
 /// Parses a "YYYY-MM-DD" string into (year, month, day).
 fn parse_date(s: &str) -> Option<(i32, u32, u32)> {
@@ -76,9 +76,9 @@ fn parse_date(s: &str) -> Option<(i32, u32, u32)> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
     #[test]
-    fn parses_and_serializes_correctly(ref s in "[0-9]{4}-[0-9]{2}-[0-9]{2}") {
-        let d = parse_date(s).unwrap();
-        prop_assert_eq!(d, parse_date(&format!("{:04}-{:02}-{:02}", d.0, d.1, d.2)).unwrap());
+    fn parses_valid_components(year in 0i32..10000, month in 1u32..13, day in 1u32..32) {
+        let encoded = format!("{year:04}-{month:02}-{day:02}");
+        prop_assert_eq!(parse_date(&encoded), Some((year, month, day)));
     }
 }
 ```
@@ -90,15 +90,15 @@ proptest! {
 | field | default | env var | meaning |
 | --- | --- | --- | --- |
 | `cases` | 256 | `PROPTEST_CASES` | number of successful test cases to run |
-| `max_shrink_iters` | 32768 | `PROPTEST_MAX_SHRINK_ITERS` | max shrinking iterations per failing case |
-| `failure_persistence` | `Some("proptest-regressions")` | `PROPTEST_PERSIST_FILE` | where to persist failing seeds |
+| `max_shrink_iters` | `u32::MAX` (effective limit: four times `cases`) | `PROPTEST_MAX_SHRINK_ITERS` | max shrinking iterations per failing case |
+| `failure_persistence` | `FileFailurePersistence::SourceParallel("proptest-regressions")` | no persistence-path environment variable | where to persist failing seeds; `PROPTEST_DISABLE_FAILURE_PERSISTENCE` disables it |
 | `fork` | `false` | `PROPTEST_FORK` | run each test in a subprocess |
 | `timeout` | 0 (disabled) | `PROPTEST_TIMEOUT` | per-test timeout in ms (requires `fork`) |
 | `rng_seed` | random | `PROPTEST_RNG_SEED` | RNG seed for deterministic replay |
 
 ## Failure persistence
 
-proptest persists the seed of every failing case in a `proptest-regressions/` directory (one file per test module). On the next run it replays those seeds first, so a regression that was once shrunk to a minimal counterexample is re-checked before any new random cases are generated.
+proptest persists failing seeds in a `proptest-regressions/` directory. On the next run it replays those seeds before new random cases. A seed depends on the generator: preserve a concrete minimized fixture as well when it demonstrates a defect. Shrinking finds a smaller failing case, not necessarily a globally minimal one.
 
 > "proptest remembers the seed... and replays it on the next run"
 
