@@ -135,22 +135,6 @@ impl<R: CidResolver> UnixSocketTransport<R> {
         Ok(Self { listener, resolver })
     }
 
-    /// Read one length-prefixed frame (fail-closed at [`MAX_FRAME_BYTES`]).
-    fn read_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result<Vec<u8>> {
-        let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf)?;
-        let len = u32::from_be_bytes(len_buf) as usize;
-        if len == 0 || len > MAX_FRAME_BYTES {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("broker frame length {len} out of bounds (max {MAX_FRAME_BYTES})"),
-            ));
-        }
-        let mut buf = vec![0u8; len];
-        stream.read_exact(&mut buf)?;
-        Ok(buf)
-    }
-
     pub fn write_frame(
         stream: &mut std::os::unix::net::UnixStream,
         bytes: &[u8],
@@ -169,6 +153,15 @@ impl<R: CidResolver> UnixSocketTransport<R> {
 
 impl<R: CidResolver + Send + Sync> BrokerTransport for UnixSocketTransport<R> {
     fn accept(&self) -> std::io::Result<(TransportPeer, WireEnvelope)> {
+        self.accept_envelope(None)
+    }
+}
+
+impl<R: CidResolver> UnixSocketTransport<R> {
+    fn accept_envelope(
+        &self,
+        stop: Option<&AtomicBool>,
+    ) -> std::io::Result<(TransportPeer, WireEnvelope)> {
         let (mut stream, _) = self.listener.accept()?;
         let cid = self.resolver.resolve_cid(&stream).ok_or_else(|| {
             std::io::Error::new(
@@ -176,7 +169,7 @@ impl<R: CidResolver + Send + Sync> BrokerTransport for UnixSocketTransport<R> {
                 "broker: no CID vouched",
             )
         })?;
-        let frame = Self::read_frame(&mut stream)?;
+        let frame = super::frame_io::read_frame(&mut stream, MAX_FRAME_BYTES, stop)?;
         let envelope: WireEnvelope = decode_cbor(&frame)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         Ok((TransportPeer { cid }, envelope))
@@ -196,6 +189,17 @@ impl<R: CidResolver> UnixSocketTransport<R> {
         std::os::unix::net::UnixStream,
         SshDivertPrelude,
     )> {
+        self.accept_divert_with_stop(None)
+    }
+
+    fn accept_divert_with_stop(
+        &self,
+        stop: Option<&AtomicBool>,
+    ) -> std::io::Result<(
+        TransportPeer,
+        std::os::unix::net::UnixStream,
+        SshDivertPrelude,
+    )> {
         let (mut stream, _) = self.listener.accept()?;
         let cid = self.resolver.resolve_cid(&stream).ok_or_else(|| {
             std::io::Error::new(
@@ -203,7 +207,7 @@ impl<R: CidResolver> UnixSocketTransport<R> {
                 "broker: no CID vouched",
             )
         })?;
-        let payload = Self::read_frame(&mut stream)?;
+        let payload = super::frame_io::read_frame(&mut stream, MAX_FRAME_BYTES, stop)?;
         let mut framed = Vec::with_capacity(4 + payload.len());
         framed.extend_from_slice(&(payload.len() as u32).to_be_bytes());
         framed.extend_from_slice(&payload);
@@ -758,12 +762,16 @@ fn accept_and_decide<R: CidResolver>(
     registry: &CidRegistry,
     grants: &GrantStore,
     audit: &AuditLog,
-    timestamp: &str,
-    now_secs: u64,
+    stop: Option<&AtomicBool>,
+    clock: impl FnOnce() -> (String, u64),
 ) -> std::io::Result<(std::os::unix::net::UnixStream, DivertDecision)> {
-    let (peer, stream, prelude) = transport.accept_divert()?;
+    let ((peer, stream, prelude), (timestamp, now_secs)) =
+        super::receipt_clock::receive_with_clock(
+            || transport.accept_divert_with_stop(stop),
+            clock,
+        )?;
     let decision = decide_divert(
-        registry, grants, audit, peer.cid, &prelude, now_secs, timestamp,
+        registry, grants, audit, peer.cid, &prelude, now_secs, &timestamp,
     );
     Ok((stream, decision))
 }
@@ -783,8 +791,9 @@ pub fn serve_divert_once<R: CidResolver>(
     timestamp: &str,
     now_secs: u64,
 ) -> std::io::Result<DivertDecision> {
-    let (stream, decision) =
-        accept_and_decide(transport, registry, grants, audit, timestamp, now_secs)?;
+    let (stream, decision) = accept_and_decide(transport, registry, grants, audit, None, || {
+        (timestamp.to_owned(), now_secs)
+    })?;
     match &decision {
         DivertDecision::Allow { dest } => {
             if let Err(e) = relay.relay(stream, dest) {
@@ -824,13 +833,15 @@ pub fn run_divert_until<R: CidResolver, L: SshRelay + Clone + 'static>(
     stop: &AtomicBool,
 ) {
     while !stop.load(Ordering::Relaxed) {
-        let timestamp = crate::microsandbox::runtime::time::current_rfc3339_utc();
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
         let (stream, decision) =
-            match accept_and_decide(transport, registry, grants, audit, &timestamp, now_secs) {
+            match accept_and_decide(transport, registry, grants, audit, Some(stop), || {
+                let timestamp = crate::microsandbox::runtime::time::current_rfc3339_utc();
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                (timestamp, now_secs)
+            }) {
                 Ok(v) => v,
                 Err(e) if stop.load(Ordering::Relaxed) => {
                     let _ = e;
@@ -903,7 +914,7 @@ impl<B: KeyBackend> BrokerShim<B> {
         stop: &AtomicBool,
     ) {
         while !stop.load(Ordering::Relaxed) {
-            let (peer, envelope) = match transport.accept() {
+            let (peer, envelope) = match transport.accept_envelope(Some(stop)) {
                 Ok(v) => v,
                 Err(e) if stop.load(Ordering::Relaxed) => {
                     let _ = e;
@@ -1146,6 +1157,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn signing_and_divert_loops_stop_during_an_accepted_incomplete_frame() {
+        #[derive(Debug)]
+        struct AcceptedResolver(std::sync::mpsc::Sender<()>);
+
+        impl CidResolver for AcceptedResolver {
+            fn resolve_cid(&self, _stream: &std::os::unix::net::UnixStream) -> Option<u32> {
+                self.0.send(()).unwrap();
+                Some(7)
+            }
+        }
+
+        for signing in [false, true] {
+            for prefix in [vec![], vec![0, 0], vec![0, 0, 0, 5, 1]] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("broker.sock");
+                let (accepted, ready) = std::sync::mpsc::channel();
+                let transport =
+                    UnixSocketTransport::bind(&path, AcceptedResolver(accepted)).unwrap();
+                let registry = bound_registry(dir.path());
+                let audit = AuditLog::memory();
+                let shim = BrokerShim::new(path.clone(), registry, test_service(), audit);
+                let stop = AtomicBool::new(false);
+                let mut client = std::os::unix::net::UnixStream::connect(&path).unwrap();
+                client.write_all(&prefix).unwrap();
+                let (finished, done) = std::sync::mpsc::channel();
+                std::thread::scope(|scope| {
+                    let server = scope.spawn(|| {
+                        if signing {
+                            shim.run_until(&transport, &stop);
+                        } else {
+                            run_divert_until(
+                                &transport,
+                                &shim.registry,
+                                &divert_store(),
+                                &shim.audit,
+                                EchoRelay,
+                                &stop,
+                            );
+                        }
+                        finished.send(()).unwrap();
+                    });
+                    let was_accepted = ready.recv_timeout(Duration::from_secs(2));
+                    stop.store(true, Ordering::Relaxed);
+                    // Keep the stalled peer open until after measuring shutdown.
+                    // On failure, close/wake before joining to bound the test too.
+                    let stopped = done.recv_timeout(Duration::from_secs(2));
+                    drop(client);
+                    drop(std::os::unix::net::UnixStream::connect(&path));
+                    server.join().unwrap();
+                    assert!(
+                        was_accepted.is_ok(),
+                        "fixture must reach an accepted stream"
+                    );
+                    assert!(stopped.is_ok(), "signing={signing}, prefix={prefix:?}");
+                });
+                assert!(shim.audit.is_empty());
+            }
+        }
+    }
+
     // ---- SSH divert decisions ----
 
     /// Fixed wall clock for divert tests (explicit `now_secs`, no time I/O).
@@ -1357,6 +1429,63 @@ mod tests {
         assert_eq!(records[0].instance, "real-instance");
         assert!(matches!(records[0].result, AuditResult::Deny { .. }));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accept_and_decide_samples_receipt_clock_and_preserves_skew_limits() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicU64;
+
+        #[derive(Debug)]
+        struct ReceiptClockResolver {
+            clock: Arc<AtomicU64>,
+            received_at: u64,
+        }
+
+        impl CidResolver for ReceiptClockResolver {
+            fn resolve_cid(&self, _stream: &std::os::unix::net::UnixStream) -> Option<u32> {
+                // Simulate time spent waiting for a client, without wall-clock sleeps.
+                self.clock.store(self.received_at, Ordering::SeqCst);
+                Some(7)
+            }
+        }
+
+        let receipt_time = DIVERT_NOW + 600;
+        for offset in [-301_i64, -300, 0, 300, 301] {
+            let dir = tempfile::tempdir().unwrap();
+            let socket_path = dir.path().join("broker.sock");
+            let clock = Arc::new(AtomicU64::new(DIVERT_NOW));
+            let transport = UnixSocketTransport::bind(
+                &socket_path,
+                ReceiptClockResolver {
+                    clock: Arc::clone(&clock),
+                    received_at: receipt_time,
+                },
+            )
+            .unwrap();
+            let registry = bound_registry(dir.path());
+            let audit = AuditLog::memory();
+            let mut client = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+            let epoch = receipt_time.checked_add_signed(offset).unwrap();
+            let framed = encode_ssh_divert_prelude(&divert_prelude("github.com", 22, 7, epoch));
+            client.write_all(&framed).unwrap();
+            client.shutdown(Shutdown::Write).unwrap();
+
+            let (_stream, decision) =
+                accept_and_decide(&transport, &registry, &divert_store(), &audit, None, || {
+                    let now = clock.load(Ordering::SeqCst);
+                    (format!("receipt-{now}"), now)
+                })
+                .unwrap();
+            assert_eq!(
+                matches!(decision, DivertDecision::Allow { .. }),
+                offset.unsigned_abs() <= MAX_DIVERT_EPOCH_SKEW_SECS,
+                "offset {offset}: {decision:?}"
+            );
+            let records = audit.snapshot();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].timestamp, format!("receipt-{receipt_time}"));
+        }
     }
 
     #[test]
