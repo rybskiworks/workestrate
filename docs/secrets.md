@@ -38,17 +38,41 @@ consumed by the code; default paths are used regardless.
 
 ## setup-secrets flows
 
-`setup-secrets.sh` supports two mutually exclusive targeting modes:
+Run `just setup-secrets ...` from the Workestrate checkout to enter the pinned
+development shell automatically; a separate helper installation is not needed.
+Arguments are forwarded literally, including paths containing spaces.
+
+`setup-secrets.sh` supports mutually exclusive named, directory and global targets:
 
 ### `setup-secrets --config <name> init|update`
 
 Targets a specific config repo's `.env.enc` + `.sops.yaml` in
-`$WORKESTRATE_HOME/config-repos/<name>/`.
+the writable directory returned by `workestrate secrets-target`. This honors
+the selected tool home, registry store directory, encrypted-file name and
+age-key overrides. A failed lookup stops before editing; it never falls back
+to a guessed XDG directory.
 
 ```bash
 setup-secrets --config personal init      # one-time: create .env.enc
 setup-secrets --config personal update    # edit existing values
+just setup-secrets --home /path/to/operator-home --config personal update
 ```
+
+`--home` is forwarded to Workestrate for named config selection; otherwise
+Workestrate's normal home/environment/XDG precedence applies. It requires
+`--config` and is not supported for the legacy `--global` mode.
+
+For a config directory not selected through the registry:
+
+```bash
+just setup-secrets --config-dir "/path/to/config repo" update
+```
+
+`--config-dir` and `--config` are mutually exclusive, and both override an
+inherited `WORKESTRATE_CONFIG_DIR`. Direct directory selection uses `.env.enc`
+(or `SECRET_FILE`) and the usual `SOPS_AGE_KEY_FILE` default; registry-specific
+file/key overrides require named selection. Both modes require an existing
+directory. `init` and `update` can appear before or after these options.
 
 `init`:
 - Creates `~/.config/sops/age/ai-workbench-secrets.txt` (mode 0600) if missing.
@@ -87,11 +111,12 @@ registered config repo, or falls back to the repo root (backwards compat).
 `REQUIRED_KEYS` is read from `workestrate secrets-schema` (falls back to
 `.env.example` grep).
 
-> **Landed (Track B).** `setup-secrets` reads per-repo `secrets_file` and
-> `age_key_file` overrides from the registry when `--config <name>` is used
-> (via `workestrate secrets-target <name> --json`, falling back to the
-> defaults when unavailable); the Rust `load_secrets()` honors the same
-> overrides.
+`setup-secrets --config` requires the Workestrate CLI and reads `dir`,
+`secrets_file` and `age_key_file` from its JSON resolver output. The helper's
+Nix package includes that CLI and `jq`; no shell evaluation of resolver output
+is used. `just secrets-target-check` tests selection and encrypted updates with
+disposable homes and fresh test keys. `just shell-arguments-check` covers the
+recipe's literal argument forwarding.
 
 ## Multi-layer per-key value merge
 

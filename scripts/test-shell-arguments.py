@@ -73,7 +73,11 @@ class ShellArgumentsTest(unittest.TestCase):
         root_file = Path(forwarded[3].removeprefix(prefix))
         self.assertTrue(root_file.is_relative_to(self.env["HOME"]))
         self.assertEqual(root_file.read_bytes(), str(self.root).encode())
-        expected = ([".#bootstrap"] if recipe == "bootstrap" else []) + arguments
+        prefix_args = {
+            "bootstrap": [".#bootstrap"],
+            "setup-secrets": ["-c", "setup-secrets"],
+        }.get(recipe, [])
+        expected = prefix_args + arguments
         self.assertEqual(forwarded[4:], expected)
 
     def observed_environment(self):
@@ -125,6 +129,17 @@ class ShellArgumentsTest(unittest.TestCase):
         for recipe in ("shell", "bootstrap"):
             with self.subTest(recipe=recipe):
                 self.check_recipe(recipe, ["-c", "false"], exit_code=23)
+
+    def test_secrets_target_arguments_remain_literal(self):
+        marker = self.root / "must not be created"
+        for arguments in (
+            ["--home", str(self.outer / "operator home"), "--config", "personal", "update"],
+            ["--config-dir", f"$(touch {shlex.quote(str(marker))}); `false`", "update"],
+        ):
+            with self.subTest(arguments=arguments):
+                self.check_recipe("setup-secrets", arguments)
+                self.assertFalse(marker.exists())
+        self.check_recipe("setup-secrets", ["--config", "personal", "update"], exit_code=23)
 
     def test_shells_keep_explicit_external_target_literal(self):
         target = str(self.outer / 'cache with spaces' / '$(touch injected); `false` "quoted"')

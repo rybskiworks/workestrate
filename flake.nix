@@ -301,8 +301,10 @@
           setup-secrets = pkgs.writeShellApplication {
             name = "setup-secrets";
             runtimeInputs = [
+              workestrate
               pkgs.sops
               pkgs.age
+              pkgs.jq
               pkgs.coreutils
               pkgs.gnugrep
               pkgs.gnused
