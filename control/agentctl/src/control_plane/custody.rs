@@ -105,7 +105,7 @@ impl SshController {
         Ok(())
     }
 
-    fn ensure_state(&self) -> Result<(), ControlError> {
+    pub(crate) fn ensure_state(&self) -> Result<(), ControlError> {
         #[cfg(unix)]
         if self
             .store
@@ -332,6 +332,17 @@ impl SshController {
         self.change(&launch)
     }
 
+    /// Retire observations before a replacement handshake can fence the old
+    /// broker connection. Cancellation before Welcome must not leave old ready
+    /// state behind; only a new authenticated Welcome can restore a session.
+    pub(crate) fn begin_broker_connection(&mut self) -> Result<(), ControlError> {
+        self.ensure_state()?;
+        if let Some(session) = self.broker.clone() {
+            self.broker_disconnected(&session)?;
+        }
+        Ok(())
+    }
+
     /// Adopt the Welcome from the authenticated, launch-bound broker transport.
     /// The broker issues its incarnation and connection sequence; the controller
     /// must not invent a substitute that cannot fence the broker's own admission.
@@ -383,6 +394,19 @@ impl SshController {
             broker,
             connection,
         })
+    }
+
+    /// Heartbeats require current ownership even before any launch is enrolled.
+    /// A previously authenticated connection cannot renew after state loss.
+    pub(crate) fn validate_broker_session(
+        &self,
+        session: &BrokerSession,
+    ) -> Result<(), ControlError> {
+        self.ensure_state()?;
+        if self.broker.as_ref() != Some(session) {
+            return Err(ControlError::StaleObservation);
+        }
+        Ok(())
     }
 
     /// A stale connection's disconnect cannot erase a newer broker session.

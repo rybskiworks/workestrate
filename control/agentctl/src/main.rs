@@ -72,6 +72,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Serve one private control endpoint for selected running instances
+    Control {
+        #[command(subcommand)]
+        action: ControlAction,
+    },
     /// Runtime/config sanity check
     Check,
     /// Initialize workestrate configuration (DEPRECATED: use `home init`;
@@ -270,6 +275,22 @@ enum Commands {
     Policy {
         #[command(subcommand)]
         action: PolicyAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ControlAction {
+    /// Adopt exact live launches without starting or stopping their VMs
+    Serve {
+        /// Existing canonical private directory for endpoint and desired state
+        #[arg(long)]
+        state_dir: PathBuf,
+        /// Existing instance selector; repeat to share one owner across instances
+        #[arg(long = "instance", required = true, action = clap::ArgAction::Append)]
+        instances: Vec<String>,
+        /// Explicitly initialize a new desired store; otherwise require one
+        #[arg(long)]
+        initialize: bool,
     },
 }
 
@@ -806,6 +827,26 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     }
 
     match cli.command {
+        Commands::Control { action } => match action {
+            ControlAction::Serve {
+                state_dir,
+                instances,
+                initialize,
+            } => {
+                #[cfg(unix)]
+                {
+                    workestrate::commands::control::cmd_control_serve(
+                        &state_dir, &instances, initialize,
+                    )
+                    .await
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = (state_dir, instances, initialize);
+                    anyhow::bail!("host control requires a Unix local endpoint")
+                }
+            }
+        },
         Commands::Check => cmd_check(),
         Commands::Init { url } => cmd_init(url.as_deref()),
         Commands::New { name } => {
@@ -1225,10 +1266,77 @@ mod tests {
     use workestrate::config::test_support::TestConfigGuard;
 
     #[test]
+    fn control_serve_requires_explicit_state_and_instances() {
+        assert!(Cli::try_parse_from(["workestrate", "control", "serve"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "workestrate",
+                "control",
+                "serve",
+                "--state-dir",
+                "/private/control"
+            ])
+            .is_err()
+        );
+        let parsed = Cli::try_parse_from([
+            "workestrate",
+            "control",
+            "serve",
+            "--state-dir",
+            "/private/control",
+            "--instance",
+            "context-worker@one",
+            "--instance",
+            "context-worker@two",
+            "--initialize",
+        ]);
+        let Ok(Cli {
+            command:
+                Commands::Control {
+                    action:
+                        ControlAction::Serve {
+                            state_dir,
+                            instances,
+                            initialize,
+                        },
+                },
+            ..
+        }) = parsed
+        else {
+            panic!("explicit control serve did not parse");
+        };
+        assert_eq!(state_dir, PathBuf::from("/private/control"));
+        assert_eq!(instances, ["context-worker@one", "context-worker@two"]);
+        assert!(initialize);
+        let reopened = Cli::try_parse_from([
+            "workestrate",
+            "control",
+            "serve",
+            "--state-dir",
+            "/private/control",
+            "--instance",
+            "worker",
+        ]);
+        assert!(matches!(
+            reopened,
+            Ok(Cli {
+                command: Commands::Control {
+                    action: ControlAction::Serve {
+                        initialize: false,
+                        ..
+                    }
+                },
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn cli_exposes_expected_subcommands() {
         let cmd = Cli::command();
         let names: Vec<_> = cmd.get_subcommands().map(|s| s.get_name()).collect();
         for expected in [
+            "control",
             "check",
             "init",
             "new",

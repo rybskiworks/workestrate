@@ -86,7 +86,7 @@ class VerificationTests(unittest.TestCase):
                 f".#checks.x86_64-linux.{name}"
                 for name in (
                     "rust", "unit", "package", "pre-commit", "treefmt",
-                    "tombiCheck", "schemaSync", "buildRevision", "deny",
+                    "tombiCheck", "schemaSync", "buildRevision", "brokerImage", "deny",
                 )
             },
         )

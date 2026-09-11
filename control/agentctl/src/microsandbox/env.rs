@@ -243,6 +243,7 @@ mod tests {
             command: Vec::new(),
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env,
             secret_env,
             credentials: None,

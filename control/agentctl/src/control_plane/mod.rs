@@ -6,11 +6,14 @@
 //! SSH readiness requires a matching current broker observation.
 
 pub mod authorization;
+pub(crate) mod broker_link;
 pub mod custody;
 pub(crate) mod dispatcher;
 #[cfg(unix)]
 pub mod local;
 pub(crate) mod native;
+#[cfg(unix)]
+pub(crate) mod owner;
 pub mod types;
 
 #[cfg(test)]

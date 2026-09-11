@@ -1,6 +1,8 @@
 //! Command handlers (`workestrate <cmd>`).
 
 pub mod config_cmd;
+#[cfg(unix)]
+pub mod control;
 pub mod deps;
 pub mod diagnostics;
 pub mod doctor;

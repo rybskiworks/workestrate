@@ -155,6 +155,15 @@ fn is_valid_port_name(name: &str) -> bool {
     ) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// Check the SDK's nonzero u32 MiB representation, not host free-space admission.
+pub fn validate_root_disk_mib(size: u32) -> Result<()> {
+    anyhow::ensure!(
+        size != 0,
+        "root_disk_mib must be a nonzero u32 MiB capacity"
+    );
+    Ok(())
+}
+
 /// Validate a parsed [`ConfigFile`] against the invariants the TOML schema
 /// alone cannot express: `schema_version` support (see
 /// [`EXPECTED_SCHEMA_VERSION`]), recipe/feature vocabulary allowlists, trust,
@@ -203,6 +212,10 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // enum already fails unknown variants at TOML parse), so they must be
     // validated here.
     for (workload_name, workload) in &config.workloads {
+        if let Some(size) = workload.root_disk_mib {
+            validate_root_disk_mib(size)
+                .map_err(|e| anyhow::anyhow!("workload '{workload_name}': {e}"))?;
+        }
         if let Some(init) = &workload.init {
             validate_init(init).map_err(|e| anyhow::anyhow!("workload '{workload_name}': {e}"))?;
         }

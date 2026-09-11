@@ -86,6 +86,14 @@ impl ConfigWorkload {
                 source_of(&format!("workloads.{}.memory_mib", self.name)),
             );
         }
+        if let Some(size) = plan.root_disk_mib {
+            write_line(
+                &mut out,
+                "",
+                &format!("root disk: {size} MiB (new managed OCI disk)"),
+                source_of(&format!("workloads.{}.root_disk_mib", self.name)),
+            );
+        }
         let env_source = source_of(&format!("workloads.{}.env", self.name));
         for e in &plan.env {
             let source = if let Some(dep) = &e.injected_by {

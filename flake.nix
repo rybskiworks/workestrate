@@ -3,7 +3,7 @@
 
   inputs = {
     # Shared build tools and development modules have one version authority.
-    tooling.url = "github:rybskiworks/nix-tooling/c99bc5af3511952241f3955bd4326e128084ee30";
+    tooling.url = "github:rybskiworks/nix-tooling/46e62f450396ea16aa884568d1d0a9591bfb6299";
     nixpkgs.follows = "tooling/nixpkgs";
     fenix.follows = "tooling/fenix";
     flake-parts.follows = "tooling/flake-parts";
@@ -13,7 +13,7 @@
 
     microsandbox-fork = {
       # Runtime packages and SDK patches must come from this same source.
-      url = "github:rybskiworks/microsandbox/41b5ad697b1c683efdfebfc1d3b7e8a01f917457";
+      url = "github:rybskiworks/microsandbox/8ae14c22963c0680b231f61280f43db364693a5c";
       inputs.tooling.follows = "tooling";
     };
 
@@ -216,6 +216,13 @@
               inputs'.microsandbox-fork.packages.microsandbox.version == forkVersion
             ) "Microsandbox runtime package and SDK source versions disagree";
             inputs'.microsandbox-fork.packages.microsandbox;
+          brokerImage = import ./nix/images/broker {
+            inherit pkgs;
+            guest = inputs.tooling.lib.guest;
+            base = inputs'.tooling.packages.guest-determinate-base;
+            brokerd = inputs'.microsandbox-fork.packages.brokerd;
+            hostPrincipal = "broker.workestrate.internal";
+          };
           tombi = inputs.tooling.packages.${system}.tombi;
           # Retain the source-package output for downstream development tools;
           # compilation shares the fork package's filtered Rust workspace.
@@ -373,6 +380,7 @@
 
           packages = {
             beads = inputs'.tooling.packages.beads;
+            broker-image = brokerImage;
             inherit
               agentd
               workestrate
@@ -408,6 +416,22 @@
           # Expose lib per system for backward compat via `config.packages`? Instead we set `flake.lib` above.
           # For `nix flake check` we also provide tombiCheck and treefmt checks.
           checks = {
+            brokerImage =
+              let
+                source = pkgs.lib.fileset.toSource {
+                  root = ./nix/images/broker;
+                  fileset = pkgs.lib.fileset.unions [
+                    ./nix/images/broker/default.nix
+                    ./nix/images/broker/workestrate-broker.service.in
+                    ./nix/images/broker/test_broker_image.py
+                  ];
+                };
+              in
+              pkgs.runCommand "workestrate-broker-image-contract" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+                python3 -B ${source}/test_broker_image.py
+                mkdir -p $out
+              '';
+
             buildRevision =
               pkgs.runCommand "workestrate-build-revision-check"
                 {
@@ -462,6 +486,7 @@
               '';
               doCheck = false;
               installPhase = "mkdir -p $out";
+              postInstall = "";
             });
 
             package =
@@ -513,9 +538,11 @@
               cargoTestFlags = [
                 "--locked"
                 "--no-fail-fast"
+                "--message-format=json-render-diagnostics"
               ];
               nativeCheckInputs = [
                 pkgs.git
+                pkgs.jq
                 pkgs.sops
                 pkgs.age
                 tombi
@@ -533,6 +560,42 @@
                 export GIT_CONFIG_GLOBAL=/dev/null
                 # Daemon-backed image tests and optional Copier round trips have
                 # separate host gates; do not install their tools in this sandbox.
+              '';
+              # Capture the artifact from the same invocation that runs the
+              # tests. A second Cargo command can invalidate build scripts.
+              postCheck = "";
+              checkPhase = ''
+                set -o pipefail
+                cargoCheckHook 2>&1 | tee "$TMPDIR/native-fixture-check.log"
+                nativeFixtureExecutable=$(jq -erRs --arg manifest "$PWD/Cargo.toml" '
+                  [split("\n")[] | fromjson? | select(type == "object")
+                    | select(.reason == "compiler-artifact"
+                    and .manifest_path == $manifest
+                    and .target.name == "workestrate"
+                    and .target.kind == ["lib"]
+                    and .profile.test == true
+                    and (.executable | type) == "string")]
+                  | if length != 1 then error("expected one library test executable")
+                    else .[0].executable end
+                ' "$TMPDIR/native-fixture-check.log")
+                test -f "$nativeFixtureExecutable"
+                test -x "$nativeFixtureExecutable"
+                test "$(realpath "$nativeFixtureExecutable")" = "$nativeFixtureExecutable"
+                test "$(dirname "$nativeFixtureExecutable")" = \
+                  "$PWD/target/${pkgs.stdenv.hostPlatform.rust.rustcTargetSpec}/debug/deps"
+                # Stage only the selected tested file, independently of the
+                # install hook's architecture-independent debug-directory link.
+                test ! -e "$TMPDIR/native-fixture-executable"
+                test ! -L "$TMPDIR/native-fixture-executable"
+                install -m755 "$nativeFixtureExecutable" "$TMPDIR/native-fixture-executable"
+                cmp "$nativeFixtureExecutable" "$TMPDIR/native-fixture-executable"
+              '';
+              postInstall = (old.postInstall or "") + ''
+                install -Dm755 "$TMPDIR/native-fixture-executable" "$out/libexec/workestrate-native-fixture"
+                makeWrapper "$out/libexec/workestrate-native-fixture" "$out/bin/workestrate-native-fixture" \
+                  --set MSB_PATH "${microsandbox}/bin/msb" \
+                  --set MSB_AGENTD_PATH "${microsandbox}/libexec/agentd" \
+                  --run ': "''${MSB_HOME:?set an explicit disposable MSB_HOME for native fixtures}"'
               '';
             });
 
@@ -672,48 +735,7 @@
               export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
               export WORKESTRATE_DEVSHELL=1
 
-              _tool_repo_root() {
-                local root
-                root=$(git rev-parse --show-toplevel 2>/dev/null || true)
-                if [ -n "$root" ] \
-                  && [ -f "$root/flake.nix" ] \
-                  && [ -f "$root/control/agentctl/Cargo.toml" ] \
-                  && [ -f "$root/config.reference/workestrate.toml" ]; then
-                  printf '%s' "$root"
-                fi
-              }
-              _setup_vendor_link() {
-                local repo_root vendor_dir vendor_link target
-                repo_root=$(_tool_repo_root)
-                if [ -z "$repo_root" ]; then
-                  return 0
-                fi
-                vendor_dir="$repo_root/control/agentctl/vendor"
-                vendor_link="$vendor_dir/microsandbox-fork"
-                target="${microsandboxSource}"
-                mkdir -p "$vendor_dir"
-                if [ -L "$vendor_link" ]; then
-                  local current
-                  current=$(readlink -f "$vendor_link" 2>/dev/null || true)
-                  # The pinned input's store path changes on every pin bump; a
-                  # still-present old generation must not suppress the refresh
-                  # (staleness is silent, GC makes it loud).
-                  if [ -z "$current" ] || [ ! -d "$current" ]; then
-                    echo "workestrate: refreshing stale vendor symlink" >&2
-                    ln -sfn "$target" "$vendor_link"
-                  elif [ "$current" != "$target" ]; then
-                    echo "workestrate: vendor symlink re-pointed to pinned fork generation" >&2
-                    ln -sfn "$target" "$vendor_link"
-                  fi
-                elif [ -e "$vendor_link" ]; then
-                  echo "workestrate: vendor/microsandbox-fork is a real directory (unlocked); leaving it alone" >&2
-                else
-                  ln -sfn "$target" "$vendor_link"
-                fi
-              }
-              _setup_vendor_link
-              unset -f _setup_vendor_link
-              unset -f _tool_repo_root
+              ${pkgs.bash}/bin/bash ${./scripts/sdk-source.sh} ${pkgs.lib.escapeShellArg config.devenv.shells.default.devenv.root} "${microsandboxSource}" --allow-unlocked > /dev/null || exit 1
             '';
           };
         };

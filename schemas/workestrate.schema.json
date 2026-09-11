@@ -1918,6 +1918,16 @@
             "$ref": "#/definitions/PortMapping"
           }
         },
+        "root_disk_mib": {
+          "description": "Managed OCI writable root-disk capacity in MiB, applied only on creation. Omission preserves the backend default; existing disks are never resized.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "maximum": 4294967295.0,
+          "minimum": 1.0
+        },
         "seed_files": {
           "default": [],
           "type": "array",

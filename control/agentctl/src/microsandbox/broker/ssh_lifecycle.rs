@@ -3,7 +3,9 @@
 //! When a workload emits an SSH policy with at least one grant,
 //! [`ensure_ssh_shim`] reserves the sandbox's transport CID before VM creation,
 //! binds its launch-specific socket, and serves divert decisions on a background
-//! thread. Its handle releases the reservation on failed launch or service end.
+//! thread. Explicit finalization releases the reservation only after listener
+//! closure and every retained relay join. Retirement also joins that finalizing
+//! loop. Drop alone cancels without authorizing release or proving retirement.
 //! Strict-only confinement emits a policy but
 //! binds no listener — nothing can divert to it, so it takes no handle.
 
@@ -84,8 +86,8 @@ pub async fn reprovision_epoch(state_dir: &Path, cid: u32) -> Result<u64, EpochP
 
 /// Owns one workload's SSH shim: the bound socket, the allocated
 /// transport CID, and the background divert loop. Release via
-/// [`SshShimHandle::shutdown`] when the foreground service ends — the
-/// socket, thread, and CID binding are all relinquished there. The divert
+/// [`SshShimHandle::retire_until`] when the foreground service ends — the
+/// socket and CID binding are relinquished only after relay joins. The divert
 /// path needs no signing backend, so this type is deliberately
 /// non-generic.
 pub struct SshShimHandle {
@@ -97,11 +99,17 @@ pub struct SshShimHandle {
     pub instance: String,
     /// Allocated CID (teardown).
     pub cid: u32,
-    registry: Arc<CidRegistry>,
-    epoch: EpochToken,
-    socket_identity: (u64, u64),
     stop: Arc<AtomicBool>,
-    join: Option<std::thread::JoinHandle<()>>,
+    finalize_requested: Arc<AtomicBool>,
+    owner_dropped: Arc<AtomicBool>,
+    join: Option<std::thread::JoinHandle<std::io::Result<ShimExit>>>,
+    retirement_failure: Option<std::io::Error>,
+    retired: bool,
+}
+
+enum ShimExit {
+    Finalized,
+    CancelledWithoutFinalization,
 }
 
 impl std::fmt::Debug for SshShimHandle {
@@ -115,52 +123,128 @@ impl std::fmt::Debug for SshShimHandle {
 }
 
 impl SshShimHandle {
-    /// Stop and wake the divert loop, join the thread, remove its owned socket,
-    /// and expire the CID
-    /// binding. Best-effort throughout: failures are stderr-loud, never
-    /// propagated — teardown must not fail the service exit it follows.
-    pub fn shutdown(mut self) {
-        self.stop_owned_listener();
+    /// Close admission and cancel joined relays without authorizing CID/socket
+    /// release. A retained owner may request retirement after it has confirmed
+    /// that the old sandbox stopped. Failed stop must leave this reservation.
+    pub(crate) fn fence(&self) {
+        self.cancel_listener();
     }
 
-    fn stop_owned_listener(&mut self) {
-        if self.join.is_none() {
-            return;
-        }
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(join) = self.join.take() {
-            join.thread().unpark();
-            if join.join().is_err() {
-                eprintln!(
-                    "WARNING: ssh shim thread for instance '{}' failed during shutdown",
-                    self.instance
-                );
+    /// Compatibility shutdown for synchronous callers, waiting at most two
+    /// seconds. Incomplete shutdown is stderr-loud without claiming retirement;
+    /// explicitly requested finalization may still complete afterward.
+    /// Async owners must use the non-consuming `retire_until`: blocking here
+    /// can prevent a current-thread reactor from driving managed relay cleanup.
+    pub fn shutdown(mut self) {
+        self.request_shutdown();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match self.try_retire() {
+                Ok(true) => return,
+                Ok(false) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                _ => {
+                    eprintln!(
+                        "WARNING: SSH shim retirement incomplete; no successful completion observed"
+                    );
+                    return;
+                }
             }
         }
-        if let Err(e) = remove_owned_socket(&self.socket_path, self.socket_identity)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            eprintln!(
-                "WARNING: failed to remove ssh shim socket {}: {e}",
-                self.socket_path.display()
-            );
+    }
+
+    /// Request explicit joined retirement and wake the owned loop. Filesystem
+    /// finalization may complete later, but runs only after all relay joins.
+    pub fn request_shutdown(&self) {
+        self.finalize_requested.store(true, Ordering::Release);
+        self.cancel_listener();
+    }
+
+    fn cancel_listener(&self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(join) = &self.join {
+            join.thread().unpark();
         }
-        match self
-            .registry
-            .expire_binding(self.cid, &self.instance, &self.epoch)
-        {
-            Ok(_) => {}
-            Err(e) => eprintln!(
-                "WARNING: failed to expire CID {} for instance '{}': {e}",
-                self.cid, self.instance
-            ),
+    }
+
+    /// Non-consuming shutdown. A deadline, cancellation or failed join leaves
+    /// this handle available for an honest retry. A pending finalizer may later
+    /// release the reservation after actual joins; only its observed result
+    /// establishes successful retirement. Drop alone never authorizes release.
+    /// No sleep or join blocks the async executor while a worker is still live.
+    pub async fn retire_until(&mut self, deadline: tokio::time::Instant) -> std::io::Result<()> {
+        self.request_shutdown();
+        loop {
+            if self.try_retire()? {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "SSH shim retirement incomplete",
+                ));
+            }
+            tokio::time::sleep_until(
+                deadline.min(tokio::time::Instant::now() + std::time::Duration::from_millis(10)),
+            )
+            .await;
         }
+    }
+
+    fn try_retire(&mut self) -> std::io::Result<bool> {
+        if let Some(error) = &self.retirement_failure {
+            return Err(std::io::Error::new(error.kind(), error.to_string()));
+        }
+        if self.retired {
+            return Ok(true);
+        }
+        if self.join.as_ref().is_some_and(|join| !join.is_finished()) {
+            return Ok(false);
+        }
+        let result = match self.join.take() {
+            Some(join) => match join.join() {
+                Ok(Ok(ShimExit::Finalized)) => {
+                    self.retired = true;
+                    return Ok(true);
+                }
+                Ok(Ok(ShimExit::CancelledWithoutFinalization)) => {
+                    std::io::Error::other("SSH shim cancelled without finalization")
+                }
+                Ok(Err(error)) => error,
+                Err(_) => std::io::Error::other("SSH shim retirement thread panicked"),
+            },
+            None => std::io::Error::other("SSH shim retirement owner is missing"),
+        };
+        let returned = std::io::Error::new(result.kind(), result.to_string());
+        self.retirement_failure = Some(result);
+        Err(returned)
     }
 }
 
 impl Drop for SshShimHandle {
     fn drop(&mut self) {
-        self.stop_owned_listener();
+        // Never block the async owner here or infer retirement from a dropped
+        // JoinHandle. The loop still owns and cancels its relay workers; without
+        // an explicit finalization request, the CID and exact socket remain
+        // reserved. Drop does not undo finalization already explicitly requested.
+        self.owner_dropped.store(true, Ordering::Release);
+        self.cancel_listener();
+    }
+}
+
+// Runs only on the original owned loop thread, after every relay join and
+// listener close. Fencing does not abandon this finalization owner. No new
+// thread or blocking registry work is moved onto the async caller.
+fn await_finalization_intent(finalize: &AtomicBool, owner_dropped: &AtomicBool) -> bool {
+    loop {
+        if finalize.load(Ordering::Acquire) {
+            return true;
+        }
+        if owner_dropped.load(Ordering::Acquire) {
+            return false;
+        }
+        std::thread::park();
     }
 }
 
@@ -174,12 +258,37 @@ fn remove_owned_socket(path: &Path, identity: (u64, u64)) -> std::io::Result<()>
     Ok(())
 }
 
+/// Runs on the existing owned loop thread, only after successful relay joins
+/// and listener closure. Preserve both reservations while the registry lock is
+/// contended. Filesystem operations are not transactional: an unlink failure
+/// after successful CID expiry remains an explicit finalization error.
+fn finalize_shim(
+    registry: &CidRegistry,
+    cid: u32,
+    instance: &str,
+    epoch: &EpochToken,
+    socket_path: &Path,
+    socket_identity: (u64, u64),
+) -> std::io::Result<ShimExit> {
+    registry
+        .expire_binding(cid, instance, epoch)
+        .map_err(std::io::Error::other)?;
+    if let Err(error) = remove_owned_socket(socket_path, socket_identity)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(error);
+    }
+    Ok(ShimExit::Finalized)
+}
+
 /// Set up the SSH shim for one workload launch, or `None` when the
 /// workload carries no SSH grants (strict-only confinement emits a policy
 /// but binds no listener — nothing can divert to it).
 ///
 /// Call before VM creation and pass the returned CID and endpoint together to
-/// the SDK. The owned handle cleans up even when creation fails or is cancelled.
+/// the SDK. On cancellation Drop fences the listener; only explicit joined
+/// retirement releases the reservation. Failed launch owners must retain the
+/// handle to await cleanup rather than equating cancellation with completion.
 /// This prepares host dispatch only: it does not install policy in brokerd or
 /// establish broker readiness. A workload's console is not the broker console.
 pub async fn ensure_ssh_shim(
@@ -228,6 +337,8 @@ pub async fn ensure_ssh_shim(
     let grants = GrantStore::compile(&[(instance, credentials)]);
     let audit = Arc::new(AuditLog::with_state_dir(state_dir));
     let stop = Arc::new(AtomicBool::new(false));
+    let finalize_requested = Arc::new(AtomicBool::new(false));
+    let owner_dropped = Arc::new(AtomicBool::new(false));
     // Custody-first relay: broker-bound sessions ride the broker VM socket
     // (fail-closed while it is absent), guest-bound sessions relay direct.
     let broker_socket = broker_vm_socket_path(state_dir);
@@ -237,6 +348,11 @@ pub async fn ensure_ssh_shim(
             let loop_registry = Arc::clone(&registry);
             let loop_stop = Arc::clone(&stop);
             let loop_audit = Arc::clone(&audit);
+            let loop_finalize = Arc::clone(&finalize_requested);
+            let loop_owner_dropped = Arc::clone(&owner_dropped);
+            let loop_instance = instance.to_owned();
+            let loop_epoch = epoch.clone();
+            let loop_path = socket_path.clone();
             move || {
                 let relay = BrokerFirstRelay::new(broker_socket);
                 run_divert_until(
@@ -246,7 +362,22 @@ pub async fn ensure_ssh_shim(
                     &loop_audit,
                     relay,
                     &loop_stop,
-                );
+                )?;
+                // No accepted listener survives reservation release. Failed
+                // worker joins return above and skip filesystem finalization.
+                drop(transport);
+                if await_finalization_intent(&loop_finalize, &loop_owner_dropped) {
+                    finalize_shim(
+                        &loop_registry,
+                        cid,
+                        &loop_instance,
+                        &loop_epoch,
+                        &loop_path,
+                        socket_identity,
+                    )
+                } else {
+                    Ok(ShimExit::CancelledWithoutFinalization)
+                }
             }
         });
     let join = match join {
@@ -265,13 +396,18 @@ pub async fn ensure_ssh_shim(
         transport_cid: u64::from(cid),
         instance: instance.to_string(),
         cid,
-        registry,
-        epoch,
-        socket_identity,
         stop,
+        finalize_requested,
+        owner_dropped,
         join: Some(join),
+        retirement_failure: None,
+        retired: false,
     }))
 }
+
+#[cfg(test)]
+#[path = "ssh_lifecycle_owned_tests.rs"]
+mod owned_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -334,7 +470,7 @@ mod tests {
     async fn concurrent_launches_have_distinct_owned_endpoints_and_cids() {
         let dir = crate::config::test_support::unique_state_dir("ssh-broker-socket");
         let credentials = ssh_credentials();
-        let first = ensure_ssh_shim(&dir, "first", &credentials)
+        let mut first = ensure_ssh_shim(&dir, "first", &credentials)
             .await
             .unwrap()
             .unwrap();
@@ -346,7 +482,10 @@ mod tests {
         assert_ne!(first.socket_path, second.socket_path);
         let first_path = first.socket_path.clone();
         let first_cid = first.cid;
-        drop(first);
+        first
+            .retire_until(tokio::time::Instant::now() + std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
         assert!(!first_path.exists());
         assert!(second.socket_path.exists());
         let registry = CidRegistry::open(&dir).unwrap();
@@ -523,7 +662,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelling_a_pending_launch_releases_the_owned_listener_and_cid() {
+    async fn cancelling_a_pending_launch_fences_but_does_not_prove_retirement() {
         let dir = crate::config::test_support::unique_state_dir("ssh-shim-cancel-launch");
         let launch_dir = dir.clone();
         let (ready, wait) = tokio::sync::oneshot::channel();
@@ -542,14 +681,26 @@ mod tests {
         assert!(path.exists());
         launch.abort();
         assert!(launch.await.unwrap_err().is_cancelled());
-        assert!(!path.exists());
+        assert!(
+            path.exists(),
+            "drop must retain the exact socket reservation"
+        );
         assert!(
             CidRegistry::open(&dir)
                 .unwrap()
                 .lookup(cid)
                 .unwrap()
-                .is_none()
+                .is_some()
         );
+        // Observe listener closure, not a historical joined-worker proof. The
+        // reservation deliberately remains unavailable without the owner.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while std::os::unix::net::UnixStream::connect(&path).is_ok() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

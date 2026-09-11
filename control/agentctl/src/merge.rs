@@ -862,6 +862,13 @@ fn merge_workload(
             layer_ctx.name.clone(),
         );
     }
+    if table.contains_key("root_disk_mib") {
+        merged.root_disk_mib = layer.root_disk_mib;
+        provenance.insert(
+            format!("workloads.{name}.root_disk_mib"),
+            layer_ctx.name.clone(),
+        );
+    }
     if table.contains_key("command") {
         merged.command = layer.command.clone();
         provenance.insert(format!("workloads.{name}.command"), layer_ctx.name.clone());

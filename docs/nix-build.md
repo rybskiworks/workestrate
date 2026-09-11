@@ -44,6 +44,32 @@ working application or Microsandbox build. It does not stage a runtime,
 change the SDK symlink, install Git hooks or mark runtime setup complete.
 Use it for Nix and source investigation; it does not configure SDK build inputs.
 
+`just sdk-prepare` explicitly creates or refreshes only the SDK source symlink
+from the locked `microsandbox-filesystem-patched` source alias. It does not build
+Workestrate or the Microsandbox runtime, enter the default shell, run Cargo,
+or update either lockfile. An existing unlocked vendor directory is preserved
+and refused; resolve it explicitly rather than overwriting local edits.
+
+To refresh Workestrate's own Cargo lock after an intentional fork pin update:
+
+```sh
+just sdk-prepare
+just bootstrap -c bash -c 'cd control/agentctl && cargo metadata --offline --format-version 1'
+just bootstrap -c bash -c 'cd control/agentctl && cargo metadata --locked --offline --format-version 1'
+just lock-guard
+git diff -- control/agentctl/Cargo.lock
+```
+
+The first metadata command permits the required lock changes; the second
+confirms resolution without further changes. Run from `control/agentctl` so
+Cargo loads its SDK path patches. Metadata does not compile or execute build
+scripts, so it needs no runtime artifacts or default-shell marker. Offline
+resolution still requires the selected Git objects and registry dependencies
+to be cached; a missing source is a separate acquisition prerequisite, not a
+reason to use an old SDK or copy the fork's lockfile. Review the resulting diff
+for only the intended source/dependency changes, with no unrelated registry
+updates. `just sdk-source-check` tests the preparation contract without Nix.
+
 `just shell` provides the full development environment and the SDK symlink.
 `MSB_BUILD_RUNTIME` points the SDK build script at the immutable runtime
 package independently of `MSB_HOME`, which remains a runtime-state selector.
@@ -105,6 +131,18 @@ separate host gates; a passing sandbox test check is not a VM deployment test.
 The unit derivation omits development/test debug symbols to bound temporary
 artifact size. Debug assertions, test selection, optimization defaults and the
 production package profile are unchanged; interactive Cargo keeps its defaults.
+
+The unit output also retains `bin/workestrate-native-fixture`, a wrapper for the
+library test executable reported by the original Cargo test invocation. The
+existing test hook runs once through a joined log capture; packaging selects
+exactly its own library-test artifact and stages that file before installation.
+It does not invoke Cargo again or guess a test executable from directory names.
+The wrapper selects the pinned Microsandbox runtime and agentd
+and requires an explicit `MSB_HOME`; it never defaults to deployed state.
+Ignored native VM tests still require a separate, explicitly selected host run
+with disposable state, image inputs and KVM. Merely building or listing the
+test executable does not boot a VM or validate broker readiness. The production
+Workestrate package does not include this test executable.
 
 The build script tracks `WORKESTRATE_REV` explicitly, so a retained Cargo target
 refreshes the compiled version when that variable changes or is removed. Plain

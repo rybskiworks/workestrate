@@ -3349,9 +3349,11 @@ dependencies = [
  "microsandbox-types",
  "serde",
  "serde_bytes",
+ "sha2 0.11.0",
  "strum 0.28.0",
  "thiserror 2.0.19",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -3514,7 +3516,7 @@ dependencies = [
 [[package]]
 name = "msb_krun"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "crossbeam-channel",
  "kvm-bindings",
@@ -3533,7 +3535,7 @@ dependencies = [
 [[package]]
 name = "msb_krun_arch"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
@@ -3547,12 +3549,12 @@ dependencies = [
 [[package]]
 name = "msb_krun_arch_gen"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 
 [[package]]
 name = "msb_krun_cpuid"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
@@ -3562,7 +3564,7 @@ dependencies = [
 [[package]]
 name = "msb_krun_devices"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "bincode",
  "bitflags 1.3.2",
@@ -3593,7 +3595,7 @@ dependencies = [
 [[package]]
 name = "msb_krun_hvf"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "crossbeam-channel",
  "libloading",
@@ -3605,7 +3607,7 @@ dependencies = [
 [[package]]
 name = "msb_krun_kernel"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "msb-vm-memory",
  "msb_krun_utils",
@@ -3614,7 +3616,7 @@ dependencies = [
 [[package]]
 name = "msb_krun_polly"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "libc",
  "msb_krun_utils",
@@ -3623,7 +3625,7 @@ dependencies = [
 [[package]]
 name = "msb_krun_smbios"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "msb-vm-memory",
 ]
@@ -3631,7 +3633,7 @@ dependencies = [
 [[package]]
 name = "msb_krun_utils"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "bitflags 1.3.2",
  "crossbeam-channel",
@@ -3646,7 +3648,7 @@ dependencies = [
 [[package]]
 name = "msb_krun_vmm"
 version = "0.1.34"
-source = "git+https://github.com/rybskiworks/libkrun?rev=ff0f4ab05b3539b75b1a05bfc072bd5cac263689#ff0f4ab05b3539b75b1a05bfc072bd5cac263689"
+source = "git+https://github.com/rybskiworks/libkrun?rev=5b81726df87807876e11939995df2eb6688be173#5b81726df87807876e11939995df2eb6688be173"
 dependencies = [
  "bincode",
  "bzip2",

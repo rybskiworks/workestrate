@@ -269,25 +269,73 @@ pub enum ExecState {
         code: i32,
     },
     SpawnFailed,
+    /// The operation did not complete normally. Process termination is
+    /// independent evidence, never inferred from timeout or cancellation.
+    Interrupted {
+        reason: ExecInterruptionReason,
+        termination: ExecTermination,
+    },
     /// Transport loss or an interrupted control is not confirmed termination.
     Indeterminate,
 }
 
 impl ExecState {
     pub fn terminal(self) -> bool {
-        matches!(self, Self::Exited { .. } | Self::SpawnFailed)
+        matches!(
+            self,
+            Self::Exited { .. }
+                | Self::SpawnFailed
+                | Self::Interrupted {
+                    termination: ExecTermination::Exited { .. } | ExecTermination::SpawnFailed,
+                    ..
+                }
+        )
     }
+}
+
+/// Portable reason categories, not native diagnostic text. The deadline is
+/// supplied in `ExecCommand::timeout_ms`; backend messages and failed-spawn
+/// details are not reflected into this public response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecInterruptionReason {
+    Timeout,
+    Cancelled,
+    OutputLimit,
+    TransportClosed,
+    Protocol,
+    Delivery,
+}
+
+/// Evidence from the original native session. Even an exit code of zero does
+/// not turn an interrupted operation into successful completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExecTermination {
+    Exited { code: i32 },
+    SpawnFailed,
+    Unconfirmed,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExecEvent {
     Started,
-    Stdout { bytes: Vec<u8> },
-    Stderr { bytes: Vec<u8> },
-    Exited { code: i32 },
+    Stdout {
+        bytes: Vec<u8>,
+    },
+    Stderr {
+        bytes: Vec<u8>,
+    },
+    Exited {
+        code: i32,
+    },
     SpawnFailed,
     TransportLost,
+    Interrupted {
+        reason: ExecInterruptionReason,
+        termination: ExecTermination,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

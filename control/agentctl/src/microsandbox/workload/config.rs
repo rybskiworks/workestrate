@@ -616,6 +616,7 @@ impl Workload for ConfigWorkload {
             command: self.workload.command.clone(),
             cpus: self.workload.cpus,
             memory_mib: self.workload.memory_mib,
+            root_disk_mib: self.workload.root_disk_mib,
             env,
             secret_env: self.secret_env.clone(),
             credentials: self.credentials.clone(),

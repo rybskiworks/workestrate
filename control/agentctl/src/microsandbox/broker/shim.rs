@@ -26,10 +26,12 @@ use crate::microsandbox::plan::{CredentialBinding, SshGrantPlan};
 use microsandbox_network::ssh::gateway::{
     SshDivertPrelude, decode_ssh_divert_prelude, encode_ssh_divert_prelude,
 };
+use microsandbox_protocol::broker as managed_wire;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -342,6 +344,30 @@ pub trait SshRelay: Send + Sync + std::fmt::Debug {
         stream: std::os::unix::net::UnixStream,
         dest: &DivertDestination,
     ) -> std::io::Result<()>;
+
+    /// Owned-loop entry. Legacy implementations may not observe cancellation;
+    /// their worker remains reserved until it actually returns and is joined.
+    fn relay_until(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+        stop: &AtomicBool,
+    ) -> std::io::Result<()> {
+        if stop.load(Ordering::Acquire) {
+            return Err(relay_cancelled());
+        }
+        self.relay(stream, dest)
+    }
+}
+
+fn relay_cancelled() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Interrupted, "SSH relay cancelled")
+}
+
+async fn relay_cancellation(stop: &AtomicBool) {
+    while !stop.load(Ordering::Acquire) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// Bound on one upstream TCP dial (seconds). A diverted session must fail
@@ -469,9 +495,9 @@ impl SshRelay for TcpUpstreamRelay {
     }
 }
 
-/// Bound on one broker-socket dial. A diverted session must fail closed fast
-/// when the broker VM is down — an unbounded connect would park the relay
-/// worker and leave the guest hanging instead of closing the session.
+/// Managed connect/header deadline and legacy dial-result wait. A legacy OS
+/// connect is still joined and may outlive this result deadline; its reserved
+/// worker cannot be reported retired until that join actually completes.
 pub const BROKER_SOCKET_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 /// Custody relay: hands a decided session to the broker VM over its host
@@ -488,14 +514,91 @@ pub const BROKER_SOCKET_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub struct BrokerSocketRelay {
     broker_socket: PathBuf,
     connect_timeout: Duration,
+    managed: Option<ManagedBrokerRelay>,
+}
+
+/// A live owner query, not a cached ready receipt. The callback must check its
+/// retained endpoint, source launch and native generation, then return the
+/// controller's current Applied observation for this exact destination. It may
+/// not derive authority from the guest prelude or a pathname alone. Keep the
+/// synchronous query bounded; this adapter runs on a dedicated relay thread.
+pub(crate) type ManagedAdmission =
+    dyn Fn(&DivertDestination) -> std::io::Result<managed_wire::Observation> + Send + Sync;
+
+#[derive(Clone)]
+struct ManagedBrokerRelay {
+    launch: managed_wire::LaunchRef,
+    cid: u32,
+    runtime: tokio::runtime::Handle,
+    admission: Arc<ManagedAdmission>,
+}
+
+impl std::fmt::Debug for ManagedBrokerRelay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ManagedBrokerRelay")
+            .field("launch", &self.launch)
+            .field("cid", &self.cid)
+            .finish_non_exhaustive()
+    }
+}
+
+fn managed_refusal() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "managed SSH relay admission is not current",
+    )
+}
+
+impl ManagedBrokerRelay {
+    fn header(&self, dest: &DivertDestination) -> std::io::Result<managed_wire::ManagedDivert> {
+        if dest.instance != self.launch.instance.instance
+            || dest.cid != self.cid
+            || !dest
+                .credentials
+                .iter()
+                .any(|c| c.binding == CredentialBinding::Broker)
+        {
+            return Err(managed_refusal());
+        }
+        // Deliberately discard arbitrary callback diagnostics: the trusted
+        // resolver may have encountered credentials or private source paths.
+        let observation = (self.admission)(dest).map_err(|_| managed_refusal())?;
+        if observation.outcome != managed_wire::Outcome::Applied
+            || observation.failure.is_some()
+            || observation.transaction.launch != self.launch
+        {
+            return Err(managed_refusal());
+        }
+        let header = managed_wire::ManagedDivert {
+            version: managed_wire::VERSION,
+            transaction: observation.transaction,
+            // Preserve the original hostname; resolving it is not authority to
+            // substitute an IP or a different host in the policy selection.
+            destination_host: dest.dest_host.clone(),
+            destination_port: dest.dest_port,
+        };
+        header.validate().map_err(|_| managed_refusal())?;
+        Ok(header)
+    }
+
+    fn encode(&self, header: &managed_wire::ManagedDivert) -> std::io::Result<Vec<u8>> {
+        // Called only on a dedicated synchronous relay thread. Reuse the
+        // owner's handle instead of constructing a runtime per connection.
+        let mut bytes = Vec::new();
+        self.runtime
+            .block_on(managed_wire::write_divert(&mut bytes, header))
+            .map_err(|_| managed_refusal())?;
+        Ok(bytes)
+    }
 }
 
 impl BrokerSocketRelay {
-    /// Build a relay dialing `broker_socket` for every decided session.
+    /// Build the legacy prelude relay. This does not select managed service mode.
     pub fn new(broker_socket: PathBuf) -> Self {
         Self {
             broker_socket,
             connect_timeout: Duration::from_secs(BROKER_SOCKET_CONNECT_TIMEOUT_SECS),
+            managed: None,
         }
     }
 
@@ -504,45 +607,62 @@ impl BrokerSocketRelay {
         Self {
             broker_socket,
             connect_timeout,
+            managed: None,
         }
     }
 
-    /// Dial the broker socket with a bounded wait. Unix connects carry no
-    /// timeout knob, so the dial runs on a worker joined with the bound —
-    /// an unresponsive listener fails closed instead of parking the relay.
-    fn dial(&self) -> std::io::Result<std::os::unix::net::UnixStream> {
-        let path = self.broker_socket.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .name("ssh-broker-dial".to_string())
-            .spawn(move || {
-                let _ = tx.send(std::os::unix::net::UnixStream::connect(&path));
-            })
-            .map_err(|e| std::io::Error::other(format!("broker dial worker spawn failed: {e}")))?;
-        match rx.recv_timeout(self.connect_timeout) {
-            Ok(Ok(stream)) => Ok(stream),
-            Ok(Err(e)) => Err(std::io::Error::other(format!(
-                "ssh broker dial failed for {}: {e}",
-                self.broker_socket.display()
-            ))),
-            Err(_) => Err(std::io::Error::other(format!(
-                "ssh broker dial timed out for {}",
-                self.broker_socket.display()
-            ))),
+    /// Explicit managed-service adapter for a trusted, retained source launch.
+    /// The owner supplies a live Applied query; saving an observation in the
+    /// callback would lose revocation, rotation and endpoint-loss fencing.
+    /// No listener/provisioning is performed and legacy constructors stay legacy.
+    pub(crate) fn managed(
+        broker_socket: PathBuf,
+        launch: managed_wire::LaunchRef,
+        cid: u32,
+        runtime: tokio::runtime::Handle,
+        admission: Arc<ManagedAdmission>,
+    ) -> std::io::Result<Self> {
+        if cid < super::registry::MIN_GUEST_CID
+            || cid == u32::MAX
+            || !broker_socket.is_absolute()
+            || broker_socket
+                .components()
+                .any(|p| matches!(p, std::path::Component::ParentDir))
+        {
+            return Err(managed_refusal());
         }
+        Ok(Self {
+            broker_socket,
+            connect_timeout: Duration::from_secs(BROKER_SOCKET_CONNECT_TIMEOUT_SECS),
+            managed: Some(ManagedBrokerRelay {
+                launch,
+                cid,
+                runtime,
+                admission,
+            }),
+        })
     }
-}
 
-impl SshRelay for BrokerSocketRelay {
-    fn relay(
+    fn relay_with_dial(
         &self,
         stream: std::os::unix::net::UnixStream,
         dest: &DivertDestination,
+        dial: impl FnOnce() -> std::io::Result<std::os::unix::net::UnixStream>,
     ) -> std::io::Result<()> {
-        let mut broker = self.dial()?;
-        // Re-stamp the prelude for the broker leg: the destination and
-        // transport attribution carry over, the epoch is now (the broker
-        // checks freshness against its provisioned floor).
+        if let Some(managed) = &self.managed {
+            return self.managed_with_connect(
+                stream,
+                dest,
+                &AtomicBool::new(false),
+                || async {
+                    let broker = dial()?;
+                    broker.set_nonblocking(true)?;
+                    tokio::net::UnixStream::from_std(broker)
+                },
+                managed,
+            );
+        }
+        let mut broker = dial()?;
         let prelude = SshDivertPrelude {
             dest_host: dest.dest_host.clone(),
             dest_port: dest.dest_port,
@@ -559,6 +679,133 @@ impl SshRelay for BrokerSocketRelay {
             broker,
             &format!("ssh-broker-{}-{}", dest.instance, dest.cid),
         )
+    }
+
+    /// A single future owns both sockets through connect, header and copy.
+    /// Handle::block_on runs on the existing dedicated relay thread; there is
+    /// no dial task, nested pump thread, or detached completion to infer.
+    fn managed_relay_until(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+        stop: &AtomicBool,
+    ) -> std::io::Result<()> {
+        let managed = self.managed.as_ref().ok_or_else(managed_refusal)?;
+        self.managed_with_connect(
+            stream,
+            dest,
+            stop,
+            || tokio::net::UnixStream::connect(&self.broker_socket),
+            managed,
+        )
+    }
+
+    fn managed_with_connect<F, C>(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+        stop: &AtomicBool,
+        connect: C,
+        managed: &ManagedBrokerRelay,
+    ) -> std::io::Result<()>
+    where
+        C: FnOnce() -> F,
+        F: std::future::Future<Output = std::io::Result<tokio::net::UnixStream>>,
+    {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(managed_refusal());
+        }
+        if stop.load(Ordering::Acquire) {
+            return Err(relay_cancelled());
+        }
+        let header = managed.header(dest)?;
+        // Validate with the shared codec before any connection side effect.
+        let encoded = managed.encode(&header)?;
+        stream.set_nonblocking(true)?;
+        managed.runtime.block_on(async {
+            let mut guest = tokio::net::UnixStream::from_std(stream)?;
+            tokio::select! {
+                biased;
+                _ = relay_cancellation(stop) => Err(relay_cancelled()),
+                result = async {
+                    // One absolute setup deadline covers connect AND header.
+                    let mut broker = tokio::time::timeout(self.connect_timeout, async {
+                        let mut broker = connect().await?;
+                        let current = managed.header(dest)?;
+                        if stop.load(Ordering::Acquire) {
+                            return Err(relay_cancelled());
+                        }
+                        if current.transaction != header.transaction {
+                            return Err(managed_refusal());
+                        }
+                        tokio::io::AsyncWriteExt::write_all(&mut broker, &encoded).await?;
+                        tokio::io::AsyncWriteExt::flush(&mut broker).await?;
+                        Ok::<_, std::io::Error>(broker)
+                    }).await.map_err(|_| std::io::Error::new(
+                        std::io::ErrorKind::TimedOut, "managed SSH setup timed out",
+                    ))??;
+                    tokio::io::copy_bidirectional(&mut guest, &mut broker).await?;
+                    Ok(())
+                } => result,
+            }
+        })
+    }
+
+    /// Dial the broker socket with a bounded wait. Unix connects carry no
+    /// timeout knob, so the caller's wait for a worker result is bounded.
+    /// The legacy worker is joined even after the result deadline. This may
+    /// remain pending in an OS connect, but cannot falsely certify retirement
+    /// of a detached dial. Managed mode uses a cancellable owned future instead.
+    fn dial(&self) -> std::io::Result<std::os::unix::net::UnixStream> {
+        let path = self.broker_socket.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::Builder::new()
+            .name("ssh-broker-dial".to_string())
+            .spawn(move || {
+                let _ = tx.send(std::os::unix::net::UnixStream::connect(&path));
+            })
+            .map_err(|e| std::io::Error::other(format!("broker dial worker spawn failed: {e}")))?;
+        let result = match rx.recv_timeout(self.connect_timeout) {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(e)) => Err(std::io::Error::other(format!(
+                "ssh broker dial failed for {}: {e}",
+                self.broker_socket.display()
+            ))),
+            Err(_) => Err(std::io::Error::other(format!(
+                "ssh broker dial timed out for {}",
+                self.broker_socket.display()
+            ))),
+        };
+        let joined = worker.join();
+        // Preserve the primary dial/timeout failure, but always visit the join.
+        let stream = result?;
+        joined.map_err(|_| std::io::Error::other("broker dial worker panicked"))?;
+        Ok(stream)
+    }
+}
+
+impl SshRelay for BrokerSocketRelay {
+    fn relay(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+    ) -> std::io::Result<()> {
+        self.relay_until(stream, dest, &AtomicBool::new(false))
+    }
+
+    fn relay_until(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+        stop: &AtomicBool,
+    ) -> std::io::Result<()> {
+        if self.managed.is_some() {
+            self.managed_relay_until(stream, dest, stop)
+        } else if stop.load(Ordering::Acquire) {
+            Err(relay_cancelled())
+        } else {
+            self.relay_with_dial(stream, dest, || self.dial())
+        }
     }
 }
 
@@ -617,13 +864,41 @@ impl BrokerFirstRelay {
             direct: TcpUpstreamRelay::default(),
         }
     }
+
+    /// Opt into managed broker framing while preserving explicit guest-bound
+    /// direct forwarding. The existing constructor keeps the legacy contract.
+    pub(crate) fn managed(
+        broker_socket: PathBuf,
+        launch: managed_wire::LaunchRef,
+        cid: u32,
+        runtime: tokio::runtime::Handle,
+        admission: Arc<ManagedAdmission>,
+    ) -> std::io::Result<Self> {
+        Ok(Self {
+            broker: BrokerSocketRelay::managed(broker_socket, launch, cid, runtime, admission)?,
+            direct: TcpUpstreamRelay::default(),
+        })
+    }
 }
+
+#[cfg(test)]
+#[path = "shim_managed_tests.rs"]
+mod managed_tests;
 
 impl SshRelay for BrokerFirstRelay {
     fn relay(
         &self,
         stream: std::os::unix::net::UnixStream,
         dest: &DivertDestination,
+    ) -> std::io::Result<()> {
+        self.relay_until(stream, dest, &AtomicBool::new(false))
+    }
+
+    fn relay_until(
+        &self,
+        stream: std::os::unix::net::UnixStream,
+        dest: &DivertDestination,
+        stop: &AtomicBool,
     ) -> std::io::Result<()> {
         if dest.credentials.is_empty() {
             return Err(std::io::Error::new(
@@ -636,9 +911,9 @@ impl SshRelay for BrokerFirstRelay {
             .iter()
             .any(|credential| credential.binding == CredentialBinding::Broker)
         {
-            self.broker.relay(stream, dest)
+            self.broker.relay_until(stream, dest, stop)
         } else {
-            self.direct.relay(stream, dest)
+            self.direct.relay_until(stream, dest, stop)
         }
     }
 }
@@ -855,13 +1130,10 @@ pub fn serve_divert_once<R: CidResolver>(
 /// caller can use a nonblocking listener and unpark this thread at shutdown,
 /// without resolving a pathname that may have been removed or replaced.
 ///
-/// Allowed sessions relay on detached worker threads: the relay blocks for
-/// the whole session (a full SSH login), so serving it inline would stall
-/// every later divert behind it. Each worker owns its stream, decision,
-/// and relay clone — nothing borrowed — so the loop keeps accepting while
-/// sessions flow. Shutdown still only joins this loop thread: in-flight
-/// sessions drain on their own EOF after the socket is removed instead of
-/// hanging teardown.
+/// The existing loop retains at most 64 relay workers, reaping completed joins
+/// before admitting another. Shutdown fences admission, cancels owned sockets,
+/// and does not return until all workers join. A legacy resolver or relay may
+/// remain pending; the lifecycle handle must retain its reservation in that case.
 pub fn run_divert_until<R: CidResolver, L: SshRelay + Clone + 'static>(
     transport: &UnixSocketTransport<R>,
     registry: &CidRegistry,
@@ -869,8 +1141,14 @@ pub fn run_divert_until<R: CidResolver, L: SshRelay + Clone + 'static>(
     audit: &AuditLog,
     relay: L,
     stop: &AtomicBool,
-) {
+) -> std::io::Result<()> {
+    let mut workers = RelayWorkers::new();
     while !stop.load(Ordering::Relaxed) {
+        workers.reap();
+        if workers.failed {
+            stop.store(true, Ordering::Release);
+            break;
+        }
         let (stream, decision) =
             match accept_and_decide(transport, registry, grants, audit, Some(stop), || {
                 let timestamp = crate::microsandbox::runtime::time::current_rfc3339_utc();
@@ -896,25 +1174,15 @@ pub fn run_divert_until<R: CidResolver, L: SshRelay + Clone + 'static>(
             };
         match decision {
             DivertDecision::Allow { dest } => {
-                let worker_relay = relay.clone();
-                let label = format!("ssh-relay-{}-{}", dest.instance, dest.cid);
-                match std::thread::Builder::new()
-                    .name(label.clone())
-                    .spawn(move || {
-                        if let Err(e) = worker_relay.relay(stream, &dest) {
-                            eprintln!(
-                                "WARNING: ssh divert relay failed for instance '{}': {e}",
-                                dest.instance
-                            );
-                        }
-                    }) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        // Spawn failure fails closed: the unspawned closure
-                        // drops the stream unrelayed (the allow audit already
-                        // records the decision).
-                        eprintln!("WARNING: {label} spawn failed: {e} (session closed)");
-                    }
+                if stop.load(Ordering::Acquire) {
+                    drop(stream);
+                    break;
+                }
+                if let Err(e) = workers.spawn(relay.clone(), stream, dest) {
+                    // Capacity/spawn refusal closes this session before relay
+                    // admission or dialing. The audit above records only the
+                    // destination decision, not relay establishment.
+                    eprintln!("WARNING: SSH relay refused: {e} (session closed)");
                 }
             }
             DivertDecision::Deny { .. } => {
@@ -922,6 +1190,104 @@ pub fn run_divert_until<R: CidResolver, L: SshRelay + Clone + 'static>(
                 drop(stream);
             }
         }
+    }
+    workers.drain()
+}
+
+const MAX_RELAY_WORKERS: usize = 64;
+
+struct RelayWorker {
+    join: std::thread::JoinHandle<()>,
+    guest: std::os::unix::net::UnixStream,
+}
+
+/// Local ownership inside the one accept loop, not an admission registry.
+struct RelayWorkers {
+    entries: Vec<RelayWorker>,
+    stop: Arc<AtomicBool>,
+    failed: bool,
+}
+
+impl RelayWorkers {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            stop: Arc::new(AtomicBool::new(false)),
+            failed: false,
+        }
+    }
+
+    fn reap(&mut self) {
+        let mut index = 0;
+        while index < self.entries.len() {
+            if self.entries[index].join.is_finished() {
+                let worker = self.entries.swap_remove(index);
+                if worker.join.join().is_err() {
+                    self.failed = true;
+                }
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn spawn<L: SshRelay + 'static>(
+        &mut self,
+        relay: L,
+        stream: std::os::unix::net::UnixStream,
+        dest: DivertDestination,
+    ) -> std::io::Result<()> {
+        self.reap();
+        if self.failed || self.stop.load(Ordering::Acquire) {
+            return Err(relay_cancelled());
+        }
+        if self.entries.len() >= MAX_RELAY_WORKERS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "SSH relay worker capacity exhausted",
+            ));
+        }
+        let guest = stream.try_clone()?;
+        let stop = Arc::clone(&self.stop);
+        let join = std::thread::Builder::new()
+            .name(format!("ssh-relay-{}-{}", dest.instance, dest.cid))
+            .spawn(move || {
+                if let Err(error) = relay.relay_until(stream, &dest, &stop) {
+                    eprintln!("WARNING: SSH relay ended: {error}");
+                }
+            })?;
+        self.entries.push(RelayWorker { join, guest });
+        Ok(())
+    }
+
+    fn cancel(&self) {
+        self.stop.store(true, Ordering::Release);
+        for worker in &self.entries {
+            let _ = worker.guest.shutdown(Shutdown::Both);
+        }
+    }
+
+    fn drain(&mut self) -> std::io::Result<()> {
+        self.cancel();
+        while !self.entries.is_empty() {
+            self.reap();
+            if !self.entries.is_empty() {
+                std::thread::park_timeout(Duration::from_millis(20));
+            }
+        }
+        if self.failed {
+            Err(std::io::Error::other("SSH relay retirement failed"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for RelayWorkers {
+    fn drop(&mut self) {
+        // Unwinding must fence streams, but dropping a JoinHandle is not a
+        // completed join. The enclosing loop panic prevents CID retirement.
+        self.cancel();
     }
 }
 
@@ -1230,7 +1596,7 @@ mod tests {
                         if signing {
                             shim.run_until(&transport, &stop);
                         } else {
-                            run_divert_until(
+                            let _ = run_divert_until(
                                 &transport,
                                 &shim.registry,
                                 &divert_store(),

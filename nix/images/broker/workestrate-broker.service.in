@@ -1,0 +1,21 @@
+[Unit]
+Description=Workestrate managed SSH custody broker
+Requires=guest-store-ready.target
+After=guest-store-ready.target
+
+[Service]
+Type=exec
+WorkingDirectory=/
+UMask=0077
+LoadCredential=host-key:/broker-credentials/host-key
+LoadCredential=host-certificate:/broker-credentials/host-certificate
+LoadCredential=host-ca.pub:/broker-credentials/host-ca.pub
+ExecStart=@brokerd@ service --credentials-directory %d --host-principal @hostPrincipal@ --management-port 3024 --divert-port 3022 --egress-port 3023
+Restart=no
+KillMode=control-group
+TimeoutStopSec=30s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

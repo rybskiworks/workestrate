@@ -246,10 +246,17 @@ fn reader(uid: u32, target: &LaunchRef) -> AuthenticatedCaller {
 }
 
 #[test]
-fn consumed_native_sdk_does_not_claim_strict_capabilities() {
+fn local_native_sdk_reports_only_platform_supported_capabilities() {
+    let local_binding = cfg!(target_os = "linux");
     assert_eq!(
         MicrosandboxControl::supported_capabilities(),
-        RuntimeCapabilities::default()
+        RuntimeCapabilities {
+            launch_bound_exec: local_binding,
+            stdin: local_binding,
+            pty: local_binding,
+            cancellation: local_binding,
+            launch_bound_lifecycle: local_binding,
+        }
     );
 }
 
@@ -286,7 +293,7 @@ async fn unsupported_native_methods_refuse_before_discovery() {
         OpaqueId::from_bytes([9; 32]),
         Guest {
             state: state.clone(),
-            capabilities: MicrosandboxControl::supported_capabilities(),
+            capabilities: RuntimeCapabilities::default(),
         },
     );
     for request in [
@@ -592,6 +599,87 @@ async fn cancellation_acknowledgment_is_not_terminal_completion() {
 }
 
 #[tokio::test]
+async fn interrupted_operations_preserve_reason_and_independent_termination() {
+    for reason in [
+        ExecInterruptionReason::Timeout,
+        ExecInterruptionReason::Cancelled,
+        ExecInterruptionReason::OutputLimit,
+        ExecInterruptionReason::TransportClosed,
+        ExecInterruptionReason::Protocol,
+        ExecInterruptionReason::Delivery,
+    ] {
+        for termination in [
+            ExecTermination::Exited { code: 0 },
+            ExecTermination::Exited { code: 137 },
+            ExecTermination::SpawnFailed,
+            ExecTermination::Unconfirmed,
+        ] {
+            let (state, mut dispatcher, target, caller) = fixture();
+            let id = start(&mut dispatcher, &caller, &target).await;
+            state.lock().unwrap().events.push_back(vec![
+                ExecEvent::Stdout {
+                    bytes: vec![0, 255],
+                },
+                ExecEvent::Interrupted {
+                    reason,
+                    termination,
+                },
+            ]);
+            let result = exec(
+                &mut dispatcher,
+                &caller,
+                &target,
+                ExecRequest::Read {
+                    id: id.clone(),
+                    max_bytes: 2,
+                },
+            )
+            .await;
+            let expected = ExecState::Interrupted {
+                reason,
+                termination,
+            };
+            assert_eq!(result.state, expected);
+            assert_eq!(result.events.len(), 2);
+            let encoded = serde_json::to_value(&result).unwrap();
+            assert_eq!(encoded["state"]["state"], "interrupted");
+            let decoded: ExecStatus = serde_json::from_value(encoded).unwrap();
+            assert!(decoded == result);
+            // A closed original stream remains inspectable after launch loss;
+            // neither read nor repeat cancellation contacts a replacement.
+            state.lock().unwrap().current.clear();
+            dispatcher.custody_mut().retire_launch(&target).unwrap();
+            let calls = state.lock().unwrap().calls.len();
+            for request in [
+                ExecRequest::Read {
+                    id: id.clone(),
+                    max_bytes: 2,
+                },
+                ExecRequest::Cancel { id: id.clone() },
+            ] {
+                assert_eq!(
+                    exec(&mut dispatcher, &caller, &target, request).await.state,
+                    expected
+                );
+            }
+            assert_eq!(state.lock().unwrap().calls.len(), calls);
+            let released = dispatcher
+                .dispatch(&caller, request(&target, ExecRequest::Release { id }))
+                .await
+                .map(|_| ());
+            assert_eq!(
+                released,
+                if termination == ExecTermination::Unconfirmed {
+                    Err(ControlError::OperationIndeterminate)
+                } else {
+                    Ok(())
+                }
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn binary_streams_keep_stdout_and_stderr_separate() {
     let (state, mut dispatcher, target, caller) = fixture();
     let id = start(&mut dispatcher, &caller, &target).await;
@@ -626,6 +714,13 @@ async fn native_output_overflow_or_events_after_exit_are_not_success() {
             ExecEvent::Stdout { bytes: vec![1] },
         ],
         vec![ExecEvent::Started; 65],
+        vec![
+            ExecEvent::Interrupted {
+                reason: ExecInterruptionReason::Timeout,
+                termination: ExecTermination::Unconfirmed,
+            },
+            ExecEvent::Exited { code: 0 },
+        ],
     ] {
         let (state, mut dispatcher, target, caller) = fixture();
         let id = start(&mut dispatcher, &caller, &target).await;
@@ -1039,4 +1134,110 @@ async fn local_codec_refuses_old_version_and_correlates_typed_response() {
             ));
         }
     }
+}
+
+#[tokio::test]
+async fn drain_fences_new_requests_without_native_discovery() {
+    let (state, mut dispatcher, target, caller) = fixture();
+    let drained = dispatcher.drain_until(tokio::time::Instant::now()).await;
+    assert!(drained.pending.is_empty());
+    assert!(matches!(
+        dispatcher
+            .dispatch(
+                &caller,
+                request(&target, ExecRequest::Start { command: command() })
+            )
+            .await,
+        Err(ControlError::StateUnavailable)
+    ));
+    assert!(state.lock().unwrap().calls.is_empty());
+}
+
+#[tokio::test]
+async fn drain_requires_independent_termination_for_interrupted_leases() {
+    for termination in [
+        ExecTermination::Unconfirmed,
+        ExecTermination::Exited { code: 0 },
+        ExecTermination::SpawnFailed,
+    ] {
+        let (state, mut dispatcher, target, caller) = fixture();
+        let id = start(&mut dispatcher, &caller, &target).await;
+        state
+            .lock()
+            .unwrap()
+            .events
+            .push_back(vec![ExecEvent::Interrupted {
+                reason: ExecInterruptionReason::Cancelled,
+                termination,
+            }]);
+        let drained = dispatcher.drain_until(tokio::time::Instant::now()).await;
+        if termination == ExecTermination::Unconfirmed {
+            assert_eq!(
+                drained.pending,
+                vec![(
+                    id.clone(),
+                    ExecState::Interrupted {
+                        reason: ExecInterruptionReason::Cancelled,
+                        termination,
+                    }
+                )]
+            );
+            assert!(drained.completed.is_empty());
+            let retry = dispatcher.drain_until(tokio::time::Instant::now()).await;
+            assert_eq!(retry.pending, drained.pending);
+        } else {
+            assert_eq!(drained.completed, vec![id]);
+            assert!(drained.pending.is_empty());
+            assert!(drained.errors.is_empty());
+        }
+        assert!(!state.lock().unwrap().calls.contains(&"cancel"));
+        assert!(!state.lock().unwrap().calls.contains(&"lifecycle"));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn drain_cancel_acceptance_times_out_but_same_lease_can_later_finish() {
+    let (state, mut dispatcher, target, caller) = fixture();
+    let id = start(&mut dispatcher, &caller, &target).await;
+    let began = tokio::time::Instant::now();
+    let first = dispatcher
+        .drain_until(began + std::time::Duration::from_millis(100))
+        .await;
+    assert_eq!(
+        tokio::time::Instant::now() - began,
+        std::time::Duration::from_millis(100)
+    );
+    assert_eq!(
+        first.pending,
+        vec![(id.clone(), ExecState::CancellationRequested)]
+    );
+    assert!(first.completed.is_empty());
+    state
+        .lock()
+        .unwrap()
+        .events
+        .push_back(vec![ExecEvent::Exited { code: 0 }]);
+    let retry = dispatcher.drain_until(tokio::time::Instant::now()).await;
+    assert_eq!(retry.completed, vec![id]);
+    assert!(retry.pending.is_empty());
+    let calls = &state.lock().unwrap().calls;
+    assert_eq!(calls.iter().filter(|call| **call == "start").count(), 1);
+    assert_eq!(calls.iter().filter(|call| **call == "cancel").count(), 1);
+    assert!(!calls.contains(&"lifecycle"));
+}
+
+#[tokio::test]
+async fn drain_invalid_event_sequence_retains_an_uncertain_lease() {
+    let (state, mut dispatcher, target, caller) = fixture();
+    let id = start(&mut dispatcher, &caller, &target).await;
+    state
+        .lock()
+        .unwrap()
+        .events
+        .push_back(vec![ExecEvent::Exited { code: 0 }, ExecEvent::Started]);
+    let drained = dispatcher.drain_until(tokio::time::Instant::now()).await;
+    assert!(drained.completed.is_empty());
+    assert_eq!(drained.pending, vec![(id, ExecState::Indeterminate)]);
+    assert_eq!(drained.errors.len(), 1);
+    assert!(!state.lock().unwrap().calls.contains(&"cancel"));
 }

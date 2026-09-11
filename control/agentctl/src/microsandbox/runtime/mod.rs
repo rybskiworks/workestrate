@@ -9,6 +9,7 @@
 //! `ForegroundConfig` / `stop_and_remove` live here in `mod.rs` alongside
 //! the `check_occupied_or_replace` gate.
 
+mod foreground;
 mod network;
 mod ps;
 // `reconcile` is crate-visible so the dep executor (commands/deps.rs) shares
@@ -185,7 +186,8 @@ pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
 }
 
 /// Start `exec_program` with `exec_args` inside `sandbox`, stream its logs to
-/// stderr, and block until Ctrl-C — then stop the sandbox.
+/// stderr, and supervise until Ctrl-C or a terminal exec failure, then stop the
+/// retained sandbox. A process Started event is not application readiness.
 ///
 /// This is the shared foreground path used by every service-kind `up`. The
 /// service label is used in user-facing messages (e.g. the workload's bare
@@ -201,8 +203,9 @@ pub struct ForegroundConfig {
     pub mounts: Vec<(String, String)>,
     /// The workload's SSH shim when it emits an SSH policy with grants
     /// (`None` for grant-less workloads and restarted sandboxes). Owned
-    /// here so the foreground service's end shuts it down (socket, thread,
-    /// CID binding) on every exit path.
+    /// here so the foreground service requests joined retirement on every exit
+    /// path. An incomplete retirement remains in this borrowed config; dropping
+    /// the config is cancellation, not proof of socket/CID release.
     pub ssh_shim: Option<super::broker::SshShimHandle>,
     /// The shared broker VM reservation when the workload carries
     /// broker-bound SSH credentials (`None` otherwise and for restarted

@@ -48,6 +48,8 @@
 //!     SSH grants and strict change guest-visible enforcement, so omitting
 //!     them would let the reuse path adopt a sandbox with stale SSH
 //!     confinement — they MUST be hashed.
+//! 11. Explicit `init`, then `root_disk_mib`, are appended only when present;
+//!     omission preserves every older configuration hash.
 //!
 //! # Explicitly NOT hashed (each would churn on non-runtime edits)
 //!
@@ -297,6 +299,14 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
         s.push_str(&init.to_string());
     }
 
+    // Appended only when declared, preserving all existing omission hashes.
+    if let Some(size) = plan.root_disk_mib {
+        s.push(REC);
+        s.push_str("root_disk_mib");
+        s.push(UNIT);
+        s.push_str(&size.to_string());
+    }
+
     s
 }
 
@@ -486,6 +496,23 @@ mod tests {
     };
     use crate::mount_policy::PolicyValue;
 
+    #[test]
+    fn root_disk_identity_changes_only_for_explicit_capacity() {
+        let mut plan = empty_plan();
+        let original = config_hash_of_plan(&plan);
+        let old_json = serde_json::to_value(&plan).unwrap();
+        assert!(old_json.get("root_disk_mib").is_none());
+        let decoded: SandboxPlan = serde_json::from_value(old_json).unwrap();
+        assert_eq!(config_hash_of_plan(&decoded), original);
+        plan.root_disk_mib = Some(4096);
+        let explicit_default = config_hash_of_plan(&plan);
+        assert_ne!(explicit_default, original);
+        plan.root_disk_mib = Some(16384);
+        assert_ne!(config_hash_of_plan(&plan), explicit_default);
+        plan.root_disk_mib = None;
+        assert_eq!(config_hash_of_plan(&plan), original);
+    }
+
     fn empty_plan() -> SandboxPlan {
         SandboxPlan {
             name: "test".to_string(),
@@ -494,6 +521,7 @@ mod tests {
             command: Vec::new(),
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: Vec::new(),
             secret_env: Vec::new(),
             credentials: None,

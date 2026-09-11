@@ -11,6 +11,103 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 
+type RootDiskSetup = (
+    std::sync::Arc<dyn microsandbox::backend::Backend>,
+    SandboxBuilder,
+);
+
+/// Inspect only the requested mode; allocation and filesystem admission remain
+/// backend responsibilities. Omission must not materialize or replace defaults.
+fn apply_plan_root_disk(
+    builder: SandboxBuilder,
+    desired: Option<u32>,
+    backend_default: Option<&microsandbox::sandbox::RootDisk>,
+) -> Result<SandboxBuilder> {
+    use microsandbox::sandbox::{RootDisk, RootfsSource};
+    let Some(size) = desired else {
+        return Ok(builder);
+    };
+    crate::config::validation::validate_root_disk_mib(size)?;
+    let RootfsSource::Oci(oci) = &builder.spec().image else {
+        anyhow::bail!(
+            "root_disk_mib requires an OCI image, not a host directory or disk-image rootfs"
+        );
+    };
+    anyhow::ensure!(
+        !oci.reference.is_empty(),
+        "root_disk_mib requires an OCI image"
+    );
+    for mode in [oci.root_disk.as_ref(), backend_default]
+        .into_iter()
+        .flatten()
+    {
+        anyhow::ensure!(
+            matches!(mode, RootDisk::Managed { .. }),
+            "root_disk_mib cannot replace a tmpfs, flat or disk-image writable mode with managed storage"
+        );
+    }
+    Ok(builder.root_disk(size))
+}
+
+fn prepare_root_disk_builder(plan: &SandboxPlan, instance: &str) -> Result<Option<RootDiskSetup>> {
+    if plan.root_disk_mib.is_none() {
+        return Ok(None);
+    }
+    let backend = microsandbox::backend::default_backend();
+    let default = backend
+        .as_local()
+        .and_then(|local| local.config().sandbox_defaults.oci.root_disk.as_ref());
+    let builder = apply_plan_root_disk(
+        super::builder_for(instance).image(plan.image.as_deref().unwrap_or("alpine:latest")),
+        plan.root_disk_mib,
+        default,
+    )?;
+    Ok(Some((backend, builder)))
+}
+
+fn root_disk_reuse_note(
+    desired: u32,
+    stored: Option<&microsandbox::sandbox::RootfsSource>,
+) -> String {
+    use microsandbox::sandbox::{RootDisk, RootfsSource};
+    let configured = match stored {
+        Some(RootfsSource::Oci(oci)) => match &oci.root_disk {
+            Some(RootDisk::Managed {
+                size_mib: Some(size),
+            }) => format!("managed {size} MiB"),
+            Some(RootDisk::Managed { size_mib: None }) => "managed size unknown".into(),
+            None => "writable mode and capacity unspecified".into(),
+            Some(RootDisk::Tmpfs { .. }) => "tmpfs (not a managed disk)".into(),
+            Some(RootDisk::Flat { .. }) => "flat (not a managed writable layer)".into(),
+            Some(RootDisk::DiskImage { .. }) => "user-owned disk image".into(),
+        },
+        Some(_) => "non-OCI rootfs".into(),
+        None => "unknown".into(),
+    };
+    format!(
+        "root_disk_mib desired {desired} MiB; retained configuration: {configured}; actual capacity unverified and stored disk unchanged. Recreate the instance to enforce a new capacity; no resize was performed."
+    )
+}
+
+async fn report_retained_root_disk(instance: &str, desired: Option<u32>) {
+    let Some(desired) = desired else { return };
+    // Metadata failure must not manufacture capacity or alter the existing skew
+    // decision. This lookup neither modifies nor resizes the retained disk.
+    let stored = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::get_sandbox(instance),
+    )
+    .await
+    {
+        Ok(Ok(handle)) => handle.config().ok().map(|config| config.spec.image),
+        _ => None,
+    };
+    eprintln!(
+        "instance '{instance}': {}",
+        root_disk_reuse_note(desired, stored.as_ref())
+    );
+}
+
 /// Forward explicit PID 1 selection without changing the separate exec-stream
 /// command. Agentd remains the default; no OCI auto-detection is requested.
 pub(crate) fn apply_plan_init(
@@ -205,139 +302,106 @@ pub(crate) fn apply_plan_envs(
 
 pub(crate) async fn run_service_foreground(
     sandbox: &Sandbox,
-    mut config: ForegroundConfig,
+    config: &mut ForegroundConfig,
 ) -> Result<()> {
-    // Taken before `exec_stream` moves the command args below: the shim and
-    // the broker reservation are relinquished on every exit path via
-    // `shutdown_ssh_shim` / `shutdown_broker_vm`.
-    let mut ssh_shim = config.ssh_shim.take();
-    let mut broker = config.broker.take();
-    let mut exec_handle = match sandbox
-        .exec_stream(&config.command.binary, config.command.arguments)
-        .await
+    use super::foreground::{self, Cancellation, Cleanup, ServiceEnd};
+    use tokio::time::{Instant, timeout, timeout_at};
+
+    let startup_deadline = Instant::now() + foreground::STARTUP_TIMEOUT;
+    let shutdown = tokio::signal::ctrl_c();
+    tokio::pin!(shutdown);
+    // No spawned log drainer: this scope retains the original session through
+    // its terminal observation or bounded cancellation/cleanup attempt.
+    let mut exec_handle = None;
+    let end = tokio::select! {
+        biased;
+        result = &mut shutdown => ServiceEnd::from_signal(result),
+        result = timeout_at(startup_deadline, sandbox.exec_stream(
+            &config.command.binary, config.command.arguments.clone(),
+        )) => match result {
+            Err(_) => ServiceEnd::StartupTimeout,
+            Ok(Err(error)) => ServiceEnd::StartRequestFailed(error.to_string()),
+            Ok(Ok(mut handle)) => {
+                let end = foreground::supervise(
+                    &mut handle, &mut shutdown, startup_deadline, |event| match event {
+                        ExecEvent::Started { pid } => {
+                            eprintln!("{} process started (guest PID {}); application readiness is not yet established",
+                                config.service_label, pid);
+                            println!("Sandbox '{}' process started (Ctrl-C to stop)", config.sandbox_name);
+                            for (host, guest) in &config.mounts {
+                                println!("mount: {} -> {}", host, guest);
+                            }
+                        }
+                        ExecEvent::Stdout(data) | ExecEvent::Stderr(data) => {
+                            eprint!("{}", String::from_utf8_lossy(data));
+                        }
+                        _ => {}
+                    },
+                ).await;
+                exec_handle = Some(handle);
+                end
+            }
+        },
+    };
+
+    // Close new SSH admission promptly. Keep the handle in the borrowed config
+    // until actual joined retirement is observed; timeout does not release it.
+    if let Some(shim) = &config.ssh_shim {
+        shim.fence();
+    }
+    let cancellation = if end.needs_cancel() {
+        if let Some(handle) = &exec_handle {
+            match timeout(foreground::CANCEL_TIMEOUT, handle.cancel()).await {
+                Ok(value) => Cancellation::Observed(value),
+                Err(_) => Cancellation::TimedOut,
+            }
+        } else {
+            Cancellation::NotNeeded
+        }
+    } else {
+        Cancellation::NotNeeded
+    };
+    let stop = match timeout(foreground::STOP_TIMEOUT, sandbox.stop()).await {
+        Ok(result) => result.map_err(|error| error.to_string()),
+        Err(_) => Err("observation timed out; stopped state is unconfirmed".into()),
+    };
+    if config.log_stop_errors
+        && let Err(error) = &stop
     {
-        Ok(handle) => handle,
-        Err(e) => {
-            shutdown_ssh_shim(&mut ssh_shim);
-            shutdown_broker_vm(&mut broker);
-            return Err(anyhow::anyhow!(
-                "failed to start {} process: {}",
-                config.service_label,
-                e
-            ));
+        eprintln!(
+            "failed to stop sandbox '{}': {}",
+            config.sandbox_name, error
+        );
+    }
+    let shim = match config.ssh_shim.as_mut() {
+        Some(_) if stop.is_err() => {
+            Err("sandbox stopped state is unconfirmed; CID/socket reservation retained".into())
         }
+        Some(shim) => shim
+            .retire_until(Instant::now() + foreground::SHIM_TIMEOUT)
+            .await
+            .map_err(|error| error.to_string()),
+        None => Ok(()),
     };
-
-    match exec_handle.recv().await {
-        Some(ExecEvent::Started { pid }) => {
-            eprintln!(
-                "{} process started (guest PID {})",
-                config.service_label, pid
-            );
-        }
-        Some(ExecEvent::Failed(err)) => {
-            if let Err(stop_err) = sandbox.stop().await {
-                eprintln!("failed to stop sandbox after service failure: {}", stop_err);
-            }
-            shutdown_ssh_shim(&mut ssh_shim);
-            shutdown_broker_vm(&mut broker);
-            return Err(anyhow::anyhow!(
-                "{} process failed to start: {:?}",
-                config.service_label,
-                err
-            ));
-        }
-        other => {
-            if let Err(stop_err) = sandbox.stop().await {
-                eprintln!(
-                    "failed to stop sandbox after unexpected event: {}",
-                    stop_err
-                );
-            }
-            shutdown_ssh_shim(&mut ssh_shim);
-            shutdown_broker_vm(&mut broker);
-            return Err(anyhow::anyhow!(
-                "unexpected exec event waiting for {} start: {:?}",
-                config.service_label,
-                other
-            ));
-        }
+    if shim.is_ok() {
+        config.ssh_shim.take();
     }
 
-    // The ExecHandle must outlive `sandbox` for the streaming session to stay
-    // open, so we move it into a background task. We intentionally do NOT use
-    // `Sandbox::detach()` here: the foreground path wants a clean stop on
-    // Ctrl-C, not a fire-and-forget background sandbox whose process group
-    // outlives this CLI invocation.
-    let drain_service = config.service_label.clone();
-    let drain_handle = tokio::spawn(async move {
-        while let Some(event) = exec_handle.recv().await {
-            match event {
-                ExecEvent::Stdout(data) => {
-                    eprint!("{}", String::from_utf8_lossy(&data));
-                }
-                ExecEvent::Stderr(data) => {
-                    eprint!("{}", String::from_utf8_lossy(&data));
-                }
-                ExecEvent::Exited { code } => {
-                    eprintln!("{} exited with code {}", drain_service, code);
-                }
-                ExecEvent::Failed(err) => {
-                    eprintln!("{} failed: {:?}", drain_service, err);
-                }
-                _ => {}
-            }
-        }
-    });
-
-    println!("Sandbox '{}' started (Ctrl-C to stop)", config.sandbox_name);
-    for (host, guest) in &config.mounts {
-        println!("mount: {} -> {}", host, guest);
-    }
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        // Even if the signal handler fails, attempt to stop the sandbox
-        // before propagating the error.
-        let _ = sandbox.stop().await;
-        let _ = drain_handle.await;
-        shutdown_ssh_shim(&mut ssh_shim);
-        shutdown_broker_vm(&mut broker);
-        return Err(anyhow::anyhow!("signal handler error: {}", e));
-    }
-    // Post-session teardown is REQUIRED: a failed stop means a silently
-    // leaked sandbox, so it must fail the command (nonzero exit), not just
-    // eprintln. The `log_stop_errors` knob still controls the eprintln; the
-    // error propagates either way.
-    let stop_err = match sandbox.stop().await {
-        Ok(()) => None,
-        Err(e) => {
-            if config.log_stop_errors {
-                eprintln!("failed to stop sandbox '{}': {}", config.sandbox_name, e);
-            }
-            Some(e)
-        }
-    };
-
-    // Drain any remaining buffered log events before returning.
-    // Use a timeout so a hung exec channel doesn't block forever.
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain_handle).await;
-
-    // The foreground service ends here on every path below: relinquish the
-    // SSH shim (socket, thread, CID binding) and the broker reservation
-    // with the sandbox.
-    shutdown_ssh_shim(&mut ssh_shim);
-    shutdown_broker_vm(&mut broker);
-
-    match stop_err {
-        None => {
-            println!("Sandbox '{}' stopped", config.sandbox_name);
-            Ok(())
-        }
-        Some(e) => Err(anyhow::anyhow!(
-            "failed to stop sandbox '{}' after session end: {}",
-            config.sandbox_name,
-            e
-        )),
-    }
+    // Compatibility path, deliberately outside the independent async budgets:
+    // the legacy egress forwarder still performs an unbounded blocking join.
+    // This is not a claim of bounded complete broker/relay retirement.
+    shutdown_broker_vm(&mut config.broker);
+    foreground::finish(
+        &config.service_label,
+        end,
+        Cleanup {
+            cancellation,
+            stop,
+            shim,
+        },
+    )?;
+    println!("Sandbox '{}' stopped", config.sandbox_name);
+    Ok(())
 }
 
 /// Start `exec_program` with `exec_args` inside `sandbox` via an interactive
@@ -980,15 +1044,6 @@ fn apply_nested_virt(builder: SandboxBuilder, nested_on: bool) -> SandboxBuilder
     builder.nested_virt(nested_on)
 }
 
-/// Release the foreground SSH shim, if any. Best-effort (see
-/// [`crate::microsandbox::broker::SshShimHandle::shutdown`]): teardown
-/// must not fail the service exit it follows.
-fn shutdown_ssh_shim(shim: &mut Option<crate::microsandbox::broker::SshShimHandle>) {
-    if let Some(shim) = shim.take() {
-        shim.shutdown();
-    }
-}
-
 /// Release the foreground broker VM reservation, if any. Best-effort (see
 /// [`crate::microsandbox::broker::BrokerVmHandle::shutdown`]): teardown
 /// must not fail the service exit it follows.
@@ -1020,6 +1075,9 @@ pub(crate) async fn build_sandbox<W: Workload>(
     let secrets = crate::microsandbox::secrets_loader::load_secrets()?;
 
     let mut plan = workload.plan();
+    // Prepare without creating storage. Defer an unsupported-mode error until
+    // a create/replace decision, so reuse keeps its original skew semantics.
+    let root_disk_setup = prepare_root_disk_builder(&plan, &spec.instance);
 
     // ADR 0030 V-addendum §V2: instance-scoped state mounts. For a
     // `per-dir`-strategy workload the state mount root
@@ -1213,9 +1271,13 @@ pub(crate) async fn build_sandbox<W: Workload>(
                 recorded,
                 Some(&current),
             ) {
-                SkewDisposition::Proceed => return Ok(BuildOutcome::Reused),
+                SkewDisposition::Proceed => {
+                    report_retained_root_disk(&spec.instance, plan.root_disk_mib).await;
+                    return Ok(BuildOutcome::Reused);
+                }
                 SkewDisposition::Warn(message) => {
                     eprintln!("{message}");
+                    report_retained_root_disk(&spec.instance, plan.root_disk_mib).await;
                     return Ok(BuildOutcome::Reused);
                 }
                 SkewDisposition::ReplaceNow => {
@@ -1229,6 +1291,9 @@ pub(crate) async fn build_sandbox<W: Workload>(
                         "on_skew = \"replace\": replacing instance '{}' (build inputs diverged)",
                         spec.instance
                     );
+                    root_disk_setup
+                        .as_ref()
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
                     super::teardown_for_replace(&state_dir, &spec.instance).await?;
                     skew_replaced = true;
                 }
@@ -1241,6 +1306,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
             );
         }
         super::reconcile::ChainStep::StartExisting => {
+            report_retained_root_disk(&spec.instance, plan.root_disk_mib).await;
             // msb state generations gate: refuse BEFORE the policy write +
             // `handle.start()` — starting a STOPPED old-generation sandbox
             // with the NEW baked binary would forward-mutate the old
@@ -1294,6 +1360,9 @@ pub(crate) async fn build_sandbox<W: Workload>(
             if let Some(e) = gate_refusal(&generation_gate) {
                 return Err(e);
             }
+            root_disk_setup
+                .as_ref()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             super::teardown_for_replace(&state_dir, &spec.instance).await?;
         }
         super::reconcile::ChainStep::Start => {}
@@ -1304,6 +1373,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // `create()`). The Ok generation dir rides to the `.booted-ok` marker
     // write after registration below.
     let generation_dir = generation_gate?;
+    let root_disk_setup = root_disk_setup?;
     if spec.replace {
         check_occupied_or_replace(spec, &state_dir).await?;
     }
@@ -1325,8 +1395,15 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // (`@` is illegal), so the BUILDER gets the encoded msb name — via the
     // ONE SDK-boundary wrapper [`super::builder_for`]; every registry/
     // record surface keeps the workestrate identity.
-    let mut builder = super::builder_for(&spec.instance)
-        .image(plan.image.as_deref().unwrap_or("alpine:latest"))
+    let (root_disk_backend, builder) = match root_disk_setup {
+        Some((backend, builder)) => (Some(backend), builder),
+        None => (
+            None,
+            super::builder_for(&spec.instance)
+                .image(plan.image.as_deref().unwrap_or("alpine:latest")),
+        ),
+    };
+    let mut builder = builder
         .cpus(plan.cpus.unwrap_or(2))
         .memory(plan.memory_mib.unwrap_or(2048))
         .workdir(plan.workdir.as_deref().unwrap_or("/app"))
@@ -1418,7 +1495,11 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // This builder launches the workload, not the custody broker. Raw DLP
     // patterns contain credential material and belong only on the direct
     // broker management path, never in this workload's bootstrap.
-    let sandbox = builder.create().await?;
+    let sandbox = match root_disk_backend {
+        // Use the same backend whose writable-mode defaults were checked.
+        Some(backend) => microsandbox::backend::with_backend(backend, builder.create()).await?,
+        None => builder.create().await?,
+    };
 
     let created_at = super::time::current_rfc3339_utc();
     // A3 (ADR 0032 §Provenance stamps): the create path knows the FULL
@@ -1609,7 +1690,8 @@ pub async fn up_service_with_spec<W: Workload>(
         // never fires, the child is always spawned, and the child re-derives
         // Replace (`--replace` rides detach_args) to tear down + recreate.
         let state_dir = crate::config::resolve_state_dir();
-        let declared_ports: Vec<u16> = workload.plan().ports.iter().map(|p| p.host).collect();
+        let requested_plan = workload.plan();
+        let declared_ports: Vec<u16> = requested_plan.ports.iter().map(|p| p.host).collect();
         let facts =
             super::reconcile::gather_facts(&state_dir, &spec.instance, &declared_ports).await?;
         let chain = workload.instance_conflict_chain();
@@ -1657,14 +1739,19 @@ pub async fn up_service_with_spec<W: Workload>(
                             "on_skew = \"replace\": replacing instance '{}' (build inputs diverged)",
                             spec.instance
                         );
+                        prepare_root_disk_builder(&requested_plan, &spec.instance)?;
                         super::teardown_for_replace(&state_dir, &spec.instance).await?;
                     }
                     SkewDisposition::Warn(message) => {
                         eprintln!("{message}");
+                        report_retained_root_disk(&spec.instance, requested_plan.root_disk_mib)
+                            .await;
                         println!("instance '{}' is already running — reusing", spec.instance);
                         return Ok(());
                     }
                     SkewDisposition::Proceed => {
+                        report_retained_root_disk(&spec.instance, requested_plan.root_disk_mib)
+                            .await;
                         println!("instance '{}' is already running — reusing", spec.instance);
                         return Ok(());
                     }
@@ -1696,6 +1783,7 @@ pub async fn up_service_with_spec<W: Workload>(
                         "tearing down existing instance '{}' before replace",
                         spec.instance
                     );
+                    prepare_root_disk_builder(&requested_plan, &spec.instance)?;
                     super::teardown_for_replace(&state_dir, &spec.instance).await?;
                 }
             }
@@ -1719,7 +1807,9 @@ pub async fn up_service_with_spec<W: Workload>(
         return Ok(());
     }
     match build_sandbox(workload, spec).await? {
-        BuildOutcome::Ready(sandbox, config) => run_service_foreground(&sandbox, *config).await,
+        BuildOutcome::Ready(sandbox, mut config) => {
+            run_service_foreground(&sandbox, &mut config).await
+        }
         BuildOutcome::Reused => {
             println!("instance '{}' is already running — reusing", spec.instance);
             Ok(())
@@ -1917,6 +2007,7 @@ mod tests {
             command: Vec::new(),
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env,
             secret_env: Vec::new(),
             credentials: None,
@@ -1974,6 +2065,75 @@ mod tests {
     }
 
     #[test]
+    fn root_disk_capacity_reaches_only_managed_oci_sdk_spec() {
+        use microsandbox::sandbox::RootDisk;
+        for size in [1, 16384, u32::MAX] {
+            let builder = apply_plan_root_disk(
+                Sandbox::builder("root-disk").image("alpine:latest"),
+                Some(size),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                builder.spec().image.oci_root_disk(),
+                Some(&RootDisk::managed(size))
+            );
+        }
+    }
+
+    #[test]
+    fn omitted_root_disk_keeps_spec_and_backend_mode_untouched() {
+        use microsandbox::sandbox::RootDisk;
+        let builder = Sandbox::builder("root-disk-default").image("alpine:latest");
+        let before = serde_json::to_value(builder.spec()).unwrap();
+        let builder =
+            apply_plan_root_disk(builder, None, Some(&RootDisk::Tmpfs { size_mib: None })).unwrap();
+        assert_eq!(serde_json::to_value(builder.spec()).unwrap(), before);
+        assert!(builder.spec().image.oci_root_disk().is_none());
+    }
+
+    #[test]
+    fn root_disk_capacity_rejects_zero_and_incompatible_writable_modes() {
+        let oci = || Sandbox::builder("root-disk-mode").image("alpine:latest");
+        assert!(apply_plan_root_disk(oci(), Some(0), None).is_err());
+        for builder in [
+            Sandbox::builder("bind-root").image_with(|i| i.bind("/rootfs")),
+            Sandbox::builder("disk-root").image_with(|i| i.disk("/rootfs.img")),
+            oci().root_disk_with(|d| d.tmpfs()),
+            oci().root_disk_with(|d| d.flat()),
+            oci().root_disk_with(|d| d.disk_image("/writable.img")),
+        ] {
+            assert!(apply_plan_root_disk(builder, Some(8192), None).is_err());
+        }
+        for builder in [
+            oci().root_disk_with(|d| d.tmpfs()),
+            oci().root_disk_with(|d| d.flat()),
+            oci().root_disk_with(|d| d.disk_image("/writable.img")),
+        ] {
+            let mode = builder.spec().image.oci_root_disk().unwrap();
+            assert!(apply_plan_root_disk(oci(), Some(8192), Some(mode)).is_err());
+        }
+    }
+
+    #[test]
+    fn root_disk_reuse_reports_desired_and_stored_without_capacity_proof() {
+        let builder = Sandbox::builder("root-disk-retained")
+            .image("alpine:latest")
+            .root_disk(4096u32);
+        let note = root_disk_reuse_note(16384, Some(&builder.spec().image));
+        assert!(note.contains("desired 16384 MiB"));
+        assert!(note.contains("managed 4096 MiB"));
+        assert!(note.contains("actual capacity unverified and stored disk unchanged"));
+        assert!(note.contains("Recreate") && note.contains("no resize was performed"));
+        assert!(root_disk_reuse_note(4096, None).contains("retained configuration: unknown"));
+        let unchanged = root_disk_reuse_note(4096, Some(&builder.spec().image));
+        assert!(
+            unchanged.contains("unverified"),
+            "matching declarations are not capacity observation"
+        );
+    }
+
+    #[test]
     fn omitted_or_agentd_init_keeps_default_sdk_pid_one() {
         let mut plan = empty_plan_with_env(vec![]);
         for init in [None, Some(crate::config::InitConfig::Agentd {})] {
@@ -2002,6 +2162,7 @@ mod tests {
             command: Vec::new(),
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: Vec::new(),
             secret_env,
             credentials: None,

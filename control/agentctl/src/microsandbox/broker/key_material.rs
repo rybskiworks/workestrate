@@ -107,7 +107,8 @@ pub struct SopsKeyMaterial {
     /// secret — safe to log, and shown by the redacting `Debug` impl).
     secret_id: String,
     /// Parsed keypair. Field-private: signing goes through
-    /// [`SealedKeyBackend`] in this module, so no accessor can leak it.
+    /// [`SealedKeyBackend`]; only the trusted broker adapter can project a
+    /// zeroizing seed for the protected custody transport.
     private_key: ssh_key::PrivateKey,
 }
 
@@ -198,6 +199,21 @@ impl SopsKeyMaterial {
     #[must_use]
     pub fn secret_id(&self) -> &str {
         &self.secret_id
+    }
+
+    /// Project the already-validated key for direct broker custody transport.
+    /// This is not a public credential accessor or a new material store. The
+    /// trusted resolver must attach its selected grant and versions, and move
+    /// these bytes into the shared wire's redacted, zeroizing secret buffer.
+    pub(crate) fn broker_key_seed(&self) -> Result<Zeroizing<[u8; 32]>, KeyMaterialError> {
+        match self.private_key.key_data() {
+            ssh_key::private::KeypairData::Ed25519(keypair) => {
+                Ok(Zeroizing::new(keypair.private.to_bytes()))
+            }
+            _ => Err(KeyMaterialError::WrongKeyType {
+                detail: "broker custody requires a cleartext Ed25519 key".into(),
+            }),
+        }
     }
 
     /// Issue public broker host trust from a host-owned CA secret. The trusted
@@ -537,6 +553,26 @@ mod tests {
     }
 
     // --- loader: happy paths ---
+
+    #[test]
+    fn broker_seed_preserves_selected_key_without_reloading_material() {
+        for _ in 0..2 {
+            let key = test_keypair();
+            let text = key.to_openssh(ssh_key::LineEnding::LF).unwrap();
+            let mut secrets = layer("SELECTED_ENV", text.as_str());
+            secrets.insert("UNRELATED_ENV".into(), ed25519_openssh());
+            let material =
+                SopsKeyMaterial::from_decrypted(&secrets, "selected-key", "SELECTED_ENV").unwrap();
+            // The parsed owner does not consult a changed source map again.
+            secrets.insert("SELECTED_ENV".into(), ed25519_openssh());
+            let seed = material.broker_key_seed().unwrap();
+            let reconstructed =
+                ssh_key::PrivateKey::from(ssh_key::private::Ed25519Keypair::from_seed(&seed));
+            assert_eq!(reconstructed.public_key(), key.public_key());
+            assert_eq!(material.secret_id(), "selected-key");
+            assert!(format!("{material:?}").contains("<redacted>"));
+        }
+    }
 
     #[test]
     fn loader_resolves_secret_id_through_env_var() {

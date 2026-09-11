@@ -83,6 +83,9 @@ pub struct SandboxPlan {
     pub command: Vec<String>,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
+    /// Desired managed OCI writable capacity; never resizes an existing disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_disk_mib: Option<u32>,
     pub env: Vec<EnvVar>,
     pub secret_env: Vec<HostBoundSecret>,
     /// Credential-broker grants for this workload: the compiled
@@ -727,6 +730,9 @@ impl fmt::Display for SandboxPlan {
         if let Some(mem) = self.memory_mib {
             writeln!(f, "memory: {} MiB", mem)?;
         }
+        if let Some(size) = self.root_disk_mib {
+            writeln!(f, "root disk: {size} MiB (new managed OCI disk)")?;
+        }
         for e in &self.env {
             writeln!(f, "env: {}", e)?;
         }
@@ -1087,6 +1093,7 @@ mod tests {
             command: vec!["run".to_string(), "--fast".to_string()],
             cpus: Some(2),
             memory_mib: Some(512),
+            root_disk_mib: None,
             env: vec![
                 EnvVar::literal("PLAIN", "value"),
                 EnvVar {
@@ -1178,6 +1185,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
@@ -1235,6 +1243,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
@@ -1328,6 +1337,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
@@ -1361,6 +1371,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
@@ -1505,6 +1516,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
@@ -1649,6 +1661,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
@@ -1719,6 +1732,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
@@ -1760,6 +1774,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
@@ -1840,6 +1855,7 @@ network: egress_default=deny ingress_default=deny
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,
