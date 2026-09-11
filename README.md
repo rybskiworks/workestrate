@@ -1,316 +1,158 @@
-# workestrate
+<h1 align="center">workestrate</h1>
+<p align="center"><strong>Define the workload. Bound its authority. Let it work.</strong></p>
+<p align="center">Declarative microVM workloads, policy-aware configuration, and a Nix-pinned control plane.</p>
+<p align="center">
+  <a href="https://github.com/rybskiworks/workestrate/actions/workflows/ci.yml"><img alt="CI on main" src="https://github.com/rybskiworks/workestrate/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  &nbsp; Linux x86_64 &nbsp; | &nbsp; Rust + Nix &nbsp; | &nbsp;
+  <a href="LICENSE-MIT">MIT</a> / <a href="LICENSE-APACHE">Apache-2.0</a>
+</p>
+<p align="center">
+  <a href="#start-here">Get started</a> &middot;
+  <a href="SPEC.md">Architecture</a> &middot;
+  <a href="docs/runtime-provisioning.md">Runtime</a> &middot;
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-**workestrate** is an agent-first microVM workload orchestrator: a Rust CLI
-plus a Nix flake that run declaratively-configured workloads (agents and
-services) inside Microsandbox microVMs with default-deny networking and
-SOPS-encrypted secrets. Workloads are **declared in TOML config repos**,
-not hardcoded in the tool — the CLI composes config from ordered layers
-(registry, contexts, trusted projects, local overrides) with
-security-aware merge semantics.
+---
 
-## Positioning
+**Your agent is a workload, not your identity.** Workestrate combines a Rust CLI
+with a Nix flake to run agents and services inside Microsandbox microVMs.
+Configuration, network access, mounts and secret bindings are explicit inputs,
+not privileges inherited simply because a program runs on your machine.
 
-workestrate is **agnostic workload configuration/orchestration**, built
-agent-first. Agents happen to be the first-class use case today (coding
-agents behind a local LiteLLM proxy, each in its own microVM), but the
-machinery is deliberately generic: any workload you can describe as an
-image + command + env/ports/mounts/seeds/network policy can be declared in
-a config repo and orchestrated the same way. The intent is to generalize
-beyond the current agent setup — applicable to anything else that benefits
-from declarative, policy-gated microVM workloads — not to be tied to one
-agent stack.
+Agent-first, not agent-specific. Workloads live in fleet/config repositories;
+the tool does not hardcode your preferred model, coding harness or service stack.
 
-The rest of this README documents **what exists today**, accurately.
+## One control plane, explicit boundaries
 
-## How it works today
-
-- **Tool, not a workspace project.** The `workestrate` Rust CLI
-  (`control/agentctl/`) drives everything. Config lives in a single tool
-  home (`$WORKESTRATE_HOME`, default `~/.workestrate`) holding the
-  registry, config-repo clones, ordered layers/contexts, user-global
-  overrides, secrets, sources, and runtime state.
-- **Nix-native.** Builds, devshells, and tool pins all flow through the
-  flake (`flake.nix`). The flake also exports `lib.*` recipes
-  (`buildImagesFromConfig`, `bun-compile`, `npm-build`, `nix-layered`,
-  `checks.validateConfig`) for config-repo flakes to consume. Workload
-  image builds live in the config repo flake, not the tool repo.
-- **Built on a Microsandbox fork.** The `microsandbox` SDK is pinned to
-  `=0.6.16` with the `net` feature, source-built from the pinned
-  `microsandbox-fork` flake input. Runtime execution requires a host with
-  `/dev/kvm`; no Docker is involved.
-- **Default-deny network policy.** Egress and ingress default to deny;
-  allow rules are explicit. Policy is a ladder: `allow` stands alone, home
-  `final` seals veto, and `entitlements` is a retired key (hard parse
-  error) — see ADR 0035 and `docs/migration/30-security-model.md`.
-- **Fail-closed without config.** A fresh clone ships only a synthetic
-  reference config (`config.reference/`) with placeholder workloads
-  (`example-service`, `example-agent`, `example-offensive`). `plan` and
-  `validate-config` work immediately; `up`/`exec` for real workloads
-  require a registered config repo.
-
-## CLI surface
-
-Workload names (`litellm`, `pi`, `odysseus`, `opencode`, `tempest`) are
-defined by your active config repo, not by the tool. Workloads split into
-two kinds: **services** support `up`/`down`/`logs`/`plan`; **agents**
-support `exec`/`down`/`plan` (agents are interactive — you attach with
-`exec`).
-
-```bash
-workestrate workload plan example-service        # plan works on a fresh clone
-workestrate workload plan <name> --show-source   # per-field layer provenance
-workestrate workload up <service>                # start detached (topo-ordered deps)
-workestrate workload up <service> --foreground   # block until Ctrl-C
-workestrate workload logs <service>              # tail a detached service log
-workestrate workload exec <agent>                # attach interactively (TUI)
-workestrate workload down <name>                 # stop a singleton slot
-workestrate workloads                            # list configured workloads + status
-workestrate ps [--json]                          # running instances (all contexts)
+```text
+fleet / config repositories       pinned nix-tooling
+  workloads + policy + sources      compiler + build tools
+                 |                         |
+                 +------ workestrate ------+
+                         plan / validate
+                         lifecycle / exec
+                               |
+                      pinned Microsandbox
+                       /               \
+                  agent microVM    service microVM
 ```
 
-**Instance lifecycle** (ADR 0021/0026): `up`/`exec` target a **slot** — a
-singleton (`<workload>`, or `<context>-<workload>` with a context active)
-or a parallel instance (`<slot>@<id>`). Occupied slots **refuse** by
-default; `--replace` recycles explicitly, `--instance <id>`/`--new` start
-a parallel canary on its own per-instance loopback IP (`127.0.0.N`).
-`host = 0` ports and `--port-auto` probe a free port at boot. Scoped
-teardown: `workestrate down --all|--context <ctx>|--config-ref
-<ref>|--everything` (exactly one selector; `workestrate clean` is
-state/cache hygiene only and never tears down VMs). Full detail:
-`docs/operating-model.md` and `docs/migration/20-target-system-spec.md`
-§13.
+| Concern | Workestrate's role |
+| :--- | :--- |
+| Configuration | Compose declared layers, expose provenance, apply security-aware policy merges. |
+| Isolation | Launch workloads through the pinned Microsandbox backend on Linux/KVM. |
+| Credentials | Resolve SOPS-encrypted inputs and explicit workload secret bindings. |
+| Reproducibility | Share reviewed Nix/toolchain inputs; keep runtime source and SDK patches aligned. |
+| Lifecycle | Plan, start, attach, inspect and stop workloads without turning the repository into operator state. |
 
-**Config and source management:**
+**Active development.** `main` is the integration branch. The former
+`migration/tool-model` line was integrated in [PR #32](https://github.com/rybskiworks/workestrate/pull/32).
+Development history is not a second release channel.
 
-```bash
-workestrate home init                     # initialize the tool home (idempotent)
-workestrate home clone <src> [dest]       # provision a home from an existing one
-workestrate config add <url> <name>       # clone + register a config repo
-workestrate config new <name> [dest]      # scaffold a new config repo (in-store auto-registers)
-workestrate config update [name]          # pull latest, refuse dirty clones
-workestrate config list                   # registered repos with rev + dirty status
-workestrate config trust <dir>            # trust a project dir for project-layer config
-workestrate source clone|build|list|reset # agent source checkouts in the managed store
-workestrate migrate-home                  # legacy XDG layout → single home
-```
+## Start here
 
-**Introspection and escape hatches:**
+Build and inspect the CLI with **Nix and flakes enabled**:
 
-```bash
-workestrate check | doctor | versions     # layout sanity / provisioning state / pin quadruple
-workestrate validate-config               # schema + policy allowlist validation
-workestrate secrets-schema                # secret env var names from config
-workestrate generate-env-example          # .env.example from the config secrets section
-workestrate generate-schema | schemas update
-workestrate completions <shell>           # bash, zsh, fish, elvish, powershell
-workestrate msb -- <args>                 # verbatim passthrough to the pinned msb binary
-workestrate run -- <cmd>                  # exec a command with decrypted secrets (BY DESIGN
-                                          # full secret access — the operator's escape hatch)
-```
-
-## Config repos and the layering model
-
-A config repo declares workloads and the secrets schema in
-`workestrate.toml` (or directory-mode `workestrate/` capsules; ADR 0017)
-and carries its own `.env.enc` + `.sops.yaml`. Config repos live in the
-managed store at `$WORKESTRATE_HOME/config-repos/<name>/`; agent source
-checkouts live in `$WORKESTRATE_HOME/sources/<name>/`.
-
-Config resolution (lowest → highest precedence):
-
-1. `WORKESTRATE_CONFIG_DIR` env (dev/testing bypass; single layer, no merge)
-2. Reference config shipped with the tool (synthetic fallback)
-3. Context layers (`[contexts.<name>] layers = [...]`, in declared order)
-4. User-global overrides (`$WORKESTRATE_HOME/overrides.toml`)
-5. Trusted project config (`./workestrate.toml`, only if cwd is trusted)
-6. Local overrides (`./workestrate.local.toml`, same trust gate)
-
-The merge is **security-aware** (ADR 0005/0035): deny rules and egress
-rules are additive-union, env bindings union by key, and everything else
-uses RFC 7396 merge-patch. Egress hosts are validated against the closed
-`ALLOWED_EGRESS_HOSTS` vocabulary at merge time (fail-closed).
-
-**Seeds.** `[[seed_files]]` entries copy files into a sandbox before
-start; `template = true` renders `${VAR}` against the guest-visible env
-view (host-bound secrets appear as `$MSB_<name>` placeholders; a missing
-var is a hard error), `glob` seeds every sorted match to
-`target/<rel-path>`, and `--reseed` forces template re-render. This is how
-agents get their LiteLLM provider config without hardcoding values. See
-`docs/migration/20-target-system-spec.md` §3.
-
-**msb runtime model.** `workestrate` converges on one canonical msb home
-(`~/.microsandbox/current`, generation-keyed per pinned msb build) and the
-`msb`/`versions` verbs expose the exact pin. msb semantics are
-Docker-inspired but intentionally different — read
-`docs/runtime-provisioning.md` before assuming anything.
-
-## Setup
-
-Prerequisites: Debian/Ubuntu on x86_64 with virtualization enabled,
-`/dev/kvm` accessible to your user, Nix with flakes, ~4 GB RAM and ~20 GB
-free disk. No Docker required. Run `just host-check` to verify.
-
-```bash
-git clone <repo-url> workestrate
+```sh
+git clone https://github.com/rybskiworks/workestrate.git
 cd workestrate
-just shell                 # devshell (pins the Rust toolchain, just, nodejs_24)
-
-workestrate home init
-workestrate config new personal          # or: workestrate config add <url> personal
-setup-secrets --config personal init     # one-time secrets bootstrap (see below)
-workestrate check
-workestrate workload up litellm          # example service from your config repo
-workestrate workload exec pi             # example agent from your config repo
+nix build --no-update-lock-file .#workestrate
+./result/bin/workestrate --help
+./result/bin/workestrate versions
 ```
 
-> Nix builds see tracked files only — `git add` new files before building.
+Actually running a microVM additionally requires a Linux x86_64 host with
+virtualization enabled and `/dev/kvm` accessible. No Docker daemon is involved.
+Building does not provision a live operator home, migrate backend state or grant
+access to credentials.
 
-## Secrets workflow
+Initialize a home and inspect the bundled synthetic reference configuration:
 
-Secrets are SOPS-encrypted (age recipient) per config repo; each config
-repo holds `.env.enc` (ciphertext-safe to commit) + `.sops.yaml`, and an
-optional user-global layer (`$WORKESTRATE_HOME/secrets/.env.local.enc`)
-applies per-key across contexts. Layers merge per key (later wins; process
-env is lowest precedence).
+```sh
+./result/bin/workestrate home init
+./result/bin/workestrate validate-config
+./result/bin/workestrate workload plan example-service
+```
 
-- `setup-secrets --config <name> init` — one-time: creates the age key
-  (mode 0600) if missing, fixes up `.sops.yaml`, opens an editor with a
-  pre-filled buffer of required keys, and writes the encrypted `.env.enc`.
-  Refuses to overwrite an existing file — use `update` for changes.
-- `setup-secrets --config <name> update` — decrypts, edits, re-encrypts.
-- From a plain host shell, `just setup-secrets --config <name> update`
-  enters the pinned development shell automatically. For another tool home,
-  use `just setup-secrets --home /path/to/home --config <name> update`.
-  Named configs resolve through `workestrate secrets-target`, including
-  registry store, encrypted-file and age-key overrides. Unknown names fail
-  without falling back to another directory.
-- `just setup-secrets --config-dir /path/to/config-repo update` — edit a
-  directory directly, without changing your shell's environment or XDG paths.
-- `setup-secrets --global init|update` — targets the user-global
-  `.env.local.enc`.
-- `workestrate run -- <cmd>` — decrypts into the process environment and
-  execs a command (escape hatch, not sandboxed). Commands that don't need
-  secrets (`plan`, `check`, `completions`, …) skip decryption entirely.
+A fresh setup ships examples, not your live agents. Register or scaffold your own
+config repository before running real workloads:
 
-The **age private key stays on the host** at
-`~/.config/sops/age/ai-workbench-secrets.txt` — never in any repo, never
-under `$WORKESTRATE_HOME` (the repo is agent-reachable via `${CWD}`
-mounts). In a container the key is absent and secret operations fail
-closed by design. Back the key up: without it, `.env.enc` is
-undecryptable. Full threat model and wrapper reference:
-`docs/secrets.md`.
+```sh
+workestrate config new personal
+# Alternative: workestrate config add <repository-url> personal
+```
 
-The secrets catalog (defined per config repo; the current personal setup
-uses seven): `LITELLM_MASTER_KEY`, provider keys (`OPENROUTER_API_KEY`,
-`KIMI_CODE_API_KEY`, `NEURALWATT_API_KEY`, `MINIMAX_CODING_API_KEY`),
-`GITHUB_TOKEN`, and `ODYSSEUS_ADMIN_PASSWORD`. Secret exposure is per
-binding: `host`-bound (default) shows the guest only a placeholder and
-substitutes the real value in host-side traffic to the secret's
-`allowed_hosts`; `guest`-bound injects the real value and is reserved for
-workloads that verify the credential (e.g. the LiteLLM proxy itself).
+Use `./result/bin/workestrate` until the built CLI is on your `PATH`. Configure
+workload definitions, trust and SOPS keys deliberately; follow the
+[setup and secrets guide](docs/getting-started.md) and
+[runtime provisioning guide](docs/runtime-provisioning.md), not a copied operator
+home or a stale session handoff.
 
-## Development workflow
+## A small CLI surface for a larger system
 
-Tasks are tracked in the existing [Beads project](.beads/README.md).
-`just beads ready` lists actionable work; `just beads show <id>` includes
-acceptance criteria and dependencies. The CLI is pinned by `nix-tooling` and
-available in both development shells. Embedded storage permits one writer at
-a time; coordinate mutations and keep remote synchronization explicit.
+```sh
+workestrate workload plan <name> --show-source
+workestrate workload up <service>
+workestrate workload logs <service>
+workestrate workload exec <agent>
+workestrate workload down <name>
+workestrate workloads
+workestrate ps --json
+workestrate doctor
+```
 
-`just beads` preserves nonempty caller-provided `BEADS_DIR` and
-`DOLT_ROOT_PATH`. Missing or empty values default to `$PWD/.beads` and
-`$BEADS_DIR/dolt-global`, respectively. Use explicit absolute paths when
-selecting existing shared state; this wrapper does not initialize a tracker,
-create remote bindings or coordinate concurrent writers for you.
+Services run detached; agents can be attached interactively. Instance replacement,
+parallel instances and scoped teardown are explicit operations. The complete
+lifecycle contract is in the [operating model](docs/operating-model.md).
 
-See [Nix builds and dependency ownership](docs/nix-build.md) for package
-integration, offline dependency staging and the tooling-only `just bootstrap`
-shell used when the application is not yet buildable.
+## One toolchain authority
 
-Both shells and bare `just` preserve an explicit external absolute
-`CARGO_TARGET_DIR`. Without it, the default is
-`${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target`. Relative targets
-and targets inside the checkout, including symlink aliases, are rejected
-before setup. The selector creates no directories; see the
-[Cargo purity contract](docs/nix-purity.md#the-rules) for details.
+[`flake.nix`](flake.nix) selects an immutable revision of
+[`rybskiworks/nix-tooling`](https://github.com/rybskiworks/nix-tooling).
+The package set, Fenix compiler and development modules follow that supplier.
+Microsandbox follows the same tooling input rather than bringing a competing pin.
 
-See [workload flakes and repositories](docs/workloads.md) for image ownership,
-the standalone baseline and communication examples, and the remaining limits
-on composing external workload repositories.
+CI resolves its exact Rust release from the **locked Fenix manifest**, not a
+separate `stable` channel or hand-maintained compiler version in YAML. Inspect
+and validate the relationship without building the application:
 
-**just-first.** Run `just <recipe>` from a plain host shell — recipes
-self-enshell (`nix develop`) as needed. Key recipes:
+```sh
+python3 scripts/ci/toolchain.py check --role consumer
+```
 
-| Recipe | What it does |
-|---|---|
-| `just shell` | Interactive devshell (`just shell -c <cmd>` passes through) |
-| `just verify` | **The gate before pushing/review**: script guards plus sandboxed package, Rust, unit, TOML, formatting, template-schema and dependency-policy checks; no runtime shell or consumer-home access |
-| `just verify-full` | `verify` plus an explicit package build |
-| `just check` / `just test` | fmt + clippy + check / unit tests for `control/agentctl` |
-| `just deny-check` | cargo-deny supply-chain gates (config: `deny.toml`) |
-| `just host-check` / `just host-provision` / `just provision-check` | Host prerequisites / provisioning / read-only provisioning check |
-| `just kvm-tests` | The ignored KVM tests, host-side |
-| `just gc` / `just store-audit` | Nix store hygiene |
-| `just lint-nix` / `just tombi-check` | Purity and TOML gates |
+Updating the supplier is a reviewed `flake.nix` + `flake.lock` change. A local
+supplier override is an experiment, not a distributable lock update. See
+[build ownership](docs/nix-build.md) and [the CI contract](docs/ci-release-foundation.md).
 
-Derivation purity rules live in `docs/nix-purity.md`; devshell rules in
-`docs/nix/devshells.md`.
+## Security is a contract, not a badge
 
-The unit check includes specification examples, golden plans, schema drift and
-native scaffolding. VM tests, daemon-backed image integration, Copier round
-trips and live consumer-schema freshness are separate integration gates; a
-green package build does not establish that those integrations work. Run
-`workestrate --home <tool-home> schemas update --check` explicitly to inspect
-deployed schema copies without making the repository gate depend on them.
+Network defaults deny access unless allowed by effective policy. This does not
+make arbitrary configuration, mounts, operator escape hatches or host privileges
+safe. The current Linux nested-virtualization `off` flag is **not** an independently
+enforced confinement boundary.
 
-**Git hooks.** Run `nix run .#install-hooks` to install the pinned hooks explicitly;
-the installer preserves the fallback chain from `scripts/git-hooks/`. Hooks are
-check-only — **never commit with `--no-verify`**; fix findings properly.
+Read the [security model](docs/migration/30-security-model.md),
+[runtime limitations](docs/runtime-provisioning.md) and
+[reporting guidance](SECURITY.md). Hosted CI, native integration checks and
+KVM/runtime tests prove different things; a green aggregate does not imply all ran.
 
-**Commit conventions.** Conventional commit prefixes (`feat:`, `fix:`,
-`chore:`, `docs:`, `ci:`, `build:`, …). ADR numbers belong in commit
-bodies/footers, never in subjects. Secrets stay encrypted (`.env.enc`) —
-never commit decrypted material.
+## Build with us
 
-**CI gate posture.** PRs run light gates defined in the workflow itself
-(rustup-pinned cargo fmt/clippy/test plus pure-script gates) — the devenv
-is never booted in CI. The heavy **e2e-nix** leg is on-demand via the
-`nix-ci` PR label (owner/maintainer-triggered; agents must NOT self-apply
-it). Supply-chain gates run via cargo-deny (`just deny-check` locally;
-hard gate on licenses/bans/sources, soft on advisories). CODEOWNERS covers
-`.github/`, `flake.nix`, `flake.lock`, and `deny.toml`.
+With Nix and `just` available, `just bootstrap` provides pinned development tools,
+`just shell` opens the interactive environment, and `just verify` is the local
+verification entrypoint. Shell entry is not permission to initialize trackers,
+replace hooks, migrate homes or start workloads.
 
-## Canonical docs
+| Read | For |
+| :--- | :--- |
+| [Specification map](SPEC.md) | Component boundaries and authoritative design records. |
+| [Runtime provisioning](docs/runtime-provisioning.md) | Backend generations, initialization, readiness and nested virtualization. |
+| [Nix build guide](docs/nix-build.md) | Immutable SDK inputs, bootstrap and verification. |
+| [Decision records](docs/migration/50-decisions/README.md) | Rationale, compatibility and historical context. |
+| [Contributing](CONTRIBUTING.md) | Review, tests and repository hygiene. |
+| [GitHub governance](docs/github-governance.md) | Proposed protections and their activation sequence. |
+| [Repository audit](docs/repository-audit-2026-09-11.md) | Findings, fixes, evidence and remaining work. |
+| [Beads](BEADS.md) | The intentional task-tracking contract. |
 
-- [`SPEC.md`](SPEC.md) — the normative system specification (components,
-  secrets model, security/egress model, resolution order, phase status).
-- [`docs/migration/`](docs/migration/README.md) — the migration tree:
-  [`20-target-system-spec.md`](docs/migration/20-target-system-spec.md)
-  (CLI surface, seeds, lifecycle — the implementation-authoritative spec),
-  [`30-security-model.md`](docs/migration/30-security-model.md) (policy
-  ladder + secrets model).
-- [`docs/migration/50-decisions/README.md`](docs/migration/50-decisions/README.md)
-  — ADR index (0021 instance lifecycle, 0026 per-instance addressing, 0035
-  hierarchical policy, 0036 nested-virt, 0037 msb state generations, …).
-- [`docs/runtime-provisioning.md`](docs/runtime-provisioning.md) — msb
-  runtime provisioning, state generations, pin wiring.
-- [`docs/secrets.md`](docs/secrets.md) — secrets threat model and wrapper
-  reference.
-- [`docs/operating-model.md`](docs/operating-model.md) — teardown ladder
-  and operating semantics.
-
-## Runtime status
-
-Repository checks validate the generic CLI, configuration and pinned package
-contracts. They do not certify deployment of a particular fleet. Runnable
-baseline, communications and nested fixtures and their independent validation
-instructions live in the [personal fleet repository](https://github.com/rybskiworks/workestrate-fleet-georgrybski),
-under `tests/workloads/`; application validation belongs to each workload owner.
-
-Nested virtualization is requested per workload with `virtualization.nested`.
-A compatible Linux runtime can boot a nested child, but that positive result
-does not prove nesting is unavailable when omitted or disabled. Validate both
-directions against the exact selected runtime. Lifecycle readiness/cleanup,
-mount-policy enforcement, SSH custody and the complete agent/memory-service
-stack have separate outstanding runtime gates. A successful build or an older
-Pi/Prime startup result must not be used as proof of those properties.
+Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
