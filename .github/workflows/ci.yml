@@ -1,422 +1,252 @@
-# ci.yml — PR quality gates for workestrate (v2: light PR gates + on-demand heavy build).
-#
-# Why the rework (v1 failed on its first run): v1 ran `just verify` on every
-# PR; the recipes self-enshell into the FULL devenv closure, and on a fresh
-# GH-hosted runner that meant building the fenix rust toolchain + closure
-# from source until the disk filled (~14G — "No space left on device").
-# v2 never boots the devenv in CI:
-#
-#   - Rust gates are DEFINED IN THIS WORKFLOW with OUR configs: a rustup
-#     toolchain pinned to the flake's RUST_TOOLCHAIN_VERSION marker (the
-#     guard step below fails closed on drift between the dtolnay ref and the
-#     marker), and cargo commands mirroring the justfile recipes
-#     (fmt --check / clippy -D warnings / test). Nix-tooling checks
-#     (treefmt & co.) stay OUT of CI — they drag the whole closure in.
-#   - Pure-script gates (bash+python3 only, no toolchain/nix): lock-guard,
-#     versions-check, lint-nix run directly.
-#   - The heavy nix build is on-demand only (workflow_dispatch) until a
-#     self-hosted runner / cachix cache lands.
-#
-# v3 (owner directive): nix-dependent functional tests are SELF-CONTAINED
-# ACTIONS — each nix-needing job defines its complete tooling on the job
-# itself (install-nix-action + in-job provisioning + explicit env exports),
-# nothing assumed from the runner image or a devshell. Pattern borrowed
-# from github.com/akitaonrails/ai-memory (ci.yml label-gated heavy legs,
-# nix.yml build-then-run-the-binary):
-#   Adapted from github.com/akitaonrails/ai-memory, MIT, (c) 2026 Fabio Akita
-#   — the two borrowed patterns: label-gated heavy leg; build-then-run-binary.
-#   e2e-nix — runs the nix/msb-gated e2e tests (image_pipeline_e2e,
-#     ensure_images_e2e non-ignored) with msb+agentd provisioned IN the job
-#     (nix build .#microsandbox) and MSB_PATH/MSB_AGENTD_PATH exported by a
-#     job step. On push + workflow_dispatch; per-PR it opts in via the
-#     `nix-ci` label (ai-memory's `full-ci` pattern). KVM variants stay
-#     #[ignore]'d — self-hosted runner follow-up.
-#
-# PR-gated job (path-filtered — code/CI-relevant paths only, per the
-# not-every-run directive):
-#   gates — lock-guard, versions-check, lint-nix, toolchain-pin guard,
-#     cargo fmt --check (edition 2024 via Cargo.toml, matching treefmt),
-#     cargo clippy --all-targets -- -D warnings, cargo test, and the
-#     Cargo.lock stability diff.
-#
-# agentd handling: the microsandbox-filesystem build.rs (default `prebuilt`
-# feature) embeds an agentd binary at COMPILE time. Locally the devshell
-# exports MSB_AGENTD_PATH (nix-built .#microsandbox) and stages the vendor
-# symlink. In CI we recreate the vendor symlink from the flake.lock-pinned
-# GitHub rev (public tarball, no nix needed) and leave MSB_AGENTD_PATH
-# unset: build.rs falls back to downloading the pinned prebuilt agentd
-# v0.6.16 release asset (URL verified live at design time). No test needs
-# agentd at RUNTIME: the KVM tests (lifecycle_detached, flake_root_gate,
-# ensure_images_e2e host variant) are #[ignore]'d, and the nix/msb-gated
-# e2e tests (image_pipeline_e2e, ensure_images_e2e non-ignored) skip with
-# a note when nix/MSB_PATH are absent. FULL coverage (nix-gated e2e, KVM,
-# real agentd embed) needs the self-hosted runner — deferred below.
-#
-# Deferred by design (follow-ups, not POC scope):
-#   - self-hosted runner (dblab42, labels [self-hosted, linux, kvm]) for
-#     the #[ignore]'d KVM tests / prime-smoke, post-merge or nightly
-#     (non-KVM nix-gated e2e now runs in the e2e-nix job below).
-#   - Real binary cache (org cachix decision pending) to make the heavy
-#     build cheap enough for per-PR gating. magic-nix-cache below is the
-#     zero-config stopgap: SHA-pinned to the v14 tag (it has releases);
-#     continue-on-error by design so a cache outage never blocks. All
-#     third-party actions in this workflow are SHA-pinned (tags are
-#     mutable).
-#   - nightly `nix flake check` (treefmt nixfmt/statix + tombiCheck +
-#     validateConfig) once devenv-test IFD warm-up is cacheable.
-
+# Workestrate edge CI: bounded PR checks plus explicitly selected Nix tiers.
+# Never enter the complete devenv closure on a GitHub-hosted PR runner.
+# The nix-ci label and build-then-execute pattern were adapted from
+# akitaonrails/ai-memory, MIT, (c) 2026 Fabio Akita; attribution retained.
+# KVM/ignored runtime tests are NOT certified by this workflow.
 name: ci
-
 on:
   pull_request:
-    # `labeled` so the e2e-nix job's `nix-ci` label gate retriggers on
-    # labeling (ai-memory ci.yml line 7 pattern).
-    # Adapted from github.com/akitaonrails/ai-memory — MIT, (c) 2026 Fabio Akita
-    types: [opened, synchronize, reopened, labeled]
-    paths:
-      - 'control/**'
-      - 'flake.nix'
-      - 'flake.lock'
-      - 'justfile'
-      - 'scripts/**'
-      - 'schemas/**'
-      - 'templates/**'
-      - 'config.reference/**'
-      - 'docs/migration/**'
-      - 'nix/**'
-      - '.github/**'
-      - 'deny.toml'
-      - 'LICENSE*'
-      - 'CODEOWNERS'
-      - 'tombi.toml'
-      - '*.md'
-      - '.github/CODEOWNERS'
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
   push:
-    branches:
-      - migration/tool-model
-      - main
-    paths:
-      - 'control/**'
-      - 'flake.nix'
-      - 'flake.lock'
-      - 'justfile'
-      - 'scripts/**'
-      - 'schemas/**'
-      - 'templates/**'
-      - 'config.reference/**'
-      - 'docs/migration/**'
-      - 'nix/**'
-      - '.github/**'
-      - 'deny.toml'
-      - 'LICENSE*'
-      - 'CODEOWNERS'
-      - 'tombi.toml'
-      - '*.md'
-      - '.github/CODEOWNERS'
+    branches: [migration/tool-model, main]
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
-
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_INCREMENTAL: '0'
+  # Action code and installed compiler are independently pinned.
+  RUST_TOOLCHAIN: '1.97.1'
 jobs:
+  changes:
+    name: CI selection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      code: ${{ steps.select.outputs.code }}
+      nix: ${{ steps.select.outputs.nix }}
+      build: ${{ steps.select.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: select
+        run: python3 scripts/ci/select_checks.py
+
+  policy:
+    name: CI contract and version metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts/ci/tests -v
+      - run: python3 scripts/ci/check_release_metadata.py
+
   gates:
     name: gates (light PR quality gates, no devenv)
-    if: github.event_name != 'workflow_dispatch'
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      # No incremental artifacts — smaller target dir, fresh-runner builds
-      # gain nothing from incrementality.
-      CARGO_INCREMENTAL: '0'
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # dtolnay/rust-toolchain resolves the toolchain from the @ref: @1.97
-      # tracks the latest 1.97.x (fenix pins rustc 1.97.1 via the same
-      # major.minor). The guard step below fails closed if the ref drifts
-      # from the flake's RUST_TOOLCHAIN_VERSION marker.
-      # WAIVER: unpinned by design — no version tags exist; the
-      # toolchain-pin guard below fails closed on drift from the flake
-      # marker.
-      - name: Install pinned Rust toolchain (flake marker parity)
-        uses: dtolnay/rust-toolchain@1.97
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # reviewed master snapshot
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
-
-      - name: Toolchain pin guard (flake marker vs installed rustc)
+      - name: Toolchain guard
         run: |
           set -euo pipefail
-          matches=$(grep 'rustToolchain = inputs\.fenix.*# RUST_TOOLCHAIN_VERSION = "' flake.nix || true)
-          hits=$(printf '%s\n' "$matches" | grep -c 'RUST_TOOLCHAIN_VERSION' || true)
-          if [ "$hits" -ne 1 ]; then
-              echo "ERROR: expected exactly 1 RUST_TOOLCHAIN_VERSION marker on the live rustToolchain line (found $hits)" >&2
-              exit 1
-          fi
-          expected=$(printf '%s\n' "$matches" | grep -oP '# RUST_TOOLCHAIN_VERSION = "\K[^"]+')
-          actual=$(rustc --version | grep -oP 'rustc \K[0-9]+\.[0-9]+')
-          echo "expected (flake.nix): rustc $expected.x"
-          echo "actual (CI):          rustc $actual"
-          if [ "$actual" != "$expected" ]; then
-              echo "FAIL: update the dtolnay/rust-toolchain@ ref in this workflow to match the flake marker" >&2
-              exit 1
-          fi
-          echo "OK: CI toolchain matches pinned toolchain"
-
-      # The devshell normally stages control/agentctl/vendor/microsandbox-fork
-      # as a nix-store symlink (gitignored). CI recreates it from the
-      # flake.lock-pinned GitHub rev (public repo tarball — no nix needed).
-      # Both .cargo/config.toml files are committed, so the [patch.crates-io]
-      # section resolves as soon as the symlink exists.
-      - name: Vendor microsandbox fork (flake.lock-pinned rev)
+          python3 - <<'PYCODE'
+          import os, re, subprocess
+          from pathlib import Path
+          marker = re.findall(r'rustToolchain = inputs\.fenix[^\n]*# RUST_TOOLCHAIN_VERSION = "([0-9]+\.[0-9]+)"', Path('flake.nix').read_text())
+          expected = os.environ['RUST_TOOLCHAIN']
+          actual = subprocess.check_output(['rustc', '--version'], text=True).split()[1]
+          if len(marker) != 1 or marker[0] != '.'.join(expected.split('.')[:2]) or actual != expected:
+              raise SystemExit(f'Toolchain mismatch: flake marker={marker}, CI={expected}, installed={actual}')
+          print(f'Exact compiler {actual}; major/minor matches the flake marker. Fenix revision remains locked.')
+          PYCODE
+      - name: Vendor microsandbox fork (flake.lock-pinned revision)
         run: |
           set -euo pipefail
           rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
-          echo "microsandbox-fork rev: $rev"
-          mkdir -p "$RUNNER_TEMP/msb-fork"
+          [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          mkdir -p "$RUNNER_TEMP/msb-fork" control/agentctl/vendor
           curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
-          mkdir -p control/agentctl/vendor
           ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
-
-      - name: Cache cargo registry + target dir
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: control/agentctl
-
-      # Pure-script gates: bash+python3 only, no toolchain, no nix.
-      - name: lock-guard (Cargo.lock fork pins)
-        run: ./scripts/check-cargo-lock.sh
-
-      - name: versions-check (msb pin agreement)
-        run: ./scripts/check-msb-versions.sh
-
-      - name: lint-nix (nix-purity invariants)
-        run: ./scripts/check-nix-paths.sh
-
-      # Rust gates: defined here with OUR configs (cargo/rustfmt/clippy read
-      # control/agentctl/Cargo.toml + rustfmt edition 2024), mirroring the
-      # justfile `check`/`test` recipes. MSB_AGENTD_PATH is deliberately
-      # unset — the fork's build.rs downloads the pinned prebuilt agentd.
-      - name: cargo fmt --check (edition 2024)
-        run: cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
-
-      - name: cargo clippy --all-targets -D warnings
-        run: cargo clippy --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
-
-      - name: cargo test (agentd-dependent and KVM tests skip gracefully)
-        run: cargo test --manifest-path control/agentctl/Cargo.toml
-
-      - name: Cargo.lock stability diff
-        run: git diff --exit-code HEAD -- control/agentctl/Cargo.lock
+      - run: ./scripts/check-cargo-lock.sh
+      - run: ./scripts/check-msb-versions.sh
+      - run: ./scripts/check-nix-paths.sh
+      - run: cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
+      - run: cargo clippy --locked --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
+      # This tier retains the existing prebuilt agentd fallback. It is not a
+      # claim that ignored KVM tests or runtime-dependent tests executed.
+      - run: cargo test --locked --manifest-path control/agentctl/Cargo.toml
+      - run: git diff --exit-code HEAD -- control/agentctl/Cargo.lock
 
   e2e-nix:
     name: e2e-nix (nix-gated functional tests, self-contained tooling)
-    # Heavy leg opts in per PR via the `nix-ci` label (ai-memory's full-ci
-    # pattern); always on push/dispatch. Every input the e2e tests probe is
-    # provisioned BY THIS JOB — nothing ambient.
-    # Adapted from github.com/akitaonrails/ai-memory — MIT, (c) 2026 Fabio Akita
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'push' ||
-      contains(github.event.pull_request.labels.*.name, 'nix-ci')
+    needs: changes
+    if: needs.changes.outputs.nix == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      CARGO_INCREMENTAL: '0'
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # SELF-CONTAINED TOOLING (owner directive): the nix-gated e2e tests
-      # probe four inputs — nix on PATH, MSB_PATH (unwrapped msb honoring
-      # MSB_HOME), MSB_AGENTD_PATH (compile-time agentd embed), gunzip.
-      # All four are provisioned/exported here, on the action itself.
-      - name: Install Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.8/install
           extra_nix_config: |
             experimental-features = nix-command flakes
-
-      # Zero-config stopgap cache; continue-on-error by design so an
-      # outage never blocks. SHA-pinned to the v14 tag (same as in
-      # heavy-build) — the action has releases.
-      - name: Warm Nix store cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         continue-on-error: true
-
-      # Provision msb + agentd INSIDE the action: source build of the
-      # flake.lock-pinned fork (bin/msb + libexec/agentd + libkrunfw). The
-      # light gates job's download fallback only covers the compile-time
-      # agentd embed — the e2e runtime gate needs a real msb binary.
-      - name: Provision msb + agentd (nix build .#microsandbox)
-        run: nix build -L .#microsandbox -o result-msb
-
-      # Explicit env set by the action, and fail-CLOSED provisioning proof:
-      # the e2e tests skip-with-note when an input is absent, so a silent
-      # provisioning miss would be a green lie — assert all four inputs
-      # before exporting.
-      - name: Export e2e env (MSB_PATH / MSB_AGENTD_PATH) + provision check
+      - run: nix build -L --no-update-lock-file .#microsandbox -o result-msb
+      - name: Provision and prove runtime inputs
         run: |
           set -euo pipefail
           msb="$PWD/result-msb/bin/msb"
           agentd="$PWD/result-msb/libexec/agentd"
-          [ -f "$agentd" ] || { echo "FAIL: agentd missing at $agentd" >&2; exit 1; }
-          command -v nix >/dev/null || { echo "FAIL: nix not on PATH" >&2; exit 1; }
-          command -v gunzip >/dev/null || { echo "FAIL: gunzip not on PATH" >&2; exit 1; }
-          "$msb" --version || { echo "FAIL: msb not runnable at $msb" >&2; exit 1; }
+          test -f "$agentd"
+          command -v nix
+          command -v gunzip
+          "$msb" --version
           echo "MSB_PATH=$msb" >> "$GITHUB_ENV"
           echo "MSB_AGENTD_PATH=$agentd" >> "$GITHUB_ENV"
-
-      # Same vendor-symlink staging as the gates job: [patch.crates-io]
-      # resolves against it (both .cargo/config.toml files are committed).
-      - name: Vendor microsandbox fork (flake.lock-pinned rev)
+      - name: Vendor microsandbox fork (flake.lock-pinned revision)
         run: |
           set -euo pipefail
           rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
-          echo "microsandbox-fork rev: $rev"
-          mkdir -p "$RUNNER_TEMP/msb-fork"
+          [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          mkdir -p "$RUNNER_TEMP/msb-fork" control/agentctl/vendor
           curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
-          mkdir -p control/agentctl/vendor
           ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
-
-      # Pinned to the same major.minor as the gates job (the drift guard
-      # lives there — one owner of the invariant).
-      # WAIVER: unpinned by design — no version tags exist; the
-      # toolchain-pin guard in the gates job fails closed on drift from
-      # the flake marker.
-      - name: Install pinned Rust toolchain (flake marker parity)
-        uses: dtolnay/rust-toolchain@1.97
-
-      - name: Cache cargo registry + target dir
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # reviewed master snapshot
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: control/agentctl
-
-      # With MSB_AGENTD_PATH set, the fork's build.rs embeds the REAL
-      # agentd; with MSB_PATH + nix + gunzip present, the nix/msb-gated
-      # e2e tests RUN here instead of skip-with-note. KVM variants stay
-      # #[ignore]'d (self-hosted runner follow-up).
-      - name: cargo test (nix-gated e2e, real nix + msb + agentd)
+      - name: Nix functional tests with real msb and agentd
         run: >-
-          cargo test --manifest-path control/agentctl/Cargo.toml
+          cargo test --locked --manifest-path control/agentctl/Cargo.toml
           --test image_pipeline_e2e --test ensure_images_e2e
+      - run: git diff --exit-code HEAD -- flake.lock control/agentctl/Cargo.lock
 
   heavy-build:
     name: heavy build (nix build .#workestrate, on-demand only)
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.34.8/install
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Warm Nix store cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         continue-on-error: true
-      - name: nix build .#workestrate
-        run: nix build -L .#workestrate
-      # ai-memory nix.yml pattern: run what the flake promises — a package
-      # that builds but cannot execute still fails.
-      # Adapted from github.com/akitaonrails/ai-memory — MIT, (c) 2026 Fabio Akita
-      - name: smoke (built binary runs)
-        run: ./result/bin/workestrate --version
+      - run: nix build -L --no-update-lock-file .#workestrate
+      - run: ./result/bin/workestrate --version
+      - run: git diff --exit-code HEAD -- flake.lock control/agentctl/Cargo.lock
 
-  # Branch-protection anchor: a single check that ALWAYS runs (even when
-  # gates is skipped/path-filtered) so branch protection can require it
-  # without pending forever. e2e-nix and heavy-build deliberately stay
-  # OUT of needs — they are label/dispatch gated.
-  required-gates:
-    name: required-gates (branch-protection anchor)
-    needs: [gates]
-    if: always() && github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Assert gates succeeded
-        run: |
-          set -euo pipefail
-          result="${{ needs.gates.result }}"
-          echo "gates result: $result"
-          if [ "$result" != "success" ]; then
-            echo "FAIL: gates job did not succeed (result: $result)" >&2
-            exit 1
-          fi
-
-  # Workflow lint: self-contained (no devenv, no nix), default settings —
-  # actionlint runs on .github/workflows.
   actionlint:
     name: actionlint (workflow lint)
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: actionlint
-        uses: reviewdog/action-actionlint@d290e336d5a743810aef4404f757dc862276d2ae # v1.73.4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # Direct exit status, unlike reviewdog's default fail_level=none.
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: actionlint@1.7.7
+      - run: actionlint
 
-  # Workflow security audit: self-contained (no devenv, no nix). Console
-  # output with GitHub annotations — a private repo without GHAS cannot
-  # upload SARIF, so no SARIF upload here.
   zizmor:
     name: zizmor (workflow security audit)
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install zizmor
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: zizmor@1.30.0
-      - name: zizmor (annotations to console)
-        run: zizmor --format github .github/workflows/
+      - run: zizmor --format github .github/workflows/
 
-  # Supply-chain gates (cargo-deny, config at repo-root deny.toml):
-  # licenses/bans/sources are a HARD gate. advisories stay soft
-  # (continue-on-error) — the advisory DB needs network + git; CI-only by
-  # design, deliberately not in `just verify`.
   deny:
     name: deny (cargo-deny supply-chain gates, no devenv)
-    if: github.event_name != 'workflow_dispatch'
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # Same staging as the gates job: the committed .cargo/config.toml
-      # [patch.crates-io] section makes cargo metadata fail without the
-      # vendored fork symlink.
-      - name: Vendor microsandbox fork (flake.lock-pinned rev)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Vendor microsandbox fork (flake.lock-pinned revision)
         run: |
           set -euo pipefail
           rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
-          echo "microsandbox-fork rev: $rev"
-          mkdir -p "$RUNNER_TEMP/msb-fork"
+          [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          mkdir -p "$RUNNER_TEMP/msb-fork" control/agentctl/vendor
           curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
-          mkdir -p control/agentctl/vendor
           ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
-
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
-          tool: cargo-deny
-
-      - name: cargo deny check licenses bans sources (hard gate)
-        run: cargo deny --locked --manifest-path control/agentctl/Cargo.toml check licenses bans sources
-
-      # Soft gate: the advisory DB needs network + git; CI-only by design,
-      # deliberately not in `just verify`.
-      - name: cargo deny check advisories (soft)
+          tool: cargo-deny@0.20.2
+      - run: cargo deny --locked --manifest-path control/agentctl/Cargo.toml check licenses bans sources
+      # Preserve the existing soft advisory policy. Network availability is
+      # not conflated with the result of an authoritative vulnerability gate.
+      - name: Advisories (informational)
         continue-on-error: true
         run: cargo deny --locked --manifest-path control/agentctl/Cargo.toml check advisories
+
+  required-gates:
+    # Preserve the existing check name for compatibility; broaden what it proves.
+    name: required-gates (branch-protection anchor)
+    needs: [changes, policy, gates, actionlint, zizmor, deny, e2e-nix, heavy-build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate the selected CI contract
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/check_results.py
+
+  required:
+    name: CI / required
+    needs: required-gates
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.required-gates.result }}
+        run: test "$RESULT" = success
