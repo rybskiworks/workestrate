@@ -208,6 +208,18 @@
         "url": "file:///dev/null"
       }
     },
+    "devenv-root_4": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-d6xi4mKdjkX2JFicDIv5niSzpyI0m/Hnm8GGAIU04kY=",
+        "type": "file",
+        "url": "file:///dev/null"
+      },
+      "original": {
+        "type": "file",
+        "url": "file:///dev/null"
+      }
+    },
     "fenix": {
       "inputs": {
         "nixpkgs": [
@@ -385,6 +397,55 @@
         "url": "https://flakehub.com/f/cachix/git-hooks.nix/0.1.941"
       }
     },
+    "libkrunfw": {
+      "inputs": {
+        "devenv": [
+          "microsandbox-fork",
+          "libkrunfw",
+          "tooling",
+          "devenv"
+        ],
+        "devenv-root": "devenv-root_3",
+        "flake-parts": [
+          "microsandbox-fork",
+          "flake-parts"
+        ],
+        "git-hooks": [
+          "microsandbox-fork",
+          "libkrunfw",
+          "tooling",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "microsandbox-fork",
+          "nixpkgs"
+        ],
+        "tooling": [
+          "microsandbox-fork",
+          "tooling"
+        ],
+        "treefmt-nix": [
+          "microsandbox-fork",
+          "libkrunfw",
+          "tooling",
+          "treefmt-nix"
+        ]
+      },
+      "locked": {
+        "lastModified": 1789011740,
+        "narHash": "sha256-urW9w6VusVS0QymKF9wXehEexamIQb7cIJ+Y22Oqj5w=",
+        "owner": "rybskiworks",
+        "repo": "libkrunfw",
+        "rev": "3017d504988971bd84dcc5935c96aa4a81227d1e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rybskiworks",
+        "repo": "libkrunfw",
+        "rev": "3017d504988971bd84dcc5935c96aa4a81227d1e",
+        "type": "github"
+      }
+    },
     "microsandbox-fork": {
       "inputs": {
         "devenv": [
@@ -408,6 +469,7 @@
           "tooling",
           "git-hooks"
         ],
+        "libkrunfw": "libkrunfw",
         "mk-shell-bin": "mk-shell-bin",
         "nix2container": "nix2container",
         "nixpkgs": [
@@ -425,17 +487,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1788977244,
-        "narHash": "sha256-g+qaIjUZpyXOreLCdqZWXAkrzLXOvLIRqDlcoGItEIE=",
+        "lastModified": 1789052672,
+        "narHash": "sha256-OVKKsZ+9zOE/0dqT9MMsqPj0cTI2zlXg5pBgoRhA5sI=",
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "53ec61407f27498c9a05ed82035f7062d9b21224",
+        "rev": "41b5ad697b1c683efdfebfc1d3b7e8a01f917457",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "53ec61407f27498c9a05ed82035f7062d9b21224",
+        "rev": "41b5ad697b1c683efdfebfc1d3b7e8a01f917457",
         "type": "github"
       }
     },
@@ -762,7 +824,7 @@
         "beads": "beads",
         "determinate": "determinate",
         "devenv": "devenv",
-        "devenv-root": "devenv-root_3",
+        "devenv-root": "devenv-root_4",
         "fenix": "fenix",
         "flake-parts": "flake-parts_2",
         "git-hooks": "git-hooks",

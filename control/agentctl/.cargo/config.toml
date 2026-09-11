@@ -8,6 +8,9 @@ linker = "cc"
 # inheritance resolves). The fork's filesystem crate carries the
 # MSB_AGENTD_PATH fix natively.
 [patch.crates-io]
+# Cargo does not inherit the fork workspace's patches through SDK dependencies.
+# Match its private-memory implementation as well as the SDK crate sources.
+msb-vm-memory = { git = "https://github.com/superradcompany/rust-vmm", rev = "f798d4f274db22a3c458ba756900db2cd03e6fe9" }
 microsandbox = { path = "vendor/microsandbox-fork/sdk/rust" }
 microsandbox-agent-client = { path = "vendor/microsandbox-fork/packages/agent-client/rust" }
 microsandbox-db = { path = "vendor/microsandbox-fork/crates/db" }
@@ -21,3 +24,4 @@ microsandbox-runtime = { path = "vendor/microsandbox-fork/crates/runtime" }
 microsandbox-scan = { path = "vendor/microsandbox-fork/crates/scan" }
 microsandbox-types = { path = "vendor/microsandbox-fork/packages/microsandbox-types/rust" }
 microsandbox-utils = { path = "vendor/microsandbox-fork/crates/utils" }
+microsandbox-vsock = { path = "vendor/microsandbox-fork/crates/vsock" }

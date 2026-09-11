@@ -13,7 +13,7 @@
 
     microsandbox-fork = {
       # Runtime packages and SDK patches must come from this same source.
-      url = "github:rybskiworks/microsandbox/53ec61407f27498c9a05ed82035f7062d9b21224";
+      url = "github:rybskiworks/microsandbox/41b5ad697b1c683efdfebfc1d3b7e8a01f917457";
       inputs.tooling.follows = "tooling";
     };
 
@@ -224,6 +224,7 @@
           } "ln -s ${microsandboxSource} $out";
           workestrate = pkgs.callPackage ./nix/packages/agentctl.nix {
             inherit microsandbox microsandboxSource rustToolchain;
+            microsandboxCargoLock = import (inputs.microsandbox-fork + "/nix/cargo-lock.nix");
             rev =
               inputs.self.shortRev
                 or (if inputs.self ? rev then builtins.substring 0 8 inputs.self.rev else "dirty");
@@ -505,6 +506,9 @@
               # full symbol tables in disposable verification artifacts.
               CARGO_PROFILE_DEV_DEBUG = "0";
               CARGO_PROFILE_TEST_DEBUG = "0";
+              PROPTEST_CASES = "256";
+              PROPTEST_RNG_SEED = "20260910";
+              PROPTEST_MAX_SHRINK_ITERS = "4096";
               doCheck = true;
               cargoTestFlags = [
                 "--locked"

@@ -9,13 +9,15 @@
 //! group whose action is the strictest contributor (severity max,
 //! audit/count union).
 //!
-//! The emission shape IS the fork's typed bootstrap (`BrokerPatterns`:
-//! credential id, authored decoder, match bytes, coalesced action),
-//! threaded straight into the builder. The patterns never enter the
-//! guest-visible spec.
+//! The emission shape reuses the fork's typed `BrokerPatterns`: credential
+//! ID, decoder, match bytes and coalesced action. These values contain raw
+//! secrets and are only for the custody broker. Exclusion from a serialized
+//! guest spec alone is insufficient: bootstrap also enters its target VM.
+//! This module deliberately does not accept an ordinary workload builder.
 
 use crate::config::SecretViolationPolicy;
 use crate::microsandbox::plan::{CredentialBinding, CredentialsPlan, SshGrantPlan};
+use crate::microsandbox::secrets::SecretDefinition;
 use microsandbox_protocol::bootstrap::{BrokerPattern, BrokerPatterns};
 use microsandbox_scan::{ActionSet, Decoder};
 use std::collections::HashMap;
@@ -206,29 +208,26 @@ pub fn compile_ssh_patterns(
     (BrokerPatterns { patterns }, excluded)
 }
 
-/// Compile a workload's broker-bound SSH material and thread it into the
-/// builder's broker bootstrap. Grant-less, guest-only, and fully-excluded
-/// plans leave the builder untouched, preserving pass-through relay
-/// behavior.
+/// Resolve broker-bound material for the custody broker's scanner.
 ///
-/// Material resolves by secret name against the decrypted map; a custom
-/// `env_var` on the material secret is not followed here (that grant
-/// warns as absent while key custody resolves it through the definitions
-/// and still fails closed on its own path).
-pub fn apply_ssh_patterns(
-    builder: microsandbox::sandbox::SandboxBuilder,
+/// Use the same secret-ID to source-variable mapping as sealed key custody.
+/// An explicit mapping never falls back to the ID's value or process-wide
+/// environment. No guest builder is accepted or mutated. The caller must
+/// send the returned secret-bearing patterns only to the managed broker.
+pub fn resolve_ssh_patterns(
     credentials: Option<&CredentialsPlan>,
     secrets: &HashMap<String, String>,
-) -> microsandbox::sandbox::SandboxBuilder {
+    definitions: &HashMap<String, SecretDefinition>,
+) -> (BrokerPatterns, Vec<DlpExclusion>) {
     let Some(plan) = credentials else {
-        return builder;
+        return (BrokerPatterns { patterns: vec![] }, vec![]);
     };
     if !plan
         .ssh
         .iter()
         .any(|g| g.binding == CredentialBinding::Broker)
     {
-        return builder;
+        return (BrokerPatterns { patterns: vec![] }, vec![]);
     }
     let mut material_bytes: HashMap<String, Vec<u8>> = HashMap::new();
     for grant in &plan.ssh {
@@ -238,29 +237,18 @@ pub fn apply_ssh_patterns(
         if material_bytes.contains_key(&grant.material) {
             continue;
         }
-        if let Some(value) = secrets.get(&grant.material)
+        let source = definitions
+            .get(&grant.material)
+            .map_or(grant.material.as_str(), |definition| {
+                definition.source_env_var.as_str()
+            });
+        if let Some(value) = secrets.get(source)
             && !value.trim().is_empty()
         {
             material_bytes.insert(grant.material.clone(), value.as_bytes().to_vec());
         }
     }
-    let (patterns, _excluded) = compile_ssh_patterns(&plan.ssh, &material_bytes);
-    if patterns.patterns.is_empty() {
-        return builder;
-    }
-    let mut credentials: Vec<&str> = patterns
-        .patterns
-        .iter()
-        .map(|p| p.credential_id.as_str())
-        .collect();
-    credentials.sort_unstable();
-    credentials.dedup();
-    eprintln!(
-        "ssh-patterns: threading {} DLP pattern(s) for credential(s) {} into the broker bootstrap",
-        patterns.patterns.len(),
-        credentials.join(",")
-    );
-    builder.broker_patterns(patterns)
+    compile_ssh_patterns(&plan.ssh, &material_bytes)
 }
 
 #[cfg(test)]
@@ -450,9 +438,86 @@ mod tests {
     }
 
     #[test]
-    fn apply_leaves_grant_less_builder_untouched() {
-        let builder = microsandbox::Sandbox::builder("ssh-patterns-none");
-        let kept = apply_ssh_patterns(builder, None, &HashMap::new());
-        assert!(kept.spec().network.ssh.is_none());
+    fn resolve_without_grants_emits_no_broker_material() {
+        let (patterns, exclusions) = resolve_ssh_patterns(None, &HashMap::new(), &HashMap::new());
+        assert!(patterns.patterns.is_empty());
+        assert!(exclusions.is_empty());
+    }
+
+    fn plan(ssh: Vec<SshGrantPlan>) -> CredentialsPlan {
+        CredentialsPlan {
+            ssh,
+            signing: vec![],
+            strict: true,
+            strict_origin: None,
+        }
+    }
+
+    fn mapped_definition(source: &str) -> SecretDefinition {
+        SecretDefinition {
+            source_env_var: source.to_owned(),
+            allowed_hosts: vec![],
+            required: true,
+            placeholder: None,
+            on_violation: Policy::Block,
+        }
+    }
+
+    #[test]
+    fn resolver_uses_the_custody_secret_mapping_without_fallback() {
+        let plan = plan(vec![broker_grant("deploy", "KEY", Policy::Block)]);
+        let secrets = HashMap::from([
+            ("KEY".to_owned(), "wrong-material-sentinel".to_owned()),
+            (
+                "KEY_SOURCE".to_owned(),
+                "broker-material-sentinel".to_owned(),
+            ),
+        ]);
+        let definitions = HashMap::from([("KEY".to_owned(), mapped_definition("KEY_SOURCE"))]);
+        let (patterns, exclusions) = resolve_ssh_patterns(Some(&plan), &secrets, &definitions);
+        assert!(exclusions.is_empty());
+        assert_eq!(patterns.patterns.len(), 1);
+        assert_eq!(patterns.patterns[0].bytes, b"broker-material-sentinel");
+        let rendered = format!("{patterns:?}");
+        assert!(!rendered.contains("broker-material-sentinel"));
+        assert!(!rendered.contains("wrong-material-sentinel"));
+
+        let unmapped = HashMap::from([("KEY".to_owned(), "wrong-material-sentinel".to_owned())]);
+        let (patterns, exclusions) = resolve_ssh_patterns(Some(&plan), &unmapped, &definitions);
+        assert!(patterns.patterns.is_empty());
+        assert_eq!(exclusions.len(), 1);
+        assert_eq!(exclusions[0].reason, DlpExclusionReason::MaterialAbsent);
+    }
+
+    #[test]
+    fn resolver_excludes_guest_material_even_in_mixed_plans() {
+        let plan = plan(vec![
+            broker_grant("deploy", "BROKER", Policy::Block),
+            grant("guest", "GUEST", Policy::Block, CredentialBinding::Guest),
+        ]);
+        let secrets = HashMap::from([
+            ("BROKER".to_owned(), "broker-material-sentinel".to_owned()),
+            ("GUEST".to_owned(), "guest-material-sentinel".to_owned()),
+        ]);
+        let (patterns, exclusions) = resolve_ssh_patterns(Some(&plan), &secrets, &HashMap::new());
+        assert!(exclusions.is_empty());
+        assert_eq!(patterns.patterns.len(), 1);
+        assert_eq!(patterns.patterns[0].credential_id, "deploy");
+        assert_eq!(patterns.patterns[0].bytes, b"broker-material-sentinel");
+    }
+
+    #[test]
+    fn ordinary_workload_construction_has_no_broker_payload_setters() {
+        // This source guard complements broker transport tests; inspecting
+        // SandboxSpec alone cannot detect secret-bearing bootstrap fields.
+        let source = include_str!("../runtime/run.rs");
+        for setter in [
+            ".broker_key(",
+            ".broker_upstream(",
+            ".broker_patterns(",
+            "apply_ssh_patterns(",
+        ] {
+            assert!(!source.contains(setter), "ordinary workload calls {setter}");
+        }
     }
 }

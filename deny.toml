@@ -30,7 +30,10 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# The runtime fork inherits these crates from this one reviewed repository.
+# The runtime fork inherits libkrun and its private-memory implementation.
 # Cargo.lock and the Nix fixed-output hash pin the exact source contents.
-allow-git = ["https://github.com/rybskiworks/libkrun"]
+allow-git = [
+  "https://github.com/rybskiworks/libkrun",
+  "https://github.com/superradcompany/rust-vmm",
+]
 required-git-spec = "rev"

@@ -129,11 +129,22 @@ impl<R: CidResolver> UnixSocketTransport<R> {
         if socket_path.exists() {
             std::fs::remove_file(socket_path)?;
         }
+        Self::bind_fresh(socket_path, resolver)
+    }
+
+    /// Bind a newly reserved launch endpoint without unlinking an existing
+    /// file or listener. Collision is an error, never permission to take over.
+    pub fn bind_fresh(socket_path: &Path, resolver: R) -> std::io::Result<Self> {
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let listener = std::os::unix::net::UnixListener::bind(socket_path)?;
         Ok(Self { listener, resolver })
+    }
+
+    /// Allow an owned loop to observe cancellation without dialing its pathname.
+    pub(super) fn set_nonblocking(&self) -> std::io::Result<()> {
+        self.listener.set_nonblocking(true)
     }
 
     pub fn write_frame(
@@ -202,6 +213,9 @@ impl<R: CidResolver> UnixSocketTransport<R> {
         SshDivertPrelude,
     )> {
         let (mut stream, _) = self.listener.accept()?;
+        // The listener may be nonblocking for cancellable acceptance. Frame
+        // deadlines and relays use blocking streams on every supported host.
+        stream.set_nonblocking(false)?;
         let cid = self.resolver.resolve_cid(&stream).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -705,6 +719,13 @@ pub fn decide_divert(
             false,
         );
     }
+    if prelude.transport_cid != u64::from(cid) {
+        return deny(
+            &instance,
+            "divert CID does not match the reserved runtime context".to_string(),
+            false,
+        );
+    }
     // Epoch freshness: a zero broker clock fails closed (freshness is
     // unverifiable without one); otherwise the prelude must sit within
     // the skew window in EITHER direction (stale = replay, future =
@@ -831,8 +852,8 @@ pub fn serve_divert_once<R: CidResolver>(
 /// Serve divert connections until `stop` is set (the divert counterpart to
 /// [`BrokerShim::run_until`]). Decided connections never kill the loop;
 /// after any accept/protocol failure a set `stop` exits instead — the
-/// shutdown dummy connection surfaces exactly such a failure to unblock
-/// `accept`.
+/// caller can use a nonblocking listener and unpark this thread at shutdown,
+/// without resolving a pathname that may have been removed or replaced.
 ///
 /// Allowed sessions relay on detached worker threads: the relay blocks for
 /// the whole session (a full SSH login), so serving it inline would stall
@@ -863,6 +884,10 @@ pub fn run_divert_until<R: CidResolver, L: SshRelay + Clone + 'static>(
                 Err(e) if stop.load(Ordering::Relaxed) => {
                     let _ = e;
                     break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::park_timeout(std::time::Duration::from_millis(100));
+                    continue;
                 }
                 Err(e) => {
                     eprintln!("WARNING: ssh divert accept failed: {e}");
@@ -1418,6 +1443,33 @@ mod tests {
             DivertDecision::Allow { .. } => panic!("overflowing transport CID must deny"),
         }
         assert_eq!(audit.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decide_divert_refuses_claims_for_a_different_reserved_runtime() {
+        let dir = crate::config::test_support::unique_state_dir("divert-cid-mismatch");
+        let registry = bound_registry(&dir);
+        for claimed in [0, 1, 2, 3, 6, 8, 65_536, u64::from(u32::MAX)] {
+            let audit = AuditLog::memory();
+            let decision = decide_divert(
+                &registry,
+                &divert_store(),
+                &audit,
+                7,
+                &divert_prelude("github.com", 22, claimed, DIVERT_NOW),
+                DIVERT_NOW,
+                "t",
+            );
+            assert!(matches!(
+                decision,
+                DivertDecision::Deny {
+                    re_attest: false,
+                    ..
+                }
+            ));
+            assert_eq!(audit.len(), 1);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

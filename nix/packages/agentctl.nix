@@ -2,6 +2,7 @@
   pkgs,
   microsandbox,
   microsandboxSource,
+  microsandboxCargoLock,
   rustToolchain,
   rev ? "dirty",
 }:
@@ -72,10 +73,8 @@ rustPlatform.buildRustPackage {
   # the crate builds from the agentctl subtree.
   sourceRoot = "source/control/agentctl";
 
-  cargoLock = {
+  cargoLock = microsandboxCargoLock {
     lockFile = ../../control/agentctl/Cargo.lock;
-    # The Git dependency is selected by this lock independently of SDK patches.
-    outputHashes."msb_krun-0.1.32" = "sha256-Wb5oaUkmp68FnrOVMxVimevXaWxfAPo34qVbuyLvKM0=";
   };
 
   # All SDK patches use the same fork input as the runtime packages. Explicit

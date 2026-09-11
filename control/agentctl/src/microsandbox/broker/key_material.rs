@@ -200,6 +200,27 @@ impl SopsKeyMaterial {
         &self.secret_id
     }
 
+    /// Issue public broker host trust from a host-owned CA secret. The trusted
+    /// lifecycle owner chooses this CA reference and durable serial; delegated
+    /// workload requests cannot select the authority. The parsed private key
+    /// remains inside existing sealed-material custody.
+    pub fn issue_broker_host_certificate(
+        &self,
+        principal: &super::host_trust::BrokerHostPrincipal,
+        broker_public_key: &ssh_key::PublicKey,
+        serial: u64,
+        valid_after: u64,
+        valid_before: u64,
+    ) -> std::io::Result<super::host_trust::BrokerHostTrust> {
+        principal.issue(
+            &self.private_key,
+            broker_public_key,
+            serial,
+            valid_after,
+            valid_before,
+        )
+    }
+
     /// Shared parse backend: blank → absent, OpenSSH decode, then
     /// cleartext-Ed25519 gate. `text` is only borrowed — the caller keeps
     /// owning the plaintext (the decrypted map, or a zeroizing buffer).

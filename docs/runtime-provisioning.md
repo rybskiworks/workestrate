@@ -269,8 +269,9 @@ are outside this console budget. Low-level helpers using a borrowed console
 channel do not impose this ownership or timeout contract themselves.
 
 These bounds do not establish operational SSH custody. Broker boot, trusted
-instance/generation routing, pre-protocol diversion, exact credential selection
-and shared listener ownership still need their own integration. Other response
+instance/generation routing, exact credential selection and shared broker
+ownership still need their own integration. The pinned Microsandbox dispatches
+configured SSH endpoints before direct upstream connection or bytes. Other response
 deadlines, relay-worker quotas/cancellation and bounded upstream resolution are
 also separate from frame receipt. In particular, listener shutdown is not proof
 that all previously admitted sessions have drained.
@@ -299,6 +300,65 @@ checking session A's requested username against trusted instance context, and
 selecting session B's key remain necessary before SSH custody is operational.
 Do not infer pairing rules, combine separate credentials' permissions, or
 interpret an endpoint allow decision as a successful SSH authorization test.
+
+## SSH launch identity
+
+Broker DLP patterns contain raw credential material. They are no longer added
+to the ordinary workload's Microsandbox builder: a bootstrap field is delivered
+to its target VM even when excluded from the serialized sandbox spec. Pattern
+resolution is a separate broker-only operation and follows the same secret-ID
+to `source_env_var` mapping as sealed key custody, without process-environment
+fallback. Preparing patterns does not install them or make custody ready; they
+must reach the direct managed broker connection. Ordinary guest bootstrap is
+not a broker management channel.
+
+For fresh workloads with compiled SSH credentials, Workestrate reserves a CID
+under its existing registry lock before creating the VM. It prepares a distinct
+`divert-<cid>.sock` endpoint and passes the endpoint and reserved CID together to
+the SDK. Microsandbox assigns that CID to libkrun and checks it before guest
+execution; network slots only select network addresses. The host shim rejects
+a divert prelude whose CID differs from its reserved runtime context.
+
+The launch setup handle owns its listener and registry binding. Failed create,
+registration or cancellation drops that handle; stopping one launch does not
+remove another launch's listener. Cleanup expires only the exact instance and
+launch token, not a replacement that has acquired the same numeric CID. Existing
+files at a newly reserved endpoint are refused, not overwritten. Shutdown wakes
+the owned thread directly, including when its socket pathname has disappeared;
+cleanup preserves a replacement inode at that pathname. This is an
+internal path/lifetime change: old running workloads using the singleton endpoint
+are not automatically attached to the new listener. No live-home migration is
+performed by a build.
+
+Host dispatch setup is not broker readiness. It no longer tries to provision the
+workload's console as though that were the shared broker's control channel.
+Acknowledged multi-instance policy installation, broker boot/supervision,
+generation-bound session context, managed SSH host-certificate trust and reuse/
+restart reconciliation remain required before claiming operational custody.
+The current timestamped prelude is not a launch-generation proof, and listener
+teardown does not yet cancel every admitted relay worker.
+
+CID registry records are authorization state, not optional diagnostics. A corrupt,
+unreadable, misnamed or invalid record now prevents loading the registry; it is
+never skipped to make a number appear free. Allocation also refuses malformed,
+out-of-range, exhausted or rolled-back counters and a missing counter when
+records already exist. Explicit bindings and automatic allocations share the
+same counter; reserved CIDs, including the wildcard, cannot identify a launch.
+
+Writers publish complete owner-only files using a synced temporary file and
+same-directory rename, then sync the parent. Allocation advances its durable
+counter before publishing a binding, so a failed publication consumes a number
+rather than reusing it. Existing valid record shapes still decode. These
+guarantees require updated writers: do not run older registry writers against
+the same state concurrently. The existing lock-recovery implementation still
+needs separate concurrency validation.
+
+On a registry error, stop launches and preserve the files for inspection. Do not
+delete a counter or broken record to bypass the error: first quiesce all writers
+and reconcile reservations against actual running VMs, then restore a verified
+backup or explicitly repair the affected state. There is no automatic live-state
+repair or migration, and a fresh empty state directory is a new authority domain,
+not a way to recover still-running workloads.
 
 ## Schema flow (Rust types → committed schema → distribution)
 

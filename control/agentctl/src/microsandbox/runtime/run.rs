@@ -1396,39 +1396,28 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // only — the socket path stays host-side). Grant-less plans leave the
     // builder untouched.
     let builder = crate::microsandbox::broker::apply_ssh_policy(builder, plan.credentials.as_ref());
-    // SSH divert dial path: hand the builder the socket path the shim binds
-    // after durable registration, so divert-intended flows dial the live
-    // listener. Only the path crosses here — no bind, thread, or CID
-    // allocation — so a failed create still leaves no live listener behind
-    // (the bind stays after registration below, at the same derived path).
-    // Grant-less plans pass nothing and keep the fail-closed deny.
-    let builder = match crate::microsandbox::broker::ssh_broker_socket_for_plan(
-        &state_dir,
-        plan.credentials.as_ref(),
-    ) {
-        Some(socket) => match socket.to_str() {
-            Some(address) => builder.ssh_broker_endpoint(address),
-            None => {
-                eprintln!(
-                    "WARNING: ssh divert disabled for instance '{}': broker socket path {} is not valid UTF-8 (divert-intended flows deny fail-closed)",
-                    spec.instance,
-                    socket.display()
-                );
-                builder
-            }
-        },
+    // Reserve the launch identity before the runtime exists. The SDK assigns
+    // this CID to libkrun and verifies it before guest execution. Each listener
+    // is launch-specific, and dropping its handle cleans up on failed creation
+    // or registration; no network-slot identity or shared-listener takeover.
+    let ssh_shim = match plan.credentials.as_ref() {
+        Some(credentials) => {
+            crate::microsandbox::broker::ensure_ssh_shim(&state_dir, &spec.instance, credentials)
+                .await?
+        }
+        None => None,
+    };
+    let builder = match ssh_shim.as_ref() {
+        Some(shim) => builder.guest_cid(shim.cid).ssh_broker_endpoint(
+            shim.socket_path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("SSH launch endpoint must be valid UTF-8"))?,
+        ),
         None => builder,
     };
-    // Broker DLP patterns: compile broker-bound SSH material into Raw
-    // match patterns and thread them into the builder's broker bootstrap
-    // (never the guest spec). Grant-less, guest-only, and fully-excluded
-    // plans leave the builder untouched, preserving pass-through relay
-    // behavior.
-    let builder = crate::microsandbox::broker::apply_ssh_patterns(
-        builder,
-        plan.credentials.as_ref(),
-        &secrets,
-    );
+    // This builder launches the workload, not the custody broker. Raw DLP
+    // patterns contain credential material and belong only on the direct
+    // broker management path, never in this workload's bootstrap.
     let sandbox = builder.create().await?;
 
     let created_at = super::time::current_rfc3339_utc();
@@ -1481,17 +1470,6 @@ pub(crate) async fn build_sandbox<W: Workload>(
     if let Some(dir) = &generation_dir {
         mark_generation_booted(dir);
     }
-    // SSH shim: bind the divert listener only once the sandbox identity is
-    // durably registered — a failed create or registration must never leave
-    // a live listener for a dead sandbox. Strict-only confinement needs no
-    // listener (nothing can divert to it).
-    let ssh_shim = match plan.credentials.as_ref() {
-        Some(credentials) if !credentials.ssh.is_empty() => {
-            crate::microsandbox::broker::ensure_ssh_shim(&state_dir, &spec.instance, credentials)
-                .await?
-        }
-        _ => None,
-    };
     // Broker VM: reserve the shared host handles only once the sandbox
     // identity is durably registered, beside the shim. Grant-less and
     // guest-bound-only plans take no reservation. The KVM boot itself is
