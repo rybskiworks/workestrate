@@ -1,46 +1,33 @@
-# Migration Documentation — workestrate Tool+XDG Model
+# Migration design records
 
-**Status:** AUTHORITATIVE DESIGN RECORD (implementation largely landed; ADRs remain the final word; dated addenda continue)
-**Branch:** `migration/tool-model`
-**Base:** `840e8b7` on `main`
-**Authored:** 2026-07-18
+**Current integration branch:** `main`, after [PR #32](https://github.com/rybskiworks/workestrate/pull/32).
+**Historical migration branch:** `migration/tool-model`.
+**Original record:** authored 2026-07-18 from `840e8b7`; later ADR amendments are dated individually.
 
-This documentation tree is the authoritative pre-implementation record for
-migrating the `ai-workbench` monorepo into the **workestrate-as-tool + XDG +
-dotfiles-registry** model. It captures: the verified current state, the target
-system specification, the security model, the phased migration process, and
-thirty-seven Architecture Decision Records (ADRs) that pin every load-bearing
-choice.
+This tree preserves the migration design and its rationale. The former branch is
+not a second integration or release channel. Older references to pending approval,
+phase gates or host verification describe the state of the record at that time;
+they are not instructions to repeat a migration or proof of current test results.
 
-Implementation may proceed from this record without re-deriving decisions.
-Where earlier session rounds expressed options or wavered, the ADRs in
-`50-decisions/` are the final word.
+Start with the current [specification map](../../SPEC.md),
+[operating model](../operating-model.md) and [runtime guide](../runtime-provisioning.md).
+Use the ADRs and their dated amendments to understand the decisions behind them.
 
 ## Reading order
 
-1. `00-executive-summary.md` — the whole migration in ≤2 pages.
-2. `10-current-state.md` — verified current state with file:line citations.
-3. `20-target-system-spec.md` — the main spec of the migrated system.
-4. `30-security-model.md` — threat model, invariants, enforcement points.
-5. `40-migration-process.md` — phased process, per-file consequence sweep, gates; review & remediation status.
-6. `50-decisions/README.md` — ADR index (0001–0037).
-7. `50-decisions/NNNN-*.md` — individual ADRs (0001–0037).
-8. `60-glossary.md` — canonical vocabulary.
-9. `70-open-items.md` — pending user defaults, KVM gates, residual risks.
-10. `80-remediation-plan.md` — review findings (2026-07) remediation plan, PENDING APPROVAL.
+| Record | Purpose |
+| :--- | :--- |
+| [Executive summary](00-executive-summary.md) | Original migration goals and scope. |
+| [Current-state snapshot](10-current-state.md) | The dated baseline, not a rolling deployment report. |
+| [Target system](20-target-system-spec.md) | Detailed system semantics, read with ADR amendments. |
+| [Security model](30-security-model.md) | Threat model, invariants and enforcement points. |
+| [Migration process](40-migration-process.md) | Phases, consequence sweeps and historical gates. |
+| [ADR index](50-decisions/README.md) | The maintained decision inventory. |
+| [Glossary](60-glossary.md) | Shared vocabulary. |
+| [Open items](70-open-items.md) | Residual questions and gates to reconcile with current work. |
+| [Remediation plan](80-remediation-plan.md) | Historical review findings and their disposition. |
 
-## Scope
-
-This tree documents the **design**. It does not contain code changes. All
-implementation (Rust, nix, shell, TOML) happens in subsequent commits against
-this branch or follow-on branches, gated by the phase plan in
-`40-migration-process.md`.
-
-## Environment honesty
-
-This documentation was authored in a container with **no nix** and **no KVM**.
-All nix-eval and KVM-runtime gates are marked `HOST-NIX` or `HOST-KVM` in the
-migration process. Claims about nix behavior (`builtins.fromTOML`, flake source
-filtering, pure-eval invisibility) are based on documented Nix semantics, not
-runtime verification in this session. External pattern precedents were
-live-verified via web research; URLs are cited in the relevant ADRs.
+Do not infer a fresh Nix or KVM validation from these documents. The initial
+record was authored without those runtime capabilities; later evidence must be
+read with its exact source revision, host and test scope. Implementation changes
+now go through PRs to main with the affected contracts and tests updated together.

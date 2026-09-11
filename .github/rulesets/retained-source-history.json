@@ -1,0 +1,11 @@
+{
+  "name": "retained-source-history",
+  "target": "branch",
+  "enforcement": "disabled",
+  "bypass_actors": [],
+  "conditions": {"ref_name": {
+    "include": ["refs/heads/upstream/*", "refs/heads/upstream/**/*", "refs/heads/migration/tool-model"],
+    "exclude": []
+  }},
+  "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]
+}

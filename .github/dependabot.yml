@@ -1,13 +1,12 @@
-# Cargo updates remain deliberately excluded: its lock and forks are managed.
-# This configuration must also be present on the repository default branch.
+# Source, compiler and runtime pins are reviewed together, not advanced independently.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    target-branch: migration/tool-model
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      actions:
-        patterns: ["*"]
+      compatible-actions:
+        patterns: ['*']
+        update-types: [minor, patch]
