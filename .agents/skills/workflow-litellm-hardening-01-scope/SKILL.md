@@ -37,7 +37,7 @@ edits and that the verify phase checks against.
    `full_path`, `default`, `requires_db`/`requires_redis` flags, and `source_urls`.
 5. For each baseline item, classify the current config state as `satisfied` or
    `gap`, recording the verbatim key + source. Mark any deployment-specific
-   recommendation `[WORKESTRATOR NOTE]`.
+   recommendation `[WORKESTRATE NOTE]`.
 6. Record the gap table (below) as the scope contract for the rest of the
    workflow.
 
@@ -64,7 +64,7 @@ edits and that the verify phase checks against.
 - `constraint-litellm-in-memory-no-db` — DB-required keys
   (`requires_db=true`) must be assessed for the in-memory (no-Postgres)
   deployment: setting them `true` is hygiene to suppress DB write attempts, not
-  a functional requirement. Mark each such case `[WORKESTRATOR NOTE]`.
+  a functional requirement. Mark each such case `[WORKESTRATE NOTE]`.
 - `constraint-litellm-deprecation-free` — do not flag as gaps any deprecated
   keys (e.g. `set_verbose`); recommend the documented replacement instead.
 
@@ -83,15 +83,15 @@ Each row ties a hardening baseline item to a verbatim config key (full_path from
 | 1 | request_timeout 6000s → 300 | `litellm_settings.request_timeout` | 6000 | — | config_settings, configs | `300` | satisfied |
 | 2 | retry/fallback present | `router_settings.num_retries` (default 3), `router_settings.fallbacks`, `router_settings.retry_policy` | 3 / — / — | false | config_settings, configs | num_retries:2, fallbacks set, retry_policy set | satisfied |
 | 3 | master_key via os.environ/ | `general_settings.master_key` (security_risk: "Admin secret; must start with 'sk-'. Use os.environ/ resolution.") | — | false | config_settings, configs, deploy, docker_quick_start, virtual_keys, users | `os.environ/LITELLM_MASTER_KEY` | satisfied |
-| 4 | disable_spend_logs | `general_settings.disable_spend_logs` (workestrator_recommendation: "Set to true in real config; compensates for no DB") | — | true | config_settings, db_info | `true` | satisfied |
+| 4 | disable_spend_logs | `general_settings.disable_spend_logs` (workestrate_recommendation: "Set to true in real config; compensates for no DB") | — | true | config_settings, db_info | `true` | satisfied |
 | 5 | SSRF user_url_validation | `litellm_settings.user_url_validation` | — | — | config_settings | NOT set | **gap** |
-| 6 | allowed_ips | `general_settings.allowed_ips` | — | false | config_settings | NOT set | **gap** `[WORKESTRATOR NOTE]` |
+| 6 | allowed_ips | `general_settings.allowed_ips` | — | false | config_settings | NOT set | **gap** `[WORKESTRATE NOTE]` |
 | 7 | background_health_checks | `general_settings.background_health_checks` | — | false | config_settings | NOT set | **gap** |
 | 8 | health_check_interval | `general_settings.health_check_interval` | 300 | false | config_settings | NOT set | **gap** |
-| 9 | disable_error_logs | `general_settings.disable_error_logs` | — | true | config_settings, db_info | NOT set | **gap** `[WORKESTRATOR NOTE]` |
-| 10 | disable_spend_updates | `general_settings.disable_spend_updates` | — | true | config_settings | NOT set | **gap** `[WORKESTRATOR NOTE]` |
-| 11 | disable_adding_master_key_hash_to_db | `general_settings.disable_adding_master_key_hash_to_db` | — | true | config_settings | NOT set | **gap** `[WORKESTRATOR NOTE]` |
-| 12 | disable_reset_budget | `general_settings.disable_reset_budget` | — | true | config_settings | NOT set | **gap** `[WORKESTRATOR NOTE]` |
+| 9 | disable_error_logs | `general_settings.disable_error_logs` | — | true | config_settings, db_info | NOT set | **gap** `[WORKESTRATE NOTE]` |
+| 10 | disable_spend_updates | `general_settings.disable_spend_updates` | — | true | config_settings | NOT set | **gap** `[WORKESTRATE NOTE]` |
+| 11 | disable_adding_master_key_hash_to_db | `general_settings.disable_adding_master_key_hash_to_db` | — | true | config_settings | NOT set | **gap** `[WORKESTRATE NOTE]` |
+| 12 | disable_reset_budget | `general_settings.disable_reset_budget` | — | true | config_settings | NOT set | **gap** `[WORKESTRATE NOTE]` |
 | 13 | disable_master_key_return | `general_settings.disable_master_key_return` | — | false | config_settings | NOT set | **gap** |
 | 14 | max_request_size_mb | `general_settings.max_request_size_mb` | — | false | config_settings | NOT set | **gap** |
 | 15 | max_response_size_mb | `general_settings.max_response_size_mb` | — | false | config_settings | NOT set | **gap** |
@@ -104,7 +104,7 @@ Each row ties a hardening baseline item to a verbatim config key (full_path from
 | 22 | reject_clientside_metadata_tags | `general_settings.reject_clientside_metadata_tags` | — | false | config_settings | NOT set | **gap** (optional) |
 | 23 | enable_pre_call_checks | `router_settings.enable_pre_call_checks` (common_misconfiguration: "Required for model_info.max_input_tokens enforcement. Default: false.") | false | false | config_settings | NOT set | **gap** |
 
-> `[WORKESTRATOR NOTE]` rows: deployment-specific. Rows 9–12 are DB-required
+> `[WORKESTRATE NOTE]` rows: deployment-specific. Rows 9–12 are DB-required
 > keys (`requires_db=true`); in the in-memory (no-Postgres) deployment, setting
 > them `true` is hygiene to suppress DB write attempts — the same pattern already
 > used for `disable_spend_logs` (row 4). Row 6 (`allowed_ips`): the microsandbox

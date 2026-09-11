@@ -50,7 +50,7 @@ cargo check --all-targets
 - `--all-targets` compiles lib, bins, tests, examples, and benches — not just
   the default target.
 - This is the minimum gate; it does not replace clippy, tests, format, or docs.
-- Run inside `nix develop` (see `nix-usage` skill) so the correct toolchain is
+- Run inside `just shell` (see `nix-usage` skill) so the correct toolchain is
   used.
 - `cargo check` does not generate final artifacts; use `cargo build` when a
   binary artifact is required.

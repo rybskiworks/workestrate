@@ -44,7 +44,7 @@ Load this skill when:
 
 `router_settings.fallbacks` is marked `requires_db=false`,
 `requires_redis=false` in the option-index. Static fallback chains in
-`config.yaml` work in the in-memory workestrator.
+`config.yaml` work in the in-memory workestrate.
 
 Verbatim rules:
 

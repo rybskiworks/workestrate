@@ -1,0 +1,361 @@
+# 10 — Config repos as working copies + dotfiles-style home
+
+> **STATUS: EXECUTED (2026-07-30).** Docs/decision landed; all three code
+> tasks landed — Task 1 `config-repos/` rename (commit `d7c5a83`), Task 2
+> dirty-guard regression test (commit `bd99481`), Task 3 `workestrate home
+> init` scaffolding (commit `3894fb7`). Home adopted into git as root commit
+> `a42e597`; `home init` idempotent over populated home; pre-commit hook
+> rejects gitlinks/store-dirs/secret material. Runtime verification:
+> `workestrate validate-config` → "workestrate.toml is valid." exit 0;
+> `workestrate doctor` → "home: OK (/home/node/.workestrate (Default))".
+> **Effort:** S (docs/decision) + M (code: rename + home-init scaffolding)
+> Prerequisites / see-also: [README.md](../README.md) · [00-index.md](00-index.md) ·
+> [08-no-repo-local-home.md](08-no-repo-local-home.md) ·
+> [06-config-home-flag.md](06-config-home-flag.md) ·
+> [../02-config-requirements.md](../02-config-requirements.md) ·
+> [../03-sibling-config-setup.md](../03-sibling-config-setup.md) ·
+> [../07-execution-order.md](../07-execution-order.md) ·
+> [../../migration/50-decisions/0007-tool-xdg-dotfiles-model.md](../../migration/50-decisions/0007-tool-xdg-dotfiles-model.md) ·
+> [../../migration/50-decisions/0008-config-repos-via-uniform-config-add.md](../../migration/50-decisions/0008-config-repos-via-uniform-config-add.md) ·
+> [../../migration/50-decisions/0010-source-override-naming.md](../../migration/50-decisions/0010-source-override-naming.md) ·
+> [../../migration/50-decisions/0013-layering-ordered-registry-layers.md](../../migration/50-decisions/0013-layering-ordered-registry-layers.md) ·
+> [../../migration/50-decisions/0018-secrets-layering-and-per-repo-config.md](../../migration/50-decisions/0018-secrets-layering-and-per-repo-config.md) ·
+> [../../migration/50-decisions/0023-single-tool-home.md](../../migration/50-decisions/0023-single-tool-home.md) ·
+> [../../migration/60-glossary.md](../../migration/60-glossary.md)
+>
+> Decisions A and B are now ADR'd: [ADR 0024](../../migration/50-decisions/0024-dotfiles-home-and-working-copy-config-repos.md);
+> the `home init --from`/positional-dest extension (superseded by the `home clone` verb split @ `c406630`, 2026-07-31) + `workestrate.lock` are
+> [ADR 0025](../../migration/50-decisions/0025-home-provisioning-and-lockfile.md)
+> + [spec 11](11-home-provisioning-and-lockfile.md).
+
+> Every citation below was verified against the working tree on branch
+> `migration/tool-model` during the authoring session (2026-07-29). Commands
+> are spelled so a later contextless session can execute top-to-bottom without
+> re-derivation.
+
+## Environment markers
+
+| Marker | Meaning |
+|---|---|
+| `verifiable-here` | Can be validated in this container (TOML, golden files, git, shell/python scripts, AND cargo-linked gates via `nix develop` — nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; the devshell provides a full C toolchain, verified 2026-07-29) |
+| `HOST-NIX` | Requires nix on the user's host for the genuine host gates only: `nix build` image builds, `nix run nixpkgs#...` FOD prefetch, `just verify-full`, `just generate-schema` |
+| `HOST-KVM` | Requires KVM on the user's host (this container has no `/dev/kvm`) |
+
+---
+
+## Summary
+
+This spec records two NEW user decisions made after specs 08/09 and one name
+decision. **Decision A:** consumed config repos are FIRST-CLASS working copies
+inside the tool home at `$WORKESTRATE_HOME/config-repos/<name>/` — the user
+edits, commits, pushes, and branches directly in them; the REMOTE is canonical
+(gitops), not a separate canonical sibling clone. This supersedes the
+standalone-sibling model in spec 08 step (a). **Decision B:** the home itself
+becomes a dotfiles-style git repo via an explicit `workestrate home init`
+scaffolding command (gitignore + pre-commit hook guarding against mode-160000
+gitlinks and secret material) — completing ADR 0007's dotfiles-registry
+intent. **Name decision:** rename `repos/` → `config-repos/` (collision with
+`sources/`; ADR 0008 term of art). Three code tasks (NEEDS-DEVSHELL): the
+rename, a dirty-safe `config update` regression test (guard already present),
+and the `home init` scaffolding.
+
+---
+
+## 1. Decision A — config repos as working copies
+
+**Decision.** Consumed config repos live at
+`$WORKESTRATE_HOME/config-repos/<name>/` (or `repos/<name>/` until the §3
+rename lands) and are FIRST-CLASS working git repos: the user edits, commits,
+pushes, and branches directly in them. There is NO separate canonical checkout
+alongside the home; the REMOTE is canonical. `workestrate config update <name>`
+is how changes made elsewhere (or by another clone of the same remote) arrive
+in the home working copy — it fetches and fast-forwards, refusing when the
+working copy is dirty.
+
+**Rationale.** One copy, at a standardized expected location, with no sync
+dance between a "canonical clone" and a "managed clone." The standalone-sibling
+model in spec 08 step (a) (clone `.workestrate/repos/personal` →
+`/home/node/Development/workestrate-personal`, then point the registry at the
+sibling) is SUPERSEDED: the home clone IS the personal working repo. Note
+explicitly: the ADRs never mandated a read-only managed clone. ADR 0008
+(`0008-config-repos-via-uniform-config-add.md:20, 28-29`) specifies uniform
+cloning of config repos into the store via `workestrate config add <url>
+<name>`; it says nothing about the clones being read-only. The "never edit home
+clones" gloss was an orchestrator convention, not an ADR invariant — and it
+created a needless two-copy sync burden.
+
+**Remote-is-canonical gitops rule.** The remote is the source of truth. Push
+early/often; `workestrate config update <name>` fetches from the registered
+remote and fast-forwards the working copy. A local-only repo (no remote) works
+but is a sole copy — the rule is: give it a remote when it matters. Arbitrary
+local-path registry entries remain an escape hatch (see the FS-18 local-path
+skip behavior at `config_cmd.rs:522-539` — local-path entries are skipped by
+`config update` at `config_cmd.rs:531-539`).
+
+**Dirty-safe `config update` requirement.** `workestrate config update` MUST
+be dirty-safe: it must refuse to clobber a working copy with uncommitted
+changes. This guard is VERIFIED PRESENT — `cmd_config_update` at
+`control/agentctl/src/commands/config_cmd.rs:509-559` bails on dirty clones at
+`config_cmd.rs:540-544` ("config repo '{}' has uncommitted changes; commit or
+stash first"). `config list` reports dirty status at `config_cmd.rs:594-609`.
+The spec task for this guard is regression-test coverage + documentation (§4
+Task 2), NOT adding the guard.
+
+---
+
+## 2. Decision B — the home as a dotfiles-style git repo
+
+**Decision.** The tool home (`~/.workestrate`) becomes a version-controlled
+dotfiles-style git repo tracking `config.toml` + `overrides.toml` (+ optionally
+encrypted secrets), scaffolded by an explicit command. This completes ADR
+0007's dotfiles-registry intent (`0007-tool-xdg-dotfiles-model.md:21-22,
+31-36`): ADR 0007 intended the registry to live in the user's dotfiles; this
+makes the home itself that dotfiles repo.
+
+**Failure mode the scaffolding must prevent.** A naive `git add -A` in the home
+would register each `config-repos/*` working copy as a GITLINK (mode 160000
+embedded-repo entry — a broken pseudo-submodule pointing at a commit that
+isn't recorded as a submodule), and could stage secret material (age private
+keys, plaintext `.env`, `*.pem`, `id_rsa*`). The scaffolding below prevents
+both.
+
+**Scaffolding spec — `workestrate home init`.** A NEW explicit command (propose
+`workestrate home init` or `workestrate init --home`; note `workestrate init`
+exists at `control/agentctl/src/commands/init.rs:24` as
+`cmd_init(url: Option<&str>)`). NEVER auto-git-init the home — that is invasive
+and surprising; the user opts in explicitly (rationale in the subsection below).
+The command must:
+
+1. **`git init` the home** (if not already a git repo).
+2. **Write `.gitignore`** with these entries (verbatim):
+   ```
+   /config-repos/
+   /sources/
+   /state/
+   /cache/
+   *.agekey
+   age.txt
+   *.pem
+   id_rsa*
+   .env
+   ```
+   Keep `/secrets/*.enc` committable — age ciphertext is safe to commit (the
+   config-repo template at `templates/workestrate-config/.gitignore` already
+   commits `.env.enc` per the same reasoning). NOTE: this `.gitignore` is for
+   the HOME repo specifically; it is distinct from the config-repo template
+   `.gitignore` at `templates/workestrate-config/.gitignore` (which is for
+   config repos and ignores `.env` but keeps `.env.enc` committed).
+3. **Install a pre-commit hook** REJECTING (exit non-zero with a clear message):
+   - any mode-160000 (gitlink) entry staged in the home index;
+   - any staged path under `config-repos/`, `sources/`, or `state/`;
+   - any staged path matching secret-material patterns: `*.agekey`, `age.txt`,
+     `*.pem`, `id_rsa*`, unencrypted `.env`.
+4. **Print next-steps:** "Add a remote for the dotfiles repo:
+   `git -C ~/.workestrate remote add origin <your-dotfiles-remote>` then push."
+
+**Idempotency.** Re-running `workestrate home init` on an already-initialized
+home must be a no-op (or refresh the `.gitignore` + hook to the canonical
+content) — never destructive.
+
+**Why never auto-git-init (rationale).** The one-liner above is load-bearing;
+the full reasoning:
+
+1. **The home is created IMPLICITLY on first use** — that is exactly why
+   git-init must not ride along. A silently-created `.git` repo leaks into
+   unrelated tooling: shell prompts start showing repo state, `git status`
+   lists hundreds of runtime files, and backup/dotfiles scanners start
+   treating the home as a repo. Silent state transitions erode CLI trust.
+2. **Multiple homes exist** (the real home, an experiment
+   `workestrate-dev-config` home, a dogfood-driver home, CI homes): auto-init
+   cannot tell them apart and would git-init throwaway homes too — pointless
+   churn plus an invitation to commit into something about to be `rm -rf`'d.
+   An explicit `workestrate home init` doubles as the user DECLARING "this is
+   my real, persistent home"; automation cannot infer that.
+3. **Hooks are executable code fired by the USER's git commands.** Silently
+   installing a pre-commit hook is what hostile tooling does, and a
+   silently-installed hook that starts rejecting commits looks like breakage.
+   The hook is the most valuable part of the scaffolding — and precisely the
+   part that needs consent.
+4. **No good implicit trigger exists.** On-home-creation fires when most first
+   homes are experiments; on-every-command polling is ambient and
+   unpredictable (and weird if the user deliberately removes `.git`);
+   `migrate-home` already has one job. An explicit idempotent command has none
+   of these failure modes: run once → scaffolds `.gitignore` + hook +
+   next-steps; run twice → no-op/warn; refuses to clobber an existing repo.
+5. **Established idiom for this tool class:** `chezmoi init` (the dotfiles
+   manager this init flow already borrows from), `git init`, `pass init` —
+   every comparable tool makes repo creation an explicit verb.
+
+The division of labor: AUTOMATIC = everything the tool needs to function (home
+layout, registry, clones, state); EXPLICIT = everything encoding user workflow
+intent (git repo, remote, hooks, branches). `workestrate home init` is the
+one-button explicit form: discoverable in `--help`, idempotent, refuses to
+clobber, and prints "add your dotfiles remote next".
+
+**Home init: which home, and which homes need it.** Three follow-up decisions
+on how `home init` selects and treats its target home:
+
+1. **NO DEDICATED `--path` FLAG.** `home init` takes no path argument; it
+   operates on the RESOLVED home — the same precedence as every other command:
+   `WORKESTRATE_HOME` env today, and the global `--home` flag once
+   [06-config-home-flag.md](06-config-home-flag.md) is implemented. Rationale:
+   a one-off `--path` would be a THIRD mechanism for "which home" and would rot
+   against the global flag; composition
+   (`workestrate --home <dir> home init`, or
+   `WORKESTRATE_HOME=<dir> workestrate home init`) is the idiomatic pattern.
+   Example for the experiment home:
+   `workestrate --home ~/Development/workestrate-dev-config home init`
+   (flag form; use the env form until the flag lands).
+2. **Experiment/throwaway homes don't need init.** The tool auto-materializes
+   the home layout (registry, `config-repos/`, `sources/`, `state/`) on first
+   use, so a disposable experiment home (`workestrate-dev-config`) needs no
+   `home init` at all — point `WORKESTRATE_HOME`/`--home` at it and run.
+   `home init` is only for homes the user wants VERSIONED (the real
+   `~/.workestrate`; later the dogfood driver home). This is the operational
+   form of the never-auto-git-init rationale above: init is the explicit
+   declaration "this home is real and persistent."
+3. **Idempotent over non-empty homes.** `home init` must tolerate an existing
+   populated home (e.g. after `cp -a` of bundle content per spec 08 step b):
+   it detects existing content, adds ONLY the git layer (`.git`, `.gitignore`,
+   pre-commit hook), and refuses only on a conflicting pre-existing `.git`.
+   This makes both Step 0.5 orderings safe: init-then-migrate OR
+   migrate-then-init.
+
+---
+
+## 3. Name decision — `config-repos/`
+
+**Decision.** Rename the home subdirectory `repos/` → `config-repos/`.
+
+**Rationale.** The current `repos/` collides conceptually with `sources/`
+(agent source-override checkouts, ADR 0010 at
+`0010-source-override-naming.md:28`): "repos" vs "sources" is ambiguous in the
+same tree. `config-repos/` matches ADR 0008's term of art ("config repo",
+`0008-config-repos-via-uniform-config-add.md:20, 28-29`) and the
+`[configs.<name>]` registry section in `config.toml`.
+
+**Rejected alternatives:**
+- `configs/` — ambiguous vs `config.toml` (the registry file itself).
+- `layers/` — names the role (layering), not the content.
+- `workloads/` — too narrow (config repos contain more than workloads).
+
+**Fallback note.** `repos/` remains an acceptable fallback if the user prefers
+— the rename is one constant at `paths.rs:216-218` (`config_repo_dir()`), so
+reverting or keeping the old name is trivial. Nothing in production depends on
+the directory name yet (zero data migration).
+
+---
+
+## 4. Required code changes (NEEDS-DEVSHELL / HOST-NIX)
+
+All three tasks run inside `nix develop` — runnable in this container via the store-path PATH prefix (nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on PATH; the devshell provides a full C toolchain); a bare shell has no `cc` linker.
+
+### Task 1 (code-S): rename `repos/` → `config-repos/`
+
+**Sites:**
+- `control/agentctl/src/config/paths.rs:216-218` — `config_repo_dir()` returns
+  `resolve_store_dir().join("repos").join(name)`; change `"repos"` →
+  `"config-repos"`.
+- `control/agentctl/src/config/loading.rs:313, 468, 930, 1027` — other `repos`
+  join sites.
+- Config add/update/remove machinery that references the store directory name.
+- Tests referencing `repos/` in expected paths.
+
+**Doc follow-through:**
+- ADR 0023 layout (`0023-single-tool-home.md:76` — `repos/` → `config-repos/`).
+- Glossary (`60-glossary.md:55-58` — config-repo entry says "Cloned to
+  `$WORKESTRATE_HOME/repos/<name>/`"; update to `config-repos/`).
+- This tree's docs (spec 08, `03-sibling-config-setup.md`, etc.).
+
+**Gates:** `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
+
+### Task 2 (test-S): dirty-safe `config update` regression test
+
+The guard is VERIFIED PRESENT (`config_cmd.rs:540-544`). The task is to add a
+regression test asserting `config update` bails on a dirty clone (mirroring the
+`config remove --delete` dirty-refusal precedent at `config_cmd.rs:52`), and to
+document the invariant. Gate: `cargo test`.
+
+### Task 3 (code-M): `workestrate home init` scaffolding
+
+New explicit command (propose `workestrate home init` or `workestrate init
+--home`; existing `workestrate init` at `init.rs:24`). Implements the §2
+scaffolding spec: `git init`, `.gitignore` generation, pre-commit hook
+installation, next-steps printout. NEVER auto-git-init (rationale: §2, "Why never auto-git-init (rationale)"). It also implements the resolution and idempotency decisions in §2, "Home init: which home, and which homes need it" (no --path flag — operates on the resolved home; idempotent over a populated home, adding only the git layer).
+
+**Gates:** `cargo test` (hook content generation, gitignore generation,
+idempotency). The `--from`/positional-`dest` extension of `home init` is
+specified by [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md)
+(ADR 0025) (superseded: verb split @ `c406630`).
+
+---
+
+## 5. Mount model
+
+Dev agents get the home mounted **read-only at the default guest path** PLUS a
+nested `config-repos/` read-write shadow mount — the same nested-mount pattern
+as `.assets/opencode-agent/docker-compose.yml:31-46` (a tmpfs or ro bind at a
+path, then a second scoped bind over the same guest path). This lets a dev
+agent read the registry and config layers (ro) while still being able to
+commit/push edits to config repos (rw on the shadow).
+
+This is an APPLICATION of the spec 01 mount-shadow machinery
+([01-mount-filtering-shadowing.md](01-mount-filtering-shadowing.md)), not a new
+mechanism: the nested shadow mount is exactly the pattern spec 01 WP4 specifies.
+
+---
+
+## 6. Precedence note — `WORKESTRATE_CONFIG_DIR`
+
+`WORKESTRATE_CONFIG_DIR` stays as the ephemeral read-live dev override — for
+foreign configs, tests, and golden fixtures (how golden tests consume
+`config.reference` today; `loading.rs:283-287, 432`). It bypasses discovery
+(`loading.rs:283-287`), is a single override layer branch (`loading.rs:432`),
+and honors `secrets = "none"` via `env_dir_secrets_none()`
+(`loading.rs:412-423`). It is NOT a working-copy mechanism. Unchanged by
+Decisions A/B.
+
+---
+
+## 7. Amendments applied by this spec
+
+- **Spec 08 step (a) AMENDED** — the standalone canonical clone target
+  (`/home/node/Development/workestrate-personal`) is SUPERSEDED: NO standalone
+  sibling. The existing bundle clone IS the personal working repo, moved to
+  `~/.workestrate/config-repos/personal` (or `~/.workestrate/repos/personal`
+  until the §3 rename lands). See [08-no-repo-local-home.md](08-no-repo-local-home.md)
+  §1 + step (a) AMENDED markers.
+- **`../03-sibling-config-setup.md` topology AMENDED** — config-repo
+  development happens in the home's `config-repos/` working copies (per
+  Decision A); the mount set for dev agents becomes: home ro at the default
+  path + `config-repos/` rw shadow + dev home rw. See its AMENDED markers.
+- **Sequencing note.** Spec 10's code tasks (Tasks 1–3) should run FIRST in
+  the next devshell session so that
+  [../07-execution-order.md](../07-execution-order.md) Step 0.5 can use
+  `workestrate home init` instead of hand-rolling the home layout and git
+  scaffolding.
+
+---
+
+## 8. Acceptance criteria
+
+- [x] Spec 10 written and indexed in
+  [00-index.md](00-index.md) + the [../README.md](../README.md) doc map +
+  [../07-execution-order.md](../07-execution-order.md).
+- [x] Spec 08 step (a) + `../03-sibling-config-setup.md` topology carry
+  `**AMENDED by spec 10**` markers.
+- [x] [00-index.md](00-index.md), [../README.md](../README.md),
+  [../07-execution-order.md](../07-execution-order.md), and
+  [../NEXT-SESSION.md](../NEXT-SESSION.md) updated.
+- [x] **(code)** Task 1 rename landed (commit `d7c5a83`) with `cargo fmt
+  --check` + `cargo clippy -- -D warnings` + `cargo test` green.
+- [x] **(code)** Task 2 dirty-guard regression test green (commit `bd99481`).
+- [x] **(code)** Task 3 `home init` scaffolds gitignore + hook and rejects
+  gitlinks/secret paths (test-verified; commit `3894fb7`).
+- [x] **(code)** Task 3 `home init` has no `--path` flag and operates on the
+  resolved home (`WORKESTRATE_HOME` env; global `--home` per
+  [06-config-home-flag.md](06-config-home-flag.md) once implemented).
+- [x] **(code)** Task 3 `home init` is idempotent over a populated home (adds
+  the git layer only; refuses only on a conflicting pre-existing `.git`).
+  Verified: second run → "already initialized … nothing to do".
+- [x] `repos/` fallback documented (one constant at `paths.rs:216-218`).

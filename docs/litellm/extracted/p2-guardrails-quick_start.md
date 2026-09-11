@@ -226,8 +226,8 @@ guardrails:
 - /docs/proxy/guardrails/guardrail_policies
 - /docs/enterprise
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Guardrails config (`guardrails:` list in config.yaml) works WITHOUT a database — it's static config. The workestrator can define guardrails (e.g. `presidio`, `litellm_content_filter`, `generic_guardrail_api`) in config.yaml and apply them via `default_on: true` or per-request `guardrails` param. `GET /guardrails/list` works without DB. Model-level guardrails (`model_list[].litellm_params.guardrails`) work without DB. Per-API-key guardrail control and tag-based modes are Enterprise (unavailable). `litellm_content_filter` and `hide-secrets` are built-in guardrails that may work without external services (inferred). The `guardrails` request parameter on `/v1/chat/completions` works without DB.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Guardrails config (`guardrails:` list in config.yaml) works WITHOUT a database — it's static config. The workestrate can define guardrails (e.g. `presidio`, `litellm_content_filter`, `generic_guardrail_api`) in config.yaml and apply them via `default_on: true` or per-request `guardrails` param. `GET /guardrails/list` works without DB. Model-level guardrails (`model_list[].litellm_params.guardrails`) work without DB. Per-API-key guardrail control and tag-based modes are Enterprise (unavailable). `litellm_content_filter` and `hide-secrets` are built-in guardrails that may work without external services (inferred). The `guardrails` request parameter on `/v1/chat/completions` works without DB.
 
 ## Confidence / uncertainty notes
 - high confidence on guardrails config format and provider names (verbatim YAML). DB requirement is "not documented" — guardrails are static config + request params (inferred they work without DB). Enterprise requirements are verbatim. The Specification block lists fewer provider names than the examples show — noted as a doc inconsistency.

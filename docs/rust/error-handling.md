@@ -879,4 +879,4 @@ Each repository should document its answers to:
 
 ## Related skills
 
-- `nix-usage` — for Rust toolchain and `nix develop` workflows in this repository.
+- `nix-usage` — for Rust toolchain and `just shell` devshell workflows in this repository.

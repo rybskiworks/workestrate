@@ -131,7 +131,7 @@ print(response.choices[0].message.content)
 ## Related links
 - https://platform.moonshot.ai/
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - Moonshot AI = the company; Kimi = their model line. The `moonshot/` prefix uses the OpenAI-compatible Moonshot API at `https://api.moonshot.ai/`.
 - The repo's `anthropic/kimi-for-coding` with `api_base: api.kimi.com/coding` is a DIFFERENT integration — it uses the `anthropic/` prefix (Anthropic Messages API protocol) pointed at Kimi's coding endpoint. This pattern is NOT documented on the moonshot page; it's documented on the Anthropic provider page (see p1-provider-anthropic.md — Custom API Base section).
 - The relationship: Kimi's coding endpoint (api.kimi.com/coding) speaks the Anthropic Messages API, NOT the OpenAI-compatible API. That's why the repo uses `anthropic/` prefix + custom api_base instead of `moonshot/` prefix.

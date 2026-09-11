@@ -126,7 +126,7 @@ print(response)
 - https://docs.litellm.ai/docs/providers/llamafile (llamafile alternative)
 - https://docs.litellm.ai/docs/contributing/adding_openai_compatible_providers (JSON registration alternative)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - This is the CANONICAL pattern for Neuralwatt (api.neuralwatt.com/v1) and any self-hosted vLLM/Ollama OpenAI-compatible endpoint.
 - Pattern: `model: openai/<name>` + `api_base: https://<host>/v1` + `api_key: <key>` in litellm_params.
 - The repo's `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` follows this exact documented pattern.

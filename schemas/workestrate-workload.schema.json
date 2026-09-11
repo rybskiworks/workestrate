@@ -1,0 +1,1757 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "workestrate workload capsule entry file (workestrate/workloads/<name>/workload.toml, bare table form)",
+  "description": "A single workload definition (`workloads.<name>` in workestrate.toml). `kind` is `\"agent\"` (interactive TUI attach) or `\"service\"` (headless, detached by default); the remaining fields describe the image, resources, command, env/secret wiring, mounts, ports, seed files, local-build override, network policy, and dependency declarations. All fields merge layer-by-layer via `merge::merge_layers`.",
+  "type": "object",
+  "properties": {
+    "command": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cpus": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint8",
+      "minimum": 0.0
+    },
+    "credentials": {
+      "description": "Credential-broker grants (`workloads.<name>.credentials`): the allowlist of catalog entry names this workload may use (`ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries). Unknown names are a validation error. Merges whole-unit (last layer wins), like `ports`/`mounts`: a higher layer restates the full allowlist.",
+      "default": {
+        "signing": [],
+        "ssh": []
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkloadCredentials"
+        }
+      ]
+    },
+    "depends_on": {
+      "description": "Dependency declarations (`workloads.<name>.depends_on.<dep>`; ADR 0026(d)): each entry names another workload whose address is resolved from the port registry and injected as the declared env var at plan time. Layers merge union-by-dependency-name, last layer wins per dep.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/DependsOnSpec"
+      }
+    },
+    "env": {
+      "default": {},
+      "allOf": [
+        {
+          "$ref": "#/definitions/EnvFieldShape"
+        }
+      ]
+    },
+    "image": {
+      "default": {
+        "baked_files": null,
+        "binary": null,
+        "contents": null,
+        "features": null,
+        "keep_last": null,
+        "name": null,
+        "recipe": "",
+        "ref": null,
+        "tag": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/ImageSpec"
+        }
+      ]
+    },
+    "init": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/InitConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "instance": {
+      "description": "Per-workload instance policy (`[workloads.<name>.instance]`; ADR 0030 §4.1). Absent = current behavior; Phase 1 parses + validates, the semantics land in Phases 2–3.",
+      "default": {
+        "label": null,
+        "on_conflict": null,
+        "on_skew": null,
+        "port": null,
+        "strategy": "singleton"
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/InstancePolicy"
+        }
+      ]
+    },
+    "kind": {
+      "default": "",
+      "type": "string"
+    },
+    "local_build": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/LocalBuildConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "log_stop_errors": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "memory_mib": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "mounts": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/MountPlan"
+      }
+    },
+    "network": {
+      "default": {
+        "defaults": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/NetworkConfig"
+        }
+      ]
+    },
+    "policy": {
+      "default": {
+        "egress": null,
+        "idna": null,
+        "ingress": null,
+        "mounts": null,
+        "secrets": null,
+        "ssh": null,
+        "virtualization": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/PolicyConfig"
+        }
+      ]
+    },
+    "ports": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PortMapping"
+      }
+    },
+    "root_disk_mib": {
+      "description": "Managed OCI writable root-disk capacity in MiB, applied only on creation. Omission preserves the backend default; existing disks are never resized.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "maximum": 4294967295.0,
+      "minimum": 1.0
+    },
+    "seed_files": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SeedFileConfig"
+      }
+    },
+    "virtualization": {
+      "description": "Per-workload nested-virtualization ask (`[workloads.<name>.virtualization]`; ADR 0036 §3). `None` (absent table) = off — current behavior, no device expectation, no checks. Merges whole-unit (last layer wins); the home `[policy.virtualization]` seal is collected via the ladder, never merged.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/VirtualizationConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "workdir": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AxisFragment": {
+      "description": "One policy axis (read or write) for one scope: `deny`/`allow` entry lists. Entries are relaxable by default; `{ pattern = \"...\", final = true }` freezes an entry against later scopes (terminal at compile time, spec 22 §4).",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "deny": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "BakedFileSpec": {
+      "description": "A single file baked into the image at build time (`image.baked_files`). `path` is the in-image destination and `content` is the verbatim file body.",
+      "type": "object",
+      "required": [
+        "content",
+        "path"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BinarySpec": {
+      "description": "A binary built from source and baked into the image (`image.binary`). `recipe` selects the build strategy and `src` locates the source; the optional fields tune the produced artifact (`entrypoint`, `worker`, `npm_deps_hash`).",
+      "type": "object",
+      "required": [
+        "recipe",
+        "src"
+      ],
+      "properties": {
+        "entrypoint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "npm_deps_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "src": {
+          "type": "string"
+        },
+        "worker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Bound": {
+      "description": "Exposure mode of a workload env binding to a secret (spec 16). `host` (the default; secure-by-default) renders the placeholder — the real value is substituted by the egress rewrite only for hosts in the credential's `allowed_hosts`. `guest` injects the real resolved value as a plain sandbox env var (the explicit opt-in for verifier workloads).\n\nTOML values: `bound = \"host\"` / `bound = \"guest\"`.",
+      "type": "string",
+      "enum": [
+        "host",
+        "guest"
+      ]
+    },
+    "ConflictStep": {
+      "description": "One step in a conflict chain (ADR 0030 addendum 2). A disposition a lifecycle verb tries against an occupied slot, in chain order, until one applies.",
+      "oneOf": [
+        {
+          "description": "Use the running instance when healthy (500ms host TCP port probe) or still booting (<30s record). Not applicable to a stopped/crashed row.",
+          "type": "string",
+          "enum": [
+            "reuse"
+          ]
+        },
+        {
+          "description": "Start a stopped/crashed sandbox (msb `handle.start()`); on failure the executor continues the chain.",
+          "type": "string",
+          "enum": [
+            "start"
+          ]
+        },
+        {
+          "description": "Always down/remove + fresh create.",
+          "type": "string",
+          "enum": [
+            "replace"
+          ]
+        },
+        {
+          "description": "Refuse with the standard occupied-instance message (terminal; nothing may follow it in a chain).",
+          "type": "string",
+          "enum": [
+            "fail"
+          ]
+        }
+      ]
+    },
+    "DefaultAction": {
+      "description": "Default per-direction action for a workload's network policy (`[...network.defaults] egress|ingress = \"allow\" | \"deny\"`). `Deny` is the fail-closed default; `Allow` is an explicit opt-in that stands alone (absent = deny; home `final` seals still veto).",
+      "oneOf": [
+        {
+          "description": "Fail-open: all traffic in that direction allowed unless a `deny` rule matches.",
+          "type": "string",
+          "enum": [
+            "allow"
+          ]
+        },
+        {
+          "description": "Fail-closed: all traffic in that direction denied unless a matching recipe/rule allows it.",
+          "type": "string",
+          "enum": [
+            "deny"
+          ]
+        }
+      ]
+    },
+    "DepConflict": {
+      "description": "Schemars-boundary-only helper for the `on_conflict` field shape (ADR 0030 addendum 2): the field accepts EITHER a scalar string (back-compat, d452575) OR an ordered list of strings. Never constructed/deserialized — `DepConflict`'s custom deserializer normalizes both forms at parse time.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ConflictStep"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConflictStep"
+          }
+        }
+      ]
+    },
+    "DepInstanceMode": {
+      "description": "The instance model a `depends_on.<dep>` entry selects for its dependency (ADR 0030 §4.1 T2). `Shared` (default) = the dependency's singleton slot in the dependent's namespace (today's model); `Scoped` = a dep instance named after the DEPENDENT's instance id (`litellm@<dependent-id>` for dependent `prime@<id>`); `Fresh` = a fresh auto-slugged dep instance per start.\n\nWhen unset, the mode derives from the DEP's own `instance.strategy`: singleton/replace/reuse → [`DepInstanceMode::Shared`]; parallel → [`DepInstanceMode::Fresh`] (see `commands::deps::dep_instance_mode`).",
+      "type": "string",
+      "enum": [
+        "shared",
+        "scoped",
+        "fresh"
+      ]
+    },
+    "DependsOnSpec": {
+      "description": "A single dependency declaration of a workload (`workloads.<name>.depends_on.<dep>` in workestrate.toml; ADR 0026(d) discovery-lite). `env` (optional) names the environment variable the resolved address of dependency `<dep>`'s primary/unnamed port is injected as; `required` (default false) makes a not-running dependency a plan-time refusal instead of a skip; `exports` maps named-port -> env var, injecting the resolved host address of each named port (one env var per named port).",
+      "type": "object",
+      "properties": {
+        "env": {
+          "description": "Env var the resolved address of dependency `<dep>`'s primary/unnamed port is injected as (legacy primary form). Optional: an exports-only dependency may omit it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exports": {
+          "description": "Named-port exports: port name -> env var name. Each entry injects the resolved host address of that named port as one env var per named port; every key must name a port the dependency declares.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "instance": {
+          "description": "The instance model this dependency entry selects (ADR 0030 §4.1 T2). `None` (default) derives from the DEP's own `instance.strategy` at decision time (parallel → fresh, else shared).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DepInstanceMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "on_conflict": {
+          "description": "Auto-start conflict policy when the dependency's singleton slot is already occupied (ADR 0026 addendum 2026-08-16; ADR 0030 addendum 2). Accepts a scalar (back-compat: d452575's `\"reuse\"` parses as `[\"reuse\"]`) or an ordered list over {reuse, start, replace, fail}. `None` (default) resolves to the default chain `[\"reuse\", \"start\", \"replace\"]` at decision time: reuse the running instance when healthy (host port probe) or still booting, start a stopped/crashed sandbox, then replace (down + start fresh) a keep-alive zombie or stale record.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DepConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DomainEntry": {
+      "description": "One egress domain entry — `[[policy.egress.allow.domain]]` or `[[policy.egress.deny.domain]]`. `port` is REQUIRED on allow, OPTIONAL on deny (omitted = all ports, deny-only). Validated by the policy compiler.",
+      "type": "object",
+      "properties": {
+        "domains": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "port": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "protocol": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressAllowTable": {
+      "description": "`policy.egress.allow` table — egress allow polarity (ADR 0035 §3.2).",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "domain": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DomainEntry"
+          }
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "host": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HostEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressDenyTable": {
+      "description": "`policy.egress.deny` table — egress deny polarity (ADR 0035 §3.2).",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "domain": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DomainEntry"
+          }
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressPolicyFragment": {
+      "description": "`policy.egress` fragment — hierarchical egress policy (ADR 0035 §3.2). Collected per rung; `on_conflict` and `final` at fragment level control the egress ladder's conflict handling and sealing.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressAllowTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deny": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressDenyTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "on_conflict": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OnConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvBinding": {
+      "description": "Serde/schemars-boundary-only helper for the `env` map value forms (specs 14/16): a bare string `\"value\"` is a literal value, a bare `true` the same-name host-bound sugar, an inline table `{ secret = \"NAME\", bound = \"guest\" }` a secret reference. This enum is NEVER stored — it backs the schemars rendering of [`EnvBinding`] (the map value in the env map), so the generated schema shows all value forms (`string | boolean | { secret?, bound? }`).",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/EnvSecretRefShape"
+        }
+      ]
+    },
+    "EnvFieldShape": {
+      "description": "Schemars-boundary-only helper for the `env` field shape (spec 14): the field accepts EITHER the classic sequence of `[[env]]` entry tables OR the map form `{ KEY = \"value\", KEY2 = { secret = \"NAME\" } }`. This enum is NEVER constructed or deserialized — [`EnvBindings`]'s custom deserializer normalizes both forms at parse time; it exists only so `#[schemars(with = \"EnvFieldShape\")]` renders the field as `anyOf [array-of-EnvVarConfig, object-map-of-EnvBinding]`.",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EnvVarConfig"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/EnvBinding"
+          }
+        }
+      ]
+    },
+    "EnvSecretRefShape": {
+      "description": "Schemars-boundary-only shape of the secret-binding inline table (spec 16): BOTH fields are optional on the wire (`secret` defaults to the map key, `bound` defaults to `host` — neither default is visible in the wire format). Distinct from the real [`EnvSecretRef`], whose `secret` is required in Rust because the key-name default has already been applied at parse time.",
+      "type": "object",
+      "properties": {
+        "bound": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Bound"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvVarConfig": {
+      "description": "One environment-variable entry in a workload's `env` list. Exactly one of `value` (literal) or `secret` (reference to a `secrets.<name>` entry) is expected to be set; `name` must be a valid shell env identifier.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "secret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostEntry": {
+      "description": "One egress host entry — `[[policy.egress.allow.host]]`. Host-bridge (DNS + litellm proxy); `host` is the msb host bridge.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ports": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          }
+        },
+        "protocols": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IdnaMode": {
+      "description": "IDNA mode for `policy.idna` (ADR 0035 §3.5). `reject` is the built-in default (hard error on non-ASCII); `uts46` enables strict ToASCII conversion via the `idna` crate with `unicode-security` confusable warnings.",
+      "type": "string",
+      "enum": [
+        "reject",
+        "uts46"
+      ]
+    },
+    "IdnaPolicyFragment": {
+      "description": "`policy.idna` fragment — flag-gated IDNA mode (ladder, default-off). Collected like other `policy.*` fragments, never via `merge.rs`; resolved before domain validation (gate 1 early, before coverage/specificity).",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mode": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IdnaMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImageSpec": {
+      "description": "How to obtain the sandbox image for a workload (`image = { ... }` inline table in workestrate.toml). `recipe` selects the acquisition strategy (e.g. `registry`, `local`); the remaining optional fields narrow it (`ref`/`name`/`tag`/`contents`) or extend the image (`binary`, `baked_files`, `features`). Unknown fields are rejected at parse time.",
+      "type": "object",
+      "required": [
+        "recipe"
+      ],
+      "properties": {
+        "baked_files": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/BakedFileSpec"
+          }
+        },
+        "binary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BinarySpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contents": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "features": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "keep_last": {
+          "description": "Keep-last-N rung for this capsule's nix-layered image (ADR 0032 §Image tags, RESOLVED user decision 3): the top rung of the cascade `crate::images::gc::DEFAULT_IMAGE_KEEP_LAST` < home settings (`RegistrySettings.image_keep_last`) < config-repo entry (`ConfigRepoEntry.image_keep_last`) < THIS field. First Some wins; an explicit 0 is a hard error (the just-loaded tag always counts toward N). Enforced at load time by prune-on-load.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1.0
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "IncrementSpec": {
+      "description": "The increment band: either `{ limit = N }` (count-bound, relative: preferred+1 .. preferred+N) or `{ range = [START, END] }` (absolute band, scanned in order). Exactly ONE of the two must be present (validated in config/validation.rs).",
+      "type": "object",
+      "properties": {
+        "limit": {
+          "description": "Count-bound relative form: candidates `preferred+1 .. preferred+N`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "range": {
+          "description": "Absolute band form: candidates `START..=END`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": [
+            {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          ],
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "IngressAllowTable": {
+      "description": "`policy.ingress.allow` table — ingress allow polarity.",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "port": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IngressDenyTable": {
+      "description": "`policy.ingress.deny` table — ingress deny polarity.",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "port": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IngressPolicyFragment": {
+      "description": "`policy.ingress` fragment — hierarchical ingress policy (ADR 0035 §3.4).",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressAllowTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deny": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressDenyTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "on_conflict": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OnConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "InitConfig": {
+      "description": "Explicit guest PID 1 selection, independent of the workload command. A higher layer replaces this entire block; `agentd` resets an inherited handoff. Handoff arguments and environment are nonsecret guest literals.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "agentd"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "cmd",
+            "mode"
+          ],
+          "properties": {
+            "args": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cmd": {
+              "type": "string"
+            },
+            "env": {
+              "default": {},
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "handoff"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "InstancePolicy": {
+      "description": "`[workloads.<name>.instance]` — the per-workload instance policy (ADR 0030 §4.1): the instance model the workload defaults to, the conflict chain when the target slot is occupied, the port strategy, and an optional display label. Absent = current behavior. NOTE: named `InstancePolicy` (not \"InstanceSpec\") to avoid colliding with the runtime `InstanceSpec`.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Optional display/version identity label (ADR 0030 §4.5 / Q4 lighter option). Free-form string.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_conflict": {
+          "description": "Conflict chain when the target slot is occupied (scalar-or-list over reuse|start|replace|fail; `None` → the built-in default [\"reuse\",\"start\",\"replace\"] at decision time; ADR 0030 U11 precedence: CLI flag > this declared chain > built-in default).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DepConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "on_skew": {
+          "description": "Config/image divergence policy for a RUNNING instance (ADR 0030 V-addendum §V4): warn (default) | replace | reuse-silently. `None` → warn at decision time (mirrors the `on_conflict` Option pattern).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OnSkew"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "port": {
+          "description": "Port strategy: strict integer | \"auto\" | { preferred, on_occupied } (ADR 0030 addendum 2 U6). Selection behavior is Phase 3; Phase 1 parses + validates.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstancePort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strategy": {
+          "description": "Instance model the workload defaults to (default \"singleton\" — current behavior). `parallel`/`replace`/`reuse` SEMANTICS land with Phase 2 (selection/disposition wiring); Phase 1 parses + validates the closed vocabulary.",
+          "default": "singleton",
+          "allOf": [
+            {
+              "$ref": "#/definitions/InstanceStrategy"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "InstancePort": {
+      "description": "Schemars-boundary-only helper for the `instance.port` field shape (ADR 0030 addendum 2 U6): strict integer | \"auto\" | { preferred, on_occupied }. The `auto` form is a newtype over a string enum so it renders as the string `\"auto\"` (a unit variant in an untagged enum renders as `null`). Never constructed/deserialized.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        {
+          "$ref": "#/definitions/PortAuto"
+        },
+        {
+          "$ref": "#/definitions/PreferredPort"
+        }
+      ]
+    },
+    "InstanceStrategy": {
+      "description": "The instance model a workload defaults to (ADR 0030 §4.1 `strategy`).",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "singleton",
+            "parallel",
+            "replace",
+            "reuse"
+          ]
+        },
+        {
+          "description": "One instance per working directory (ADR 0030 V-addendum §V1): the instance id is `<dirname-slug>-<shorthash>` of the CANONICALIZED invocation cwd. `rename_all = \"snake_case\"` would render this `per_dir` — the pinned config vocabulary is kebab-case `per-dir`.",
+          "type": "string",
+          "enum": [
+            "per-dir"
+          ]
+        }
+      ]
+    },
+    "LocalBuildConfig": {
+      "description": "Build the workload from a local source checkout instead of pulling an image (`workloads.<name>.local_build`). `recipe` selects the build strategy, `source` the checkout location; the optional fields drive incremental-build gating and fallback behaviour.",
+      "type": "object",
+      "required": [
+        "recipe",
+        "source"
+      ],
+      "properties": {
+        "env_override": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gating_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "requirements_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MountMode": {
+      "description": "Mount access mode (spec §\"Mount `mode` field\"). Closed vocabulary: the only accepted wire values are `\"ro\"` (read-only) and `\"rw\"` (read-write, the default). This replaces the `read_only = <bool>` field, which remains a DEPRECATED parse-time alias (see [`MountPlan`]'s custom `Deserialize`). Rationale (ADR 0030 addendum): booleans don't grow — a future third state (e.g. masked / append-only) fits a mode enum, not a bool.",
+      "type": "string",
+      "enum": [
+        "ro",
+        "rw"
+      ]
+    },
+    "MountPlan": {
+      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `read`/`write` are parse-time mount-policy sugar in the `[policy.mounts]` axis shapes, normalized into the row's `policy` fragment (never serialized).",
+      "type": "object",
+      "required": [
+        "guest",
+        "host"
+      ],
+      "properties": {
+        "guest": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "mode": {
+          "description": "Mount access mode: \"ro\" (read-only) or \"rw\" (read-write, the default).",
+          "default": "rw",
+          "type": "string",
+          "enum": [
+            "ro",
+            "rw"
+          ]
+        },
+        "policy": {
+          "description": "Mount-entry policy is collected from the same declaring layer as this row; it is intentionally not part of mount-row merging.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MountsFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read": {
+          "description": "Mount-policy sugar: the read axis (visibility) directly on the mount row, in the same shape `[policy.mounts.read]` accepts (TOML dotted-key form: `read.deny = [...]` / `read.allow = [...]`). Parse-time-only: normalized INTO `policy.read` by `TryFrom<MountPlanWire>`, never serialized.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "read_only": {
+          "description": "DEPRECATED alias for `mode` (`true` ≡ \"ro\", `false` ≡ \"rw\"); accepted at parse time with a deprecation warning, never serialized.",
+          "deprecated": true,
+          "type": "boolean"
+        },
+        "write": {
+          "description": "Mount-policy sugar: the write axis (write admission) directly on the mount row (same shape as `read`; `write.deny = [...]` / `write.allow = [...]`). Parse-time-only, normalized into `policy.write`.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MountsFragment": {
+      "description": "The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).\n\nEntries hold RAW pattern strings: the compiler validates and compiles them against the declaring origin (spec 22 §6 pattern rejections name the origin), so fragments must not pre-compile patterns. `case_sensitivity` is likewise raw so the compiler can name the offending value and origin in a `CompileError` (spec 22 §6). The former vocabulary (`mask`, `unmask`, `protect`, `writes`, `masked_writes`, entry key `overridable`) is intentionally gone: this pre-release surface rejects those keys as unknown fields rather than silently accepting old policy.",
+      "type": "object",
+      "properties": {
+        "case_sensitivity": {
+          "description": "Raw `case_sensitivity` setting; v1 accepts exactly `\"sensitive\"` (spec 22 §6).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read": {
+          "description": "Read axis (visibility): `deny` hides paths, `allow` carves out exceptions; applied deny-then-allow within the scope (spec 22 §4: per-scope deny-then-allow emission order).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "write": {
+          "description": "Write axis (write admission): pattern-keyed `allow`/`deny`.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "NestedMode": {
+      "description": "Nested-virtualization demand of ONE workload (ADR 0036 §3): the flat per-workload `[workloads.<name>.virtualization]` table with its single tri-state `nested` key (`\"require\"` | `\"prefer\"` | `\"off\"`, default `\"off\"`; an absent table — or an absent key — means off, i.e. current behavior with no device expectation and no gate beyond an explicit `nested≠off` plus the home-final seal).\n\nThe tri-state IS the conflict policy (no generic `on_conflict` field — a second knob could contradict the first): `require` fails closed at `up`, `prefer` warns at `plan` and degrades without the device (never refuses), `off` ignores. `require` demands the whole unit (guest /dev/kvm + VT-x/AMD-V together — the VMM yields both as one); there is deliberately NO `require_device` split (the old device-without-nested hole is closed BY DELETION) and NO backend namespacing (KVM is the only backend on this Linux-microVM arch; a second backend needs its own plan amendment). Non-Linux/x86_64 + `require` fails closed; `plan` stays portable (resolve + warn, never fail).",
+      "oneOf": [
+        {
+          "description": "Current behavior: no device expectation, no checks.",
+          "type": "string",
+          "enum": [
+            "off"
+          ]
+        },
+        {
+          "description": "Use nested virt when the host offers it, else degrade without the device (warn at `plan`, machine-readable degraded flag, never refuse at `up`).",
+          "type": "string",
+          "enum": [
+            "prefer"
+          ]
+        },
+        {
+          "description": "Guest must have /dev/kvm + VT-x/AMD-V; absent/unreadable (or CPU nested disabled, or a home-final ban) → fail-closed refusal at `up`.",
+          "type": "string",
+          "enum": [
+            "require"
+          ]
+        }
+      ]
+    },
+    "NetworkConfig": {
+      "description": "Per-workload network policy (`workloads.<name>.network`). `defaults.egress` / `defaults.ingress` are the per-direction fail-closed switches (absent = deny; explicit `allow` stands alone, home `final` seals still veto). The rule surface has migrated to hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035; `network.egress` / `network.deny` / `network.ingress` are removed and hard-error with ADR-citing messages.",
+      "type": "object",
+      "properties": {
+        "defaults": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkDefaultsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "NetworkDefaultsConfig": {
+      "description": "Per-workload network defaults (`[...network.defaults]`). `egress` and `ingress` are the per-direction fail-closed switches (absent = `deny`; explicit `allow` stands alone; home `final` seals still veto).",
+      "type": "object",
+      "properties": {
+        "egress": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DefaultAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ingress": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DefaultAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OnConflict": {
+      "description": "Conflict handling for a frozen rung (ADR 0035 §8). Per-ladder granular: egress vs ingress ladders have independent `on_conflict`; each polarity table overridable; `final` seals the choice.",
+      "type": "string",
+      "enum": [
+        "ignore",
+        "warn",
+        "fail"
+      ]
+    },
+    "OnSkew": {
+      "description": "The `instance.on_skew` divergence policy knob (ADR 0030 V-addendum §V4): what to do when the current build inputs diverge from a RUNNING instance's recorded provenance stamps. `Warn` is the default (divergence is common and usually benign; silent reuse hides real drift; auto-replace destroys instances the operator may want).",
+      "oneOf": [
+        {
+          "description": "Proceed (reuse/start per the conflict chain) and print the divergence.",
+          "type": "string",
+          "enum": [
+            "warn"
+          ]
+        },
+        {
+          "description": "Tear down and start fresh on the new inputs.",
+          "type": "string",
+          "enum": [
+            "replace"
+          ]
+        },
+        {
+          "description": "Adopt the running instance without comment.",
+          "type": "string",
+          "enum": [
+            "reuse-silently"
+          ]
+        }
+      ]
+    },
+    "ParameterizedIncrement": {
+      "description": "The parameterized `increment` element: `on_occupied = { increment = ... }`.",
+      "type": "object",
+      "required": [
+        "increment"
+      ],
+      "properties": {
+        "increment": {
+          "$ref": "#/definitions/IncrementSpec"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyConfig": {
+      "description": "A policy namespace. Keeping the `mounts` table nested makes the config surface match `[policy.mounts]` while leaving policy fragments outside the ordinary merge algebra.",
+      "type": "object",
+      "properties": {
+        "egress": {
+          "description": "Hierarchical egress policy fragment (`[policy.egress]`). Collected per rung (home registry, config layers, workload) and compiled by the network policy engine (ADR 0035). Each polarity table (`allow`/`deny`) carries `all` / `final` and array-of-tables entries.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "idna": {
+          "description": "IDNA handling policy (`[policy.idna]`). Ladder with `final` sealing, default `reject` (ADR 0035 §3.5). Resolved before domain validation.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IdnaPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ingress": {
+          "description": "Hierarchical ingress policy fragment (`[policy.ingress]`). Collected per rung and compiled by the network policy engine (ADR 0035). Ingress is port-only with peer-source scope vocabulary (§3.4).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mounts": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MountsFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secrets": {
+          "description": "Secret violation-policy ladder rung (`[policy.secrets]`). The SAME sub-shape is valid at all three policy rungs: the home registry (`Registry.policy`, operator scope), a workestrate.toml layer (config-repo-layer rung), and a workload declaration (`[workloads.<name>.policy]` — where a bare directory-mode capsule's top-level `[policy.secrets]` lands). Like `mounts`, this fragment is COLLECTED per scope, never merged (see loading.rs).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretsPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ssh": {
+          "description": "SSH confinement-policy rung (`[policy.ssh]`). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SshPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "virtualization": {
+          "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VirtualizationPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyValueStringExpandedSchema": {
+      "type": "object",
+      "required": [
+        "pattern"
+      ],
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyValue_for_String": {
+      "description": "The public schema for a raw string policy value. Runtime deserialization also supports the historical `value` alias, but the config surface is the compact string or the documented `{ pattern, final }` table.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/PolicyValueStringExpandedSchema"
+        }
+      ]
+    },
+    "PortAuto": {
+      "description": "The `\"auto\"` string form of `instance.port` (schema-rendering only).",
+      "type": "string",
+      "enum": [
+        "auto"
+      ]
+    },
+    "PortEntry": {
+      "description": "One ingress port entry — `[[policy.ingress.allow.port]]` or `[[policy.ingress.deny.port]]`. `protocol` is `\"tcp\"` only v1 (`\"udp\"` validation error \"not supported v1, tcp/local only\"), `scope` is `\"local\"` only v1.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ports": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          }
+        },
+        "protocol": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PortMapping": {
+      "type": "object",
+      "required": [
+        "guest",
+        "host"
+      ],
+      "properties": {
+        "bind_ip": {
+          "description": "Host bind address (ADR 0026). Defaults to 127.0.0.1 (the shared singleton bind).",
+          "default": "127.0.0.1",
+          "type": "string",
+          "format": "ip"
+        },
+        "guest": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "host": {
+          "description": "Host port to publish on `bind_ip`. `0` = auto-allocate a free port at boot (probed from the port registry; the effective port is recorded in the instance record and shown by `ps`).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "name": {
+          "description": "Optional port name (namespaced ports): gives the port a stable identity that `depends_on.<dep>.exports = { <name> = \"<ENV_VAR>\" }` resolves (one exported env var per named port). Unnamed = the legacy primary port, addressed via `depends_on.<dep>.env`. Additive serde default so older plans/configs parse cleanly; skipped when `None` so legacy JSON is byte-identical.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PortOccupiedBare": {
+      "description": "Bare `on_occupied` elements (ADR 0030 addendum 2 U6).",
+      "type": "string",
+      "enum": [
+        "auto",
+        "increment",
+        "fail"
+      ]
+    },
+    "PortOccupiedChain": {
+      "description": "Schemars-boundary-only helper for the `on_occupied` field shape (ADR 0030 addendum 2 U6): scalar or ordered list. Never constructed/deserialized.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PortOccupiedStep"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortOccupiedStep"
+          }
+        }
+      ]
+    },
+    "PortOccupiedStep": {
+      "description": "One step in a port `on_occupied` chain (ADR 0030 addendum 2 U6): a bare string auto|increment|fail, or a parameterized increment table. Manual Deserialize (the untagged derive swallows an unknown element's \"unknown variant\" error into a generic \"did not match any variant\" message).",
+      "anyOf": [
+        {
+          "description": "`\"auto\"` / `\"increment\"` / `\"fail\"` (bare).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortOccupiedBare"
+            }
+          ]
+        },
+        {
+          "description": "`{ increment = { limit = N } }` or `{ increment = { range = [S, E] } }`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ParameterizedIncrement"
+            }
+          ]
+        }
+      ]
+    },
+    "PreferredPort": {
+      "description": "The preferred-port form of `instance.port` (ADR 0030 addendum 2 U6).",
+      "type": "object",
+      "required": [
+        "preferred"
+      ],
+      "properties": {
+        "on_occupied": {
+          "description": "What to do when `preferred` is occupied: scalar-or-list chain over auto|increment|fail. `None` → the default chain [\"increment\", \"auto\"] at decision time (Phase 3).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PortOccupiedChain"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preferred": {
+          "description": "The port to try first.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecretViolationPolicy": {
+      "description": "Per-secret egress violation policy (`secrets.<name>.on_violation`): what the host-side network proxy does when the secret's `$MSB_<NAME>` placeholder appears in traffic to a host that is NOT in the secret's `allowed_hosts` (including request BODIES, where a quoted placeholder would otherwise poison the session — upstream microsandbox#1354).\n\nThe sandbox only ever sees the placeholder; the proxy substitutes the real value exclusively for allowed hosts, so every variant here governs the fate of the harmless placeholder TEXT, never the credential itself. Serde kebab-case yields the TOML strings `\"passthrough\"` | `\"block\"` | `\"block-and-log\"` | `\"block-and-terminate\"`, matching the SDK's `ViolationAction` naming.",
+      "oneOf": [
+        {
+          "description": "Forward the placeholder unchanged to the non-allowed host (the engine's connection is not reset). DEFAULT — safe because the proxy never substitutes the real value for non-allowed hosts: passthrough only permits the harmless placeholder text to leave the sandbox; real-secret substitution still requires an allowed host + enabled injection location. Also works around upstream microsandbox#1354, where a placeholder quoted inside a request body (e.g. an LLM conversation echoing `$MSB_GITHUB_TOKEN`) blocks every subsequent request under the engine default.",
+          "type": "string",
+          "enum": [
+            "passthrough"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection carrying the placeholder to the non-allowed host, silently (no host-side warning).",
+          "type": "string",
+          "enum": [
+            "block"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection AND emit a host-side warning — the engine default when no per-secret policy is configured in the SDK.",
+          "type": "string",
+          "enum": [
+            "block-and-log"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection, log, and terminate the sandbox session.",
+          "type": "string",
+          "enum": [
+            "block-and-terminate"
+          ]
+        }
+      ]
+    },
+    "SecretsPolicyFragment": {
+      "description": "One rung of the secret violation-policy ladder (`[policy.secrets]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Resolution walks the rungs authority-ascending — built-in passthrough, then home registry (`Registry.policy.secrets` in `<home>/config.toml`, the operator scope), then each config-repo layer's `[policy.secrets]` in stack order, then the workload capsule's `[workloads.<name>.policy.secrets]` — and the per-secret `[secrets.<NAME>] on_violation` entry decides last unless a higher rung is final. This mirrors the mount-policy hierarchy (docs/mount-policy/03-hierarchy-and-precedence.md): later = more specific wins, and `final = true` is a terminal freeze that stops every lower rung (including per-secret entries) from overriding the value resolved at the freezing rung. DEVIATION from mount-policy vocabulary: `final` may appear WITHOUT `on_violation` (mount-policy rules always carry an action) — a bare final freezes whatever the higher rungs resolved so far. There is no frozen-out explain trace (mount-policy's `frozen_out`/`frozen_by`): the resolution provenance records only the deciding rung.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung — config-repo layers, workload capsules, per-secret entries — is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "on_violation": {
+          "description": "Default violation policy this rung declares for secrets (same kebab-case vocabulary as the per-secret field). Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretViolationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SeedFileConfig": {
+      "description": "A file copied from the host into the sandbox at start time (`workloads.<name>.seed_files`). `source` is the host path (validated at the trust boundary); it is `None` when the entry uses `glob` instead — exactly one of `source`|`glob` per entry is enforced by `config::validation`. `target` is rendered on the HOST: targets starting with `workspaces/` or `var/` resolve under the XDG state dir, anything else resolves under the declaring config layer's content root. The file is guest-visible ONLY through a declared mount whose host path is a component-wise prefix of the target (seeds are mount-backed by design); validation fails closed on an uncovered target — and `prepare()` re-checks before any write — so a seed can never silently render on the host where the guest never sees it. `only_if_missing` skips the copy when the target already exists. When `template` is true, the source TEXT is rendered as a `${VAR}` template against the workload's guest-visible env view at seed time (`$$` emits a literal `$`, so `$${FOO}` renders as `${FOO}`; map-only resolver; missing var = hard error; no process env). `glob` is a glob pattern relative to the declaring layer's content dir: `target` becomes a directory and each regular-file match seeds to `target/<rel-path>`, sorted; a glob with no matches is a hard error at seed time; mutually exclusive with `source`.",
+      "type": "object",
+      "required": [
+        "target"
+      ],
+      "properties": {
+        "glob": {
+          "description": "Glob pattern (relative to the declaring layer's content dir): `target` becomes a directory and each sorted regular-file match seeds to `target/<rel-path>`. No match = hard error at seed time. Mutually exclusive with `source`.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "only_if_missing": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "template": {
+          "description": "When true, render the source TEXT as a `${VAR}` template against the workload's guest-visible env view at seed time (`$$` emits a literal `$`; a missing var is a hard error).",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SshPolicyFragment": {
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "strict": {
+          "description": "Confinement switch this rung declares. `strict = true` means recognized SSH flows are checked against SSH grants/egress even when a generic TCP allowance would match. Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VirtualizationConfig": {
+      "description": "`[workloads.<name>.virtualization]` — the workload's nested-virt ASK (ADR 0036 §3, ask-vs-grant: the workload asks with strength require|prefer|off, like firewall allow-rules; home grants/restricts via [`VirtualizationPolicyFragment`]). `None` (absent table) = omitted → Off. An explicit `nested≠off` stands alone — no entitlement gate (the entitlements mechanism was removed 2026-09-04; review + home-final suffice). Merges whole-unit like [`InstancePolicy`]: a higher layer re-declaring the table replaces it wholesale.",
+      "type": "object",
+      "properties": {
+        "nested": {
+          "description": "Tri-state demand; `None` = key omitted → Off (current behavior).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NestedMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VirtualizationPolicyFragment": {
+      "description": "`[policy.virtualization]` fragment — the HOME-registry operator seal (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final` seals. Collected per scope (home registry → config layers → workload capsule), NEVER merged — the same collect-never-merge idiom as the secrets/egress ladders. `final` seals, never enables: a freeze at `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban); `true` grants nothing by itself (the workload still needs an explicit `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is plan-time (`frozen_out` provenance; `up` refuses), NOT a validate-config error (validate stays static, no host I/O).",
+      "type": "object",
+      "properties": {
+        "allow_nested": {
+          "description": "Operator grant/restriction for nested virt at this rung. `None` = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadCredentials": {
+      "description": "Workload credential-broker consumption (`workloads.<name>.credentials`): the allowlist of catalog entry names this workload may use. `ssh` names `[credentials.ssh.<name>]` entries, `signing` names `[credentials.signing.ssh.<name>]` entries; an unknown name is a validation error. Binding stays at consumption via the EXISTING env idiom: omission of any guest binding renders the grant broker-bound (the default, secure); `bound = \"guest\"` on the corresponding secret consumption delivers real material via the existing secret-delivery path. There is deliberately NO `bound` (and no `via`/`recipe` vocabulary) here — `deny_unknown_fields` rejects them.",
+      "type": "object",
+      "properties": {
+        "signing": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ssh": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

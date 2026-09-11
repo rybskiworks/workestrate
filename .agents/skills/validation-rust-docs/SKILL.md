@@ -55,4 +55,4 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
 - This gate checks doc build integrity, not doc content. For content rules
   (every `pub` item documented, `# Errors`/`# Panics`/`# Safety` sections,
   intra-doc links), see `constraint-rust-api-docs`.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).

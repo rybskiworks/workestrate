@@ -16,11 +16,11 @@ description: |
 > **[UPSTREAM]** trace to a cited corpus fact. No keys/defaults are invented.
 
 Distilled operational guidance for hardening a LiteLLM proxy deployment
-(especially the in-memory, microsandbox-hosted workestrator shape). Full
+(especially the in-memory, microsandbox-hosted workestrate shape). Full
 detail lives in:
 
 - `docs/litellm/deployment-ops/README.md` — image choice, health probes, env.
-- `docs/litellm/workestrator-recommended-patterns.md` — security layers, M1/M4.
+- `docs/litellm/workestrate-recommended-patterns.md` — security layers, M1/M4.
 - `docs/litellm/examples/microvm-safe-proxy.yaml` — the in-memory shape used.
 - `docs/litellm/auth-access-budget/README.md` — `master_key`, `disable_spend_logs`.
 
@@ -103,7 +103,7 @@ Keep `force_ipv4: true` for Anthropic upstreams.
 **[RECOMMENDATION]** Use `/health/liveliness` for k8s liveness,
 `/health/readiness` for readiness, `/health` sparingly (it calls upstreams).
 Note: OpenAPI has both `/health/liveness` and `/health/liveliness` (misspelled);
-workestrator uses the misspelled form.
+workestrate uses the misspelled form.
 
 ## store_model_in_db
 
@@ -117,7 +117,7 @@ leave `false` in-memory (M1); set `true` only at M4 cut-over with Postgres.
 | `docker.litellm.ai/berriai/litellm:latest` | **main (no DB)** — use for in-memory **[RECOMMENDATION]** |
 | `ghcr.io/berriai/litellm-database:latest` | with DB — do NOT use without Postgres |
 
-**[RECOMMENDATION]** Use the main image for the in-memory workestrator. The
+**[RECOMMENDATION]** Use the main image for the in-memory workestrate. The
 `-database` image logs DB errors on every request without a Postgres
 connection.
 
@@ -148,14 +148,14 @@ enforces it).
 ## Related Docs
 
 - `docs/litellm/deployment-ops/README.md`
-- `docs/litellm/workestrator-recommended-patterns.md`
+- `docs/litellm/workestrate-recommended-patterns.md`
 - `docs/litellm/examples/microvm-safe-proxy.yaml`
 - `docs/litellm/auth-access-budget/README.md`
 - `docs/litellm/observability-cache-guardrails/README.md`
 - `docs/litellm/schemas/config-yaml.option-index.json`
 
 > Do not hallucinate defaults, keys, or image tags. Every default/key above
-> traces to `deployment-ops/README.md`, `workestrator-recommended-patterns.md`,
+> traces to `deployment-ops/README.md`, `workestrate-recommended-patterns.md`,
 > `microvm-safe-proxy.yaml`, or `config-yaml.option-index.json`.
 > Recommendations are marked **[RECOMMENDATION]**; upstream facts are marked
 > **[UPSTREAM]**. The 6000s `request_timeout` default is verbatim; the ~300

@@ -132,7 +132,7 @@ print(embedding)
 - https://docs.vllm.ai/en/latest/index.html
 - https://docs.litellm.ai/docs/providers/vllm_batches (vLLM Batch + Files API)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - `hosted_vllm/` is the recommended prefix for self-hosted OpenAI-compatible vLLM servers.
 - This is the alternative to `openai/` prefix when the endpoint doesn't require an API key (no need for fake key).
 - Pattern: `model: hosted_vllm/<model-name>` + `api_base: https://<vllm-host>` + optional `api_key`.

@@ -69,7 +69,7 @@ Model pricing table (verbatim):
 - `api_base` is NOT documented — the exact Z.AI API base URL is not stated on this page.
 - Provider name variations: "Z.AI" (primary), "Zhipu AI" (parenthesized alias).
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 The repo uses `openrouter/z-ai/glm-5.1` (via OpenRouter). This is the CORRECT path for GLM-5.1 since it's not documented on the native Z.AI provider page. CRITICAL SPELLING DIFFERENCE: LiteLLM native prefix is `zai/` (no hyphen); OpenRouter namespace is `z-ai/` (hyphenated). These are distinct routing paths. Do NOT change `openrouter/z-ai/glm-5.1` to `zai/glm-5.1` — GLM-5.1 is not in the native Z.AI docs and would likely fail routing. If direct Z.AI access is desired, use `zai/glm-4.7` (latest flagship) or `zai/glm-4.5-flash` (free tier). The repo's GLM-5.1 access via OpenRouter is the correct approach since GLM-5.1 is not yet in LiteLLM's native Z.AI docs.
 

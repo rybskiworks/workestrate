@@ -69,8 +69,8 @@ None on this index page.
 - /docs/wildcard_routing — Provider specific Wildcard routing
 - /docs/proxy/health_check_routing — Health Check Driven Routing
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- This is the routing landing page. The actual `router_settings.fallbacks`, `num_retries`, `timeout`, `stream_timeout`, `allowed_fails`, `cooldown_time`, `retry_policy` config lives on child pages (especially /docs/proxy/reliability and /docs/routing). For the in-memory workestrator deployment, static router_settings in config.yaml is the relevant path. The dynamic fallback management endpoints (child page) require a DB and are unavailable.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- This is the routing landing page. The actual `router_settings.fallbacks`, `num_retries`, `timeout`, `stream_timeout`, `allowed_fails`, `cooldown_time`, `retry_policy` config lives on child pages (especially /docs/proxy/reliability and /docs/routing). For the in-memory workestrate deployment, static router_settings in config.yaml is the relevant path. The dynamic fallback management endpoints (child page) require a DB and are unavailable.
 
 ## Confidence / uncertainty notes
 - medium confidence — page is an index only; no verbatim config extracted. Child pages (reliability, timeout) were DEFERRED due to budget but their config keys are expected to be covered by the P0 config_settings page (handled by another lead).

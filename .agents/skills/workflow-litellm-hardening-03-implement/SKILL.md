@@ -57,7 +57,7 @@ keys, regress already-satisfied items, or introduce secrets.
   `requires_db`/`requires_redis` key as a functional dependency. DB-required
   hygiene keys (`disable_error_logs`, `disable_spend_updates`,
   `disable_adding_master_key_hash_to_db`, `disable_reset_budget`) are set `true`
-  to suppress DB write attempts — mark `[WORKESTRATOR NOTE]` in comments.
+  to suppress DB write attempts — mark `[WORKESTRATE NOTE]` in comments.
 - `constraint-litellm-deprecation-free` — do NOT add `set_verbose` (deprecated;
   use `LITELLM_LOG`) or `disable_copilot_system_to_assistant` (deprecated).
 - `constraint-litellm-fallback-resolution` — do NOT modify
@@ -83,10 +83,10 @@ general_settings:
   disable_spend_logs: true                           # existing
   background_health_checks: true                    # [HARDENING] E2
   health_check_interval: 300                         # [HARDENING] E3
-  disable_error_logs: true                           # [HARDENING] E4 [WORKESTRATOR NOTE]
-  disable_spend_updates: true                        # [HARDENING] E5 [WORKESTRATOR NOTE]
-  disable_adding_master_key_hash_to_db: true         # [HARDENING] E6 [WORKESTRATOR NOTE]
-  disable_reset_budget: true                         # [HARDENING] E7 [WORKESTRATOR NOTE]
+  disable_error_logs: true                           # [HARDENING] E4 [WORKESTRATE NOTE]
+  disable_spend_updates: true                        # [HARDENING] E5 [WORKESTRATE NOTE]
+  disable_adding_master_key_hash_to_db: true         # [HARDENING] E6 [WORKESTRATE NOTE]
+  disable_reset_budget: true                         # [HARDENING] E7 [WORKESTRATE NOTE]
   disable_master_key_return: true                    # [HARDENING] E8
   max_request_size_mb: 10                            # [HARDENING] E9
   max_response_size_mb: 10                           # [HARDENING] E10

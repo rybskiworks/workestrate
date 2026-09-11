@@ -82,7 +82,7 @@ curl -s -o /tmp/chat.json -w "%{http_code}" \
   `LITELLM_MASTER_KEY` exported in the environment.
 - Requires a KVM-capable host for the Docker path; in this environment (no KVM)
   this gate is `not_fully_checkable` unless the proxy is run via the `litellm`
-  CLI inside `nix develop` or on a KVM host.
+  CLI inside the devshell (`just shell`) or on a KVM host.
 - The chat completion request consumes real provider tokens (use `max_tokens: 1`
   and a cheap/free alias like `coding.free` when possible).
 - This gate does not validate config schema or boot — run

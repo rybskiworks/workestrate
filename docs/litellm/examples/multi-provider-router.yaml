@@ -22,15 +22,15 @@
 #         api_base MUST include /v1 postfix).
 #
 # ALIASES: this example uses GENERIC aliases (primary / primary-fallback) that
-# mirror the workestrator coding-tier pattern WITHOUT real provider keys. The
+# mirror the workestrate coding-tier pattern WITHOUT real provider keys. The
 # real config uses coding / coding-fallback etc. (see microvm-safe-proxy.yaml).
 #
 # SECRETS: master_key and all api_key values use os.environ/ indirection. NEVER
 # commit real values. Required env vars: LITELLM_MASTER_KEY, OPENROUTER_API_KEY,
 # OPENAI_API_KEY.
 #
-# WORKESTRATOR-SPECIFIC: the alias-naming convention (primary / primary-fallback)
-# is a [WORKESTRATOR RECOMMENDATION] mirroring the coding-tier failover pattern.
+# WORKESTRATE-SPECIFIC: the alias-naming convention (primary / primary-fallback)
+# is a [WORKESTRATE RECOMMENDATION] mirroring the coding-tier failover pattern.
 # The router_settings keys themselves are upstream-documented.
 
 model_list:
@@ -63,7 +63,7 @@ router_settings:
 
   # fallbacks: Verified router_settings.fallbacks (type=list;
   #   ex: `fallbacks: [{"zephyr-beta": ["gpt-4o"]}]`). Maps a model group to its
-  #   ordered fallback groups. [WORKESTRATOR RECOMMENDATION] mirror the
+  #   ordered fallback groups. [WORKESTRATE RECOMMENDATION] mirror the
   #   coding-tier failover pattern: <tier> -> [<tier>-fallback].
   fallbacks:
     - primary: [primary-fallback]
@@ -84,7 +84,7 @@ router_settings:
   # retry_policy: Verified router_settings.retry_policy (type=dict;
   #   ex: `retry_policy: {TimeoutErrorRetries: 3}`). The retry-class keys below
   #   (TimeoutErrorRetries, RateLimitErrorRetries, InternalServerErrorRetries)
-  #   are taken from the option-index example and the workestrator
+  #   are taken from the option-index example and the workestrate
   #   recommendation note on retry_policy.
   retry_policy:
     TimeoutErrorRetries: 2

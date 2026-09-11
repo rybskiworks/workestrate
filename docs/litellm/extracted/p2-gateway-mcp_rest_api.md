@@ -107,7 +107,7 @@ Two patterns:
 - /docs/mcp_zero_trust — JWT signing for upstream MCP servers
 - /docs/mcp_troubleshoot — Connectivity and auth issues
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - The `/mcp-rest/tools/list` and `/mcp-rest/tools/call` runtime endpoints are CONFIRMED verbatim upstream, plus the read-only `GET /v1/mcp/server` discovery endpoint. These operate on already-configured (config.yaml) servers; the page does NOT state a DB requirement for them, so the prior `(inferred no-DB)` assessment stands but is now grounded in a verbatim negative finding (DB NOT mentioned on the runtime REST API page). The CRUD management endpoints (POST/PUT/DELETE `/mcp`) are NOT documented on this page — the prior "deferred to /docs/mcp_rest_api" claim is RESOLVED as a NEGATIVE: they are not there. `store_model_in_db` and the DB requirement for runtime-added servers remain documented only on `/docs/mcp` (see p2-gateway-mcp.md).
 
 ## Confidence / uncertainty notes

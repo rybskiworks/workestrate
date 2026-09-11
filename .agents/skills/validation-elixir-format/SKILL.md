@@ -50,4 +50,4 @@ mix format --check-formatted
   re-run `mix format --check-formatted` to confirm.
 - Check `.formatter.exs` for non-default formatting rules (e.g. import_deps,
   inputs, locals_without_parens).
-- Run inside `nix develop` (see `nix-usage` skill) so the correct `mix` is used.
+- Run inside `just shell` (see `nix-usage` skill) so the correct `mix` is used.

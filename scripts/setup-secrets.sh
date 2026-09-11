@@ -5,42 +5,219 @@ set +H
 # setup-secrets — bootstrap or update ai-workbench encrypted secrets.
 #
 # Usage:
-#   nix develop -c setup-secrets init
-#   nix develop -c setup-secrets update
+#   just setup-secrets init
+#   just setup-secrets update
+#   just setup-secrets --config <name> init
+#   just setup-secrets --config <name> update
+#   just setup-secrets --home <directory> --config <name> update
+#   just setup-secrets --config-dir <directory> update
+#   just setup-secrets --global init
+#   just setup-secrets --global update
 #
 # Secrets can be supplied via environment variables or interactive prompts.
 # Command-line argument support is intentionally omitted to avoid leaking
 # secrets into shell history.
 
-# Determine the repo root: prefer the directory holding this script
-# (works when invoked directly from a clone); fall back to the current
-# working directory (works when invoked via a Nix wrapper that copies
-# the script into /nix/store and exec's it from the user's CWD).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../.sops.yaml" ]; then
-  cd "$SCRIPT_DIR/.."
-elif [ -f "$PWD/.sops.yaml" ]; then
-  cd "$PWD"
+CONFIG_NAME=""
+CONFIG_DIR=""
+TOOL_HOME=""
+GLOBAL_MODE=0
+ARGS=()
+
+fail() { echo "[setup-secrets] error: $*" >&2; exit 1; }
+
+require_value() {
+  if [ -z "${2:-}" ] || [[ "$2" == --* ]]; then
+    fail "$1 requires a value"
+  fi
+}
+
+# Options may appear before or after the init/update subcommand.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help|-h)
+      cat <<'EOF'
+setup-secrets — bootstrap or update ai-workbench encrypted secrets.
+
+Usage:
+  just setup-secrets init
+  just setup-secrets update
+  just setup-secrets --config <name> init
+  just setup-secrets --config <name> update
+  just setup-secrets --home <directory> --config <name> update
+  just setup-secrets --config-dir <directory> update
+  just setup-secrets --global init
+  just setup-secrets --global update
+
+Secrets can be supplied via environment variables or interactive prompts.
+--config selects a registered configuration through workestrate secrets-target.
+--home selects its Workestrate home; otherwise normal home/XDG resolution applies.
+--config-dir edits an existing directory directly, without registry lookup.
+Secret values are never accepted as command-line arguments.
+EOF
+      exit 0
+      ;;
+    --config)
+      require_value "$1" "${2:-}"
+      CONFIG_NAME="$2"
+      shift 2
+      ;;
+    --config=*)
+      CONFIG_NAME="${1#--config=}"
+      require_value --config "$CONFIG_NAME"
+      shift
+      ;;
+    --config-dir)
+      require_value "$1" "${2:-}"
+      CONFIG_DIR="$2"
+      shift 2
+      ;;
+    --config-dir=*)
+      CONFIG_DIR="${1#--config-dir=}"
+      require_value --config-dir "$CONFIG_DIR"
+      shift
+      ;;
+    --home)
+      require_value "$1" "${2:-}"
+      TOOL_HOME="$2"
+      shift 2
+      ;;
+    --home=*)
+      TOOL_HOME="${1#--home=}"
+      require_value --home "$TOOL_HOME"
+      shift
+      ;;
+    --global)
+      GLOBAL_MODE=1
+      shift
+      ;;
+    init|update)
+      ARGS+=("$1")
+      shift
+      ;;
+    *) fail "unknown argument: $1 (expected init, update, or --help)" ;;
+  esac
+done
+
+if (( ${#ARGS[@]} > 1 )); then
+  fail "choose exactly one command: init or update"
+fi
+
+if { [ -n "$CONFIG_NAME" ] && [ -n "$CONFIG_DIR" ]; } ||
+  { [ "$GLOBAL_MODE" -eq 1 ] && { [ -n "$CONFIG_NAME" ] || [ -n "$CONFIG_DIR" ]; }; }; then
+  fail "--config, --config-dir, and --global are mutually exclusive"
+fi
+if [ -n "$TOOL_HOME" ] && [ -z "$CONFIG_NAME" ]; then
+  fail "--home requires --config; use --config-dir to select a directory directly"
+fi
+
+# Resolve before changing cwd: the CLI owns home, store, registry and per-repo
+# override semantics. Never guess another location if an explicit name fails.
+resolve_registered_config() {
+  local name="$1" target_json
+  local cli=(workestrate --no-project-config)
+  command -v workestrate >/dev/null 2>&1 || fail "workestrate not found; run via 'just setup-secrets'"
+  command -v jq >/dev/null 2>&1 || fail "jq not found; run via 'just setup-secrets'"
+  if [ -n "$TOOL_HOME" ]; then
+    cli+=(--home "$TOOL_HOME")
+  fi
+  target_json=$("${cli[@]}" secrets-target "$name" --json) ||
+    fail "could not resolve config '$name'; check --home and the registered config name"
+  if ! printf '%s' "$target_json" | jq -e '
+    type == "object" and
+    ([.dir, .secrets_file, .age_key_file] |
+      all(.[]; type == "string" and length > 0 and index("\u0000") == null))
+  ' >/dev/null; then
+    fail "workestrate secrets-target returned invalid target paths"
+  fi
+  TARGET_DIR=$(printf '%s' "$target_json" | jq -r '.dir')
+  SECRET_FILE=$(printf '%s' "$target_json" | jq -r '.secrets_file')
+  SOPS_AGE_KEY_FILE=$(printf '%s' "$target_json" | jq -r '.age_key_file')
+  # A registry may use relative paths; preserve their invocation-cwd meaning.
+  if [[ "$SOPS_AGE_KEY_FILE" != /* ]]; then
+    SOPS_AGE_KEY_FILE="$PWD/$SOPS_AGE_KEY_FILE"
+  fi
+  export SOPS_AGE_KEY_FILE
+}
+
+# Legacy global targeting remains separate from registered configuration edits.
+resolve_config_dir() {
+  echo "${XDG_CONFIG_HOME:-$HOME/.config}/workestrate"
+}
+
+find_single_config_name() {
+  local reg
+  reg="$(resolve_config_dir)/config.toml"
+  if [ -f "$reg" ]; then
+    local names
+    names=$(grep -oE '^[[:space:]]*\[configs\.[^]]+\]' "$reg" 2>/dev/null | sed 's/.*\[configs\.//; s/\]//' | tr -d ' ' || true)
+    local count
+    count=$(echo "$names" | wc -w | tr -d ' ')
+    if [ "$count" -eq 1 ]; then
+      echo "$names"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+if [ "$GLOBAL_MODE" -eq 1 ]; then
+  TARGET_DIR="$(resolve_config_dir)"
+elif [ -n "$CONFIG_NAME" ]; then
+  resolve_registered_config "$CONFIG_NAME"
+elif [ -n "$CONFIG_DIR" ]; then
+  TARGET_DIR="$CONFIG_DIR"
+elif [ -n "${WORKESTRATE_CONFIG_DIR:-}" ]; then
+  TARGET_DIR="$WORKESTRATE_CONFIG_DIR"
+elif single_name=$(find_single_config_name); then
+  resolve_registered_config "$single_name"
 else
-  echo "[setup-secrets] error: could not locate repo root (.sops.yaml not found)" >&2
+  # Determine the repo root: prefer the directory holding this script
+  # (works when invoked directly from a clone); fall back to the current
+  # working directory (works when invoked via a Nix wrapper that copies
+  # the script into /nix/store and exec's it from the user's CWD).
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../.sops.yaml" ]; then
+    TARGET_DIR="$SCRIPT_DIR/.."
+  elif [ -f "$PWD/.sops.yaml" ]; then
+    TARGET_DIR="$PWD"
+  else
+    echo "[setup-secrets] error: could not locate repo root (.sops.yaml not found)" >&2
+    exit 1
+  fi
+fi
+
+if [ "$GLOBAL_MODE" -eq 1 ] && [ ! -d "$TARGET_DIR" ]; then
+  mkdir -p "$TARGET_DIR"
+fi
+
+if [ ! -d "$TARGET_DIR" ]; then
+  echo "[setup-secrets] error: target config directory does not exist: $TARGET_DIR" >&2
   exit 1
+fi
+
+cd "$TARGET_DIR"
+export WORKESTRATE_CONFIG_DIR="$PWD"
+
+if [ "$GLOBAL_MODE" -eq 1 ]; then
+  SECRET_FILE=".env.local.enc"
+elif [ -z "${SECRET_FILE:-}" ]; then
+  SECRET_FILE=".env.enc"
 fi
 
 : "${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/ai-workbench-secrets.txt}"
 export SOPS_AGE_KEY_FILE
-
 KEY_DIR="$(dirname "$SOPS_AGE_KEY_FILE")"
+
 SOPS_CONFIG=".sops.yaml"
-SECRET_FILE=".env.enc"
 SCHEMA_FILE=".env.example"
 
-# Read required keys from .env.example (all non-empty keys that are not
-# obviously non-secret config paths).
-REQUIRED_KEYS=(
-  $(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' .env.example \
+# Read required keys from workestrate config (replaces .env.example grep).
+mapfile -t REQUIRED_KEYS < <(
+  workestrate secrets-schema 2>/dev/null || grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SCHEMA_FILE" \
     | grep -vE '^(AI_WORKBENCH_.*_DIR)=' \
     | cut -d= -f1 \
-    | sort -u)
+    | sort -u
 )
 
 unset HISTFILE
@@ -51,11 +228,10 @@ SECRET_TMPFILE=""
 trap 'rm -f "$TMPFILE" "$SECRET_TMPFILE"; stty echo 2>/dev/null || true' EXIT
 
 log() { echo "[setup-secrets] $*" >&2; }
-fail() { echo "[setup-secrets] error: $*" >&2; exit 1; }
 
 require_tools() {
-  command -v age-keygen >/dev/null 2>&1 || fail "age-keygen not found; run inside 'nix develop'"
-  command -v sops >/dev/null 2>&1 || fail "sops not found; run inside 'nix develop'"
+  command -v age-keygen >/dev/null 2>&1 || fail "age-keygen not found; run inside 'just shell'"
+  command -v sops >/dev/null 2>&1 || fail "sops not found; run inside 'just shell'"
 }
 
 ensure_key() {
@@ -105,10 +281,20 @@ build_prefilled_buffer() {
   local tmpfile="$1"
   local example_file="${2:-$SCHEMA_FILE}"
 
+  # Generate example source from workestrate if available; fall back to .env.example.
+  local example_source
+  local example_label
+  if example_source="$(workestrate generate-env-example 2>/dev/null)"; then
+    example_label="workestrate generate-env-example"
+  else
+    example_source="$(cat "$example_file")"
+    example_label="$example_file"
+  fi
+
   {
     echo "# ai-workbench secrets (will be encrypted to $SECRET_FILE via sops)."
     echo "# Lines starting with '#' are ignored by sops and serve as instructions only."
-    echo "# Required keys (from $example_file):"
+    echo "# Required keys (from $example_label):"
     local k
     for k in "${REQUIRED_KEYS[@]}"; do
       echo "#   - $k"
@@ -117,7 +303,7 @@ build_prefilled_buffer() {
     echo "# and encrypted automatically. Delete the SENTINEL line below to confirm."
     echo ""
 
-    # Walk .env.example: keep comments/blanks, rewrite KEY=value to KEY=
+    # Walk the example source: keep comments/blanks, rewrite KEY=value to KEY=
     local line key value
     while IFS= read -r line || [ -n "$line" ]; do
       if [ -z "$line" ] || [[ "$line" =~ ^# ]]; then
@@ -126,10 +312,10 @@ build_prefilled_buffer() {
         key="${BASH_REMATCH[1]}"
         printf '%s=\n' "$key"
       else
-        # Unparseable line: keep as a comment so it survives the round-trip
+        # Unparsable line: keep as a comment so it survives the round-trip
         printf '# %s\n' "$line"
       fi
-    done < "$example_file"
+    done <<< "$example_source"
 
     echo "$SENTINEL_LINE"
   } > "$tmpfile"
@@ -144,7 +330,12 @@ build_update_buffer() {
 
   cp "$decrypted_tmpfile" "$output_tmpfile"
 
-  local example_file="$SCHEMA_FILE"
+  # Generate example source from workestrate if available; fall back to .env.example.
+  local example_source
+  if ! example_source="$(workestrate generate-env-example 2>/dev/null)"; then
+    example_source="$(cat "$SCHEMA_FILE")"
+  fi
+
   local line key
   while IFS= read -r line || [ -n "$line" ]; do
     if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
@@ -153,7 +344,7 @@ build_update_buffer() {
         printf '%s=\n' "$key" >> "$output_tmpfile"
       fi
     fi
-  done < "$example_file"
+  done <<< "$example_source"
 
   printf '%s\n' "$SENTINEL_LINE" >> "$output_tmpfile"
 }
@@ -240,7 +431,7 @@ edit_loop() {
 validate_buffer() {
   local tmpfile="$1"
   local errors=0
-  local warn_unparseable=0
+  local warn_unparsable=0
   declare -A seen
   local line key value trimmed_key trimmed_value
 
@@ -290,12 +481,12 @@ validate_buffer() {
 
       fi
     else
-      warn_unparseable=1
+      warn_unparsable=1
     fi
   done < "$tmpfile"
 
-  if [ "$warn_unparseable" -eq 1 ]; then
-    echo "[setup-secrets] warning: unparseable lines were ignored" >&2
+  if [ "$warn_unparsable" -eq 1 ]; then
+    echo "[setup-secrets] warning: unparsable lines were ignored" >&2
   fi
 
   if [ "$errors" -gt 0 ]; then
@@ -535,8 +726,8 @@ cmd_init() {
   fi
 
   init_via_editor
-  log "done. If you use direnv, ensure you've run 'direnv allow'; otherwise use 'nix develop'."
-  log "You can now run: workestrate litellm up"
+  log "done. If you use direnv, ensure you've run 'direnv allow'; otherwise use 'just shell'."
+  log "You can now run: workestrate workload up litellm"
 }
 
 cmd_update() {
@@ -557,4 +748,4 @@ main() {
   esac
 }
 
-main "$@"
+main "${ARGS[@]}"

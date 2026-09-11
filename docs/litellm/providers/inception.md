@@ -63,7 +63,7 @@ model_list:
 - `api_base` is NOT configurable — fixed at `https://api.inceptionlabs.ai/v1`.
 - `reasoning_effort` has an Inception-specific `instant` value not found in other providers.
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 Not currently used in `infra/litellm/config.yaml`. Inception is a provider of diffusion LLMs (Mercury family). OpenAI-compatible API. Pattern: `model: inception/mercury-2` + `api_key: os.environ/INCEPTION_API_KEY`. `api_base` is fixed at `https://api.inceptionlabs.ai/v1` — not configurable. Supports FIM (fill-in-the-middle) via `text-completion-inception/mercury-edit-2` prefix. Inception-specific `reasoning_effort="instant"` for near real-time responses.
 

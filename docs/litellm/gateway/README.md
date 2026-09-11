@@ -157,7 +157,7 @@ OAuth discovery:
 - **DB:** Static `mcp_servers` config works **without** a DB. Runtime-added servers (management API) need `general_settings.store_model_in_db: true`. Fine-grained control via `supported_db_objects: ["mcp"]`. `mcp_aliases` and `mcp_client_side_auth_header_name` work without DB.
 - **Enterprise:** not documented on the /docs/mcp Overview page (footer card only).
 
-### Workestrator notes
+### Workestrate notes
 In the current in-memory (no-DB) deployment: **MCP Gateway is fully usable.** Define `mcp_servers` (HTTP/SSE/stdio) in `config.yaml`, set `mcp_aliases`, invoke via `/v1/chat/completions` or `/v1/responses` with `server_url: "litellm_proxy"`, and use `/mcp-rest/tools/list|call` (inferred no-DB). All auth types work without DB. Avoid the deprecated `x-mcp-auth` header. Runtime-added MCP servers (management API) are unavailable without DB.
 
 ---
@@ -235,7 +235,7 @@ All `/v1/skills` requests require:
 - **Enterprise:** not documented on `/docs/skills` (footer card only).
 - **Supported providers:** `anthropic`.
 
-### Workestrator notes
+### Workestrate notes
 In the current in-memory (no-DB) deployment: **Skills Gateway persistence is NOT usable.** `/v1/skills` endpoints have an unconfirmed DB requirement (inferred needs DB for persistence); `POST /claude-code/plugins` and `GET /public/skill_hub` require DB per project context — runtime-registered skills are lost on restart. Model-based routing (`model_list` with anthropic models) works without DB. Skip Skills gateway persistence for M1; revisit when Postgres is added.
 
 ---
@@ -297,14 +297,14 @@ Management:
 - **DB:** static `agents:` config works **without** a DB (file-based registration). `POST /v1/agents` admin registration may require DB for persistence (unconfirmed — inferred). Per-key/team agent permissions require DB (virtual keys). Cost tracking and iteration budgets likely require DB (inferred). Trace ID enforcement works without DB. Load balancing across multiple agent deployments works without DB (static config).
 - **Enterprise:** not documented on the /docs/a2a Overview page (footer card only).
 
-### Workestrator notes
+### Workestrate notes
 In the current in-memory (no-DB) deployment: **A2A Agent Gateway is usable for static agents.** Define agents in the `config.yaml` `agents:` block, invoke via `POST /a2a/{agent_id}` (JSON-RPC), set `protocolVersion: "1.0"` or `"0.3"`, enable trace ID enforcement (`require_trace_id_on_calls_to_agent` / `require_trace_id_on_calls_by_agent`) without DB, and load-balance across static deployments without DB. `POST /v1/agents` admin registration, per-key/team permissions, cost tracking, and iteration budgets likely require DB (inferred) — unavailable.
 
 ---
 
 ## Cross-gateway summary
 
-| Gateway | Static config works without DB? | Runtime management without DB? | Workestrator M1 usable? |
+| Gateway | Static config works without DB? | Runtime management without DB? | Workestrate M1 usable? |
 |---|---|---|---|
 | MCP | Yes (`mcp_servers:` block) | No (needs `store_model_in_db`) | Yes |
 | Skills | Model-based routing only | No (`/v1/skills` persistence + `/claude-code/plugins` + `/public/skill_hub` need DB) | No (persistence) |

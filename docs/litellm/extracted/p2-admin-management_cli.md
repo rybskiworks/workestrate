@@ -99,8 +99,8 @@ None on this page — page uses shell-style code blocks only.
 - https://litellm-api.up.railway.app/ — Swagger
 - https://github.com/astral-sh/uv — uv dependency
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- The `lite` CLI commands for models/credentials/keys/users management hit proxy endpoints that require a database (per db_info page). The workestrator runs in-memory (no Postgres), so `lite models add`, `lite credentials create`, `lite keys generate`, `lite users create` will FAIL (DB-backed). However, `lite chat completions` and `lite http request POST /chat/completions` work without DB (inference endpoints). `lite models list` may partially work (lists config.yaml models — inferred). `LITELLM_PROXY_URL` and `LITELLM_PROXY_API_KEY` env vars are relevant for CLI configuration. `EXPERIMENTAL_UI_LOGIN` is moot without DB-backed SSO. The CLI is a thin client — it doesn't require DB itself, but the proxy endpoints it calls do.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- The `lite` CLI commands for models/credentials/keys/users management hit proxy endpoints that require a database (per db_info page). The workestrate runs in-memory (no Postgres), so `lite models add`, `lite credentials create`, `lite keys generate`, `lite users create` will FAIL (DB-backed). However, `lite chat completions` and `lite http request POST /chat/completions` work without DB (inference endpoints). `lite models list` may partially work (lists config.yaml models — inferred). `LITELLM_PROXY_URL` and `LITELLM_PROXY_API_KEY` env vars are relevant for CLI configuration. `EXPERIMENTAL_UI_LOGIN` is moot without DB-backed SSO. The CLI is a thin client — it doesn't require DB itself, but the proxy endpoints it calls do.
 
 ## Confidence / uncertainty notes
 - high confidence on CLI commands (verbatim). DB requirement is inferred from db_info page (not stated on this page explicitly) — marked as inferred. `lite chat completions` and `lite http request` work without DB (inferred high confidence — they hit inference endpoints). `lite models list` working without DB is inferred (may list config.yaml models).

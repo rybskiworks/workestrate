@@ -53,9 +53,9 @@ Debugging docs: https://docs.litellm.ai/docs/proxy/debugging
 - Authoritative key index: [`config-yaml.option-index.json`](../schemas/config-yaml.option-index.json)
 - Normalized schema: [`config-yaml.normalized.schema.md`](../schemas/config-yaml.normalized.schema.md) — the authoritative key reference.
 
-## Workestrator notes
+## Workestrate notes
 
-> **PROJECT CONTEXT** — not upstream LiteLLM docs. Describes the workestrator deployment specifically.
+> **PROJECT CONTEXT** — not upstream LiteLLM docs. Describes the workestrate deployment specifically.
 
 The real config at `infra/litellm/config.yaml` is validated at proxy startup against LiteLLM's internal Pydantic schema.
 
@@ -72,4 +72,4 @@ Watch for either:
 
 The harden/validation workflows (see project harden docs; *(see `docs/litellm/harden/` if present, else not documented in fetched source)*) cover pre-flight config checks.
 
-`set_verbose` is deprecated — use `LITELLM_LOG=DEBUG` instead for the workestrator deployment.
+`set_verbose` is deprecated — use `LITELLM_LOG=DEBUG` instead for the workestrate deployment.

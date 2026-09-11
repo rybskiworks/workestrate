@@ -27,7 +27,7 @@
 #
 # PLACEHOLDER / project-specific values (NOT from upstream docs):
 #   - `neuralwatt` model name, `https://api.neuralwatt.com/v1` api_base, and the
-#     `NEURALWATT_API_KEY` env var name are WORKESTRATOR PROJECT CHOICES. They
+#     `NEURALWATT_API_KEY` env var name are WORKESTRATE PROJECT CHOICES. They
 #     follow the documented pattern but the specific host/key-name are not in
 #     the upstream LiteLLM docs. Replace `<your-model-name>` / host / key with
 #     your own OpenAI-compatible endpoint.
@@ -39,7 +39,7 @@
 # SECRET HYGIENE: NEVER commit real API keys. Use `os.environ/<VAR>` indirection
 # so LiteLLM reads the key from the environment at runtime.
 #
-# WORKESTRATOR NOTES [PROJECT CONTEXT — NOT upstream docs]:
+# WORKESTRATE NOTES [PROJECT CONTEXT — NOT upstream docs]:
 #   - This is the CANONICAL Neuralwatt pattern: `openai/neuralwatt` +
 #     `api_base: https://api.neuralwatt.com/v1`. For keyless local vLLM, prefer
 #     the `hosted_vllm/` prefix (see providers/vllm.md) to avoid passing a fake

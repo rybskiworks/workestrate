@@ -130,7 +130,7 @@ openai-compatible page. OpenAI-native adds:
 
 ## Project context [PROJECT — not upstream docs]
 
-The workestrator uses this exact pattern for the `neural` tier:
+The workestrate uses this exact pattern for the `neural` tier:
 
 ```yaml
 model_list:

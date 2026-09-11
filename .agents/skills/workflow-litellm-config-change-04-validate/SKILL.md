@@ -24,7 +24,7 @@ target, env var, and `api_base` against the schema index files.
 
 - `docs/litellm/schemas/config-yaml.option-index.json` — AUTHORITATIVE for config key existence and `section`; flags `deprecated`, `requires_db`, `requires_redis`.
 - `docs/litellm/schemas/provider-fields.index.json` — AUTHORITATIVE for provider `litellm_prefix`, `required_env_vars`, `api_base_behavior`, `caveats`.
-- `docs/litellm/schemas/env-vars.index.json` — AUTHORITATIVE for env var names, `requires_db`, `deprecated`, `workestrator_used`.
+- `docs/litellm/schemas/env-vars.index.json` — AUTHORITATIVE for env var names, `requires_db`, `deprecated`, `workestrate_used`.
 - `docs/litellm/schemas/config-yaml.normalized.schema.md` — precedence rule, env-var syntax, in-memory mapping table, enum values.
 - `infra/litellm/config.yaml` — the edited config to validate.
 

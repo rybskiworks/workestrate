@@ -35,7 +35,7 @@ the only phase that modifies files.
 
 1. **Apply the design.** Edit only the keys/section decided in `02-design`. Stay within the assigned scope; do not refactor unrelated sections.
 2. **Preserve `os.environ/` secret hygiene.** Every `api_key`, `master_key`, and secret-bearing value MUST use `os.environ/<VAR>`. NEVER hardcode a secret literal. `master_key` MUST resolve to `os.environ/LITELLM_MASTER_KEY`.
-3. **Enforce in-memory constraints.** The workestrator deployment runs LiteLLM in-memory in a microsandbox (no Postgres, no Redis):
+3. **Enforce in-memory constraints.** The workestrate deployment runs LiteLLM in-memory in a microsandbox (no Postgres, no Redis):
    - NO `database_url` (requires_db=true).
    - NO `redis_*` keys (`redis_host`, `redis_password`, `redis_port`, `redis_db`, `redis_url`, `enable_redis_auth_cache`, `use_redis_transaction_buffer`) — all requires_redis=true.
    - NO virtual-key/team/user/budget keys (`store_model_in_db`, `custom_key_generate`, `key_generation_settings`, `default_key_generate_params`, `upperbound_key_generate_params`, `max_budget`, `budget_duration`, `default_team_params`, `prometheus_initialize_budget_metrics`) — all requires_db=true.

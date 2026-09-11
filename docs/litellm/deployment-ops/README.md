@@ -19,7 +19,7 @@
 How the proxy is packaged (Docker image), started (CLI flags, workers,
 config mount), how environment variables are resolved, how it is probed
 (health/readiness/liveness/drain), and the production sizing envelope. The
-workestrator runs the **main in-memory image** inside a microsandbox
+workestrate runs the **main in-memory image** inside a microsandbox
 microVM at `:4000` with read-only config and default-deny egress.
 
 ## Verified behavior
@@ -66,7 +66,7 @@ Number of workers. Multi-worker deployments require
 ### Hot reload
 
 **Not clearly documented in fetched source** — likely needs a process
-restart to pick up `config.yaml` changes **(inferred)**. The workestrator
+restart to pick up `config.yaml` changes **(inferred)**. The workestrate
 mounts config read-only, so changes require a sandbox restart.
 
 ### Health endpoints (from `endpoints.index.json` + `p0-deploy.md`)
@@ -78,7 +78,7 @@ mounts config read-only, so changes require a sandbox restart.
 | `GET /health/readiness` | Readiness probe — includes DB connection status. | no (DB status N/A) |
 
 > **Misspelling note:** the OpenAPI contains both `/health/liveness` and
-> `/health/liveliness`. The workestrator infra uses the misspelled
+> `/health/liveliness`. The workestrate infra uses the misspelled
 > `/health/liveliness`.
 
 ### Drain endpoint
@@ -97,7 +97,7 @@ Verbatim (from `p0-deploy.md`):
 > "4 CPU cores and 8 GB RAM"
 
 Redis required at **1000+ RPS or multi-instance**. Not required for
-single-instance (workestrator is single-instance).
+single-instance (workestrate is single-instance).
 
 ### Air-gapped / cost map
 
@@ -161,7 +161,7 @@ without DB/Redis.
   `--detailed_debug` it slows down response times". Use `--debug` or
   `LITELLM_LOG=INFO` instead.
 - **Hot reload not documented.** Do not assume config changes apply without
-  a restart. The workestrator mounts config read-only and restarts the
+  a restart. The workestrate mounts config read-only and restarts the
   microVM to apply changes **(inferred)**.
 - **`/health` makes real API calls.** It is not a cheap liveness probe — it
   calls every configured upstream. Use `/health/liveliness` for k8s
@@ -181,7 +181,7 @@ without DB/Redis.
 - [`schemas/config-yaml.option-index.json`](../schemas/config-yaml.option-index.json) — `general_settings.enable_drain_endpoint`, `drain_endpoint_token`.
 - [`config/README.md`](../config/README.md) — top-level config structure.
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 

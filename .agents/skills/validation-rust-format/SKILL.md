@@ -50,5 +50,5 @@ cargo fmt --all -- --check
   re-run `cargo fmt --all -- --check` to confirm.
 - Check for a `rustfmt.toml` / `.rustfmt.toml` in the project root for
   non-default style settings.
-- Run inside `nix develop` (see `nix-usage` skill) so the correct `rustfmt`
+- Run inside `just shell` (see `nix-usage` skill) so the correct `rustfmt`
   is used.

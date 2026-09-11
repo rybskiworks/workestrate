@@ -70,8 +70,8 @@ None on this page — page contains only JSON request/response examples and cURL
 - /docs/proxy/reliability (Fallbacks — Previous)
 - /docs/proxy/tag_routing (Next)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- These dynamic fallback management endpoints REQUIRE a database (`STORE_MODEL_IN_DB=True`). The workestrator runs LiteLLM in-memory (no Postgres), so these endpoints are UNAVAILABLE. Fallbacks must instead be configured statically via `router_settings.fallbacks` in config.yaml. The `router.max_fallbacks` setting and the static `router_settings.fallbacks` list (documented on /docs/proxy/reliability) are the in-memory-compatible path. `num_retries`, `timeout`, `stream_timeout`, `allowed_fails`, `cooldown_time`, `retry_policy` in router_settings work without a DB.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- These dynamic fallback management endpoints REQUIRE a database (`STORE_MODEL_IN_DB=True`). The workestrate runs LiteLLM in-memory (no Postgres), so these endpoints are UNAVAILABLE. Fallbacks must instead be configured statically via `router_settings.fallbacks` in config.yaml. The `router.max_fallbacks` setting and the static `router_settings.fallbacks` list (documented on /docs/proxy/reliability) are the in-memory-compatible path. `num_retries`, `timeout`, `stream_timeout`, `allowed_fails`, `cooldown_time`, `retry_policy` in router_settings work without a DB.
 
 ## Confidence / uncertainty notes
 - high confidence on endpoints and DB requirement (verbatim quotes). The `router.max_fallbacks` key is mentioned in Notes but its exact config section (router_settings vs litellm_settings) is not shown on this page — inferred from router context.

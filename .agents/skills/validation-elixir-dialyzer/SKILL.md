@@ -66,4 +66,4 @@ Run `--plt` once to warm the cache, then `mix dialyzer` to analyse.
   `:project` (deprecated; use `:app_tree`/`:apps_direct`).
 - For new projects, treat Dialyzer as advisory until the baseline is clean, then
   promote it to a gate.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).

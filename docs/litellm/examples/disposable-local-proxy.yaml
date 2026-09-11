@@ -19,13 +19,13 @@
 #   - `litellm_settings.drop_params` (bool) — option-index; example
 #     `drop_params: True`.
 #
-# PROJECT REALITY (workestrator): in-memory microsandbox, no DB/Redis, master_key
+# PROJECT REALITY (workestrate): in-memory microsandbox, no DB/Redis, master_key
 # auth, config at infra/litellm/config.yaml. This file is a teaching minimal.
 #
 # SECRETS: master_key and api_key use os.environ/ indirection. NEVER commit real
 # secret values. Required env vars: LITELLM_MASTER_KEY, OPENROUTER_API_KEY.
 #
-# WORKESTRATOR-SPECIFIC: none beyond the os.environ/ convention (which is
+# WORKESTRATE-SPECIFIC: none beyond the os.environ/ convention (which is
 # upstream-documented). This is a generic minimal example.
 
 model_list:

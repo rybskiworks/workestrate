@@ -76,7 +76,7 @@ not documented on this page (no code blocks of any kind appear on this page)
 - https://docs.litellm.ai/docs/proxy/auto_routing (Cost Optimization)
 - https://docs.litellm.ai/docs/supported_endpoints (Supported Endpoints)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 This is the gateway landing/index page. It provides the sidebar hierarchy that contextualizes all other config/proxy pages. No direct config.yaml relevance — it contains no config keys, YAML, env vars, or endpoints. Its value is navigational: it confirms the sidebar structure under "LiteLLM AI Gateway (Proxy)" and the canonical location of the Config.yaml docs (/docs/proxy/configs) and config_settings (/docs/proxy/config_settings).
 
 ## Confidence / uncertainty notes

@@ -2,187 +2,341 @@
 
 ## Purpose
 
-ai-workbench is a local development environment for running AI agents
-(Pi, Odysseus, OpenCode, T3MP3ST) inside isolated Microsandbox microVMs.
-LiteLLM provides a unified proxy to multiple LLM providers. The control plane
-(`workestrate`) manages sandbox definitions, plans, and health checks.
-
-## Current milestone
-
-Milestone 1 (M1) delivers:
-- Compile-checked Rust control plane (`workestrate`)
-- Nix flake for reproducible dev shell
-- Microsandbox SDK integration (0.5.6, `net` feature)
-- Sandbox plans for LiteLLM, Pi, Odysseus, OpenCode, and T3MP3ST
-- Verified `cargo check`, `cargo clippy`, `cargo fmt`
-- No runtime-validated claims — this environment lacks KVM; `up`/`down` are
-  implemented and compile-checked only in M1.
-
-## Runtime architecture
-
-The host runs NixOS or Nix on Linux with KVM. `workestrate` builds sandbox
-configurations using the Microsandbox Rust SDK. Each agent and LiteLLM runs in
-its own microVM with explicit network policies, secret injection, and resource
-limits. Agents communicate with LiteLLM via a well-known host IP/port.
+ai-workbench is a **tool**, not a workspace-bound project. The `workestrate`
+Rust CLI drives a config-driven workload system: workloads (agents and
+services) are defined by config repos, not hardcoded in the tool. A single
+tool home (`$WORKESTRATE_HOME`) holds the registry, config-repo clones,
+ordered layers/contexts, user-global overrides, secrets, sources, and
+runtime state. A layering/merge engine composes config from multiple
+sources with security-aware semantics. The instance lifecycle model
+(singleton slots, parallel instances, refuse-on-occupied) governs
+`up`/`exec`. Source overrides let users point at local or nix-built agent
+binaries. Workloads run inside Microsandbox microVMs with default-deny
+egress. LiteLLM provides a unified, in-memory LLM proxy.
 
 ## Components
 
 ### workestrate
 
-Rust CLI built with Tokio and Clap. Commands: `check`, plus per-workload subcommands. **Services** (litellm,
-odysseus) expose `{up,down,logs,plan}`; **agents** (pi, opencode, tempest) expose
-`{exec,down,plan}`. The `plan` subcommands print sandbox configurations
-built with `SandboxBuilder` and `NetworkPolicyBuilder`. The `up`/`down`
-subcommands drive the Microsandbox runtime (compile-checked in M1;
-runtime-validated on a KVM host in M2). Service `up` starts detached by
-default (`--foreground` to block); `logs` tails the detached service's log.
+Rust CLI built with Tokio and Clap. Sources live in `control/agentctl/src/`.
+Commands span workload lifecycle (`up`/`down`/`logs`/`exec`/`plan`), config
+management (`config add/new/update/list/trust`), source management
+(`source clone/build/list/reset`), bootstrap (`init`, `migrate-home`),
+introspection (`check`, `ps`, `doctor`, `versions`, `validate-config`, `secrets-schema`,
+`generate-env-example`, `generate-schema`, `completions`), the `msb`
+passthrough (`workestrate msb <args>` forwards verbatim to the pinned
+microsandbox binary), and the
+secret-bearing escape hatch (`run`). `plan` prints sandbox configurations
+built with `SandboxBuilder` and `NetworkPolicyBuilder`; `plan --show-source`
+annotates per-field provenance with layer names. `up`/`exec` target a slot
+(singleton `<workload>` or `<context>-<workload>`) or a parallel instance
+(`<slot>@<id>`); occupied slots refuse by default (`--replace` to recycle;
+`--instance <id>`/`--new` start a parallel canary on its own per-instance
+loopback IP `127.0.0.N`). Declared ports publish per instance; `host = 0`
+ports (and `--port-auto`) probe a free port at boot (`--port-offset` was
+removed pre-release, ADR 0026). Workloads may opt in to nested
+virtualization per workload via inline `workloads.<name>.virtualization`
+`nested` (`require`|`prefer`|`off`, default `off`; absent means off —
+current behavior, no device expectation); `prefer` degrades
+machine-readably, `require` refuses fail-closed at `up`, and the home
+`[policy.virtualization]` seal (`allow_nested` + `final`) still vetoes
+(ADR 0036).
 
-The `.#workestrator` wrapper (`runCommand` + `makeWrapper`) bakes
-`WORKESTRATE_PI_BUILD` (pointing at the `.#pi-bun` standalone binary)
-into the environment, so `nix build .#workestrator && ./result/bin/workestrator …`
-runs the hermetic bun-binary pi sandbox without `nix develop`.
-`apps.default` points at this wrapped binary.
+`apps.default` runs the workestrate CLI directly. Workload image builds
+live in the config repo flake (cleanup phase 3), which consumes the tool
+flake's `lib` recipes (`buildImagesFromConfig`, `bun-compile`,
+`npm-build`, `image.nix-layered`); the `WORKESTRATE_<NAME>_BUILD` env
+override (`Workload::build_path()`) can point the CLI at any built tree.
+
+Workloads may explicitly select guest PID 1 with an optional `init` block.
+`mode = "handoff"` requires an absolute Linux guest executable `cmd`, with
+optional ordered literal `args` and nonsecret literal `env`. `mode = "agentd"`
+resets an inherited handoff; omission preserves the existing agentd behavior.
+Layers replace this whole block, never field-merge an executable with another
+layer's arguments. Init is separate from the workload's `command`/exec-stream.
+See [guest init](docs/runtime-provisioning.md#explicit-guest-init) for activation,
+readiness and recreation boundaries.
 
 ### Microsandbox
 
-MicroVM runtime. SDK version 0.5.6. Provides `Sandbox`, `SandboxBuilder`,
-`NetworkPolicy`, and builder methods for images, resources, ports, env vars,
-volumes, and network rules. Async-only, requires Tokio.
+MicroVM runtime. SDK version 0.6.16 with the `net` feature, source-built
+from the user's fork via the pinned `microsandbox-fork` flake input at
+validated rev 8e53de7e, which carries the mount-policy stack and the
+first-class `resources.nested_virt` spec option (default OFF; driven by the
+`virtualization.nested` decision via agentctl's `builder.nested_virt(...)`,
+superseding the same-day env gate and the earlier always-on Track 1 flag).
+The guest kernel firmware still lacks `CONFIG_KVM`, so nested stays inert
+and no nested-works claim holds until the Phase 2 firmware rebuild lands.
+Provides
+`Sandbox`, `SandboxBuilder`, `NetworkPolicy`, and builder methods for
+images, resources, ports, env vars, volumes, and network rules. Async-only,
+requires Tokio. Runtime execution requires a host with `/dev/kvm`.
+`nested=off` (the default) withholds the guest device promise and, with
+the spec-field pin 8e53de7e (default-OFF `resources.nested_virt`), the
+nested CPU capability too — ADR 0036's 2026-09-06 amendment.
 
 ### LiteLLM
 
-LLM proxy/gateway. Runs as a sandboxed workload. Holds only dummy provider
-credentials; real keys are injected at the egress boundary. M1 uses
-in-memory storage; Postgres for virtual keys/spend tracking is deferred.
+LLM proxy/gateway. Runs as a sandboxed workload. **In-memory storage** in
+the current milestone: no Postgres, no virtual keys, no persistent spend
+tracking. Agents authenticate to LiteLLM using `LITELLM_MASTER_KEY`;
+virtual keys and per-agent spend tracking are deferred to a future
+milestone (M4). Provider keys are injected into the LiteLLM microVM via
+host-bound `secret_env`.
 
-### Pi
+### Agents (pi / prime / odysseus / opencode / tempest)
 
-Coding agent from `github:georgrybski/pi` (remote fork; single canonical
-source). Built two ways from one source, one `npmDepsHash`:
+Agents are **defined by the config repo**, not by the tool. A fresh clone
+ships only synthetic reference workloads (`example-service`,
+`example-agent`, `example-offensive`); real agent workloads (`pi`,
+`odysseus`, `opencode`, `tempest`) appear once a personal config repo is
+registered.
 
-- `.#pi-bun` (canonical) — `bun build --compile` produces a self-contained
-  standalone `pi` binary (~110 MB, Bun runtime embedded) at `$out/bin/pi`,
-  with runtime assets mirrored alongside. The pi sandbox execs `/app/bin/pi`;
-  no node/bun is needed inside the microVM at runtime.
-- `.#pi` (fallback) — hermetic `buildNpmPackage` of the monorepo runtime
-  tree, exec'ing `node` against the `packages/coding-agent` CLI (the
-  npm/node artifact, as opposed to the bun standalone binary).
+- **Pi** — coding agent. Built two ways from one source (the remote fork)
+  by the config repo flake: a bun-compile standalone binary (canonical,
+  ~110 MB, Bun runtime embedded, exec'd at `/app/bin/pi`) and an npm/node
+  fallback. Pi does not honor
+  `OPENAI_BASE_URL`; it requires seeding `~/.pi/agent/models.json` with a
+  custom provider pointing at LiteLLM. The bun-binary path is
+  host-validated; the npm/node variant is the fallback. Prime (same lineage)
+  instead REQUIRES node — see below.
+- **Prime** — prime-agent (pi-lineage coding agent, same npm-workspaces
+  monorepo shape). Defined in the personal config repo; built as a
+  nix-layered image with a **nodejs_24 wrapper** at `/app/bin/prime` (bun
+  cannot run prime's zeromq native addon — `uv_async_init` unimplemented,
+  bun#18546 / PR #35475 unmerged). Kernel env: python312 + ipykernel +
+  prime-agent-runtime (the vocabulary entry is named `python311_kernel` but
+  ships 3.12 — pinned nixpkgs cannot build a py3.11 ipykernel). `models.json`
+  uses seed-time substitution: `apiKey = "${LITELLM_MASTER_KEY}"` (single
+  dollar) renders to `$MSB_LITELLM_MASTER_KEY`; pi keeps the `$$` escaped
+  runtime-expansion form (REQUIRED — pi's parser expands brace-less
+  `$VAR`). Host-validated 2026-08-13.
+- **Odysseus** — coding agent (service). Requires `ODYSSEUS_ADMIN_PASSWORD`
+  because `AUTH_ENABLED=true`. Does not honor `OPENAI_BASE_URL`; requires
+  seeding `data/settings.json` with a custom provider pointing at LiteLLM.
+- **OpenCode** — coding agent. Receives `OPENAI_API_KEY` (remapped from
+  `LITELLM_MASTER_KEY`) host-bound to `host.microsandbox.internal`.
+- **T3MP3ST (tempest)** — offensive-security multi-agent framework. Uses
+  `network.defaults.egress = "allow"` (broad egress) because it scans arbitrary targets;
+  the microVM boundary is the containment layer. Connects to LiteLLM via
+  the `local` provider (`TEMPEST_LOCAL_*` env vars; `TEMPEST_LOCAL_API_KEY`
+  remapped from `LITELLM_MASTER_KEY`).
+- **Seed files** — `seed_files` entries support `template = true` (renders
+  `${VAR}` against the guest-visible env view: host-bound secrets →
+  `$MSB_<binding key>` placeholder, guest-bound → real value,
+  defined-but-unbound secret → hard error; no process env) and `glob`
+  patterns (each regular-file match seeds to `target/<rel-path>`, sorted;
+  mutually exclusive with `source`). This is how Pi's `models.json` and
+  Odysseus's `settings.json` get their LiteLLM provider values without
+  hardcoding them in config.
 
-**Fork-carries-compat policy:** nix-build compatibility (patches, lockfile,
-committed catalogs) lives on the agent fork, not as nix-side patches in
-this repo. The flake consumes the fork verbatim. Local pi hacking uses
-`just dev-build-pi` (hashless native npm into `agents/pi/build`), not a
-nix override.
-
-Target package: `packages/coding-agent`. Expected to call LiteLLM through
-an OpenAI-compatible endpoint. Pi does not honor `OPENAI_BASE_URL`; it
-requires seeding `~/.pi/agent/models.json` with a custom provider pointing
-at LiteLLM. The bun-binary sandbox path is compile- and plan-verified but
-pending KVM runtime validation; `.#pi` (node) is the fallback.
-
-### Odysseus
-
-Coding agent from `github:georgrybski/odysseus`. Expected to call LiteLLM
-through an OpenAI-compatible endpoint. Odysseus does not honor
-`OPENAI_BASE_URL`; it requires seeding `data/settings.json` with a custom
-provider pointing at LiteLLM. Full integration is future work.
-
-### T3MP3ST (tempest)
-
-Offensive-security multi-agent framework from `github:georgrybski/T3MP3ST`
-(remote fork of `elder-plinius/T3MP3ST`). Built via `buildNpmPackage` (single
-TypeScript package; `tsc` emits `dist/`).
-
-- `.#tempest-built` — hermetic nix build of the T3MP3ST tree.
-- `.#tempest-image` — `dockerTools.buildLayeredImage` with nodejs_24 + nmap +
-  bind.dnsutils + the compiled tree + a baked `defaultProvider:"local"` config.
-
-T3MP3ST uses the `local` LLM provider, which reads all config from env vars
-(`TEMPEST_LOCAL_BASE_URL`, `TEMPEST_LOCAL_MODEL`, `TEMPEST_LOCAL_API_KEY`).
-`TEMPEST_LOCAL_API_KEY` is remapped from `LITELLM_MASTER_KEY`. The
-`defaultProvider:"local"` config is baked into the image so no secrets are
-stored in T3MP3ST's conf store. T3MP3ST execs `node dist/cli.js` (interactive
-CLI TUI, like Pi). Unlike other agents, tempest uses `default_deny: false`
-(broad egress) because it scans arbitrary targets. Compile- and plan-verified
-in M1; pending KVM runtime validation.
+See `README.md` for the full depth on each agent.
 
 ### Nix
 
-Reproducible build environment. `nix develop` provides Rust toolchain,
-`just`, and build dependencies. `nix build .#workestrate` compiles the CLI and wraps it with `MSB_PATH` pointing at
-`.#microsandbox` so runtime commands find the Nix-managed daemon.
-`.#workestrator` wraps `.#workestrate` with `WORKESTRATE_PI_BUILD` baked
-in (pointing at `.#pi-bun`); `apps.default` is the wrapped binary. `.#pi`
-(npm/node) and `.#pi-bun` (standalone bun binary) are the two pi
-derivations from the remote fork. The dev shell pins `nodejs_24` (was
-`nodejs_22`).
+Reproducible build environment. `nix develop` provides the Rust toolchain,
+`just`, and build dependencies. `nix build .#workestrate` compiles the CLI
+and wraps it with `MSB_PATH` pointing at `.#microsandbox`. The flake exposes
+`lib.*` exports (recipes, vocabulary, `buildWorkloadImage`,
+`buildImagesFromConfig`, `checks.validateConfig`) for config-repo-flake
+consumption. The dev shell pins `nodejs_24`.
 
 ## Source model
 
 - `workestrate` sources: `control/agentctl/src/`
-- Flake inputs: `nixpkgs`, `pi` (GitHub fork), `odysseus` (GitHub fork),
-  `opencode` (GitHub fork), `tempest` (GitHub fork)
-- Agent repos are optional local overrides in `agents/`, ignored by git
-- Profiles live in `profiles/agents/`
+- Flake inputs: `nixpkgs`, `pi`, `odysseus`, `opencode`, `tempest` (GitHub
+  forks)
+- Agent repos are optional local overrides in `agents/` (gitignored) or in
+  the managed sources store (`$WORKESTRATE_HOME/sources/<name>/`)
+- Config repos live in the managed store (`$WORKESTRATE_HOME/config-repos/<name>/`)
+- Profiles live in `profiles/` (tracked, reference)
 
 ## Secrets model
 
-LiteLLM holds the real provider keys inside its own microVM. Agents authenticate
-to LiteLLM using `LITELLM_MASTER_KEY` in milestone 1 (virtual keys are deferred
-to M4). The dummy-key egress rewrite is not implemented in M1.
+Secrets are SOPS-encrypted (age recipient) per config repo. Each config
+repo holds its own `.env.enc` + `.sops.yaml` in
+`$WORKESTRATE_HOME/config-repos/<name>/`. A user-global secrets layer
+(`$WORKESTRATE_HOME/secrets/.env.local.enc`) applies per-key across all
+contexts.
+
+**Multi-layer per-key merge** (later layer wins per key; process env is
+lowest precedence):
+
+1. Process env (only for defined secrets; lowest precedence)
+2. `WORKESTRATE_CONFIG_DIR` (single override, bypasses discovery)
+3. Reference config dir (shipped with tool — no `.env.enc` expected)
+4. Context layers in declared order, each with its own `.env.enc`
+   (per-repo `secrets_file` and `age_key_file` overrides honored from the
+   registry `[configs.<name>]`)
+5. User-global secrets (`$WORKESTRATE_HOME/secrets/.env.local.enc`) —
+   applied per-key AFTER the context's domain layers, BEFORE project layers
+6. Trusted project dir (cwd, if trusted) — may have `.env.enc`
+7. Local overrides dir
+
+**The 7 secrets:**
+
+| Secret | Used for |
+|---|---|
+| `LITELLM_MASTER_KEY` | Local LiteLLM proxy auth (any `sk-…`; `sk-change-me-local-only` rejected) |
+| `OPENROUTER_API_KEY` | OpenRouter provider |
+| `KIMI_CODE_API_KEY` | Kimi for Coding provider |
+| `NEURALWATT_API_KEY` | Neuralwatt provider |
+| `MINIMAX_CODING_API_KEY` | MiniMax Coding provider |
+| `GITHUB_TOKEN` | GitHub PAT for agent sandboxes (git ops + API) |
+| `ODYSSEUS_ADMIN_PASSWORD` | Odysseus admin login (required because `AUTH_ENABLED=true`) |
+
+(Plus optional reserved-but-unconsumed: `AI_WORKBENCH_WORKSPACES_DIR`,
+`AI_WORKBENCH_VAR_DIR`.)
+
+**age key location:** `~/.config/sops/age/ai-workbench-secrets.txt` on the
+HOST. NEVER in the repo, NEVER in the bundle, NEVER under `.workestrate/`
+or `$WORKESTRATE_HOME`. The repo is agent-reachable via `${CWD}` mounts, so
+a key inside it would be exposed to sandboxes. In a container the key is
+simply absent and secret operations fail closed by design.
+
+**Failure semantics:** undecryptable layer → WARNING + continue; required
+secret unsatisfied → hard fail naming the secret + layers tried +
+remediation. `secrets = "none"` repos are skipped silently.
+
+## Security model
+
+- **Config purity:** closed vocabulary (egress recipes, build recipes,
+  image features, package names) — reviewed like core code.
+- **Policy ceiling:** explicit `[network.defaults] egress/ingress = "allow"`
+  stands alone (absent = deny; home `final` seals still veto); egress hosts are validated
+  against `ALLOWED_EGRESS_HOSTS` at merge time (fail-closed);
+  `deny_rules`/`egress_rules`/`secret_env` are additive-union.
+  A relaxed `[network.defaults]` flip rides the ladder freeze walk as a
+  synthetic lowest-rung allow-all, so a home (or layer) covering final deny
+  seals it and the default stays deny (coarse FIX1 parity).
+- **Trust gating:** project-layer config (`./workestrate.toml`,
+  `./workestrate.local.toml`) is only loaded if cwd is in
+  `[trusted_projects]`. Untrusted discovery prints a one-time warning and
+  stops walking.
+- **LiteLLM in-memory:** no Postgres, no virtual keys, no persistent spend
+  tracking in the current milestone.
 
 ## Egress model
 
-Network policy uses `default_deny` with explicit allow rules for the real
-provider host. All other outbound traffic is blocked. The egress layer also
-performs secret injection (dummy key → real key) for allowed destinations.
+Network policy defaults both egress and ingress to deny (`[network.defaults] egress =
+"deny"`, `ingress = "deny"`; absent = deny) with explicit allow rules for the real provider hosts. All other outbound traffic is blocked. Provider secrets
+are host-bound via `secret_env` so they are only visible to the LiteLLM
+microVM.
 
-T3MP3ST (tempest) is an exception: it uses `default_deny: false` because it
-is an offensive-security tool that needs to reach arbitrary targets for
-scanning. The microVM boundary itself is the containment layer for tempest.
+T3MP3ST (tempest) is an exception: it uses `egress = "allow"` (broad
+egress) because it is an offensive-security tool that needs to reach
+arbitrary targets for scanning. The microVM boundary itself is the
+containment layer for tempest. `egress = "allow"` stands alone with no gate
+(home `final` seals still veto). The seal walks the defaults axis too: a
+covering home final deny freezes the relaxed default (sealed ⇒ deny stands).
 
 ## Filesystem model
 
+Single tool home (`$WORKESTRATE_HOME`, default `~/.workestrate`; container
+`<repo>/.workestrate`). Flat layout:
+
+| Path | Contents |
+|---|---|
+| `$WORKESTRATE_HOME/config.toml` | Registry: config repos, ordered layers/contexts, trusted projects |
+| `$WORKESTRATE_HOME/overrides.toml` | User-global overrides (optional) |
+| `$WORKESTRATE_HOME/secrets/` | Machine-local secrets incl. `.env.local.enc` |
+| `$WORKESTRATE_HOME/config-repos/<name>/` | Config repo clones: `workestrate.toml`, `.env.enc`, `.sops.yaml`, `infra/litellm/`, `agents/*/config/` |
+| `$WORKESTRATE_HOME/sources/<name>/` | Agent source checkouts + builds |
+| `$WORKESTRATE_HOME/state/` | `workspaces/`, `var/` (runtime state) |
+| `$WORKESTRATE_HOME/cache/` | Cache |
+
 - Source code: tracked in git
 - Build artifacts: `control/agentctl/target/` (gitignored)
-- Runtime state: `var/log/`, `var/run/` (gitignored)
-- Secrets: `.env.enc` (committed, SOPS-encrypted); decrypted at runtime by `workestrate` internally
-- Agent overrides: `agents/*` (gitignored)
+- Runtime state: under `$WORKESTRATE_HOME/state/` (gitignored)
+- Secrets: `.env.enc` committed in config repos (ciphertext-safe);
+  decrypted at runtime by `workestrate` internally
+- Agent overrides: `$WORKESTRATE_HOME/sources/` (gitignored)
 
-## Milestone 1 acceptance criteria
+Home resolution: `WORKESTRATE_HOME` env > auto-discovery (walk-up,
+trust-gated, finds `.workestrate/` in trusted ancestor) > legacy XDG
+(read-only compat + deprecation) > default `~/.workestrate`.
 
-- [x] `nix develop` produces a working shell
-- [x] `cargo check` passes with zero warnings
-- [x] `cargo clippy -- -D warnings` passes
-- [x] `cargo fmt -- --check` passes
-- [x] `just check` passes
-- [x] `workestrate check` reports all required files present
-- [x] `workestrate litellm plan` prints a valid sandbox plan
-- [x] `workestrate pi plan` prints a valid sandbox plan
-- [x] `workestrate odysseus plan` prints a valid sandbox plan
-- [x] `workestrate opencode plan` prints a valid sandbox plan
-- [x] `workestrate tempest plan` prints a valid sandbox plan
-- [ ] Runtime sandbox execution (blocked: no KVM)
+## Config resolution order
 
-## Future milestones
+Lowest → highest precedence:
 
-- **M2**: Runtime Microsandbox execution on a KVM host; secret injection and egress
-  policy tested end-to-end. The Microsandbox runtime daemon (`msb`) is now packaged
-  in Nix as `.#microsandbox`; runtime execution still requires a host with KVM.
-  The `up`/`down` subcommands are implemented in M1 and are compile-checked; M2
-  validates them on a host with `/dev/kvm`.
-- **M3**: Pi and Odysseus route through LiteLLM using their native configuration
-mechanisms (Pi's `models.json` provider config, Odysseus's `data/settings.json`
-/ `LLM_HOST`); agents run in microVMs and communicate with the LiteLLM proxy.
-- **M4**: Postgres-backed LiteLLM with virtual keys, per-agent spend tracking,
-and team isolation.
-- **M5**: Production deployment profiles, CI/CD, automated updates.
+1. `WORKESTRATE_CONFIG_DIR` env var (bypasses discovery; single layer, no
+   merging)
+2. Reference config (`config.reference/workestrate.toml`) — synthetic
+   fallback shipped with the tool
+3. Context layers (registry `[contexts.<name>] layers = [...]`, in declared
+   order; each a config repo's `workestrate.toml`)
+4. User-global overrides (`$WORKESTRATE_HOME/overrides.toml`: `[global]`
+   applied to every context, then `[configs.<name>]` for each active
+   context layer)
+5. Trusted project config (`./workestrate.toml` in cwd, IF cwd is in
+   `[trusted_projects]`)
+6. Local overrides (`./workestrate.local.toml` in cwd, same trust gate as
+   #5)
+
+Fail-closed: with no config repos registered, the synthetic reference
+config is used (placeholder secrets — `example-service plan` works;
+`up`/`exec` for real workloads require a registered config repo).
+
+## Phases and milestones status
+
+### Done
+
+- **Phase 0a (data-driven workloads):** `just verify` passes, golden
+  parity, `workloads/*.rs` deleted, odysseus/opencode derivations exist
+  (HOST-NIX).
+- **Phase 0b (nix recipe parameterization):** PARTIALLY IMPLEMENTED —
+  0b.1–0b.5 + Phase 2 core exports + source-build wiring DONE; 0b.6
+  (vendor→git-fork, ADR 0011) NOT done, deferred to backlog. The single
+  source of truth for the 0b.6 improvement is
+  `docs/validation-and-improvements/06-improvements/09-microsandbox-agentd-offline-build.md`.
+- **Phase 1 (tool home, ADR 0023):** implemented — config
+  add/update/list/trust, init, source clone/build/list/reset,
+  migrate-home. Runtime on KVM = HOST-KVM gate (NOT validated).
+- **Phase 2 (config-repo-flake):** core `lib.*` exports DONE;
+  template-only/HOST-NIX remaining.
+- **Phase 3 (layering engine):** IMPLEMENTED (cargo-verified in-container)
+  — merge engine, fixture tests, `plan --show-source`, multi-recipient
+  SOPS template, copier template. HOST-GATE items (copier copy,
+  multi-recipient live, config-repo nix build) deferred.
+- **Review remediation:** WP1–WP11 DONE; WP12 = backlog.
+
+### Host-gated (remaining unvalidated pieces)
+
+- **KVM runtime** — HOST-VALIDATED 2026-08-13 (pi/prime microVM boots,
+  egress + secret substitution, kernel env). This container itself has no
+  `/dev/kvm`; host runs happen on a KVM host. Remaining unvalidated pieces:
+  tempest/odysseus/opencode runtime parity and the spec-21 phase-F
+  multi-repo migration.
+- **HOST-NIX** — nix builds (`nix build .#workestrate`, image builds,
+  config-repo flake builds) require a host with nix; this container has
+  none.
+- **Copier/SOPS live** — `copier copy`, multi-recipient SOPS with two age
+  keys, and `nix build` in a config repo are HOST-GATE items deferred from
+  Phase 3.
+
+### Future milestones (forward-looking)
+
+- **M2:** Runtime Microsandbox execution on a KVM host; secret injection
+  and egress policy tested end-to-end. The `up`/`down`/`exec` subcommands
+  are implemented and compile-checked; M2 validates them on a host with
+  `/dev/kvm`.
+- **M3:** Agents route through LiteLLM using their native configuration
+  mechanisms (Pi's `models.json` provider config, Odysseus's
+  `data/settings.json`); agents run in microVMs and communicate with the
+  LiteLLM proxy.
+- **M4:** Postgres-backed LiteLLM with virtual keys, per-agent spend
+  tracking, and team isolation.
+- **M5:** Production deployment profiles, CI/CD, automated updates.
 
 ## Known gaps
 
-See `docs/gaps.md` for the full list. Key items:
-- Runtime testing blocked by missing KVM
-- Agent integration with LiteLLM requires native config seeding, not `OPENAI_BASE_URL`
-- Secret injection and egress enforcement are compile-checked but untested
-- `nix build .#workestrate` is available in M1 and is wired to the `.#microsandbox`
-  runtime via `MSB_PATH`; runtime execution still requires a host with KVM.
+- Container has no KVM; host-side runtime is validated for pi/prime
+  (2026-08-13); tempest/odysseus/opencode runtime parity remains
+  host-unvalidated
+- Agent integration with LiteLLM requires native config seeding, not
+  `OPENAI_BASE_URL`
+- Secret injection and egress enforcement are compile-checked but
+  untested at runtime
+- `nix build .#workestrate` is wired to the `.#microsandbox` runtime via
+  `MSB_PATH`; runtime execution still requires a host with KVM

@@ -297,7 +297,7 @@ general_settings:
 - https://docs.litellm.ai/docs/proxy/virtual_keys (Virtual Keys)
 - https://docs.litellm.ai/docs/proxy/management_cli (LiteLLM Proxy CLI)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 This is the primary config.yaml structure page. Maps directly to infra/litellm/config.yaml:
 - `model_list[].model_name` + `litellm_params{model, api_base, api_key: os.environ/X}` — exact pattern used in real config. The `os.environ/<VAR>` syntax confirmed here: "does os.getenv(...)".
 - `general_settings.master_key` — shown as `sk-1234` example; real config uses `os.environ/...` form.

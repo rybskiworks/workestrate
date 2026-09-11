@@ -1,8 +1,6 @@
 # Plaintext dotenv files
 .env
 .env.*
-!.env.example
-!.env.enc
 
 # Local private keys / decrypted dumps
 .keys/
@@ -10,17 +8,12 @@
 age.txt
 .secrets/
 
-var/*
-!var/.gitkeep
-
-workspaces/*
-!workspaces/.gitkeep
-
 # Upstream agent repos and build outputs (gitignored — flake/local + build cache)
 agents/*/repo
 agents/*/build
 agents/*/.build-hash
 
+# nix build byproducts; GC roots; build with --no-link
 result
 result-*
 
@@ -43,3 +36,20 @@ control/agentctl/vendor/
 
 # Temporary extraction / download cache
 .tmp/
+
+
+# Zed editor settings (IDE-specific, not project config)
+.zed/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# devenv task/state/cache runtime dirs (devenv.dotfile = <root>/.devenv with
+# root = worktree via the devenv-root override; in-tree and ignored)
+.devenv/
+
+# prek/pre-commit generated state (devenv-managed; never commit — a committed
+# copy referencing store paths dangles after nix GC)
+/.pre-commit-config.yaml

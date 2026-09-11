@@ -11,7 +11,7 @@
 - Odysseus does not honor `OPENAI_BASE_URL`. The `data/settings.json` approach is documented but untested.
 - Exact Pi RPC/headless handshake is unknown.
 - Exact Odysseus entrypoint customization for LiteLLM proxy mode is unknown.
-- Odysseus companion services (chromadb/searxng/ntfy) are not provisioned — see [docs/odysseus-full-capability.md](odysseus-full-capability.md).
+- Odysseus companion services (chromadb/searxng/ntfy) are not provisioned — the full analysis (docs/odysseus-full-capability.md) moved to the user's personal config repo, as it is personal-workload content rather than generic tooling.
 
 ## Unverified Microsandbox Behavior
 
@@ -27,7 +27,7 @@
   `MSB_PATH` pointing at the Nix-managed `msb` from `.#microsandbox`. The SDK's
   `build.rs` is satisfied at build time by staging `msb` and `libkrunfw.so.5.2.1` in
   `$MSB_HOME` (no network download), and at run time by `MSB_PATH`. So
-  `nix run .#workestrate -- litellm plan` (or `nix run . -- litellm plan`) works
+  `nix run .#workestrate -- workload plan litellm` (or `nix run . -- workload plan litellm`) works
   without `nix develop` and without a pre-existing `~/.microsandbox/`.
 - `microsandbox-filesystem`'s build.rs would normally download `agentd-x86_64` at
   compile time. We patch it to honor `$MSB_HOME/bin/agentd` and stage the binary

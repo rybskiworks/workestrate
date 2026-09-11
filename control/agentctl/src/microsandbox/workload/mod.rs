@@ -1,0 +1,342 @@
+//! Sandbox workloads: the `Workload` trait, the config-driven
+//! `ConfigWorkload`, and the plan/env/secret builders.
+//!
+//! WP2 split of the former `workload.rs` god-file into `config`
+//! (`ConfigWorkload` + its `Workload` impl), `secrets` (secret resolution and
+//! provenance helpers), `show_source` (the `show_source` formatter), and
+//! `validate` (trust-boundary validators + mount-template resolution). Purely
+//! mechanical — no behavior changes.
+
+use crate::microsandbox::env::SeedEnvView;
+use crate::microsandbox::plan::SandboxPlan;
+use anyhow::Result;
+
+mod config;
+pub(crate) mod credentials;
+pub(crate) mod secrets;
+mod show_source;
+mod validate;
+
+pub use config::ConfigWorkload;
+pub use validate::{
+    validate_env_override, validate_seed_glob, validate_seed_source, validate_seed_target,
+    validate_seed_target_coverage,
+};
+
+/// Program and args to exec inside the sandbox via exec_stream.
+#[derive(Debug, Clone)]
+pub struct SandboxCommand {
+    pub binary: String,
+    pub arguments: Vec<String>,
+}
+
+impl SandboxCommand {
+    pub fn with_args(binary: impl Into<String>, args: &[&str]) -> Self {
+        Self {
+            binary: binary.into(),
+            arguments: args.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+/// How to set the sandbox entrypoint.
+#[derive(Debug, Clone)]
+pub enum EntrypointSpec {
+    /// Blocking keep-alive foreground (`/bin/sh -c "tail -f /dev/null"`) that
+    /// keeps the sandbox alive while `exec_stream` runs the real service. A bare
+    /// `/bin/sh` would run `/bin/sh <image-cmd>` (Docker ENTRYPOINT+CMD) and exit.
+    Shell,
+}
+
+/// A sandbox workload. The generic `ConfigWorkload` implementation reads from
+/// `workestrate.toml`; the lifecycle in `runtime.rs` operates on `&W where W:
+/// Workload`.
+pub trait Workload: Send + Sync + std::fmt::Debug {
+    /// Sandbox name (used for Sandbox::get, logging, user messages).
+    fn name(&self) -> &str;
+
+    /// Sandbox instance name (used for Sandbox::builder, log dirs, down).
+    /// Default: bare workload name. ConfigWorkload overrides to
+    /// `<context>-<workload>` when contexts are active.
+    fn sandbox_instance_name(&self) -> String {
+        self.name().to_string()
+    }
+
+    /// Build the declarative sandbox plan.
+    fn plan(&self) -> SandboxPlan;
+
+    /// Compiled mount policy for one guest mount.
+    fn mount_policy_for(&self, guest: &str) -> Option<&crate::mount_policy::MountPolicyProgram> {
+        let _ = guest;
+        None
+    }
+
+    /// The workload's declared conflict chain (ADR 0030 U11 precedence): the
+    /// per-workload `instance.on_conflict` default the named up/exec path
+    /// applies when no CLI flag overrides. Default: the built-in
+    /// ["reuse","start","replace"] chain.
+    fn instance_conflict_chain(&self) -> Vec<crate::config::ConflictStep> {
+        crate::config::DepConflict::default_chain().0
+    }
+
+    /// The workload's declaring config-repo namespace (ADR 0030 Phase 2 T1):
+    /// the registry-record namespace its instances register under. A
+    /// RESOLUTION filter for depends_on, not a slot prefix. Default "default"
+    /// (legacy/synthetic); ConfigWorkload overrides from provenance.
+    fn namespace(&self) -> String {
+        crate::microsandbox::port_registry::default_namespace()
+    }
+
+    /// The workload's default instance strategy (ADR 0030 §4.1): the
+    /// instance model `up`/`exec` default to when no CLI flag overrides.
+    /// Default Singleton (current behavior); ConfigWorkload overrides from
+    /// the `[workloads.<name>.instance]` policy block.
+    fn instance_strategy(&self) -> crate::config::InstanceStrategy {
+        crate::config::InstanceStrategy::Singleton
+    }
+
+    /// The workload's declared `instance.port` policy (ADR 0030 Phase 3 /
+    /// addendum 2 U6): strict | auto | preferred-with-on_occupied-chain.
+    /// Default None (current behavior — declared host ports as-is).
+    fn instance_port(&self) -> Option<crate::config::InstancePort> {
+        None
+    }
+
+    /// The workload's declared `instance.on_skew` divergence policy (ADR
+    /// 0030 V-addendum §V4): None = the warn default at decision time.
+    /// ConfigWorkload overrides from the `[workloads.<name>.instance]` block.
+    fn instance_on_skew(&self) -> Option<crate::config::OnSkew> {
+        None
+    }
+
+    /// The workload's nested-virtualization ASK (ADR 0036 §3): the
+    /// `[workloads.<name>.virtualization]` table's `nested` value (`None` =
+    /// table/key omitted → Off, current behavior). Default Off (synthetic
+    /// workloads); ConfigWorkload overrides from the merged declaration.
+    fn virtualization_nested(&self) -> Option<crate::config::NestedMode> {
+        None
+    }
+
+    /// The workload's resolved nested-virt posture: the ASK above against
+    /// the collected home `[policy.virtualization]` seal ladder (pure,
+    /// infallible — absent ladder degrades to the ask alone). Default: the
+    /// ask alone with no restriction. `plan()` and the `up` pre-create gate
+    /// share this so warn and refuse can never disagree.
+    fn virtualization_resolution(&self) -> crate::microsandbox::nested::VirtualizationResolution {
+        crate::microsandbox::nested::resolve_virtualization(
+            self.virtualization_nested(),
+            "declared",
+            &[],
+        )
+    }
+
+    /// Format the plan with a `[source]` annotation for each field.
+    fn show_source(&self) -> String {
+        self.plan().to_string()
+    }
+
+    /// Program and args to exec inside the sandbox.
+    fn exec(&self) -> SandboxCommand;
+
+    /// Args to pass when re-exec'ing in detached (background) mode.
+    ///
+    /// Reconstructs the CLI from `spec` in the verb-first shape (ADR 0027)
+    /// — `workload up <name> --foreground ...` — so the detached child
+    /// re-enters the `up --foreground` path with the SAME identity and flags
+    /// the parent resolved:
+    ///   - `--replace` (when `spec.replace`),
+    ///   - `--port-auto` (when `spec.port_auto`, ADR 0026(c)),
+    ///   - `--instance <id>` for a parallel instance — the **bare id**, not
+    ///     `slot@id` (the child re-derives the slot from its own context),
+    ///   - `--use <dep>@<instance>` for each depends_on instance-selection
+    ///     override (`spec.use_overrides`, ADR 0026(d)) so the child resolves
+    ///     the SAME records the parent did.
+    ///
+    /// Detach is service-only: only `spawn_detached_service` calls this
+    /// (agents run in foreground), so `up` is the only verb emitted.
+    ///
+    /// `--new` is intentionally NOT forwarded: the parent has already
+    /// materialized the slug into `spec.instance`, so the child must target
+    /// that concrete instance rather than allocate a fresh one. The child
+    /// parses these args via clap's `workload up` subcommand; the raw-args
+    /// `parse_service_action` parser still round-trips the same flags for
+    /// the detach tests.
+    ///
+    /// `--images-ready` (spec 21 §2.2) is forwarded UNCONDITIONALLY — the
+    /// same shape as `--foreground`: by the time a detached child exists,
+    /// the parent has already run the ensure-images pre-flight, so the
+    /// child must skip it entirely (a child-side `nix build` would be an
+    /// invisible-timeout guarantee: redirected output + the FS-8 500ms
+    /// grace). `--reload-images` is NEVER forwarded (USER DECISION D3 —
+    /// parent-side force only; `InstanceSpec` deliberately carries no
+    /// reload field, so there is nothing here to forward).
+    fn detach_args(&self, spec: &crate::microsandbox::runtime::InstanceSpec) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "workload".to_string(),
+            "up".to_string(),
+            self.name().to_string(),
+            "--foreground".to_string(),
+            // Spec 21 §2.2: the ensure-images token rides the re-exec so the
+            // child skips the pre-flight the parent already ran.
+            "--images-ready".to_string(),
+        ];
+        if spec.replace {
+            args.push("--replace".to_string());
+        }
+        if spec.port_auto {
+            args.push("--port-auto".to_string());
+        }
+        // ADR 0026 addendum: forward --no-deps so the detached child does
+        // NOT re-run dependency auto-start the parent was told to skip.
+        if spec.no_deps {
+            args.push("--no-deps".to_string());
+        }
+        // Forward --reseed so the detached child re-renders template seeds
+        // exactly as the parent was asked to.
+        if spec.reseed {
+            args.push("--reseed".to_string());
+        }
+        for (dep, id) in &spec.use_overrides {
+            args.push("--use".to_string());
+            args.push(format!("{}@{}", dep, id));
+        }
+        // Forward the parallel-instance id only when this is NOT the singleton
+        // (instance == slot, no `@`). instance_id_of splits on the first `@`;
+        // slots never contain `@`, so this is unambiguous.
+        if let Some(id) = crate::microsandbox::slots::instance_id_of(&spec.instance) {
+            args.push("--instance".to_string());
+            args.push(id.to_string());
+        }
+        args
+    }
+
+    /// Optional pre-start hook (e.g., seeding/writing config files to persistent data dir). Receives the workload's guest-visible env view so templated seed files can render against it.
+    ///
+    /// `reseed` is the `--reseed` CLI flag: when true, `template = true`
+    /// seed files re-render over their EXISTING targets (bypassing
+    /// `only_if_missing` for those entries); static seeds and
+    /// `only_if_missing = false` behavior are unchanged.
+    ///
+    /// `instance_state_key` (ADR 0030 V-addendum §V2) is the per-instance
+    /// state key — the instance id's `@`-suffix for a `per-dir`-strategy
+    /// workload, `None` otherwise. Seed targets under the workload's state
+    /// root (`workspaces/<name>-state[/...]`) gain the key segment; with
+    /// `None` every target is byte-identical to before (no layout churn).
+    ///
+    /// `SeedEnvView` is crate-internal (`pub(crate)`, env.rs); the default
+    /// implementation ignores all arguments, and callers inside this crate
+    /// are the only ones that ever construct or consume the view.
+    #[allow(private_interfaces)] // SeedEnvView is crate-internal by design
+    fn prepare(
+        &self,
+        env_view: &SeedEnvView,
+        reseed: bool,
+        instance_state_key: Option<&str>,
+    ) -> Result<()> {
+        let _ = env_view;
+        let _ = reseed;
+        let _ = instance_state_key;
+        Ok(())
+    }
+
+    /// Whether to log errors when stopping the sandbox (default: true).
+    fn log_stop_errors(&self) -> bool {
+        true
+    }
+
+    /// Sandbox entrypoint (default: Shell).
+    fn entrypoint(&self) -> EntrypointSpec {
+        EntrypointSpec::Shell
+    }
+
+    /// Where to find the built workload artifacts. Default: the reserved
+    /// `.workestrate-build/<name>` dir (spec 21 §6.1), resolved
+    /// declaring-layer-relative at mount time; override per workload with
+    /// WORKESTRATE_<NAME>_BUILD (NAME uppercased, '-' → '_') — used by the
+    /// nix wrapper to point at a store path.
+    fn build_path(&self) -> String {
+        let key = format!(
+            "WORKESTRATE_{}_BUILD",
+            self.name().to_ascii_uppercase().replace('-', "_")
+        );
+        if let Ok(p) = std::env::var(key) {
+            p
+        } else {
+            format!(".workestrate-build/{}", self.name())
+        }
+    }
+
+    /// Whether `build_path()` is the UNDECLARED reserved default
+    /// (`.workestrate-build/<name>`, spec 21 §6.1) rather than a declared
+    /// `local_build.fallback` or an env override. The reserved default is a
+    /// config-repo artifact dir that resolves DECLARING-LAYER-relative — it
+    /// must NOT trigger the flake project-root mount preference or the
+    /// flake-root gate. Default impl matches the default `build_path()`
+    /// above: true when the conventional env var is unset. Implementors that
+    /// override `build_path()` with declared-fallback handling MUST override
+    /// this too.
+    fn build_path_is_reserved_default(&self) -> bool {
+        let key = format!(
+            "WORKESTRATE_{}_BUILD",
+            self.name().to_ascii_uppercase().replace('-', "_")
+        );
+        std::env::var(key).is_err()
+    }
+
+    /// Content root for repo-relative mount hosts: the directory of the
+    /// config layer that DECLARED this workload's mounts (spec 17 directory
+    /// mode — config content lives in config repos, not in the tool
+    /// checkout). `None` when no declaring layer dir is knowable (synthetic
+    /// layers, hand-built workloads); the caller then applies the documented
+    /// fallback (flake project root, else cwd) explicitly.
+    fn mount_content_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    /// Immediate directory of the layer declaring the image or local build.
+    /// Used only to locate its flake, never to rebase mount or seed paths.
+    fn flake_source_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    /// The feature requiring a flake project root at sandbox-build time, if
+    /// any — a human-readable label used in the gate's error message
+    /// ("workload '<name>' uses <feature>, which requires a flake project
+    /// root: ..."). `None` means `build_sandbox` must NOT call
+    /// `project_root()` eagerly: registry-image workloads with no local
+    /// build and no relative build-path mounts run from any cwd.
+    fn flake_root_requirement(&self, plan: &SandboxPlan) -> Option<String> {
+        let _ = plan;
+        None
+    }
+
+    /// Plan-time existence preflight (security-model enforcement point; see
+    /// docs/migration/30-security-model.md §enforcement-points). Checks that
+    /// mount sources / seed sources referenced by the plan actually resolve
+    /// to existing paths BEFORE any KVM/runtime work — surfacing the
+    /// failure-1 doubling signal at `plan` time rather than at sandbox start.
+    ///
+    /// `hard = true` (the `plan` command): a missing read-only mount source
+    /// or missing seed source BAILS. `hard = false` (`validate-config`):
+    /// everything is collected as a warning (synthetic/reference configs may
+    /// legitimately lack the referenced files). Read-write mounts and
+    /// `local_build` fallbacks are ALWAYS warnings (RW is auto-created at
+    /// runtime; the fallback is a build output that may not exist yet).
+    ///
+    /// The default impl checks mounts only (the pieces available on the
+    /// trait); `ConfigWorkload` overrides to add seed sources and the
+    /// `local_build` fallback. Returns the list of warning strings.
+    fn preflight_existence(&self, plan: &SandboxPlan, hard: bool) -> Result<Vec<String>> {
+        let owned = crate::microsandbox::mounts::resolve_mount_roots_owned(self, plan)?;
+        let roots = owned.as_roots();
+        crate::microsandbox::mounts::preflight_existence(
+            &roots,
+            plan,
+            &[],
+            None,
+            None,
+            self.name(),
+            hard,
+        )
+    }
+}

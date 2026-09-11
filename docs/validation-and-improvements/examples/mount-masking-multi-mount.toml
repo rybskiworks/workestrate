@@ -1,0 +1,89 @@
+# Example: multi-mount workload with per-mount masking policy (spec 22).
+#
+# Demonstrates the scope hierarchy:
+#   home registry  ->  reference config  ->  config-repo layer  ->  workload  ->  mount entry
+#
+# This file is a complete, valid workestrate config. It is NOT scanned by the
+# spec_examples_parse guard (that test only scans docs/migration/20-target-system-spec.md).
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Scope 3: reference config — sensitive defaults inherited by every workload.
+# All non-final (the default) so lower scopes can carve out exceptions with
+# read.allow.
+# ---------------------------------------------------------------------------
+[policy.mounts.read]
+deny = [
+  "**/.env",
+  "**/.env.*",
+  "**/.ssh/**",
+  "**/*.pem",
+  "**/*.key",
+  "**/.git/**",
+  "**/.sops.yaml",
+  "**/node_modules/.npmrc",
+]
+
+# ---------------------------------------------------------------------------
+# Workload: a service with two mounts, each carrying its own policy.
+# ---------------------------------------------------------------------------
+[workloads.api]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 2
+memory_mib = 1024
+command = ["python", "-m", "http.server", "8080"]
+
+# Scope 5: workload-level policy. Denies the secrets tree, then carves out
+# one public certificate so the service can read it.
+[workloads.api.policy.mounts.read]
+deny = ["secrets/**"]
+allow = ["secrets/public.pem"]
+
+# Mount 1: read-write data mount. No mount-entry policy; inherits the
+# workload + reference scopes.
+[[workloads.api.mounts]]
+host = "workspaces/api-state"
+guest = "/data"
+read_only = false
+
+# Mount 2: read-only config mount with a mount-entry policy (scope 6).
+# The mount-entry policy denies everything except the public template.
+# v1 limitation: mount-entry policy is collected from the declaring layer only.
+[[workloads.api.mounts]]
+host = "config"
+guest = "/config"
+read_only = true
+policy = { read.deny = ["**"], read.allow = ["template.toml"] }
+
+# ---------------------------------------------------------------------------
+# Workload: an agent with a protected config and explicit write rules.
+# ---------------------------------------------------------------------------
+[workloads.agent]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-slim" }
+command = ["node", "index.js"]
+
+# Scope 5: workload policy with write rules. Default writes are allow+tag;
+# here we deny writes to config and allow writes to the workspace.
+[workloads.agent.policy.mounts.read]
+deny = ["config/**"]
+
+[workloads.agent.policy.mounts.write]
+deny = ["config/**"]
+allow = ["workspace/**"]
+
+[[workloads.agent.mounts]]
+host = "workspaces/agent"
+guest = "/workspace"
+read_only = false
+
+[[workloads.agent.mounts]]
+host = "config"
+guest = "/config"
+read_only = true
+# A separate policy_file (JSON program) for this mount — v1 supports either
+# inline `policy` or `policy_file`, not both on the same mount entry.
+# policy_file = "policies/agent-config.json"

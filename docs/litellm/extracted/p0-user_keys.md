@@ -99,8 +99,8 @@ not documented on this page (no config.yaml examples; all code blocks are client
 - https://docs.litellm.ai/docs/proxy/clientside_auth (Clientside LLM Credentials — next page)
 - https://docs.litellm.ai/docs/proxy/email (Email Notifications — previous page)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-This page documents how clients call the proxy. Relevant to workestrator:
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+This page documents how clients call the proxy. Relevant to workestrate:
 - The primary inference endpoint is `POST /chat/completions` (and `/v1/chat/completions` for streaming). Clients set `base_url="http://0.0.0.0:4000"` and `api_key` to the proxy master key or a virtual key.
 - Auth header pattern: `Authorization: Bearer <key>` (or `Authorization: Bearer $OPTIONAL_YOUR_PROXY_KEY` if master_key not set).
 - The `model` field in requests maps to `model_name` in config.yaml (NOT the `litellm_params.model` which is the provider-specific model string).

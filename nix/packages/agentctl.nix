@@ -1,33 +1,84 @@
-{ pkgs
-, microsandbox
-, microsandbox-filesystem-patched
+{
+  pkgs,
+  microsandbox,
+  microsandboxSource,
+  microsandboxCargoLock,
+  rustToolchain,
+  rev ? "dirty",
 }:
 
 let
-  src = pkgs.lib.cleanSourceWith {
-    filter = path: type:
-      let base = baseNameOf path; in
-      !(base == "target" || base == "result" || base == "result-"
-        || (type == "regular" && base == "config.toml"
-            && pkgs.lib.hasSuffix "/.cargo/config.toml" path));
+  # `src` is filtered to keep the nix build hermetic: no in-tree build
+  # artifacts, no crash dumps, no locally-managed result symlinks, no stale
+  # vendor directory (the preBuild hook recreates `vendor/` as a symlink to
+  # the nix-managed patched crate, so any source-tree vendor/ is unused).
+  # Closing the nix-purity guard: every excluded basename here corresponds
+  # to an entry in `control/agentctl/.gitignore` so the working-tree state
+  # and the nix-source view agree.
+  agentctlSrc = pkgs.lib.cleanSourceWith {
+    filter =
+      path: type:
+      let
+        base = baseNameOf path;
+      in
+      !(
+        base == "target"
+        || base == "result"
+        || base == "result-"
+        || base == "result-man"
+        || base == "core"
+        || pkgs.lib.hasPrefix "core." base
+        || base == "vendor"
+        || (type == "regular" && base == "config.toml" && pkgs.lib.hasSuffix "/.cargo/config.toml" path)
+      );
     src = ../../control/agentctl;
   };
+
+  # The scaffold embeds the committed JSON schema via
+  # `include_str!("../../../../schemas/workestrate.schema.json")` (relative to
+  # control/agentctl/src/scaffold/mod.rs), so the build source must be the
+  # repo-level subtree that contains BOTH control/agentctl and schemas/.
+  src = pkgs.runCommand "source" { } ''
+    mkdir -p $out/control
+    cp -r ${agentctlSrc} $out/control/agentctl
+    chmod -R u+w $out/control/agentctl
+    cp -r ${../../schemas} $out/schemas
+  '';
+
+  # Use the fenix-pinned toolchain so nix builds and the dev shell agree on
+  # the exact rustc version (currently 1.97.1).
+  rustPlatform = pkgs.makeRustPlatform {
+    inherit (rustToolchain) rustc;
+    inherit (rustToolchain) cargo;
+  };
+  # Read metadata before filtering: read-only evaluation cannot realize a new
+  # filtered source copy merely to inspect the unchanged manifest inside it.
+  manifest = builtins.fromTOML (builtins.readFile ../../control/agentctl/Cargo.toml);
 in
-(pkgs.rustPlatform.buildRustPackage {
+assert pkgs.lib.assertMsg (
+  manifest.dependencies.microsandbox.version == "=${microsandbox.version}"
+  && manifest.dev-dependencies.microsandbox-image == "=${microsandbox.version}"
+) "Workestrate SDK dependencies must match the Microsandbox runtime version";
+rustPlatform.buildRustPackage {
   pname = "workestrate";
-  version = "0.1.0";
+  version = manifest.package.version;
 
   inherit src;
 
-  cargoLock = {
+  env = {
+    WORKESTRATE_REV = rev;
+  };
+
+  # The composite src root contains control/agentctl + schemas/ (see above);
+  # the crate builds from the agentctl subtree.
+  sourceRoot = "source/control/agentctl";
+
+  cargoLock = microsandboxCargoLock {
     lockFile = ../../control/agentctl/Cargo.lock;
   };
 
-  # Allow microsandbox-filesystem's build.rs to find a pre-staged agentd
-  # under $MSB_HOME/bin/agentd so the Nix build avoids network downloads.
-  # The patch is applied directly to the vendored crate directory in
-  # preBuild (see below) because buildRustPackage with cargoLock does not
-  # forward `cargoPatches` to the vendored source.
+  # All SDK patches use the same fork input as the runtime packages. Explicit
+  # immutable runtime inputs keep the prebuilt features offline.
 
   nativeBuildInputs = with pkgs; [
     makeWrapper
@@ -39,42 +90,36 @@ in
   ];
 
   preBuild = ''
-    mkdir -p vendor
-    ln -sfn "${microsandbox-filesystem-patched}" vendor/microsandbox-filesystem-0.5.6
-    cat > .cargo/config.toml <<'CARGO_CONFIG'
-    [patch.crates-io]
-    microsandbox-filesystem = { path = "vendor/microsandbox-filesystem-0.5.6" }
-    CARGO_CONFIG
+    mkdir -p vendor .cargo
+    ln -sfn "${microsandboxSource}" vendor/microsandbox-fork
+    cp ${../../control/agentctl/.cargo/config.toml} .cargo/config.toml
 
-    # Stage the Nix-managed Microsandbox runtime where the crate's build.rs
-    # expects it. build.rs resolves its install root via MSB_HOME (verbatim,
-    # no .microsandbox suffix) and skips downloading when bin/msb and
-    # lib/libkrunfw.so.5.2.1 exist and msb --version matches 0.5.6.
-    export MSB_HOME=$TMPDIR/.microsandbox
-    mkdir -p $MSB_HOME/bin $MSB_HOME/lib
-    cp ${microsandbox}/bin/msb $MSB_HOME/bin/msb
-
-    # Also stage the agentd guest-init binary used by microsandbox-filesystem.
-    cp ${microsandbox}/libexec/agentd $MSB_HOME/bin/agentd
-    chmod +x $MSB_HOME/bin/agentd
-
-    for f in ${microsandbox}/lib/libkrunfw.so*; do
-      if [ -f "$f" ] || [ -L "$f" ]; then
-        cp -P "$f" $MSB_HOME/lib/
-      fi
-    done
+    # Build inputs are immutable, independent of mutable runtime state. The
+    # SDK validates the explicit runtime directory without any downloads.
+    export MSB_BUILD_RUNTIME=${microsandbox}
+    export MSB_AGENTD_PATH=${microsandbox}/libexec/agentd
   '';
 
   postInstall = ''
-    # Force MSB_HOME to a persistent path at runtime. The dev shell sets a
-    # temporary MSB_HOME (e.g. /run/user/1000/ai-workbench-msb-$$) for offline
-    # cargo check builds only. At runtime, the SDK needs a stable MSB_HOME
-    # (~/.microsandbox) for cache/db/state. Using --run ensures shell expansion
-    # of $HOME happens at wrapper execution time, not at build time.
+    # Canonical MSB home: $HOME/.microsandbox/current — the `current`
+    # GENERATION symlink of the msb state-generations layout
+    # ($HOME/.microsandbox/generations/<hash12>/{db,sandboxes,run,...};
+    # see control/agentctl/src/microsandbox/generation.rs). msb resolves
+    # the symlink itself, so its home is the target generation dir keyed by
+    # the baked msb store-path hash. The guarded --run below honors an
+    # explicit caller override (a non-empty MSB_HOME still wins verbatim)
+    # while defaulting unset AND empty to the canonical home — empty
+    # mirrors the SDK's resolve_home semantics (empty treated as unset).
+    # --set-default would NOT handle the empty-string case (it only fires
+    # when unset), so the explicit `[ -z ... ]` guard is required. The
+    # 12-char generation keys keep derived Unix socket endpoints short
+    # enough for the platform's sun_path byte limit. Shell expansion of $HOME happens
+    # at wrapper execution time, not at build time.
     wrapProgram $out/bin/workestrate \
       --set MSB_PATH "${microsandbox}/bin/msb" \
+      --set MSB_AGENTD_PATH "${microsandbox}/libexec/agentd" \
       --prefix PATH : ${pkgs.sops}/bin \
-      --run 'export MSB_HOME="$HOME/.microsandbox"'
+      --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox/current"; fi'
   '';
 
   doCheck = false;
@@ -84,4 +129,3 @@ in
     mainProgram = "workestrate";
   };
 }
-)

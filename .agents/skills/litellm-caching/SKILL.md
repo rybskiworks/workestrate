@@ -141,7 +141,7 @@ per-call basis.
 
 ## Project context [PROJECT — not upstream docs]
 
-The workestrator config (`infra/litellm/config.yaml`) sets **none** of the
+The workestrate config (`infra/litellm/config.yaml`) sets **none** of the
 cache keys — caching is entirely off (deliberate minimal in-memory baseline).
 Recommended DB-free additions:
 

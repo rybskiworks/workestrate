@@ -1,0 +1,800 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Registry",
+  "description": "Schema root of the tool-home `registry.toml`: global `[settings]`, the registered config repos (`configs`), the default layer stack (`layers`), named contexts (`contexts`), and the trusted-project list. Written atomically by `config::save_registry`.",
+  "type": "object",
+  "properties": {
+    "configs": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/ConfigRepoEntry"
+      }
+    },
+    "contexts": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/Context"
+      }
+    },
+    "layers": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "policy": {
+      "default": {
+        "egress": null,
+        "idna": null,
+        "ingress": null,
+        "mounts": null,
+        "secrets": null,
+        "ssh": null,
+        "virtualization": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/PolicyConfig"
+        }
+      ]
+    },
+    "settings": {
+      "default": {
+        "default_context": null,
+        "home_version": null,
+        "image_keep_last": null,
+        "state_dir": null,
+        "store_dir": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/RegistrySettings"
+        }
+      ]
+    },
+    "trusted_projects": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/TrustedProject"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AxisFragment": {
+      "description": "One policy axis (read or write) for one scope: `deny`/`allow` entry lists. Entries are relaxable by default; `{ pattern = \"...\", final = true }` freezes an entry against later scopes (terminal at compile time, spec 22 §4).",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        },
+        "deny": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PolicyValue_for_String"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConfigRepoEntry": {
+      "description": "One registered config repo in the tool-home registry (`[configs.<name>]`). `url` is the clone source (git URL, or a filesystem path for `config new` repos); `ref`/`rev` track the checked-out branch and commit; the `secrets*` fields locate that repo's encrypted secrets material.",
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "age_key_file": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image_keep_last": {
+          "description": "Per-repo keep-last-N rung for nix-layered image tags (ADR 0032 §Image tags, RESOLVED user decision 3): beats the home-settings and built-in-default rungs, loses to a workload capsule `keep_last`. `None` = not configured at this rung.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rev": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secrets": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secrets_file": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Context": {
+      "description": "A named context in the registry (`[contexts.<name>]`): an ordered list of config-layer names merged (earlier = lower precedence) when the context is active.",
+      "type": "object",
+      "properties": {
+        "layers": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DomainEntry": {
+      "description": "One egress domain entry — `[[policy.egress.allow.domain]]` or `[[policy.egress.deny.domain]]`. `port` is REQUIRED on allow, OPTIONAL on deny (omitted = all ports, deny-only). Validated by the policy compiler.",
+      "type": "object",
+      "properties": {
+        "domains": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "port": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "protocol": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressAllowTable": {
+      "description": "`policy.egress.allow` table — egress allow polarity (ADR 0035 §3.2).",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "domain": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DomainEntry"
+          }
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "host": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HostEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressDenyTable": {
+      "description": "`policy.egress.deny` table — egress deny polarity (ADR 0035 §3.2).",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "domain": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DomainEntry"
+          }
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EgressPolicyFragment": {
+      "description": "`policy.egress` fragment — hierarchical egress policy (ADR 0035 §3.2). Collected per rung; `on_conflict` and `final` at fragment level control the egress ladder's conflict handling and sealing.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressAllowTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deny": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressDenyTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "on_conflict": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OnConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostEntry": {
+      "description": "One egress host entry — `[[policy.egress.allow.host]]`. Host-bridge (DNS + litellm proxy); `host` is the msb host bridge.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ports": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          }
+        },
+        "protocols": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IdnaMode": {
+      "description": "IDNA mode for `policy.idna` (ADR 0035 §3.5). `reject` is the built-in default (hard error on non-ASCII); `uts46` enables strict ToASCII conversion via the `idna` crate with `unicode-security` confusable warnings.",
+      "type": "string",
+      "enum": [
+        "reject",
+        "uts46"
+      ]
+    },
+    "IdnaPolicyFragment": {
+      "description": "`policy.idna` fragment — flag-gated IDNA mode (ladder, default-off). Collected like other `policy.*` fragments, never via `merge.rs`; resolved before domain validation (gate 1 early, before coverage/specificity).",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mode": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IdnaMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "IngressAllowTable": {
+      "description": "`policy.ingress.allow` table — ingress allow polarity.",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "port": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IngressDenyTable": {
+      "description": "`policy.ingress.deny` table — ingress deny polarity.",
+      "type": "object",
+      "properties": {
+        "all": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "port": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IngressPolicyFragment": {
+      "description": "`policy.ingress` fragment — hierarchical ingress policy (ADR 0035 §3.4).",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressAllowTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deny": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressDenyTable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "on_conflict": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OnConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MountsFragment": {
+      "description": "The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).\n\nEntries hold RAW pattern strings: the compiler validates and compiles them against the declaring origin (spec 22 §6 pattern rejections name the origin), so fragments must not pre-compile patterns. `case_sensitivity` is likewise raw so the compiler can name the offending value and origin in a `CompileError` (spec 22 §6). The former vocabulary (`mask`, `unmask`, `protect`, `writes`, `masked_writes`, entry key `overridable`) is intentionally gone: this pre-release surface rejects those keys as unknown fields rather than silently accepting old policy.",
+      "type": "object",
+      "properties": {
+        "case_sensitivity": {
+          "description": "Raw `case_sensitivity` setting; v1 accepts exactly `\"sensitive\"` (spec 22 §6).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read": {
+          "description": "Read axis (visibility): `deny` hides paths, `allow` carves out exceptions; applied deny-then-allow within the scope (spec 22 §4: per-scope deny-then-allow emission order).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "write": {
+          "description": "Write axis (write admission): pattern-keyed `allow`/`deny`.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OnConflict": {
+      "description": "Conflict handling for a frozen rung (ADR 0035 §8). Per-ladder granular: egress vs ingress ladders have independent `on_conflict`; each polarity table overridable; `final` seals the choice.",
+      "type": "string",
+      "enum": [
+        "ignore",
+        "warn",
+        "fail"
+      ]
+    },
+    "PolicyConfig": {
+      "description": "A policy namespace. Keeping the `mounts` table nested makes the config surface match `[policy.mounts]` while leaving policy fragments outside the ordinary merge algebra.",
+      "type": "object",
+      "properties": {
+        "egress": {
+          "description": "Hierarchical egress policy fragment (`[policy.egress]`). Collected per rung (home registry, config layers, workload) and compiled by the network policy engine (ADR 0035). Each polarity table (`allow`/`deny`) carries `all` / `final` and array-of-tables entries.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EgressPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "idna": {
+          "description": "IDNA handling policy (`[policy.idna]`). Ladder with `final` sealing, default `reject` (ADR 0035 §3.5). Resolved before domain validation.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IdnaPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ingress": {
+          "description": "Hierarchical ingress policy fragment (`[policy.ingress]`). Collected per rung and compiled by the network policy engine (ADR 0035). Ingress is port-only with peer-source scope vocabulary (§3.4).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IngressPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mounts": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MountsFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secrets": {
+          "description": "Secret violation-policy ladder rung (`[policy.secrets]`). The SAME sub-shape is valid at all three policy rungs: the home registry (`Registry.policy`, operator scope), a workestrate.toml layer (config-repo-layer rung), and a workload declaration (`[workloads.<name>.policy]` — where a bare directory-mode capsule's top-level `[policy.secrets]` lands). Like `mounts`, this fragment is COLLECTED per scope, never merged (see loading.rs).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretsPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ssh": {
+          "description": "SSH confinement-policy rung (`[policy.ssh]`). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SshPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "virtualization": {
+          "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VirtualizationPolicyFragment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyValueStringExpandedSchema": {
+      "type": "object",
+      "required": [
+        "pattern"
+      ],
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyValue_for_String": {
+      "description": "The public schema for a raw string policy value. Runtime deserialization also supports the historical `value` alias, but the config surface is the compact string or the documented `{ pattern, final }` table.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/PolicyValueStringExpandedSchema"
+        }
+      ]
+    },
+    "PortEntry": {
+      "description": "One ingress port entry — `[[policy.ingress.allow.port]]` or `[[policy.ingress.deny.port]]`. `protocol` is `\"tcp\"` only v1 (`\"udp\"` validation error \"not supported v1, tcp/local only\"), `scope` is `\"local\"` only v1.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ports": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          }
+        },
+        "protocol": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RegistrySettings": {
+      "description": "Tool-wide settings section of the tool-home `registry.toml` (`[settings]`). `default_context` selects the active context when none is given; `store_dir`/`state_dir` override the derived store/state locations.",
+      "type": "object",
+      "properties": {
+        "default_context": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "home_version": {
+          "description": "Layout version of the tool home. Absent ⇒ 1 (legacy XDG-derived layout). Set to 2 by `workestrate migrate-home` after consolidating into a single `WORKESTRATE_HOME` (ADR 0023). Purely informational/forward-compat: the [`HomeKind`] resolution already determines the active layout.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "image_keep_last": {
+          "description": "Home-wide keep-last-N rung for nix-layered image tags (ADR 0032 §Image tags, RESOLVED user decision 3): middle rung of the cascade — beats the built-in default, loses to a config-repo entry and a workload capsule `keep_last`. `None` = not configured at this rung.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "state_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecretViolationPolicy": {
+      "description": "Per-secret egress violation policy (`secrets.<name>.on_violation`): what the host-side network proxy does when the secret's `$MSB_<NAME>` placeholder appears in traffic to a host that is NOT in the secret's `allowed_hosts` (including request BODIES, where a quoted placeholder would otherwise poison the session — upstream microsandbox#1354).\n\nThe sandbox only ever sees the placeholder; the proxy substitutes the real value exclusively for allowed hosts, so every variant here governs the fate of the harmless placeholder TEXT, never the credential itself. Serde kebab-case yields the TOML strings `\"passthrough\"` | `\"block\"` | `\"block-and-log\"` | `\"block-and-terminate\"`, matching the SDK's `ViolationAction` naming.",
+      "oneOf": [
+        {
+          "description": "Forward the placeholder unchanged to the non-allowed host (the engine's connection is not reset). DEFAULT — safe because the proxy never substitutes the real value for non-allowed hosts: passthrough only permits the harmless placeholder text to leave the sandbox; real-secret substitution still requires an allowed host + enabled injection location. Also works around upstream microsandbox#1354, where a placeholder quoted inside a request body (e.g. an LLM conversation echoing `$MSB_GITHUB_TOKEN`) blocks every subsequent request under the engine default.",
+          "type": "string",
+          "enum": [
+            "passthrough"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection carrying the placeholder to the non-allowed host, silently (no host-side warning).",
+          "type": "string",
+          "enum": [
+            "block"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection AND emit a host-side warning — the engine default when no per-secret policy is configured in the SDK.",
+          "type": "string",
+          "enum": [
+            "block-and-log"
+          ]
+        },
+        {
+          "description": "Drop/reset the connection, log, and terminate the sandbox session.",
+          "type": "string",
+          "enum": [
+            "block-and-terminate"
+          ]
+        }
+      ]
+    },
+    "SecretsPolicyFragment": {
+      "description": "One rung of the secret violation-policy ladder (`[policy.secrets]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Resolution walks the rungs authority-ascending — built-in passthrough, then home registry (`Registry.policy.secrets` in `<home>/config.toml`, the operator scope), then each config-repo layer's `[policy.secrets]` in stack order, then the workload capsule's `[workloads.<name>.policy.secrets]` — and the per-secret `[secrets.<NAME>] on_violation` entry decides last unless a higher rung is final. This mirrors the mount-policy hierarchy (docs/mount-policy/03-hierarchy-and-precedence.md): later = more specific wins, and `final = true` is a terminal freeze that stops every lower rung (including per-secret entries) from overriding the value resolved at the freezing rung. DEVIATION from mount-policy vocabulary: `final` may appear WITHOUT `on_violation` (mount-policy rules always carry an action) — a bare final freezes whatever the higher rungs resolved so far. There is no frozen-out explain trace (mount-policy's `frozen_out`/`frozen_by`): the resolution provenance records only the deciding rung.",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung — config-repo layers, workload capsules, per-secret entries — is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "on_violation": {
+          "description": "Default violation policy this rung declares for secrets (same kebab-case vocabulary as the per-secret field). Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecretViolationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SshPolicyFragment": {
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "type": "object",
+      "properties": {
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        },
+        "strict": {
+          "description": "Confinement switch this rung declares. `strict = true` means recognized SSH flows are checked against SSH grants/egress even when a generic TCP allowance would match. Absent = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TrustedProject": {
+      "description": "A project directory trusted for project-layer config loading (`[[trusted_projects]]` in the registry). `path` is the canonicalized directory; only trusted projects' `workestrate.toml`/`.workestrate/` are honored during config/home resolution.",
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VirtualizationPolicyFragment": {
+      "description": "`[policy.virtualization]` fragment — the HOME-registry operator seal (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final` seals. Collected per scope (home registry → config layers → workload capsule), NEVER merged — the same collect-never-merge idiom as the secrets/egress ladders. `final` seals, never enables: a freeze at `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban); `true` grants nothing by itself (the workload still needs an explicit `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is plan-time (`frozen_out` provenance; `up` refuses), NOT a validate-config error (validate stays static, no host I/O).",
+      "type": "object",
+      "properties": {
+        "allow_nested": {
+          "description": "Operator grant/restriction for nested virt at this rung. `None` = this rung declares no value (it may still freeze with `final`).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "final": {
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

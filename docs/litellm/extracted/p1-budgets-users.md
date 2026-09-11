@@ -192,8 +192,8 @@ model_list:
 - /docs/a2a
 - /docs/a2a_iteration_budgets
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- Per-key, per-team, per-user budgets and rate limits ALL REQUIRE a Postgres database (virtual keys/teams/users). The workestrator runs in-memory (no Postgres, no Redis), so these are UNAVAILABLE. Only `litellm_settings.max_budget` (global proxy budget) and `litellm_settings.budget_duration` (global reset) work without a DB — but even these track spend in the DB, so enforcement is limited. `general_settings.token_rate_limit_type` is moot without per-key rate limits. `model_list[].model_info.access_groups` works without a DB (static config). Multi-instance rate limiting requires Redis (unavailable). `general_settings.fail_closed_budget_enforcement` requires DB (unavailable). `general_settings.disable_spend_logs` (from db_info page) is the relevant setting to avoid DB spend log writes.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- Per-key, per-team, per-user budgets and rate limits ALL REQUIRE a Postgres database (virtual keys/teams/users). The workestrate runs in-memory (no Postgres, no Redis), so these are UNAVAILABLE. Only `litellm_settings.max_budget` (global proxy budget) and `litellm_settings.budget_duration` (global reset) work without a DB — but even these track spend in the DB, so enforcement is limited. `general_settings.token_rate_limit_type` is moot without per-key rate limits. `model_list[].model_info.access_groups` works without a DB (static config). Multi-instance rate limiting requires Redis (unavailable). `general_settings.fail_closed_budget_enforcement` requires DB (unavailable). `general_settings.disable_spend_logs` (from db_info page) is the relevant setting to avoid DB spend log writes.
 
 ## Confidence / uncertainty notes
 - high confidence on DB + Redis requirements (verbatim quotes). The global `litellm_settings.max_budget` may partially function without DB but spend tracking is DB-backed (inferred). `access_groups` in model_info is static config (high confidence it works without DB).

@@ -51,7 +51,7 @@ mix compile --warnings-as-errors
 - `--warnings-as-errors` promotes warnings to failures; do not run the compile
   gate without it.
 - This is the minimum gate; it does not replace credo, dialyzer, format, or test.
-- Run inside `nix develop` (see `nix-usage` skill) so the correct Erlang/Elixir
+- Run inside `just shell` (see `nix-usage` skill) so the correct Erlang/Elixir
   toolchain is used.
 - For umbrella projects, `mix compile` compiles all apps; `--warnings-as-errors`
   applies across the umbrella.

@@ -22,7 +22,7 @@
 
 Who can call the proxy (auth), which models each caller may use (access),
 how much they may spend and how fast (budgets / rate limits), and how the
-admin manages keys/teams/users (management surface). In the workestrator
+admin manages keys/teams/users (management surface). In the workestrate
 (in-memory, no Postgres, no Redis) the **only** auth is the `master_key`;
 virtual keys, teams, users, budgets, and per-key/per-team model access are
 all **unavailable**.
@@ -226,7 +226,7 @@ Verbatim (from `p1-budgets-rate_limit_tiers.md` / budgets corpus):
 - `litellm-budgets-keys` (`.agents/skills/litellm-budgets-keys/`) — operational skill (virtual keys, budgets, rate limits; DB-gated; M4).
 - [`endpoints/README.md`](../endpoints/README.md) — management endpoint families by DB requirement.
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 

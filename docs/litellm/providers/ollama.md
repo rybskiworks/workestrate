@@ -68,7 +68,7 @@ model_list:
 - Ollama uses native API (not OpenAI-compatible) — uses `/api/chat` and `/api/generate` endpoints.
 - `api_base` defaults to `http://localhost:11434`.
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 Ollama is a local model serving pattern. Uses native Ollama API (not OpenAI-compatible). `ollama_chat/` is the recommended prefix for chat; `ollama/` for generate/FIM. No API key required — suitable for local development. `api_base` defaults to `http://localhost:11434`. For OpenAI-compatible local serving, vLLM (`hosted_vllm/`) may be a better choice since it exposes an OpenAI-compatible API.
 

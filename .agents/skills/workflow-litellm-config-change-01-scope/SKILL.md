@@ -36,7 +36,7 @@ This phase is read-only: it reads docs and the current config; it does not edit.
 1. **Classify the change type.** Record which of the change types above applies. The change type determines which regular skill `03-implement` loads.
 2. **Record the target top-level section.** Per `config-yaml-overview.md`, the valid top-level keys are: `environment_variables`, `model_list`, `litellm_settings`, `callback_settings`, `general_settings`, `router_settings`, plus `credential_list` and `include`. Do not invent any other top-level key. The real config uses 4: `model_list`, `general_settings`, `router_settings`, `litellm_settings`.
 3. **Record affected `model_name` aliases.** For `model_list`/fallback changes, list every alias touched (e.g. `coding`, `coding-fallback`). Note that the `model` field in a client request maps to the `model_name` alias, NOT to `litellm_params.model`.
-4. **Confirm deployment mode.** The workestrator deployment is in-memory (no Postgres, no Redis, `master_key`-only auth). Record this assumption — it activates the in-memory constraints in later phases.
+4. **Confirm deployment mode.** The workestrate deployment is in-memory (no Postgres, no Redis, `master_key`-only auth). Record this assumption — it activates the in-memory constraints in later phases.
 5. **Read the current config.** Read `infra/litellm/config.yaml` and record the current state of the target section so the diff is unambiguous.
 
 ## Constraints to apply

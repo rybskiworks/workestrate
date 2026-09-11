@@ -1,0 +1,17 @@
+name: example-offensive
+image: example-offensive:latest
+workdir: /work
+command: node dist/cli.js
+cpus: 2
+memory: 2048 MiB
+env: T3MP3ST_HOST=127.0.0.1
+env: OPENAI_API_KEY=(redacted)
+env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'example-litellm')
+mount: workspaces/example-offensive-state:/data
+network: egress_default=allow ingress_default=deny
+NOTE: workload 'example-offensive' runs relaxed defaults (egress=allow)
+  egress: tcp:53 -> host
+  egress: udp:53 -> host
+  egress: tcp:443 -> openrouter.ai, api.kimi.com, api.neuralwatt.com, api.minimax.io, github.com, api.github.com
+  egress: tcp:4000 -> host (derived: depends_on 'example-litellm')
+

@@ -1,1 +1,13 @@
+# Cargo build artifacts — relocated to
+#   $XDG_CACHE_HOME/ai-workbench/agentctl-target
+# by the devshell and by `just` recipes. The legacy in-tree /target is
+# still ignored here in case anyone runs bare `cargo` without the devshell.
 /target
+
+# Rust panic crash dumps (large, never tracked).
+/core
+/core.*
+
+# Nix output symlinks (manage locally; never commit closures).
+/result
+/result-*

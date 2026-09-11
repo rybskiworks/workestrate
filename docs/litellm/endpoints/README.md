@@ -15,7 +15,7 @@ readable indexes live in `docs/litellm/schemas/`:
 
 These are the runtime/data-plane endpoints clients call to perform LLM work.
 Auth is via `Authorization: Bearer <master_key>` (or a virtual key when a DB is
-configured). The workestrator uses only the master key (in-memory, no DB).
+configured). The workestrate uses only the master key (in-memory, no DB).
 
 | Method | Path | Purpose | Compat | Auth |
 |--------|------|---------|--------|------|
@@ -56,7 +56,7 @@ configured). The workestrator uses only the master key (in-memory, no DB).
   Requires `litellm_settings.callbacks: ["prometheus"]`. Works without DB/Redis
   for basic metrics. Budget/rate-limit metrics require DB-backed virtual keys.
 - **`/health/liveliness`** — note the OpenAPI contains both `/health/liveness`
-  and `/health/liveliness` (misspelled). The workestrator infra uses the
+  and `/health/liveliness` (misspelled). The workestrate infra uses the
   misspelled `/health/liveliness` and `/health/readiness`.
 - **MCP REST** (`/mcp-rest/tools/list`, `/mcp-rest/tools/call`) operate on
   config-defined `mcp_servers` and work without a DB.
@@ -66,7 +66,7 @@ configured). The workestrator uses only the master key (in-memory, no DB).
 ## Management Endpoints (by family)
 
 Management endpoints administer virtual keys, teams, users, budgets, spend,
-models, guardrails, cache, and config. **The workestrator runs LiteLLM
+models, guardrails, cache, and config. **The workestrate runs LiteLLM
 in-memory with no Postgres**, so any endpoint flagged `requires_db` is
 **unavailable** in this deployment.
 
@@ -117,7 +117,7 @@ in-memory with no Postgres**, so any endpoint flagged `requires_db` is
 > the family need a DB; `partial` = some do; `no` = none do (static config /
 > read-only / passthrough).
 
-### DB-required families (unavailable in workestrator)
+### DB-required families (unavailable in workestrate)
 
 These mutate or query DB-backed entities and will fail without a Postgres
 connection:
@@ -138,7 +138,7 @@ connection:
   (CRUD) / agents registry / access_groups / audit / jwt_mappings / workflows
   / projects / vector_store / claude-code plugins** — all DB-backed.
 
-### DB-free families (available in workestrator)
+### DB-free families (available in workestrate)
 
 - **health** — `/health`, `/health/liveliness`, `/health/readiness`,
   `/health/services`, `/health/backlog`, `/health/test_connection`, etc. Work
@@ -201,9 +201,9 @@ These are the agent-gateway endpoints. All three can be configured statically in
   persistence (inferred).
 - Source: https://docs.litellm.ai/docs/a2a
 
-## Workestrator in Practice
+## Workestrate in Practice
 
-The workestrator runs LiteLLM as an in-memory gateway (no Postgres, no Redis,
+The workestrate runs LiteLLM as an in-memory gateway (no Postgres, no Redis,
 no UI). Agent sandboxes (Pi, Odysseus) call LiteLLM, not provider APIs
 directly.
 
@@ -241,7 +241,7 @@ directly.
 
 See [`infra/litellm/config.yaml`](../../../infra/litellm/config.yaml) and
 [`infra/litellm/README.md`](../../../infra/litellm/README.md) for the
-workestrator deployment details. The proxy listens on `:4000`. Clients set
+workestrate deployment details. The proxy listens on `:4000`. Clients set
 `base_url=http://<litellm-host>:4000` and `api_key=$LITELLM_MASTER_KEY`.
 
 ## Sources

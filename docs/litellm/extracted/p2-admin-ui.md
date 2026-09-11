@@ -77,8 +77,8 @@ None on this page — page contains no YAML blocks. All configuration is shown a
 - /docs/proxy/customer_usage
 - /docs/proxy/ui_logs
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- CRITICAL: The Admin UI REQUIRES a database — verbatim: "Requires db connected". The workestrator runs in-memory (no Postgres), so the Admin UI is UNAVAILABLE. `DISABLE_ADMIN_UI="True"` should be set to disable the UI and avoid DB-dependent errors. `LITELLM_MASTER_KEY` works without DB (master_key auth). `UI_USERNAME` / `UI_PASSWORD` are moot without DB. `DOCS_URL` and `ROOT_REDIRECT_URL` work without DB (static routing). The Swagger at `/` may partially work without DB (endpoint listing) but DB-backed management endpoints will fail.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- CRITICAL: The Admin UI REQUIRES a database — verbatim: "Requires db connected". The workestrate runs in-memory (no Postgres), so the Admin UI is UNAVAILABLE. `DISABLE_ADMIN_UI="True"` should be set to disable the UI and avoid DB-dependent errors. `LITELLM_MASTER_KEY` works without DB (master_key auth). `UI_USERNAME` / `UI_PASSWORD` are moot without DB. `DOCS_URL` and `ROOT_REDIRECT_URL` work without DB (static routing). The Swagger at `/` may partially work without DB (endpoint listing) but DB-backed management endpoints will fail.
 
 ## Confidence / uncertainty notes
 - high confidence on DB requirement (verbatim "Requires db connected"). The `DISABLE_ADMIN_UI` env var is the relevant setting for the in-memory deployment (high confidence). `DOCS_URL` / `ROOT_REDIRECT_URL` work without DB (inferred high confidence — static routing).

@@ -516,7 +516,7 @@ Set via `#![allow|warn|deny(rustdoc::NAME)]`. Except `missing_docs`, these lints
 | `rustdoc::private_doc_tests` | ALLOW | Doctests on private items. |
 | `rustdoc::invalid_codeblock_attributes` | WARN | Mistyped fence attrs. |
 | `rustdoc::invalid_html_tags` | WARN | Invalid HTML in docs. |
-| `rustdoc::invalid_rust_codeblocks` | WARN | Unparseable Rust blocks. |
+| `rustdoc::invalid_rust_codeblocks` | WARN | Unparsable Rust blocks. |
 | `rustdoc::bare_urls` | WARN | URLs not wrapped in link syntax. |
 | `rustdoc::redundant_explicit_links` | WARN | Explicit link duplicating an intra-doc link. |
 | `rustdoc::unescaped_backticks` | ALLOW | Unescaped backticks in prose. |

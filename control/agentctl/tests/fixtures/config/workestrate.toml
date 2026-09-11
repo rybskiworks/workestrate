@@ -1,0 +1,280 @@
+schema_version = 1
+
+# 5-workload test fixture. Cleanup phase 3: the historical real litellm
+# workload is replaced by the synthetic `example-litellm` placeholder
+# (mirroring config.reference/workestrate.toml) — generic public image, no
+# real provider egress hosts, no real provider secret IDs. The pi/odysseus/
+# opencode/tempest workloads are test scaffolding kept as-is.
+
+[secrets.LITELLM_MASTER_KEY]
+env_var = "LITELLM_MASTER_KEY"
+required = true
+
+[secrets.GITHUB_TOKEN]
+env_var = "GITHUB_TOKEN"
+allowed_hosts = ["github.com", "api.github.com"]
+required = false
+
+[secrets.ODYSSEUS_ADMIN_PASSWORD]
+env_var = "ODYSSEUS_ADMIN_PASSWORD"
+required = true
+placeholder = "change_me_before_first_boot"
+
+[workloads.example-litellm]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+# python:3.12-slim has no /app (and nothing mounts one); msb validates
+# that workdir exists in the guest at create time (fork PR #475), so the
+# workdir must be a dir the image actually ships.
+workdir = "/"
+cpus = 2
+memory_mib = 2048
+command = ["python", "-m", "http.server", "4000"]
+log_stop_errors = true
+
+[workloads.example-litellm.env]
+PORT = "4000"
+
+[[workloads.example-litellm.ports]]
+host = 4000
+guest = 4000
+
+[workloads.example-litellm.network.defaults]
+egress = "deny"
+
+[[workloads.example-litellm.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.example-litellm.policy.ingress.allow.port]]
+ports = [4000]
+protocol = "tcp"
+scope = "local"
+
+[workloads.pi]
+kind = "agent"
+image = { recipe = "nix-layered", name = "workestrate-pi", tag = "latest", contents = ["cacert", "busybox", "fakeNss"], binary = { recipe = "bun-compile", src = "flake://pi", entrypoint = "packages/coding-agent/dist/bun/cli.js", worker = "packages/coding-agent/src/utils/image-resize-worker.ts" }, features = ["create_tmp"] }
+workdir = "/work"
+cpus = 2
+memory_mib = 2048
+command = ["/app/bin/pi"]
+log_stop_errors = false
+
+[workloads.pi.env]
+PI_CODING_AGENT_DIR = "/data/agent"
+PI_TELEMETRY = "0"
+LITELLM_MASTER_KEY = true
+GITHUB_TOKEN = true
+
+[[workloads.pi.mounts]]
+host = "workspaces/pi-state"
+guest = "/data"
+read_only = false
+
+[[workloads.pi.mounts]]
+host = "${CWD}"
+guest = "/work"
+read_only = false
+
+[workloads.pi.network.defaults]
+egress = "deny"
+
+[[workloads.pi.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.pi.policy.egress.allow.host]]
+ports = [4000]
+protocols = ["tcp"]
+
+[[workloads.pi.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[[workloads.pi.policy.egress.deny.domain]]
+domains = [".pi.dev"]
+
+[[workloads.pi.seed_files]]
+source = "agents/pi/config/models.json"
+target = "workspaces/pi-state/agent/models.json"
+only_if_missing = true
+
+[workloads.odysseus]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 2
+memory_mib = 2048
+command = ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7000"]
+log_stop_errors = false
+
+[workloads.odysseus.env]
+APP_PORT = "7000"
+AUTH_ENABLED = "true"
+LOCALHOST_BYPASS = "false"
+ODYSSEUS_DATA_DIR = "/data"
+OPENAI_BASE_URL = "http://host.microsandbox.internal:4000/v1"
+OPENAI_MODEL = "coding"
+PYTHONPATH = "/app/.deps"
+ODYSSEUS_ADMIN_PASSWORD = { bound = "guest" }
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }
+GITHUB_TOKEN = true
+
+[[workloads.odysseus.ports]]
+host = 7000
+guest = 7000
+
+[[workloads.odysseus.mounts]]
+host = "${WORKESTRATE_ODYSSEUS_BUILD}"
+guest = "/app"
+read_only = true
+
+[[workloads.odysseus.mounts]]
+host = "workspaces/odysseus-state"
+guest = "/data"
+read_only = false
+
+[workloads.odysseus.network.defaults]
+egress = "deny"
+
+[[workloads.odysseus.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.odysseus.policy.egress.allow.host]]
+ports = [4000]
+protocols = ["tcp"]
+
+[[workloads.odysseus.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[[workloads.odysseus.policy.egress.allow.domain]]
+domains = ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co"]
+port = 443
+protocol = "tcp"
+
+[[workloads.odysseus.policy.ingress.allow.port]]
+ports = [7000]
+protocol = "tcp"
+scope = "local"
+
+[[workloads.odysseus.seed_files]]
+source = "agents/odysseus/config/settings.json"
+target = "workspaces/odysseus-state/settings.json"
+only_if_missing = true
+
+[workloads.odysseus.local_build]
+recipe = "pip-install"
+source = "flake://odysseus"
+requirements_file = "requirements.txt"
+target = ".deps"
+gating_file = "requirements.txt"
+env_override = "WORKESTRATE_ODYSSEUS_BUILD"
+fallback = "agents/odysseus/build"
+
+[workloads.opencode]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24-bookworm-slim" }
+workdir = "/workspace"
+cpus = 2
+memory_mib = 2048
+command = ["opencode"]
+log_stop_errors = false
+
+[workloads.opencode.env]
+OPENAI_BASE_URL = "http://host.microsandbox.internal:4000/v1"
+OPENAI_MODEL = "coding"
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY" }
+GITHUB_TOKEN = true
+
+[[workloads.opencode.ports]]
+host = 3000
+guest = 3000
+
+[[workloads.opencode.mounts]]
+host = "${WORKESTRATE_OPENCODE_BUILD}"
+guest = "/app"
+read_only = true
+
+[[workloads.opencode.mounts]]
+host = "${CWD}"
+guest = "/workspace"
+read_only = false
+
+[[workloads.opencode.mounts]]
+host = "agents/opencode/config/opencode.jsonc"
+guest = "/home/node/.config/opencode/opencode.jsonc"
+read_only = true
+
+[[workloads.opencode.mounts]]
+host = "${MSB_HOME}/sandboxes/opencode/state"
+guest = "/home/node/.local/share/opencode"
+read_only = false
+
+[workloads.opencode.network.defaults]
+egress = "deny"
+
+[[workloads.opencode.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.opencode.policy.egress.allow.host]]
+ports = [4000]
+protocols = ["tcp"]
+
+[[workloads.opencode.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[[workloads.opencode.policy.ingress.allow.port]]
+ports = [3000]
+protocol = "tcp"
+scope = "local"
+
+[workloads.opencode.local_build]
+recipe = "bun-install"
+source = "flake://opencode"
+gating_file = "bun.lock"
+env_override = "WORKESTRATE_OPENCODE_BUILD"
+fallback = "agents/opencode/build"
+
+[workloads.tempest]
+kind = "agent"
+# egress = "allow" (below) stands alone (absent = deny; explicit allow needs
+# no gate — home `final` seals still veto).
+image = { recipe = "nix-layered", name = "tempest", tag = "latest", contents = ["cacert", "busybox", "fakeNss", "nodejs_24", "nmap", "dnsutils"], binary = { recipe = "npm-build", src = "flake://tempest", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }, baked_files = [{ path = "root/.config/t3mp3st/config.json", content = '{"defaultProvider":"local"}' }], features = ["create_tmp"] }
+workdir = "/work"
+cpus = 2
+memory_mib = 2048
+command = ["node", "dist/cli.js"]
+log_stop_errors = false
+
+[workloads.tempest.env]
+TEMPEST_LOCAL_BASE_URL = "http://host.microsandbox.internal:4000/v1"
+TEMPEST_LOCAL_MODEL = "coding"
+TEMPEST_LOCAL_API_KEY = { secret = "LITELLM_MASTER_KEY" }
+T3MP3ST_HOST = "127.0.0.1"
+
+[[workloads.tempest.mounts]]
+host = "workspaces/tempest-state"
+guest = "/data"
+read_only = false
+
+[[workloads.tempest.mounts]]
+host = "${CWD}"
+guest = "/work"
+read_only = false
+
+[workloads.tempest.network.defaults]
+egress = "allow"
+
+[workloads.tempest.local_build]
+recipe = "npm-build"
+source = "flake://tempest"
+gating_file = "package-lock.json"
+env_override = "WORKESTRATE_TEMPEST_BUILD"
+fallback = "sources/tempest/build"

@@ -18,7 +18,7 @@ metadata:
 # Workflow: LiteLLM Config Change (Orchestration)
 
 This skill orchestrates the LiteLLM config-change workflow. It is the PRIMARY
-entry point for editing `infra/litellm/config.yaml` for the workestrator
+entry point for editing `infra/litellm/config.yaml` for the workestrate
 in-memory LiteLLM deployment (no Postgres, no Redis, `master_key`-only auth).
 Each phase is a separate public skill (Shape A) loaded by exact name; the
 orchestrator loads them in order and applies the continuation policy between

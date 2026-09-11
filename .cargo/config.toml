@@ -1,0 +1,21 @@
+# Root-level cargo config so cargo commands invoked from the REPO ROOT also
+# resolve the patched microsandbox-* crates (config discovery is cwd-upward;
+# the crate-level .cargo/config.toml is only found when running from
+# control/agentctl/). Paths here are relative to this file's parent dir.
+#
+# ALL microsandbox-* crates are patched to the fork source (the entire fork
+# workspace is vendored so *.workspace = true inheritance resolves).
+[patch.crates-io]
+microsandbox = { path = "control/agentctl/vendor/microsandbox-fork/sdk/rust" }
+microsandbox-agent-client = { path = "control/agentctl/vendor/microsandbox-fork/packages/agent-client/rust" }
+microsandbox-db = { path = "control/agentctl/vendor/microsandbox-fork/crates/db" }
+microsandbox-filesystem = { path = "control/agentctl/vendor/microsandbox-fork/crates/filesystem" }
+microsandbox-image = { path = "control/agentctl/vendor/microsandbox-fork/crates/image" }
+microsandbox-metrics = { path = "control/agentctl/vendor/microsandbox-fork/crates/metrics" }
+microsandbox-migration = { path = "control/agentctl/vendor/microsandbox-fork/crates/migration" }
+microsandbox-network = { path = "control/agentctl/vendor/microsandbox-fork/crates/network" }
+microsandbox-protocol = { path = "control/agentctl/vendor/microsandbox-fork/crates/protocol" }
+microsandbox-runtime = { path = "control/agentctl/vendor/microsandbox-fork/crates/runtime" }
+microsandbox-scan = { path = "control/agentctl/vendor/microsandbox-fork/crates/scan" }
+microsandbox-types = { path = "control/agentctl/vendor/microsandbox-fork/packages/microsandbox-types/rust" }
+microsandbox-utils = { path = "control/agentctl/vendor/microsandbox-fork/crates/utils" }

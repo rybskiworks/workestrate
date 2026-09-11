@@ -77,7 +77,7 @@ model_list:
 - /docs/proxy/reliability (Fallbacks + Retries + Timeouts + Cooldowns)
 - /docs/proxy/load_balancing (Quick Start)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - The real config sets `router_settings.timeout: 300` and `router_settings.stream_timeout: 300` (both 5 min), overriding the documented default of "10 minutes" (from config_settings). Per-model `litellm_params.timeout`/`stream_timeout` are NOT set — the router-level values apply globally. `ttft_timeout` and `stream_idle_timeout` are unset. The per-request `timeout` body param and `mock_timeout` test param are available at runtime without DB/Redis.
 
 ## Confidence / uncertainty notes

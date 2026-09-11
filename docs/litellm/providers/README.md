@@ -2,7 +2,7 @@
 
 This index covers 11 LiteLLM providers extracted from on-disk source files under `docs/litellm/extracted/`. No web fetches were performed. Each row links to a per-provider doc and the upstream LiteLLM source URL.
 
-| Provider | LiteLLM Prefix | API Protocol | Workestrator Usage |
+| Provider | LiteLLM Prefix | API Protocol | Workestrate Usage |
 |---|---|---|---|
 | [OpenAI-Compatible Endpoints](openai-compatible.md) | `openai/` | OpenAI-compatible | neural tier (`openai/neuralwatt`) |
 | [Anthropic](anthropic.md) | `anthropic/` | both (OpenAI-compatible + Anthropic Messages) | `coding`, `coding.fast`, `coding.pro-fallback` (`kimi-for-coding`, `MiniMax-M3`) |
@@ -68,7 +68,7 @@ For example, `openrouter/z-ai/glm-5.1`. The middle segment is OpenRouter's provi
 
 [LiteLLM Proxy](litellm-proxy.md) (`litellm_proxy/`) is the chained-proxy pattern: one LiteLLM proxy/SDK calling another LiteLLM proxy. Useful for centralized gateway management.
 
-## Workestrator notes
+## Workestrate notes
 
 The following are project-specific choices in `infra/litellm/config.yaml`. They are not necessarily the only upstream-documented way to reach these upstreams.
 

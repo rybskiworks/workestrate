@@ -245,9 +245,9 @@ general_settings:
 - Authoritative key index: [`config-yaml.option-index.json`](../schemas/config-yaml.option-index.json)
 - Normalized schema: [`config-yaml.normalized.schema.md`](../schemas/config-yaml.normalized.schema.md)
 
-## Workestrator notes
+## Workestrate notes
 
-> **PROJECT CONTEXT** — not upstream LiteLLM docs. Describes the workestrator deployment specifically.
+> **PROJECT CONTEXT** — not upstream LiteLLM docs. Describes the workestrate deployment specifically.
 
 Real config (`infra/litellm/config.yaml`):
 
@@ -317,6 +317,6 @@ These two boolean keys are documented in the config_settings Reference table (op
 
 Team-level secret manager settings (per-team bring-your-own-key-management) are configured via the Admin UI Teams page (Create Team → Additional Settings → Secret Manager Settings panel), using provider-specific JSON. Verbatim: "JSON is required today, but we plan to add a more UI-friendly editor." This requires the Admin UI (and therefore a DB backend).
 
-### Workestrator applicability
+### Workestrate applicability
 
-The workestrator does NOT use any secret manager. `key_management_system`, `key_management_settings`, `use_google_kms`, and `use_azure_key_vault` are all unset. API keys are resolved via `os.environ/` at config load time. Secret-manager integration is Enterprise-gated and therefore unavailable without a `litellm_license`.
+The workestrate does NOT use any secret manager. `key_management_system`, `key_management_settings`, `use_google_kms`, and `use_azure_key_vault` are all unset. API keys are resolved via `os.environ/` at config load time. Secret-manager integration is Enterprise-gated and therefore unavailable without a `litellm_license`.

@@ -58,4 +58,4 @@ mix credo --strict
   not used as a blanket escape hatch.
 - Credo exit statuses are a bitmask per category; `>= 128` indicates a runtime
   error.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).

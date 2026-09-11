@@ -1,0 +1,60 @@
+# Example: final-deny tier and write rules (spec 22 §10).
+#
+# The final-deny tier is an operator-only tier: an operator scope's final
+# read.deny compiles to the wire format's `protect` bucket (wire-internal
+# name) — sealed paths are hidden
+# AND untouchable, independently of the finality axis. Only operator scopes
+# (home registry, user-global overrides) may declare final allows, and only
+# their final read.deny entries seal paths. Write rules are
+# pattern-keyed: default is allow+tag; deny beats allow; final deny freezes.
+#
+# This file is a fragment illustrating the operator-scope (home registry)
+# policy surface. It is NOT a complete config (no schema_version/workloads) —
+# it is meant to be dropped into a home registry `config.toml` or
+# `overrides.toml`.
+
+# ---------------------------------------------------------------------------
+# Operator scope: home registry [policy.mounts].
+# Seal the admin tree (final-deny tier: hidden + untouchable) and deny writes to config.
+# ---------------------------------------------------------------------------
+[policy.mounts.read]
+deny = [
+  # This tier is operator-only: this final read.deny routes to the wire
+  # format's `protect` bucket (wire-internal name). A config-repo or workload
+  # layer cannot lift the final deny on these paths
+  # (operator trust model — spec 22 §5).
+  { pattern = "**/admin/**", final = true },
+  # Non-final: deny the secrets tree; lower scopes may allow specific files.
+  "secrets/**",
+]
+
+[policy.mounts.write]
+# Deny writes to the config tree; allow writes to the data tree.
+# Deny beats allow on overlap; a final deny (final = true) freezes.
+deny = [
+  "config/**",
+  { pattern = "state/lock/**", final = true },
+]
+allow = ["data/**"]
+
+# ---------------------------------------------------------------------------
+# A workload that inherits the operator final-deny + write rules and adds its
+# own workload-scope carve-out. The workload CANNOT lift the final deny on
+# admin/ (operator-only) but CAN re-expose a specific secret file (the
+# operator's
+# secrets deny is non-final).
+# ---------------------------------------------------------------------------
+[workloads.worker]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+command = ["python", "-m", "http.server", "9000"]
+
+[workloads.worker.policy.mounts.read]
+# Carve out a specific secret the worker needs (the operator deny above is
+# non-final).
+allow = ["secrets/api-token"]
+
+[[workloads.worker.mounts]]
+host = "workspaces/worker"
+guest = "/data"
+read_only = false

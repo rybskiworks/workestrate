@@ -68,7 +68,7 @@ model_list:
 - `reasoning_effort` other than "none" automatically turns thinking on for Claude 4.6/4.7 models.
 - `budget_tokens` deprecated on 4.6 models, rejected on Opus 4.7 (only adaptive supported).
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 CRITICAL: The `anthropic/` prefix + custom `api_base` IS a documented pattern. This confirms the repo's `anthropic/kimi-for-coding` with `api_base: api.kimi.com/coding` and `anthropic/MiniMax-M3` with `api_base: api.minimax.io/anthropic` is valid — pointing the `anthropic/` prefix at non-Anthropic endpoints that speak the Anthropic Messages API. IMPORTANT NUANCE: LiteLLM auto-appends `/v1/messages` to the api_base. For Kimi (`api.kimi.com/coding`), the final URL is `api.kimi.com/coding/v1/messages`; for MiniMax (`api.minimax.io/anthropic`), it is `api.minimax.io/anthropic/v1/messages` — which matches the MiniMax docs page exactly. If the endpoint already includes the full path, set `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true` to prevent auto-append. NOTE: The MiniMax provider page documents using `minimax/` prefix (not `anthropic/`) with `litellm.anthropic.messages.acreate()` and `api_base: https://api.minimax.io/anthropic/v1/messages`. The repo's use of `anthropic/MiniMax-M3` may be an alternative valid approach but differs from the documented `minimax/` prefix pattern. See [minimax.md](minimax.md).
 

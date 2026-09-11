@@ -1,0 +1,289 @@
+# 17 — Config repo directory mode (workestrate/ + workloads/ capsules)
+
+> **STATUS: EXECUTED (2026-08-01; commit `e3194d9` — directory-mode loader landed; scaffold/copier tombi include-glob edits included; home-emitted tombi glob followed in `ea48f45`)**
+> Prerequisites / see-also: [00-index.md](00-index.md) ·
+> [15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) ·
+> [16-unified-secret-env-model.md](16-unified-secret-env-model.md) ·
+> [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md) ·
+> [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md) ·
+> [../../migration/50-decisions/0002-toml-config-format.md](../../migration/50-decisions/0002-toml-config-format.md) ·
+> [../../migration/50-decisions/0003-config-purity-closed-vocabulary.md](../../migration/50-decisions/0003-config-purity-closed-vocabulary.md) ·
+> [../../migration/50-decisions/0022-config-repo-scaffolding.md](../../migration/50-decisions/0022-config-repo-scaffolding.md) ·
+> [../../migration/50-decisions/0023-single-tool-home.md](../../migration/50-decisions/0023-single-tool-home.md) ·
+> [../../migration/50-decisions/0024-dotfiles-home-and-working-copy-config-repos.md](../../migration/50-decisions/0024-dotfiles-home-and-working-copy-config-repos.md)
+
+This document specifies **directory mode** for config repos: an alternative to
+the single-file `workestrate.toml` in which the config repo is a `workestrate/`
+directory of cross-cutting files plus a `workloads/` tree of per-workload files
+or **capsule directories** that colocate each workload's definition with its
+app-native artifacts. Directory mode is a **layout change only** — the workload
+schema, the merge semantics, and the final secret/env model of
+[16-unified-secret-env-model.md](16-unified-secret-env-model.md) are unchanged.
+
+### Environment markers
+
+- `verifiable-here` — the loader work and all its gates (cargo `check`/`test`/
+  `golden-check`/`schema-check`) are runnable in-container via `nix develop`
+  (nix at `/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin`, not on
+  PATH; prefix with `export
+  PATH="/nix/store/q6yfdws28aj556jlz5yayaggiddmb0b5-nix-2.35.1/bin:$PATH"` then
+  `nix develop -c bash -c '<cmd>'` — the store-path nix prefix convention used
+  by the sibling specs). No KVM is needed for the loader or the personal-config
+  restructure proof.
+- `HOST-KVM` — only the runtime smoke of a restructured config (guest boot
+  against capsule-mounted artifacts) requires the host batch.
+
+---
+
+## 1. Structure
+
+A config repo uses **either** the single `workestrate.toml` at its root (the
+current form, unchanged) **or** directory mode. Directory mode layout:
+
+```
+<config-repo>/
+├── workestrate/
+│   ├── default.toml            # schema_version + cross-cutting config
+│   ├── secrets.toml            # OPTIONAL — the [secrets.*] catalog only
+│   └── workloads/
+│       ├── <name>.toml         # flat single-workload file, OR
+│       └── <name>/             # workload CAPSULE directory
+│           ├── workload.toml   # the capsule entry file (the workload def)
+│           ├── config.yaml     # app-native artifacts, colocated:
+│           ├── models.yaml     #   litellm: config.yaml, models.yaml
+│           ├── opencode.jsonc  #   opencode: opencode.jsonc
+│           ├── settings.json   #   odysseus: settings.json
+│           ├── models.json     #   pi: models.json
+│           ├── <seed files>    #   seed_files payloads, colocated
+│           └── flake.nix       #   image-build flake for the workload
+└── … (repo plumbing: tombi.toml, schemas/, .sops.yaml, .env.enc, README.md)
+```
+
+- **`workestrate/default.toml`** — `schema_version` plus everything
+  cross-cutting: contexts, registry-level policy, shared mounts, defaults —
+  i.e. every field that is not a per-workload table or the secrets catalog.
+- **`workestrate/secrets.toml`** (optional) — the `[secrets.*]` catalog only,
+  per the final secret/env model of spec 16.
+- **`workestrate/workloads/`** — holds **either** flat single-workload files
+  `workloads/<name>.toml`, **or** workload capsule directories
+  `workloads/<name>/` whose `workload.toml` entry file carries the workload
+  definition and whose sibling files carry that workload's artifacts under
+  their **app-native names** (`config.yaml`, `models.yaml`, `opencode.jsonc`,
+  `settings.json`, `models.json`, seed files, `flake.nix`).
+- **Mount/seed/local_build paths resolve against the declaring config layer's
+  content root.** For directory mode the content root is the **directory-mode
+  root** `<repo>/workestrate/` — the dir containing `default.toml` / the parent
+  of `workloads/` — NOT the capsule dir or the `workloads/` dir. Repo-relative
+  hosts are written against the workestrate root (e.g.
+  `mounts = [{ host = "workloads/litellm", … }]` resolves to
+  `<repo>/workestrate/workloads/litellm`). For single-file mode
+  (`<repo>/workestrate.toml`) the content root is the file's parent dir
+  (unchanged). The `flake_build_path`/`${WORKESTRATE_<NAME>_BUILD}` exception
+  (a declared `local_build.fallback` or relative env override resolving
+  against the flake project root) is unchanged. **Zero schema change** to the
+  workload schema — directory mode is purely a loader + layout concern.
+
+> *Superseded-with-correction (2026-08-03): the phase-1 amendment in commit
+> `08a75d2` codified the WRONG root — "for a capsule, that is the capsule dir
+> itself" — which resolved a `host = "workloads/litellm"` mount against the
+> capsule dir, doubling it to
+> `workestrate/workloads/litellm/workloads/litellm` (host-boot failure 1,
+> discovered on the first real host boot). The correction (commit `b675db2`)
+> resolves the content root at the directory-mode root `<repo>/workestrate/`
+> for all directory-mode layers; the capsule dir does NOT change the root.
+> Single-file mode and the flake-build exception are unchanged.*
+
+---
+
+## 2. Rules (hard semantics)
+
+### 2.1 Either/or vs `workestrate.toml`
+
+If both `workestrate.toml` and `workestrate/` exist in the same config repo →
+**HARD ERROR** naming both paths. No precedence, no merge-across-modes: one
+config repo, one mode.
+
+### 2.2 Load order
+
+`default.toml` → `secrets.toml` → `workloads/` entries. Workload entries are
+loaded in **lexicographic order**, flat files and capsule directories
+interleaved, sorted by entry name (`litellm.toml` and `litellm/` compare as
+equals on the workload name — which the duplicate rule §2.4 then rejects).
+
+### 2.3 Filename/dirname-implied workload names
+
+A **bare table** (workload fields at top level, no `[workloads.<name>]`
+wrapper) in `workloads/<name>.toml` or `workloads/<name>/workload.toml`
+**implies the workload name from the filename/dirname**. The full
+`[workloads.<name>]` table form remains allowed in any `workloads/` file for
+flexibility — including multi-workload files — but **one-thing-per-file is the
+recommended posture**.
+
+### 2.4 Duplicate workload names
+
+The same workload name defined across more than one file/dir → **HARD ERROR**
+naming both provenance paths (e.g. `workloads/litellm.toml` vs
+`workloads/litellm/workload.toml`). Within-file duplicates stay the existing
+TOML parse error.
+
+### 2.5 Provenance: per-FILE granularity
+
+Provenance strings carry the repo-relative path: **`<repo>#<relpath>`** — e.g.
+`personal#workestrate/workloads/litellm/workload.toml` — recorded **per
+field**. This is strictly better than layer-level provenance (`personal`)
+because it tells you **WHICH file set the field**, and it composes with the
+existing `--show-source` provenance surface unchanged in shape.
+
+### 2.6 tombi per-file schema validation
+
+Every directory-mode file is schema-validated **individually**. The scaffolded
+config-repo template `control/agentctl/src/scaffold/template/tombi.toml.tpl`
+(currently `include = ["workestrate.toml", "overrides.toml"]` in its
+`[[schemas]]` block) must gain the directory-mode glob:
+
+```toml
+include = ["workestrate.toml", "overrides.toml", "workestrate/**/*.toml"]
+```
+
+**LANDED (2026-08-01).** The `.tpl` edit and the matching copier-template
+static copy landed with the loader implementation in `e3194d9`; the
+home-emitted tombi include glob (`config-repos/*/workestrate/**/*.toml`)
+followed in `ea48f45`, with the schema-drift guard per
+[15-toml-toolchain-tombi.md](15-toml-toolchain-tombi.md) §3/§5.
+
+### 2.7 `schema_version` authority
+
+`schema_version` is required **only** in `default.toml`. `secrets.toml` and
+`workloads/` files must **NOT** repeat it; presence elsewhere → **HARD ERROR**
+(chosen over a warning: a single authority for the version — a stray
+`schema_version` in a workload file is always an authoring mistake, never
+meaningful, so failing closed costs nothing and removes an ambiguity class).
+
+---
+
+## 3. Home files decision (decided)
+
+- **The registry `config.toml` STAYS single-file.** It is machine-managed
+  under `RegistryLock` (see
+  [11-home-provisioning-and-lockfile.md](11-home-provisioning-and-lockfile.md));
+  multi-file machine writes are complexity without benefit.
+- **`workestrate.lock` is generated** → single-file forever. Never hand-edited,
+  never split.
+- **`overrides.d/` is DEFERRED** until user-global overrides actually grow past
+  what a single `overrides.toml` comfortably carries. Not part of this spec.
+
+---
+
+## 3a. Location-independent execution (ADR 0028, 2026-08-13)
+
+Directory mode makes the config repo a self-contained deployment unit — so a
+workload's flake root must come from the repo, not the caller's CWD. ADR 0028
+locks: flake/image-build roots resolve from the declaring config repo
+(registry-known; nearest `flake.nix` ancestor of the declaring layer dir); CWD
+is never the resolution origin unless the CWD IS the declaring repo;
+`AGENTCTL_ROOT` is an explicit override, not a requirement. This completes the
+F1/F2/F3 path-resolution family: F1 (mount/seed content root = declaring layer
+dir), F2 (flake-root gate = declaring repo root, lazy), F3 (no silent cwd
+fallback for seeds). The image-build path (`repo_identity_for`,
+`images/repo_key.rs`) already follows this rule; the sandbox-build F2 gate
+(`mounts.rs resolve_mount_roots_owned`, `config::project_root`) is the code
+surface to align (the 2026-08-13 CWD bug: `workload exec prime` from
+`~/Development/agent-workbench` resolved project root = cwd → no flake.nix →
+hard error).
+
+---
+
+## 3b. Config-source path model (ADR 0032 addendum, 2026-08-24)
+
+ADR 0032's 2026-08-24 addendum changes WHERE a consumed config layer's files
+physically live, not how paths resolve against them. When a config entry is
+consumed at a pinned/locked ref, the layer's content root is a directory in
+the content-addressed archive store `<state>/cache/gitv3/<sha>/` — a plain
+immutable directory produced by `git archive <sha>` from the single managed
+clone (NO worktrees, NO checkouts); `<home>/workestrate.lock` (v2) maps
+entry+ref → sha. Every rule in this spec is UNCHANGED under that model:
+the content root is still the directory-mode root `<layer>/workestrate/`
+(F1), the flake-root gate still resolves against the declaring repo root
+(F2), seeds still never fall back to the caller's cwd (F3), and provenance
+strings still carry `<repo>#<relpath>` — the relpath is computed against
+the archive dir exactly as against a working copy. Local working-copy
+entries (plain-path urls, ADR 0024) keep resolving against the working
+copy as today; the archive store applies only to ref-pinned consumption.
+
+---
+
+## 4. Rationale
+
+- **Precedent.** docker-compose multi-file/`extends`; kustomize
+  bases+overlays; nix modules (`default.nix` entry point, one-thing-per-file).
+  The pattern — a directory with a fixed entry point and lexicographic merge —
+  is the industry default once a single file outgrows head-sized.
+- **Capsules kill the split trees.** The current personal repo splits one
+  logical workload across `agents/<wl>/config/*` and `infra/litellm/*`; a
+  capsule colocates a workload's dependencies with its definition, so adding /
+  moving / deleting a workload is a single-directory operation.
+- **The config repo becomes a self-contained deployment unit.** Clone the repo,
+  and every artifact every workload needs is inside it, addressed by
+  repo-relative paths — the working-copy model of
+  [10-config-repos-as-working-copies.md](10-config-repos-as-working-copies.md)
+  carried to its conclusion.
+
+---
+
+## 5. Migration: personal config → directory mode
+
+Current layout (proof-case repo `.tmp/config-repos/personal-v2` @ `99c9985`):
+`workestrate.toml` (309 lines, `schema_version = 2`,
+`[secrets.LITELLM_MASTER_KEY]` etc. at lines 1–32+),
+`agents/{odysseus,opencode,pi,tempest}/config/*` (`settings.json`,
+`opencode.jsonc`, `models.json`), and
+`infra/litellm/{config.yaml,models.yaml,README.md}`.
+
+Mapping:
+
+| From (current personal-v2) | To (directory mode) |
+|---|---|
+| `workestrate.toml` cross-cutting (contexts, defaults, `schema_version = 2`) | `workestrate/default.toml` |
+| `[secrets.*]` catalog | `workestrate/secrets.toml` |
+| Per-workload tables (`[workloads.litellm]` …) | `workestrate/workloads/<name>/workload.toml` (capsule form) |
+| `agents/<wl>/config/*` artifacts | `workestrate/workloads/<wl>/` under app-native names (`settings.json`, `opencode.jsonc`, `models.json`) |
+| `infra/litellm/{config.yaml,models.yaml}` | `workestrate/workloads/litellm/{config.yaml,models.yaml}` |
+| Mount/seed paths referencing `agents/…` / `infra/…` | Re-pointed against the directory-mode root `<repo>/workestrate/` (workestrate-root-relative strings), **no schema change** |
+
+The `agents/` and `infra/` trees collapse into capsules; the restructured repo
+must load to a **byte-identical merged config** (acceptance §6).
+
+---
+
+## 6. Acceptance criteria
+
+- [x] Both-modes hard error: a repo containing both `workestrate.toml` and
+      `workestrate/` fails naming both paths (test-covered).
+- [x] Duplicate workload name across files/dirs fails naming both provenance
+      paths (test-covered).
+- [x] `schema_version` outside `default.toml` fails as a hard error
+      (test-covered).
+- [x] Filename/dirname-implied names: a bare table in
+      `workloads/<name>.toml` and in `workloads/<name>/workload.toml` loads as
+      workload `<name>`; the `[workloads.<name>]` wrapper form still loads
+      (test-covered, both forms).
+- [x] The restructured personal config repo loads to a **byte-identical merged
+      config** vs the single-file form (golden diff).
+- [x] Provenance strings carry the relpath form `<repo>#<relpath>` per field
+      (test-covered; `--show-source` output shape unchanged).
+- [x] tombi validates each directory-mode file individually via the
+      `workestrate/**/*.toml` include glob (the `tombi.toml.tpl` edit,
+      §2.6, landed in `e3194d9` + `ea48f45` per spec 15 §5.2).
+- [x] Golden plans **byte-unchanged** across the restructure (no plan-surface
+      drift).
+
+---
+
+## 7. Effort & gate
+
+| Item | Value |
+|---|---|
+| Effort | **M** (loader: mode detection + lexicographic multi-file load + implied names + provenance relpath strings; scaffold `tombi.toml.tpl` glob + copier parity; personal restructure proof case; hard-error test matrix). |
+| Gate | `verifiable-here` via `nix develop` for all loader/cargo gates (`check`, `test`, `golden-check`, `schema-check`); tombi per-file validation via `just tombi-check`; runtime smoke of a restructured repo is `HOST-KVM` (folds into the host batch). |
+| Files touched | Loader (`control/agentctl/src/config/loading.rs` + `types.rs` provenance); `control/agentctl/src/scaffold/template/tombi.toml.tpl` (include-glob edit landed `e3194d9`, §2.6) + copier static copy + parity test; `schemas/` (no change — layout-only); `.tmp/config-repos/personal-v2` (restructure proof case). |
+| Risk | Low–moderate. Additive mode; single-file repos are untouched by construction (§2.1 keeps the modes disjoint). The main risk is provenance-string churn, contained by the per-field relpath rule and golden-plan byte-stability. |

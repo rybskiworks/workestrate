@@ -706,5 +706,5 @@ Note: E0495 is no longer emitted by the compiler ([Rust Error Index E0495](https
 
 ## Related skills
 
-- `nix-usage` — for the Rust toolchain and `nix develop` workflow used by this repository.
+- `nix-usage` — for the Rust toolchain and `just shell` devshell workflow used by this repository.
 - There are no ownership-specific skills in the current registry. Repository-specific Rust validation skills may be added under `.agents/skills/` in the future and should reference this document.

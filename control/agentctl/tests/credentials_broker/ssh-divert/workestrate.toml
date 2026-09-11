@@ -1,0 +1,37 @@
+schema_version = 1
+
+# (d) divert: an ssh grant under strict confinement — the plan renders both
+# the confinement flag (with its ladder origin) and the grant. The sandbox
+# gets the guest SSH policy plus a host-side divert listener.
+
+[secrets.DEPLOY_KEY]
+env_var = "DEPLOY_KEY"
+allowed_hosts = ["github.com"]
+required = false
+
+[policy.ssh]
+strict = true
+
+[credentials.ssh.deploy]
+material = "DEPLOY_KEY"
+hosts = ["github.com"]
+users = ["git"]
+# ports absent → [22]
+# Non-default policy so the goldens pin the full chain (catalog entry →
+# grant plan → rendered plan + guest policy slot).
+on_violation = "block"
+
+[workloads.diverter]
+kind = "agent"
+image = { recipe = "registry", ref = "node:24" }
+command = []
+
+[workloads.diverter.credentials]
+ssh = ["deploy"]
+
+[workloads.diverter.network.defaults]
+egress = "deny"
+
+[[workloads.diverter.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]

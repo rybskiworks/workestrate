@@ -1,7 +1,7 @@
 [package]
 name = "workestrate"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Control plane CLI for the AI workbench (Rust + Microsandbox SDK)."
 license = "MIT OR Apache-2.0"
 publish = false
@@ -12,18 +12,94 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+# Credential broker: CBOR wire codec (same 0.2.x already in the lockfile
+# via the microsandbox SDK — promoted to a direct dep, no new package).
+ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
-microsandbox = { version = "=0.5.6", features = ["net"] }
+# Credential broker: platform secure-random source for epoch tokens
+# (getrandom 0.3.x already in the lockfile — promoted to direct, no new pkg).
+getrandom = "0.3"
+glob = "0.3.4"
+globset = "0.4"
+# Credential broker: hex rendering of epoch tokens / payload digests
+# (0.4.x already in the lockfile — promoted to direct, no new package).
+hex = "0.4"
+idna = "1.1"
+libc = "0.2"
+microsandbox = { version = "=0.6.18", features = ["net"] }
+# SSH gateway handoff: the fork's network engine (divert prelude framing)
+# and shared domain types (guest SSH policy). Both crates are already in
+# the .cargo patch table, so they resolve to the vendored fork.
+microsandbox-network = "=0.6.18"
+microsandbox-types = "=0.6.18"
+# Broker DLP emission: the fork's typed bootstrap (`BrokerPatterns`) and the
+# scan vocabulary (`Decoder`, `ActionSet`) the emission is built from. Both
+# crates are already in the .cargo patch table, so they resolve to the
+# vendored fork.
+microsandbox-protocol = "=0.6.18"
+microsandbox-scan = "=0.6.18"
+# Credential broker: SHA-256 payload digests for the audit log
+# (0.10.x already in the lockfile — promoted to direct, no new package).
+sha2 = "0.10"
+# Credential broker: sealed key custody (SealedKeyBackend) — OpenSSH key
+# parsing plus SSHSIG sign/verify/armor. Ed25519-only crypto surface:
+# `ed25519` is the production signing backend; `getrandom` enables the OS
+# RNG (`ssh_key::rand_core::OsRng`) so tests generate keys in-memory (never
+# committed); `rsa` + `encryption` exist so the loader can tell a real RSA
+# key or a passphrase-encrypted key apart from garbage and fail closed with
+# the typed WrongKeyType error (neither ever signs).
+ssh-key = { version = "0.6", default-features = false, features = [
+  "std",
+  "ed25519",
+  "rsa",
+  "encryption",
+  "getrandom",
+] }
+unicode-security = "0.1"
+# Credential broker: zeroizing custody for resolved key material
+# (1.x already in the lockfile — promoted to direct, no new package).
+zeroize = "1"
+
+schemars = { version = "0.8", optional = true }
+serde = { version = "1", features = ["derive"] }
+# Epoch provisioning: the console envelope's `p` field is a CBOR byte string
+# (the fork protocol crate's envelope shape — an array-of-ints encoding would
+# fail the guest's envelope decode). 0.11.x already in the lockfile via the
+# fork's protocol crate — promoted to a direct dep, no new package.
+serde_bytes = "0.11"
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+toml = "0.8"
+
+[features]
+# Activates schemars::JsonSchema derives across config + plan types.
+# Required by `workestrate generate-schema` and the schema-drift CI guard.
+default = ["schema"]
+schema = ["dep:schemars"]
+
+[dev-dependencies]
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
+# The vendored fork's image crate (patched in via .cargo/config.toml) — used
+# ONLY by the host-Bug-B regression test in images::state, which validates
+# computed store tags against the REAL docker/OCI reference parser
+# (`microsandbox_image::Reference`, re-exported from oci-client) rather than
+# a local approximation. Already in the build graph transitively via the
+# microsandbox SDK, so it adds no new packages.
+microsandbox-image = "=0.6.18"
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 
 [lints.rust]
-unsafe_code = "forbid"
+# Edition 2024 makes std::env::set_var/remove_var unsafe; `forbid` cannot be
+# overridden by scoped #[allow] (E0453), so `deny` is the strictest workable
+# level: unsafe stays denied crate-wide by default and every legitimate site
+# needs an explicit fn/module-level #[allow(unsafe_code)] + SAFETY comment.
+unsafe_code = "deny"
 unused_must_use = "deny"
 
 [lints.clippy]

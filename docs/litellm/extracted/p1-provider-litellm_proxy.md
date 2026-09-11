@@ -138,7 +138,7 @@ response = litellm.completion(
 - https://docs.litellm.ai/docs/proxy/user_keys (Integration with other libraries)
 - https://docs.litellm.ai/docs/proxy_auth (SDK Proxy Authentication)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - This is the chained-proxy pattern for one LiteLLM proxy calling another LiteLLM proxy.
 - Pattern: `model: litellm_proxy/<model-name>` + `api_base: <upstream-proxy-url>` + `api_key: <upstream-proxy-key>`.
 - The `USE_LITELLM_PROXY` flag (v1.72.1+) routes ALL SDK requests through the proxy regardless of model — useful for centralized proxy management.

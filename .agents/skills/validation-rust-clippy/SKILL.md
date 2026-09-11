@@ -57,4 +57,4 @@ cargo clippy --workspace --all-targets -- -D warnings
   `clone_on_copy`, `ptr_arg`, `unwrap_used`, `expect_used`,
   `missing_errors_doc`, `missing_panics_doc`, `missing_safety_doc`,
   `rc_mutex`, `arc_with_non_send_sync`, `await_holding_lock`.
-- Run inside `nix develop` (see `nix-usage` skill).
+- Run inside `just shell` (see `nix-usage` skill).

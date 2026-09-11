@@ -3,7 +3,7 @@
 # =============================================================================
 # TWO clearly-separated variants:
 #   (a) DOCUMENTED `moonshot/` prefix — OpenAI-compatible Moonshot API.
-#   (b) WORKESTRATOR `anthropic/kimi-for-coding` — Anthropic Messages API at
+#   (b) WORKESTRATE `anthropic/kimi-for-coding` — Anthropic Messages API at
 #       Kimi's coding endpoint. PROJECT-SPECIFIC / UNCERTAIN.
 #
 # VERIFIED FROM DOCS (providers/moonshot.md,
@@ -36,7 +36,7 @@
 #
 # SECRET HYGIENE: NEVER commit real API keys. Use `os.environ/<VAR>` indirection.
 #
-# WORKESTRATOR NOTES [PROJECT CONTEXT — NOT upstream docs]:
+# WORKESTRATE NOTES [PROJECT CONTEXT — NOT upstream docs]:
 #   - Moonshot AI = the company; Kimi = their model line.
 #   - Variant (b) `anthropic/kimi-for-coding` is NOT documented on the moonshot
 #     page; it is inferred from the Anthropic page's Custom API Base section.
@@ -61,7 +61,7 @@ model_list:
       model: moonshot/kimi-k2.5           # VERIFIED verbatim model string
       api_key: os.environ/MOONSHOT_API_KEY
 
-  # --- VARIANT (b): WORKESTRATOR anthropic/kimi-for-coding (UNCERTAIN) ------
+  # --- VARIANT (b): WORKESTRATE anthropic/kimi-for-coding (UNCERTAIN) ------
   # NOT documented on the moonshot page. Inferred from the Anthropic page's
   # Custom API Base section. PROJECT-SPECIFIC.
   # TODO: verify api.kimi.com/coding accepts Anthropic Messages API and that

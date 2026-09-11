@@ -34,6 +34,25 @@ else
   warn "No vmx/svm flag in /proc/cpuinfo; virtualization may be disabled in firmware"
 fi
 
+# Nested-virtualization module parameter (ADR 0036): guest /dev/kvm needs
+# host KVM *plus* nesting enabled (kvm_intel/kvm_amd `nested` at Y).
+# Report-only — the `up` gate owns the fail-closed refusal.
+NESTED_STATE="unknown"
+for mod in kvm_intel kvm_amd; do
+  p="/sys/module/${mod}/parameters/nested"
+  if [[ -r "$p" ]]; then
+    NESTED_STATE="$(tr -d '[:space:]' < "$p")"
+    log "Nested parameter ${mod}: ${NESTED_STATE}"
+  fi
+done
+if [[ "$NESTED_STATE" == "unknown" ]]; then
+  warn "No readable kvm_intel/kvm_amd nested parameter; nested-guest readiness unknown (guest nesting needs nested=Y)"
+elif [[ "$NESTED_STATE" == "Y" || "$NESTED_STATE" == "y" || "$NESTED_STATE" == "1" ]]; then
+  log "Nested virtualization parameter enabled"
+else
+  warn "CPU nested parameter is N (disabled); nested guests refuse at up — enable with: sudo modprobe -r kvm_intel && sudo modprobe kvm_intel nested=1 (or the kvm_amd equivalent)"
+fi
+
 # Nix
 if command -v nix >/dev/null 2>&1; then
   log "nix found: $(command -v nix)"
@@ -61,7 +80,7 @@ if [[ "$DISK_GB" -lt 20 ]]; then
 fi
 
 if [[ "$ERRORS" -eq 0 ]]; then
-  log "Host looks ready for ai-workbench. Run: nix run . -- litellm plan"
+  log "Host looks ready for ai-workbench. Run: nix run . -- workload plan litellm"
   exit 0
 else
   fail "$ERRORS check(s) failed; fix above issues before running the workbench"

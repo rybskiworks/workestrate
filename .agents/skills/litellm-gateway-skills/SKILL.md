@@ -5,7 +5,7 @@ description: |
   Gateway: /v1/skills endpoints (anthropic-beta: skills-2025-10-02,
   anthropic provider only), central registry (/claude-code/plugins,
   /public/skill_hub, /claude-code/marketplace.json), and model-based routing.
-  Persistence requires DB (defer to Postgres/M4 in workestrator). Load when
+  Persistence requires DB (defer to Postgres/M4 in workestrate). Load when
   planning Skills gateway enablement or reviewing why runtime-registered
   skills are lost on restart. Distilled from docs/litellm/.
 ---

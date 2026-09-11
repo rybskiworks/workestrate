@@ -1,0 +1,7 @@
+name: diverter
+image: node:24
+ssh: strict=true (origin local)
+credential: ssh deploy material=DEPLOY_KEY hosts=[github.com] users=[git] ports=[22] on_violation=block binding=broker-bound
+network: egress_default=deny ingress_default=deny
+  egress: tcp:53 -> host
+  egress: udp:53 -> host

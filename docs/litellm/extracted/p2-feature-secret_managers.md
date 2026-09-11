@@ -84,8 +84,8 @@ general_settings:
 - ./google_kms (Google Key Management Service)
 - ./hashicorp_vault (Hashicorp Vault)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- The workestrator does NOT use any secret manager. `general_settings.key_management_system`, `key_management_settings`, `use_google_kms`, and `use_azure_key_vault` are all unset. API keys are resolved via `os.environ/` at config load time (e.g. `master_key: os.environ/LITELLM_MASTER_KEY`). Secret-manager integration is Enterprise-gated and therefore unavailable without a `litellm_license`. No action needed for the in-memory deployment.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- The workestrate does NOT use any secret manager. `general_settings.key_management_system`, `key_management_settings`, `use_google_kms`, and `use_azure_key_vault` are all unset. API keys are resolved via `os.environ/` at config load time (e.g. `master_key: os.environ/LITELLM_MASTER_KEY`). Secret-manager integration is Enterprise-gated and therefore unavailable without a `litellm_license`. No action needed for the in-memory deployment.
 
 ## Confidence / uncertainty notes
 - high confidence on Enterprise requirement, `key_management_system` (REQUIRED), and all `key_management_settings` sub-keys (verbatim YAML + prose). The relationship between `key_management_system` (unified, this page) and `use_google_kms`/`use_azure_key_vault` (config_settings) is inferred from the corpus: this overview page does not mention the two boolean keys, while config_settings lists them. Both are real per the option-index; the unified `key_management_system` path is the current documented approach.

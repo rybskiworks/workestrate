@@ -1,0 +1,8 @@
+# CODEOWNERS — review ownership for CI, flake, and supply-chain config.
+# NOTE: enforcement requires the GitHub branch ruleset (host-side step:
+# enable "Require review from Code Owners" on the protected branches).
+
+/.github/    @rybskiworks
+/flake.nix   @rybskiworks
+/flake.lock  @rybskiworks
+/deny.toml   @rybskiworks

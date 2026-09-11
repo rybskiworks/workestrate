@@ -82,7 +82,7 @@ model_list:
 - GPT-5.4+ drops `reasoning_effort` from requests that include tools (only supported in Responses API).
 - `reasoning_effort` summary field requires OpenAI org verification.
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 
 Not currently used in `infra/litellm/config.yaml` for direct OpenAI API calls. The repo uses `openai/neuralwatt` with `api_base: https://api.neuralwatt.com/v1` — this follows the documented pattern. `openai/` prefix + `OPENAI_BASE_URL` (or `api_base` in litellm_params) is the canonical way to point LiteLLM at a custom OpenAI-compatible endpoint. The `openai/` prefix is shared between the OpenAI provider page and the openai_compatible page — both use the same prefix for OpenAI-protocol chat-completions endpoints. For Neuralwatt: `model: openai/neuralwatt` + `api_base: https://api.neuralwatt.com/v1` + `api_key: <key>` is correct. The `openai/responses/` sub-prefix is for OpenAI's Responses API (not relevant for Neuralwatt).
 

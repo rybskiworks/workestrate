@@ -1,0 +1,443 @@
+#:schema ../schemas/workestrate.schema.json
+
+schema_version = 1
+
+# Synthetic reference config. This is a machine-independent fixture that
+# exercises every recipe type and policy feature the core understands. It is
+# NOT a real deployment; user deployments live in personal config repos.
+#
+# Cleanup phase 2: every workload here is a synthetic `example-*` placeholder
+# (generic public images only — no real product images, no mounts into
+# personal infra/ directories). `example-litellm` stands in for the historical
+# real litellm service so the example workloads keep exercising the
+# depends_on env-injection / derived-egress / declared-port-fallback paths.
+
+# Sensitive-path defaults (spec 22 §9). These are the lowest-scope reference
+# defaults: every workload under config.reference inherits them, and any
+# later scope (config-repo / workload layer) may relax them via `read.allow`
+# carve-outs. Every entry is non-final (the default) — `final = true` would
+# freeze an entry against ALL later scopes, and an OPERATOR scope's final
+# read.deny entry compiles to the protect wire bucket (invisible AND
+# untouchable); the reference config is not an operator scope, so nothing
+# here is final. The former `mask`/`protect` keywords and the `overridable`
+# entry key no longer exist on the config surface.
+[policy.mounts.read]
+deny = [
+  "**/.env",
+  "**/.env.*",
+  "**/.ssh/**",
+  "**/*.pem",
+  "**/*.key",
+  "**/.git/**",
+  "**/.sops.yaml",
+  "**/node_modules/.npmrc",
+]
+
+# Secret violation-policy ladder (secrets edition of the mount-policy
+# hierarchy, docs/mount-policy/03-hierarchy-and-precedence.md): the effective
+# per-secret on_violation is resolved authority-ascending — built-in
+# passthrough < home registry config.toml [policy.secrets] (operator) <
+# this layer's [policy.secrets] < [workloads.<name>.policy.secrets] <
+# per-secret [secrets.<NAME>] on_violation. `final = true` freezes the value
+# so every lower rung (including per-secret entries) cannot override it.
+# Like [policy.mounts.read] above, this ships the NON-final default: an
+# active final here would freeze passthrough against every lower rung.
+[policy.secrets]
+on_violation = "passthrough"  # the built-in default, made explicit; also: block, block-and-log, block-and-terminate
+# final = true  # terminal freeze — lower rungs could not override
+
+# SSH confinement policy (M1 credential broker): the [policy.ssh] ladder
+# follows the [policy.secrets] pattern (collected per rung, `final` freeze,
+# never merged). strict = true checks recognized SSH flows against SSH
+# grants/egress even when a generic TCP allowance would match; strict = true
+# requires at least one credentials.ssh grant or one port-22 egress allowance
+# in the same effective policy (else a config error). Absent = no
+# confinement (current behavior).
+# [policy.ssh]
+# strict = false
+# final = false  # true freezes the value against ALL lower rungs
+
+# Nested-virtualization operator seal (ADR 0036, optional, restrict-only):
+# the home fragment grants/restricts via allow_nested + final (final seals,
+# never enables; absent fragment = no restriction).
+# [policy.virtualization]
+# allow_nested = true
+# final = false  # true + allow_nested = false = fleet-wide ban
+
+[secrets.LITELLM_MASTER_KEY]
+env_var = "LITELLM_MASTER_KEY"
+required = true
+
+[secrets.GITHUB_TOKEN]
+env_var = "GITHUB_TOKEN"
+allowed_hosts = ["github.com", "api.github.com"]
+required = false
+on_violation = "passthrough"  # default; placeholder text may leave the sandbox unsubstituted — real values still only go to allowed_hosts
+
+# Machine-identity SSH key (M1 broker-bound grant material): key BYTES are
+# never stored here — the operator provisions them later via the host env var
+# above (or the secrets workflow into .env.enc). required = false so absent
+# material warns-and-skips at runtime instead of refusing (mirrors
+# GITHUB_TOKEN); validate-config passes with the value absent.
+[secrets.GITHUB_MACHINE_IDENTITY_SSH_KEY]
+env_var = "GITHUB_MACHINE_IDENTITY_SSH_KEY"
+allowed_hosts = ["github.com"]
+required = false
+
+# Credential-broker catalog (M1, repo-global): [credentials.ssh.<name>]
+# SSH grants plus [credentials.signing.ssh.<name>] signing grants. `material`
+# is an explicit first-class reference to an existing [secrets.<N>] entry
+# (no same-name magic). Workloads opt in via [workloads.<name>.credentials]
+# allowlists; binding stays at consumption via the existing env idiom
+# (omission = broker-bound, the default; `bound = "guest"` delivers real
+# material). No workload below consumes these entries, so the golden plans
+# are unaffected — they document the catalog shape.
+[credentials.ssh.deploy]
+material = "GITHUB_TOKEN"
+hosts = ["github.com"]
+users = ["git"]
+# ports = [22]  # absent = [22] (defaults-after-merge)
+
+# Machine-identity SSH grant shape for consumer config repos (codex /
+# prime-agent / pi wire this name via [workloads.<name>.credentials]
+# ssh = ["github-machine-identity"] plus a github.com:22 egress allowance;
+# those workloads live outside this repo, so like `deploy` above this entry
+# is unconsumed here and the golden plans are unaffected).
+[credentials.ssh.github-machine-identity]
+material = "GITHUB_MACHINE_IDENTITY_SSH_KEY"
+hosts = ["github.com"]
+users = ["git"]
+# ports = [22]  # absent = [22] (defaults-after-merge)
+
+[credentials.signing.ssh.release]
+material = "GITHUB_TOKEN"
+namespace = "release"
+# on_violation = "block"  # absent = the material secret's ladder-resolved policy
+
+[workloads.example-litellm]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 2
+memory_mib = 2048
+command = ["python", "-m", "http.server", "4000"]
+log_stop_errors = true
+
+# Instance policy (ADR 0030 Phase 1 schema; COMMENTED — the defaults below are
+# the current behavior, so no reference workload declares a block):
+# [workloads.example-litellm.instance]
+# strategy = "singleton"
+# on_conflict = ["reuse", "start", "replace"]
+# port = { preferred = 4000, on_occupied = ["increment", "auto"] }
+# label = "dev"
+# Nested virtualization (ADR 0036; COMMENTED — absent table = off, the
+# current behavior, so only the example-nested capsule below declares it):
+# [workloads.example-litellm.virtualization]
+# nested = "require"  # "require" | "prefer" | "off"; default "off"
+[workloads.example-litellm.env]
+PORT = "4000"
+
+# Named ports (P0/P2): `name` gives a port a stable identity for
+# `depends_on.<dep>.exports = { <name> = "<ENV_VAR>" }` resolution. The
+# UNNAMED port is the legacy primary (env) port; here `api` is the only
+# HTTP port and the primary rule resolves to it.
+[[workloads.example-litellm.ports]]
+name = "api"
+host = 4000
+guest = 4000
+
+# Auto-allocated port (P1): `host = 0` asks the registry to probe a free
+# port on the slot's bind at boot (same mechanism as --port-auto, per port).
+# The chosen port is recorded in the instance record; `ps` shows the
+# effective port. A dependency's auto port has NO address until it runs, so
+# a not-running dep with an auto port refuses at plan time ("start it
+# first").
+[[workloads.example-litellm.ports]]
+name = "metrics"
+host = 0
+guest = 9090
+
+[workloads.example-litellm.network.defaults]
+egress = "deny"
+# ingress = "deny"  # absent = deny (fail-closed); explicit "allow" stands alone
+
+[[workloads.example-litellm.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.example-litellm.policy.ingress.allow.port]]
+ports = [4000]
+protocol = "tcp"
+scope = "local"
+
+[workloads.example-service]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 2
+memory_mib = 1024
+command = ["python", "-m", "http.server", "8080"]
+log_stop_errors = true
+
+[workloads.example-service.env]
+APP_PORT = "8080"
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
+
+[[workloads.example-service.ports]]
+host = 8080
+guest = 8080
+
+[[workloads.example-service.mounts]]
+host = "workspaces/example-service-state"
+guest = "/data"
+mode = "rw"  # canonical access-mode field; `read_only = <bool>` is a deprecated alias
+
+# seed_files targets are rendered on the HOST and reach the guest only when a
+# declared mount host covers the target (here: workspaces/example-service-state
+# → /data); validation fails closed on an uncovered target.
+[[workloads.example-service.seed_files]]
+source = "agents/example-service/config/settings.json"
+target = "workspaces/example-service-state/settings.json"
+only_if_missing = true
+
+[[workloads.example-service.seed_files]]
+source = "agents/example-service/config/rendered.json.tpl"
+target = "workspaces/example-service-state/rendered.json"
+# template = true renders ${VAR} against the guest-visible env view. Rendered
+# ONCE (only_if_missing defaults to true): editing the source template never
+# reaches an existing state copy unless you pass `--reseed` to up/exec, which
+# re-renders template seeds over their existing targets (static seeds above
+# are never overwritten).
+template = true
+
+[[workloads.example-service.seed_files]]
+glob = "agents/example-service/config/glob/*.json"
+target = "workspaces/example-service-state/globbed"
+
+[workloads.example-service.network.defaults]
+egress = "deny"
+
+[[workloads.example-service.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.example-service.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[[workloads.example-service.policy.ingress.allow.port]]
+ports = [8080]
+protocol = "tcp"
+scope = "local"
+
+# required = false (here and on the other example workloads below) because
+# this reference fixture must render golden plans with NO instances running:
+# required = true refuses at plan time (discovery.rs resolve_depends_on),
+# which would break golden generation. The fixture deliberately exercises the
+# declared-port convention-fallback path instead; real deployments (personal
+# config repos) use required = true per spec 12 §4.
+[workloads.example-service.depends_on.example-litellm]
+env = "LITELLM_ADDR"
+required = false
+# on_conflict (default chain ["reuse", "start", "replace"]; ADR 0030
+# addendum 2): what dependency auto-start does when the dep's singleton slot
+# is occupied at auto-start time. Accepts a scalar (back-compat: "reuse" =
+# ["reuse"]) or an ordered list tried until one succeeds: "reuse" the running
+# instance when healthy (short host port probe) or still booting; "start" a
+# stopped/crashed sandbox; "replace" (down + start fresh) a keep-alive zombie
+# or stale record; "fail" refuses with the standard occupied-instance error
+# (terminal). This reference config keeps the d452575 scalar form.
+on_conflict = "reuse"
+# depends_on.<dep>.instance (ADR 0030 Phase 2; COMMENTED — the default below
+# is the current behavior, so no reference entry declares it): which instance
+# of the dep the dependent selects. "shared" (default) = the dep's singleton
+# slot in the dependent's config-repo NAMESPACE; "scoped" = a dep instance
+# named after the dependent's instance id; "fresh" = a fresh auto-slugged dep
+# instance per start (scoped/fresh dep AUTO-START is a P2.1 follow-up; the
+# `--use <dep>@<id>` selection path works today):
+# instance = "shared"
+
+# Exports-only depends_on (P2 namespaced ports): resolves the DEPENDENCY's
+# NAMED ports and injects each resolved address as its own env var. `env` is
+# omitted here on purpose — validation requires at least one of env/exports.
+# (`metrics` is intentionally NOT exported: it is auto-allocated, so it has
+# no address until example-litellm runs — a not-running auto dep refuses by
+# design.)
+[workloads.example-exports]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 1
+memory_mib = 256
+command = ["python", "-m", "http.server", "9999"]
+log_stop_errors = true
+
+[workloads.example-exports.env]
+PORT = "9999"
+
+[[workloads.example-exports.ports]]
+host = 9999
+guest = 9999
+
+[workloads.example-exports.network.defaults]
+egress = "deny"
+
+[[workloads.example-exports.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[workloads.example-exports.depends_on.example-litellm]
+exports = { api = "LITELLM_API_URL" }
+required = false
+
+[workloads.example-agent]
+kind = "agent"
+image = { recipe = "nix-layered", name = "example-agent", tag = "latest", contents = [
+  "cacert",
+  "busybox",
+  "fakeNss"
+], binary = { recipe = "npm-build", src = "flake://example-agent", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }, baked_files = [
+  { path = "root/.config/example/settings.json", content = '{"mode":"test"}' }
+], features = ["create_tmp"] }
+workdir = "/work"
+cpus = 1
+memory_mib = 512
+command = ["node", "dist/cli.js"]
+log_stop_errors = false
+
+[workloads.example-agent.env]
+API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
+GITHUB_TOKEN = true
+
+[[workloads.example-agent.mounts]]
+host = "workspaces/example-agent-state"
+guest = "/data"
+mode = "rw"
+# Mount-policy sugar (spec 22 §8.3 mount-entry scope): read.deny/read.allow/
+# write.deny/write.allow dotted keys directly on the mount row, in the same
+# entry shapes as [policy.mounts] (compact string or { pattern, final }).
+# Parse-time normalized into this mount's entry policy; mixing with an
+# explicit `policy` table on the same mount is allowed (they concatenate).
+read.deny = ["agent-scratch/**"]
+write.deny = [".env", "*.key"]
+
+[workloads.example-agent.network.defaults]
+egress = "deny"
+
+[[workloads.example-agent.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.example-agent.policy.egress.allow.host]]
+ports = [4000]
+protocols = ["tcp"]
+
+[[workloads.example-agent.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[[workloads.example-agent.policy.egress.deny.domain]]
+domains = [".example.dev"]
+
+[workloads.example-agent.local_build]
+recipe = "npm-build"
+source = "flake://example-agent"
+gating_file = "package-lock.json"
+env_override = "WORKESTRATE_EXAMPLE_AGENT_BUILD"
+fallback = "agents/example-agent/build"
+
+[workloads.example-agent.depends_on.example-litellm]
+env = "LITELLM_ADDR"
+required = false
+
+[workloads.example-offensive]
+kind = "agent"
+# egress = "allow" (below) stands alone (absent = deny; explicit allow needs
+# no gate — home `final` seals still veto).
+image = { recipe = "nix-layered", name = "example-offensive", tag = "latest", contents = [
+  "cacert",
+  "busybox",
+  "fakeNss",
+  "nodejs_24",
+  "nmap",
+  "dnsutils"
+], binary = { recipe = "npm-build", src = "flake://example-offensive", npm_deps_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }, baked_files = [
+  { path = "root/.config/offensive/config.json", content = '{"defaultProvider":"local"}' }
+], features = ["create_tmp"] }
+workdir = "/work"
+cpus = 2
+memory_mib = 2048
+command = ["node", "dist/cli.js"]
+log_stop_errors = false
+
+[workloads.example-offensive.env]
+T3MP3ST_HOST = "127.0.0.1"
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
+
+[[workloads.example-offensive.mounts]]
+host = "workspaces/example-offensive-state"
+guest = "/data"
+mode = "rw"
+
+[workloads.example-offensive.network.defaults]
+egress = "allow"
+
+[[workloads.example-offensive.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.example-offensive.policy.egress.allow.domain]]
+domains = [
+  "openrouter.ai",
+  "api.kimi.com",
+  "api.neuralwatt.com",
+  "api.minimax.io",
+  "github.com",
+  "api.github.com"
+]
+port = 443
+protocol = "tcp"
+
+[workloads.example-offensive.local_build]
+recipe = "npm-build"
+source = "flake://example-offensive"
+gating_file = "package-lock.json"
+env_override = "WORKESTRATE_EXAMPLE_OFFENSIVE_BUILD"
+fallback = "agents/example-offensive/build"
+
+[workloads.example-offensive.depends_on.example-litellm]
+env = "LITELLM_ADDR"
+required = false
+
+# Nested-virtualization example capsule (ADR 0036): the only reference
+# workload that ASKS for nesting. require = fail-closed at up without host
+# nested KVM (plan warns, never fails); prefer would degrade instead, off
+# (absent) is current behavior. Additive: golden plans cover the three
+# workloads above, so this capsule never churns them.
+[workloads.example-nested]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 1
+memory_mib = 256
+command = ["python", "-m", "http.server", "9998"]
+log_stop_errors = true
+
+[workloads.example-nested.virtualization]
+nested = "require"
+
+[workloads.example-nested.env]
+PORT = "9998"
+
+[[workloads.example-nested.ports]]
+host = 9998
+guest = 9998
+
+[workloads.example-nested.network.defaults]
+egress = "deny"
+
+[[workloads.example-nested.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]

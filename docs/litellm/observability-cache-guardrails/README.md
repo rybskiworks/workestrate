@@ -378,9 +378,9 @@ basic Prometheus metrics; static `guardrails:` config + `GET /guardrails/list`
 - **`_created` vs `_total` metrics.** Consume the `_total` metrics
   (verbatim). The `_created` series are Prometheus boilerplate.
 - **Multi-worker metrics not aggregated** without `PROMETHEUS_MULTIPROC_DIR`.
-  Single-process workestrator is fine; scaling out requires it.
+  Single-process workestrate is fine; scaling out requires it.
 - **`forward_traceparent_to_llm_provider` breaks Bedrock/VertexAI.** Only
-  use for self-hosted LLMs (verbatim). The workestrator's upstreams are
+  use for self-hosted LLMs (verbatim). The workestrate's upstreams are
   Kimi/MiniMax/OpenRouter/Neuralwatt — verify before enabling.
 - **`default_on: true` guardrails run even on empty `guardrails` array.**
   Verbatim caveat — a `default_on` guardrail cannot be opted out per
@@ -408,7 +408,7 @@ basic Prometheus metrics; static `guardrails:` config + `GET /guardrails/list`
 - `litellm-logging-observability` (`.agents/skills/litellm-logging-observability/`) — operational skill (callbacks/alerting/prometheus).
 - `litellm-guardrails` (`.agents/skills/litellm-guardrails/`) — operational skill (static guardrails).
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 
@@ -430,6 +430,6 @@ basic Prometheus metrics; static `guardrails:` config + `GET /guardrails/list`
 - Budget/spend alerts, `/daily_metrics`, budget/rate-limit Prometheus
   metrics, and per-key guardrail control remain **unavailable** until
   Postgres is added (M4). See
-  [workestrator-recommended-patterns.md](../workestrator-recommended-patterns.md).
+  [workestrate-recommended-patterns.md](../workestrate-recommended-patterns.md).
 - `user_api_key_cache_ttl` (default 60s) governs the `master_key` auth
   cache TTL — relevant even in-memory (single key, low churn).

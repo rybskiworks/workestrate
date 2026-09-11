@@ -3,7 +3,7 @@ name: workflow-litellm-debugging-00-orchestration
 description: |
   Use only to orchestrate the LiteLLM debugging workflow. Use when fixing a
   broken LiteLLM proxy, an invalid config.yaml, or wrong model routing in the
-  workestrator in-memory deployment. Do not use for implementing new LiteLLM
+  workestrate in-memory deployment. Do not use for implementing new LiteLLM
   features (use workflow-litellm-implementation), reviewing a diff (use
   workflow-litellm-code-review), or restructuring config without behavior
   change. If the fix requires new config keys or a new provider entry, follow

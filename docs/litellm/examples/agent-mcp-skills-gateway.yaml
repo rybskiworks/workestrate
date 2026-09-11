@@ -39,20 +39,20 @@
 #     `litellm_settings.skills` config block documented on /docs/skills. Skills
 #     are managed via /v1/skills REST endpoints."). Skills are runtime-only and
 #     need a DB to persist; in-memory they are lost on restart. [DEFERRED until
-#     workestrator adds a Postgres backend.]
+#     workestrate adds a Postgres backend.]
 #
 # A2A AUTH NOTE: gateway_types.a2a_agents.auth_types_note states A2A uses LiteLLM
 #   virtual-key auth (Authorization: Bearer sk-... or x-litellm-api-key header)
 #   and that per-key/team permission checks REQUIRE DB (virtual keys). With
 #   master_key only (no DB), A2A endpoints are reachable with the master key but
-#   per-team/per-key agent permissions are NOT enforceable. [WORKESTRATOR NOTE]
+#   per-team/per-key agent permissions are NOT enforceable. [WORKESTRATE NOTE]
 #
 # SECRETS: master_key and all auth_value / api_key values use os.environ/
 # indirection. NEVER commit real values. Required env vars: LITELLM_MASTER_KEY,
 # MCP_REMOTE_API_KEY, ANTHROPIC_API_KEY (for the skills-capable model).
 #
-# WORKESTRATOR-SPECIFIC: the choice to run MCP + A2A in-memory (no DB) is a
-# project decision. Sections marked [WORKESTRATOR NOTE] are project commentary.
+# WORKESTRATE-SPECIFIC: the choice to run MCP + A2A in-memory (no DB) is a
+# project decision. Sections marked [WORKESTRATE NOTE] are project commentary.
 
 model_list:
   # A model group backing the Skills gateway (Anthropic-compatible /v1/skills
@@ -107,7 +107,7 @@ general_settings:
   # completion_model: default model group. Verified:
   # option-index general_settings.completion_model.
   completion_model: claude-sonnet
-  # disable_spend_logs: [WORKESTRATOR NOTE] set true to suppress spend-log write
+  # disable_spend_logs: [WORKESTRATE NOTE] set true to suppress spend-log write
   # attempts against the nonexistent DB. Verified:
   # option-index general_settings.disable_spend_logs (requires_db=true).
   disable_spend_logs: true

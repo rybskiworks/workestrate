@@ -4,7 +4,7 @@
 **Total excluded**: 258
 
 These discovered URLs are deliberately excluded from Phase 3 extraction because they are
-not relevant to the workestrator LiteLLM proxy knowledge pack.
+not relevant to the workestrate LiteLLM proxy knowledge pack.
 
 ## Exclusion Categories
 

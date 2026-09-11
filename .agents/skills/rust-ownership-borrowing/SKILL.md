@@ -159,7 +159,7 @@ matrix", "Practical rules".
 ## Verification Commands
 
 Before claiming a fix complete, run from the project root inside
-`nix develop` (see `nix-usage` skill):
+`just shell` (see `nix-usage` skill):
 
 ```bash
 cargo check                       # primary borrow-checker gate

@@ -91,8 +91,8 @@ None on this page — this is the SDK-side documentation; the page uses Python c
 - /docs/proxy/caching (Proxy caching)
 - /docs/completion/prompt_caching
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- This is the SDK-side cache doc. For the workestrator (proxy in-memory), the relevant cache types that work WITHOUT Redis are: `local` (in-memory), `disk`, `s3`, `gcs`, `azure-blob`, `qdrant-semantic`, `valkey-semantic`. The proxy config uses `litellm_settings.cache_params.type` (see p2-feature-caching.md). `local` is the simplest for in-memory deployment. This page confirms `azure-blob` as an additional option not shown on the proxy caching page.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- This is the SDK-side cache doc. For the workestrate (proxy in-memory), the relevant cache types that work WITHOUT Redis are: `local` (in-memory), `disk`, `s3`, `gcs`, `azure-blob`, `qdrant-semantic`, `valkey-semantic`. The proxy config uses `litellm_settings.cache_params.type` (see p2-feature-caching.md). `local` is the simplest for in-memory deployment. This page confirms `azure-blob` as an additional option not shown on the proxy caching page.
 
 ## Confidence / uncertainty notes
 - high confidence on cache type list and Redis requirements. `azure-blob` is documented only in SDK code examples (not in proxy config YAML) — may not be available as a proxy `cache_params.type` (inferred; not confirmed on proxy page).

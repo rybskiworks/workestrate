@@ -1,0 +1,12 @@
+# Encrypted secrets (SOPS) — committed, but the plaintext form is not.
+# .env.enc IS committed (it's encrypted); .env is NOT.
+.env
+
+# OS clutter
+.DS_Store
+
+# Editor clutter
+*.swp
+
+# Reserved workload-agnostic build-artifact dir (spec 21 §6) — never committed.
+.workestrate-build/

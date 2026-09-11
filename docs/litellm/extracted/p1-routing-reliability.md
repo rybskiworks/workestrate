@@ -131,7 +131,7 @@ litellm_settings:
 - /docs/proxy/timeout (Timeouts)
 - /docs/proxy/fallback_management (dynamic fallback management endpoints — DB-required)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - The real config uses static `router_settings.fallbacks` (coding-tier chains), `num_retries: 2`, `allowed_fails: 3`, `cooldown_time: 60`, and `retry_policy` (TimeoutErrorRetries/RateLimitErrorRetries/InternalServerErrorRetries). All of these work without DB/Redis. `enable_pre_call_checks` is NOT set, so context-window pre-checks do not run. `default_fallbacks`, `request_timeout`, and per-request `disable_fallbacks` are unset. The `mock_testing_*` test params are available at runtime. Cross-instance cooldown sharing would require Redis (not configured).
 
 ## Confidence / uncertainty notes

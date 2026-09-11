@@ -94,8 +94,8 @@ include:
 - https://docs.litellm.ai/docs/proxy/config_settings (top-level YAML schema + Caveats)
 - https://docs.litellm.ai/docs/proxy/configs (Overview — model_list, providers, credentials)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-The real config at `infra/litellm/config.yaml` is a single monolithic file (no `include`). The `include` directive is available but unused in workestrator. If adopted, a split config would separate `model_list` (per-provider child files) from `general_settings`/`router_settings`/`litellm_settings` (parent). NOTE: in the workestrator microsandbox the config is mounted **read-only** at `/app/config.yaml`, so even if `include` were used, hot-reload (if it existed) would be blocked by the read-only mount — config changes require a sandbox restart regardless. Hot-reload is NOT documented upstream on this page in any case.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+The real config at `infra/litellm/config.yaml` is a single monolithic file (no `include`). The `include` directive is available but unused in workestrate. If adopted, a split config would separate `model_list` (per-provider child files) from `general_settings`/`router_settings`/`litellm_settings` (parent). NOTE: in the workestrate microsandbox the config is mounted **read-only** at `/app/config.yaml`, so even if `include` were used, hot-reload (if it existed) would be blocked by the read-only mount — config changes require a sandbox restart regardless. Hot-reload is NOT documented upstream on this page in any case.
 
 ## Confidence / uncertainty notes
 - HTTP status 200 confirmed via raw GitHub fetch (raw.githubusercontent.com/.../config_management.md, 1260 bytes).

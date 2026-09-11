@@ -133,7 +133,7 @@ model_list:
 - Local: `extracted/p0-config_settings.md`, `extracted/p0-configs.md`,
   `schemas/config-yaml.option-index.json`
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 
@@ -167,4 +167,4 @@ Provider-prefix usage in the real config:
 Fallbacks are wired in `router_settings` (not `model_list`): `coding` →
 `coding-fallback`, `coding.fast` → `coding.fast-fallback`, `coding.pro` →
 `coding.pro-fallback`, `coding.free` → `coding.free-fallback`. See
-[config-yaml-overview.md](config-yaml-overview.md) → Workestrator notes.
+[config-yaml-overview.md](config-yaml-overview.md) → Workestrate notes.

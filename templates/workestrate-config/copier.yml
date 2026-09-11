@@ -1,0 +1,42 @@
+# Copier template for a new workestrate config repo.
+# Usage: copier copy templates/workestrate-config/ my-config-repo/
+#
+# Or from a remote: copier copy github:georgrybski/ai-workbench/templates/workestrate-config/ my-config-repo/
+
+config_name:
+  type: str
+  help: "Name for this config repo (e.g. personal, work, team)"
+  default: personal
+
+age_recipient:
+  type: str
+  help: "Your age public key (age1...) for SOPS encryption. Generate with: age-keygen -o ~/.config/sops/age/ai-workbench-secrets.txt && age-keygen -y ~/.config/sops/age/ai-workbench-secrets.txt"
+  default: age1PLACEHOLDER
+
+team_age_recipient:
+  type: str
+  help: "Team age public key (optional, for shared secrets). Leave blank if no team."
+  default: ""
+
+include_flake:
+  type: bool
+  help: "Include a flake.nix for inverted-dependency image builds (Phase 2)?"
+  default: false
+
+core_flake_url:
+  type: str
+  help: "URL of the workestrate core flake"
+  default: "github:georgrybski/ai-workbench"
+  when: "{{ include_flake }}"
+
+# Exclude files conditionally
+_exclude:
+  - "!include_flake"
+
+# NOTE (cleanup phase 4): no post-copy `_tasks`. The historical task
+# regenerated `.env.example` via `workestrate generate-env-example`, which
+# renders the ACTIVE (ambient) config's secrets — leaking whatever personal
+# config the operator has registered into the freshly scaffolded repo. The
+# committed static `.env.example` matches the scaffolded workestrate.toml
+# exactly; regenerate against YOUR config once the repo is registered:
+#   workestrate generate-env-example --output .env.example

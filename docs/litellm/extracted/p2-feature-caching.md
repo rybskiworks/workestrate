@@ -268,8 +268,8 @@ cache_params:
 - /docs/caching/all_caches
 - https://litellm-api.up.railway.app/ (Swagger)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
-- CRITICAL: caching works WITHOUT Redis using `type: local` (in-memory) or `type: disk`. The workestrator runs in-memory (no Redis), so `cache_params.type: local` is the viable caching option. `type: disk` also works (writes to local disk). `type: s3` / `type: gcs` work without Redis but require cloud credentials. `enable_redis_auth_cache` is unavailable (requires Redis) but is OPTIONAL and only relevant for multi-worker virtual-key auth caching (moot without virtual keys/DB anyway). `general_settings.user_api_key_cache_ttl` controls master_key auth cache TTL — relevant even in-memory. Per-request cache controls (`cache: {ttl, no-cache, no-store}`) work with any backend including local.
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
+- CRITICAL: caching works WITHOUT Redis using `type: local` (in-memory) or `type: disk`. The workestrate runs in-memory (no Redis), so `cache_params.type: local` is the viable caching option. `type: disk` also works (writes to local disk). `type: s3` / `type: gcs` work without Redis but require cloud credentials. `enable_redis_auth_cache` is unavailable (requires Redis) but is OPTIONAL and only relevant for multi-worker virtual-key auth caching (moot without virtual keys/DB anyway). `general_settings.user_api_key_cache_ttl` controls master_key auth cache TTL — relevant even in-memory. Per-request cache controls (`cache: {ttl, no-cache, no-store}`) work with any backend including local.
 
 ## Confidence / uncertainty notes
 - high confidence on cache type options and which work without Redis (verbatim YAML blocks for `local` and `disk`). The `local` cache is in-process memory (not shared across workers) — fine for single-process in-memory deployment. `user_api_key_cache_ttl` default 60s is verbatim.

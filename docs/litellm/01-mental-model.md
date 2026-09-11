@@ -108,12 +108,12 @@ model_list:
 - https://docs.litellm.ai/docs/proxy/config_settings
 - Local: `extracted/p0-simple_proxy.md`, `extracted/p0-configs.md`, `extracted/p0-config_settings.md`
 
-## Workestrator notes
+## Workestrate notes
 
 [PROJECT CONTEXT — NOT upstream docs]
 
 - In-memory deployment: no DB, no Redis, `master_key`-only auth. See
-  [00-index.md](00-index.md) → Workestrator notes.
+  [00-index.md](00-index.md) → Workestrate notes.
 - Client-facing aliases are **coding-tier role names**: `coding`,
   `coding-fallback`, `coding.fast`, `coding.fast-fallback`, `coding.pro`,
   `coding.pro-fallback`, `coding.free`, `coding.free-fallback`, `neural`.

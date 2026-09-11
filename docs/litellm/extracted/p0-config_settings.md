@@ -1268,7 +1268,7 @@ The complete environment_variables Reference table (765 entries, byte-for-byte f
 - https://docs.litellm.ai/docs/proxy/health (health checks)
 - https://docs.litellm.ai/docs/secret_managers/overview (Secret Managers)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 This is the canonical config schema reference. Maps directly to infra/litellm/config.yaml:
 - `general_settings.master_key` — used as `os.environ/...` in real config (env var resolution syntax `os.environ/X` confirmed here: "runs os.getenv at load time").
 - `general_settings.completion_model` — documented here as "model to use for all completions, overriding `model` in request". Used in real config.

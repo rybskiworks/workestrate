@@ -115,7 +115,7 @@ print(response)
 - https://openrouter.ai/docs
 - https://openrouter.ai/models (all models)
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - The repo uses `openrouter/z-ai/glm-5.1`, `openrouter/qwen/...`, and `openrouter/nex/...` style model strings.
 - CONFIRMED: The nested format `openrouter/<provider>/<model>` is the correct documented pattern.
 - `openrouter/z-ai/glm-5.1` is structurally valid (z-ai is OpenRouter's namespace for Z.AI/Zhipu). Note: OpenRouter uses `z-ai/` (hyphenated) while LiteLLM's native Z.AI provider uses `zai/` (no hyphen) — see p1-provider-zai.md.

@@ -146,7 +146,7 @@ print(response)
 - https://github.com/ollama/ollama
 - https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Ollama.ipynb
 
-## Workestrator relevance  [PROJECT CONTEXT — NOT upstream docs]
+## Workestrate relevance  [PROJECT CONTEXT — NOT upstream docs]
 - Ollama is a local model serving pattern. Uses native Ollama API (not OpenAI-compatible).
 - `ollama_chat/` is the recommended prefix for chat; `ollama/` for generate/FIM.
 - No API key required — suitable for local development.

@@ -4,7 +4,7 @@ description: |
   DB-GATED operational reference for LiteLLM virtual keys, model access,
   budgets, and rate-limit tiers. REQUIRES Postgres
   (general_settings.database_url) — UNAVAILABLE in the current in-memory
-  workestrator (M1). Load when planning the M4 Postgres cut-over or reviewing
+  workestrate (M1). Load when planning the M4 Postgres cut-over or reviewing
   why key/budget endpoints fail in-memory. Distilled from docs/litellm/;
   in-memory-safe alternatives are listed.
 ---
@@ -12,7 +12,7 @@ description: |
 # LiteLLM Budgets & Keys (DB-GATED)
 
 > **⚠️ DB-GATED SKILL.** Every feature in this skill REQUIRES Postgres
-> (`general_settings.database_url` / `DATABASE_URL`). The current workestrator
+> (`general_settings.database_url` / `DATABASE_URL`). The current workestrate
 > runs in-memory (M1, no Postgres) — **all of these features are UNAVAILABLE**.
 > Use the in-memory-safe alternatives at the bottom. Defer this surface to the
 > M4 Postgres cut-over.
