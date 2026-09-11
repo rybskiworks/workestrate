@@ -1,11 +1,13 @@
-# Dependabot: keep GitHub Actions up to date.
-#
-# The cargo ecosystem is deliberately OUT — dependabot cargo updates would
-# fight the Cargo.lock stability gates (scripts/check-cargo-lock.sh +
-# the lock stability diff in .github/workflows/ci.yml).
+# Cargo updates remain deliberately excluded: its lock and forks are managed.
+# This configuration must also be present on the repository default branch.
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: migration/tool-model
     schedule:
-      interval: "weekly"
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
