@@ -9,6 +9,8 @@ set +H
 #   just setup-secrets update
 #   just setup-secrets --config <name> init
 #   just setup-secrets --config <name> update
+#   just setup-secrets --home <directory> --config <name> update
+#   just setup-secrets --config-dir <directory> update
 #   just setup-secrets --global init
 #   just setup-secrets --global update
 #
@@ -17,10 +19,20 @@ set +H
 # secrets into shell history.
 
 CONFIG_NAME=""
+CONFIG_DIR=""
+TOOL_HOME=""
 GLOBAL_MODE=0
 ARGS=()
 
-# Parse --help, --config <name>, and --global before the init/update subcommand.
+fail() { echo "[setup-secrets] error: $*" >&2; exit 1; }
+
+require_value() {
+  if [ -z "${2:-}" ] || [[ "$2" == --* ]]; then
+    fail "$1 requires a value"
+  fi
+}
+
+# Options may appear before or after the init/update subcommand.
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h)
@@ -32,49 +44,103 @@ Usage:
   just setup-secrets update
   just setup-secrets --config <name> init
   just setup-secrets --config <name> update
+  just setup-secrets --home <directory> --config <name> update
+  just setup-secrets --config-dir <directory> update
   just setup-secrets --global init
   just setup-secrets --global update
 
 Secrets can be supplied via environment variables or interactive prompts.
-Command-line argument support is intentionally omitted to avoid leaking
-secrets into shell history.
+--config selects a registered configuration through workestrate secrets-target.
+--home selects its Workestrate home; otherwise normal home/XDG resolution applies.
+--config-dir edits an existing directory directly, without registry lookup.
+Secret values are never accepted as command-line arguments.
 EOF
       exit 0
       ;;
     --config)
-      shift
-      if [ "$#" -eq 0 ]; then
-        echo "[setup-secrets] error: --config requires a name" >&2
-        exit 1
-      fi
-      CONFIG_NAME="$1"
-      shift
+      require_value "$1" "${2:-}"
+      CONFIG_NAME="$2"
+      shift 2
       ;;
     --config=*)
       CONFIG_NAME="${1#--config=}"
+      require_value --config "$CONFIG_NAME"
+      shift
+      ;;
+    --config-dir)
+      require_value "$1" "${2:-}"
+      CONFIG_DIR="$2"
+      shift 2
+      ;;
+    --config-dir=*)
+      CONFIG_DIR="${1#--config-dir=}"
+      require_value --config-dir "$CONFIG_DIR"
+      shift
+      ;;
+    --home)
+      require_value "$1" "${2:-}"
+      TOOL_HOME="$2"
+      shift 2
+      ;;
+    --home=*)
+      TOOL_HOME="${1#--home=}"
+      require_value --home "$TOOL_HOME"
       shift
       ;;
     --global)
       GLOBAL_MODE=1
       shift
       ;;
-    *)
+    init|update)
       ARGS+=("$1")
       shift
       ;;
+    *) fail "unknown argument: $1 (expected init, update, or --help)" ;;
   esac
 done
 
-if [ "$GLOBAL_MODE" -eq 1 ] && [ -n "$CONFIG_NAME" ]; then
-  echo "[setup-secrets] error: --global and --config are mutually exclusive" >&2
-  exit 1
+if (( ${#ARGS[@]} > 1 )); then
+  fail "choose exactly one command: init or update"
 fi
 
-# Determine the target configuration directory.
-resolve_store_dir() {
-  echo "${XDG_DATA_HOME:-$HOME/.local/share}/workestrate"
+if { [ -n "$CONFIG_NAME" ] && [ -n "$CONFIG_DIR" ]; } ||
+  { [ "$GLOBAL_MODE" -eq 1 ] && { [ -n "$CONFIG_NAME" ] || [ -n "$CONFIG_DIR" ]; }; }; then
+  fail "--config, --config-dir, and --global are mutually exclusive"
+fi
+if [ -n "$TOOL_HOME" ] && [ -z "$CONFIG_NAME" ]; then
+  fail "--home requires --config; use --config-dir to select a directory directly"
+fi
+
+# Resolve before changing cwd: the CLI owns home, store, registry and per-repo
+# override semantics. Never guess another location if an explicit name fails.
+resolve_registered_config() {
+  local name="$1" target_json
+  local cli=(workestrate --no-project-config)
+  command -v workestrate >/dev/null 2>&1 || fail "workestrate not found; run via 'just setup-secrets'"
+  command -v jq >/dev/null 2>&1 || fail "jq not found; run via 'just setup-secrets'"
+  if [ -n "$TOOL_HOME" ]; then
+    cli+=(--home "$TOOL_HOME")
+  fi
+  target_json=$("${cli[@]}" secrets-target "$name" --json) ||
+    fail "could not resolve config '$name'; check --home and the registered config name"
+  if ! printf '%s' "$target_json" | jq -e '
+    type == "object" and
+    ([.dir, .secrets_file, .age_key_file] |
+      all(.[]; type == "string" and length > 0 and index("\u0000") == null))
+  ' >/dev/null; then
+    fail "workestrate secrets-target returned invalid target paths"
+  fi
+  TARGET_DIR=$(printf '%s' "$target_json" | jq -r '.dir')
+  SECRET_FILE=$(printf '%s' "$target_json" | jq -r '.secrets_file')
+  SOPS_AGE_KEY_FILE=$(printf '%s' "$target_json" | jq -r '.age_key_file')
+  # A registry may use relative paths; preserve their invocation-cwd meaning.
+  if [[ "$SOPS_AGE_KEY_FILE" != /* ]]; then
+    SOPS_AGE_KEY_FILE="$PWD/$SOPS_AGE_KEY_FILE"
+  fi
+  export SOPS_AGE_KEY_FILE
 }
 
+# Legacy global targeting remains separate from registered configuration edits.
 resolve_config_dir() {
   echo "${XDG_CONFIG_HOME:-$HOME/.config}/workestrate"
 }
@@ -98,11 +164,13 @@ find_single_config_name() {
 if [ "$GLOBAL_MODE" -eq 1 ]; then
   TARGET_DIR="$(resolve_config_dir)"
 elif [ -n "$CONFIG_NAME" ]; then
-  TARGET_DIR="$(resolve_store_dir)/repos/$CONFIG_NAME"
+  resolve_registered_config "$CONFIG_NAME"
+elif [ -n "$CONFIG_DIR" ]; then
+  TARGET_DIR="$CONFIG_DIR"
 elif [ -n "${WORKESTRATE_CONFIG_DIR:-}" ]; then
   TARGET_DIR="$WORKESTRATE_CONFIG_DIR"
 elif single_name=$(find_single_config_name); then
-  TARGET_DIR="$(resolve_store_dir)/repos/$single_name"
+  resolve_registered_config "$single_name"
 else
   # Determine the repo root: prefer the directory holding this script
   # (works when invoked directly from a clone); fall back to the current
@@ -129,23 +197,7 @@ if [ ! -d "$TARGET_DIR" ]; then
 fi
 
 cd "$TARGET_DIR"
-export WORKESTRATE_CONFIG_DIR="$TARGET_DIR"
-
-# If --config <name> was used, try to resolve per-repo secrets overrides
-# via workestrate. Fall back to defaults if the command is unavailable or fails.
-if [ -n "$CONFIG_NAME" ]; then
-  if _st_json=$(workestrate secrets-target "$CONFIG_NAME" --json 2>/dev/null); then
-    _st_sf=$(printf '%s' "$_st_json" | grep -oE '"secrets_file"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"//;s/"$//')
-    _st_akf=$(printf '%s' "$_st_json" | grep -oE '"age_key_file"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"//;s/"$//')
-    if [ -n "$_st_sf" ]; then
-      SECRET_FILE="$_st_sf"
-    fi
-    if [ -n "$_st_akf" ]; then
-      SOPS_AGE_KEY_FILE="$_st_akf"
-      export SOPS_AGE_KEY_FILE
-    fi
-  fi
-fi
+export WORKESTRATE_CONFIG_DIR="$PWD"
 
 if [ "$GLOBAL_MODE" -eq 1 ]; then
   SECRET_FILE=".env.local.enc"
@@ -161,11 +213,11 @@ SOPS_CONFIG=".sops.yaml"
 SCHEMA_FILE=".env.example"
 
 # Read required keys from workestrate config (replaces .env.example grep).
-REQUIRED_KEYS=(
-  $(workestrate secrets-schema 2>/dev/null || grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SCHEMA_FILE" \
+mapfile -t REQUIRED_KEYS < <(
+  workestrate secrets-schema 2>/dev/null || grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SCHEMA_FILE" \
     | grep -vE '^(AI_WORKBENCH_.*_DIR)=' \
     | cut -d= -f1 \
-    | sort -u)
+    | sort -u
 )
 
 unset HISTFILE
@@ -176,7 +228,6 @@ SECRET_TMPFILE=""
 trap 'rm -f "$TMPFILE" "$SECRET_TMPFILE"; stty echo 2>/dev/null || true' EXIT
 
 log() { echo "[setup-secrets] $*" >&2; }
-fail() { echo "[setup-secrets] error: $*" >&2; exit 1; }
 
 require_tools() {
   command -v age-keygen >/dev/null 2>&1 || fail "age-keygen not found; run inside 'just shell'"

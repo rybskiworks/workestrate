@@ -114,6 +114,10 @@ hooks-check:
 shell-arguments-check:
     python3 ./scripts/test-shell-arguments.py
 
+# Disposable operator homes and real SOPS/age encryption; no live secrets.
+secrets-target-check:
+    @just shell -c python3 scripts/test-setup-secrets.py
+
 store-audit-check:
     python3 ./scripts/test-store-audit.py
 
@@ -502,6 +506,7 @@ provision-check:
     ./scripts/host-provision.sh --check-only
 
 # Bootstrap or update encrypted secrets
+[positional-arguments]
 setup-secrets *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -510,7 +515,7 @@ setup-secrets *args:
     _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
     _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
     printf '%s' "$_repo_root" > "$_devenv_root_file"
-    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c setup-secrets {{args}}
+    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c setup-secrets "$@"
 
 # Validate the full secrets workflow (non-interactive, uses test values)
 validate-secrets:
