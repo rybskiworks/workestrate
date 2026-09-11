@@ -15,6 +15,7 @@
 //! - [`signing`]: grant-enforcement pipeline + [`signing::KeyBackend`].
 //! - [`key_material`]: sealed SOPS-backed Ed25519 custody + the real SSHSIG
 //!   [`key_material::SealedKeyBackend`] behind the same trait.
+//! - [`host_trust`]: host-owned certificate issuance for managed broker trust.
 //! - [`shim`]: host-side unix-socket listener + transport trait.
 //! - [`forwarder`]: host-side TCP forwarder for broker VM egress.
 //! - [`broker_vm`]: shared broker VM lifecycle (spawn once per host).
@@ -33,6 +34,7 @@ pub mod epoch;
 pub mod epoch_provision;
 pub mod forwarder;
 mod frame_io;
+pub mod host_trust;
 pub mod key_material;
 mod receipt_clock;
 pub mod registry;
@@ -41,6 +43,9 @@ pub mod signing;
 pub mod ssh_emit;
 pub mod ssh_lifecycle;
 pub mod ssh_patterns;
+
+#[cfg(test)]
+mod property_tests;
 
 pub use audit::{AuditLog, AuditRecord, AuditResult, payload_digest_hex};
 pub use broker_vm::{BrokerVmHandle, broker_has_broker_bound_grants, ensure_broker_vm};
@@ -75,5 +80,5 @@ pub use ssh_lifecycle::{
     SshShimHandle, ensure_ssh_shim, provision_epoch_via_console, reprovision_epoch,
 };
 pub use ssh_patterns::{
-    DlpExclusion, DlpExclusionReason, apply_ssh_patterns, compile_ssh_patterns, policy_to_action,
+    DlpExclusion, DlpExclusionReason, compile_ssh_patterns, policy_to_action, resolve_ssh_patterns,
 };

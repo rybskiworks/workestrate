@@ -506,6 +506,9 @@
               # full symbol tables in disposable verification artifacts.
               CARGO_PROFILE_DEV_DEBUG = "0";
               CARGO_PROFILE_TEST_DEBUG = "0";
+              PROPTEST_CASES = "256";
+              PROPTEST_RNG_SEED = "20260910";
+              PROPTEST_MAX_SHRINK_ITERS = "4096";
               doCheck = true;
               cargoTestFlags = [
                 "--locked"
