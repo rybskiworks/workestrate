@@ -212,6 +212,17 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // enum already fails unknown variants at TOML parse), so they must be
     // validated here.
     for (workload_name, workload) in &config.workloads {
+        if let Some(seconds) = workload.readiness_timeout_secs {
+            anyhow::ensure!(
+                (1..=3600).contains(&seconds),
+                "workload '{workload_name}': readiness_timeout_secs must be in 1..=3600"
+            );
+            // Validate the effective workload, after partial layers inherit kind.
+            anyhow::ensure!(
+                workload.kind == "service",
+                "workload '{workload_name}': readiness_timeout_secs requires kind = \"service\""
+            );
+        }
         if let Some(size) = workload.root_disk_mib {
             validate_root_disk_mib(size)
                 .map_err(|e| anyhow::anyhow!("workload '{workload_name}': {e}"))?;

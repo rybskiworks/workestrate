@@ -432,17 +432,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1789011740,
+        "lastModified": 1789114971,
         "narHash": "sha256-urW9w6VusVS0QymKF9wXehEexamIQb7cIJ+Y22Oqj5w=",
         "owner": "rybskiworks",
         "repo": "libkrunfw",
-        "rev": "3017d504988971bd84dcc5935c96aa4a81227d1e",
+        "rev": "d575b13e79368b23246be3d93d7935899dec5a3b",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "libkrunfw",
-        "rev": "3017d504988971bd84dcc5935c96aa4a81227d1e",
+        "rev": "d575b13e79368b23246be3d93d7935899dec5a3b",
         "type": "github"
       }
     },
@@ -487,17 +487,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1789093257,
-        "narHash": "sha256-szetiy5J35Olln4swM5PihT58BK0NgkHSryEQ77NCh0=",
+        "lastModified": 1789135404,
+        "narHash": "sha256-7CVQqR6lv2lgywdA6bZr+ASxmEozaO/WahGZSO514oA=",
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "8ae14c22963c0680b231f61280f43db364693a5c",
+        "rev": "251b368a868d578ead123071c3e6bc8eec013817",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "8ae14c22963c0680b231f61280f43db364693a5c",
+        "rev": "251b368a868d578ead123071c3e6bc8eec013817",
         "type": "github"
       }
     },
@@ -832,17 +832,17 @@
         "treefmt-nix": "treefmt-nix_2"
       },
       "locked": {
-        "lastModified": 1789010344,
-        "narHash": "sha256-VWT9LCqzWLdgThNg6Nqteej4/9f3MO3ogYVT++xYL18=",
+        "lastModified": 1789141455,
+        "narHash": "sha256-ZGPmMeZXZSuA9DdbjcU4jjvaax4BG4zXiMt7jyHJfUM=",
         "owner": "rybskiworks",
         "repo": "nix-tooling",
-        "rev": "46e62f450396ea16aa884568d1d0a9591bfb6299",
+        "rev": "a403c2c111e24db64feb5748bbba939308048c07",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "nix-tooling",
-        "rev": "46e62f450396ea16aa884568d1d0a9591bfb6299",
+        "rev": "a403c2c111e24db64feb5748bbba939308048c07",
         "type": "github"
       }
     },

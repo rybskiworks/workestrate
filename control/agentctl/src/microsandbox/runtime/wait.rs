@@ -1,45 +1,44 @@
-//! Host-side wait-for-port readiness probe (ADR 0026 addendum 2026-08-01).
-//!
-//! The W4 compose-mirrored dependency lifecycle starts service-kind
-//! dependencies DETACHED, then must not let the dependent proceed until the
-//! dep is actually accepting connections. This module provides the bounded
-//! host-side TCP connect loop used for that: `TcpStream::connect_timeout`
-//! against the dep's published host address on a 100ms poll interval until
-//! `timeout` elapses.
+//! Cancellable host-side TCP readiness polling under a shared absolute deadline.
+//! A successful connection establishes transport reachability, not application health.
 
-use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::time::{Duration, Instant};
+use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
 
 use anyhow::Result;
+use tokio::net::TcpStream;
+use tokio::time::{Instant, sleep_until};
 
-/// Default readiness budget for a freshly-started service dependency (~15s,
-/// ADR 0026 addendum 2026-08-01).
+/// Default TCP readiness budget for dependency and batch service startup.
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(15);
 
-/// Poll interval between connection attempts.
+/// Maximum connection attempt duration and interval between attempts.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Block until a TCP connection to `ip:port` succeeds or `timeout` elapses.
+/// Wait until a TCP connection succeeds strictly before `deadline`.
 ///
-/// Each attempt is itself bounded (one poll interval), so connection REFUSED
-/// (the common not-yet-ready case) and a black-holed address both degrade to
-/// the same poll loop. On exhaustion the error names the budget and the
-/// address: `timed out after <n>s waiting for <ip>:<port>`.
-pub fn wait_for_port(ip: IpAddr, port: u16, timeout: Duration) -> Result<()> {
+/// The caller shares this deadline across registry lookup and all ports. No
+/// connection or retry sleep receives a fresh budget. Dropping this future
+/// cancels the pending socket or timer directly; there is no background worker.
+pub async fn wait_for_port(ip: IpAddr, port: u16, deadline: Instant) -> Result<()> {
     let addr = SocketAddr::new(ip, port);
-    let deadline = Instant::now() + timeout;
     loop {
-        match TcpStream::connect_timeout(&addr, POLL_INTERVAL) {
-            Ok(_) => return Ok(()),
-            Err(_) if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
-            Err(_) => {
-                anyhow::bail!(
-                    "timed out after {}s waiting for {}:{}",
-                    timeout.as_secs(),
-                    ip,
-                    port
-                )
+        let now = Instant::now();
+        if now >= deadline {
+            anyhow::bail!("readiness deadline elapsed waiting for {addr}");
+        }
+        let attempt_deadline = deadline.min(now + POLL_INTERVAL);
+        tokio::select! {
+            biased;
+            _ = sleep_until(attempt_deadline) => {}
+            result = TcpStream::connect(addr) => {
+                if result.is_ok() && Instant::now() < deadline {
+                    return Ok(());
+                }
             }
+        }
+        let now = Instant::now();
+        if now < deadline {
+            sleep_until(deadline.min(now + POLL_INTERVAL)).await;
         }
     }
 }
@@ -54,50 +53,111 @@ pub fn wait_for_port(ip: IpAddr, port: u16, timeout: Duration) -> Result<()> {
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, TcpListener};
+    use tokio::time::{sleep, timeout};
 
-    /// A live listener answers immediately: wait_for_port returns Ok well
-    /// inside the budget. The listener is held for the duration of the call.
-    #[test]
-    fn bound_port_returns_ok_fast() {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind fixture listener");
-        let port = listener.local_addr().expect("local_addr").port();
+    const LOCAL: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+    fn reserved_socket() -> tokio::net::TcpSocket {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind(SocketAddr::new(LOCAL, 0)).unwrap();
+        socket
+    }
+
+    #[tokio::test]
+    async fn bound_port_returns_ok_fast() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
         let start = Instant::now();
-        wait_for_port(IpAddr::V4(Ipv4Addr::LOCALHOST), port, DEFAULT_WAIT)
-            .expect("a listening port must be reachable");
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "a listening port must be reachable ~immediately"
+        wait_for_port(LOCAL, port, start + DEFAULT_WAIT)
+            .await
+            .unwrap();
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn unbound_port_times_out_with_address_in_error() {
+        let socket = reserved_socket();
+        let port = socket.local_addr().unwrap().port();
+        let budget = Duration::from_millis(150);
+        let start = Instant::now();
+        let error = wait_for_port(LOCAL, port, start + budget)
+            .await
+            .unwrap_err();
+        assert!(start.elapsed() >= budget);
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(error.to_string().contains(&format!("127.0.0.1:{port}")));
+    }
+
+    #[tokio::test]
+    async fn expired_deadline_never_connects_to_live_listener() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(wait_for_port(LOCAL, port, Instant::now()).await.is_err());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
         );
     }
 
-    /// No listener on the port: the loop burns the FULL budget and then errs,
-    /// naming the timeout and the address.
-    #[test]
-    fn unbound_port_times_out_with_address_in_error() {
-        // Bind to grab a free port, then drop the listener so nothing is
-        // listening on it.
-        let port = {
-            let listener =
-                TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind probe listener");
-            listener.local_addr().expect("local_addr").port()
+    #[tokio::test]
+    async fn cancelled_before_poll_does_not_connect() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let future = wait_for_port(
+            LOCAL,
+            listener.local_addr().unwrap().port(),
+            Instant::now() + DEFAULT_WAIT,
+        );
+        drop(future);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_retry_leaves_no_worker_or_later_connection() {
+        let socket = reserved_socket();
+        let port = socket.local_addr().unwrap().port();
+        assert!(
+            timeout(
+                Duration::from_millis(25),
+                wait_for_port(LOCAL, port, Instant::now() + DEFAULT_WAIT)
+            )
+            .await
+            .is_err()
+        );
+        // The original wait has been dropped while retrying. A subsequently
+        // opened listener must not receive an orphaned retry.
+        let listener = socket.listen(16).unwrap();
+        assert!(timeout(POLL_INTERVAL * 2, listener.accept()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn delayed_listener_needs_sufficient_shared_budget() {
+        let socket = reserved_socket();
+        let port = socket.local_addr().unwrap().port();
+        let started = Instant::now();
+        // Both futures run on this task; no detached producer remains on failure.
+        let delayed = async {
+            sleep(Duration::from_millis(250)).await;
+            let listener = socket.listen(16).unwrap();
+            timeout(Duration::from_secs(2), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
         };
-        let timeout = Duration::from_millis(300);
-        let start = Instant::now();
-        let err = wait_for_port(IpAddr::V4(Ipv4Addr::LOCALHOST), port, timeout)
-            .expect_err("an unbound port must time out");
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed >= timeout,
-            "must burn the full budget before failing; elapsed: {elapsed:?}"
-        );
-        assert!(
-            elapsed < timeout + Duration::from_secs(2),
-            "must not overshoot the budget materially; elapsed: {elapsed:?}"
-        );
-        let msg = err.to_string();
-        assert!(
-            msg.starts_with("timed out after ") && msg.contains("waiting for 127.0.0.1:"),
-            "error must name the timeout and address: {msg}"
-        );
+        let probes = async {
+            assert!(
+                wait_for_port(LOCAL, port, started + Duration::from_millis(100))
+                    .await
+                    .is_err()
+            );
+            wait_for_port(LOCAL, port, started + Duration::from_secs(2))
+                .await
+                .unwrap();
+        };
+        tokio::join!(delayed, probes);
     }
 }

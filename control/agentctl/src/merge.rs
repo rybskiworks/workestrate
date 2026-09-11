@@ -869,6 +869,13 @@ fn merge_workload(
             layer_ctx.name.clone(),
         );
     }
+    if table.contains_key("readiness_timeout_secs") {
+        merged.readiness_timeout_secs = layer.readiness_timeout_secs;
+        provenance.insert(
+            format!("workloads.{name}.readiness_timeout_secs"),
+            layer_ctx.name.clone(),
+        );
+    }
     if table.contains_key("command") {
         merged.command = layer.command.clone();
         provenance.insert(format!("workloads.{name}.command"), layer_ctx.name.clone());

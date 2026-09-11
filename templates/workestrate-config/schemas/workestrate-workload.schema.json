@@ -158,6 +158,16 @@
         "$ref": "#/definitions/PortMapping"
       }
     },
+    "readiness_timeout_secs": {
+      "description": "Service TCP readiness budget in seconds for dependency and batch startup. Omission uses 15 seconds; valid values are 1 through 3600.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "maximum": 3600.0,
+      "minimum": 1.0
+    },
     "root_disk_mib": {
       "description": "Managed OCI writable root-disk capacity in MiB, applied only on creation. Omission preserves the backend default; existing disks are never resized.",
       "type": [
