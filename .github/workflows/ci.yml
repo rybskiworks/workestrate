@@ -177,7 +177,7 @@ jobs:
         with:
           persist-credentials: false
       # Direct exit status, unlike reviewdog's default fail_level=none.
-      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: actionlint@1.7.7
       - run: actionlint
@@ -190,7 +190,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: zizmor@1.30.0
       - run: zizmor --format github .github/workflows/
@@ -214,7 +214,7 @@ jobs:
           curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
           ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
-      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --locked --manifest-path control/agentctl/Cargo.toml check licenses bans sources
