@@ -1,14 +1,16 @@
-# Workestrate edge CI: bounded PR checks plus explicitly selected Nix tiers.
-# Never enter the complete devenv closure on a GitHub-hosted PR runner.
+# Bounded PR checks; never enter the full development shell on hosted CI.
 # The nix-ci label and build-then-execute pattern were adapted from
 # akitaonrails/ai-memory, MIT, (c) 2026 Fabio Akita; attribution retained.
-# KVM/ignored runtime tests are NOT certified by this workflow.
+# KVM and ignored runtime tests are not certified by this workflow.
 name: ci
 on:
   pull_request:
+    branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
   push:
-    branches: [migration/tool-model, main]
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,12 +19,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_INCREMENTAL: '0'
-  # Action code and installed compiler are independently pinned.
-  RUST_TOOLCHAIN: '1.97.1'
 jobs:
   changes:
     name: CI selection
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       code: ${{ steps.select.outputs.code }}
@@ -35,73 +35,65 @@ jobs:
           fetch-depth: 0
       - id: select
         run: python3 scripts/ci/select_checks.py
-
   policy:
     name: CI contract and version metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      rust_version: ${{ steps.toolchain.outputs.rust_version }}
+      microsandbox_rev: ${{ steps.toolchain.outputs.microsandbox_rev }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s scripts/ci/tests -v
       - run: python3 scripts/ci/check_release_metadata.py
-
+      - run: python3 scripts/ci/check_repository.py
+      - id: toolchain
+        run: python3 scripts/ci/toolchain.py resolve --role consumer
   gates:
     name: gates (light PR quality gates, no devenv)
-    needs: changes
+    needs: [changes, policy]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Install exact Rust toolchain
-        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # reviewed master snapshot
+      - name: Checkout the lock-pinned Microsandbox source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          repository: rybskiworks/microsandbox
+          ref: ${{ needs.policy.outputs.microsandbox_rev }}
+          path: control/agentctl/vendor/microsandbox-fork
+          persist-credentials: false
+      - name: Install the compiler selected by the locked Fenix manifest
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: ${{ needs.policy.outputs.rust_version }}
           components: rustfmt, clippy
-      - name: Toolchain guard
-        run: |
-          set -euo pipefail
-          python3 - <<'PYCODE'
-          import os, re, subprocess
-          from pathlib import Path
-          marker = re.findall(r'rustToolchain = inputs\.fenix[^\n]*# RUST_TOOLCHAIN_VERSION = "([0-9]+\.[0-9]+)"', Path('flake.nix').read_text())
-          expected = os.environ['RUST_TOOLCHAIN']
-          actual = subprocess.check_output(['rustc', '--version'], text=True).split()[1]
-          if len(marker) != 1 or marker[0] != '.'.join(expected.split('.')[:2]) or actual != expected:
-              raise SystemExit(f'Toolchain mismatch: flake marker={marker}, CI={expected}, installed={actual}')
-          print(f'Exact compiler {actual}; major/minor matches the flake marker. Fenix revision remains locked.')
-          PYCODE
-      - name: Vendor microsandbox fork (flake.lock-pinned revision)
-        run: |
-          set -euo pipefail
-          rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
-          [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          mkdir -p "$RUNNER_TEMP/msb-fork" control/agentctl/vendor
-          curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
-          ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
+      - name: Verify the installed exact compiler version
+        env:
+          EXPECTED_RUST: ${{ needs.policy.outputs.rust_version }}
+        run: python3 -c 'import os,subprocess; actual=subprocess.check_output(["rustc","--version"],text=True).split()[1]; assert actual == os.environ["EXPECTED_RUST"], actual'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: control/agentctl
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: ./scripts/check-cargo-lock.sh
       - run: ./scripts/check-msb-versions.sh
       - run: ./scripts/check-nix-paths.sh
       - run: cargo fmt --manifest-path control/agentctl/Cargo.toml -- --check
       - run: cargo clippy --locked --manifest-path control/agentctl/Cargo.toml --all-targets -- -D warnings
-      # This tier retains the existing prebuilt agentd fallback. It is not a
-      # claim that ignored KVM tests or runtime-dependent tests executed.
+      # Retains the prebuilt agentd fallback; skipped/ignored KVM tests are not proof.
       - run: cargo test --locked --manifest-path control/agentctl/Cargo.toml
       - run: git diff --exit-code HEAD -- control/agentctl/Cargo.lock
-
   e2e-nix:
     name: e2e-nix (nix-gated functional tests, self-contained tooling)
-    needs: changes
+    needs: [changes, policy]
     if: needs.changes.outputs.nix == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -112,6 +104,8 @@ jobs:
           install_url: https://releases.nixos.org/nix/nix-2.34.8/install
           extra_nix_config: |
             experimental-features = nix-command flakes
+            max-jobs = 2
+            cores = 2
       - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         continue-on-error: true
       - run: nix build -L --no-update-lock-file .#microsandbox -o result-msb
@@ -126,32 +120,36 @@ jobs:
           "$msb" --version
           echo "MSB_PATH=$msb" >> "$GITHUB_ENV"
           echo "MSB_AGENTD_PATH=$agentd" >> "$GITHUB_ENV"
-      - name: Vendor microsandbox fork (flake.lock-pinned revision)
-        run: |
-          set -euo pipefail
-          rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
-          [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          mkdir -p "$RUNNER_TEMP/msb-fork" control/agentctl/vendor
-          curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
-          ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # reviewed master snapshot
+      - name: Checkout the lock-pinned Microsandbox source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          repository: rybskiworks/microsandbox
+          ref: ${{ needs.policy.outputs.microsandbox_rev }}
+          path: control/agentctl/vendor/microsandbox-fork
+          persist-credentials: false
+      - name: Install the compiler selected by the locked Fenix manifest
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: ${{ needs.policy.outputs.rust_version }}
+          components: rustfmt, clippy
+      - name: Verify the installed exact compiler version
+        env:
+          EXPECTED_RUST: ${{ needs.policy.outputs.rust_version }}
+        run: python3 -c 'import os,subprocess; actual=subprocess.check_output(["rustc","--version"],text=True).split()[1]; assert actual == os.environ["EXPECTED_RUST"], actual'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: control/agentctl
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Nix functional tests with real msb and agentd
         run: >-
           cargo test --locked --manifest-path control/agentctl/Cargo.toml
           --test image_pipeline_e2e --test ensure_images_e2e
       - run: git diff --exit-code HEAD -- flake.lock control/agentctl/Cargo.lock
-
   heavy-build:
     name: heavy build (nix build .#workestrate, on-demand only)
     needs: changes
     if: needs.changes.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -162,29 +160,28 @@ jobs:
           install_url: https://releases.nixos.org/nix/nix-2.34.8/install
           extra_nix_config: |
             experimental-features = nix-command flakes
+            max-jobs = 2
+            cores = 2
       - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         continue-on-error: true
       - run: nix build -L --no-update-lock-file .#workestrate
       - run: ./result/bin/workestrate --version
       - run: git diff --exit-code HEAD -- flake.lock control/agentctl/Cargo.lock
-
   actionlint:
     name: actionlint (workflow lint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # Direct exit status, unlike reviewdog's default fail_level=none.
       - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: actionlint@1.7.7
       - run: actionlint
-
   zizmor:
     name: zizmor (workflow security audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -194,42 +191,37 @@ jobs:
         with:
           tool: zizmor@1.30.0
       - run: zizmor --format github .github/workflows/
-
   deny:
     name: deny (cargo-deny supply-chain gates, no devenv)
-    needs: changes
+    needs: [changes, policy]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Vendor microsandbox fork (flake.lock-pinned revision)
-        run: |
-          set -euo pipefail
-          rev=$(python3 -c "import json; print(json.load(open('flake.lock'))['nodes']['microsandbox-fork']['locked']['rev'])")
-          [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          mkdir -p "$RUNNER_TEMP/msb-fork" control/agentctl/vendor
-          curl -fsSL "https://github.com/rybskiworks/microsandbox/archive/$rev.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/msb-fork" --strip-components=1
-          ln -sfn "$RUNNER_TEMP/msb-fork" control/agentctl/vendor/microsandbox-fork
+      - name: Checkout the lock-pinned Microsandbox source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: rybskiworks/microsandbox
+          ref: ${{ needs.policy.outputs.microsandbox_rev }}
+          path: control/agentctl/vendor/microsandbox-fork
+          persist-credentials: false
       - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --locked --manifest-path control/agentctl/Cargo.toml check licenses bans sources
-      # Preserve the existing soft advisory policy. Network availability is
-      # not conflated with the result of an authoritative vulnerability gate.
+      # Existing advisory policy retained. This is not a clean-vulnerability claim.
       - name: Advisories (informational)
         continue-on-error: true
         run: cargo deny --locked --manifest-path control/agentctl/Cargo.toml check advisories
-
   required-gates:
-    # Preserve the existing check name for compatibility; broaden what it proves.
+    # Compatibility anchor retained while the canonical required context is adopted.
     name: required-gates (branch-protection anchor)
     needs: [changes, policy, gates, actionlint, zizmor, deny, e2e-nix, heavy-build]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -239,12 +231,11 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: python3 scripts/ci/check_results.py
-
   required:
     name: CI / required
     needs: required-gates
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - env:

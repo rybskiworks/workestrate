@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select CI tiers. Unknown changes select checks; no workflow-level path filters."""
+"""Select bounded CI tiers from changed paths; no workflow-level path filters."""
 from __future__ import annotations
 import json
 import os
@@ -11,12 +11,18 @@ import subprocess
 def select(event_name: str, event: dict, paths: list[str] | None) -> dict[str, str]:
     def documentation_only(path: str) -> bool:
         return path.startswith('docs/') and not path.startswith('docs/migration/')
-    code = event_name == 'workflow_dispatch' or paths is None or not paths or any(
+
+    def nix_sensitive(path: str) -> bool:
+        return (path == 'flake.lock' or path.endswith('.nix')
+                or path.startswith(('nix/', 'templates/', 'config.reference/', '.github/workflows/')))
+
+    code = event_name in {'workflow_dispatch', 'merge_group'} or paths is None or not paths or any(
         not documentation_only(path) for path in paths
     )
     labels = event.get('pull_request', {}).get('labels', [])
-    nix = (event_name == 'workflow_dispatch' or (event_name == 'push' and code)
-           or any(x.get('name') == 'nix-ci' for x in labels))
+    nix = (event_name in {'workflow_dispatch', 'merge_group'} or paths is None or not paths
+           or (event_name == 'push' and code) or any(nix_sensitive(path) for path in paths)
+           or any(label.get('name') == 'nix-ci' for label in labels))
     return {key: str(value).lower() for key, value in {
         'code': code, 'nix': nix, 'build': event_name == 'workflow_dispatch'
     }.items()}
@@ -35,7 +41,7 @@ def changed_paths(event_name: str, event: dict) -> list[str] | None:
     if any(not re.fullmatch('[0-9a-f]{40}', ref) or set(ref) == {'0'} for ref in (base, head)):
         return None
     try:
-        # Include the deleted source path when code is moved into documentation.
+        # Include deleted source paths when code is renamed into documentation.
         output = subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z', comparison, '--'],
                                          stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError:
