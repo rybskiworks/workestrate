@@ -158,12 +158,16 @@ mod tests {
         assert!(certificate.extensions().is_empty());
         let fingerprint = ca.public_key().fingerprint(HashAlg::Sha256);
         certificate
-            .validate_at(100, &[fingerprint.clone()])
+            .validate_at(100, std::slice::from_ref(&fingerprint))
             .unwrap();
         certificate
-            .validate_at(199, &[fingerprint.clone()])
+            .validate_at(199, std::slice::from_ref(&fingerprint))
             .unwrap();
-        assert!(certificate.validate_at(99, &[fingerprint.clone()]).is_err());
+        assert!(
+            certificate
+                .validate_at(99, std::slice::from_ref(&fingerprint))
+                .is_err()
+        );
         assert!(certificate.validate_at(200, &[fingerprint]).is_err());
         assert!(
             certificate

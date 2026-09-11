@@ -468,9 +468,11 @@ not send custody through guest exec or fabricate broker acknowledgments.
 The currently wired native capabilities are exact-launch inspection, stop and
 owned guest execution. Broker transport, trusted policy preparation and managed
 SSH diversion remain private integration seams, not an available deployment
-mode. Their item-specific non-test lint expectations identify the missing
-callers and must be removed when those callers are connected; the ordinary
-all-target lint gate still checks their test builds. No successful native
+mode. Item-specific lint expectations identify the missing callers and must be
+removed when those callers are connected. Eight apply only outside tests; the
+native attachment wrapper has no caller in either target because tests exercise
+the synthetic transport boundary instead. The ordinary all-target lint gate
+still checks these method bodies and their dependencies. No successful native
 operation, Hello or Probe substitutes for a complete matching Applied policy.
 
 Ctrl-C and SIGTERM fence request admission and start one fair ten-second drain

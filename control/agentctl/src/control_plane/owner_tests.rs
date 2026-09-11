@@ -666,12 +666,13 @@ async fn owner_drain_polls_later_leases_despite_a_blocked_first_cancellation() {
     assert_eq!(result.operations.completed, vec![second]);
     assert_eq!(result.operations.pending.len(), 1);
     assert_eq!(result.operations.pending[0].0, first);
-    let state = fixture.native.state.lock().unwrap();
-    assert!(state.entered.contains(&("cancel", 1)));
-    assert!(state.finished.contains(&("cancel", 2)));
-    assert_eq!(state.dropped_sessions, vec![2]);
-    assert_eq!(state.vm_stop_calls, 0);
-    drop(state);
+    {
+        let state = fixture.native.state.lock().unwrap();
+        assert!(state.entered.contains(&("cancel", 1)));
+        assert!(state.finished.contains(&("cancel", 2)));
+        assert_eq!(state.dropped_sessions, vec![2]);
+        assert_eq!(state.vm_stop_calls, 0);
+    }
     fixture
         .native
         .state
@@ -977,21 +978,22 @@ async fn owner_actual_fully_closed_queued_client_is_refused_before_native_dispat
     );
     drop(response);
     drop(serving);
-    let state = fixture.native.state.lock().unwrap();
-    assert_eq!(
-        state.next_session, 1,
-        "abandoned second request started a native command"
-    );
-    assert_eq!(
-        state
-            .entered
-            .iter()
-            .filter(|(name, _)| *name == "start")
-            .count(),
-        1
-    );
-    assert_eq!(state.vm_stop_calls, 0);
-    drop(state);
+    {
+        let state = fixture.native.state.lock().unwrap();
+        assert_eq!(
+            state.next_session, 1,
+            "abandoned second request started a native command"
+        );
+        assert_eq!(
+            state
+                .entered
+                .iter()
+                .filter(|(name, _)| *name == "start")
+                .count(),
+            1
+        );
+        assert_eq!(state.vm_stop_calls, 0);
+    }
     assert!(
         fixture
             .owner
