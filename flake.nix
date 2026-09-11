@@ -3,7 +3,7 @@
 
   inputs = {
     # Shared build tools and development modules have one version authority.
-    tooling.url = "github:rybskiworks/nix-tooling/1120aa22cddf4a9a3424f38aadbebadd8a963c4b";
+    tooling.url = "github:rybskiworks/nix-tooling/a403c2c111e24db64feb5748bbba939308048c07";
     nixpkgs.follows = "tooling/nixpkgs";
     fenix.follows = "tooling/fenix";
     flake-parts.follows = "tooling/flake-parts";
