@@ -303,6 +303,15 @@ interpret an endpoint allow decision as a successful SSH authorization test.
 
 ## SSH launch identity
 
+Broker DLP patterns contain raw credential material. They are no longer added
+to the ordinary workload's Microsandbox builder: a bootstrap field is delivered
+to its target VM even when excluded from the serialized sandbox spec. Pattern
+resolution is a separate broker-only operation and follows the same secret-ID
+to `source_env_var` mapping as sealed key custody, without process-environment
+fallback. Preparing patterns does not install them or make custody ready; they
+must reach the direct managed broker connection. Ordinary guest bootstrap is
+not a broker management channel.
+
 For fresh workloads with compiled SSH credentials, Workestrate reserves a CID
 under its existing registry lock before creating the VM. It prepares a distinct
 `divert-<cid>.sock` endpoint and passes the endpoint and reserved CID together to
