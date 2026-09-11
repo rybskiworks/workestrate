@@ -94,6 +94,19 @@ impl ConfigWorkload {
                 source_of(&format!("workloads.{}.root_disk_mib", self.name)),
             );
         }
+        if self.workload.kind == "service" {
+            let seconds = self
+                .workload
+                .readiness_timeout_secs
+                .map(u64::from)
+                .unwrap_or(crate::microsandbox::runtime::DEFAULT_WAIT.as_secs());
+            write_line(
+                &mut out,
+                "",
+                &format!("readiness timeout: {seconds}s (dependency/batch TCP)"),
+                source_of(&format!("workloads.{}.readiness_timeout_secs", self.name)),
+            );
+        }
         let env_source = source_of(&format!("workloads.{}.env", self.name));
         for e in &plan.env {
             let source = if let Some(dep) = &e.injected_by {
