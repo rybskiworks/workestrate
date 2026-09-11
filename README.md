@@ -20,6 +20,7 @@ agents and services in Microsandbox microVMs. Workloads, network policy, mounts,
 and credential bindings live in configuration, not in a particular agent's prompt.
 
 <a id="positioning"></a>
+<a id="one-control-plane-explicit-boundaries"></a>
 
 ## a runtime, not an agent
 
@@ -46,31 +47,33 @@ selected policy. Check what actually happened. A configuration setting describes
 intent; runtime evidence establishes what was enforced.
 
 <a id="setup"></a>
+<a id="start-here"></a>
 
 ## take a look
 
-With Git, Nix (flakes enabled), and `just` on x86_64 Linux:
+With Git and Nix (flakes enabled) on x86_64 Linux:
 
 ```sh
-git clone --branch migration/tool-model https://github.com/rybskiworks/workestrate.git
+git clone --branch main https://github.com/rybskiworks/workestrate.git
 cd workestrate
-just shell
+nix build --no-update-lock-file .#workestrate
 
-# Inside the pinned development shell:
-workestrate --help
-WORKESTRATE_CONFIG_DIR="$PWD/config.reference" workestrate validate-config
-WORKESTRATE_CONFIG_DIR="$PWD/config.reference" workestrate workload plan example-service
+./result/bin/workestrate --help
+WORKESTRATE_CONFIG_DIR="$PWD/config.reference" ./result/bin/workestrate validate-config
+WORKESTRATE_CONFIG_DIR="$PWD/config.reference" ./result/bin/workestrate workload plan example-service
 ```
 
 This inspects the **synthetic reference configuration**, not your personal fleet,
-and does not launch a VM. First shell entry may build the pinned packages.
-`migration/tool-model` is the current engineering branch; this guide describes it.
+and does not launch a VM. Use `./result/bin/workestrate` until the CLI is on your
+`PATH`. `main` is the integration branch; the former migration line was integrated
+in [PR #32](https://github.com/rybskiworks/workestrate/pull/32).
 Actual VM execution additionally requires accessible `/dev/kvm` and host
-provisioning. Start with the [setup reference](README.agents.md#setup) and
+provisioning. Start with the [setup guide](docs/getting-started.md) and
 [Nix build guide](docs/nix-build.md).
 
 <a id="config-repos-and-the-layering-model"></a>
 <a id="secrets-workflow"></a>
+<a id="a-small-cli-surface-for-a-larger-system"></a>
 
 ## bring your own fleet
 
@@ -84,15 +87,23 @@ fleet-local capsules. The [configuration reference](README.agents.md#configurati
 and [secrets workflow](README.agents.md#secrets-workflow) cover the next steps.
 The bundled example names are placeholders, not ready-to-run applications.
 
+<a id="one-toolchain-authority"></a>
+
+Workestrate and its Microsandbox input share a pinned
+[nix-tooling](https://github.com/rybskiworks/nix-tooling) supplier. See the
+[dependency boundary](README.agents.md#the-dependency-boundary) for ownership
+and the locked-toolchain check.
+
 <a id="cli-surface"></a>
 <a id="development-workflow"></a>
 <a id="canonical-docs"></a>
+<a id="build-with-us"></a>
 
 ## find your depth
 
 | Looking for | Start here |
 | :--- | :--- |
-| Setup, CLI commands, and operating details | [Technical reference](README.agents.md#cli-reference) |
+| Setup, CLI commands, and operating details | [Setup guide](docs/getting-started.md) / [technical reference](README.agents.md#cli-reference) |
 | Architecture, ownership, and where a change belongs | [Agent-oriented README](README.agents.md) |
 | Always-applicable working instructions | [AGENTS.md](AGENTS.md) |
 | Specifications, decisions, and focused guides | [Documentation index](docs/README.md) |
@@ -104,11 +115,12 @@ their task needs it. A narrowly scoped worker can go straight to the relevant
 code and applicable instructions.
 
 For development, start with `just bootstrap` or `just shell`, and use
-`just verify` for the repository gate. See the
+`just verify` for the repository gate. See [contributing](CONTRIBUTING.md) and the
 [development reference](README.agents.md#development-workflow) for checks,
 Beads, hooks, and contribution conventions.
 
 <a id="runtime-status"></a>
+<a id="security-is-a-contract-not-a-badge"></a>
 
 ## status, without the mythology
 
@@ -121,6 +133,7 @@ nested guest booting does not prove that disabling nesting enforces a boundary.
 See [runtime status](README.agents.md#runtime-status), the
 [testing guide](docs/testing.md), and
 [runtime provisioning](docs/runtime-provisioning.md) before relying on a property.
+Use the [security reporting guidance](SECURITY.md) for vulnerabilities.
 
 ---
 

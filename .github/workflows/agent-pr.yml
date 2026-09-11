@@ -4,15 +4,17 @@ on:
     branches: ['agents/**']
 permissions:
   contents: read
-  pull-requests: write
 concurrency:
   group: agent-pr-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   open:
     if: vars.RYBSKIWORKS_AGENT_PRS == 'true' && !github.event.deleted
+    permissions:
+      contents: read
+      pull-requests: write
     uses: rybskiworks/.github/.github/workflows/reusable-open-pr.yml@3a7ef7dd7d23aedba866cb3a3a5df26ff2f86a7c
     with:
       head: ${{ github.ref_name }}
-      base: migration/tool-model
+      base: main
       kind: agent

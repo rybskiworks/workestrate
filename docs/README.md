@@ -9,7 +9,7 @@ instructions, not an architectural onboarding requirement for every agent.
 
 | Document | Owns |
 | :--- | :--- |
-| [System specification](../SPEC.md) | Normative system contract. |
+| [Specification map](../SPEC.md) | Entry point to the maintained system contracts and their owners. |
 | [Target specification](migration/20-target-system-spec.md) | Detailed configuration, CLI, seed, and lifecycle semantics. |
 | [Security model](migration/30-security-model.md) | Policy layering and authority boundaries. |
 | [Architecture decisions](migration/50-decisions/README.md) | Rationale, alternatives, and decision history. Check supersession and implementation status. |
@@ -18,6 +18,7 @@ instructions, not an architectural onboarding requirement for every agent.
 
 | Document | Owns |
 | :--- | :--- |
+| [Getting started](getting-started.md) | Initial build, operator setup, and secrets entry points. |
 | [Nix build ownership](nix-build.md) | Toolchain inputs, SDK pairing, packaging, and verification entry points. |
 | [Nix purity](nix-purity.md) / [devshell rules](nix/devshells.md) | Source/build separation and shell behavior. |
 | [Workload layouts](workloads.md) | Standalone config repositories, fleet capsules, image ownership, and current composition limits. |
@@ -29,9 +30,13 @@ instructions, not an architectural onboarding requirement for every agent.
 
 | Document | Owns |
 | :--- | :--- |
+| [Contributing](../CONTRIBUTING.md) | Integration, review, tests, and repository hygiene. |
+| [Security reporting](../SECURITY.md) | Vulnerability reporting and disclosure guidance. |
 | [Testing](testing.md) | Repository checks, properties, regressions, and separate VM acceptance. |
 | [CI and release foundation](ci-release-foundation.md) | Check selection, required gates, and release boundaries. |
-| [Beads tracker](../.beads/README.md) | Work items, acceptance criteria, and dependencies. |
+| [GitHub governance](github-governance.md) | Proposed protections and their activation sequence. |
+| [Repository audit](repository-audit-2026-09-11.md) | Dated consolidation findings, fixes, and remaining work. |
+| [Beads contract](../BEADS.md) / [tracker](../.beads/README.md) | Work tracking, acceptance criteria, and dependencies. |
 | [Presentation assets](assets/README.md) | Light/dark README artwork and editing constraints. |
 
 ## Keep the layers distinct

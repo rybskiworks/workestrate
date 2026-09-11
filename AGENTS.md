@@ -9,10 +9,11 @@
   Focused workers can use the relevant code and applicable instructions directly.
 - This file holds repository-wide working instructions. Apply any additional
   instructions scoped to the files you change. [docs/README.md](docs/README.md)
-  indexes the detailed guides; [SPEC.md](SPEC.md) owns the normative system spec.
+  indexes focused guides; [SPEC.md](SPEC.md) maps the maintained system contracts.
 
 ## Workflow
 
+- Target `main` for integration and follow [CONTRIBUTING.md](CONTRIBUTING.md).
 - Use `just <recipe>` from a plain host shell. `just shell` provides the full
   development environment; `just bootstrap` provides pinned tools without
   building the application/runtime. Shell entry does not provision workloads.

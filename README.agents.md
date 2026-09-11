@@ -6,9 +6,10 @@ subtask**. Read the sections relevant to the task. Repository-wide working
 instructions live in [AGENTS.md](AGENTS.md); the human introduction lives in
 [README.md](README.md).
 
-This guide describes `migration/tool-model`, the current engineering branch.
-[SPEC.md](SPEC.md) is the normative system specification. Focused guides and ADRs
-own detailed contracts; this document maps them rather than replacing them.
+This guide describes `main`, the integration branch. The former migration line
+was integrated in [PR #32](https://github.com/rybskiworks/workestrate/pull/32).
+[SPEC.md](SPEC.md) maps the maintained system contracts. Focused guides and ADRs
+own detailed semantics; this document maps them rather than replacing them.
 When implementation, specification, and an older decision disagree, identify
 that discrepancy explicitly instead of treating historical intent as capability.
 
@@ -80,6 +81,13 @@ capabilities and enforcement depend on the selected backend, image, and host.
 Fenix, devenv, and formatting versions. Workestrate follows those inputs rather
 than independently choosing a second toolchain. Inspect `flake.nix` and
 `flake.lock` for the selected revisions instead of copying volatile pins here.
+
+CI derives its exact Rust release from the locked Fenix manifest. Validate the
+supplier relationship without building the application:
+
+```sh
+python3 scripts/ci/toolchain.py check --role consumer
+```
 
 The [Microsandbox fork](https://github.com/rybskiworks/microsandbox) owns the SDK,
 runtime, and static `agentd` packages. Workestrate consumes paired artifacts from
@@ -201,9 +209,10 @@ workestrate ps --json
 The packaged system targets x86_64 Linux. Runtime execution needs accessible
 `/dev/kvm`, enabled virtualization, and host prerequisites; the host provisioning
 scripts target Debian/Ubuntu. The introductory workflow is in
-[README.md](README.md#take-a-look). `just host-check` checks prerequisites.
-Sizing depends on the workload, image builds, and retained Nix store; the old
-minimum estimates are not capacity guarantees for a real fleet.
+[README.md](README.md#take-a-look), with operator setup in the
+[getting-started guide](docs/getting-started.md). `just host-check` checks
+prerequisites. Sizing depends on the workload, image builds, and retained Nix
+store; minimum estimates are not capacity guarantees for a real fleet.
 
 Once the host is provisioned and the intended tool home is selected:
 
@@ -266,7 +275,8 @@ SSH custody has separate runtime acceptance requirements.
 Run `just <recipe>` from a plain host shell. The [Nix build guide](docs/nix-build.md)
 is the canonical reference for package ownership, SDK preparation, offline
 staging, local overrides, and verification. Use `just shell -c <command>` or
-`just bootstrap -c <command>` for explicit shell commands.
+`just bootstrap -c <command>` for explicit shell commands. Follow
+[CONTRIBUTING.md](CONTRIBUTING.md) for integration and review conventions.
 
 | Recipe | Scope |
 | :--- | :--- |
@@ -292,10 +302,11 @@ Stage new required files before Nix evaluates the Git source. See
 ### Work tracking, hooks, and review
 
 `just beads ready` lists actionable work; `just beads show <id>` exposes criteria
-and dependencies in the [existing tracker](.beads/README.md). Beads is pinned by
-nix-tooling. Embedded storage permits one writer at a time. The wrapper preserves
-nonempty `BEADS_DIR` and `DOLT_ROOT_PATH`, otherwise defaulting to `$PWD/.beads`
-and `$BEADS_DIR/dolt-global`. Explicit absolute paths select shared state; the
+and dependencies in the [existing tracker](.beads/README.md). The repository-wide
+tracking contract is in [BEADS.md](BEADS.md). Beads is pinned by nix-tooling.
+Embedded storage permits one writer at a time. The wrapper preserves nonempty
+`BEADS_DIR` and `DOLT_ROOT_PATH`, otherwise defaulting to `$PWD/.beads` and
+`$BEADS_DIR/dolt-global`. Explicit absolute paths select shared state; the
 wrapper does not initialize a tracker, bind remotes, or coordinate writers.
 
 `nix run .#install-hooks` installs pinned hooks explicitly and preserves the
@@ -318,7 +329,7 @@ not inputs to the repository verification gate.
 
 | Task | Read for the relevant boundary |
 | :--- | :--- |
-| Understand the whole system | [SPEC.md](SPEC.md), [target specification](docs/migration/20-target-system-spec.md), and the [ADR index](docs/migration/50-decisions/README.md). |
+| Understand the whole system | [Specification map](SPEC.md), [target specification](docs/migration/20-target-system-spec.md), and the [ADR index](docs/migration/50-decisions/README.md). |
 | Change config merge, defaults, or trust | [Security model](docs/migration/30-security-model.md), ADR 0035, `control/agentctl/`, `schemas/`, and `templates/`. |
 | Change image builds or fleet layout | [Workload layouts](docs/workloads.md), `nix/lib/`, and the declaring fleet/workload repository. |
 | Change slot identity or teardown | [Operating model](docs/operating-model.md), target specification, ADRs 0021/0026. |
@@ -326,7 +337,8 @@ not inputs to the repository verification gate.
 | Change secrets or credential exposure | [Secrets](docs/secrets.md), [security model](docs/migration/30-security-model.md), and applicable broker/runtime acceptance evidence. |
 | Change compiler, SDK, or dependency packaging | [Nix ownership](docs/nix-build.md), [purity](docs/nix-purity.md), `flake.nix`, `flake.lock`, and `control/agentctl/` Cargo manifests/patches. |
 | Add a regression or runtime experiment | [Testing](docs/testing.md); keep tool contracts here and application fixtures with their workload owner. |
-| Change CI or release gates | [CI foundation](docs/ci-release-foundation.md), `.github/`, `scripts/ci/`, and `deny.toml`. |
+| Change CI or release gates | [CI foundation](docs/ci-release-foundation.md), [governance](docs/github-governance.md), `.github/`, `scripts/ci/`, and `deny.toml`. |
+| Report a vulnerability | [Security reporting](SECURITY.md); keep sensitive details out of public issues. |
 | Change documentation or visual assets | This document for orientation, [docs index](docs/README.md) for detailed ownership, [asset notes](docs/assets/README.md) for presentation. |
 
 ## Runtime status
