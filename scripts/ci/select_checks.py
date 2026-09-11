@@ -35,7 +35,8 @@ def changed_paths(event_name: str, event: dict) -> list[str] | None:
     if any(not re.fullmatch('[0-9a-f]{40}', ref) or set(ref) == {'0'} for ref in (base, head)):
         return None
     try:
-        output = subprocess.check_output(['git', 'diff', '--name-only', '-z', comparison, '--'],
+        # Include the deleted source path when code is moved into documentation.
+        output = subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z', comparison, '--'],
                                          stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError:
         return None
