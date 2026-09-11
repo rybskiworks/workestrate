@@ -60,7 +60,7 @@ assert pkgs.lib.assertMsg (
 ) "Workestrate SDK dependencies must match the Microsandbox runtime version";
 rustPlatform.buildRustPackage {
   pname = "workestrate";
-  version = "0.1.0";
+  version = manifest.package.version;
 
   inherit src;
 
