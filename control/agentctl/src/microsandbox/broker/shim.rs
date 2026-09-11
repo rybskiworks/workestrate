@@ -867,6 +867,13 @@ impl BrokerFirstRelay {
 
     /// Opt into managed broker framing while preserving explicit guest-bound
     /// direct forwarding. The existing constructor keeps the legacy contract.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "workload launch does not yet activate managed diversion from a live Applied custody observation"
+        )
+    )]
     pub(crate) fn managed(
         broker_socket: PathBuf,
         launch: managed_wire::LaunchRef,

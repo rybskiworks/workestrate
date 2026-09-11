@@ -465,6 +465,14 @@ remains potentially effective and is never replayed when its client leaves. No b
 this entrypoint yet: SSH desired changes stay unobserved and not ready. It does
 not send custody through guest exec or fabricate broker acknowledgments.
 
+The currently wired native capabilities are exact-launch inspection, stop and
+owned guest execution. Broker transport, trusted policy preparation and managed
+SSH diversion remain private integration seams, not an available deployment
+mode. Their item-specific non-test lint expectations identify the missing
+callers and must be removed when those callers are connected; the ordinary
+all-target lint gate still checks their test builds. No successful native
+operation, Hello or Probe substitutes for a complete matching Applied policy.
+
 Ctrl-C and SIGTERM fence request admission and start one fair ten-second drain
 of original exec leases and connection tasks. Cancellation acceptance is not
 process-exit evidence. Confirmed terminal operations are released; indeterminate

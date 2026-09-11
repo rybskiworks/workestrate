@@ -160,6 +160,13 @@ impl MicrosandboxControl {
     /// bound it. The owner retains this token for every subsequent connection;
     /// it must not recapture a replacement endpoint for an issued launch.
     #[cfg(unix)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "broker bootstrap does not yet supply a newly bound management listener to the host owner"
+        )
+    )]
     pub(crate) async fn capture_host_listener(
         &self,
         launch: &LaunchRef,
@@ -188,6 +195,13 @@ impl MicrosandboxControl {
     /// peer checks. No application bytes, guest exec, name lookup or replay are
     /// used. Dropping this future drops any not-yet-verified connection.
     #[cfg(unix)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "direct protected-listener bootstrap checks are not yet invoked by the production owner"
+        )
+    )]
     pub(crate) async fn connect_host_listener(
         &self,
         launch: &LaunchRef,

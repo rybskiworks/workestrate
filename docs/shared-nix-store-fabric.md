@@ -2,6 +2,11 @@
 
 > Status: design exploration / architecture note, not a committed ADR.
 >
+> The shared-store topology, configuration examples and rollout below are proposals,
+> not enabled Workestrate features. The source snapshot in section 14 was refreshed
+> against immutable revisions; use [runtime provisioning](runtime-provisioning.md)
+> and the selected flake lock for operational configuration and dependency identity.
+>
 > Goal: work toward a host and microVM topology where many Workestrate workloads reuse the same Nix artifacts, the same VM image bases, and as much physical RAM as is safely practical, without turning the shared state into one giant writable trust boundary.
 
 ## Executive summary
@@ -815,16 +820,22 @@ VM creation then becomes deterministic:
 
 ## 14. Current `rybskiworks` stack: concrete gaps and required changes
 
-This is where the design intersects the repositories as they exist today.
+This section distinguishes the inspected implementation from the proposed fabric.
+Source presence is not deployment or backend-conformance evidence.
 
 ### 14.1 `rybskiworks/workestrate`
 
-Current default branch is still the older implementation centered on Microsandbox 0.5.x-era behavior. It contains the workaround where Pi's Nix-built binary was baked into the sandbox image because the runtime could not bind-mount the host `/nix/store` path and returned `Permission denied`.
+Workestrate's [native-control implementation](https://github.com/rybskiworks/workestrate/tree/6c0672efb376ceb860a0a5a339bf6b550a94fea2)
+selects the Microsandbox 0.6.18 fork through its flake, includes launch-bound native
+execution and explicit root-disk sizing, and packages the broker on the shared
+NixOS/Determinate base. This does not implement the shared lower-store generations,
+publisher, builder service or memory-sharing policy proposed here. Broker transport
+and model tests also do not establish production SSH custody enrollment.
 
 Needed:
 
-- update the Microsandbox integration to the current `rybskiworks/microsandbox` API line,
-- introduce backend capabilities rather than hard-coded image/mount assumptions,
+- maintain verified Microsandbox/runtime/agent dependency alignment,
+- extend the existing backend capability boundary for independently tested storage features,
 - add a first-class infrastructure workload for the Nix builder/cache plane,
 - add store-generation registry and leases,
 - add lower-store + private-upper plan generation,
@@ -836,7 +847,8 @@ Needed:
 
 ### 14.2 `rybskiworks/microsandbox`
 
-Current fork is on Microsandbox 0.6.17 and already contains much more useful storage machinery than Workestrate's current pin expects:
+The inspected [Microsandbox source](https://github.com/rybskiworks/microsandbox/tree/8ae14c22963c0680b231f61280f43db364693a5c)
+is version 0.6.18 and contains:
 
 - volume model,
 - read-only mounts,
@@ -845,15 +857,11 @@ Current fork is on Microsandbox 0.6.17 and already contains much more useful sto
 - current root-disk abstractions,
 - the public future `resumable` snapshot contract.
 
-However, its workspace currently pins published `msb_krun = 0.1.32` / `msb_krun_utils = 0.1.32` rather than automatically consuming `rybskiworks/libkrun` HEAD.
-
-That means a feature added only to `rybskiworks/libkrun` does not magically reach Microsandbox. The fork stack needs an explicit dependency strategy:
-
-- publish/version the forked `msb_krun` line, or
-- use a `[patch.crates-io]`/git pin in the rybskiworks Microsandbox fork, or
-- make the Nix flake patch the dependency reproducibly.
-
-Do not leave this as an implicit local Cargo override.
+Its workspace pins `msb_krun` and `msb_krun_utils` version 0.1.34 to the immutable
+libkrun revision `5b81726df87807876e11939995df2eb6688be173`. The Nix build consumes
+the locked fork inputs. A later change on libkrun's operational branch still
+requires a reviewed consuming-pin update and runtime validation; a branch merge
+alone does not update an existing Microsandbox or Workestrate image.
 
 Microsandbox changes likely needed:
 

@@ -205,6 +205,13 @@ impl SopsKeyMaterial {
     /// This is not a public credential accessor or a new material store. The
     /// trusted resolver must attach its selected grant and versions, and move
     /// these bytes into the shared wire's redacted, zeroizing secret buffer.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the production broker policy resolver does not yet consume validated host-side key seeds"
+        )
+    )]
     pub(crate) fn broker_key_seed(&self) -> Result<Zeroizing<[u8; 32]>, KeyMaterialError> {
         match self.private_key.key_data() {
             ssh_key::private::KeypairData::Ed25519(keypair) => {

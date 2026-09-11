@@ -105,6 +105,13 @@ where
         self.next_probe
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the production policy reconciler does not yet consume the owner-bound broker session"
+        )
+    )]
     pub(crate) fn session(&self) -> &BrokerSession {
         &self.session
     }
@@ -121,6 +128,13 @@ where
     /// no raw credential bytes enter public control requests or durable state.
     /// `expected_revision` is the last accepted revision on this connection,
     /// supplied by the single reconciler; an ambiguous write is never retried.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the host owner does not yet resolve and submit complete trusted broker policies"
+        )
+    )]
     pub(crate) async fn apply(
         &mut self,
         controller: &mut SshController,
@@ -154,6 +168,13 @@ where
 
     /// Poll the exact prepared transaction. Pending is not cancellation or
     /// process-exit proof; only the broker's complete Applied receipt is ready.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the host owner does not yet finish pending prepared broker policy transactions"
+        )
+    )]
     pub(crate) async fn finish(
         &mut self,
         controller: &mut SshController,

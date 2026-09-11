@@ -324,6 +324,13 @@ impl HostControlOwner<MicrosandboxControl> {
     /// Attach an already selected native launch and its once-captured route.
     /// Trusted bootstrap must supply both; this never creates, discovers,
     /// recaptures or reconnects a broker by name. No policy becomes Applied here.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "control serve does not yet select trusted broker bootstrap and route inputs"
+        )
+    )]
     pub(crate) async fn attach_broker(
         &mut self,
         launch: &LaunchRef,

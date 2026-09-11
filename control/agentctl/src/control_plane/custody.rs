@@ -231,6 +231,13 @@ impl SshController {
 
     /// Destruction invalidates the exact generation before broker I/O starts.
     /// A delayed owner of an older generation cannot retire its replacement.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "confirmed native launch retirement is not yet connected to managed SSH reconciliation"
+        )
+    )]
     pub(crate) fn retire_launch(&mut self, launch: &LaunchRef) -> Result<SshChange, ControlError> {
         let state = self.current_mut(launch)?;
         if !state.desired.destroyed {
