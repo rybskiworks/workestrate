@@ -1,158 +1,140 @@
-<h1 align="center">workestrate</h1>
-<p align="center"><strong>Define the workload. Bound its authority. Let it work.</strong></p>
-<p align="center">Declarative microVM workloads, policy-aware configuration, and a Nix-pinned control plane.</p>
+<a id="workestrate"></a>
+
+<a href="https://github.com/rybskiworks">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/workestrate-dark.svg">
+    <img src="docs/assets/workestrate-light.svg" width="1200" alt="workestrate / rybskiworks. Systems that let software act. Declarative policy, a shared control plane, individual microVM workloads.">
+  </picture>
+</a>
+
 <p align="center">
-  <a href="https://github.com/rybskiworks/workestrate/actions/workflows/ci.yml"><img alt="CI on main" src="https://github.com/rybskiworks/workestrate/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  &nbsp; Linux x86_64 &nbsp; | &nbsp; Rust + Nix &nbsp; | &nbsp;
-  <a href="LICENSE-MIT">MIT</a> / <a href="LICENSE-APACHE">Apache-2.0</a>
+  <a href="#take-a-look">get started</a> /
+  <a href="docs/README.md">documentation</a> /
+  <a href="README.agents.md">architecture for agents</a> /
+  <a href="https://github.com/rybskiworks/workestrate/issues">open work</a>
 </p>
-<p align="center">
-  <a href="#start-here">Get started</a> &middot;
-  <a href="SPEC.md">Architecture</a> &middot;
-  <a href="docs/runtime-provisioning.md">Runtime</a> &middot;
-  <a href="CONTRIBUTING.md">Contribute</a>
-</p>
+
+**Give software a place to work, and an explicit boundary to work within.**
+Workestrate is a Rust CLI and Nix flake for running declaratively configured
+agents and services in Microsandbox microVMs. Workloads, network policy, mounts,
+and credential bindings live in configuration, not in a particular agent's prompt.
+
+<a id="positioning"></a>
+<a id="one-control-plane-explicit-boundaries"></a>
+
+## a runtime, not an agent
+
+Bring the agent, service, or development workload that suits the job. Workestrate
+handles configuration and lifecycle; your fleet owns the workload definitions
+and image builds. No particular model, provider, or coding harness is required.
+
+The foundation is deliberately small: **TOML for intent, Nix for reproducible
+build inputs, microVMs for execution.** Networking defaults to deny. Secrets are
+SOPS-encrypted, with explicit host-bound or guest-bound delivery. The current
+runtime uses the pinned Microsandbox fork on x86_64 Linux, without Docker.
+
+<a id="how-it-works-today"></a>
+
+## from intent to execution
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/operating-loop-dark.svg">
+  <img src="docs/assets/operating-loop-light.svg" width="1200" alt="Define policy. Bound authority. Delegate work. Validate results. An operating philosophy, not a claim that every runtime property has been verified.">
+</picture>
+
+Declare what a workload needs. Inspect the resolved plan. Run it within the
+selected policy. Check what actually happened. A configuration setting describes
+intent; runtime evidence establishes what was enforced.
+
+<a id="setup"></a>
+<a id="start-here"></a>
+
+## take a look
+
+With Git and Nix (flakes enabled) on x86_64 Linux:
+
+```sh
+git clone --branch main https://github.com/rybskiworks/workestrate.git
+cd workestrate
+nix build --no-update-lock-file .#workestrate
+
+./result/bin/workestrate --help
+WORKESTRATE_CONFIG_DIR="$PWD/config.reference" ./result/bin/workestrate validate-config
+WORKESTRATE_CONFIG_DIR="$PWD/config.reference" ./result/bin/workestrate workload plan example-service
+```
+
+This inspects the **synthetic reference configuration**, not your personal fleet,
+and does not launch a VM. Use `./result/bin/workestrate` until the CLI is on your
+`PATH`. `main` is the integration branch; the former migration line was integrated
+in [PR #32](https://github.com/rybskiworks/workestrate/pull/32).
+Actual VM execution additionally requires accessible `/dev/kvm` and host
+provisioning. Start with the [setup guide](docs/getting-started.md) and
+[Nix build guide](docs/nix-build.md).
+
+<a id="config-repos-and-the-layering-model"></a>
+<a id="secrets-workflow"></a>
+<a id="a-small-cli-surface-for-a-larger-system"></a>
+
+## bring your own fleet
+
+A fleet is your collection of workload definitions and operator configuration.
+Keep application choices, image flakes, and encrypted credentials there rather
+than baking them into the orchestration tool. Services run detached; agents
+attach interactively. Workload names come from your configuration.
+
+The [workload guide](docs/workloads.md) explains standalone repositories and
+fleet-local capsules. The [configuration reference](README.agents.md#configuration-model)
+and [secrets workflow](README.agents.md#secrets-workflow) cover the next steps.
+The bundled example names are placeholders, not ready-to-run applications.
+
+<a id="one-toolchain-authority"></a>
+
+Workestrate and its Microsandbox input share a pinned
+[nix-tooling](https://github.com/rybskiworks/nix-tooling) supplier. See the
+[dependency boundary](README.agents.md#the-dependency-boundary) for ownership
+and the locked-toolchain check.
+
+<a id="cli-surface"></a>
+<a id="development-workflow"></a>
+<a id="canonical-docs"></a>
+<a id="build-with-us"></a>
+
+## find your depth
+
+| Looking for | Start here |
+| :--- | :--- |
+| Setup, CLI commands, and operating details | [Setup guide](docs/getting-started.md) / [technical reference](README.agents.md#cli-reference) |
+| Architecture, ownership, and where a change belongs | [Agent-oriented README](README.agents.md) |
+| Always-applicable working instructions | [AGENTS.md](AGENTS.md) |
+| Specifications, decisions, and focused guides | [Documentation index](docs/README.md) |
+
+`README.md` introduces the project to people. `README.agents.md` is an optional,
+text-first architectural map, readable by humans too. `AGENTS.md` stays short
+and supplies working instructions; it points agents to broader context when
+their task needs it. A narrowly scoped worker can go straight to the relevant
+code and applicable instructions.
+
+For development, start with `just bootstrap` or `just shell`, and use
+`just verify` for the repository gate. See [contributing](CONTRIBUTING.md) and the
+[development reference](README.agents.md#development-workflow) for checks,
+Beads, hooks, and contribution conventions.
+
+<a id="runtime-status"></a>
+<a id="security-is-a-contract-not-a-badge"></a>
+
+## status, without the mythology
+
+Workestrate is under active development. Repository checks validate the CLI,
+configuration, and pinned package contracts, **not every property of a deployed
+fleet**. Lifecycle readiness and cleanup, mount-policy enforcement, SSH custody,
+and nested confinement require their own runtime evidence. In particular, a
+nested guest booting does not prove that disabling nesting enforces a boundary.
+
+See [runtime status](README.agents.md#runtime-status), the
+[testing guide](docs/testing.md), and
+[runtime provisioning](docs/runtime-provisioning.md) before relying on a property.
+Use the [security reporting guidance](SECURITY.md) for vulnerabilities.
 
 ---
 
-**Your agent is a workload, not your identity.** Workestrate combines a Rust CLI
-with a Nix flake to run agents and services inside Microsandbox microVMs.
-Configuration, network access, mounts and secret bindings are explicit inputs,
-not privileges inherited simply because a program runs on your machine.
-
-Agent-first, not agent-specific. Workloads live in fleet/config repositories;
-the tool does not hardcode your preferred model, coding harness or service stack.
-
-## One control plane, explicit boundaries
-
-```text
-fleet / config repositories       pinned nix-tooling
-  workloads + policy + sources      compiler + build tools
-                 |                         |
-                 +------ workestrate ------+
-                         plan / validate
-                         lifecycle / exec
-                               |
-                      pinned Microsandbox
-                       /               \
-                  agent microVM    service microVM
-```
-
-| Concern | Workestrate's role |
-| :--- | :--- |
-| Configuration | Compose declared layers, expose provenance, apply security-aware policy merges. |
-| Isolation | Launch workloads through the pinned Microsandbox backend on Linux/KVM. |
-| Credentials | Resolve SOPS-encrypted inputs and explicit workload secret bindings. |
-| Reproducibility | Share reviewed Nix/toolchain inputs; keep runtime source and SDK patches aligned. |
-| Lifecycle | Plan, start, attach, inspect and stop workloads without turning the repository into operator state. |
-
-**Active development.** `main` is the integration branch. The former
-`migration/tool-model` line was integrated in [PR #32](https://github.com/rybskiworks/workestrate/pull/32).
-Development history is not a second release channel.
-
-## Start here
-
-Build and inspect the CLI with **Nix and flakes enabled**:
-
-```sh
-git clone https://github.com/rybskiworks/workestrate.git
-cd workestrate
-nix build --no-update-lock-file .#workestrate
-./result/bin/workestrate --help
-./result/bin/workestrate versions
-```
-
-Actually running a microVM additionally requires a Linux x86_64 host with
-virtualization enabled and `/dev/kvm` accessible. No Docker daemon is involved.
-Building does not provision a live operator home, migrate backend state or grant
-access to credentials.
-
-Initialize a home and inspect the bundled synthetic reference configuration:
-
-```sh
-./result/bin/workestrate home init
-./result/bin/workestrate validate-config
-./result/bin/workestrate workload plan example-service
-```
-
-A fresh setup ships examples, not your live agents. Register or scaffold your own
-config repository before running real workloads:
-
-```sh
-workestrate config new personal
-# Alternative: workestrate config add <repository-url> personal
-```
-
-Use `./result/bin/workestrate` until the built CLI is on your `PATH`. Configure
-workload definitions, trust and SOPS keys deliberately; follow the
-[setup and secrets guide](docs/getting-started.md) and
-[runtime provisioning guide](docs/runtime-provisioning.md), not a copied operator
-home or a stale session handoff.
-
-## A small CLI surface for a larger system
-
-```sh
-workestrate workload plan <name> --show-source
-workestrate workload up <service>
-workestrate workload logs <service>
-workestrate workload exec <agent>
-workestrate workload down <name>
-workestrate workloads
-workestrate ps --json
-workestrate doctor
-```
-
-Services run detached; agents can be attached interactively. Instance replacement,
-parallel instances and scoped teardown are explicit operations. The complete
-lifecycle contract is in the [operating model](docs/operating-model.md).
-
-## One toolchain authority
-
-[`flake.nix`](flake.nix) selects an immutable revision of
-[`rybskiworks/nix-tooling`](https://github.com/rybskiworks/nix-tooling).
-The package set, Fenix compiler and development modules follow that supplier.
-Microsandbox follows the same tooling input rather than bringing a competing pin.
-
-CI resolves its exact Rust release from the **locked Fenix manifest**, not a
-separate `stable` channel or hand-maintained compiler version in YAML. Inspect
-and validate the relationship without building the application:
-
-```sh
-python3 scripts/ci/toolchain.py check --role consumer
-```
-
-Updating the supplier is a reviewed `flake.nix` + `flake.lock` change. A local
-supplier override is an experiment, not a distributable lock update. See
-[build ownership](docs/nix-build.md) and [the CI contract](docs/ci-release-foundation.md).
-
-## Security is a contract, not a badge
-
-Network defaults deny access unless allowed by effective policy. This does not
-make arbitrary configuration, mounts, operator escape hatches or host privileges
-safe. The current Linux nested-virtualization `off` flag is **not** an independently
-enforced confinement boundary.
-
-Read the [security model](docs/migration/30-security-model.md),
-[runtime limitations](docs/runtime-provisioning.md) and
-[reporting guidance](SECURITY.md). Hosted CI, native integration checks and
-KVM/runtime tests prove different things; a green aggregate does not imply all ran.
-
-## Build with us
-
-With Nix and `just` available, `just bootstrap` provides pinned development tools,
-`just shell` opens the interactive environment, and `just verify` is the local
-verification entrypoint. Shell entry is not permission to initialize trackers,
-replace hooks, migrate homes or start workloads.
-
-| Read | For |
-| :--- | :--- |
-| [Specification map](SPEC.md) | Component boundaries and authoritative design records. |
-| [Runtime provisioning](docs/runtime-provisioning.md) | Backend generations, initialization, readiness and nested virtualization. |
-| [Nix build guide](docs/nix-build.md) | Immutable SDK inputs, bootstrap and verification. |
-| [Decision records](docs/migration/50-decisions/README.md) | Rationale, compatibility and historical context. |
-| [Contributing](CONTRIBUTING.md) | Review, tests and repository hygiene. |
-| [GitHub governance](docs/github-governance.md) | Proposed protections and their activation sequence. |
-| [Repository audit](docs/repository-audit-2026-09-11.md) | Findings, fixes, evidence and remaining work. |
-| [Beads](BEADS.md) | The intentional task-tracking contract. |
-
-Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+<sub>Part of <a href="https://github.com/rybskiworks">rybskiworks</a>. Explicit intent. Bounded execution. Evidence over assumption. <a href="LICENSE-MIT">MIT</a> / <a href="LICENSE-APACHE">Apache-2.0</a>.</sub>
