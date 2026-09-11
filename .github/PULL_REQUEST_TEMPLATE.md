@@ -1,23 +1,19 @@
-## Summary
+## Change
 
-<!-- What does this PR change and why? Keep it short; link tickets/ADRs here. -->
+Describe the problem and the smallest coherent fix. Link the issue or Bead.
 
--
+## Evidence
 
-## Test plan
+Record exact commands, results and the commit tested. Distinguish evaluation,
+compiled checks, native integration and KVM/runtime tests. List anything not run.
 
-<!-- How was this validated? List the commands you ran and their results.
-     `just verify` is expected green before review. -->
+## Compatibility and safety
 
-- `just verify` ✅
+Describe pin/lock changes, public interface changes, state migrations and rollback.
+Changes to `.github/`, security policy, schemas and dependency pins need explicit review.
+Do not paste credentials, decrypted configuration or private workload logs.
 
-## Agent conventions
-
-- Agents must NOT self-apply the `nix-ci` label — the heavy e2e-nix CI leg is
-  owner/maintainer-triggered only.
-- Commit subjects use conventional commit prefixes (`feat:`, `fix:`, `chore:`,
-  `docs:`, `ci:`, `build:`, ...). ADR numbers belong in commit bodies, never in
-  subjects.
-- Never commit with `--no-verify`. Hooks are check-only — fix findings properly
-  instead of bypassing them.
-- `just verify` must be green before requesting review.
+- [ ] The PR targets `main` and contains no local build/session artifacts.
+- [ ] Lockfiles and generated schemas changed only intentionally.
+- [ ] Documentation describes implemented behavior, not planned capability.
+- [ ] No live deployment, database migration or protection activation is implied.
