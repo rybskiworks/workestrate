@@ -178,6 +178,14 @@ env is lowest precedence).
   pre-filled buffer of required keys, and writes the encrypted `.env.enc`.
   Refuses to overwrite an existing file — use `update` for changes.
 - `setup-secrets --config <name> update` — decrypts, edits, re-encrypts.
+- From a plain host shell, `just setup-secrets --config <name> update`
+  enters the pinned development shell automatically. For another tool home,
+  use `just setup-secrets --home /path/to/home --config <name> update`.
+  Named configs resolve through `workestrate secrets-target`, including
+  registry store, encrypted-file and age-key overrides. Unknown names fail
+  without falling back to another directory.
+- `just setup-secrets --config-dir /path/to/config-repo update` — edit a
+  directory directly, without changing your shell's environment or XDG paths.
 - `setup-secrets --global init|update` — targets the user-global
   `.env.local.enc`.
 - `workestrate run -- <cmd>` — decrypts into the process environment and
