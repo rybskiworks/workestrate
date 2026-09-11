@@ -28,6 +28,18 @@ bootstrap *args:
     set -euo pipefail
     exec just shell .#bootstrap "$@"
 
+# Prepare only the immutable SDK source; neither application nor runtime builds.
+sdk-prepare:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    _repo_root=$(git rev-parse --show-toplevel)
+    _sdk_source=$(nix build .#microsandbox-filesystem-patched --no-update-lock-file --no-link --print-out-paths)
+    exec bash "$_repo_root/scripts/sdk-source.sh" "$_repo_root" "$_sdk_source"
+
+# Exercise source-link ownership and the source-only recipe without running Nix.
+sdk-source-check:
+    python3 ./scripts/test-sdk-source.py
+
 # Use the shared pinned tracker without entering the runtime shell. Embedded
 # Dolt permits one writer; coordinate writes and keep remote synchronization
 # explicit. This command does not initialize a tracker or install hooks.
@@ -157,7 +169,7 @@ _spec-examples-inner:
 # homes. Nix checks use the pinned toolchain, offline dependencies and isolated
 # test state. Unit checks include spec examples, goldens, schema drift and the
 # native scaffold; KVM, Nix-daemon and Copier integration remain separate gates.
-verify: lock-guard versions-check hooks-check shell-arguments-check store-audit-check verification-check purity-check lint-nix
+verify: lock-guard versions-check hooks-check shell-arguments-check sdk-source-check store-audit-check verification-check purity-check lint-nix
     #!/usr/bin/env bash
     set -euo pipefail
     nix build --no-link --no-update-lock-file --keep-going \
@@ -169,6 +181,7 @@ verify: lock-guard versions-check hooks-check shell-arguments-check store-audit-
       .#checks.x86_64-linux.tombiCheck \
       .#checks.x86_64-linux.schemaSync \
       .#checks.x86_64-linux.buildRevision \
+      .#checks.x86_64-linux.brokerImage \
       .#checks.x86_64-linux.deny
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
     just store-audit

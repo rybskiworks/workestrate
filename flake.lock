@@ -487,17 +487,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1789052672,
-        "narHash": "sha256-OVKKsZ+9zOE/0dqT9MMsqPj0cTI2zlXg5pBgoRhA5sI=",
+        "lastModified": 1789093257,
+        "narHash": "sha256-szetiy5J35Olln4swM5PihT58BK0NgkHSryEQ77NCh0=",
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "41b5ad697b1c683efdfebfc1d3b7e8a01f917457",
+        "rev": "8ae14c22963c0680b231f61280f43db364693a5c",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "41b5ad697b1c683efdfebfc1d3b7e8a01f917457",
+        "rev": "8ae14c22963c0680b231f61280f43db364693a5c",
         "type": "github"
       }
     },
@@ -832,17 +832,17 @@
         "treefmt-nix": "treefmt-nix_2"
       },
       "locked": {
-        "lastModified": 1788994177,
-        "narHash": "sha256-zAh0r9BHQEk8NTj9O039OTqaDfQaw/RXj4G81QFKG8M=",
+        "lastModified": 1789010344,
+        "narHash": "sha256-VWT9LCqzWLdgThNg6Nqteej4/9f3MO3ogYVT++xYL18=",
         "owner": "rybskiworks",
         "repo": "nix-tooling",
-        "rev": "c99bc5af3511952241f3955bd4326e128084ee30",
+        "rev": "46e62f450396ea16aa884568d1d0a9591bfb6299",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "nix-tooling",
-        "rev": "c99bc5af3511952241f3955bd4326e128084ee30",
+        "rev": "46e62f450396ea16aa884568d1d0a9591bfb6299",
         "type": "github"
       }
     },

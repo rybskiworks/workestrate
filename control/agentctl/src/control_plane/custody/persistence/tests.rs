@@ -454,6 +454,10 @@ fn failed_desired_commit_returns_no_transaction_and_permanently_fences_owner() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
     assert!(controller.broker.is_none());
     assert_eq!(
+        controller.validate_broker_session(&old.session),
+        Err(ControlError::StateUnavailable)
+    );
+    assert_eq!(
         controller.observe(applied(&old)),
         Err(ControlError::StateUnavailable)
     );

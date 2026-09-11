@@ -1434,6 +1434,11 @@ pub struct WorkloadConfig {
     pub init: Option<InitConfig>,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
+    /// Managed OCI writable root-disk capacity in MiB, applied only on creation.
+    /// Omission preserves the backend default; existing disks are never resized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 4294967295u32))]
+    pub root_disk_mib: Option<u32>,
     #[serde(default)]
     pub command: Vec<String>,
     pub log_stop_errors: Option<bool>,
@@ -2074,6 +2079,7 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
     "init",
     "cpus",
     "memory_mib",
+    "root_disk_mib",
     "command",
     "log_stop_errors",
     "env",

@@ -654,6 +654,7 @@ mod tests {
             command: vec![],
             cpus: None,
             memory_mib: None,
+            root_disk_mib: None,
             env: vec![],
             secret_env: vec![],
             credentials: None,

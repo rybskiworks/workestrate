@@ -65,6 +65,44 @@ fn prepare(controller: &mut SshController, transaction: &SshPolicyTransaction) {
 }
 
 #[test]
+fn broker_heartbeat_requires_current_session_without_launches() {
+    let mut controller = SshController::new(OpaqueId::from_bytes([1; 32]));
+    let session = BrokerSession {
+        controller: OpaqueId::from_bytes([1; 32]),
+        broker: OpaqueId::from_bytes([2; 32]),
+        connection: 1,
+    };
+    assert_eq!(
+        controller.validate_broker_session(&session),
+        Err(ControlError::StaleObservation)
+    );
+    assert!(
+        controller
+            .broker_session_authenticated(session.clone())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(controller.validate_broker_session(&session), Ok(()));
+    let newer = BrokerSession {
+        connection: 2,
+        ..session.clone()
+    };
+    controller
+        .broker_session_authenticated(newer.clone())
+        .unwrap();
+    assert_eq!(
+        controller.validate_broker_session(&session),
+        Err(ControlError::StaleObservation)
+    );
+    assert_eq!(controller.validate_broker_session(&newer), Ok(()));
+    controller.broker_disconnected(&newer).unwrap();
+    assert_eq!(
+        controller.validate_broker_session(&newer),
+        Err(ControlError::StaleObservation)
+    );
+}
+
+#[test]
 fn unprepared_intent_cannot_be_acknowledged_even_after_reconnection() {
     let mut controller = SshController::new(OpaqueId::from_bytes([1; 32]));
     let target = launch("worker", 1);
@@ -594,6 +632,10 @@ fn broker_state_loss_cannot_be_repaired_by_replaying_an_old_acknowledgment() {
     let mut lost = applied(&old);
     lost.outcome = AppliedOutcome::StateLost;
     assert!(!controller.observe(lost).unwrap().ready);
+    assert_eq!(
+        controller.validate_broker_session(&old.session),
+        Err(ControlError::StaleObservation)
+    );
     assert_eq!(
         controller.observe(applied(&old)),
         Err(ControlError::StaleObservation)

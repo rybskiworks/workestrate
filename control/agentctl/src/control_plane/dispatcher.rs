@@ -2,7 +2,7 @@
 //!
 //! The owner serializes requests; native event polling must be nonblocking and
 //! every asynchronous native call has a fixed budget. This is an in-process
-//! integration seam, not a running service or a readiness assertion. Persistent
+//! integration seam, not itself a readiness assertion. Persistent
 //! desired-state commit and broker I/O remain the reconciler owner's boundary.
 
 use std::collections::BTreeMap;
@@ -44,9 +44,11 @@ pub(crate) struct ControlDispatcher<N> {
     native: N,
     custody: SshController,
     operations: BTreeMap<OperationRef, OwnedExec>,
+    admitting: bool,
 }
 
 impl<N: NativeControl> ControlDispatcher<N> {
+    #[cfg(test)]
     pub(crate) fn new(incarnation: OpaqueId, native: N) -> Self {
         Self::with_custody(native, SshController::new(incarnation))
     }
@@ -60,12 +62,18 @@ impl<N: NativeControl> ControlDispatcher<N> {
             sequence: 0,
             native,
             operations: BTreeMap::new(),
+            admitting: true,
         }
     }
 
     /// Trusted runtime/broker integration only; never exposed through the codec.
     pub(crate) fn custody_mut(&mut self) -> &mut SshController {
         &mut self.custody
+    }
+
+    /// Retained native resource access for the trusted host owner, not the codec.
+    pub(crate) fn native(&self) -> &N {
+        &self.native
     }
 
     pub(crate) async fn dispatch(
@@ -75,6 +83,7 @@ impl<N: NativeControl> ControlDispatcher<N> {
     ) -> Result<DispatchOutcome, ControlError> {
         // The same matcher serves all adapters. Deny before target discovery.
         caller.authorize_control(&request)?;
+        self.check_owner()?;
         if let CallerIdentity::WorkloadLaunch(origin) = caller.identity() {
             self.custody
                 .verify_registered_launch(origin)
@@ -82,6 +91,7 @@ impl<N: NativeControl> ControlDispatcher<N> {
             bounded(self.native.verify_launch(origin))
                 .await
                 .map_err(|_| ControlError::PermissionDenied)?;
+            self.check_owner()?;
         }
         let response = match request {
             ControlRequest::Capabilities { .. } => ControlResponse::Capabilities {
@@ -101,6 +111,7 @@ impl<N: NativeControl> ControlDispatcher<N> {
                 }
                 self.custody.verify_registered_launch(&launch)?;
                 bounded(self.native.verify_launch(&launch)).await?;
+                self.check_owner()?;
                 // The native operation must itself enforce the binding. The
                 // precheck is not a substitute for an atomic native fence.
                 let state = bounded(self.native.lifecycle(&launch, operation)).await?;
@@ -110,6 +121,7 @@ impl<N: NativeControl> ControlDispatcher<N> {
                 ControlResponse::GuestExec(self.exec(caller, launch, request).await?)
             }
         };
+        self.check_owner()?;
         Ok(DispatchOutcome {
             response,
             custody_transaction: None,
@@ -141,6 +153,7 @@ impl<N: NativeControl> ControlDispatcher<N> {
             // request cannot relabel another instance using a known native ID.
             self.custody.verify_registered_launch(&launch)?;
             bounded(self.native.verify_launch(&launch)).await?;
+            self.check_owner()?;
             self.sequence = self
                 .sequence
                 .checked_add(1)
@@ -196,7 +209,7 @@ impl<N: NativeControl> ControlDispatcher<N> {
             self.operations.remove(&id);
             return Ok(result);
         }
-        if entry.state.terminal() {
+        if entry.state.terminal() || matches!(entry.state, ExecState::Interrupted { .. }) {
             return match request {
                 ExecRequest::Read { .. } | ExecRequest::Cancel { .. } => {
                     Ok(status(&id, entry, Vec::new()))
@@ -208,6 +221,7 @@ impl<N: NativeControl> ControlDispatcher<N> {
         // record. Any access to a live native lease revalidates the exact launch.
         self.custody.verify_registered_launch(&launch)?;
         bounded(self.native.verify_launch(&launch)).await?;
+        self.custody.ensure_state()?;
         let Some(native) = entry.native.as_mut() else {
             return match request {
                 ExecRequest::Read { .. } => Ok(status(&id, entry, Vec::new())),
@@ -310,7 +324,7 @@ fn accept_events(
     let mut bytes = 0usize;
     let mut state = entry.state;
     for event in events {
-        if state.terminal() {
+        if state.terminal() || matches!(state, ExecState::Interrupted { .. }) {
             return Err(ControlError::InvalidRuntimeResponse);
         }
         match event {
@@ -337,6 +351,15 @@ fn accept_events(
             ExecEvent::Exited { code } => state = ExecState::Exited { code: *code },
             ExecEvent::SpawnFailed => state = ExecState::SpawnFailed,
             ExecEvent::TransportLost => state = ExecState::Indeterminate,
+            ExecEvent::Interrupted {
+                reason,
+                termination,
+            } => {
+                state = ExecState::Interrupted {
+                    reason: *reason,
+                    termination: *termination,
+                };
+            }
         }
     }
     entry.state = state;
@@ -378,6 +401,161 @@ fn validate_command(command: &ExecCommand) -> Result<(), ControlError> {
         .ok_or(ControlError::InvalidRequest)?;
     if size > MAX_COMMAND_BYTES {
         return Err(ControlError::InvalidRequest);
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) struct DrainSummary {
+    pub completed: Vec<OperationRef>,
+    pub pending: Vec<(OperationRef, ExecState)>,
+    pub errors: Vec<(OperationRef, ControlError)>,
+}
+
+impl<N: NativeControl> ControlDispatcher<N> {
+    pub(crate) fn check_owner(&self) -> Result<(), ControlError> {
+        if !self.admitting {
+            return Err(ControlError::StateUnavailable);
+        }
+        self.custody.ensure_state()
+    }
+
+    pub(crate) fn fence(&mut self) {
+        self.admitting = false;
+    }
+
+    /// Stop admission and drain the original leases, not new authorized calls.
+    /// Dropping this future keeps all operation entries in this owner. No VM is
+    /// stopped, no name is resolved, and cancellation acceptance is not exit.
+    pub(crate) async fn drain_until(&mut self, deadline: tokio::time::Instant) -> DrainSummary {
+        use std::future::Future;
+        use std::task::Poll;
+
+        self.fence();
+        let mut errors = Vec::new();
+        {
+            // At most MAX_OPERATIONS futures, borrowed from the existing map.
+            // Poll every lease each round; a slow first cancellation cannot
+            // consume the entire budget before later leases are even signalled.
+            let mut drains: Vec<_> = self
+                .operations
+                .iter_mut()
+                .map(|(id, entry)| (id.clone(), Some(Box::pin(drain_owned(entry, deadline)))))
+                .collect();
+            std::future::poll_fn(|context| {
+                let mut pending = false;
+                for (id, future) in &mut drains {
+                    let Some(active) = future else { continue };
+                    match active.as_mut().poll(context) {
+                        Poll::Ready(error) => {
+                            if let Some(error) = error {
+                                errors.push((id.clone(), error));
+                            }
+                            *future = None;
+                        }
+                        Poll::Pending => pending = true,
+                    }
+                }
+                if pending {
+                    Poll::Pending
+                } else {
+                    Poll::Ready(())
+                }
+            })
+            .await;
+        }
+        let completed: Vec<_> = self
+            .operations
+            .iter()
+            .filter(|(_, entry)| entry.state.terminal())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &completed {
+            self.operations.remove(id);
+        }
+        DrainSummary {
+            completed,
+            pending: self
+                .operations
+                .iter()
+                .map(|(id, entry)| (id.clone(), entry.state))
+                .collect(),
+            errors,
+        }
+    }
+}
+
+async fn drain_owned(
+    entry: &mut OwnedExec,
+    deadline: tokio::time::Instant,
+) -> Option<ControlError> {
+    if entry.state.terminal() {
+        return None;
+    }
+    if entry.native.is_none() || matches!(entry.state, ExecState::Interrupted { .. }) {
+        return Some(ControlError::OperationIndeterminate);
+    }
+    // Check already-buffered terminal evidence before requesting cancellation.
+    if let Err(error) = poll_owned(entry) {
+        return Some(error);
+    }
+    if entry.state.terminal() {
+        return None;
+    }
+    if matches!(entry.state, ExecState::Interrupted { .. }) {
+        return Some(ControlError::OperationIndeterminate);
+    }
+    if tokio::time::Instant::now() >= deadline {
+        return Some(ControlError::OperationIndeterminate);
+    }
+    entry.state = ExecState::Indeterminate;
+    let Some(native) = entry.native.as_mut() else {
+        return Some(ControlError::OperationIndeterminate);
+    };
+    let cancelled = tokio::time::timeout_at(deadline, native.cancel()).await;
+    let mut error = None;
+    match cancelled {
+        Ok(Ok(())) => entry.state = ExecState::CancellationRequested,
+        Ok(Err(cause)) => error = Some(cause),
+        Err(_) => error = Some(ControlError::OperationIndeterminate),
+    }
+    loop {
+        if let Err(cause) = poll_owned(entry) {
+            return Some(cause);
+        }
+        if entry.state.terminal() {
+            return error;
+        }
+        if matches!(entry.state, ExecState::Interrupted { .. })
+            || tokio::time::Instant::now() >= deadline
+        {
+            return Some(error.unwrap_or(ControlError::OperationIndeterminate));
+        }
+        // Both byte/event work and the delay are bounded. Every lease has its
+        // own timer while sharing the one absolute shutdown deadline.
+        tokio::time::sleep_until(std::cmp::min(
+            deadline,
+            tokio::time::Instant::now() + Duration::from_millis(10),
+        ))
+        .await;
+    }
+}
+
+fn poll_owned(entry: &mut OwnedExec) -> Result<(), ControlError> {
+    let native = entry
+        .native
+        .as_mut()
+        .ok_or(ControlError::OperationIndeterminate)?;
+    let events = match native.poll(MAX_IO_BYTES) {
+        Ok(events) => events,
+        Err(_) => {
+            entry.state = ExecState::Indeterminate;
+            return Err(ControlError::OperationIndeterminate);
+        }
+    };
+    if let Err(error) = accept_events(entry, &events, MAX_IO_BYTES) {
+        entry.state = ExecState::Indeterminate;
+        return Err(error);
     }
     Ok(())
 }

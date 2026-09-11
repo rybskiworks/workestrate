@@ -72,6 +72,47 @@ bootstrap. The existing JSON `agentd.version_or_sha` field is retained and repor
 or an availability/executable marker otherwise. Microsandbox's host CLI still
 supports its ordinary `--version` probe.
 
+## Managed guest root-disk capacity
+
+Workloads may request the capacity of a new OCI image's managed writable layer:
+
+```toml
+[workloads.builder]
+kind = "service"
+image = { recipe = "registry", ref = "example:latest" }
+memory_mib = 8192
+root_disk_mib = 16384
+command = ["/bin/builder"]
+```
+
+`root_disk_mib` is an integer number of MiB (1 MiB = 1,048,576 bytes), not RAM,
+host build scratch, the read-only OCI image size, or a host-mounted directory's
+quota. It accepts the SDK's nonzero u32 representation: 1 through 4,294,967,295.
+Zero, negative, fractional, unit-suffixed and unrepresentable values are rejected.
+Representability does not reserve host space or guarantee that the filesystem
+formatter/backend can satisfy the size; allocation can still fail, including
+for a size too small for its metadata or insufficient host capacity.
+
+Omission preserves existing configuration/plan bytes, hashes and backend defaults
+(normally a 4,096 MiB managed writable layer). A higher layer replaces the whole
+scalar; the effective declaration is shown in plan JSON/text and source
+provenance, and explicit values change the configuration hash. No new setting is
+added implicitly to existing workloads.
+
+This scalar supports managed OCI storage only. Host-directory and disk-image
+root filesystems are refused, as are backend or explicit OCI writable modes
+selecting tmpfs, flat storage or a user-owned disk image: a capacity request must
+not silently change storage mode. The SDK cloud request can carry the managed
+size; that wire support is not evidence of provider allocation or resize support.
+
+Only fresh creation applies the builder setting. Reuse and restart keep the
+stored disk untouched and retain the existing conflict/skew policy. With an
+explicit request, these paths report desired capacity and the retained SDK
+declaration when readable, or an unknown/default declaration otherwise. Matching
+declarations are not measured capacity or readiness. Recreate an owned instance
+explicitly to enforce a changed value, after preserving any data it owns; this
+setting performs no live resize, reformat, automatic migration or data recovery.
+
 ## Immutable build inputs are not runtime homes
 
 Nix builds and the default development shell supply the SDK with
@@ -241,6 +282,42 @@ reuse after policy changes, SSH broker custody or safe credential deployment.
 ADR 0036 retains the design history; historical future-firmware wording is not
 an observation of the current running artifact.
 
+## Foreground service supervision
+
+Foreground service `up` keeps its exec receiver in the foreground task; it does
+not detach a log-draining task. A process `Started` event reports process
+creation, not application readiness. An unexpected exit, including exit zero,
+spawn failure, interruption or terminal-less EOF ends supervision with an
+error instead of waiting for Ctrl-C while the service is already dead.
+Interruption reason and process-termination evidence remain separate: even an
+interruption accompanied by exit zero is not normal completion.
+
+The exec request and initial `Started` event share a 30-second startup budget.
+There is no corresponding lifetime cap on a running service. Ctrl-C closes new
+SSH admission without releasing its CID/socket reservation and triggers cleanup
+of the original exec session and retained sandbox. Cancellation observation has
+a ten-second budget; stopped-state
+observation has a separate 45-second budget; joined SSH-shim retirement gets two
+seconds. Timeout or signal delivery is not termination or retirement proof.
+Primary service failure and cleanup failures are reported together.
+During cancellation observation the receiver is retained but not concurrently
+drained; final buffered shutdown log lines may be discarded. The SDK queue stays
+bounded, and missing log output is not treated as termination evidence.
+
+Only successful stopped-state observation authorizes SSH reservation release.
+On stop failure/timeout the fenced shim's original loop thread waits, retaining
+the reservation; it can finalize after a later explicit retirement request, or
+exit without releasing it when its owner is dropped. The SSH handle remains in
+the borrowed foreground config after incomplete cleanup, allowing its owner to
+decide whether to retry. The CLI currently
+returns an error and drops that config: this requests cancellation but does not
+claim joined retirement or release the reserved CID/socket on the strength of a
+dropped handle. A future shared owner must retain it for retries. Legacy broker
+egress shutdown still has a synchronous unbounded join, outside these independent
+async budgets; this is not a total-shutdown deadline or a complete shared broker
+lifecycle implementation. Interactive `exec` retains its existing TTY/attach and
+detach behavior.
+
 ## SSH broker receipt bounds
 
 The host broker's signing, divert and egress ingress paths allow ten seconds
@@ -359,6 +436,65 @@ and reconcile reservations against actual running VMs, then restore a verified
 backup or explicitly repair the affected state. There is no automatic live-state
 repair or migration, and a fresh empty state directory is a new authority domain,
 not a way to recover still-running workloads.
+
+## Explicit host control owner
+
+`workestrate control serve --state-dir /absolute/private/control --instance NAME`
+serves one Unix endpoint for selected, already-running instances. Repeat
+`--instance` to retain several launches on the same dispatcher. The supplied
+control-state directory must already exist, be canonical, private and owned by
+the invoking operator. Use `--initialize` only for a new desired store; reopening
+never treats a missing or corrupt store as empty. This path does not replace
+`MSB_HOME`, start workloads, change active context or decrypt SSH key material.
+
+Before its first await, the command captures the active configuration and each
+selected registry/workload association and compiles immutable policy ceilings.
+It then uses one existing local backend to retain the exact running SDK objects;
+connection failure does not start or replace a VM. JSON startup output names the
+endpoint and public launch identities. The endpoint initially authenticates only
+the local operator. Guest UIDs are not promoted to operator authority.
+
+The endpoint, durable SSH controller and thin common dispatcher share one owner.
+There are at most 16 owned connection tasks, 32 queued requests and 32 retained
+exec operations. Existing codec framing and native call bounds still apply.
+Each queued request retains its server socket descriptor. Immediately before
+dispatch, a fresh nonblocking poll refuses a completely closed client or socket
+error, without mistaking a normal write-half-close for cancellation. Closure
+after that check or issuance is not atomic cancellation; a call already issued
+remains potentially effective and is never replayed when its client leaves. No broker is attached by
+this entrypoint yet: SSH desired changes stay unobserved and not ready. It does
+not send custody through guest exec or fabricate broker acknowledgments.
+
+The currently wired native capabilities are exact-launch inspection, stop and
+owned guest execution. Broker transport, trusted policy preparation and managed
+SSH diversion remain private integration seams, not an available deployment
+mode. Item-specific lint expectations identify the missing callers and must be
+removed when those callers are connected. Eight apply only outside tests; the
+native attachment wrapper has no caller in either target because tests exercise
+the synthetic transport boundary instead. The ordinary all-target lint gate
+still checks these method bodies and their dependencies. No successful native
+operation, Hello or Probe substitutes for a complete matching Applied policy.
+
+Ctrl-C and SIGTERM fence request admission and start one fair ten-second drain
+of original exec leases and connection tasks. Cancellation acceptance is not
+process-exit evidence. Confirmed terminal operations are released; indeterminate
+operations, including interruption with unconfirmed termination, remain owned.
+If anything is pending, the process stays fenced with the same owner and reports
+bounded public IDs/states. Another Ctrl-C or SIGTERM requests another finite
+ten-second cleanup attempt only. It cannot reopen admission, extend an in-flight
+deadline, replay commands or stop adopted VMs. A retry need not make progress;
+persistent uncertainty may require explicit operator escalation. Forced process
+exit is not clean retirement. Original service and cleanup failures remain
+reported even if a later drain finishes.
+
+Endpoint and desired-store identity loss both fence the owner. Endpoint identity
+is observed while dispatch is pending. Desired state is checked before/after
+dispatch and immediately after native launch verification, before another
+stateful effect. Replacement during an already-issued native call is observed
+on its return or existing five-second call budget, not by an independent store
+watcher. Any uncertain operation remains on the same owner for cleanup. Broker
+admission fencing must additionally use the owned direct link when that link is
+attached; this broker-absent entrypoint makes no such runtime claim.
 
 ## Schema flow (Rust types → committed schema → distribution)
 

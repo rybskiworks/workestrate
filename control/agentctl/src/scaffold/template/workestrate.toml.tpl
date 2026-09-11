@@ -54,6 +54,7 @@ required = false
 # workdir = "/work"
 # cpus = 2
 # memory_mib = 2048
+# root_disk_mib = 16384 # New managed OCI writable disk only; never resizes reuse.
 # command = ["my-agent"]
 # log_stop_errors = false
 #
