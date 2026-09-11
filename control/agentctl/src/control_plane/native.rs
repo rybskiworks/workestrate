@@ -130,12 +130,6 @@ impl MicrosandboxControl {
         Ok(launch)
     }
 
-    /// Release this owner's connection only. Existing exec leases retain their
-    /// own original controls; forgetting a launch does not claim it terminated.
-    pub(crate) fn forget(&mut self, launch: &LaunchRef) {
-        self.selected.remove(launch);
-    }
-
     /// Retain the selected SDK object and the already captured trusted route.
     /// This owns a connection capability, not authority to create or stop a VM.
     /// The route is never recaptured or resolved from a public control request.

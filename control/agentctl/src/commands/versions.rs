@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn fork_short_rev_is_the_first_eight_chars() {
-        assert_eq!(fork_rev_short(), "41b5ad69");
+        assert_eq!(fork_rev_short(), &FORK_REV_PIN[..8]);
         assert_eq!(fork_rev_short().len(), 8);
     }
 

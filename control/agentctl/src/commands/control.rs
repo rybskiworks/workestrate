@@ -197,6 +197,10 @@ pub async fn cmd_control_serve(
     let OwnerExit { primary, drain } = owner.serve_until(signals.next()).await;
     let (drain, cleanup_error) =
         retain_until_retired(&mut owner, drain, async || signals.next().await).await;
+    eprintln!(
+        "host control final drain completed operations: {:?}; cleanup: {drain:?}",
+        drain.operations.completed
+    );
     if primary.is_err() || cleanup_error {
         anyhow::bail!(
             "host control primary outcome: {primary:?}; final cleanup: {drain:?}; \

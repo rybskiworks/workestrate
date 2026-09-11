@@ -48,6 +48,7 @@ pub(crate) struct ControlDispatcher<N> {
 }
 
 impl<N: NativeControl> ControlDispatcher<N> {
+    #[cfg(test)]
     pub(crate) fn new(incarnation: OpaqueId, native: N) -> Self {
         Self::with_custody(native, SshController::new(incarnation))
     }

@@ -376,10 +376,10 @@ async fn watch_resources(endpoint: &LocalEndpoint, broker: Option<&AttachedBroke
         if let Err(error) = endpoint.check_current() {
             return error;
         }
-        if let Some(broker) = broker {
-            if let Err(error) = broker.check_current() {
-                return io::Error::other(error);
-            }
+        if let Some(broker) = broker
+            && let Err(error) = broker.check_current()
+        {
+            return io::Error::other(error);
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
