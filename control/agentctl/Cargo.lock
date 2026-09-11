@@ -7124,6 +7124,7 @@ dependencies = [
  "globset",
  "hex",
  "idna",
+ "libc",
  "microsandbox",
  "microsandbox-image",
  "microsandbox-network",

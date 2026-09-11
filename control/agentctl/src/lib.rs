@@ -10,6 +10,7 @@ pub mod cli_actions;
 pub mod cli_error;
 pub mod commands;
 pub mod config;
+pub mod control_plane;
 pub mod git;
 pub mod images;
 pub mod json_out;

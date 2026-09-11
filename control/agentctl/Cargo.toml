@@ -26,6 +26,7 @@ globset = "0.4"
 # (0.4.x already in the lockfile — promoted to direct, no new package).
 hex = "0.4"
 idna = "1.1"
+libc = "0.2"
 microsandbox = { version = "=0.6.18", features = ["net"] }
 # SSH gateway handoff: the fork's network engine (divert prelude framing)
 # and shared domain types (guest SSH policy). Both crates are already in
