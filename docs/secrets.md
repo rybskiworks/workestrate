@@ -1,5 +1,9 @@
 # Secrets Management
 
+For the explicit single-config SSH signing-key generation and public-key
+display commands, see [Encrypted SSH signing keys](signing-keys.md). This is
+separate from age wrapping-key setup and does not enable workload signing.
+
 For explicit development input from declared environment bindings without
 age or SOPS, see [Environment-only development secrets](development-env-secrets.md).
 Normal layered loading remains the default.

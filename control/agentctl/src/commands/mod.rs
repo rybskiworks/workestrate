@@ -14,5 +14,7 @@ pub mod policy;
 pub mod schemas;
 
 pub mod secrets_target;
+#[cfg(unix)]
+pub mod signing_keys;
 pub mod source;
 pub mod versions;

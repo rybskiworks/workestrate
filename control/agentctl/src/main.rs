@@ -77,6 +77,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Provision encrypted credential material without changing workload grants
+    #[cfg(unix)]
+    Credentials {
+        #[command(subcommand)]
+        action: workestrate::commands::signing_keys::CredentialAction,
+    },
     /// Serve one private control endpoint for selected running instances
     Control {
         #[command(subcommand)]
@@ -962,6 +968,10 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         },
         Commands::Home { action } => cmd_home(action),
         Commands::Schemas { action } => cmd_schemas(action),
+        #[cfg(unix)]
+        Commands::Credentials { action } => {
+            workestrate::commands::signing_keys::run(action, cli.json)
+        }
         Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
         Commands::Doctor => cmd_doctor(cli.json),
         Commands::Versions => cmd_versions(cli.json),
@@ -1409,6 +1419,64 @@ mod tests {
                 "typed subcommand must not exist: {removed}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signing_commands_require_explicit_config_and_parse_public_json() {
+        use workestrate::commands::signing_keys::{CredentialAction, SigningKeyAction};
+        for verb in ["generate", "public-key"] {
+            assert!(
+                Cli::try_parse_from(
+                    ["workestrate", "credentials", "signing", verb, "SIGNING_KEY",]
+                )
+                .is_err()
+            );
+            assert!(
+                Cli::try_parse_from([
+                    "workestrate",
+                    "credentials",
+                    "signing",
+                    verb,
+                    "SIGNING_KEY",
+                    "--config",
+                    "personal",
+                    "unexpected-workload",
+                ])
+                .is_err()
+            );
+        }
+        let generated = Cli::try_parse_from([
+            "workestrate",
+            "credentials",
+            "signing",
+            "generate",
+            "SIGNING_KEY",
+            "--config",
+            "personal",
+        ])
+        .unwrap();
+        assert!(!generated.json);
+        assert!(matches!(generated.command,
+            Commands::Credentials { action: CredentialAction::Signing {
+                action: SigningKeyAction::Generate { name, config }
+            }} if name == "SIGNING_KEY" && config == "personal"));
+        let public = Cli::try_parse_from([
+            "workestrate",
+            "credentials",
+            "signing",
+            "public-key",
+            "SIGNING_KEY",
+            "--config",
+            "personal",
+            "--json",
+        ])
+        .unwrap();
+        assert!(public.json);
+        assert!(matches!(public.command,
+            Commands::Credentials { action: CredentialAction::Signing {
+                action: SigningKeyAction::PublicKey { name, config }
+            }} if name == "SIGNING_KEY" && config == "personal"));
     }
 
     // ---- ADR 0030 P2.1: rewrite_action_for_resolved_instance ----
