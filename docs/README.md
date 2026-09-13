@@ -25,6 +25,7 @@ instructions, not an architectural onboarding requirement for every agent.
 | [Operating model](operating-model.md) | Instances, addressing, teardown, and operational scope. |
 | [Runtime provisioning](runtime-provisioning.md) | Runtime homes, state generations, build/runtime separation, guest init, and provisioning contracts. |
 | [Secrets](secrets.md) | SOPS workflow, credential exposure, and the secrets threat model. |
+| [Signing keys](signing-keys.md) | Explicit encrypted Ed25519 provisioning and public-key export without granting workload authority. |
 
 ## Change and validate
 

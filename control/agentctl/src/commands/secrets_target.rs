@@ -46,7 +46,14 @@ pub fn derive_age_recipient(key_file: &std::path::Path) -> Result<String> {
 /// the fallback matches `secrets_loader::decrypt_layer()`:
 /// `SOPS_AGE_KEY_FILE` env, else `$HOME` + `scaffold::AGE_KEY_DEFAULT_PATH`
 /// with the `~/` prefix stripped.
-pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
+pub struct SecretsTarget {
+    pub dir: PathBuf,
+    pub secrets_file: String,
+    pub age_key_file: PathBuf,
+}
+
+/// Resolve one explicit write target without decrypting any layer.
+pub fn resolve_secrets_target(name: &str) -> Result<SecretsTarget> {
     let registry = config::load_registry()?;
     let entry = registry
         .as_ref()
@@ -70,6 +77,19 @@ pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
             .unwrap_or(scaffold::AGE_KEY_DEFAULT_PATH);
         PathBuf::from(home).join(rel)
     };
+    Ok(SecretsTarget {
+        dir,
+        secrets_file,
+        age_key_file,
+    })
+}
+
+pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
+    let SecretsTarget {
+        dir,
+        secrets_file,
+        age_key_file,
+    } = resolve_secrets_target(name)?;
     let exists = dir.join(&secrets_file).exists();
 
     if json {
