@@ -1096,6 +1096,31 @@
         "rw"
       ]
     },
+    "MountOwner": {
+      "description": "Fallback guest ownership for bind-mounted files without per-file stat overrides.",
+      "type": "object",
+      "required": [
+        "gid",
+        "uid"
+      ],
+      "properties": {
+        "gid": {
+          "description": "Numeric guest group ID; required together with uid.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295.0,
+          "minimum": 0.0
+        },
+        "uid": {
+          "description": "Numeric guest user ID; does not change host ownership.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295.0,
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
     "MountPlan": {
       "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `read`/`write` are parse-time mount-policy sugar in the `[policy.mounts]` axis shapes, normalized into the row's `policy` fragment (never serialized).",
       "type": "object",
@@ -1117,6 +1142,17 @@
           "enum": [
             "ro",
             "rw"
+          ]
+        },
+        "owner": {
+          "description": "Fallback guest ownership for files without per-file stat overrides. Both numeric IDs are required; host ownership is unchanged.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MountOwner"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "policy": {

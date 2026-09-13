@@ -1303,6 +1303,7 @@ pub(crate) mod tests {
                 guest: "/data".to_string(),
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
+                owner: None,
                 policy_file: None,
             },
             crate::microsandbox::plan::MountPlan {
@@ -1310,6 +1311,7 @@ pub(crate) mod tests {
                 guest: "/data".to_string(),
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
+                owner: None,
                 policy_file: None,
             },
         ];
@@ -1327,6 +1329,7 @@ pub(crate) mod tests {
             guest: "/data".to_string(),
             mode: crate::microsandbox::plan::MountMode::Rw,
             policy: None,
+            owner: None,
             policy_file: Some(std::path::PathBuf::from("/some/path")),
         }];
         let err = validate_config(&config).unwrap_err().to_string();
@@ -2105,6 +2108,7 @@ egress = "deny"
                 guest: "/work".to_string(),
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
+                owner: None,
                 policy_file: None,
             }];
             svc.seed_files[0].target = "work/x.json".to_string();
@@ -2128,6 +2132,7 @@ egress = "deny"
                 guest: "/app/config".to_string(),
                 mode: crate::microsandbox::plan::MountMode::Ro,
                 policy: None,
+                owner: None,
                 policy_file: None,
             }];
             svc.seed_files[0].target = "workloads/svc/config/app.json".to_string();
@@ -2147,6 +2152,7 @@ egress = "deny"
                 guest: "/data".to_string(),
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
+                owner: None,
                 policy_file: None,
             }];
         }
@@ -2169,6 +2175,7 @@ egress = "deny"
                 guest: "/data".to_string(),
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
+                owner: None,
                 policy_file: None,
             }];
             svc.seed_files[0].target = "workspaces/svc-state/x.json".to_string();
@@ -2374,6 +2381,7 @@ egress = "deny"
             guest: "/data".to_string(),
             mode: MountMode::Ro,
             policy: None,
+            owner: None,
             policy_file: None,
         };
         let json = serde_json::to_value(&mount).unwrap();
@@ -2385,6 +2393,91 @@ egress = "deny"
         // And the canonical JSON round-trips without a deprecation warning.
         let reparsed: MountPlan = serde_json::from_value(json).unwrap();
         assert_eq!(reparsed, mount);
+    }
+
+    #[test]
+    fn mount_owner_pair_round_trips_and_omission_is_unchanged() {
+        use crate::microsandbox::plan::{MountOwner, MountPlan};
+        let old = r#"{"host":"state","guest":"/data","mode":"rw"}"#;
+        let absent: MountPlan = serde_json::from_str(old).unwrap();
+        assert_eq!(absent.owner, None);
+        assert_eq!(serde_json::to_string(&absent).unwrap(), old);
+        for (uid, gid) in [(0, 0), (61040, 61040), (7, 42), (u32::MAX, u32::MAX)] {
+            let config: ConfigFile = toml::from_str(&mount_mode_config(&format!(
+                "owner = {{ uid = {uid}, gid = {gid} }}"
+            )))
+            .unwrap();
+            let mount = &config.workloads["pi"].mounts[0];
+            assert_eq!(mount.owner, Some(MountOwner { uid, gid }));
+            let json = serde_json::to_value(mount).unwrap();
+            assert_eq!(json["owner"], serde_json::json!({"uid": uid, "gid": gid}));
+            assert_eq!(serde_json::from_value::<MountPlan>(json).unwrap(), *mount);
+        }
+    }
+
+    #[test]
+    fn mount_owner_rejects_incomplete_ambiguous_and_out_of_range_forms() {
+        for owner in [
+            "{}",
+            "{ uid = 0 }",
+            "{ gid = 0 }",
+            "{ uid = -1, gid = 0 }",
+            "{ uid = 0, gid = 4294967296 }",
+            "{ uid = 4294967296, gid = 0 }",
+            "{ uid = 0.5, gid = 0 }",
+            "{ uid = false, gid = 0 }",
+            "{ uid = \"root\", gid = 0 }",
+            "{ uid = 0, gid = 0, user = \"root\" }",
+            "\"0:0\"",
+            "[0, 0]",
+        ] {
+            let text = mount_mode_config(&format!("owner = {owner}"));
+            assert!(toml::from_str::<ConfigFile>(&text).is_err(), "{owner}");
+        }
+        let duplicate = mount_mode_config("owner = { uid = 0, uid = 1, gid = 0 }");
+        assert!(toml::from_str::<ConfigFile>(&duplicate).is_err());
+        for owner in [
+            "{}",
+            r#"{"uid":0}"#,
+            r#"{"gid":0}"#,
+            r#"{"uid":-1,"gid":0}"#,
+            r#"{"uid":0,"gid":4294967296}"#,
+            r#"{"uid":4294967296,"gid":0}"#,
+            r#"{"uid":0.5,"gid":0}"#,
+            r#"{"uid":false,"gid":0}"#,
+            r#"{"uid":"root","gid":0}"#,
+            r#"{"uid":0,"gid":0,"user":"root"}"#,
+            r#"{"uid":0,"uid":1,"gid":0}"#,
+            r#"{"uid":0,"gid":0,"gid":1}"#,
+            r#""0:0""#,
+            "[0,0]",
+        ] {
+            let text = format!(r#"{{"host":"state","guest":"/data","owner":{owner}}}"#);
+            assert!(
+                serde_json::from_str::<crate::microsandbox::plan::MountPlan>(&text).is_err(),
+                "{owner}"
+            );
+        }
+    }
+
+    #[test]
+    fn mount_owner_tracks_whole_array_layer_replacement() {
+        use crate::merge::{Layer, merge_layers};
+        for owner in ["owner = { uid = 0, gid = 0 }", ""] {
+            let base = Layer::from_string(
+                "base",
+                &mount_mode_config("owner = { uid = 61040, gid = 61040 }"),
+            )
+            .unwrap();
+            let overlay = Layer::from_string("overlay", &mount_mode_config(owner)).unwrap();
+            let (merged, provenance) = merge_layers(&[base, overlay]).unwrap();
+            let expected: ConfigFile = toml::from_str(&mount_mode_config(owner)).unwrap();
+            assert_eq!(
+                merged.workloads["pi"].mounts,
+                expected.workloads["pi"].mounts
+            );
+            assert_eq!(provenance.get("workloads.pi.mounts").unwrap(), "overlay");
+        }
     }
 
     // ---- Mount-policy sugar (read/write axis sub-tables on [[mounts]]) ----

@@ -304,7 +304,7 @@ pub(crate) async fn run_service_foreground(
     sandbox: &Sandbox,
     config: &mut ForegroundConfig,
 ) -> Result<()> {
-    use super::foreground::{self, Cancellation, Cleanup, ServiceEnd};
+    use super::foreground::{self, Cancellation, Cleanup, ServiceEnd, StopObservation};
     use tokio::time::{Instant, timeout, timeout_at};
 
     let startup_deadline = Instant::now() + foreground::STARTUP_TIMEOUT;
@@ -361,8 +361,20 @@ pub(crate) async fn run_service_foreground(
     } else {
         Cancellation::NotNeeded
     };
-    let stop = match timeout(foreground::STOP_TIMEOUT, sandbox.stop()).await {
-        Ok(result) => result.map_err(|error| error.to_string()),
+    let stop = match timeout(foreground::STOP_TIMEOUT, async {
+        sandbox.stop().await.map_err(|error| error.to_string())?;
+        if sandbox.owns_lifecycle() {
+            // Keep normal SDK stop/escalation semantics. The retained owner's
+            // cached child wait status is not a fresh lookup by name or PID.
+            let status = sandbox.wait().await.map_err(|error| error.to_string())?;
+            foreground::owned_runtime_exit(status)
+        } else {
+            Ok(StopObservation::StoppedState)
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
         Err(_) => Err("observation timed out; stopped state is unconfirmed".into()),
     };
     if config.log_stop_errors
@@ -2574,6 +2586,7 @@ mod tests {
                 guest: "/data".to_string(),
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
+                owner: None,
                 policy_file: None,
             }];
             p.ports = vec![PortMapping::new(4000, 4000)];
