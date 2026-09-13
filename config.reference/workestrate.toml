@@ -120,6 +120,9 @@ image = { recipe = "registry", ref = "python:3.12-slim" }
 workdir = "/app"
 cpus = 2
 memory_mib = 2048
+# Optional service TCP wait for dependency/batch startup, 1..3600 seconds.
+# Omission keeps 15 seconds. This is not an application-health or init probe.
+# readiness_timeout_secs = 120
 command = ["python", "-m", "http.server", "4000"]
 log_stop_errors = true
 

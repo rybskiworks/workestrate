@@ -72,6 +72,41 @@ bootstrap. The existing JSON `agentd.version_or_sha` field is retained and repor
 or an availability/executable marker otherwise. Microsandbox's host CLI still
 supports its ordinary `--version` probe.
 
+## Service startup TCP readiness budget
+
+For slow-starting services, set the budget on the service being started:
+
+```toml
+[workloads.example-service]
+kind = "service"
+readiness_timeout_secs = 120
+```
+
+`readiness_timeout_secs` accepts integer seconds from 1 through 3600. Omission
+keeps the 15-second default. Higher layers may replace this scalar while
+inheriting `kind` from a lower layer; the effective workload must be a service.
+Inspect the effective value and declaring layer with
+`workestrate workload plan <service> --show-source`; omission is shown as
+the 15-second core default. This orchestration setting is not added to the VM plan or image
+identity merely for display.
+
+The budget applies after starting a service for a dependency or bare
+`workestrate workload up` batch. It includes registry polling (at most five
+seconds) and TCP connection checks for all of that instance's published ports,
+under one absolute deadline. The selected service's setting applies, not the
+dependent's. Async connection attempts and retry sleeps are cancelled when
+their waiting future is dropped; no background retry worker remains. Ordinary
+process signal behavior is unchanged. Local registry file reads remain the
+existing synchronous reads; this is not a hard filesystem-I/O deadline.
+
+A connection proves only TCP reachability, not HTTP health, completed NixOS
+activation, or a ready Nix daemon. No published ports means no TCP readiness
+requirement; no application probe is invented. Existing-instance reuse keeps
+its separate 500-millisecond health probe. Named detached startup keeps its
+existing child startup check, without adding a service TCP wait. Image builds,
+VM creation, and guest command execution timeouts are unchanged. Changing this
+orchestration budget does not resize, restart, or replace an existing VM.
+
 ## Managed guest root-disk capacity
 
 Workloads may request the capacity of a new OCI image's managed writable layer:

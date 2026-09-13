@@ -3,7 +3,7 @@
 
   inputs = {
     # Shared build tools and development modules have one version authority.
-    tooling.url = "github:rybskiworks/nix-tooling/46e62f450396ea16aa884568d1d0a9591bfb6299";
+    tooling.url = "github:rybskiworks/nix-tooling/a403c2c111e24db64feb5748bbba939308048c07";
     nixpkgs.follows = "tooling/nixpkgs";
     fenix.follows = "tooling/fenix";
     flake-parts.follows = "tooling/flake-parts";
@@ -13,7 +13,7 @@
 
     microsandbox-fork = {
       # Runtime packages and SDK patches must come from this same source.
-      url = "github:rybskiworks/microsandbox/8ae14c22963c0680b231f61280f43db364693a5c";
+      url = "github:rybskiworks/microsandbox/251b368a868d578ead123071c3e6bc8eec013817";
       inputs.tooling.follows = "tooling";
     };
 

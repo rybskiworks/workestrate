@@ -33,9 +33,10 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
+use tokio::time::{Instant, sleep_until};
 
 use crate::config::{ConfigFile, ConflictStep, DepConflict, DepInstanceMode};
 use crate::microsandbox::depgraph::{dep_closure, singleton_record, topo_all};
@@ -672,7 +673,9 @@ pub async fn auto_start_dependencies(
                     &format!("dependency '{dep}' of '{workload_name}'"),
                     &slot,
                     declared_ports_of(&action),
-                )?;
+                    readiness_budget(&config, &dep),
+                )
+                .await?;
             }
             DepDisposition::Replace { dep, slot, ports } => {
                 let down = down_instance(&state_dir, &slot).await;
@@ -699,7 +702,9 @@ pub async fn auto_start_dependencies(
                     &format!("dependency '{dep}' of '{workload_name}'"),
                     &slot,
                     &ports,
-                )?;
+                    readiness_budget(&config, &dep),
+                )
+                .await?;
             }
             DepDisposition::Start { dep, slot, ports } => {
                 // Spec 21 §2.1: dep auto-start inherits the ensure-images
@@ -719,7 +724,9 @@ pub async fn auto_start_dependencies(
                     &format!("dependency '{dep}' of '{workload_name}'"),
                     &slot,
                     &ports,
-                )?;
+                    readiness_budget(&config, &dep),
+                )
+                .await?;
             }
             DepDisposition::Fail {
                 dep: _,
@@ -967,7 +974,9 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
             &format!("workload '{}'", s.name),
             &s.slot,
             &s.ports,
-        )?;
+            readiness_budget(&config, &s.name),
+        )
+        .await?;
         started.push(s.name.clone());
     }
 
@@ -1134,25 +1143,35 @@ fn declared_ports_of(action: &DepStartAction) -> &[u16] {
     }
 }
 
-/// Wait for a freshly-started workload's published host ports within
-/// [`DEFAULT_WAIT`]. A workload with no ports skips the wait. On timeout
+/// The started service owns its budget, not the dependent that selected it.
+fn readiness_budget(config: &ConfigFile, workload: &str) -> Duration {
+    config
+        .workloads
+        .get(workload)
+        .and_then(|workload| workload.readiness_timeout_secs)
+        .map(|seconds| Duration::from_secs(u64::from(seconds)))
+        .unwrap_or(DEFAULT_WAIT)
+}
+
+/// Wait for a freshly-started workload's published host ports within one
+/// budget. A workload with no ports skips TCP probing. On timeout
 /// the error names the subject (dep-of-dependent or workload), the address,
 /// and the detached child's log file. `instance` is the TARGET INSTANCE
 /// NAME (singleton slot or `<slot>@<id>`).
-fn wait_until_ready(
+async fn wait_until_ready(
     state_dir: &Path,
     subject: &str,
     instance: &str,
     declared_ports: &[u16],
+    budget: Duration,
 ) -> Result<()> {
-    let deadline = Instant::now() + DEFAULT_WAIT;
-    let targets = readiness_targets(state_dir, instance, declared_ports);
+    let deadline = Instant::now() + budget;
+    let targets = readiness_targets(state_dir, instance, declared_ports, deadline).await;
     for (ip, port) in targets {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        wait_for_port(ip, port, remaining).map_err(|_| {
+        wait_for_port(ip, port, deadline).await.map_err(|_| {
             anyhow::anyhow!(
                 "{subject} did not become ready on {ip}:{port} within {}s; see log: {}/logs/{instance}/workestrate.log",
-                DEFAULT_WAIT.as_secs(),
+                budget.as_secs(),
                 state_dir.display()
             )
         })?;
@@ -1169,13 +1188,14 @@ fn wait_until_ready(
 /// 127.0.0.1 bind when the record is not yet visible within
 /// [`RECORD_POLL_BUDGET`]. An empty result means no ports to wait on (the
 /// caller skips the wait).
-fn readiness_targets(
+async fn readiness_targets(
     state_dir: &Path,
     instance: &str,
     declared_ports: &[u16],
+    deadline: Instant,
 ) -> Vec<(IpAddr, u16)> {
-    let poll_deadline = Instant::now() + RECORD_POLL_BUDGET;
-    loop {
+    let poll_deadline = deadline.min(Instant::now() + RECORD_POLL_BUDGET);
+    while Instant::now() < poll_deadline {
         if let Ok(records) = list_records(state_dir)
             && let Some(rec) = records.iter().find(|r| r.instance == instance)
         {
@@ -1184,14 +1204,15 @@ fn readiness_targets(
             }
             return rec.ports.iter().map(|&p| (rec.bind_ip, p)).collect();
         }
-        if Instant::now() >= poll_deadline {
-            return declared_ports
-                .iter()
-                .map(|&p| (IpAddr::V4(Ipv4Addr::LOCALHOST), p))
-                .collect();
+        let now = Instant::now();
+        if now < poll_deadline {
+            sleep_until(poll_deadline.min(now + RECORD_POLL_INTERVAL)).await;
         }
-        std::thread::sleep(RECORD_POLL_INTERVAL);
     }
+    declared_ports
+        .iter()
+        .map(|&p| (IpAddr::V4(Ipv4Addr::LOCALHOST), p))
+        .collect()
 }
 
 #[cfg(test)]
@@ -2865,8 +2886,8 @@ strategy = "parallel"
     // P2.1: readiness_targets matches the EXACT instance name — a parallel
     // record `<slot>@<id>` is found (the old singleton-only matcher missed
     // it), and the singleton still matches.
-    #[test]
-    fn readiness_targets_matches_parallel_instance_exactly() -> Result<()> {
+    #[tokio::test]
+    async fn readiness_targets_matches_parallel_instance_exactly() -> Result<()> {
         let state_dir = unique_state_dir("deps-readiness");
         register_singleton(&state_dir, "litellm", 4000, 4000)?;
         register_parallel(
@@ -2878,20 +2899,234 @@ strategy = "parallel"
             4000,
         )?;
         // The parallel record's published pair wins for the scoped instance.
-        let targets = readiness_targets(&state_dir, "personal-litellm@prime-1", &[4000]);
+        let targets = readiness_targets(
+            &state_dir,
+            "personal-litellm@prime-1",
+            &[4000],
+            Instant::now() + DEFAULT_WAIT,
+        )
+        .await;
         assert_eq!(
             targets,
             vec![(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 14000)],
             "the scoped instance must resolve to its own record's ports"
         );
         // The singleton still resolves to its own record.
-        let targets = readiness_targets(&state_dir, "personal-litellm", &[4000]);
+        let targets = readiness_targets(
+            &state_dir,
+            "personal-litellm",
+            &[4000],
+            Instant::now() + DEFAULT_WAIT,
+        )
+        .await;
         assert_eq!(
             targets,
             vec![(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000)],
             "the singleton record still matches exactly"
         );
         let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn readiness_budget_belongs_to_selected_service() {
+        let mut config = chain_config();
+        assert_eq!(readiness_budget(&config, "b"), Duration::from_secs(15));
+        config
+            .workloads
+            .get_mut("b")
+            .unwrap()
+            .readiness_timeout_secs = Some(120);
+        config
+            .workloads
+            .get_mut("c")
+            .unwrap()
+            .readiness_timeout_secs = Some(30);
+        assert_eq!(readiness_budget(&config, "b"), Duration::from_secs(120));
+        assert_eq!(readiness_budget(&config, "c"), Duration::from_secs(30));
+        assert_eq!(readiness_budget(&config, "a"), DEFAULT_WAIT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readiness_registry_consumes_same_deadline_without_late_connect() -> Result<()> {
+        let state_dir = unique_state_dir("readiness-registry-deadline");
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        listener.set_nonblocking(true)?;
+        let port = listener.local_addr()?.port();
+        let start = Instant::now();
+        let error = wait_until_ready(
+            &state_dir,
+            "service test",
+            "missing",
+            &[port],
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(start.elapsed(), Duration::from_secs(1));
+        assert!(error.to_string().contains("within 1s"));
+        assert!(error.to_string().contains("/logs/missing/workestrate.log"));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        let _ = std::fs::remove_dir_all(state_dir);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readiness_registry_retains_five_second_fallback_cap() {
+        let state_dir = unique_state_dir("readiness-registry-cap");
+        let start = Instant::now();
+        let targets = readiness_targets(
+            &state_dir,
+            "missing",
+            &[4000],
+            start + Duration::from_secs(120),
+        )
+        .await;
+        assert_eq!(targets, vec![(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000)]);
+        assert_eq!(start.elapsed(), RECORD_POLL_BUDGET);
+        let _ = std::fs::remove_dir_all(state_dir);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readiness_registry_retry_can_be_cancelled() {
+        let state_dir = unique_state_dir("readiness-registry-cancel");
+        let start = Instant::now();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(25),
+                wait_until_ready(
+                    &state_dir,
+                    "service test",
+                    "missing",
+                    &[4000],
+                    Duration::from_secs(120),
+                )
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(start.elapsed(), Duration::from_millis(25));
+        // Cancellation never registers, starts, or cleans up a service.
+        assert!(list_records(&state_dir).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(state_dir);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readiness_no_ports_keeps_no_probe_semantics() -> Result<()> {
+        let state_dir = unique_state_dir("readiness-no-ports");
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-empty",
+            Some("personal"),
+            "empty",
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            &[],
+            &[],
+            "2026-08-01T00:00:00Z",
+            "default",
+            None,
+            None,
+            None,
+            None,
+        )?;
+        let start = Instant::now();
+        wait_until_ready(&state_dir, "empty", "personal-empty", &[], DEFAULT_WAIT).await?;
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        // Without a record, retain the bounded registry lookup and empty fallback.
+        wait_until_ready(
+            &state_dir,
+            "missing",
+            "missing",
+            &[],
+            Duration::from_secs(1),
+        )
+        .await?;
+        assert_eq!(start.elapsed(), Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(state_dir);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readiness_registry_and_port_share_one_budget() -> Result<()> {
+        let state_dir = unique_state_dir("readiness-registry-port-budget");
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.bind((Ipv4Addr::LOCALHOST, 0).into())?;
+        let port = socket.local_addr()?.port();
+        let start = Instant::now();
+        let registration = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            register_singleton(&state_dir, "late", port, 4000)
+        };
+        let probe = wait_until_ready(
+            &state_dir,
+            "late service",
+            "personal-late",
+            &[4000],
+            Duration::from_secs(1),
+        );
+        let (registered, result) = tokio::join!(registration, probe);
+        registered?;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains(&format!("127.0.0.1:{port}"))
+        );
+        assert_eq!(start.elapsed(), Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(state_dir);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn readiness_requires_all_published_ports() -> Result<()> {
+        let state_dir = unique_state_dir("readiness-all-ports");
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        listener.set_nonblocking(true)?;
+        let live_port = listener.local_addr()?.port();
+        let closed_socket = tokio::net::TcpSocket::new_v4()?;
+        closed_socket.bind((Ipv4Addr::LOCALHOST, 0).into())?;
+        let closed_port = closed_socket.local_addr()?.port();
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        check_and_register_sandbox_lifecycle(
+            &state_dir,
+            "personal-multi",
+            Some("personal"),
+            "multi",
+            bind,
+            &[live_port, closed_port],
+            &[
+                PortMapping::new(live_port, 4000),
+                PortMapping::new(closed_port, 4001),
+            ],
+            "2026-08-01T00:00:00Z",
+            "default",
+            None,
+            None,
+            None,
+            None,
+        )?;
+        let start = Instant::now();
+        let error = wait_until_ready(
+            &state_dir,
+            "multi service",
+            "personal-multi",
+            &[],
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("127.0.0.1:{closed_port}"))
+        );
+        assert!(start.elapsed() >= Duration::from_secs(1));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        listener.accept()?;
+        let _ = std::fs::remove_dir_all(state_dir);
         Ok(())
     }
 

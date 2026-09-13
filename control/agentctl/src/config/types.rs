@@ -1439,6 +1439,11 @@ pub struct WorkloadConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 4294967295u32))]
     pub root_disk_mib: Option<u32>,
+    /// Service TCP readiness budget in seconds for dependency and batch startup.
+    /// Omission uses 15 seconds; valid values are 1 through 3600.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 3600))]
+    pub readiness_timeout_secs: Option<u32>,
     #[serde(default)]
     pub command: Vec<String>,
     pub log_stop_errors: Option<bool>,
@@ -2080,6 +2085,7 @@ pub(crate) const WORKLOAD_FIELDS: &[&str] = &[
     "cpus",
     "memory_mib",
     "root_disk_mib",
+    "readiness_timeout_secs",
     "command",
     "log_stop_errors",
     "env",

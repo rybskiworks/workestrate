@@ -106,7 +106,7 @@ pub async fn gather_facts(
     };
     let dir_exists = sandbox_dir(instance).exists();
     let healthy = if msb_status == Some(SandboxStatus::Running) {
-        probe_health(state_dir, instance, record.as_ref(), declared_ports)?
+        probe_health(state_dir, instance, record.as_ref(), declared_ports).await?
     } else {
         None
     };
@@ -141,7 +141,7 @@ pub async fn gather_facts(
 /// there are no ports to probe (a no-port instance cannot be verified
 /// cheaply — reuse is then decided optimistically; use `on_conflict =
 /// "replace"` to force a fresh start).
-fn probe_health(
+async fn probe_health(
     state_dir: &Path,
     slot: &str,
     record: Option<&SandboxInstanceRecord>,
@@ -151,13 +151,12 @@ fn probe_health(
     if targets.is_empty() {
         return Ok(None);
     }
-    let deadline = std::time::Instant::now() + REUSE_PROBE_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + REUSE_PROBE_TIMEOUT;
     for (ip, port) in targets {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
+        if tokio::time::Instant::now() >= deadline {
             break;
         }
-        if wait_for_port(ip, port, remaining).is_ok() {
+        if wait_for_port(ip, port, deadline).await.is_ok() {
             return Ok(Some(true));
         }
     }
@@ -459,6 +458,36 @@ mod tests {
     use super::*;
     use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
     use crate::microsandbox::plan::PortMapping;
+
+    #[tokio::test(start_paused = true)]
+    async fn reuse_probe_retains_its_shared_half_second_budget() -> Result<()> {
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.bind((Ipv4Addr::LOCALHOST, 0).into())?;
+        let port = socket.local_addr()?.port();
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            probe_health(Path::new("unused"), "unused", None, &[port, port]).await?,
+            Some(false)
+        );
+        assert_eq!(start.elapsed(), REUSE_PROBE_TIMEOUT);
+        assert_eq!(REUSE_PROBE_TIMEOUT, Duration::from_millis(500));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reuse_probe_keeps_live_port_and_no_port_semantics() -> Result<()> {
+        assert_eq!(
+            probe_health(Path::new("unused"), "unused", None, &[]).await?,
+            None
+        );
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let port = listener.local_addr()?.port();
+        assert_eq!(
+            probe_health(Path::new("unused"), "unused", None, &[port]).await?,
+            Some(true)
+        );
+        Ok(())
+    }
 
     /// Build a minimal record for fact fixtures (only the fields the
     /// decision reads).
