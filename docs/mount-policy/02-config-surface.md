@@ -110,6 +110,15 @@ read.deny = ["agent/auth.json"]
 write.deny = ["logs/**"]
 ```
 
+## Optional guest owner
+
+A mount row can also declare `owner = { uid = 61040, gid = 61040 }`. Both numeric
+IDs are required. This selects native fallback guest ownership, not a path-policy
+rule or host ownership change; read-only mode and policy enforcement are unchanged.
+Files with existing per-file virtual stat overrides retain those overrides.
+See [guest ownership of bind mounts](../runtime-provisioning.md#guest-ownership-of-bind-mounts)
+for accepted values, layer replacement and create-time behavior.
+
 ## The pattern dialect
 
 Mount-root-relative globs (fork `mount_policy/pattern.rs`; the tool's mirror
