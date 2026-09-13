@@ -1148,7 +1148,8 @@ pub fn cmd_run(command: &[String]) -> Result<()> {
         anyhow::bail!("no command specified. Usage: workestrate run -- <command> [args...]");
     }
 
-    // Load secrets from .env.enc (generic — all keys, no filtering).
+    // Layered mode loads encrypted layers; explicit env mode resolves the
+    // configured source names. The child otherwise inherits the caller's env.
     let secrets = crate::microsandbox::secrets_loader::load_secrets()?;
     // FN-9 scoped set_var: this command `exec(2)` REPLACES the workestrate
     // process with the user command below, so the secrets can only reach it

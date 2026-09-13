@@ -259,6 +259,17 @@ pub enum DepDisposition {
     },
 }
 
+/// Reuse needs no new credential material. Check input only before an actual
+/// start or replacement, after reconciling stale planner records.
+fn dependency_secret_input(disposition: &DepDisposition) -> Option<&str> {
+    match disposition {
+        DepDisposition::Start { dep, .. }
+        | DepDisposition::StartExisting { dep, .. }
+        | DepDisposition::Replace { dep, .. } => Some(dep),
+        DepDisposition::Reuse { .. } | DepDisposition::Fail { .. } => None,
+    }
+}
+
 /// Decide the executor disposition for one planned action from the runtime
 /// facts by iterating the action's conflict CHAIN in order (ADR 0030
 /// addendum 2): the first element whose precondition holds wins. Returns
@@ -597,6 +608,8 @@ pub async fn auto_start_dependencies(
             ..
         } = &mut action
         {
+            // A fresh dependency allocates state before reconciliation.
+            crate::microsandbox::secrets_loader::preflight_environment(&config, dep)?;
             let slug = auto_allocate_slug(&state_dir, slot)?;
             *instance = Some(instance_name(slot, Some(&slug)));
             fresh_selections.push((dep.clone(), slug));
@@ -619,7 +632,12 @@ pub async fn auto_start_dependencies(
         .await?;
         let mut chain = action.conflict().0.clone();
         let disposition = loop {
-            match decide_dep_disposition(&chain, &action, workload_name, &facts, &namespace)? {
+            let proposed =
+                decide_dep_disposition(&chain, &action, workload_name, &facts, &namespace)?;
+            if let Some(dep) = dependency_secret_input(&proposed) {
+                crate::microsandbox::secrets_loader::preflight_environment(&config, dep)?;
+            }
+            match proposed {
                 DepDisposition::StartExisting { dep, slot } => {
                     // The detached child re-reconciles and executes
                     // handle.start(); if that fails the child errors and we
@@ -850,6 +868,7 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
                         });
                     }
                     Ok(BareUpDisposition::Replace) => {
+                        crate::microsandbox::secrets_loader::preflight_environment(&config, &name)?;
                         // Zombie/stale record: down the slot first (a down
                         // ERROR is batch-fatal, naming the workload), then
                         // converge via a fresh start.
@@ -951,6 +970,10 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
                 }
             }
         }
+    }
+
+    for start in &final_starts {
+        crate::microsandbox::secrets_loader::preflight_environment(&config, &start.name)?;
     }
 
     // Spec 21 §2.1/§5.2: the batch ensure pass, ALL starts BEFORE ANY
@@ -1224,6 +1247,44 @@ async fn readiness_targets(
 )]
 #[allow(unsafe_code)]
 mod tests {
+    #[test]
+    fn secret_preflight_requires_start_material_but_not_reused_service_material() {
+        use super::{DepDisposition, dependency_secret_input};
+        let dep = "service".to_string();
+        let slot = "context-service@instance".to_string();
+        for disposition in [
+            DepDisposition::Reuse {
+                dep: dep.clone(),
+                slot: slot.clone(),
+            },
+            DepDisposition::Fail {
+                dep: dep.clone(),
+                slot: slot.clone(),
+                workload: "agent".into(),
+            },
+        ] {
+            assert_eq!(dependency_secret_input(&disposition), None);
+        }
+        for disposition in [
+            DepDisposition::Start {
+                dep: dep.clone(),
+                slot: slot.clone(),
+                ports: vec![],
+            },
+            DepDisposition::StartExisting {
+                dep: dep.clone(),
+                slot: slot.clone(),
+            },
+            DepDisposition::Replace {
+                dep,
+                slot,
+                ports: vec![],
+            },
+        ] {
+            assert_eq!(dependency_secret_input(&disposition), Some("service"));
+        }
+    }
+
     use super::*;
     use crate::config::test_support::{TestConfigGuard, unique_state_dir};
     use crate::microsandbox::plan::PortMapping;

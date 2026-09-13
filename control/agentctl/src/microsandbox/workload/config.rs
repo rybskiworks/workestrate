@@ -1101,6 +1101,23 @@ mod tests {
     }
 
     #[test]
+    fn instance_selection_preserves_secret_resolution_config_key() -> Result<()> {
+        let _guard = TestConfigGuard::new();
+        let pi = ConfigWorkload::new_with_use_overrides_and_instance(
+            "pi",
+            &[],
+            Some("synthetic-instance"),
+        )?;
+        assert_eq!(pi.name(), "pi");
+        assert!(
+            crate::config::load_config()?
+                .workloads
+                .contains_key(pi.name())
+        );
+        Ok(())
+    }
+
+    #[test]
     fn sandbox_instance_namespaced_when_context_active() -> Result<()> {
         let _guard = TestConfigGuard::new();
         let pi = ConfigWorkload::new("pi")?;

@@ -35,6 +35,11 @@ use workestrate::microsandbox::workload::ConfigWorkload;
 #[command(about = "Control plane CLI for the AI workbench")]
 #[command(version = env!("WORKESTRATE_VERSION"))]
 struct Cli {
+    /// Secret input source. Env is an explicit development opt-in; the normal
+    /// default is layered. Inherited WORKESTRATE_SECRETS_SOURCE is overridden.
+    #[arg(long, global = true, value_enum)]
+    secrets_source: Option<workestrate::microsandbox::secrets_loader::SecretsSource>,
+
     #[arg(long, help = "Disable project-layer config loading")]
     no_project_config: bool,
 
@@ -781,6 +786,27 @@ fn main() {
 #[allow(unsafe_code)]
 async fn async_main(args: Vec<String>) -> Result<()> {
     let cli = Cli::parse_from(args);
+    let inherited_source = std::env::var(workestrate::microsandbox::secrets_loader::SOURCE_ENV);
+    let source = workestrate::microsandbox::secrets_loader::SecretsSource::resolve(
+        cli.secrets_source,
+        match &inherited_source {
+            Ok(value) => Some(value.as_str()),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) if cli.secrets_source.is_some() => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                anyhow::bail!("WORKESTRATE_SECRETS_SOURCE must be valid text")
+            }
+        },
+    )?;
+    // SAFETY: startup-only nonsecret mode selection before command dispatch.
+    // Dependency, detach and nested run children inherit the selected value;
+    // their own explicit CLI option can switch back to layered loading.
+    unsafe {
+        std::env::set_var(
+            workestrate::microsandbox::secrets_loader::SOURCE_ENV,
+            source.as_str(),
+        )
+    };
     if cli.no_project_config {
         // SAFETY: startup-phase write-once CLI override, set before any
         // command flow reads it and before any spawned tasks mutate env; no
@@ -1097,6 +1123,13 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             }
             let mut overrides =
                 workestrate::microsandbox::discovery::parse_use_overrides(&use_values)?;
+            if matches!(verb, "up" | "exec")
+                && workestrate::config::pending_inline_override().is_none()
+                && source == workestrate::microsandbox::secrets_loader::SecretsSource::Env
+            {
+                let config = workestrate::config::load_config()?;
+                workestrate::microsandbox::secrets_loader::preflight_environment(&config, &name)?;
+            }
             // ADR 0030 P2.1: resolve the DEPENDENT's OWN parallel instance id
             // BEFORE dependency auto-start — the planner composes scoped dep
             // instance ids (`<dep>@<dependent>-<id>`) from it and fresh dep
@@ -1209,6 +1242,12 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // on a teardown/log config load.
             if workestrate::config::verb_arms_after_dep_autostart(verb) {
                 workestrate::config::arm_inline_override();
+                if source == workestrate::microsandbox::secrets_loader::SecretsSource::Env {
+                    let config = workestrate::config::load_config()?;
+                    workestrate::microsandbox::secrets_loader::preflight_environment(
+                        &config, &name,
+                    )?;
+                }
             }
             // A2/A5 SEAM (the reordered ensure call site — see the comment
             // at the pre-flight above): a pending inline override on a

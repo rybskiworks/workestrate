@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Decrypt `.env.enc` files across all resolved config layers via `sops` and
+mod environment;
+pub use environment::{SOURCE_ENV, SecretsSource};
+
+/// In layered mode, decrypt `.env.enc` across resolved layers via `sops` and
 /// return the merged secrets map. Secrets are merged per-key: later layers
 /// override earlier layers for the same key, with process env as the lowest
 /// precedence.
@@ -19,7 +22,37 @@ use std::process::Command;
 ///
 /// Called conditionally by code paths that need secrets (build_sandbox,
 /// the `run` subcommand). NOT called for plan/check/new/completions.
+/// Explicit env-only mode instead resolves declared names without inspecting
+/// encrypted files or invoking SOPS; see `SecretsSource`.
 pub fn load_secrets() -> Result<std::collections::HashMap<String, String>> {
+    load_secrets_scoped(None)
+}
+
+/// Runtime scope: env-only development resolves this workload's declared
+/// bindings/materials, without requiring unrelated fleets' credentials.
+pub fn load_secrets_for_workload(name: &str) -> Result<HashMap<String, String>> {
+    load_secrets_scoped(Some(name))
+}
+
+/// Availability check before image/launch work, without SOPS in either mode.
+/// Layered mode retains its existing validation point and behavior.
+pub fn preflight_environment(config: &crate::config::ConfigFile, name: &str) -> Result<()> {
+    if SecretsSource::current()? == SecretsSource::Env {
+        environment::resolve(config, Some(name), &environment::process_lookup)?;
+    }
+    Ok(())
+}
+
+fn load_secrets_scoped(workload: Option<&str>) -> Result<HashMap<String, String>> {
+    if SecretsSource::current()? == SecretsSource::Env {
+        // Return before even resolving encrypted layers: no age lookup,
+        // encrypted-file read or SOPS subprocess belongs to this mode.
+        let config = crate::config::load_config()?;
+        let (values, provenance) =
+            environment::resolve(&config, workload, &environment::process_lookup)?;
+        crate::merge::set_secret_provenance(Some(provenance));
+        return Ok(values);
+    }
     let layers = crate::config::resolve_secrets_layers()?;
     let mut merged: HashMap<String, String> = HashMap::new();
     let mut provenance: HashMap<String, String> = HashMap::new();

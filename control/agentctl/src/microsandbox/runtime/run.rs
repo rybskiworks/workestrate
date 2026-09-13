@@ -1067,12 +1067,12 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // path returns untouched; the create path consumes the verdict for the
     // `.booted-ok` marker dir.
     let generation_gate = check_generation_up_gate();
-    // Load secrets from .env.enc across the resolved layers. FN-9: the
+    // Load secrets from the selected input source. FN-9: the
     // merged map is threaded into env/secret resolution below — it is NOT
     // written into process-global env (parallel build_sandbox calls would
     // race on shared keys). Only called for exec/up paths — plan/check
     // never reach here.
-    let secrets = crate::microsandbox::secrets_loader::load_secrets()?;
+    let secrets = crate::microsandbox::secrets_loader::load_secrets_for_workload(workload.name())?;
 
     let mut plan = workload.plan();
     // Prepare without creating storage. Defer an unsupported-mode error until
