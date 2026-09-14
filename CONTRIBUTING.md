@@ -8,6 +8,26 @@ Read [AGENTS.md](AGENTS.md), the [specification map](SPEC.md), relevant ADRs and
 [build ownership](docs/nix-build.md) before changing configuration or runtime code.
 Future architecture is not evidence that a capability is already implemented.
 
+## Contribution licensing
+
+Unless explicitly stated otherwise and accepted by the maintainer, original
+contributions intentionally submitted for inclusion are offered under Apache-2.0,
+consistent with section 5 of [LICENSE](LICENSE). Contributors retain ownership of
+their work; this is not a copyright assignment or a separate CLA. Submit only
+material you have authority to license, including any required employer/client
+permission. Do not identify an agent or GitHub organization as a substitute for
+the actual rights holder.
+
+For copied or adapted material, identify its source, revision, actual license,
+required attribution and modifications. Preserve existing notices and separately
+mark third-party exceptions. Do not describe imported material as your original
+Apache-licensed contribution. Disclose relevant provenance for AI-assisted work
+rather than assuming tool output clears third-party rights.
+
+See [LICENSING.md](LICENSING.md) and [THIRD-PARTY.md](THIRD-PARTY.md). A DCO sign-off
+can document submission authority but is not an assignment; this change does not
+add a new mandatory sign-off or contributor-agreement gate retroactively.
+
 ## Validation
 
 With Nix and just available, `just bootstrap` supplies pinned tools, `just shell`
@@ -20,6 +40,7 @@ Do not bypass hooks to hide a failed validation.
 python3 -m unittest discover -s scripts/ci/tests -v
 python3 scripts/ci/check_repository.py
 python3 scripts/ci/toolchain.py check --role consumer
+python3 -m unittest discover -s tests/licensing -v
 ```
 
 Record exact commands, results and tested revisions. Separate lint, evaluation,
