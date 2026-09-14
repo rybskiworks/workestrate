@@ -94,6 +94,22 @@ rustPlatform.buildRustPackage {
   ];
 
   preBuild = ''
+    # Require the producer contracts before compiling against a promoted runtime.
+    # The old pin deliberately fails until validated producer/lock promotion.
+    for evidence in \
+      share/libkrunfw/compliance/manifest.json \
+      share/licenses/microsandbox-cli/rust/manifest.json \
+      share/licenses/microsandbox-agentd/rust/manifest.json; do
+      if ! test -s "${microsandbox}/$evidence"; then
+        echo "error: promote a validated Microsandbox runtime with legal evidence: $evidence" >&2
+        exit 1
+      fi
+    done
+    for component in microsandbox-cli microsandbox-agentd; do
+      python3 ${../../scripts/licensing/cargo_notices.py} verify \
+        "${microsandbox}/share/licenses/$component/rust"
+    done
+
     mkdir -p vendor .cargo
     ln -sfn "${microsandboxSource}" vendor/microsandbox-fork
     cp ${../../control/agentctl/.cargo/config.toml} .cargo/config.toml
