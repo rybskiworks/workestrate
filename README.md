@@ -103,7 +103,7 @@ and the locked-toolchain check.
 
 | Looking for | Start here |
 | :--- | :--- |
-| Setup, CLI commands, and operating details | [Setup guide](docs/getting-started.md) / [technical reference](README.agents.md) |
+| Setup, CLI commands, and operating details | [Setup guide](docs/getting-started.md) / [technical reference](README.agents.md#cli-reference) |
 | Architecture, ownership, and where a change belongs | [Agent-oriented README](README.agents.md) |
 | Always-applicable working instructions | [AGENTS.md](AGENTS.md) |
 | Specifications, decisions, and focused guides | [Documentation index](docs/README.md) |
