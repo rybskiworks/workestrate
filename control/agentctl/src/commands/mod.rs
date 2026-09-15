@@ -13,6 +13,7 @@ pub mod migrate;
 pub mod policy;
 pub mod schemas;
 
+pub mod secrets;
 pub mod secrets_target;
 pub mod source;
 pub mod versions;

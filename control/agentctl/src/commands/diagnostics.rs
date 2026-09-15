@@ -1096,7 +1096,11 @@ pub fn cmd_generate_schema(
     Ok(())
 }
 
-pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> {
+/// Build the `.env.example` content from the loaded config's secrets
+/// section. Shared between `cmd_generate_env_example` and the
+/// `workestrate secrets` provisioning buffers (which pre-fill the editor
+/// from the same source).
+pub(crate) fn generate_env_example_content() -> Result<String> {
     let config = config::load_config()?;
     // Bare sorted key list: the resolved source env var of every secret def
     // (raw env_var, defaulting to the secret ID). No description comments —
@@ -1131,7 +1135,11 @@ pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> 
     for key in &keys {
         buf.push_str(&format!("{}=\n", key));
     }
+    Ok(buf)
+}
 
+pub fn cmd_generate_env_example(output: Option<&std::path::Path>) -> Result<()> {
+    let buf = generate_env_example_content()?;
     match output {
         Some(path) => {
             std::fs::write(path, &buf)?;
