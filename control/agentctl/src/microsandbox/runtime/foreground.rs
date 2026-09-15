@@ -160,15 +160,37 @@ pub(super) enum Cancellation {
     TimedOut,
 }
 
+/// A terminal backend row and a successful wait of the original owned runtime
+/// are different evidence. Only the latter proves all its guest execs ended.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum StopObservation {
+    StoppedState,
+    OwnedRuntimeExited,
+}
+
+pub(super) fn owned_runtime_exit(
+    status: std::process::ExitStatus,
+) -> Result<StopObservation, String> {
+    if status.success() {
+        Ok(StopObservation::OwnedRuntimeExited)
+    } else {
+        Err(format!(
+            "original sandbox runtime exited unsuccessfully: {status}"
+        ))
+    }
+}
+
 /// These are independent observations, not one total-cleanup deadline. Legacy
 /// broker-forwarder shutdown is outside them and still has a blocking join.
 pub(super) struct Cleanup {
     pub cancellation: Cancellation,
-    pub stop: Result<(), String>,
+    pub stop: Result<StopObservation, String>,
     pub shim: Result<(), String>,
 }
 
 pub(super) fn finish(label: &str, end: ServiceEnd, cleanup: Cleanup) -> anyhow::Result<()> {
+    let owned_shutdown = matches!(&end, ServiceEnd::ShutdownRequested)
+        && matches!(&cleanup.stop, Ok(StopObservation::OwnedRuntimeExited));
     let mut failures = Vec::new();
     if let Some(primary) = end.failure() {
         failures.push(primary);
@@ -180,7 +202,7 @@ pub(super) fn finish(label: &str, end: ServiceEnd, cleanup: Cleanup) -> anyhow::
         }
         Cancellation::Observed(value) => {
             if !matches!(value.reason, ExecInterruptionReason::Cancelled)
-                || matches!(value.termination, ExecTermination::Unconfirmed)
+                || (matches!(value.termination, ExecTermination::Unconfirmed) && !owned_shutdown)
             {
                 failures.push(format!("exec cleanup interruption: {value}"));
             }

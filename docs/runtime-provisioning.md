@@ -148,6 +148,42 @@ declarations are not measured capacity or readiness. Recreate an owned instance
 explicitly to enforce a changed value, after preserving any data it owns; this
 setting performs no live resize, reformat, automatic migration or data recovery.
 
+## Guest ownership of bind mounts
+
+An optional paired numeric owner sets the fallback UID/GID presented inside the
+guest for a declared bind mount:
+
+```toml
+[[workloads.database.mounts]]
+host = "workspaces/database-state"
+guest = "/data"
+mode = "rw"
+owner = { uid = 61040, gid = 61040 }
+```
+
+Bare workload capsules use the same fields under `[[mounts]]`. Both IDs are
+required integers in the SDK's u32 range, 0 through 4,294,967,295. Names, partial
+pairs and unknown owner fields are rejected; no host or guest account lookup is
+performed. An explicit `0:0` is valid and distinct from omission.
+
+This forwards native stat virtualization, not host `chown`. It applies to files
+without per-file virtual stat overrides; existing guest ownership overrides take
+precedence. Native private host permissions, read-only mode, mount path policy,
+source-path validation and symlink restrictions remain unchanged. It does not
+grant new host access or make a read-only bind writable. Host source creation
+and seed-file ownership are not changed by this declaration.
+
+Omission preserves old plan bytes, configuration hashes and native defaults.
+The owner appears in plan JSON/text and changes configuration identity. Mount
+arrays still replace wholesale between layers; omitting `owner` in a replacing
+row returns to the native default rather than inheriting the previous owner.
+
+This is a create-time setting. Starting/reusing an existing sandbox retains its
+persisted mount configuration under the existing skew policy. Recreate an owned
+instance explicitly to change its view, preserving its state first. This field
+does not migrate existing virtual ownership metadata or prove that an application
+can read/write its data; validate the exact guest service separately.
+
 ## Immutable build inputs are not runtime homes
 
 Nix builds and the default development shell supply the SDK with
@@ -326,6 +362,16 @@ spawn failure, interruption or terminal-less EOF ends supervision with an
 error instead of waiting for Ctrl-C while the service is already dead.
 Interruption reason and process-termination evidence remain separate: even an
 interruption accompanied by exit zero is not normal completion.
+
+During explicitly requested Ctrl-C shutdown, an exec cancellation may report
+unconfirmed process termination even when the separately retained runtime has
+already exited. The foreground owner accepts that cancellation only after its
+normal SDK stop succeeds and the original owned local runtime's native child
+wait reports exit zero. It does not look up a replacement by name or PID, and
+the exec interruption itself is not rewritten as an exited event. A terminal
+backend row alone, non-owner/cloud stop, cancellation timeout, transport failure,
+unexpected service exit, unsuccessful runtime exit or incomplete SSH retirement
+still fails. The original primary failure is never erased by later VM shutdown.
 
 The exec request and initial `Started` event share a 30-second startup budget.
 There is no corresponding lifetime cap on a running service. Ctrl-C closes new
