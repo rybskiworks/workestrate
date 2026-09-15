@@ -102,7 +102,7 @@ pub fn load_secrets() -> Result<std::collections::HashMap<String, String>> {
             anyhow::bail!(
                 "required secret '{}' is not satisfied.\n\
                  Layers tried: {}\n\
-                 Remediation: run `nix develop -c setup-secrets --config <name> update` (or `just setup-secrets --config <name> update`),\n\
+                 Remediation: run `workestrate secrets update --config <name>`,\n\
                  set the env var directly, or add an age recipient to the\n\
                  config repo's .sops.yaml.",
                 env_var,
@@ -297,7 +297,7 @@ mod tests {
         let err_msg = format!(
             "required secret '{}' is not satisfied.\n\
              Layers tried: {}\n\
-             Remediation: run `nix develop -c setup-secrets --config <name> update` (or `just setup-secrets --config <name> update`),\n\
+             Remediation: run `workestrate secrets update --config <name>`,\n\
              set the env var directly, or add an age recipient to the\n\
              config repo's .sops.yaml.",
             "LITELLM_MASTER_KEY", "reference, team, personal"
@@ -305,7 +305,7 @@ mod tests {
         assert!(err_msg.contains("required secret"));
         assert!(err_msg.contains("Layers tried"));
         assert!(err_msg.contains("Remediation"));
-        assert!(err_msg.contains("setup-secrets"));
+        assert!(err_msg.contains("workestrate secrets"));
     }
 
     #[test]
@@ -338,8 +338,8 @@ mod tests {
         assert!(
             err.contains("required secret")
                 && err.contains("Layers tried")
-                && err.contains("setup-secrets"),
-            "error should mention required secret, layers tried, and setup-secrets; got: {err}"
+                && err.contains("workestrate secrets"),
+            "error should mention required secret, layers tried, and the secrets CLI; got: {err}"
         );
     }
 

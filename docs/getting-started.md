@@ -27,19 +27,23 @@ it to arbitrary agent checkouts.
 ## SOPS workflow
 
 Config repositories can hold encrypted `.env.enc` and `.sops.yaml` files. The
-helper honors encrypted-file/key overrides from the registry. With Nix and just:
+`workestrate secrets` provisioning commands honor encrypted-file/key overrides
+from the registry; the nix-installed CLI bundles `sops` and `age`, so no
+devshell is needed:
 
 ```sh
-just setup-secrets --config personal init
-just setup-secrets --config personal update
-# Explicit directory: just setup-secrets --config-dir /path/to/config-repo update
-# Another home: just setup-secrets --home /path/to/home --config personal update
+workestrate secrets init --config personal
+workestrate secrets update --config personal
+# Explicit directory: workestrate secrets update --config-dir /path/to/config-repo
+# Another home: workestrate --home /path/to/home secrets update --config personal
 ```
 
 `init` refuses to overwrite an existing encrypted file; use `update` for changes.
-Named configs resolve through the tool, without silently falling back to an
-unrelated directory for an unknown name. Use `workestrate secrets-target --help`
-for the current targeting interface.
+Named configs resolve through the registry, without silently falling back to an
+unrelated directory for an unknown name. Use `workestrate secrets target --help`
+for the targeting inspection interface. The legacy `just setup-secrets` recipe
+and `scripts/setup-secrets.sh` still work as deprecated delegates to the same
+CLI commands.
 
 Global encrypted layers and multiple recipients are deliberate operator choices.
 Do not copy provider-secret lists or host key locations from old session notes.

@@ -17,7 +17,7 @@ $WORKESTRATE_HOME/                    # default: ~/.workestrate
 ├── config.toml                       # REGISTRY: tool settings + config-repo registry + layers + trusted_projects
 ├── overrides.toml                   # user-global overrides (optional)
 ├── secrets/                          # machine-local secrets
-│   └── .env.local.enc               # SOPS-encrypted (optional; setup-secrets --global)
+│   └── .env.local.enc               # SOPS-encrypted (optional; workestrate secrets --global)
 ├── config-repos/                     # managed config-repo clones
 │   ├── personal/                     # personal config repo
 │   │   ├── workestrate.toml
@@ -112,7 +112,7 @@ ai-workbench/
 │   └── infra/litellm/        # reference LiteLLM values (used by `just litellm-check`)
 │       ├── config.yaml
 │       └── models.yaml
-├── scripts/                  # core tooling (setup-secrets.sh, host-check.sh)
+├── scripts/                  # core tooling (host-check.sh; setup-secrets.sh is a deprecated delegate for `workestrate secrets`)
 ├── .agents/skills/           # validation skills
 ├── docs/                     # tool docs (incl. migration/)
 ├── justfile                  # tool-dev recipes
@@ -876,7 +876,7 @@ enum Commands {
 | `workestrate config remove <name>` | Remove a config repo from the registry |
 | `workestrate config trust <dir>` | Add project directory to `[trusted_projects]` |
 | `workestrate config untrust <dir>` | Remove a project directory from `[trusted_projects]` |
-| `workestrate init <dotfiles-url>` | Bootstrap: clone dotfiles, read registry, clone config repos, run setup-secrets |
+| `workestrate init <dotfiles-url>` | Bootstrap: clone dotfiles, read registry, clone config repos, provision secrets |
 | `workestrate home init` | Initialize an empty tool home (zero positionals; explicit init, never auto-init — ADR 0025) |
 | `workestrate home clone <src> [<dest>]` | Provision a tool home from a source (url/bundle); selective copy (never `state/`); generates `workestrate.lock` (ADR 0025) |
 | `workestrate migrate-home` | Migrate a legacy XDG three-home layout into the single tool home; stamps `home_version = 2` (ADR 0023) |
@@ -885,7 +885,11 @@ enum Commands {
 | `workestrate source list` | List agent source checkouts with build status |
 | `workestrate source reset <name>` | Reset agent source to canonical (discard local edits) |
 | `workestrate validate-config` | Validate active config against schema + policy.rs allowlist |
-| `workestrate secrets-schema` | Print REQUIRED_KEYS from config `secrets:` section (replaces `.env.example` grep) |
+| `workestrate secrets init [--config <name> \| --config-dir <dir> \| --global]` | Bootstrap the age key + `.sops.yaml` recipient, then write the encrypted secrets file (env/stdin/editor input — never argv) |
+| `workestrate secrets update [--config <name> \| --config-dir <dir> \| --global]` | Decrypt → modify → re-encrypt; env-set schema keys are replaced in place |
+| `workestrate secrets target <name>` | Resolve a registered config repo's secrets target paths |
+| `workestrate secrets schema` | Print REQUIRED_KEYS from config `secrets:` section (replaces `.env.example` grep) |
+| `workestrate secrets-target` / `secrets-schema` | DEPRECATED hidden compatibility aliases for `secrets target` / `secrets schema` |
 | `workestrate generate-env-example` | Generate `.env.example` from config `secrets:` section |
 | `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes for the active context (or all contexts). `--json` emits the instance-record array (ADR 0021 §7) |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes` |
@@ -995,9 +999,10 @@ config-repos/personal/
 `secrets.rs` const). Post-migration, the config `secrets:` section is the
 single source of truth.
 
-`setup-secrets.sh` is updated to call `workestrate secrets-schema` to get
-REQUIRED_KEYS directly from the loaded config, eliminating the `.env.example`
-grep intermediate (`setup-secrets.sh:39-44`).
+`workestrate secrets init|update` reads REQUIRED_KEYS directly from the
+loaded config (the `secrets schema` source), eliminating the `.env.example`
+grep intermediate; the `.env.example` parse remains only as a fallback when
+the config fails to load.
 
 ### SOPS multi-recipient layout (Phase 3)
 
@@ -1238,8 +1243,8 @@ layers, BEFORE project layers.
 Secrets precedence: process env < reference < context layers < user-global .env.local.enc < trusted project < local
 ```
 
-`setup-secrets --global init|update` targets this file (mutually exclusive
-with `--config`).
+`workestrate secrets --global init|update` targets this file (mutually
+exclusive with `--config`).
 
 
 ## 13. Instance lifecycle model (ADR 0021)

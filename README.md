@@ -81,6 +81,7 @@ config repository before running real workloads:
 ```sh
 workestrate config new personal
 # Alternative: workestrate config add <repository-url> personal
+workestrate secrets init --config personal   # create .env.enc (SOPS + age)
 ```
 
 Use `./result/bin/workestrate` until the built CLI is on your `PATH`. Configure
@@ -99,6 +100,8 @@ workestrate workload exec <agent>
 workestrate workload down <name>
 workestrate workloads
 workestrate ps --json
+workestrate secrets init
+workestrate secrets update --config <name>
 workestrate doctor
 ```
 

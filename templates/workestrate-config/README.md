@@ -46,7 +46,7 @@ credential (e.g. a proxy service verifying its callers). `secret` appears at a b
 
 3. Initialize secrets:
    ```bash
-   setup-secrets --config {{ config_name }} init
+   workestrate secrets init --config {{ config_name }}
    ```
 
 4. Register this config repo with workestrate:

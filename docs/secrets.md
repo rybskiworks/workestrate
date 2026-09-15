@@ -9,7 +9,7 @@ user-global secrets layer applies per-key across all contexts.
 - Encrypted file: `.env.enc` (committed in each config repo; ciphertext-safe)
 - Decrypted form: never committed; `workestrate run -- <cmd>` injects env vars into a child process; `write-env` writes a plaintext `.env` you must remove yourself.
 - Key file: `~/.config/sops/age/ai-workbench-secrets.txt` on the HOST (project-specific, NEVER in repo, NEVER in bundle, NEVER under `.workestrate/` or `$WORKESTRATE_HOME`)
-- All wrappers (`setup-secrets`, `decrypt-env`, `write-env`) export `SOPS_AGE_KEY_FILE` defaulting to that path. These wrappers run on the host (age key present); in a container the key is absent and they fail closed by design.
+- The `workestrate secrets` CLI defaults the age key path itself (registry `age_key_file` override > `SOPS_AGE_KEY_FILE` env > the default path). `decrypt-env`/`write-env` export `SOPS_AGE_KEY_FILE` defaulting to that path. These run on the host (age key present); in a container the key is absent and they fail closed by design.
 
 ## The 7 secrets
 
@@ -36,87 +36,124 @@ consumed by the code; default paths are used regardless.
 | User-global secrets | `$WORKESTRATE_HOME/secrets/.env.local.enc` | Applied per-key across all contexts |
 | age private key | `~/.config/sops/age/ai-workbench-secrets.txt` (HOST) | NEVER in repo/bundle/`.workestrate/` |
 
-## setup-secrets flows
+## `workestrate secrets` flows
 
-Run `just setup-secrets ...` from the Workestrate checkout to enter the pinned
-development shell automatically; a separate helper installation is not needed.
-Arguments are forwarded literally, including paths containing spaces.
-
-`setup-secrets.sh` supports mutually exclusive named, directory and global targets:
-
-### `setup-secrets --config <name> init|update`
-
-Targets a specific config repo's `.env.enc` + `.sops.yaml` in
-the writable directory returned by `workestrate secrets-target`. This honors
-the selected tool home, registry store directory, encrypted-file name and
-age-key overrides. A failed lookup stops before editing; it never falls back
-to a guessed XDG directory.
+Secrets are provisioned with the installed CLI — no devshell, no helper
+script (the nix wrapper bundles `sops` and `age-keygen`):
 
 ```bash
-setup-secrets --config personal init      # one-time: create .env.enc
-setup-secrets --config personal update    # edit existing values
-just setup-secrets --home /path/to/operator-home --config personal update
+workestrate secrets init    [--config <name> | --config-dir <dir> | --global]
+workestrate secrets update  [--config <name> | --config-dir <dir> | --global]
+workestrate secrets target <name> [--json]   # inspect the resolved target
+workestrate secrets schema                   # required key names from config
 ```
 
-`--home` is forwarded to Workestrate for named config selection; otherwise
-Workestrate's normal home/environment/XDG precedence applies. It requires
-`--config` and is not supported for the legacy `--global` mode.
+Secret values are **never accepted as command-line arguments** (they would
+leak into shell history): they come from process environment variables,
+stdin (non-TTY), or an interactive editor.
+
+The target selectors are mutually exclusive. Targeting precedence:
+
+1. `--config <name>` — registry-backed resolution (same resolver as
+   `workestrate secrets target`): the managed store clone of the named
+   config repo, honoring the selected tool home, the registry store
+   directory, and per-repo `secrets_file`/`age_key_file` overrides (tilde
+   expanded; a relative `age_key_file` keeps its invocation-cwd meaning).
+   An unknown name is a hard error — it never falls back to a guessed
+   directory.
+2. `--config-dir <dir>` — the directory itself. It must exist and is never
+   created. Relative paths resolve against the invocation directory; spaces,
+   quotes, and shell metacharacters in directory names are inert (pure path
+   handling, no shell).
+3. `--global` — the user-global layer
+   (`${XDG_CONFIG_HOME:-~/.config}/workestrate/.env.local.enc`; the
+   directory is created when missing).
+4. `WORKESTRATE_CONFIG_DIR`, when set.
+5. Auto-detect: exactly one registered config repo → resolve as `--config`.
+6. A `.sops.yaml` in the current directory → the current directory.
+
+The global `--home <DIR>` flag selects the tool home the registry is read
+from and only makes sense together with `--config`.
+
+### `workestrate secrets init --config <name>`
+
+```bash
+workestrate secrets init --config personal      # one-time: create .env.enc
+workestrate secrets update --config personal    # edit existing values
+workestrate --home /path/to/operator-home secrets update --config personal
+```
 
 For a config directory not selected through the registry:
 
 ```bash
-just setup-secrets --config-dir "/path/to/config repo" update
+workestrate secrets update --config-dir "/path/to/config repo"
 ```
-
-`--config-dir` and `--config` are mutually exclusive, and both override an
-inherited `WORKESTRATE_CONFIG_DIR`. Direct directory selection uses `.env.enc`
-(or `SECRET_FILE`) and the usual `SOPS_AGE_KEY_FILE` default; registry-specific
-file/key overrides require named selection. Both modes require an existing
-directory. `init` and `update` can appear before or after these options.
 
 `init`:
-- Creates `~/.config/sops/age/ai-workbench-secrets.txt` (mode 0600) if missing.
-- Replaces the `age1PLACEHOLDER...` recipient in the config repo's `.sops.yaml` with the actual public key.
-- If all required env vars are set and non-empty, uses those values directly (non-interactive).
-- Otherwise, opens your default terminal editor (`$EDITOR`, or `nano`/`vi`/`vim` on the host) with a pre-filled buffer of all keys from `workestrate generate-env-example`. Fill in values, delete the `# setup-secrets: delete this line…` sentinel to confirm the save, and exit the editor. The buffer is validated; on errors, the file is re-opened with an `# ERROR:` annotation (up to 3 attempts).
-- Writes encrypted `.env.enc` in the config repo dir.
-- Refuses to overwrite an existing `.env.enc` — use `update` for changes.
+- Creates `~/.config/sops/age/ai-workbench-secrets.txt` (mode 0600, parent
+  0700) via `age-keygen` if missing.
+- Replaces the `age1PLACEHOLDER...` recipient in the target's `.sops.yaml`
+  with the actual public key; refuses (with a "update it manually" error)
+  when the file carries a different recipient.
+- If all required env vars are set and non-empty, uses those values directly
+  (non-interactive).
+- Otherwise, opens your default terminal editor (`$EDITOR`, or
+  `nano`/`vi`/`vim`) with a pre-filled buffer of all keys from the
+  env-example generator (falling back to the target's `.env.example`). Fill
+  in values, delete the `# setup-secrets: delete this line…` sentinel to
+  confirm the save, and exit the editor. The buffer is validated; on errors,
+  the file is re-opened with an `# ERROR:` annotation (up to 3 attempts).
+- Writes the encrypted secrets file (mode 0600) atomically (`.tmp` + rename).
+- Refuses to overwrite an existing secrets file — use `update` for changes.
 
 `update`:
-- Decrypts the config repo's `.env.enc`, opens the editor with existing values pre-filled (plus any keys added since the last init/update), validates, and re-encrypts.
+- Requires the age key and the secrets file to exist ("run 'init' first").
+- Decrypts the secrets file, then picks a path:
+  - **Env-var targeted replace:** if ANY schema/env-example key is set
+    non-empty in the process env, exactly those keys are replaced in place
+    (or appended) and every other value is preserved. The replaced key
+    NAMES are reported, never the values. (This generalizes the retired
+    script's `LITELLM_MASTER_KEY`-only special case — any key now works the
+    same way, which covers scripted key rotation.)
+  - **stdin (non-TTY):** one line per required key in required-keys order;
+    an empty line keeps the existing value.
+  - **Interactive:** opens the editor with the decrypted values plus any
+    keys added since the last init/update, validates, re-encrypts.
 
-### `setup-secrets --global init|update`
+`REQUIRED_KEYS` is read from the loaded config's `secrets` section (the same
+source as `workestrate secrets schema`), falling back to parsing the
+target's `.env.example` when the config fails to load.
+
+### `workestrate secrets init|update --global`
 
 Targets the user-global secrets layer at
-`$WORKESTRATE_HOME/secrets/.env.local.enc`. This layer is applied per-key
-AFTER the context's domain layers and BEFORE project layers.
+`$WORKESTRATE_HOME/secrets/.env.local.enc` (XDG config dir in legacy-XDG
+layouts). This layer is applied per-key AFTER the context's domain layers
+and BEFORE project layers.
 
 ```bash
-setup-secrets --global init      # one-time: create .env.local.enc
-setup-secrets --global update    # edit existing user-global values
+workestrate secrets init --global      # one-time: create .env.local.enc
+workestrate secrets update --global    # edit existing user-global values
 ```
 
-`--global` and `--config` are **mutually exclusive**.
+### Deprecated delegates
 
-### No flags (auto-detect)
+- `just setup-secrets ...` still works: the recipe is a thin alias for
+  `workestrate secrets "$@"` and no longer enters a devshell.
+- `scripts/setup-secrets.sh` and the flake `setup-secrets` app print a
+  deprecation notice and delegate to `workestrate secrets`, hoisting the
+  `init`/`update` verb in front of the target flags so every historical
+  argument order keeps working.
+- The top-level `workestrate secrets-target` and `workestrate
+  secrets-schema` commands remain as hidden compatibility aliases for
+  `workestrate secrets target` / `workestrate secrets schema`.
 
-Without `--global` or `--config`, `setup-secrets` auto-detects a single
-registered config repo, or falls back to the repo root (backwards compat).
-
-### Non-interactive input
-
-- **Env vars:** if all required env vars are set and non-empty, those values are used directly.
-- **stdin:** if stdin is not a TTY (e.g. piped from another command or run from a test harness), one line per required key is read from stdin in `REQUIRED_KEYS` order; empty lines preserve the existing value, non-empty lines replace it.
-
-`REQUIRED_KEYS` is read from `workestrate secrets-schema` (falls back to
-`.env.example` grep).
-
-`setup-secrets --config` requires the Workestrate CLI and reads `dir`,
-`secrets_file` and `age_key_file` from its JSON resolver output. The helper's
-Nix package includes that CLI and `jq`; no shell evaluation of resolver output
-is used. `just secrets-target-check` tests selection and encrypted updates with
-disposable homes and fresh test keys. `just shell-arguments-check` covers the
-recipe's literal argument forwarding.
+`just secrets-target-check` tests selection and encrypted updates with
+disposable homes and fresh test keys (both as Rust integration tests in
+`control/agentctl/tests/cmd_secrets.rs` and via
+`scripts/test-setup-secrets.py`, which drives the real CLI).
+`just shell-arguments-check` covers the recipe's literal argument
+forwarding.
 
 ## Multi-layer per-key value merge
 
@@ -223,13 +260,13 @@ rm .env
 
 | Wrapper | Runs on | Purpose |
 |---|---|---|
-| `setup-secrets` | Host (age key present) | Create/update `.env.enc` (`--config`) or `.env.local.enc` (`--global`) |
+| `workestrate secrets init\|update` | Host (age key present) | Create/update `.env.enc` (`--config`) or `.env.local.enc` (`--global`) — the CLI subcommand, with sops+age bundled in the nix wrapper |
+| `setup-secrets` (DEPRECATED) | Host | Alias delegating to `workestrate secrets` |
 | `decrypt-env` | Host | Print decrypted secrets to stdout |
 | `write-env` | Host | Write a short-lived plaintext `.env` (mode 0600) |
 
-The CLI's secret command is `workestrate run -- <cmd>` — it decrypts
-`.env.enc` and execs `<cmd>` with the secrets in its environment (a CLI
-subcommand, not a flake wrapper).
+The CLI's secret-consumption command is `workestrate run -- <cmd>` — it decrypts
+`.env.enc` and execs `<cmd>` with the secrets in its environment.
 
 In a container, the age key is absent, so all of these fail closed by
 design.
@@ -237,7 +274,7 @@ design.
 ## Validating the workflow
 
 A non-interactive validation script exercises the full secrets lifecycle
-(`setup-secrets init` → `decrypt-env` → `setup-secrets update` →
+(`workestrate secrets init` → `decrypt-env` → `workestrate secrets update` →
 `decrypt-env` → `write-env` → `workestrate run -- env` → `workestrate --help`) in an
 isolated temp directory using a freshly generated test key. It does not
 touch the real `~/.config/sops/age/ai-workbench-secrets.txt` or any config
@@ -253,10 +290,10 @@ The script:
 
 1. Creates a temp working directory and a one-off age key inside it.
 2. Copies `.sops.yaml` and rewrites the recipient to the test public key.
-3. Runs `setup-secrets init` with secrets supplied via env vars (all 7
+3. Runs `workestrate secrets init` with secrets supplied via env vars (all 7
    required keys).
 4. Decrypts with `decrypt-env` and asserts the initial values appear.
-5. Runs `setup-secrets update` with one changed value and the rest
+5. Runs `workestrate secrets update` with one changed value and the rest
    preserved, then re-decrypts and asserts the change took effect and the
    others were preserved.
 6. Runs `write-env`, asserts `.env` was created with mode `0600` and
@@ -277,7 +314,7 @@ directory and any files it created.
 - `.sops.yaml` may be committed (no secrets in it — only the age recipient).
 - `.env.enc` is ciphertext-safe and may be committed in config repos.
 - Do not put secrets in Nix expressions — Nix strings can leak into the world-readable Nix store.
-- Do not pass secrets as command-line arguments; `setup-secrets` deliberately omits argv-based secret input so values cannot leak into shell history.
+- Do not pass secrets as command-line arguments; `workestrate secrets` deliberately omits argv-based secret input so values cannot leak into shell history.
 - Do not paste decrypted `.env` into logs, issues, or shell history.
 - `.env` is gitignored; `.env.enc` is committed (in config repos).
 - When using the editor flow, secret values are written to a temp file with mode 0600 and removed in a cleanup trap. They will also appear in your terminal scrollback. Clear scrollback or use a private terminal session if that is a concern.
