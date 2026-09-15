@@ -305,22 +305,39 @@
             '';
           };
 
+          # DEPRECATED compatibility shim for `workestrate secrets` (the
+          # provisioning engine moved into the CLI). The workestrate wrapper
+          # bundles sops + age, so the CLI is the only runtime input; the
+          # SOPS_AGE_KEY_FILE default export is gone (the CLI defaults the
+          # key path itself). Kept so `nix develop -c setup-secrets ...`
+          # invocations keep working during the transition.
           setup-secrets = pkgs.writeShellApplication {
             name = "setup-secrets";
-            runtimeInputs = [
-              workestrate
-              pkgs.sops
-              pkgs.age
-              pkgs.jq
-              pkgs.coreutils
-              pkgs.gnugrep
-              pkgs.gnused
-            ];
+            runtimeInputs = [ workestrate ];
             text = ''
               set -euo pipefail
-              : "''${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/ai-workbench-secrets.txt}"
-              export SOPS_AGE_KEY_FILE
-              exec ${./scripts/setup-secrets.sh} "$@"
+              echo "[setup-secrets] DEPRECATED: use 'workestrate secrets' directly; this wrapper delegates to it." >&2
+              # Hoist the init/update verb in front of the target-selector
+              # flags: the historical script accepted options before or after
+              # the command, while the CLI parses them as flags OF the verb.
+              action=""
+              rest=()
+              for arg in "$@"; do
+                if [ -z "$action" ] && { [ "$arg" = "init" ] || [ "$arg" = "update" ]; }; then
+                  action="$arg"
+                else
+                  rest+=("$arg")
+                fi
+              done
+              if [ -n "$action" ]; then
+                exec workestrate secrets "$action" "''${rest[@]}"
+              fi
+              for arg in "$@"; do
+                case "$arg" in
+                  -h|--help) exec workestrate secrets "$@" ;;
+                esac
+              done
+              exec workestrate secrets init "$@"
             '';
           };
 
