@@ -137,4 +137,4 @@ Use the [security reporting guidance](SECURITY.md) for vulnerabilities.
 
 ---
 
-<sub>Part of <a href="https://github.com/rybskiworks">rybskiworks</a>. Explicit intent. Bounded execution. Evidence over assumption. <a href="LICENSE-MIT">MIT</a> / <a href="LICENSE-APACHE">Apache-2.0</a>.</sub>
+<sub>Part of <a href="https://github.com/rybskiworks">rybskiworks</a>. Explicit intent. Bounded execution. Evidence over assumption. Original material: <a href="LICENSE">Apache-2.0</a>. Copyright (c) 2026 Georg Rybski. <a href="LICENSING.md">License scope and historical grants</a>; <a href="THIRD-PARTY.md">third-party exceptions</a>.</sub>

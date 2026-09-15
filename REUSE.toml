@@ -1,0 +1,16 @@
+version = 1
+
+# Incremental coverage only. Never blanket-assign imported documents or skills.
+[[annotations]]
+path = [
+  "NOTICE",
+  "LICENSING.md",
+  "THIRD-PARTY.md",
+  "REUSE.toml",
+  "scripts/licensing/*.py",
+  "tests/licensing/*.py",
+  ".github/workflows/licensing.yml",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Georg Rybski"
+SPDX-License-Identifier = "Apache-2.0"

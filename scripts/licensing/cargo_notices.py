@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Georg Rybski
+# SPDX-License-Identifier: Apache-2.0
+"""Offline Rust notice generation. Mirrors contract v1 in Microsandbox.
+
+The accepted license set comes from deny.toml, not another hand-maintained list.
+Original license/NOTICE files are retained separately from cargo-about's report.
+This does not certify native dependencies or fulfill corresponding-source duties.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import html
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import tomllib
+
+LEGAL = re.compile(r"^(licen[cs]e|copying|notice|copyright|authors|unlicense)([._-].*)?$", re.I)
+SKIP = {".git", "target", "node_modules", ".venv", "__pycache__"}
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run(command: list[str]) -> str:
+    return subprocess.run(command, check=True, text=True, stdout=subprocess.PIPE).stdout
+
+
+def config(policy: Path, target: str) -> str:
+    licenses = tomllib.loads(policy.read_text())["licenses"]
+    allowed = licenses.get("allow", [])
+    if not allowed or not all(isinstance(x, str) and x for x in allowed):
+        raise ValueError("licenses.allow must be nonempty")
+    if licenses.get("clarify"):
+        raise ValueError("translate hash-bound clarifications explicitly; do not discard them")
+    allowed = list(dict.fromkeys(allowed))
+    if "Apache-2.0" in allowed:
+        allowed.remove("Apache-2.0")
+        allowed.insert(0, "Apache-2.0")
+    result = (f"accepted = {json.dumps(allowed)}\ntargets = {json.dumps([target])}\n"
+            "ignore-build-dependencies = false\nignore-dev-dependencies = true\n"
+            "ignore-transitive-dependencies = false\nprivate = { ignore = false }\n")
+    scoped = {}
+    for exception in licenses.get("exceptions", []):
+        # cargo-about scopes by name, not semver. Never widen a version restriction.
+        if exception.get("version") != "*":
+            raise ValueError("version-scoped exceptions require explicit graph-aware review")
+        name, extra = exception["name"], exception["allow"]
+        if not isinstance(name, str) or not name or not extra or not all(isinstance(x, str) for x in extra):
+            raise ValueError("invalid scoped license exception")
+        scoped.setdefault(name, []).extend(extra)
+    for name, extra in sorted(scoped.items()):
+        result += f"\n[{json.dumps(name)}]\naccepted = {json.dumps(list(dict.fromkeys(extra)))}\n"
+    return result
+
+
+def selected(metadata: dict, manifest: Path) -> list[dict]:
+    packages = {p["id"]: p for p in metadata["packages"]}
+    roots = [p["id"] for p in packages.values()
+             if Path(p["manifest_path"]).resolve() == manifest.resolve()]
+    if len(roots) != 1:
+        raise ValueError("select a package manifest, not a virtual workspace")
+    nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
+    pending, visited = roots[:], set()
+    while pending:
+        identity = pending.pop()
+        if identity in visited:
+            continue
+        visited.add(identity)
+        for dep in nodes[identity]["deps"]:
+            kinds = dep.get("dep_kinds", [])
+            if not kinds or any(k.get("kind") != "dev" for k in kinds):
+                pending.append(dep["pkg"])
+    result = sorted((packages[i] for i in visited), key=lambda p: (p["name"], p["version"]))
+    if len({(p["name"], p["version"]) for p in result}) != len(result):
+        raise ValueError("duplicate name/version from different sources requires identity-aware review")
+    return result
+
+
+def originals(package: dict, roots: list[Path]) -> list[Path]:
+    directory = Path(package["manifest_path"]).resolve().parent
+    candidates = set()
+    for parent, dirs, files in os.walk(directory, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP)
+        candidates.update(Path(parent) / name for name in files if LEGAL.match(name))
+    if package.get("license_file"):
+        declared = Path(package["license_file"])
+        declared = declared if declared.is_absolute() else directory / declared
+        if not any(declared.resolve().is_relative_to(r) for r in [directory, *roots]):
+            raise ValueError("declared license_file escapes approved source roots")
+        candidates.add(declared)
+    for parent in directory.parents:
+        manifest = parent / "Cargo.toml"
+        workspace = manifest.is_file() and "workspace" in tomllib.loads(manifest.read_text())
+        if parent in roots or workspace:
+            candidates.update(p for p in parent.iterdir() if LEGAL.match(p.name) and not p.is_dir())
+        if parent in roots:
+            break
+    for path in candidates:
+        if path.is_symlink() or not path.is_file() or not path.stat().st_size:
+            raise ValueError(f"missing, empty or symlink legal evidence: {path}")
+    if not candidates:
+        raise ValueError(f"missing original legal evidence: {package['name']} {package['version']}")
+    return sorted(candidates)
+
+
+def verify(bundle: Path) -> None:
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    if manifest.get("schema") != 1:
+        raise ValueError("unknown notice manifest version")
+    expected = manifest["files"]
+    actual = set()
+    for path in bundle.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("notice bundle contains symlinks")
+        if path.is_file():
+            actual.add(path.relative_to(bundle).as_posix())
+    if actual != set(expected) | {"manifest.json"}:
+        raise ValueError("missing or unexpected notice files")
+    if not {"THIRD-PARTY.html", "inventory.json", "cargo-about.json"} <= expected.keys():
+        raise ValueError("required reports are missing")
+    for name, checksum in expected.items():
+        if Path(name).is_absolute() or ".." in Path(name).parts or "\\" in name:
+            raise ValueError("unsafe notice path")
+        if digest(bundle / name) != checksum:
+            raise ValueError(f"notice checksum mismatch: {name}")
+    crates = json.loads((bundle / "inventory.json").read_text())["crates"]
+    if not crates or any(not p["legal_files"] or any(f not in expected for f in p["legal_files"]) for p in crates):
+        raise ValueError("missing crate attribution")
+
+
+def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path], profile: dict) -> None:
+    expected = {(p["name"], str(p["version"])) for p in packages}
+    covered, normalized = set(), []
+    for item in report.get("licenses", []):
+        if not item.get("text", "").strip():
+            raise ValueError("empty license text")
+        users = [{"name": u["crate"]["name"], "version": str(u["crate"]["version"])} for u in item["used_by"]]
+        covered.update((p["name"], p["version"]) for p in users)
+        normalized.append({"id": item["id"], "text": item["text"], "used_by": users})
+    if not normalized or expected - covered:
+        raise ValueError(f"report omitted selected crates: {sorted(expected - covered)}")
+    if output.exists() or output.is_symlink():
+        raise ValueError("refusing to overwrite notice bundle")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+        staging = Path(temporary) / "notices"
+        staging.mkdir()
+        inventory, sections = [], ["<h1>Third-party notices</h1>"]
+        for package in packages:
+            key = f"{package['name']}@{package['version']}#{package.get('source') or 'local'}"
+            slug = hashlib.sha256(key.encode()).hexdigest()[:16]
+            files = set()
+            sections.append(f"<h2>{html.escape(key)}</h2>")
+            for path in originals(package, roots):
+                name = f"evidence/{slug}/{digest(path)}-{path.name}"
+                destination = staging / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(path.read_bytes())
+                files.add(name)
+                sections.append(f"<h3>{html.escape(path.name)}</h3><pre>{html.escape(path.read_text(errors='replace'))}</pre>")
+            inventory.append({"name": package["name"], "version": package["version"],
+                              "source": package.get("source"), "license": package.get("license"),
+                              "legal_files": sorted(files)})
+        for item in normalized:
+            sections.append(f"<h2>{html.escape(item['id'])}</h2><pre>{html.escape(item['text'])}</pre>")
+        (staging / "THIRD-PARTY.html").write_text('<!doctype html><html lang="en"><meta charset="utf-8"><title>Notices</title><body>\n' + "\n".join(sections) + "\n</body></html>\n")
+        (staging / "cargo-about.json").write_text(json.dumps({"licenses": normalized}, indent=2, sort_keys=True) + "\n")
+        (staging / "inventory.json").write_text(json.dumps({"profile": profile, "crates": inventory}, indent=2, sort_keys=True) + "\n")
+        files = {p.relative_to(staging).as_posix(): digest(p) for p in sorted(staging.rglob("*")) if p.is_file()}
+        (staging / "manifest.json").write_text(json.dumps({"schema": 1, "files": files}, indent=2, sort_keys=True) + "\n")
+        verify(staging)
+        staging.rename(output)
+
+
+def generate(args: argparse.Namespace) -> None:
+    manifest = args.manifest.resolve(strict=True)
+    roots = [p.resolve(strict=True) for p in args.source_root]
+    flags = ["--manifest-path", str(manifest), "--locked", "--offline"]
+    if args.no_default_features:
+        flags.append("--no-default-features")
+    if args.features:
+        flags.extend(["--features", args.features])
+    metadata = json.loads(run(["cargo", "metadata", "--format-version", "1", "--filter-platform", args.target, *flags]))
+    lock = Path(metadata["workspace_root"]) / "Cargo.lock"
+    before = digest(lock)
+    with tempfile.TemporaryDirectory() as temporary:
+        policy = Path(temporary) / "about.toml"
+        policy.write_text(config(args.policy, args.target))
+        command = ["cargo", "about", "generate", *flags, "--fail", "--format", "json", "--config", str(policy)]
+        for root in roots:
+            command.extend(["--include-local", str(root)])
+        report = json.loads(run(command))
+    if digest(lock) != before:
+        raise ValueError("Cargo.lock changed during notice generation")
+    profile = {"target": args.target, "features": args.features, "default_features": not args.no_default_features,
+               "lock_sha256": before, "deny_sha256": digest(args.policy),
+               "generator": run(["cargo", "about", "--version"]).strip()}
+    assemble(args.output, selected(metadata, manifest), report, roots, profile)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    build = sub.add_parser("generate")
+    for name in ("manifest", "policy", "output"):
+        build.add_argument("--" + name, type=Path, required=True)
+    build.add_argument("--target", required=True)
+    build.add_argument("--source-root", type=Path, action="append", required=True)
+    build.add_argument("--features", default="")
+    build.add_argument("--no-default-features", action="store_true")
+    sub.add_parser("verify").add_argument("bundle", type=Path)
+    args = parser.parse_args()
+    try:
+        generate(args) if args.command == "generate" else verify(args.bundle)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f"licensing: {error}\n")
+
+
+if __name__ == "__main__":
+    main()
