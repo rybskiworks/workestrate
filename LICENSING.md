@@ -3,10 +3,10 @@
 ## Workestrate's license and copyright
 
 Workestrate's original material is licensed under Apache-2.0, except where a file
-or third-party component specifies otherwise. The license text is in `LICENSE`;
-`LICENSE-APACHE` is retained as an identical compatibility copy. Copyright for
-Georg Rybski's original material is attributed to Georg Rybski, not to the GitHub
-organization as a substitute legal owner.
+or third-party component specifies otherwise. `LICENSE` is the single root
+project license file; `LICENSES/Apache-2.0.txt` is retained for REUSE tooling.
+Copyright for Georg Rybski's original material is attributed to Georg Rybski,
+not to the GitHub organization as a substitute legal owner.
 
 A copyright notice does not transfer another contributor's rights. Original
 contributions, imported material, employment/contract assignments, and upstream
