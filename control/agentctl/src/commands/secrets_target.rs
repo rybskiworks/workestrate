@@ -31,34 +31,32 @@ pub fn derive_age_recipient(key_file: &std::path::Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Resolve a registered config repo's secrets target paths for setup-secrets.
+/// The resolved WRITE-side secrets target of a registered config repo.
 ///
-/// This is the WRITE-side target: `dir` is the managed store clone
-/// (`<store>/config-repos/<name>`), where the operator commits the encrypted
-/// `.env.enc`. A5 Session 2 changed the READ side only — consumption
-/// (`config::resolve_secrets_layers`) reads the pinned archive of the locked
-/// rev for Remote/GitFile entries, so this function deliberately no longer
-/// mirrors it: the committed file rides the archive like any other content,
-/// while new/edited secrets still land in the clone and become visible to
-/// consumption at the next `workestrate config update`. `secrets_file` comes
-/// from the entry override or ".env.enc", `age_key_file` from the entry
-/// override (tilde-expanded); when the entry has no age_key_file override,
-/// the fallback matches `secrets_loader::decrypt_layer()`:
-/// `SOPS_AGE_KEY_FILE` env, else `$HOME` + `scaffold::AGE_KEY_DEFAULT_PATH`
-/// with the `~/` prefix stripped.
-pub struct SecretsTarget {
+/// `dir` is the managed store clone (`<store>/config-repos/<name>`), where
+/// the operator commits the encrypted secrets file. `secrets_file` comes
+/// from the entry override or ".env.enc". `age_key_file` comes from the
+/// entry override (tilde-expanded; may stay RELATIVE — its meaning is
+/// anchored to the operator's invocation cwd, and callers that need an
+/// absolute path resolve it against `config::invoke_cwd()` themselves);
+/// when the entry has no age_key_file override, the fallback matches
+/// `secrets_loader::decrypt_layer()`: `SOPS_AGE_KEY_FILE` env, else `$HOME`
+/// + `scaffold::AGE_KEY_DEFAULT_PATH` with the `~/` prefix stripped.
+pub struct RegisteredSecretsTarget {
     pub dir: PathBuf,
     pub secrets_file: String,
     pub age_key_file: PathBuf,
 }
 
-/// Resolve one explicit write target without decrypting any layer.
-pub fn resolve_secrets_target(name: &str) -> Result<SecretsTarget> {
+/// Registry-backed resolution shared by `secrets target` (inspection) and
+/// `secrets init|update --config <name>` (provisioning). Returns `Ok(None)`
+/// when the name is not registered so each caller words the failure for its
+/// own surface.
+pub fn resolve_registered_target(name: &str) -> Result<Option<RegisteredSecretsTarget>> {
     let registry = config::load_registry()?;
-    let entry = registry
-        .as_ref()
-        .and_then(|r| r.configs.get(name))
-        .ok_or_else(|| anyhow::anyhow!("config repo '{}' not registered", name))?;
+    let Some(entry) = registry.as_ref().and_then(|r| r.configs.get(name)) else {
+        return Ok(None);
+    };
 
     let dir = config::resolve_store_dir().join("config-repos").join(name);
     let secrets_file = entry
@@ -77,19 +75,41 @@ pub fn resolve_secrets_target(name: &str) -> Result<SecretsTarget> {
             .unwrap_or(scaffold::AGE_KEY_DEFAULT_PATH);
         PathBuf::from(home).join(rel)
     };
-    Ok(SecretsTarget {
+    Ok(Some(RegisteredSecretsTarget {
         dir,
         secrets_file,
         age_key_file,
-    })
+    }))
+}
+
+/// Resolve a registered config repo's secrets target paths for inspection.
+///
+/// This is the WRITE-side target: `dir` is the managed store clone
+/// (`<store>/config-repos/<name>`), where the operator commits the encrypted
+/// `.env.enc`. A5 Session 2 changed the READ side only — consumption
+/// (`config::resolve_secrets_layers`) reads the pinned archive of the locked
+/// rev for Remote/GitFile entries, so this function deliberately no longer
+/// mirrors it: the committed file rides the archive like any other content,
+/// while new/edited secrets still land in the clone and become visible to
+/// consumption at the next `workestrate config update`. Resolution itself
+/// lives in [`resolve_registered_target`].
+/// Back-compat alias: the signing-keys flow uses the `SecretsTarget` name.
+pub type SecretsTarget = RegisteredSecretsTarget;
+
+/// Back-compat resolver: hard-errors on unknown names (old behavior).
+pub fn resolve_secrets_target(name: &str) -> Result<SecretsTarget> {
+    resolve_registered_target(name)?
+        .ok_or_else(|| anyhow::anyhow!("config repo '{}' not registered", name))
 }
 
 pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
-    let SecretsTarget {
+    let target = resolve_registered_target(name)?
+        .ok_or_else(|| anyhow::anyhow!("config repo '{}' not registered", name))?;
+    let RegisteredSecretsTarget {
         dir,
         secrets_file,
         age_key_file,
-    } = resolve_secrets_target(name)?;
+    } = target;
     let exists = dir.join(&secrets_file).exists();
 
     if json {

@@ -505,17 +505,13 @@ host-provision:
 provision-check:
     ./scripts/host-provision.sh --check-only
 
-# Bootstrap or update encrypted secrets
+# Bootstrap or update encrypted secrets (DEPRECATED convenience alias —
+# delegates to the CLI: the nix-installed workestrate wrapper bundles sops
+# and age, so no devshell is needed). Kept for muscle memory; prefer
+# `workestrate secrets <init|update> ...` directly.
 [positional-arguments]
 setup-secrets *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
-    mkdir -p "$_devenv_root_dir"
-    _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
-    printf '%s' "$_repo_root" > "$_devenv_root_file"
-    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c setup-secrets "$@"
+    workestrate secrets "$@"
 
 # Validate the full secrets workflow (non-interactive, uses test values)
 validate-secrets:
