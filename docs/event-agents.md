@@ -18,14 +18,21 @@ credentials and the events it reacts to.
 
 What the CLI already provides for an event-driven role:
 
-- **Instance addressing.** `workload up <name> --instance <id>` targets
-  `<slot>@<id>` and refuses when that exact instance is already running;
-  `--new` allocates the lowest free integer id; `--replace` tears down an
-  existing instance at the slot first. `workload down <name> --instance <id>`
-  and `--all-instances` tear down. Instance ids are how branch or pull-request
-  work is kept apart.
-- **Detachment.** `workload up` is detached by default; `--foreground` blocks.
-  A host-side service can therefore launch a role and exit.
+- **Kind routing.** The verb is chosen by kind: a `service` workload uses
+  `workload up | down | logs | plan`, an `agent` workload uses
+  `workload exec | down | plan`. `up` and `logs` refuse an agent name and name
+  the verb to use instead (`commands/lifecycle.rs`, `workload_route`). An agent
+  role is therefore started with `workload exec <role>`.
+- **Instance addressing.** `--instance <id>` targets `<slot>@<id>` and refuses
+  when that exact instance is already running; `--new` allocates the lowest free
+  integer id; `--replace` tears down an existing instance at the slot first.
+  `workload down <name> --instance <id>` and `--all-instances` tear down.
+  Instance ids are how branch or pull-request work is kept apart.
+- **Detachment.** A service `up` is detached by default and `--foreground`
+  blocks. An agent `exec` is always foreground: it attaches until the agent
+  exits, and it has no detach flag. A host-side service that starts an agent
+  role must spawn `exec` detached itself and keep the process (its stdio is the
+  agent's log); `down --instance` is then the stop path.
 - **Instance strategy.** The `[instance] strategy` vocabulary is
   `singleton | parallel | replace | reuse | per-dir`. `per-dir` derives the id
   from the canonical invocation directory. `parallel`, `replace` and `reuse`
@@ -54,7 +61,7 @@ What the CLI already provides for an event-driven role:
 ## Host-side pattern
 
 ```
-event  ->  authorize  ->  derive instance id  ->  workestrate workload up <role> --instance <id>
+event  ->  authorize  ->  derive instance id  ->  workestrate workload exec <role> --instance <id>
                                                         |
                                                    agent works in the microVM
                                                         |
