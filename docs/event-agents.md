@@ -59,12 +59,13 @@ What the CLI already provides for an event-driven role:
 - **Dependencies.** `[depends_on.<service>]` with `required` and the injected
   address (`env`), so a role reaches the model gateway rather than the public
   internet.
-- **Secrets.** A bare `true` is the host-bound form of the same-named secret
-  (its value is read from the host environment variable of the secret ID, or
-  the secret's `env_var`); `{ secret = "NAME", bound = "host" }` is the same
-  binding written out and is substituted at the egress proxy, but only for the
-  hosts in `allowed_hosts`. `bound = "guest"` injects the real value into the
-  guest. See [secrets](secrets.md).
+- **Secrets.** A bare `true` is the host-bound form of the same-named secret;
+  `{ secret = "NAME", bound = "host" }` is the same binding written out and is
+  substituted at the egress proxy, but only for the hosts in `allowed_hosts`.
+  `bound = "guest"` injects the real value into the guest. The value comes from
+  the secret's catalog entry, whose `env_var` names the environment-variable
+  key the loader resolves (default: the secret ID); encrypted `.env.enc` layers
+  outrank the process environment. See [secrets](secrets.md).
 - **Host control endpoint.** `workestrate control serve --state-dir <dir>
   --instance <name>...` serves one private Unix endpoint for launch-bound
   operations on selected, already-running instances: capability queries, guest
