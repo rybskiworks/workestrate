@@ -184,14 +184,19 @@ it supports inspection, not deployment of real applications.
 ```sh
 workestrate workload plan example-service
 workestrate workload plan <name> --show-source
-workestrate workload up <service>                # detached service and dependencies
-workestrate workload up <service> --foreground   # run until Ctrl-C
-workestrate workload logs <service>
-workestrate workload exec <agent>                # interactive attachment
-workestrate workload down <name>
+workestrate workload up <name>                   # detached service and dependencies
+workestrate workload up <name> --foreground     # run until Ctrl-C
+workestrate workload logs <name>
+workestrate workload exec <name>                 # interactive attachment
+workestrate workload down <name>                 # this workload's slot only
 workestrate workloads
 workestrate ps --json
 ```
+
+`workload down <name>` tears down one workload slot. Wider scopes use the
+separate ladder verb, for example `workestrate down --context personal`.
+The ladder alternatives (`--all`, `--context <ctx>`, `--config-ref <ref>`,
+`--everything`) are exclusive selectors, not flags to combine.
 
 | Area | Commands and purpose |
 | :--- | :--- |
@@ -225,10 +230,10 @@ workestrate check
 ```
 
 These commands initialize operator state. Scaffolding a config is not installing
-a working agent stack. Define real workloads and their image builds, inspect the
-resolved plan, then use `workload up <service>` or `workload exec <agent>` with
-names from that configuration. The [workload guide](docs/workloads.md) links
-independently maintained baseline and communication fixtures.
+a working agent stack. The [worked example](#worked-example-new-config-to-running-workload)
+below defines two real workloads from scratch, then plans, runs, and tears
+them down with names from that configuration. The [workload guide](docs/workloads.md)
+links independently maintained baseline and communication fixtures.
 
 ## Secrets workflow
 
@@ -269,6 +274,119 @@ there. These are different exposure decisions, not equivalent isolation claims.
 `workestrate run -- <cmd>` intentionally grants its host process decrypted secrets;
 commands such as `plan`, `check`, and `completions` do not need secret decryption.
 SSH custody has separate runtime acceptance requirements.
+
+## Worked example: new config to running workload
+
+Start from the setup above (`home init`, `config new personal`). Add two
+workloads to the personal config: a service and a dependent agent that
+discovers it. This is the smallest honest pair: closed egress, one
+host-bound secret, one guest-bound secret, and a `depends_on` edge.
+
+```toml
+[workloads.my-service]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+cpus = 1
+memory_mib = 512
+command = ["python", "-m", "http.server", "8080"]
+log_stop_errors = true
+
+[workloads.my-service.env]
+APP_PORT = "8080"
+
+[[workloads.my-service.ports]]
+host = 8080
+guest = 8080
+
+[workloads.my-service.network.defaults]
+egress = "deny"
+
+[[workloads.my-service.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[workloads.my-agent]
+kind = "agent"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/work"
+cpus = 1
+memory_mib = 512
+command = ["python", "-m", "http.server", "8081"]
+log_stop_errors = false
+
+[workloads.my-agent.env]
+GITHUB_TOKEN = true
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
+
+[[workloads.my-agent.mounts]]
+host = "workspaces/my-agent-state"
+guest = "/data"
+mode = "rw"
+
+[workloads.my-agent.network.defaults]
+egress = "deny"
+
+[[workloads.my-agent.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.my-agent.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[workloads.my-agent.depends_on.my-service]
+env = "MY_SERVICE_ADDR"
+required = true
+```
+
+Provision secrets, then inspect before running:
+
+```sh
+setup-secrets --config personal init
+setup-secrets --config personal update
+workestrate validate-config
+workestrate workload plan my-service
+workestrate workload plan my-agent --show-source
+```
+
+Expected plan shape (modeled on the committed `example-service` golden):
+
+```text
+name: my-service
+image: python:3.12-slim
+workdir: /app
+command: python -m http.server 8080
+cpus: 1
+memory: 512 MiB
+```
+
+Then run, observe, and tear down. `down --context` scopes teardown to
+the personal context; it never touches other contexts:
+
+```sh
+workestrate workload up my-service
+workestrate workload logs my-service
+workestrate workload exec my-agent
+workestrate down --context personal
+```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/layering-dark.svg" />
+  <img src="docs/assets/layering-light.svg" width="1200" alt="Configuration layering: reference config, ordered context layers, user-global overrides, then trusted project and local layers. WORKESTRATE_CONFIG_DIR bypasses discovery with a single dev layer." />
+</picture>
+
+Layer order, lowest to highest precedence: reference config, ordered
+context layers, user-global overrides, trusted project and local layers.
+`WORKESTRATE_CONFIG_DIR` bypasses discovery with a single dev layer
+(no merge, no trust).
+
+Secrets note: `GITHUB_TOKEN = true` stays host-bound (guests see a
+placeholder; the host substitutes on approved traffic), while
+`bound = "guest"` places the real value in the guest. Different
+exposure decisions, not equivalent isolation claims. See
+[docs/secrets.md](docs/secrets.md).
 
 ## Development workflow
 
