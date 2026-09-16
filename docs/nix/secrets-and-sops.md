@@ -2,7 +2,7 @@
 type: Reference
 resource: https://nix.dev/guides/best-practices.html
 title: Secrets and SOPS
-description: Secret management in Nix — why the Nix store leaks secrets, SOPS with age encryption, sops-nix and agenix NixOS modules, and the ai-workbench secret workflow (decrypt-env, write-env, setup-secrets wrappers; the CLI's secret command is workestrate run -- <cmd>).
+description: Secret management in Nix — why the Nix store leaks secrets, SOPS with age encryption, sops-nix and agenix NixOS modules, and the ai-workbench secret workflow (decrypt-env, write-env, the workestrate secrets provisioning CLI, decrypt-env/write-env wrappers; the CLI's secret-consumption command is workestrate run -- <cmd>).
 tags: [nix, secrets, sops, age, sops-nix, agenix]
 timestamp: 2026-07-24T01:30:00Z
 ---
@@ -14,7 +14,7 @@ timestamp: 2026-07-24T01:30:00Z
 Source-verified guidance for secret management in Nix. Covers why the Nix
 store leaks secrets, SOPS with age encryption, the sops-nix and agenix NixOS
 modules, and the ai-workbench secret workflow (`decrypt-env`, `write-env`,
-`setup-secrets` wrappers; the CLI's secret command is `workestrate run -- <cmd>`).
+the `workestrate secrets` provisioning CLI and `decrypt-env`/`write-env` wrappers; the CLI's secret-consumption command is `workestrate run -- <cmd>`).
 Agents who handle
 secrets in a Nix project should follow these rules so secrets never land in
 the world-readable Nix store or in plaintext at rest.
@@ -145,9 +145,11 @@ From `flake.nix`, the wrappers are `pkgs.writeShellApplication` derivations:
 - `write-env`: decrypts `.env.enc` to a temp file (mode 0600 via `umask 077`),
   then `mv` to `.env` with `chmod 600`. Refuses to overwrite an existing
   `.env`.
-- `setup-secrets`: wraps `scripts/setup-secrets.sh`; sets `SOPS_AGE_KEY_FILE`
-  and execs the script. Supports `--config <name> init|update`,
-  `--global init|update`, and auto-detect modes.
+- `workestrate secrets init|update` (CLI subcommands, not flake wrappers):
+  create/update `.env.enc` (`--config <name>`) or `.env.local.enc`
+  (`--global`); the nix-installed CLI bundles `sops` and `age` on its
+  wrapper PATH, and defaults the age key path itself. The deprecated
+  `setup-secrets` flake package remains as a delegate to these commands.
 - The CLI's secret command `workestrate run -- <cmd>`: decrypts `.env.enc`
   and execs `<cmd>` with the secrets in its environment (a CLI subcommand,
   not a flake wrapper).
@@ -156,7 +158,8 @@ From `flake.nix`, the wrappers are `pkgs.writeShellApplication` derivations:
 
 | Wrapper | Runs on | Purpose |
 |---|---|---|
-| `setup-secrets` | Host (age key present) | Create/update `.env.enc` (`--config`) or `.env.local.enc` (`--global`) |
+| `workestrate secrets init\|update` | Host (age key present) | Create/update `.env.enc` (`--config`) or `.env.local.enc` (`--global`) |
+| `setup-secrets` (DEPRECATED) | Host | Delegate for `workestrate secrets` |
 | `decrypt-env` | Host | Print decrypted secrets to stdout |
 | `write-env` | Host | Write a short-lived plaintext `.env` (mode 0600) |
 
@@ -184,7 +187,7 @@ workestrate workload up litellm   # dev shell: workestrate is on PATH
 > - `.env.enc` is ciphertext-safe and may be committed in config repos.
 > - Do not put secrets in Nix expressions — Nix strings can leak into the
 >   world-readable Nix store.
-> - Do not pass secrets as command-line arguments; `setup-secrets`
+> - Do not pass secrets as command-line arguments; `workestrate secrets`
 >   deliberately omits argv-based secret input so values cannot leak into
 >   shell history.
 > - Do not paste decrypted `.env` into logs, issues, or shell history.
@@ -227,7 +230,7 @@ creation_rules:
     age: "age1PLACEHOLDER..."
 ```
 
-In ai-workbench, `setup-secrets init` replaces the `age1PLACEHOLDER...`
+In ai-workbench, `workestrate secrets init` replaces the `age1PLACEHOLDER...`
 recipient with the actual public key. `.sops.yaml` contains NO secrets — only
 the age recipient — so it is safe to commit.
 
@@ -236,7 +239,7 @@ the age recipient — so it is safe to commit.
 
 ### Secret rotation
 
-Rotate secret values by running `setup-secrets --config <name> update`
+Rotate secret values by running `workestrate secrets update --config <name>`
 (decrypts, opens editor, re-encrypts). To rotate the age key itself: generate
 a new keypair, re-encrypt all `.env.enc` files to the new recipient (update
 `.sops.yaml`, then `sops updatekeys .env.enc`), and remove the old key.
@@ -247,7 +250,7 @@ Rotation is non-interactive when all required env vars are set.
 In CI, provide secrets via environment variables (the non-interactive path) or
 via stdin (one line per key in `REQUIRED_KEYS` order). The age private key
 must be provisioned as a CI secret (e.g. GitHub Actions secret) and written to
-`~/.config/sops/age/ai-workbench-secrets.txt` before running `setup-secrets` or
+`~/.config/sops/age/ai-workbench-secrets.txt` before running `workestrate secrets` or
 `workestrate run --`.
 
 > "**Env vars:** if all required env vars are set and non-empty, those values
@@ -269,8 +272,8 @@ is hermetic and safe to run in CI.
 3. Keep the age private key on the HOST at
    `~/.config/sops/age/ai-workbench-secrets.txt` (mode 0600), never in the
    repo, bundle, `.workestrate/`, or `$WORKESTRATE_HOME`.
-4. Use `setup-secrets` to create/update `.env.enc`; never edit ciphertext by
-   hand.
+4. Use `workestrate secrets` to create/update `.env.enc`; never edit
+   ciphertext by hand.
 5. Use `workestrate run -- <cmd>` to inject secrets into a child process —
    never write plaintext `.env` unless a tool requires it.
 6. If a plaintext `.env` is needed, use `write-env` (mode 0600) and `rm .env`
@@ -282,7 +285,7 @@ is hermetic and safe to run in CI.
 9. In CI, provision the age key as a CI secret and provide secret values via
    env vars or stdin.
 10. Back up the age private key — without it, `.env.enc` is unrecoverable.
-11. Rotate secrets via `setup-secrets update`; rotate keys via
+11. Rotate secrets via `workestrate secrets update`; rotate keys via
     `sops updatekeys`.
 12. In a container, the age key is absent by design — secret operations fail
     closed.
@@ -295,7 +298,7 @@ is hermetic and safe to run in CI.
 - [ ] `.sops.yaml` committed (recipient only, no secrets)?
 - [ ] `.env.enc` committed (ciphertext-safe)?
 - [ ] `.env` gitignored and removed after use?
-- [ ] `setup-secrets` used for create/update (not hand-editing ciphertext)?
+- [ ] `workestrate secrets` used for create/update (not hand-editing ciphertext)?
 - [ ] `workestrate run -- <cmd>` used to inject secrets into commands?
 - [ ] No secrets passed as command-line arguments?
 - [ ] No decrypted secrets pasted into logs, issues, or shell history?
@@ -309,7 +312,7 @@ is hermetic and safe to run in CI.
       (`flake.nix`).
 - [ ] Create `.sops.yaml` with creation rules mapping `.env.enc` to the age
       recipient.
-- [ ] Run `setup-secrets --config <name> init` to create `.env.enc`.
+- [ ] Run `workestrate secrets init --config <name>` to create `.env.enc`.
 - [ ] Set `SOPS_AGE_KEY_FILE` in wrappers (defaulting to the host path).
 - [ ] Ensure wrappers fail closed when the age key is absent (container
       context).
@@ -320,7 +323,7 @@ is hermetic and safe to run in CI.
 ## Runtime / debugging checklist
 
 - [ ] `decrypt-env` prints decrypted secrets to stdout (key present)?
-- [ ] `setup-secrets init` creates `.env.enc` without error?
+- [ ] `workestrate secrets init` creates `.env.enc` without error?
 - [ ] `workestrate run -- bash -c 'echo $LITELLM_MASTER_KEY'` shows the secret in the child env?
 - [ ] `write-env` creates `.env` with mode 0600?
 - [ ] "secret file not found" — check `SECRET_FILE` / cwd has `.env.enc`?
@@ -339,8 +342,9 @@ is hermetic and safe to run in CI.
 - `just shell -c write-env && stat -c '%a' .env` — verifies mode 0600.
 
 > "A non-interactive validation script exercises the full secrets lifecycle
-> (`setup-secrets init` → `decrypt-env` → `setup-secrets update` →
-> `decrypt-env` → `write-env` → `workestrate run -- env` → `workestrate --help`)
+> (`workestrate secrets init` → `decrypt-env` → `workestrate secrets
+> update` → `decrypt-env` → `write-env` → `workestrate run -- env` →
+> `workestrate --help`)
 > in an isolated temp directory using a freshly generated test key."
 > — docs/secrets.md
 
@@ -367,7 +371,7 @@ creation_rules:
 ### Initialize secrets (interactive)
 
 ```shell
-just setup-secrets --config personal init
+workestrate secrets init --config personal
 ```
 
 ### Initialize secrets (non-interactive via env vars)
@@ -376,13 +380,13 @@ just setup-secrets --config personal init
 export LITELLM_MASTER_KEY="sk-..."
 export OPENROUTER_API_KEY="sk-or-..."
 # ... all 7 keys ...
-just setup-secrets --config personal init
+workestrate secrets init --config personal
 ```
 
 ### Update secrets
 
 ```shell
-just setup-secrets --config personal update
+workestrate secrets update --config personal
 ```
 
 ### Decrypt to stdout
@@ -458,7 +462,7 @@ age.secrets.my-api-key = {
 - Placing the age key under `.workestrate/` or `$WORKESTRATE_HOME` — same
   exposure.
 - Hand-editing `.env.enc` ciphertext — corrupts the file; use
-  `setup-secrets update`.
+  `workestrate secrets update`.
 - Passing secrets as command-line arguments — leaks into shell history and
   `ps`.
 - Leaving a plaintext `.env` on disk after `write-env` — remove it
@@ -481,7 +485,7 @@ age.secrets.my-api-key = {
 - Never embed secrets in Nix expressions (Nix store is world-readable).
 - Keep the age private key on the HOST, never in repo/bundle/`.workestrate/`/
   `$WORKESTRATE_HOME`.
-- Use `setup-secrets` for create/update; never hand-edit ciphertext.
+- Use `workestrate secrets` for create/update; never hand-edit ciphertext.
 - Use `workestrate run -- <cmd>` to inject secrets into commands.
 - `.sops.yaml` and `.env.enc` are safe to commit; `.env` is gitignored.
 - Do not pass secrets as command-line arguments.
@@ -506,7 +510,7 @@ age.secrets.my-api-key = {
 - Require the age private key at
   `~/.config/sops/age/ai-workbench-secrets.txt` (mode 0600) on the host.
 - Require `.sops.yaml` and `.env.enc` committed; `.env` gitignored.
-- Require `setup-secrets` for all create/update operations.
+- Require `workestrate secrets` for all create/update operations.
 - Require `workestrate run -- <cmd>` for commands needing secrets.
 - Require the age key provisioned as a CI secret for non-interactive flows.
 - Require `just validate-secrets` to pass before merge for secret-workflow

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use workestrate::cli_actions::{
     AgentAction, ConfigAction, ContextAction, HomeAction, ImagesAction, PolicyAction,
-    SchemasAction, ServiceAction, SourceAction, WorkloadAction,
+    SchemasAction, SecretsAction, ServiceAction, SourceAction, WorkloadAction,
 };
 use workestrate::cli_error::{classify_exit_code, emit_error};
 use workestrate::commands::config_cmd::{
@@ -138,8 +138,6 @@ enum Commands {
     },
     /// Validate active config against schema and policy allowlists
     ValidateConfig,
-    /// Print the env_var names of all secrets defined in config
-    SecretsSchema,
     /// Generate a .env.example from the config secrets section
     GenerateEnvExample {
         /// Write output to a file instead of stdout
@@ -232,10 +230,11 @@ enum Commands {
         #[command(subcommand)]
         action: SchemasAction,
     },
-    /// Resolve a registered config repo's secrets target paths (for setup-secrets).
-    SecretsTarget {
-        /// Config repo name to resolve.
-        name: String,
+    /// Provision encrypted secrets (init/update) and inspect secrets
+    /// targets. Secret values are never accepted as command-line arguments.
+    Secrets {
+        #[command(subcommand)]
+        action: SecretsAction,
     },
     /// Diagnose environment and tool health (KVM, nix, sops, age, msb, config repos).
     /// Use the global --json flag for machine-readable output.
@@ -895,7 +894,6 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::Run { command } => cmd_run(&command),
         Commands::Msb { args } => cmd_msb(&args),
         Commands::ValidateConfig => cmd_validate_config(),
-        Commands::SecretsSchema => cmd_secrets_schema(),
         Commands::GenerateEnvExample { output } => cmd_generate_env_example(output.as_deref()),
         Commands::Ps => cmd_ps(cli.json).await,
         Commands::Down {
@@ -972,7 +970,16 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::Credentials { action } => {
             workestrate::commands::signing_keys::run(action, cli.json)
         }
-        Commands::SecretsTarget { name } => cmd_secrets_target(&name, cli.json).await,
+        Commands::Secrets { action } => match action {
+            SecretsAction::Init { target } => {
+                workestrate::commands::secrets::cmd_secrets_init(&target)
+            }
+            SecretsAction::Update { target } => {
+                workestrate::commands::secrets::cmd_secrets_update(&target)
+            }
+            SecretsAction::Target { name } => cmd_secrets_target(&name, cli.json).await,
+            SecretsAction::Schema => cmd_secrets_schema(),
+        },
         Commands::Doctor => cmd_doctor(cli.json),
         Commands::Versions => cmd_versions(cli.json),
         Commands::Source { action } => cmd_source(action).await,
@@ -1393,12 +1400,11 @@ mod tests {
             "run",
             "msb",
             "validate-config",
-            "secrets-schema",
             "generate-env-example",
             "config",
             "home",
             "schemas",
-            "secrets-target",
+            "secrets",
             "doctor",
             "versions",
             "clean",
@@ -1870,6 +1876,114 @@ mod tests {
         assert_eq!(name.as_deref(), Some("prime"));
         assert_eq!(instance, &None);
         assert!(!new);
+    }
+
+    // ---- secrets subcommand family ----
+
+    /// `secrets init|update` accept the target selector flags AFTER the
+    /// subcommand, in both separate and `=` forms; the global --home flag is
+    /// accepted at any position.
+    #[test]
+    fn secrets_init_update_target_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "workestrate",
+            "secrets",
+            "init",
+            "--home=operator home",
+            "--config=personal",
+        ])
+        .expect("equals-form flags after init must parse");
+        let Commands::Secrets {
+            action: SecretsAction::Init { target },
+        } = cli.command
+        else {
+            panic!("expected secrets init");
+        };
+        assert_eq!(target.config.as_deref(), Some("personal"));
+        assert!(target.config_dir.is_none());
+        assert!(!target.global);
+        assert_eq!(cli.home, Some(PathBuf::from("operator home")));
+
+        let cli = Cli::try_parse_from([
+            "workestrate",
+            "--home",
+            "operator home",
+            "secrets",
+            "update",
+            "--config",
+            "personal",
+        ])
+        .expect("separate-form flags must parse");
+        let Commands::Secrets {
+            action: SecretsAction::Update { target },
+        } = cli.command
+        else {
+            panic!("expected secrets update");
+        };
+        assert_eq!(target.config.as_deref(), Some("personal"));
+
+        let cli = Cli::try_parse_from([
+            "workestrate",
+            "secrets",
+            "update",
+            "--config-dir=fleet with spaces \"quoted\" $(touch INJECTED)",
+        ])
+        .expect("--config-dir equals form must parse");
+        let Commands::Secrets {
+            action: SecretsAction::Update { target },
+        } = cli.command
+        else {
+            panic!("expected secrets update");
+        };
+        assert_eq!(
+            target.config_dir.as_deref(),
+            Some(std::path::Path::new(
+                "fleet with spaces \"quoted\" $(touch INJECTED)"
+            ))
+        );
+
+        let cli = Cli::try_parse_from(["workestrate", "secrets", "init", "--global"])
+            .expect("--global must parse");
+        let Commands::Secrets {
+            action: SecretsAction::Init { target },
+        } = cli.command
+        else {
+            panic!("expected secrets init");
+        };
+        assert!(target.global);
+    }
+
+    /// The target selectors are mutually exclusive on BOTH verbs; a typo'd
+    /// subcommand and unknown flags are rejected (all before any writes).
+    #[test]
+    fn secrets_target_selectors_are_mutually_exclusive() {
+        for verb in ["init", "update"] {
+            for extra in [
+                vec!["--config", "personal", "--global"],
+                vec!["--config-dir", "fleet", "--global"],
+                vec!["--config-dir", "fleet", "--config", "personal"],
+                vec!["--unknown"],
+            ] {
+                let argv: Vec<&str> = ["workestrate", "secrets", verb]
+                    .into_iter()
+                    .chain(extra)
+                    .collect();
+                assert!(
+                    Cli::try_parse_from(&argv).is_err(),
+                    "{argv:?} must be rejected"
+                );
+            }
+        }
+        assert!(Cli::try_parse_from(["workestrate", "secrets", "typo"]).is_err());
+        assert!(Cli::try_parse_from(["workestrate", "secrets", "init", "update"]).is_err());
+    }
+
+    /// The removed top-level `secrets-target`/`secrets-schema` aliases
+    /// stay removed: they must fail to parse (use `secrets target/schema`).
+    #[test]
+    fn legacy_secrets_commands_are_removed() {
+        assert!(Cli::try_parse_from(["workestrate", "secrets-target", "personal", "--json"]).is_err());
+        assert!(Cli::try_parse_from(["workestrate", "secrets-schema"]).is_err());
     }
 
     #[test]

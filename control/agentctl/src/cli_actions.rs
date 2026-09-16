@@ -571,6 +571,67 @@ pub enum ImagesAction {
     Gc {},
 }
 
+/// Target selector shared by `secrets init` and `secrets update`. Exactly
+/// one of the three forms may be given; with none, resolution falls back to
+/// `WORKESTRATE_CONFIG_DIR`, then a single registered config, then a
+/// `.sops.yaml` in the current directory.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct SecretsTargetArgs {
+    /// Registered config repo name to provision (resolved through the
+    /// registry; honors its store dir and per-repo secrets_file/age_key_file
+    /// overrides). The global --home flag selects the tool home the registry
+    /// is read from — --home only makes sense together with --config.
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["config_dir", "global"])]
+    pub config: Option<String>,
+
+    /// Existing config directory to edit directly, without a registry
+    /// lookup. The directory must exist; it is never created.
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["config", "global"])]
+    pub config_dir: Option<std::path::PathBuf>,
+
+    /// Target the user-global secrets layer
+    /// (${XDG_CONFIG_HOME:-~/.config}/workestrate/.env.local.enc; the
+    /// directory is created when missing).
+    #[arg(long, conflicts_with_all = ["config", "config_dir"])]
+    pub global: bool,
+}
+
+/// Actions for provisioning and inspecting encrypted secrets
+/// (`workestrate secrets ...`).
+#[derive(Subcommand)]
+pub enum SecretsAction {
+    /// Bootstrap encrypted secrets for a target: creates the age key and
+    /// substitutes the .sops.yaml recipient when needed, then writes the
+    /// encrypted secrets file. Refuses to overwrite an existing file — use
+    /// `update` for changes. Secret values are NEVER accepted as
+    /// command-line arguments: they come from process env vars (all required
+    /// keys set → fully non-interactive), stdin (non-TTY), or an interactive
+    /// editor.
+    Init {
+        #[command(flatten)]
+        target: SecretsTargetArgs,
+    },
+    /// Decrypt → modify → re-encrypt an existing secrets file. Any schema
+    /// key set non-empty in the process env is replaced in place (names are
+    /// reported, never values); otherwise values come from stdin (non-TTY,
+    /// one line per required key, empty keeps the existing value) or an
+    /// interactive editor. Secret values are NEVER accepted as command-line
+    /// arguments.
+    Update {
+        #[command(flatten)]
+        target: SecretsTargetArgs,
+    },
+    /// Resolve a registered config repo's secrets target paths (dir,
+    /// secrets_file, age_key_file). Use the global --json flag for
+    /// machine-readable output.
+    Target {
+        /// Config repo name to resolve.
+        name: String,
+    },
+    /// Print the env_var names of all secrets defined in config.
+    Schema,
+}
+
 /// Mount-policy diagnostics (spec 22 §13).
 #[derive(Subcommand)]
 pub enum PolicyAction {

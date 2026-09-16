@@ -139,6 +139,11 @@ rustPlatform.buildRustPackage {
     cp -r "$TMPDIR/workestrate-notices" $out/share/licenses/workestrate/rust
     python3 ${../../scripts/licensing/cargo_notices.py} verify $out/share/licenses/workestrate/rust
 
+    # sops + age are bundled on the wrapper's PATH: `workestrate secrets`
+    # (init/update) shells out to sops for encrypt/decrypt and to age-keygen
+    # for key bootstrap/recipient derivation, and the secrets loader shells
+    # out to sops for decryption — the installed CLI must find both without
+    # a devshell.
     # Canonical MSB home: $HOME/.microsandbox/current — the `current`
     # GENERATION symlink of the msb state-generations layout
     # ($HOME/.microsandbox/generations/<hash12>/{db,sandboxes,run,...};
@@ -156,7 +161,7 @@ rustPlatform.buildRustPackage {
     wrapProgram $out/bin/workestrate \
       --set MSB_PATH "${microsandbox}/bin/msb" \
       --set MSB_AGENTD_PATH "${microsandbox}/libexec/agentd" \
-      --prefix PATH : ${pkgs.sops}/bin \
+      --prefix PATH : ${pkgs.sops}/bin:${pkgs.age}/bin \
       --run 'if [ -z "''${MSB_HOME:-}" ]; then export MSB_HOME="$HOME/.microsandbox/current"; fi'
   '';
 

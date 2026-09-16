@@ -75,7 +75,6 @@ class ShellArgumentsTest(unittest.TestCase):
         self.assertEqual(root_file.read_bytes(), str(self.root).encode())
         prefix_args = {
             "bootstrap": [".#bootstrap"],
-            "setup-secrets": ["-c", "setup-secrets"],
         }.get(recipe, [])
         expected = prefix_args + arguments
         self.assertEqual(forwarded[4:], expected)
@@ -131,15 +130,81 @@ class ShellArgumentsTest(unittest.TestCase):
                 self.check_recipe(recipe, ["-c", "false"], exit_code=23)
 
     def test_secrets_target_arguments_remain_literal(self):
+        # The setup-secrets recipe is a thin host-side alias with the same
+        # verb-hoisting + default-init adapter as scripts/setup-secrets.sh
+        # and the flake's setup-secrets wrapper: the init/update verb is
+        # hoisted before the target-selector flags, a bare invocation
+        # defaults to init, and --help without a verb passes through to the
+        # CLI group help. No nix develop; arguments are forwarded literally.
+        # Stub the CLI to capture argv and control the exit code.
+        self.write_tool(
+            "workestrate",
+            f"#!{sys.executable}\n"
+            "import json, os, pathlib, sys\n"
+            "pathlib.Path(os.environ['CLI_ARGV_LOG']).write_text(json.dumps(sys.argv[1:]))\n"
+            "sys.exit(int(os.environ.get('CLI_EXIT_CODE', '0')))\n",
+        )
+        env = {**self.env, "CLI_ARGV_LOG": str(self.root / "cli-argv.json")}
         marker = self.root / "must not be created"
-        for arguments in (
-            ["--home", str(self.outer / "operator home"), "--config", "personal", "update"],
-            ["--config-dir", f"$(touch {shlex.quote(str(marker))}); `false`", "update"],
-        ):
+        # Cases are (recipe argv, expected CLI argv): the verb may appear
+        # before or after the selector flags, option values named init/update
+        # must not be mistaken for the verb, `--opt=value` forms are kept
+        # verbatim, and a bare invocation gains `init` while staying literal
+        # (no shell expansion of metacharacters).
+        hoist_cases = (
+            (["--home", str(self.outer / "operator home"), "--config", "personal", "update"],
+             ["secrets", "update", "--home", str(self.outer / "operator home"), "--config", "personal"]),
+            (["update", "--home", str(self.outer / "operator home"), "--config", "personal"],
+             ["secrets", "update", "--home", str(self.outer / "operator home"), "--config", "personal"]),
+            (["--config", "personal", "update"], ["secrets", "update", "--config", "personal"]),
+            (["--config=personal", "update"], ["secrets", "update", "--config=personal"]),
+            (["update", "--config=personal"], ["secrets", "update", "--config=personal"]),
+            (["--config", "init"], ["secrets", "init", "--config", "init"]),
+            (["--config=init"], ["secrets", "init", "--config=init"]),
+            (["--config-dir", "update"], ["secrets", "init", "--config-dir", "update"]),
+            (["--home", "init"], ["secrets", "init", "--home", "init"]),
+            (["--config", "personal"], ["secrets", "init", "--config", "personal"]),
+            ([], ["secrets", "init"]),
+            (["--global"], ["secrets", "init", "--global"]),
+            (["init", "--global"], ["secrets", "init", "--global"]),
+            (["--global", "init"], ["secrets", "init", "--global"]),
+            (["--help"], ["secrets", "--help"]),
+            (["-h"], ["secrets", "-h"]),
+            ([f"$(touch {shlex.quote(str(marker))}); `false`", "update"],
+             ["secrets", "update", f"$(touch {shlex.quote(str(marker))}); `false`"]),
+            (["--config-dir", f"$(touch {shlex.quote(str(marker))}); `false`", "update"],
+             ["secrets", "update", "--config-dir", f"$(touch {shlex.quote(str(marker))}); `false`"]),
+        )
+        for arguments, expected in hoist_cases:
             with self.subTest(arguments=arguments):
-                self.check_recipe("setup-secrets", arguments)
+                result = subprocess.run(
+                    [str(self.bin / "just"), "setup-secrets", *arguments],
+                    cwd=self.root, env=env, text=True, capture_output=True, timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                forwarded = json.loads((self.root / "cli-argv.json").read_text())
+                self.assertEqual(forwarded, expected)
                 self.assertFalse(marker.exists())
-        self.check_recipe("setup-secrets", ["--config", "personal", "update"], exit_code=23)
+                self.assertFalse((self.root / "nix-argv.json").exists(), "recipe must not enter nix")
+        # A missing option value errors before delegating to the CLI.
+        for arguments in (["--config"], ["--config-dir"], ["--home"]):
+            with self.subTest(arguments=arguments):
+                before = (self.root / "cli-argv.json").read_text() if (self.root / "cli-argv.json").exists() else None
+                result = subprocess.run(
+                    [str(self.bin / "just"), "setup-secrets", *arguments],
+                    cwd=self.root, env=env, text=True, capture_output=True, timeout=10,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn("requires a value", result.stderr)
+                self.assertFalse((self.root / "nix-argv.json").exists(), "recipe must not enter nix")
+                after = (self.root / "cli-argv.json").read_text() if (self.root / "cli-argv.json").exists() else None
+                self.assertEqual(after, before, "missing option value must not reach the CLI")
+        result = subprocess.run(
+            [str(self.bin / "just"), "setup-secrets", "--config", "personal", "update"],
+            cwd=self.root, env={**env, "CLI_EXIT_CODE": "23"},
+            text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 23, result.stderr)
 
     def test_shells_keep_explicit_external_target_literal(self):
         target = str(self.outer / 'cache with spaces' / '$(touch injected); `false` "quoted"')

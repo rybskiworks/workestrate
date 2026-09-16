@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Test secrets selection and encrypted updates using disposable homes and keys."""
+"""Test secrets selection and encrypted updates using disposable homes and keys.
+
+Exercises the real `workestrate secrets` CLI (init/update) — target selection
+precedence, per-repo overrides, and the no-secret-values-in-output contract.
+"""
 
 import json
 import os
@@ -10,12 +14,9 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).resolve().with_name("setup-secrets.sh")
-
-
 class SecretsTargetTest(unittest.TestCase):
     def setUp(self):
-        for tool in ("bash", "workestrate", "jq", "age-keygen", "sops"):
+        for tool in ("workestrate", "age-keygen", "sops"):
             self.assertIsNotNone(shutil.which(tool), f"required test tool missing: {tool}")
         self.scratch = tempfile.TemporaryDirectory(prefix="workestrate-secrets-target-")
         self.addCleanup(self.scratch.cleanup)
@@ -33,6 +34,8 @@ class SecretsTargetTest(unittest.TestCase):
             "SOPS_AGE_KEY_FILE": str(self.key),
             "TMPDIR": str(self.root),
             "LITELLM_MASTER_KEY": "sk-test-initial-target-selection",
+            # Fail deterministically if a flow unexpectedly goes interactive.
+            "EDITOR": "false",
             "LC_ALL": "C",
         }
         subprocess.run(
@@ -65,9 +68,12 @@ class SecretsTargetTest(unittest.TestCase):
             f"{overrides}\n"
         )
 
-    def run_helper(self, *args, extra_env=None, success=True):
+    def run_helper(self, command, *args, extra_env=None, success=True):
+        # `workestrate secrets <init|update> [opts]`: the target-selector
+        # flags belong to the verb; --home is a global CLI flag and is
+        # accepted at any position.
         result = subprocess.run(
-            [shutil.which("bash"), str(SCRIPT), *map(str, args)],
+            [shutil.which("workestrate"), "secrets", command, *map(str, args)],
             cwd=self.root, env={**self.env, **(extra_env or {})},
             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
         )
@@ -77,6 +83,14 @@ class SecretsTargetTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertNotIn(self.env["LITELLM_MASTER_KEY"], result.stdout + result.stderr)
         return result
+
+    def run_cli(self, *args, extra_env=None):
+        """Raw CLI invocation for invalid-argument cases (any argv shape)."""
+        return subprocess.run(
+            [shutil.which("workestrate"), *map(str, args)],
+            cwd=self.root, env={**self.env, **(extra_env or {})},
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+        )
 
     def decrypt(self, path):
         return subprocess.check_output(
@@ -89,10 +103,10 @@ class SecretsTargetTest(unittest.TestCase):
         self.make_fleet(other)
         (other / ".env.enc").write_text("untouched ciphertext fixture")
         args = ["--home", self.home, "--config", "personal"]
-        self.run_helper(*args, "init")
+        self.run_helper("init", *args)
         self.assertIn(self.env["LITELLM_MASTER_KEY"], self.decrypt(self.fleet / ".env.enc"))
         replacement = "sk-test-updated-target-selection"
-        result = self.run_helper(*args, "update", extra_env={"LITELLM_MASTER_KEY": replacement})
+        result = self.run_helper("update", *args, extra_env={"LITELLM_MASTER_KEY": replacement})
         self.assertIn(replacement, self.decrypt(self.fleet / ".env.enc"))
         self.assertNotIn(replacement, result.stdout + result.stderr)
         self.assertEqual((other / ".env.enc").read_text(), "untouched ciphertext fixture")
@@ -105,7 +119,7 @@ class SecretsTargetTest(unittest.TestCase):
     def test_home_environment_and_explicit_name_override_direct_environment(self):
         other = self.root / "unselected fleet"
         self.make_fleet(other)
-        self.run_helper("--config", "personal", "init", extra_env={
+        self.run_helper("init", "--config", "personal", extra_env={
             "WORKESTRATE_HOME": str(self.home),
             "WORKESTRATE_CONFIG_DIR": str(other),
         })
@@ -113,7 +127,7 @@ class SecretsTargetTest(unittest.TestCase):
         self.assertFalse((other / ".env.enc").exists())
 
     def test_home_flag_overrides_home_environment(self):
-        self.run_helper("--home", self.home, "--config", "personal", "init", extra_env={
+        self.run_helper("init", "--home", self.home, "--config", "personal", extra_env={
             "WORKESTRATE_HOME": str(self.root / "wrong home"),
         })
         self.assertTrue((self.fleet / ".env.enc").is_file())
@@ -126,7 +140,7 @@ class SecretsTargetTest(unittest.TestCase):
             settings=f"[settings]\nstore_dir = {json.dumps(str(store))}\n",
             overrides=f'secrets_file = "custom secrets.enc"\nage_key_file = {json.dumps(str(self.key))}',
         )
-        self.run_helper("--home", self.home, "--config", "personal", "init", extra_env={
+        self.run_helper("init", "--home", self.home, "--config", "personal", extra_env={
             "SOPS_AGE_KEY_FILE": str(self.root / "wrong key"),
             "SECRET_FILE": "wrong-file.enc",
         })
@@ -138,7 +152,7 @@ class SecretsTargetTest(unittest.TestCase):
         name = 'fleet with spaces "quoted" $(touch INJECTED)'
         selected = self.root / name
         self.make_fleet(selected)
-        self.run_helper("--config-dir", name, "init", extra_env={
+        self.run_helper("init", "--config-dir", name, extra_env={
             "WORKESTRATE_CONFIG_DIR": str(self.fleet),
         })
         self.assertIn(self.env["LITELLM_MASTER_KEY"], self.decrypt(selected / ".env.enc"))
@@ -147,48 +161,43 @@ class SecretsTargetTest(unittest.TestCase):
 
     def test_relative_registry_key_is_resolved_before_changing_directory(self):
         self.write_registry(overrides='age_key_file = "private keys/age.txt"')
-        self.run_helper("--home", self.home, "--config", "personal", "init")
+        self.run_helper("init", "--home", self.home, "--config", "personal")
         self.assertIn(self.env["LITELLM_MASTER_KEY"], self.decrypt(self.fleet / ".env.enc"))
 
     def test_direct_directory_equals(self):
-        self.run_helper(f"--config-dir={self.fleet}", "init")
+        self.run_helper("init", f"--config-dir={self.fleet}")
         self.assertTrue((self.fleet / ".env.enc").exists())
 
     def test_unknown_name_does_not_fall_back_to_environment(self):
-        result = self.run_helper("--home", self.home, "--config", "missing", "init",
+        result = self.run_helper("init", "--home", self.home, "--config", "missing",
                                  extra_env={"WORKESTRATE_CONFIG_DIR": str(self.fleet)}, success=False)
         self.assertIn("could not resolve config 'missing'", result.stderr)
         self.assertFalse((self.fleet / ".env.enc").exists())
 
     def test_missing_directory_is_not_created(self):
         missing = self.root / "missing directory"
-        self.run_helper("--config-dir", missing, "update", success=False)
+        self.run_helper("update", "--config-dir", missing, success=False)
         self.assertFalse(missing.exists())
 
     def test_invalid_arguments_fail_before_writes(self):
-        for args in (
-            ["--config"], ["--config="], ["--home"], ["--home="],
-            ["--config-dir"], ["--config-dir="], ["--config", "--global"],
-            ["--home", self.home], ["--home", self.home, "--global"],
-            ["--config", "personal", "--global"],
-            ["--config-dir", self.fleet, "--global"],
-            ["--config-dir", self.fleet, "--config", "personal"],
-            ["--unknown"], ["init", "update"], ["typo"],
-        ):
+        for verb in ("init", "update"):
+            for args in (
+                ["--config"], ["--config="], ["--home"], ["--home="],
+                ["--config-dir"], ["--config-dir="], ["--config", "--global"],
+                ["--config", "personal", "--global"],
+                ["--config-dir", self.fleet, "--global"],
+                ["--config-dir", self.fleet, "--config", "personal"],
+                ["--unknown"],
+            ):
+                with self.subTest(verb=verb, args=args):
+                    result = self.run_cli("secrets", verb, *args)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertFalse((self.fleet / ".env.enc").exists())
+        for args in (["secrets", "init", "update"], ["secrets", "typo"]):
             with self.subTest(args=args):
-                self.run_helper(*args, success=False)
+                result = self.run_cli(*args)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertFalse((self.fleet / ".env.enc").exists())
-
-    def test_invalid_resolver_response_fails_before_writes(self):
-        bin_dir = self.root / "mock bin"
-        bin_dir.mkdir()
-        mock = bin_dir / "workestrate"
-        mock.write_text('#!/bin/sh\nprintf \'{"dir":null,"secrets_file":".env.enc"}\\n\'\n')
-        mock.chmod(0o755)
-        result = self.run_helper("--config", "personal", "init", success=False,
-                                 extra_env={"PATH": str(bin_dir) + os.pathsep + self.env["PATH"]})
-        self.assertIn("invalid target paths", result.stderr)
-        self.assertFalse((self.fleet / ".env.enc").exists())
 
 
 if __name__ == "__main__":

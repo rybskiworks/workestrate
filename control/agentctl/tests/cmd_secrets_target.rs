@@ -1,4 +1,4 @@
-//! Integration tests for `workestrate secrets-target` — registry resolution,
+//! Integration tests for `workestrate secrets target` — registry resolution,
 //! per-repo overrides, unregistered names, and exists detection. Uses an
 //! isolated HOME + XDG_CONFIG_HOME per test so the user's real workestrate
 //! registry is never touched.
@@ -42,7 +42,7 @@ fn secrets_target_defaults_for_registered_repo() {
 
     let out = home
         .cmd()
-        .args(["secrets-target", "personal", "--json"])
+        .args(["secrets", "target", "personal", "--json"])
         .output()
         .expect("invoke secrets-target");
     assert!(
@@ -97,7 +97,7 @@ fn secrets_target_honors_per_repo_overrides() {
 
     let out = home
         .cmd()
-        .args(["secrets-target", "personal", "--json"])
+        .args(["secrets", "target", "personal", "--json"])
         .output()
         .expect("invoke secrets-target");
     assert!(
@@ -142,7 +142,7 @@ fn secrets_target_rejects_unregistered_name() {
 
     let out = home
         .cmd()
-        .args(["secrets-target", "ghost", "--json"])
+        .args(["secrets", "target", "ghost", "--json"])
         .output()
         .expect("invoke secrets-target");
     assert!(
@@ -167,7 +167,7 @@ fn secrets_target_reports_exists_true_when_file_present() {
 
     let out = home
         .cmd()
-        .args(["secrets-target", "personal", "--json"])
+        .args(["secrets", "target", "personal", "--json"])
         .output()
         .expect("invoke secrets-target");
     assert!(

@@ -192,7 +192,7 @@ pub(crate) fn apply_plan_secrets(
                 if s.required && value.trim().is_empty() {
                     anyhow::bail!(
                         "required secret '{}' is set but empty.\n\
-                         Set a real value via `nix develop -c setup-secrets --config <name> update` (or `just setup-secrets --config <name> update`).",
+                         Set a real value via `workestrate secrets update --config <name>`.",
                         s.name
                     );
                 }
@@ -235,7 +235,7 @@ pub(crate) fn apply_plan_secrets(
             Err(e) => {
                 return Err(anyhow::anyhow!(
                     "required secret '{}' is not set: {}\n\
-                     Set it in the environment or run `nix develop -c setup-secrets --config <name> update` (or `just setup-secrets --config <name> update`)",
+                     Set it in the environment or run `workestrate secrets update --config <name>`",
                     s.name,
                     e
                 ));

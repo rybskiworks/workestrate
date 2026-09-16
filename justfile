@@ -505,17 +505,65 @@ host-provision:
 provision-check:
     ./scripts/host-provision.sh --check-only
 
-# Bootstrap or update encrypted secrets
+# Bootstrap or update encrypted secrets (DEPRECATED convenience alias —
+# delegates to the CLI: the nix-installed workestrate wrapper bundles sops
+# and age, so no devshell is needed). Kept for muscle memory; prefer
+# `workestrate secrets <init|update> ...` directly. Accepts the historical
+# argument shapes (init/update before or after the --config/--config-dir/
+# flags; --home anywhere) and hoists the verb in front of the
+# target-selector flags; a bare invocation defaults to `init`.
 [positional-arguments]
 setup-secrets *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
-    mkdir -p "$_devenv_root_dir"
-    _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
-    printf '%s' "$_repo_root" > "$_devenv_root_file"
-    exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c setup-secrets "$@"
+    action=""
+    rest=()
+    saw_help=0
+    # Consume --config/--config-dir/--home together with their value (both
+    # `--opt value` and `--opt=value` forms) so a value named init/update
+    # is never mistaken for the verb; a missing value errors out before
+    # delegating to the CLI.
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --config|--config-dir|--home)
+          opt="$1"
+          if [ $# -lt 2 ]; then
+            echo "[setup-secrets] ERROR: $opt requires a value" >&2
+            exit 1
+          fi
+          rest+=("$1" "$2")
+          shift 2
+          ;;
+        --config=*|--config-dir=*|--home=*)
+          rest+=("$1")
+          shift
+          ;;
+        -h|--help)
+          saw_help=1
+          rest+=("$1")
+          shift
+          ;;
+        init|update)
+          if [ -z "$action" ]; then
+            action="$1"
+          else
+            rest+=("$1")
+          fi
+          shift
+          ;;
+        *)
+          rest+=("$1")
+          shift
+          ;;
+      esac
+    done
+    if [ -n "$action" ]; then
+      exec workestrate secrets "$action" "${rest[@]}"
+    fi
+    if [ "$saw_help" -eq 1 ]; then
+      exec workestrate secrets "${rest[@]}"
+    fi
+    exec workestrate secrets init "${rest[@]}"
 
 # Validate the full secrets workflow (non-interactive, uses test values)
 validate-secrets:

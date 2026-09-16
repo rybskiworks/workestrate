@@ -305,22 +305,70 @@
             '';
           };
 
+          # DEPRECATED compatibility shim for `workestrate secrets` (the
+          # provisioning engine moved into the CLI). The workestrate wrapper
+          # bundles sops + age, so the CLI is the only runtime input; the
+          # SOPS_AGE_KEY_FILE default export is gone (the CLI defaults the
+          # key path itself). Kept so `nix develop -c setup-secrets ...`
+          # invocations keep working during the transition.
           setup-secrets = pkgs.writeShellApplication {
             name = "setup-secrets";
-            runtimeInputs = [
-              workestrate
-              pkgs.sops
-              pkgs.age
-              pkgs.jq
-              pkgs.coreutils
-              pkgs.gnugrep
-              pkgs.gnused
-            ];
+            runtimeInputs = [ workestrate ];
             text = ''
               set -euo pipefail
-              : "''${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/ai-workbench-secrets.txt}"
-              export SOPS_AGE_KEY_FILE
-              exec ${./scripts/setup-secrets.sh} "$@"
+              echo "[setup-secrets] DEPRECATED: use 'workestrate secrets' directly; this wrapper delegates to it." >&2
+              # Hoist the init/update verb in front of the target-selector
+              # flags: the historical script accepted options before or after
+              # the command, while the CLI parses them as flags OF the verb.
+              # Options that take a value (--config/--config-dir/--home, both
+              # `--opt value` and `--opt=value` forms) are consumed together
+              # with their value, so a value named init/update is never
+              # mistaken for the verb; a missing value errors out before
+              # delegating to the CLI.
+              action=""
+              rest=()
+              saw_help=0
+              while [ $# -gt 0 ]; do
+                case "$1" in
+                  --config|--config-dir|--home)
+                    opt="$1"
+                    if [ $# -lt 2 ]; then
+                      echo "[setup-secrets] ERROR: $opt requires a value" >&2
+                      exit 1
+                    fi
+                    rest+=("$1" "$2")
+                    shift 2
+                    ;;
+                  --config=*|--config-dir=*|--home=*)
+                    rest+=("$1")
+                    shift
+                    ;;
+                  -h|--help)
+                    saw_help=1
+                    rest+=("$1")
+                    shift
+                    ;;
+                  init|update)
+                    if [ -z "$action" ]; then
+                      action="$1"
+                    else
+                      rest+=("$1")
+                    fi
+                    shift
+                    ;;
+                  *)
+                    rest+=("$1")
+                    shift
+                    ;;
+                esac
+              done
+              if [ -n "$action" ]; then
+                exec workestrate secrets "$action" "''${rest[@]}"
+              fi
+              if [ "$saw_help" -eq 1 ]; then
+                exec workestrate secrets "''${rest[@]}"
+              fi
+              exec workestrate secrets init "''${rest[@]}"
             '';
           };
 
