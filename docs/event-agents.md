@@ -45,8 +45,12 @@ What the CLI already provides for an event-driven role:
   mount). `replace` and `reuse` are parsed and validated but do **not** yet
   select behaviour (ADR 0030 Phase 2).
 - **State.** `[[mounts]]` with `mode = "rw" | "ro"`; `[[seed_files]]` with
-  `only_if_missing` and `template`; both paths are relative to the config-repo
-  root.
+  `only_if_missing` and `template`. Relative mount hosts, seed sources and
+  non-state seed targets resolve against the content root of the layer that
+  declares them, not the config-repo root: a root `workestrate.toml` resolves
+  from the repo root, while a capsule under `workestrate/workloads/<role>/`
+  resolves from `workestrate/`. Seed targets under `workspaces/` or `var/`
+  resolve under the state directory instead.
 - **Network.** `[network.defaults] egress = "deny"` plus explicit
   `policy.egress.allow.host` / `.domain` grants. Deny-by-default is the only
   defensible default for a workload reacting to untrusted input.
