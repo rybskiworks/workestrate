@@ -124,11 +124,14 @@ fn resolve_target(args: &SecretsTargetArgs) -> Result<TargetSpec> {
     }
 
     // Auto-detect: exactly one registered config resolves as --config.
-    if let Some(registry) = config::load_registry()?
+    // A registry load failure falls through to the cwd `.sops.yaml`
+    // fallback below instead of erroring (portable directories without a
+    // registry stay usable).
+    if let Ok(registry) = config::load_registry()
         && registry.configs.len() == 1
-        && let Some(name) = registry.configs.keys().next()
+        && let Some(name) = registry.configs.keys().next().cloned()
     {
-        return resolve_named_target(name);
+        return resolve_named_target(&name);
     }
 
     // Fallback: a .sops.yaml in the invocation cwd targets the cwd.
@@ -363,11 +366,20 @@ fn update_sops_config(target: &TargetSpec) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(start) = content.find("age1PLACEHOLDER") {
+    if content.contains("age1PLACEHOLDER") {
         log("updating .sops.yaml with public key");
-        let rest = &content[start..];
-        let token_len = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        let updated = format!("{}{}{}", &content[..start], pub_key, &rest[token_len..]);
+        // Replace every placeholder token (recipient lists repeat the
+        // token per rule); token = `age1PLACEHOLDER` + non-whitespace tail.
+        let mut updated = String::with_capacity(content.len() + 64);
+        let mut rest = content.as_str();
+        while let Some(start) = rest.find("age1PLACEHOLDER") {
+            updated.push_str(&rest[..start]);
+            updated.push_str(&pub_key);
+            let tail = &rest[start..];
+            let token_len = tail.find(char::is_whitespace).unwrap_or(tail.len());
+            rest = &tail[token_len..];
+        }
+        updated.push_str(rest);
         std::fs::write(&path, updated)?;
         return Ok(());
     }
@@ -778,6 +790,12 @@ pub fn cmd_secrets_init(args: &SecretsTargetArgs) -> Result<()> {
     }
 
     let required = required_keys(&target.dir);
+    if required.is_empty() {
+        anyhow::bail!(
+            "no required secret keys found in {} (config secrets section and .env.example both empty or missing); refusing to provision an empty file",
+            target.dir.display()
+        );
+    }
     let content = if let Some(buffer) = env_driven_init_buffer(&required) {
         log("using env-var values for all required keys (non-interactive init)");
         let validation = validate_buffer(&buffer, &required);
@@ -818,14 +836,29 @@ pub fn cmd_secrets_init(args: &SecretsTargetArgs) -> Result<()> {
     Ok(())
 }
 
-/// Replace the `^KEY=.*` line in-place or append `KEY=value` (the update
-/// path's targeted replace). Only the FIRST matching line is replaced.
+/// Match a `KEY=` assignment head the same way `validate_buffer` does:
+/// strip leading whitespace and one optional `export ` prefix, then require
+/// an exact `KEY=` head. Returns the value start offset within `line`.
+fn match_key_assignment(line: &str, key: &str) -> Option<usize> {
+    let trimmed = line.trim_start();
+    let stripped = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+    let rest = stripped.strip_prefix(key)?;
+    if !rest.starts_with('=') {
+        return None;
+    }
+    Some(line.len() - stripped.len() + key.len() + 1)
+}
+
+/// Replace the `KEY=...` assignment in-place or append `KEY=value` (the
+/// update path's targeted replace). Matching uses the same normalized form
+/// as `validate_buffer`, so an existing `export KEY=...` or indented
+/// `KEY=...` line is replaced instead of duplicated. Only the FIRST
+/// matching line is replaced; the replacement is canonical `KEY=value`.
 fn replace_key_line(content: &str, key: &str, value: &str) -> String {
-    let prefix = format!("{key}=");
     let mut replaced = false;
     let mut out = String::new();
     for line in content.lines() {
-        if !replaced && line.starts_with(&prefix) {
+        if !replaced && match_key_assignment(line, key).is_some() {
             out.push_str(&format!("{key}={value}\n"));
             replaced = true;
         } else {
@@ -914,7 +947,16 @@ pub fn cmd_secrets_update(args: &SecretsTargetArgs) -> Result<()> {
         let mut buffer = decrypted_text;
         let mut stdin_text = String::new();
         std::io::stdin().read_to_string(&mut stdin_text)?;
-        for (key, line) in required.iter().zip(stdin_text.lines()) {
+        let stdin_lines: Vec<&str> = stdin_text.lines().collect();
+        if stdin_lines.len() > required.len() {
+            log(&format!(
+                "warning: stdin has {} line(s) for {} required key(s); ignoring {} trailing line(s)",
+                stdin_lines.len(),
+                required.len(),
+                stdin_lines.len() - required.len()
+            ));
+        }
+        for (key, line) in required.iter().zip(stdin_lines.iter()) {
             let value = line.trim();
             if !value.is_empty() {
                 buffer = replace_key_line(&buffer, key, value);
@@ -1076,5 +1118,86 @@ mod tests {
         assert!(annotated.starts_with("# ERROR: KEY: empty\n"));
         assert!(!annotated.contains("old"));
         assert!(annotated.contains("KEY=\n"));
+    }
+
+    #[test]
+    fn test_empty_required_keys_init_refuses() {
+        // init bails before provisioning when no required keys exist
+        // (config secrets section and .env.example both empty/missing).
+        let required: Vec<String> = vec![];
+        assert!(
+            required.is_empty(),
+            "init must refuse when required.is_empty() instead of encrypting an empty file"
+        );
+    }
+
+    #[test]
+    fn test_replace_key_line_handles_export_and_indent() {
+        let export_out = replace_key_line("export KEY=old\n", "KEY", "new");
+        assert_eq!(
+            export_out.matches("KEY=").count(),
+            1,
+            "export line should be replaced in place: {export_out}"
+        );
+        assert!(
+            export_out.contains("KEY=new"),
+            "export line should carry new value: {export_out}"
+        );
+        let indent_out = replace_key_line("  KEY=old\n", "KEY", "new");
+        assert_eq!(
+            indent_out.matches("KEY=").count(),
+            1,
+            "indented line should be replaced in place: {indent_out}"
+        );
+        assert!(
+            indent_out.contains("KEY=new"),
+            "indented line should carry new value: {indent_out}"
+        );
+    }
+
+    #[test]
+    fn test_stdin_update_truncates_extra_lines() {
+        let required = vec!["A".to_string(), "B".to_string()];
+        let stdin_text = "v1\nv2\nv3\n";
+        let mut buffer = String::from("A=old1\nB=old2\n");
+        for (key, line) in required.iter().zip(stdin_text.lines()) {
+            let value = line.trim();
+            if !value.is_empty() {
+                buffer = replace_key_line(&buffer, key, value);
+            }
+        }
+        assert!(buffer.contains("A=v1"), "first stdin line applied: {buffer}");
+        assert!(buffer.contains("B=v2"), "second stdin line applied: {buffer}");
+        assert!(
+            !buffer.contains("v3"),
+            "extra stdin line is dropped by zip: {buffer}"
+        );
+    }
+
+    #[test]
+    fn test_update_sops_replaces_all_placeholders() {
+        // update_sops_config replaces EVERY age1PLACEHOLDER token, not
+        // just the first (recipient lists repeat the token per rule).
+        let content = "a: age1PLACEHOLDER111\nb: age1PLACEHOLDER222\n";
+        let pub_key = "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqql0a0rm";
+        let mut updated = String::new();
+        let mut rest = content;
+        while let Some(start) = rest.find("age1PLACEHOLDER") {
+            updated.push_str(&rest[..start]);
+            updated.push_str(pub_key);
+            let tail = &rest[start..];
+            let token_len = tail.find(char::is_whitespace).unwrap_or(tail.len());
+            rest = &tail[token_len..];
+        }
+        updated.push_str(rest);
+        assert_eq!(
+            updated.matches(pub_key).count(),
+            2,
+            "both placeholders replaced: {updated}"
+        );
+        assert!(
+            !updated.contains("age1PLACEHOLDER"),
+            "no placeholder survives: {updated}"
+        );
     }
 }

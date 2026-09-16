@@ -123,6 +123,12 @@ workestrate secrets update --config-dir "/path/to/config repo"
     NAMES are reported, never the values. (This generalizes the retired
     script's `LITELLM_MASTER_KEY`-only special case — any key now works the
     same way, which covers scripted key rotation.)
+  - **Ambient-env warning:** there is NO opt-out flag — ANY non-empty
+    schema key present in the process environment triggers the targeted
+    path instead of the interactive editor, even when that was not the
+    intent (e.g. a stray exported `LITELLM_MASTER_KEY` in your shell mutates
+    the file on `update`). Scrub or unset unrelated secret env vars before
+    running `update` interactively.
   - **stdin (non-TTY):** one line per required key in required-keys order;
     an empty line keeps the existing value.
   - **Interactive:** opens the editor with the decrypted values plus any
