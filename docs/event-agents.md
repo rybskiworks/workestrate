@@ -34,9 +34,11 @@ What the CLI already provides for an event-driven role:
   tear down. Instance ids are how branch or pull-request work is kept apart.
 - **Detachment.** A service `up` is detached by default and `--foreground`
   blocks. An agent `exec` is always foreground: it attaches until the agent
-  exits, and it has no detach flag. A host-side service that starts an agent
-  role must spawn `exec` detached itself and keep the process (its stdio is the
-  agent's log); `down --instance` is then the stop path.
+  exits, and it has no detach or background flag. A host-side service that
+  starts an agent role must therefore spawn `exec` detached itself and keep the
+  process (its stdio is the agent's log). A finished attach stops and removes
+  the sandbox, so `down --instance` is the early stop path while the holder is
+  still alive.
 - **Instance strategy.** The `[instance] strategy` vocabulary is
   `singleton | parallel | replace | reuse | per-dir`. Two entries select
   behaviour today: `parallel` makes `up`/`exec` default to a fresh
@@ -57,12 +59,16 @@ What the CLI already provides for an event-driven role:
 - **Dependencies.** `[depends_on.<service>]` with `required` and the injected
   address (`env`), so a role reaches the model gateway rather than the public
   internet.
-- **Secrets.** A bare `true` reads the host environment variable of the same
-  name; `{ secret = "NAME", bound = "host" }` substitutes at the egress proxy
-  and `bound = "guest"` injects into the guest. See [secrets](secrets.md).
+- **Secrets.** A bare `true` is the host-bound form of the same-named secret
+  (its value is read from the host environment variable of the secret ID, or
+  the secret's `env_var`); `{ secret = "NAME", bound = "host" }` is the same
+  binding written out and is substituted at the egress proxy, but only for the
+  hosts in `allowed_hosts`. `bound = "guest"` injects the real value into the
+  guest. See [secrets](secrets.md).
 - **Host control endpoint.** `workestrate control serve --state-dir <dir>
-  --instance <name>...` serves one private Unix endpoint for retained exec and
-  SSH custody on selected, already-running instances (16 connections, 32 queued
+  --instance <name>...` serves one private Unix endpoint for launch-bound
+  operations on selected, already-running instances: capability queries, guest
+  exec, SSH custody and launch-scoped inspect/stop (16 connections, 32 queued
   requests, 32 retained operations). It is not an admission queue: it does not
   start workloads, hold pending launches or place work across hosts. See
   [runtime provisioning](runtime-provisioning.md).
@@ -91,9 +97,10 @@ event  ->  authorize  ->  derive instance id  ->  workestrate workload exec <rol
 
 ## What this tool does not do
 
-The command surface stays launch-oriented. There is no event broker, no
-webhook receiver, no durable admission queue for pending work, no scheduler and
-no multi-host placement, and no Kubernetes or k0s operator. There is also no
-self-hosted runner, no auto-merge and no bypass of review. A hosted CI job in
-this repository must never launch a VM; KVM acceptance remains a recorded
-host-side run.
+The command surface stays launch-oriented. There is no event broker (the
+`microsandbox::broker` modules are credential brokers for a guest, not an event
+bus), no webhook receiver, no durable admission queue for pending work, no
+scheduler and no multi-host placement, and no Kubernetes or k0s operator.
+There is also no self-hosted runner, no auto-merge and no bypass of review. A
+hosted CI job in this repository must never launch a VM; KVM acceptance remains
+a recorded host-side run.
