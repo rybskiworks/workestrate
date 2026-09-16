@@ -98,15 +98,13 @@ UPDATE_LITELLM="sk-test-updated-master-key-CHANGED-xyz"
 log "working directory: $WORKDIR"
 log "repo root: $REPO_ROOT"
 
-# Copy the script into the workdir so its BASH_SOURCE points at a path under
-# $WORKDIR (this is the path the script is invoked with in real use, not the
-# nix-store copy). The tool repo root carries NO .sops.yaml/.env.example
-# (those are config-repo artifacts the scaffold generates — the old cp of
+# Copy nothing from the repo into the workdir: provisioning runs through the
+# `workestrate secrets` CLI (sops/age are bundled in its nix wrapper). The
+# tool repo root carries NO .sops.yaml/.env.example (those are config-repo
+# artifacts the scaffold generates — the old cp of
 # $REPO_ROOT/.sops.yaml/.env.example died under set -e), so render
 # scaffold-true fixtures here instead.
-mkdir -p "$WORKDIR/scripts"
-cp "$REPO_ROOT/scripts/setup-secrets.sh" "$WORKDIR/scripts/setup-secrets.sh"
-chmod +x "$WORKDIR/scripts/setup-secrets.sh"
+mkdir -p "$WORKDIR"
 
 # Generate fresh age key for this test
 mkdir -p "$WORKDIR/keys"
@@ -124,10 +122,10 @@ sed -e "s|{{ config_name }}|validate|g" \
 log "rendered .sops.yaml from scaffold template with test recipient"
 
 # Fixture .env.example: same KEY= schema shape the scaffold generates,
-# limited to the keys exercised below (setup-secrets.sh falls back to this
-# file for REQUIRED_KEYS only if `workestrate secrets-schema` fails; with the
-# fixture workestrate.toml exported below, the binary path wins — the fixture
-# keeps the script hermetic either way).
+# limited to the keys exercised below (`workestrate secrets` falls back to
+# this file for required keys only if loading the config fails; with the
+# fixture workestrate.toml exported below, the config path wins — the fixture
+# keeps the workflow hermetic either way).
 cat > "$WORKDIR/.env.example" <<'EOF'
 # validate-secrets-workflow fixture (not a repo artifact).
 GITHUB_TOKEN=
@@ -179,7 +177,6 @@ EOF
 # Export env for init
 export SOPS_AGE_KEY_FILE="$WORKDIR/keys/age.txt"
 export SOPS_CONFIG="./.sops.yaml"
-export SECRET_FILE=".env.enc"
 export LITELLM_MASTER_KEY="$INIT_LITELLM"
 export OPENROUTER_API_KEY="$INIT_OPENROUTER"
 export KIMI_CODE_API_KEY="$INIT_KIMI"
@@ -214,18 +211,16 @@ run_in_workdir() {
 }
 
 # PHASE 1: init
-# Invoke the workdir copy of setup-secrets.sh directly (not the nix wrapper)
-# so BASH_SOURCE points at $WORKDIR/scripts/setup-secrets.sh and the script's
-# repo-root detection (BASH_SOURCE/..) lands in $WORKDIR, where we put
-# .sops.yaml and .env.example.
-log "=== PHASE 1: setup-secrets init ==="
+# `workestrate secrets init` targets WORKESTRATE_CONFIG_DIR ($WORKDIR),
+# where the fixture .sops.yaml/.env.example/workestrate.toml live.
+log "=== PHASE 1: workestrate secrets init ==="
 phase="init"
 out="$WORKDIR/phase-${phase}.out"
 err="$WORKDIR/phase-${phase}.err"
-if run_in_workdir "./scripts/setup-secrets.sh init" >"$out" 2>"$err"; then
-  pass "setup-secrets init succeeded"
+if run_in_workdir "workestrate secrets init" >"$out" 2>"$err"; then
+  pass "workestrate secrets init succeeded"
 else
-  fail "setup-secrets init failed (phase=$phase)"
+  fail "workestrate secrets init failed (phase=$phase)"
   echo "stdout:" >&2
   cat "$out" | redact >&2
   echo "stderr:" >&2
@@ -247,17 +242,18 @@ assert_contains "$DECRYPT_INIT" "GITHUB_TOKEN=$INIT_GITHUB" "init decrypt: GITHU
 assert_contains "$DECRYPT_INIT" "ODYSSEUS_ADMIN_PASSWORD=$INIT_ODYSSEUS" "init decrypt: ODYSSEUS_ADMIN_PASSWORD"
 
 # PHASE 3: update with LITELLM_MASTER_KEY env var path
-log "=== PHASE 3: setup-secrets update (LITELLM_MASTER_KEY env var) ==="
-# Set LITELLM_MASTER_KEY to the new value. setup-secrets.sh detects this
-# and replaces just that key, keeping all others unchanged.
+log "=== PHASE 3: workestrate secrets update (LITELLM_MASTER_KEY env var) ==="
+# Set LITELLM_MASTER_KEY to the new value. `workestrate secrets update`
+# detects schema keys set non-empty in the process env and replaces exactly
+# those keys, keeping all others unchanged.
 export LITELLM_MASTER_KEY="$UPDATE_LITELLM"
 phase="update"
 out="$WORKDIR/phase-${phase}.out"
 err="$WORKDIR/phase-${phase}.err"
-if run_in_workdir "./scripts/setup-secrets.sh update" >"$out" 2>"$err"; then
-  pass "setup-secrets update succeeded"
+if run_in_workdir "workestrate secrets update" >"$out" 2>"$err"; then
+  pass "workestrate secrets update succeeded"
 else
-  fail "setup-secrets update failed (phase=$phase)"
+  fail "workestrate secrets update failed (phase=$phase)"
   echo "stdout:" >&2
   cat "$out" | redact >&2
   echo "stderr:" >&2

@@ -182,7 +182,7 @@ pub fn doctor_check_age_key_file() -> DoctorCheck {
                 "WARN",
                 format!("{} not found", path.display()),
             )
-            .with_remediation("Run 'setup-secrets init' to generate the age key");
+            .with_remediation("Run 'workestrate secrets init' to generate the age key");
         }
     };
     let mode = metadata.permissions().mode() & 0o777;
