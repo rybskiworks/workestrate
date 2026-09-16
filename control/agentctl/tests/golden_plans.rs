@@ -23,7 +23,14 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
 
-const WORKLOADS: [&str; 3] = ["example-service", "example-agent", "example-offensive"];
+const WORKLOADS: [&str; 6] = [
+    "example-service",
+    "example-agent",
+    "example-offensive",
+    "event-implementer",
+    "event-reviewer",
+    "event-qa",
+];
 
 /// `<workspace_root>/config.reference` (manifest dir = control/agentctl).
 fn config_reference_dir() -> PathBuf {
@@ -89,6 +96,9 @@ fn golden_plans_match_byte_for_byte() {
             "example-service" => include_str!("golden/example-service.plan.txt"),
             "example-agent" => include_str!("golden/example-agent.plan.txt"),
             "example-offensive" => include_str!("golden/example-offensive.plan.txt"),
+            "event-implementer" => include_str!("golden/event-implementer.plan.txt"),
+            "event-reviewer" => include_str!("golden/event-reviewer.plan.txt"),
+            "event-qa" => include_str!("golden/event-qa.plan.txt"),
             other => unreachable!("unknown workload {other}"),
         };
         let stdout = render_plan(name);

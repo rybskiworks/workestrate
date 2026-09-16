@@ -1,0 +1,32 @@
+# Event-agent signal (issue #56, v1): authorize and point, never launch.
+#
+# Hosted-runner only: no secrets, no checkout of untrusted code, no KVM.
+# It validates the event shape, derives the instance id, and posts a
+# Check/comment pointing at the host-side run. Host-side
+# `workload up event-<role> [--instance <id>]` stays an explicit operator
+# step until the broker service lands. No live-state migration implied.
+name: Event agents signal
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, labeled]
+  push:
+    tags: ['v*']
+  issues:
+    types: [opened, assigned, labeled]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  signal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Derive instance id and role pointer
+        run: |
+          echo "event=${{ github.event_name }} ref=${{ github.ref }} (host-side launch is explicit; see docs/event-agents.md)"

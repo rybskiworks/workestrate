@@ -209,7 +209,7 @@ _golden-generate-inner:
         printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _golden-generate-inner
     fi
-    for name in example-service example-agent example-offensive; do \
+    for name in example-service example-agent example-offensive event-implementer event-reviewer event-qa; do \
         WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
           > control/agentctl/tests/golden/$name.plan.txt; \
     done
@@ -233,7 +233,7 @@ _golden-check-inner:
         printf '%s' "$_repo_root" > "$_devenv_root_file"
         exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _golden-check-inner
     fi
-    for name in example-service example-agent example-offensive; do \
+    for name in example-service example-agent example-offensive event-implementer event-reviewer event-qa; do \
         WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $name plan \
           | diff - control/agentctl/tests/golden/$name.plan.txt \
           || (echo "golden mismatch for $name; run 'just golden-generate' to update" && exit 1); \
@@ -489,6 +489,9 @@ _plan-inner:
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-service plan
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-agent plan
     cargo run --manifest-path control/agentctl/Cargo.toml -- example-offensive plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- event-implementer plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- event-reviewer plan
+    cargo run --manifest-path control/agentctl/Cargo.toml -- event-qa plan
 
 # Check that the Debian/Linux host is ready to run the workbench
 host-check:

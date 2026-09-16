@@ -444,3 +444,155 @@ egress = "deny"
 [[workloads.example-nested.policy.egress.allow.host]]
 ports = [53]
 protocols = ["tcp", "udp"]
+
+# Event-agent role family (issue #56): synthetic on-host role capsules for
+# GitHub-event work. implementer/qa are strategy=parallel (many branches and
+# check runs coexist as <slot>@<id>); reviewer is the singleton queue owner
+# (one verdict writer, no split-brain). All three share
+# workspaces/event-review-queue (/queue) plus a private state mount; seeds
+# below populate each private inbox copy. Registry images only (no flake or
+# image builds); deny-by-default network with DNS + github egress and the
+# example-litellm discovery edge (required = false, golden-compatible).
+[workloads.event-implementer]
+kind = "agent"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/work"
+cpus = 1
+memory_mib = 512
+command = ["python", "-m", "http.server", "9001"]
+log_stop_errors = false
+
+[workloads.event-implementer.instance]
+strategy = "parallel"
+
+[workloads.event-implementer.env]
+EVENT_ROLE = "implementer"
+EVENT_QUEUE = "/queue/queue.json"
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
+GITHUB_TOKEN = true
+
+[[workloads.event-implementer.mounts]]
+host = "workspaces/event-implementer-state"
+guest = "/data"
+mode = "rw"
+
+[[workloads.event-implementer.mounts]]
+host = "workspaces/event-review-queue"
+guest = "/queue"
+mode = "rw"
+
+[[workloads.event-implementer.seed_files]]
+source = "agents/event-implementer/config/queue.json"
+target = "workspaces/event-implementer-state/queue.json"
+only_if_missing = true
+
+[workloads.event-implementer.network.defaults]
+egress = "deny"
+
+[[workloads.event-implementer.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.event-implementer.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[workloads.event-implementer.depends_on.example-litellm]
+env = "LITELLM_ADDR"
+required = false
+
+[workloads.event-reviewer]
+kind = "agent"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/work"
+cpus = 1
+memory_mib = 512
+command = ["python", "-m", "http.server", "9002"]
+log_stop_errors = false
+
+[workloads.event-reviewer.env]
+EVENT_ROLE = "reviewer"
+EVENT_QUEUE = "/queue/queue.json"
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
+GITHUB_TOKEN = true
+
+[[workloads.event-reviewer.mounts]]
+host = "workspaces/event-reviewer-state"
+guest = "/data"
+mode = "rw"
+
+[[workloads.event-reviewer.mounts]]
+host = "workspaces/event-review-queue"
+guest = "/queue"
+mode = "rw"
+
+[[workloads.event-reviewer.seed_files]]
+source = "agents/event-reviewer/config/queue.json"
+target = "workspaces/event-reviewer-state/queue.json"
+only_if_missing = true
+
+[workloads.event-reviewer.network.defaults]
+egress = "deny"
+
+[[workloads.event-reviewer.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.event-reviewer.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[workloads.event-reviewer.depends_on.example-litellm]
+env = "LITELLM_ADDR"
+required = false
+
+[workloads.event-qa]
+kind = "agent"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/work"
+cpus = 1
+memory_mib = 512
+command = ["python", "-m", "http.server", "9003"]
+log_stop_errors = false
+
+[workloads.event-qa.instance]
+strategy = "parallel"
+
+[workloads.event-qa.env]
+EVENT_ROLE = "qa"
+EVENT_QUEUE = "/queue/queue.json"
+OPENAI_API_KEY = { secret = "LITELLM_MASTER_KEY", bound = "guest" }
+GITHUB_TOKEN = true
+
+[[workloads.event-qa.mounts]]
+host = "workspaces/event-qa-state"
+guest = "/data"
+mode = "rw"
+
+[[workloads.event-qa.mounts]]
+host = "workspaces/event-review-queue"
+guest = "/queue"
+mode = "ro"
+
+[[workloads.event-qa.seed_files]]
+source = "agents/event-qa/config/queue.json"
+target = "workspaces/event-qa-state/queue.json"
+only_if_missing = true
+
+[workloads.event-qa.network.defaults]
+egress = "deny"
+
+[[workloads.event-qa.policy.egress.allow.host]]
+ports = [53]
+protocols = ["tcp", "udp"]
+
+[[workloads.event-qa.policy.egress.allow.domain]]
+domains = ["github.com", "api.github.com"]
+port = 443
+protocol = "tcp"
+
+[workloads.event-qa.depends_on.example-litellm]
+env = "LITELLM_ADDR"
+required = false

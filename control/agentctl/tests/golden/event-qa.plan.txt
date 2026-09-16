@@ -1,0 +1,20 @@
+name: event-qa
+image: python:3.12-slim
+workdir: /work
+command: python -m http.server 9003
+cpus: 1
+memory: 512 MiB
+env: EVENT_ROLE=qa
+env: EVENT_QUEUE=/queue/queue.json
+env: OPENAI_API_KEY=(redacted)
+env: LITELLM_ADDR=host.microsandbox.internal:4000 (injected: depends_on 'example-litellm')
+secret_env: GITHUB_TOKEN (value redacted, allowed: github.com, api.github.com, optional)
+mount: workspaces/event-qa-state:/data
+mount: workspaces/event-review-queue:/queue (ro)
+network: egress_default=deny ingress_default=deny
+  egress: tcp:53 -> host
+  egress: udp:53 -> host
+  egress: tcp:443 -> github.com, api.github.com
+  egress: tcp:4000 -> host (derived: depends_on 'example-litellm')
+instance: strategy=parallel
+

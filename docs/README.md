@@ -23,6 +23,7 @@ instructions, not an architectural onboarding requirement for every agent.
 | [Nix purity](nix-purity.md) / [devshell rules](nix/devshells.md) | Source/build separation and shell behavior. |
 | [Workload layouts](workloads.md) | Standalone config repositories, fleet capsules, image ownership, and current composition limits. |
 | [Operating model](operating-model.md) | Instances, addressing, teardown, and operational scope. |
+| [Event agents](event-agents.md) | GitHub-event role workloads: implementer, reviewer, and qa instances. |
 | [Runtime provisioning](runtime-provisioning.md) | Runtime homes, state generations, build/runtime separation, guest init, and provisioning contracts. |
 | [Secrets](secrets.md) | SOPS workflow, credential exposure, and the secrets threat model. |
 | [Signing keys](signing-keys.md) | Explicit encrypted Ed25519 provisioning and public-key export without granting workload authority. |
