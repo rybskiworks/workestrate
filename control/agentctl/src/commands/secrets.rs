@@ -662,6 +662,14 @@ fn decrypt_secret(target: &TargetSpec) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
+/// Value passed as `sops --filename-override`: the absolute secret path
+/// inside `target.dir`, so SOPS absolutizes to the same path regardless of
+/// invocation cwd and anchored `creation_rules` (e.g. `^\.env\.enc$`)
+/// still match when cwd != target dir.
+fn sops_filename_override(target: &TargetSpec) -> PathBuf {
+    target.secret_path()
+}
+
 /// Encrypt `plaintext_path` to the target's secrets file atomically:
 /// `sops encrypt` stdout → `<secret>.tmp` → rename, final mode 0600. On
 /// failure the `.tmp` is removed and no partial output is left behind.
@@ -677,8 +685,8 @@ fn encrypt_to_secret(target: &TargetSpec, plaintext_path: &Path) -> Result<()> {
             "--output-type",
             "dotenv",
             "--filename-override",
-            &target.secret_file,
         ])
+        .arg(sops_filename_override(target))
         .arg(plaintext_path)
         .env("SOPS_AGE_KEY_FILE", &target.age_key_file)
         .output()
@@ -1171,6 +1179,38 @@ mod tests {
         assert!(
             !buffer.contains("v3"),
             "extra stdin line is dropped by zip: {buffer}"
+        );
+    }
+
+    #[test]
+    fn test_sops_filename_override_is_absolute_inside_target_dir() {
+        // Regression: the sops --filename-override must be the absolute
+        // secret path (not the bare file name), so anchored creation_rules
+        // match regardless of the invocation cwd.
+        let dir = std::env::temp_dir().join(format!(
+            "workestrate-secrets-override-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let target = TargetSpec {
+            dir: dir.clone(),
+            secret_file: ".env.enc".to_string(),
+            age_key_file: dir.join("age.key"),
+        };
+        let override_path = sops_filename_override(&target);
+        assert!(
+            override_path.is_absolute(),
+            "override must be absolute: {}",
+            override_path.display()
+        );
+        assert_eq!(override_path, target.secret_path());
+        assert!(
+            override_path.starts_with(&target.dir),
+            "override must live inside target dir: {}",
+            override_path.display()
         );
     }
 

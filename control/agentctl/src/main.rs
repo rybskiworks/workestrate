@@ -138,10 +138,6 @@ enum Commands {
     },
     /// Validate active config against schema and policy allowlists
     ValidateConfig,
-    /// Print the env_var names of all secrets defined in config (DEPRECATED
-    /// compatibility alias for `secrets schema`; hidden)
-    #[command(hide = true)]
-    SecretsSchema,
     /// Generate a .env.example from the config secrets section
     GenerateEnvExample {
         /// Write output to a file instead of stdout
@@ -239,13 +235,6 @@ enum Commands {
     Secrets {
         #[command(subcommand)]
         action: SecretsAction,
-    },
-    /// Resolve a registered config repo's secrets target paths (DEPRECATED
-    /// compatibility alias for `secrets target`; hidden)
-    #[command(hide = true)]
-    SecretsTarget {
-        /// Config repo name to resolve.
-        name: String,
     },
     /// Diagnose environment and tool health (KVM, nix, sops, age, msb, config repos).
     /// Use the global --json flag for machine-readable output.
@@ -905,12 +894,6 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::Run { command } => cmd_run(&command),
         Commands::Msb { args } => cmd_msb(&args),
         Commands::ValidateConfig => cmd_validate_config(),
-        Commands::SecretsSchema => {
-            eprintln!(
-                "warning: `workestrate secrets-schema` is deprecated; use `workestrate secrets schema`"
-            );
-            cmd_secrets_schema()
-        }
         Commands::GenerateEnvExample { output } => cmd_generate_env_example(output.as_deref()),
         Commands::Ps => cmd_ps(cli.json).await,
         Commands::Down {
@@ -997,12 +980,6 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             SecretsAction::Target { name } => cmd_secrets_target(&name, cli.json).await,
             SecretsAction::Schema => cmd_secrets_schema(),
         },
-        Commands::SecretsTarget { name } => {
-            eprintln!(
-                "warning: `workestrate secrets-target` is deprecated; use `workestrate secrets target`"
-            );
-            cmd_secrets_target(&name, cli.json).await
-        }
         Commands::Doctor => cmd_doctor(cli.json),
         Commands::Versions => cmd_versions(cli.json),
         Commands::Source { action } => cmd_source(action).await,
@@ -1423,13 +1400,11 @@ mod tests {
             "run",
             "msb",
             "validate-config",
-            "secrets-schema",
             "generate-env-example",
             "config",
             "home",
             "schemas",
             "secrets",
-            "secrets-target",
             "doctor",
             "versions",
             "clean",
@@ -2003,24 +1978,12 @@ mod tests {
         assert!(Cli::try_parse_from(["workestrate", "secrets", "init", "update"]).is_err());
     }
 
-    /// The legacy top-level `secrets-target`/`secrets-schema` commands stay
-    /// parseable as HIDDEN compatibility aliases.
+    /// The removed top-level `secrets-target`/`secrets-schema` aliases
+    /// stay removed: they must fail to parse (use `secrets target/schema`).
     #[test]
-    fn legacy_secrets_commands_stay_parseable_but_hidden() {
-        assert!(
-            Cli::try_parse_from(["workestrate", "secrets-target", "personal", "--json"]).is_ok()
-        );
-        assert!(Cli::try_parse_from(["workestrate", "secrets-schema"]).is_ok());
-        let cmd = Cli::command();
-        for legacy in ["secrets-target", "secrets-schema"] {
-            let sub = cmd
-                .find_subcommand(legacy)
-                .unwrap_or_else(|| panic!("missing subcommand: {legacy}"));
-            assert!(
-                sub.is_hide_set(),
-                "{legacy} must be hidden (compatibility alias)"
-            );
-        }
+    fn legacy_secrets_commands_are_removed() {
+        assert!(Cli::try_parse_from(["workestrate", "secrets-target", "personal", "--json"]).is_err());
+        assert!(Cli::try_parse_from(["workestrate", "secrets-schema"]).is_err());
     }
 
     #[test]

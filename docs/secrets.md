@@ -158,9 +158,9 @@ workestrate secrets update --global    # edit existing user-global values
   deprecation notice and delegate to `workestrate secrets`, hoisting the
   `init`/`update` verb in front of the target flags so every historical
   argument order keeps working.
-- The top-level `workestrate secrets-target` and `workestrate
-  secrets-schema` commands remain as hidden compatibility aliases for
-  `workestrate secrets target` / `workestrate secrets schema`.
+- The old top-level `workestrate secrets-target` / `secrets-schema` names
+  were removed pre-launch (breaking change): use `workestrate secrets
+  target` / `workestrate secrets schema`.
 
 `just secrets-target-check` tests selection and encrypted updates with
 disposable homes and fresh test keys (both as Rust integration tests in

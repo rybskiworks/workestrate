@@ -889,7 +889,7 @@ enum Commands {
 | `workestrate secrets update [--config <name> \| --config-dir <dir> \| --global]` | Decrypt → modify → re-encrypt; env-set schema keys are replaced in place |
 | `workestrate secrets target <name>` | Resolve a registered config repo's secrets target paths |
 | `workestrate secrets schema` | Print REQUIRED_KEYS from config `secrets:` section (replaces `.env.example` grep) |
-| `workestrate secrets-target` / `secrets-schema` | DEPRECATED hidden compatibility aliases for `secrets target` / `secrets schema` |
+| ~~`workestrate secrets-target` / `secrets-schema`~~ | Removed pre-launch (breaking change); use `secrets target` / `secrets schema` |
 | `workestrate generate-env-example` | Generate `.env.example` from config `secrets:` section |
 | `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes for the active context (or all contexts). `--json` emits the instance-record array (ADR 0021 §7) |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes` |
