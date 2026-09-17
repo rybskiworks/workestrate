@@ -104,7 +104,55 @@ def selected(metadata: dict, manifest: Path, report: dict) -> list[dict]:
     return result
 
 
-def originals(package: dict, roots: list[Path]) -> list[Path]:
+def supplemental_originals(package: dict, directory: Path, lockfile: Path | None) -> list[Path]:
+    """Use reviewed upstream files only for an exact registry archive/manifest."""
+    name, version = package["name"], package["version"]
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or not re.fullmatch(r"[A-Za-z0-9.+-]+", version):
+        raise ValueError("unsafe supplemental package identity")
+    evidence_root = Path(__file__).resolve().parent / "evidence"
+    evidence = evidence_root / f"{name}-{version}"
+    if evidence_root.is_symlink() or evidence.is_symlink():
+        raise ValueError("supplemental evidence contains a symlink")
+    if not evidence.exists():
+        return []
+    provenance = evidence / "NOTICE-provenance.json"
+    if provenance.is_symlink():
+        raise ValueError("supplemental provenance is a symlink")
+    record = json.loads(provenance.read_text())
+    if record.get("schema") != 1:
+        raise ValueError("unknown supplemental evidence schema")
+    approved = record["package"]
+    if any(package.get(k) != approved[k] for k in ("name", "version", "source")):
+        raise ValueError("supplemental evidence package identity mismatch")
+    if lockfile is None:
+        raise ValueError("supplemental evidence requires the exact Cargo.lock")
+    locked = [entry for entry in tomllib.loads(lockfile.read_text()).get("package", [])
+              if all(entry.get(k) == approved[k] for k in ("name", "version", "source"))]
+    if len(locked) != 1 or locked[0].get("checksum") != approved["checksum"]:
+        raise ValueError("supplemental evidence registry checksum mismatch")
+    original_manifest = directory / "Cargo.toml.orig"
+    if original_manifest.is_symlink() or not original_manifest.is_file():
+        raise ValueError("supplemental evidence requires a regular Cargo.toml.orig")
+    if digest(original_manifest) != record["manifest_sha256"]:
+        raise ValueError("supplemental evidence original manifest mismatch")
+    documents = record["documents"]
+    if not isinstance(documents, dict) or not documents:
+        raise ValueError("supplemental evidence has no original documents")
+    files = [provenance]
+    for filename, checksum in sorted(documents.items()):
+        if (filename in (".", "..", provenance.name) or "/" in filename or "\\" in filename
+                or not LEGAL.fullmatch(filename)):
+            raise ValueError("unsafe supplemental evidence filename")
+        path = evidence / filename
+        if path.is_symlink() or not path.is_file() or not path.stat().st_size:
+            raise ValueError("missing, empty or symlink supplemental evidence")
+        if digest(path) != checksum:
+            raise ValueError("supplemental evidence document checksum mismatch")
+        files.append(path)
+    return files
+
+
+def originals(package: dict, roots: list[Path], lockfile: Path | None = None) -> list[Path]:
     directory = Path(package["manifest_path"]).resolve().parent
     candidates = set()
     for parent, dirs, files in os.walk(directory, followlinks=False):
@@ -126,6 +174,8 @@ def originals(package: dict, roots: list[Path]) -> list[Path]:
     for path in candidates:
         if path.is_symlink() or not path.is_file() or not path.stat().st_size:
             raise ValueError(f"missing, empty or symlink legal evidence: {path}")
+    if not candidates:
+        candidates.update(supplemental_originals(package, directory, lockfile))
     if not candidates:
         raise ValueError(f"missing original legal evidence: {package['name']} {package['version']}")
     return sorted(candidates)
@@ -156,7 +206,8 @@ def verify(bundle: Path) -> None:
         raise ValueError("missing crate attribution")
 
 
-def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path], profile: dict) -> None:
+def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path], profile: dict,
+             lockfile: Path | None = None) -> None:
     expected = {p["id"]: p for p in packages}
     covered, normalized = set(), []
     for item in report.get("licenses", []):
@@ -174,6 +225,16 @@ def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path]
         raise ValueError(f"report omitted selected crates: {names}")
     if output.exists() or output.is_symlink():
         raise ValueError("refusing to overwrite notice bundle")
+    # Collect all failures before publishing a bundle; do not make the operator
+    # repeat a package build merely to discover the next missing notice.
+    evidence, failures = {}, []
+    for package in packages:
+        try:
+            evidence[package["id"]] = originals(package, roots, lockfile)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            failures.append(f"{package['name']} {package['version']}: {error}")
+    if failures:
+        raise ValueError("original legal evidence failures:\n  " + "\n  ".join(failures))
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         staging = Path(temporary) / "notices"
@@ -184,7 +245,7 @@ def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path]
             slug = hashlib.sha256(key.encode()).hexdigest()[:16]
             files = set()
             sections.append(f"<h2>{html.escape(key)}</h2>")
-            for path in originals(package, roots):
+            for path in evidence[package["id"]]:
                 name = f"evidence/{slug}/{digest(path)}-{path.name}"
                 destination = staging / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +292,7 @@ def generate(args: argparse.Namespace) -> None:
                "lock_sha256": before, "deny_sha256": digest(args.policy),
                "generator": run(["cargo", "about", "--version"]).strip(),
                "graph_source": "cargo-about.crates"}
-    assemble(args.output, selected(metadata, manifest, report), report, roots, profile)
+    assemble(args.output, selected(metadata, manifest, report), report, roots, profile, lock)
 
 
 def main() -> None:
