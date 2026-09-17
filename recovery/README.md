@@ -14,13 +14,16 @@ The normal root flake and its checks remain unchanged by this subflake.
 Run on the existing x86_64 Linux host, as the normal user, from any directory:
 
 ```sh
-nix profile add -L \
+nix profile install -L \
   'github:rybskiworks/workestrate/56c1dd000cf404cc282572c5639e40461c1de3e9?dir=recovery#workestrate-local-recovery' \
   --no-write-lock-file
 
 hash -r
 workestrate --version
 ```
+
+`nix profile install` is the portable verb: Lix provides no `profile add`
+subcommand, and Nix documents `install` as an alias of `profile add`.
 
 No clone, separate dependency installation, input overrides, sudo, PR merge or
 working-tree changes are required. Do not append the previous Microsandbox or
