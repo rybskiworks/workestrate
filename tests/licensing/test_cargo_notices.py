@@ -128,7 +128,8 @@ class NoticeTests(unittest.TestCase):
         metadata = {"packages": packages, "resolve": {"nodes": [
             {"id": "fixture", "deps": [{"pkg": "build", "dep_kinds": [{"kind": "build"}]}, {"pkg": "dev", "dep_kinds": [{"kind": "dev"}]}]},
             {"id": "build", "deps": []}, {"id": "dev", "deps": []}]}}
-        self.assertEqual({p["name"] for p in m.selected(metadata, self.crate / "Cargo.toml")}, {"fixture", "build"})
+        report = {"crates": [{"package": p, "license": "MIT"} for p in packages[:2]]}
+        self.assertEqual({p["name"] for p in m.selected(metadata, self.crate / "Cargo.toml", report)}, {"fixture", "build"})
 
     def test_deterministic_bundle(self):
         self.build()
