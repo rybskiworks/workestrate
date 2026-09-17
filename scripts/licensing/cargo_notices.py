@@ -194,8 +194,10 @@ def generate(args: argparse.Namespace) -> None:
         policy = Path(temporary) / "about.toml"
         policy.write_text(config(args.policy, args.target))
         command = ["cargo", "about", "generate", *flags, "--fail", "--format", "json", "--config", str(policy)]
-        for root in roots:
-            command.extend(["--include-local", str(root)])
+        # cargo-about 0.9 includes local path/workspace crates in the graph.
+        # private.ignore=false keeps unpublished crates; --include-local is not
+        # a supported flag. Keep roots for original-file collection below, and
+        # let assemble() reject any selected crate missing from the report.
         report = json.loads(run(command))
     if digest(lock) != before:
         raise ValueError("Cargo.lock changed during notice generation")
