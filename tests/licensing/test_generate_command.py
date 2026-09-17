@@ -55,6 +55,8 @@ class GenerateCommandTests(unittest.TestCase):
                          ]}}
         self.report = {"licenses": [{"id": "MIT", "text": "Synthetic MIT report",
                                     "used_by": [{"crate": p} for p in self.packages]}]}
+        # cargo-about emits a graph inventory separately from license text users.
+        self.report["crates"] = [{"package": dict(p), "license": "MIT"} for p in self.packages]
         self.commands = []
         self.mutate_lock = False
         self.fail_report = False
@@ -133,6 +135,76 @@ class GenerateCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Cargo.lock changed"):
             self.generate()
         self.assertFalse(self.args.output.exists())
+
+    def test_workspace_feature_edges_do_not_expand_the_report_inventory(self):
+        # Another workspace member enabled an optional dependency on local-fork.
+        # Raw metadata exposes this as a normal edge even though cargo-about's
+        # selected-root graph correctly excludes it. No source files are needed
+        # for the excluded package, and its absence must not fail generation.
+        extra = dict(self.packages[1], id="workspace-only", name="workspace-only",
+                     manifest_path=str(self.root / "workspace-only" / "Cargo.toml"))
+        self.metadata["packages"].append(extra)
+        self.metadata["resolve"]["nodes"][1]["deps"].append(
+            {"pkg": "workspace-only", "dep_kinds": [{"kind": None}]})
+        self.metadata["resolve"]["nodes"].append({"id": "workspace-only", "deps": []})
+        self.generate()
+        inventory = json.loads((self.args.output / "inventory.json").read_text())
+        self.assertEqual({p["name"] for p in inventory["crates"]}, {"application", "local-fork"})
+        self.assertEqual(inventory["profile"]["graph_source"], "cargo-about.crates")
+
+    def test_inventory_is_required_not_inferred_from_license_users(self):
+        del self.report["crates"]
+        with self.assertRaisesRegex(ValueError, "no crate inventory"):
+            self.generate()
+
+    def test_empty_inventory_fails(self):
+        self.report["crates"] = []
+        with self.assertRaisesRegex(ValueError, "no crate inventory"):
+            self.generate()
+
+    def test_root_cannot_disappear_from_inventory(self):
+        self.report["crates"].pop(0)
+        with self.assertRaisesRegex(ValueError, "omitted the selected root"):
+            self.generate()
+
+    def test_duplicate_inventory_identity_fails(self):
+        self.report["crates"].append(self.report["crates"][0])
+        with self.assertRaisesRegex(ValueError, "duplicate report package identity"):
+            self.generate()
+
+    def test_unknown_inventory_identity_fails(self):
+        self.report["crates"][1]["package"]["id"] = "unrelated-source"
+        with self.assertRaisesRegex(ValueError, "unknown package identity"):
+            self.generate()
+
+    def test_inventory_source_and_path_are_checked_against_metadata(self):
+        original = dict(self.report["crates"][1]["package"])
+        for key, value in (("source", "git+https://example.invalid/other"),
+                           ("manifest_path", "/unapproved/Cargo.toml"),
+                           ("name", "wrong-name"), ("version", "9.9.9")):
+            with self.subTest(field=key):
+                self.report["crates"][1]["package"] = dict(original, **{key: value})
+                with self.assertRaisesRegex(ValueError, "metadata mismatch"):
+                    self.generate()
+        self.assertFalse(self.args.output.exists())
+
+    def test_unresolved_and_ignored_inventory_licenses_fail(self):
+        for expression in ("Unknown", "Ignore", "", None):
+            with self.subTest(license=expression):
+                self.report["crates"][1]["license"] = expression
+                with self.assertRaisesRegex(ValueError, "unresolved or ignored"):
+                    self.generate()
+
+    def test_same_name_version_cannot_mask_wrong_source_in_license_users(self):
+        wrong = dict(self.packages[1], id="different-package-source")
+        self.report["licenses"][0]["used_by"][1] = {"crate": wrong}
+        with self.assertRaisesRegex(ValueError, "unknown package identity"):
+            self.generate()
+
+    def test_uninventoried_license_user_fails(self):
+        self.report["crates"].pop()
+        with self.assertRaisesRegex(ValueError, "unknown package identity"):
+            self.generate()
 
 
 if __name__ == "__main__":
