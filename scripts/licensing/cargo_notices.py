@@ -60,24 +60,45 @@ def config(policy: Path, target: str) -> str:
     return result
 
 
-def selected(metadata: dict, manifest: Path) -> list[dict]:
+def matching_package(reported: dict, packages: dict) -> dict:
+    """Resolve report identities to metadata; never trust report source paths."""
+    identity = reported["id"]
+    if identity not in packages:
+        raise ValueError(f"report contains an unknown package identity: {identity}")
+    package = packages[identity]
+    if (any(reported.get(key) != package.get(key) for key in ("name", "version", "source"))
+            or Path(reported["manifest_path"]).resolve() != Path(package["manifest_path"]).resolve()):
+        raise ValueError(f"report package metadata mismatch: {identity}")
+    return package
+
+
+def selected(metadata: dict, manifest: Path, report: dict) -> list[dict]:
+    # cargo metadata describes a workspace-unified graph. Walking its normal /
+    # build edges does not undo features enabled by other workspace members.
+    # cargo-about's krates resolver already filters the requested root, target,
+    # features and dependency kinds. Use its separate `crates` inventory, NOT
+    # licenses[].used_by: missing license-text coverage must still fail below.
     packages = {p["id"]: p for p in metadata["packages"]}
     roots = [p["id"] for p in packages.values()
              if Path(p["manifest_path"]).resolve() == manifest.resolve()]
     if len(roots) != 1:
         raise ValueError("select a package manifest, not a virtual workspace")
-    nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
-    pending, visited = roots[:], set()
-    while pending:
-        identity = pending.pop()
-        if identity in visited:
-            continue
-        visited.add(identity)
-        for dep in nodes[identity]["deps"]:
-            kinds = dep.get("dep_kinds", [])
-            if not kinds or any(k.get("kind") != "dev" for k in kinds):
-                pending.append(dep["pkg"])
-    result = sorted((packages[i] for i in visited), key=lambda p: (p["name"], p["version"]))
+    inventory = report.get("crates")
+    if not isinstance(inventory, list) or not inventory:
+        raise ValueError("cargo-about report has no crate inventory")
+    chosen = {}
+    for item in inventory:
+        license_expression = item.get("license")
+        if (not isinstance(license_expression, str) or not license_expression.strip()
+                or license_expression in ("Unknown", "Ignore")):
+            raise ValueError("cargo-about inventory contains an unresolved or ignored license")
+        package = matching_package(item["package"], packages)
+        if package["id"] in chosen:
+            raise ValueError(f"duplicate report package identity: {package['id']}")
+        chosen[package["id"]] = package
+    if roots[0] not in chosen:
+        raise ValueError("cargo-about inventory omitted the selected root package")
+    result = sorted(chosen.values(), key=lambda p: (p["name"], p["version"]))
     if len({(p["name"], p["version"]) for p in result}) != len(result):
         raise ValueError("duplicate name/version from different sources requires identity-aware review")
     return result
@@ -136,16 +157,21 @@ def verify(bundle: Path) -> None:
 
 
 def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path], profile: dict) -> None:
-    expected = {(p["name"], str(p["version"])) for p in packages}
+    expected = {p["id"]: p for p in packages}
     covered, normalized = set(), []
     for item in report.get("licenses", []):
         if not item.get("text", "").strip():
             raise ValueError("empty license text")
-        users = [{"name": u["crate"]["name"], "version": str(u["crate"]["version"])} for u in item["used_by"]]
-        covered.update((p["name"], p["version"]) for p in users)
+        users = []
+        for user in item["used_by"]:
+            package = matching_package(user["crate"], expected)
+            covered.add(package["id"])
+            users.append({"name": package["name"], "version": str(package["version"])})
         normalized.append({"id": item["id"], "text": item["text"], "used_by": users})
-    if not normalized or expected - covered:
-        raise ValueError(f"report omitted selected crates: {sorted(expected - covered)}")
+    missing = set(expected) - covered
+    if not normalized or missing:
+        names = sorted((expected[i]["name"], str(expected[i]["version"])) for i in missing)
+        raise ValueError(f"report omitted selected crates: {names}")
     if output.exists() or output.is_symlink():
         raise ValueError("refusing to overwrite notice bundle")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -203,8 +229,9 @@ def generate(args: argparse.Namespace) -> None:
         raise ValueError("Cargo.lock changed during notice generation")
     profile = {"target": args.target, "features": args.features, "default_features": not args.no_default_features,
                "lock_sha256": before, "deny_sha256": digest(args.policy),
-               "generator": run(["cargo", "about", "--version"]).strip()}
-    assemble(args.output, selected(metadata, manifest), report, roots, profile)
+               "generator": run(["cargo", "about", "--version"]).strip(),
+               "graph_source": "cargo-about.crates"}
+    assemble(args.output, selected(metadata, manifest, report), report, roots, profile)
 
 
 def main() -> None:
