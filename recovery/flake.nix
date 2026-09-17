@@ -31,8 +31,12 @@
           pname = "workestrate-local-recovery";
           name = "workestrate-local-recovery-${old.version}";
           env = (old.env or { }) // {
-            WORKESTRATE_REV = "bf6fce4-local-recovery";
+            WORKESTRATE_REV = "bf6fce4-local-recovery-registry-fix";
           };
+
+          # load_registry returns Result<Option<Registry>>. Match both wrappers
+          # before reading fields; preserve the absent/error fallback behavior.
+          patches = (old.patches or [ ]) ++ [ ./secrets-registry-option.patch ];
 
           # Drop the notice-manifest precondition, not SDK/runtime preparation.
           preBuild = ''
@@ -56,6 +60,7 @@
               'This package is for temporary local recovery, not release or binary-cache publication.' \
               'No complete compliance, vulnerability-review, or VM-acceptance result is claimed.' \
               'CLI source: bf6fce49037d9ae870b847d7734785fa94dcef79' \
+              'CLI patch: secrets-registry-option.patch (Ok(Some(registry)) field access)' \
               'Microsandbox: 251b368a868d578ead123071c3e6bc8eec013817' \
               'libkrunfw: d575b13e79368b23246be3d93d7935899dec5a3b' \
               > "$out/share/licenses/workestrate/LOCAL-RECOVERY.txt"
