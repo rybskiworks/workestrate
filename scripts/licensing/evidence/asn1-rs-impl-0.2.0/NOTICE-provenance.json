@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "asn1-rs-impl",
+    "version": "0.2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "checksum": "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
+  },
+  "manifest_sha256": "f4d839a0543fac286eb3be3b6c56cb75bb5910f3cb8a98f44a448ff36a8e50ec",
+  "upstream": {
+    "repository": "https://github.com/rusticata/asn1-rs",
+    "revision": "df44b67c1359edb8f7c42d73a72493d0d6ee07c9",
+    "manifest": "impl/Cargo.toml",
+    "manifest_git_blob": "f28a806bdf03a1f112e311f9d27f68dfe3ebdc3c",
+    "license_git_blobs": {
+      "LICENSE-MIT": "290e7b9be19d39a81c8eb24c75a6b5f1e57fea71",
+      "LICENSE-APACHE": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+    }
+  },
+  "documents": {
+    "LICENSE-MIT": "a5c61b93b6ee1d104af9920cf020ff3c7efe818e31fe562c72261847a728f513",
+    "LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  "reason": "The build reported no original legal files in this registry package. Retain the upstream repository-root MIT and Apache texts without altering the vendored crate or its license expression. The approved original manifest must match byte-for-byte; the archive checksum must match Cargo.lock. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "Upstream files were fetched at this immutable revision and checked against their Git blob hashes. The registry checksum was read from rust-lang/crates.io-index. The build host verifies the published Cargo.toml.orig and lock checksum; the actual registry archive was not downloaded in the editing environment."
+}

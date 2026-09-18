@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="236" viewBox="0 0 1200 236" role="img" aria-labelledby="title desc">
   <title id="title">From intent to execution</title>
-  <desc id="desc">Define policy. Bound authority. Delegate work. Validate results. Feed observations back into the next declaration. This is an operating philosophy, not a claim that runtime acceptance is complete.</desc>
+  <desc id="desc">Define policy. Scope authority. Delegate work. Validate results. Feed observations back into the next declaration. This is an operating philosophy, not a claim that runtime acceptance is complete.</desc>
   <defs>
     <linearGradient id="ink" x1="44" y1="0" x2="1156" y2="0" gradientUnits="userSpaceOnUse">
       <stop stop-color="#255bbd"/><stop offset=".3" stop-color="#b3435d"/><stop offset=".65" stop-color="#b3435d"/><stop offset="1" stop-color="#255bbd"/>

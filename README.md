@@ -39,12 +39,12 @@ runtime uses the pinned Microsandbox fork on x86_64 Linux, without Docker.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/operating-loop-dark.svg">
-  <img src="docs/assets/operating-loop-light.svg" width="1200" alt="Define policy. Bound authority. Delegate work. Validate results. An operating philosophy, not a claim that every runtime property has been verified.">
+  <img src="docs/assets/operating-loop-light.svg" width="1200" alt="Define policy. Scope authority. Delegate work. Validate results. An operating philosophy, not a claim that every runtime property has been verified.">
 </picture>
 
-Declare what a workload needs. Inspect the resolved plan. Run it within the
-selected policy. Check what actually happened. A configuration setting describes
-intent; runtime evidence establishes what was enforced.
+Define policy. Scope authority. Delegate work. Validate results.
+A configuration setting describes intent; runtime evidence establishes
+what was enforced.
 
 <a id="setup"></a>
 <a id="start-here"></a>
@@ -156,6 +156,30 @@ Alternatives: `down --all`, `down --config-ref <branch>`, or the double-gated
 <a id="config-repos-and-the-layering-model"></a>
 <a id="secrets-workflow"></a>
 <a id="a-small-cli-surface-for-a-larger-system"></a>
+
+## define, plan, run
+
+```toml
+[workloads.my-service]
+kind = "service"
+image = { recipe = "registry", ref = "python:3.12-slim" }
+workdir = "/app"
+command = ["python", "-m", "http.server", "8080"]
+
+[workloads.my-service.env]
+APP_PORT = "8080"
+```
+
+```sh
+workestrate validate-config
+workestrate workload plan my-service
+workestrate workload up my-service
+workestrate workload logs my-service
+workestrate down --context personal
+```
+
+The full pair (service plus dependent agent, secrets, teardown scope) is
+worked in [README.agents.md](README.agents.md#worked-example-new-config-to-running-workload).
 
 ## bring your own fleet
 

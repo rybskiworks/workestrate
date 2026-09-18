@@ -21,6 +21,9 @@
   checkout, following [Nix purity](docs/nix-purity.md).
 - Run `just verify` before pushing/review. Report checks actually run and any
   unavailable gates explicitly; keep VM acceptance separate from build checks.
+- Verification containers provide KVM, Lix, and the pinned Microsandbox CLI;
+  check availability with `workestrate check`/`doctor` before skipping a VM
+  gate. See [agent test environment](docs/agent-test-env.md).
 - Install hooks explicitly with `nix run .#install-hooks`; preserve the hook chain
   and fix findings with hooks enabled. Keep heavy `nix-ci` runs maintainer-triggered.
 - Use conventional commit prefixes and put ADR identifiers in bodies/footers.

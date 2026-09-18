@@ -60,30 +60,99 @@ def config(policy: Path, target: str) -> str:
     return result
 
 
-def selected(metadata: dict, manifest: Path) -> list[dict]:
+def matching_package(reported: dict, packages: dict) -> dict:
+    """Resolve report identities to metadata; never trust report source paths."""
+    identity = reported["id"]
+    if identity not in packages:
+        raise ValueError(f"report contains an unknown package identity: {identity}")
+    package = packages[identity]
+    if (any(reported.get(key) != package.get(key) for key in ("name", "version", "source"))
+            or Path(reported["manifest_path"]).resolve() != Path(package["manifest_path"]).resolve()):
+        raise ValueError(f"report package metadata mismatch: {identity}")
+    return package
+
+
+def selected(metadata: dict, manifest: Path, report: dict) -> list[dict]:
+    # cargo metadata describes a workspace-unified graph. Walking its normal /
+    # build edges does not undo features enabled by other workspace members.
+    # cargo-about's krates resolver already filters the requested root, target,
+    # features and dependency kinds. Use its separate `crates` inventory, NOT
+    # licenses[].used_by: missing license-text coverage must still fail below.
     packages = {p["id"]: p for p in metadata["packages"]}
     roots = [p["id"] for p in packages.values()
              if Path(p["manifest_path"]).resolve() == manifest.resolve()]
     if len(roots) != 1:
         raise ValueError("select a package manifest, not a virtual workspace")
-    nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
-    pending, visited = roots[:], set()
-    while pending:
-        identity = pending.pop()
-        if identity in visited:
-            continue
-        visited.add(identity)
-        for dep in nodes[identity]["deps"]:
-            kinds = dep.get("dep_kinds", [])
-            if not kinds or any(k.get("kind") != "dev" for k in kinds):
-                pending.append(dep["pkg"])
-    result = sorted((packages[i] for i in visited), key=lambda p: (p["name"], p["version"]))
+    inventory = report.get("crates")
+    if not isinstance(inventory, list) or not inventory:
+        raise ValueError("cargo-about report has no crate inventory")
+    chosen = {}
+    for item in inventory:
+        license_expression = item.get("license")
+        if (not isinstance(license_expression, str) or not license_expression.strip()
+                or license_expression in ("Unknown", "Ignore")):
+            raise ValueError("cargo-about inventory contains an unresolved or ignored license")
+        package = matching_package(item["package"], packages)
+        if package["id"] in chosen:
+            raise ValueError(f"duplicate report package identity: {package['id']}")
+        chosen[package["id"]] = package
+    if roots[0] not in chosen:
+        raise ValueError("cargo-about inventory omitted the selected root package")
+    result = sorted(chosen.values(), key=lambda p: (p["name"], p["version"]))
     if len({(p["name"], p["version"]) for p in result}) != len(result):
         raise ValueError("duplicate name/version from different sources requires identity-aware review")
     return result
 
 
-def originals(package: dict, roots: list[Path]) -> list[Path]:
+def supplemental_originals(package: dict, directory: Path, lockfile: Path | None) -> list[Path]:
+    """Use reviewed upstream files only for an exact registry archive/manifest."""
+    name, version = package["name"], package["version"]
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or not re.fullmatch(r"[A-Za-z0-9.+-]+", version):
+        raise ValueError("unsafe supplemental package identity")
+    evidence_root = Path(__file__).resolve().parent / "evidence"
+    evidence = evidence_root / f"{name}-{version}"
+    if evidence_root.is_symlink() or evidence.is_symlink():
+        raise ValueError("supplemental evidence contains a symlink")
+    if not evidence.exists():
+        return []
+    provenance = evidence / "NOTICE-provenance.json"
+    if provenance.is_symlink():
+        raise ValueError("supplemental provenance is a symlink")
+    record = json.loads(provenance.read_text())
+    if record.get("schema") != 1:
+        raise ValueError("unknown supplemental evidence schema")
+    approved = record["package"]
+    if any(package.get(k) != approved[k] for k in ("name", "version", "source")):
+        raise ValueError("supplemental evidence package identity mismatch")
+    if lockfile is None:
+        raise ValueError("supplemental evidence requires the exact Cargo.lock")
+    locked = [entry for entry in tomllib.loads(lockfile.read_text()).get("package", [])
+              if all(entry.get(k) == approved[k] for k in ("name", "version", "source"))]
+    if len(locked) != 1 or locked[0].get("checksum") != approved["checksum"]:
+        raise ValueError("supplemental evidence registry checksum mismatch")
+    original_manifest = directory / "Cargo.toml.orig"
+    if original_manifest.is_symlink() or not original_manifest.is_file():
+        raise ValueError("supplemental evidence requires a regular Cargo.toml.orig")
+    if digest(original_manifest) != record["manifest_sha256"]:
+        raise ValueError("supplemental evidence original manifest mismatch")
+    documents = record["documents"]
+    if not isinstance(documents, dict) or not documents:
+        raise ValueError("supplemental evidence has no original documents")
+    files = [provenance]
+    for filename, checksum in sorted(documents.items()):
+        if (filename in (".", "..", provenance.name) or "/" in filename or "\\" in filename
+                or not LEGAL.fullmatch(filename)):
+            raise ValueError("unsafe supplemental evidence filename")
+        path = evidence / filename
+        if path.is_symlink() or not path.is_file() or not path.stat().st_size:
+            raise ValueError("missing, empty or symlink supplemental evidence")
+        if digest(path) != checksum:
+            raise ValueError("supplemental evidence document checksum mismatch")
+        files.append(path)
+    return files
+
+
+def originals(package: dict, roots: list[Path], lockfile: Path | None = None) -> list[Path]:
     directory = Path(package["manifest_path"]).resolve().parent
     candidates = set()
     for parent, dirs, files in os.walk(directory, followlinks=False):
@@ -105,6 +174,8 @@ def originals(package: dict, roots: list[Path]) -> list[Path]:
     for path in candidates:
         if path.is_symlink() or not path.is_file() or not path.stat().st_size:
             raise ValueError(f"missing, empty or symlink legal evidence: {path}")
+    if not candidates:
+        candidates.update(supplemental_originals(package, directory, lockfile))
     if not candidates:
         raise ValueError(f"missing original legal evidence: {package['name']} {package['version']}")
     return sorted(candidates)
@@ -135,19 +206,35 @@ def verify(bundle: Path) -> None:
         raise ValueError("missing crate attribution")
 
 
-def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path], profile: dict) -> None:
-    expected = {(p["name"], str(p["version"])) for p in packages}
+def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path], profile: dict,
+             lockfile: Path | None = None) -> None:
+    expected = {p["id"]: p for p in packages}
     covered, normalized = set(), []
     for item in report.get("licenses", []):
         if not item.get("text", "").strip():
             raise ValueError("empty license text")
-        users = [{"name": u["crate"]["name"], "version": str(u["crate"]["version"])} for u in item["used_by"]]
-        covered.update((p["name"], p["version"]) for p in users)
+        users = []
+        for user in item["used_by"]:
+            package = matching_package(user["crate"], expected)
+            covered.add(package["id"])
+            users.append({"name": package["name"], "version": str(package["version"])})
         normalized.append({"id": item["id"], "text": item["text"], "used_by": users})
-    if not normalized or expected - covered:
-        raise ValueError(f"report omitted selected crates: {sorted(expected - covered)}")
+    missing = set(expected) - covered
+    if not normalized or missing:
+        names = sorted((expected[i]["name"], str(expected[i]["version"])) for i in missing)
+        raise ValueError(f"report omitted selected crates: {names}")
     if output.exists() or output.is_symlink():
         raise ValueError("refusing to overwrite notice bundle")
+    # Collect all failures before publishing a bundle; do not make the operator
+    # repeat a package build merely to discover the next missing notice.
+    evidence, failures = {}, []
+    for package in packages:
+        try:
+            evidence[package["id"]] = originals(package, roots, lockfile)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            failures.append(f"{package['name']} {package['version']}: {error}")
+    if failures:
+        raise ValueError("original legal evidence failures:\n  " + "\n  ".join(failures))
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         staging = Path(temporary) / "notices"
@@ -158,7 +245,7 @@ def assemble(output: Path, packages: list[dict], report: dict, roots: list[Path]
             slug = hashlib.sha256(key.encode()).hexdigest()[:16]
             files = set()
             sections.append(f"<h2>{html.escape(key)}</h2>")
-            for path in originals(package, roots):
+            for path in evidence[package["id"]]:
                 name = f"evidence/{slug}/{digest(path)}-{path.name}"
                 destination = staging / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -194,15 +281,18 @@ def generate(args: argparse.Namespace) -> None:
         policy = Path(temporary) / "about.toml"
         policy.write_text(config(args.policy, args.target))
         command = ["cargo", "about", "generate", *flags, "--fail", "--format", "json", "--config", str(policy)]
-        for root in roots:
-            command.extend(["--include-local", str(root)])
+        # cargo-about 0.9 includes local path/workspace crates in the graph.
+        # private.ignore=false keeps unpublished crates; --include-local is not
+        # a supported flag. Keep roots for original-file collection below, and
+        # let assemble() reject any selected crate missing from the report.
         report = json.loads(run(command))
     if digest(lock) != before:
         raise ValueError("Cargo.lock changed during notice generation")
     profile = {"target": args.target, "features": args.features, "default_features": not args.no_default_features,
                "lock_sha256": before, "deny_sha256": digest(args.policy),
-               "generator": run(["cargo", "about", "--version"]).strip()}
-    assemble(args.output, selected(metadata, manifest), report, roots, profile)
+               "generator": run(["cargo", "about", "--version"]).strip(),
+               "graph_source": "cargo-about.crates"}
+    assemble(args.output, selected(metadata, manifest, report), report, roots, profile, lock)
 
 
 def main() -> None:
