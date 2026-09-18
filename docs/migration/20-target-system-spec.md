@@ -180,6 +180,8 @@ layers = ["work", "personal"]
 # malicious project dirs from injecting config).
 
 [[trusted_projects]]
+# Placeholder paths in this synthetic spec example; replace with real
+# operator directories via `workestrate config trust <dir>`.
 path = "/home/node/Development/my-project"
 
 [[trusted_projects]]

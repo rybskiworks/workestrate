@@ -116,6 +116,11 @@ The project files are `./workestrate.toml` and `./workestrate.local.toml`;
 untrusted working directories do not silently contribute these layers.
 Use `workestrate workload plan <name> --show-source` to inspect field provenance.
 
+Run workload verbs from the intended project directory. The CLI captures the
+invocation directory once at entry (`WORKESTRATE_INVOKE_CWD`); `${CWD}` mount
+hosts, project-config discovery, and per-directory slots resolve against that
+captured value, not against a later or detached child's working directory.
+
 Merge behavior is security-aware, not generic last-write-wins: deny and egress
 rules are additive unions, environment bindings merge by key, and other values
 use merge-patch semantics. Egress hosts are checked against the closed
@@ -152,10 +157,13 @@ recycles; `--instance <id>` and `--new` create parallel instances with independe
 loopback addressing. `host = 0` port declarations and `--port-auto` probe a free
 port at boot. See [operating semantics](docs/operating-model.md) and ADRs 0021/0026.
 
-Scoped teardown takes exactly one selector:
-`workestrate down --all|--context <ctx>|--config-ref <ref>|--everything`.
-These are alternatives, not a command to paste verbatim. `workestrate clean`
-handles state/cache hygiene and does not tear down VMs.
+Scoped teardown takes exactly one selector per invocation. The safe,
+narrow example is `workestrate down --context <ctx>`. Alternatives are
+`down --all`, `down --config-ref <branch>`, and the double-gated
+`down --everything --everything --yes`; these are alternatives, not one
+command to paste verbatim. The instance/workload rung stays on
+`workload <name> down [--instance <id> | --all-instances]`.
+`workestrate clean` handles state/cache hygiene and does not tear down VMs.
 
 The packaged runtime defaults to `~/.microsandbox/current`, pointing to a
 state generation for the pinned runtime. A nonempty `MSB_HOME` is a separate,
@@ -214,15 +222,25 @@ scripts target Debian/Ubuntu. The introductory workflow is in
 prerequisites. Sizing depends on the workload, image builds, and retained Nix
 store; minimum estimates are not capacity guarantees for a real fleet.
 
-Once the host is provisioned and the intended tool home is selected:
+Once the host is provisioned, provision the tool home with a config repo
+attached, then pair `--home` (WHERE the registry lives) with `--config`
+(WHICH registered config to target) on every secrets command:
 
 ```sh
-workestrate home init
-workestrate config new personal
-# Alternatively: workestrate config add <url> personal
-setup-secrets --config personal init
+workestrate home init --config <your-config-repo-url> --name personal
+# Second machine from an existing home:
+# workestrate home clone <src-home-or-git-url> [dest-dir]
+workestrate --home <tool-home-path> config list
+workestrate context current
+workestrate validate-config
+workestrate --home <tool-home-path> secrets update --config personal
+workestrate secrets init --config personal   # first bootstrap only; use update after
 workestrate check
 ```
+
+`--home` without `--config` on a `secrets` command selects no target. Enable
+a project directory's local layer explicitly with
+`workestrate config trust <dir>`; never trust arbitrary checkouts.
 
 These commands initialize operator state. Scaffolding a config is not installing
 a working agent stack. Define real workloads and their image builds, inspect the
@@ -239,21 +257,20 @@ Required variable names belong to the active config's schema, not a fixed list
 of personal providers in this tool README.
 
 ```sh
-# From the pinned shell:
-setup-secrets --config <name> init
-setup-secrets --config <name> update
-setup-secrets --global init
-
-# From a plain host shell:
-just setup-secrets --config <name> update
-just setup-secrets --home /path/to/home --config <name> update
-just setup-secrets --config-dir /path/to/config-repo update
+workestrate secrets init --config <name>
+workestrate secrets update --config <name>
+workestrate --home <tool-home-path> secrets update --config <name>
+workestrate secrets update --config-dir /path/to/config-repo
 ```
+
+`--home` selects WHERE the registry is read from; `--config` (or
+`--config-dir`) selects WHICH target to provision. `--home` without
+`--config` selects no target.
 
 `init` creates an age key with mode 0600 when needed, prepares recipients, and
 opens an editor for required values; it refuses to overwrite existing ciphertext.
 Use `update` for an existing file, including `--global update` for the global
-layer. Named targets resolve through `workestrate secrets-target`, including
+layer. Named targets resolve through `workestrate secrets target`, including
 registry/file/key overrides; unknown names fail without selecting another target.
 
 The default age private key is
@@ -321,9 +338,35 @@ explains docs-only selection and the required-check contract. Heavy `nix-ci` run
 are owner/maintainer-triggered, not an agent self-applied label. Prefer these
 sources to a second, easily stale CI implementation description here.
 
-Repository schema checks cover owned templates. Inspect deployed copies explicitly
-with `workestrate --home <tool-home> schemas update --check`; consumer homes are
-not inputs to the repository verification gate.
+Repository schema checks cover owned templates. Inspect a deployed tool home
+explicitly with `workestrate --home <tool-home-path> schemas update --check`
+(where the registry/schema state of that home is the inspection target);
+consumer homes are not inputs to the repository verification gate.
+
+<a id="flag-glossary"></a>
+
+## Flag glossary
+
+The global `--context` spelling and the `down --context` spelling select
+different things. Do not merge them. No flag is renamed by this change.
+
+| Flag or variable | Selects | Does not select |
+| :--- | :--- | :--- |
+| `--home <DIR>` | Tool-home root: registry (`config.toml`), overrides, state/store dirs, config-repo checkouts. Highest-precedence `WORKESTRATE_HOME` step. | Which config layers are active; backend runtime state (`MSB_HOME`); full process isolation (see `AGENTS.md`). |
+| `--context <NAME>` (global) | Active named layer bundle (`[contexts.<name>] layers`), plus the `<ctx>-` slot-prefix namespace. | Which sandbox records `down` stops; the pinned git ref. |
+| `--config-ref <REF>` | Pinned-consumption rung: every git-backed config entry is read at this branch/sha; a branch-shaped ref also feeds context derivation. | A sandbox-record selector (see `down --config-ref`). |
+| `WORKESTRATE_CONFIG_DIR` | Explicit single-layer development/testing bypass, resolved before the registry. | The operator path; the first layer of a merged stack. |
+| `down --context <CTX>` | Sandbox records whose record context (primary) or `<ctx>-` slot prefix (corroborating) matches. | The config layer bundle. |
+| `down --config-ref <REF>` | Records whose implied context matches a validated branch-shaped ref; a sha implies nothing and is refused. | The pinned-consumption layer. |
+| `MSB_HOME` | Backend Microsandbox runtime state, separate from the tool home. Packaged default `~/.microsandbox/current`. | Tool-home registry, overrides, or config checkouts. |
+| `WORKESTRATE_INVOKE_CWD` | The operator's invocation directory, captured once at CLI entry and inherited by re-exec'd or detached children. | A live re-resolution of the current working directory. |
+
+Related names that are not these flags: the `home` subcommand (dotfiles-style
+tool-home provisioning), `migrate-home` (one-time legacy XDG consolidation),
+`--config <name>` (which registered config a `secrets` command targets),
+`--config-dir <DIR>` (explicit config directory target), and the `context`
+subcommand family (`list | current | use <name>`; contexts are otherwise
+hand-edited in the registry TOML).
 
 ## Task-to-source map
 
