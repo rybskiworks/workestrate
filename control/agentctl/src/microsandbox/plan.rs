@@ -196,6 +196,54 @@ impl fmt::Display for MountMode {
     }
 }
 
+/// Fallback guest ownership for bind-mounted files without per-file stat overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct MountOwner {
+    /// Numeric guest user ID; does not change host ownership.
+    #[cfg_attr(feature = "schema", schemars(range(max = 4294967295_u64)))]
+    pub uid: u32,
+    /// Numeric guest group ID; required together with uid.
+    #[cfg_attr(feature = "schema", schemars(range(max = 4294967295_u64)))]
+    pub gid: u32,
+}
+
+impl<'de> Deserialize<'de> for MountOwner {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct OwnerVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for OwnerVisitor {
+            type Value = MountOwner;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an object with numeric uid and gid")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Fields {
+                    uid: u32,
+                    gid: u32,
+                }
+
+                let fields =
+                    Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(MountOwner {
+                    uid: fields.uid,
+                    gid: fields.gid,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(OwnerVisitor)
+    }
+}
+
 /// A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`), BOTH the
 /// config shape AND the plan-JSON wire shape. The canonical field is `mode`
 /// ("ro" | "rw", default "rw"); `read_only = <bool>` is accepted as a
@@ -221,6 +269,8 @@ pub struct MountPlan {
     pub host: String,
     pub guest: String,
     pub mode: MountMode,
+    /// Optional guest fallback owner; native per-file stat overrides take precedence.
+    pub owner: Option<MountOwner>,
     /// Mount-entry policy is collected from the same declaring layer as this
     /// row; it is intentionally not part of mount-row merging.
     pub policy: Option<MountsFragment>,
@@ -256,6 +306,10 @@ struct MountPlanWire {
     /// at parse time with a deprecation warning, never serialized.
     #[serde(default)]
     read_only: Option<bool>,
+    /// Fallback guest ownership for files without per-file stat overrides.
+    /// Both numeric IDs are required; host ownership is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner: Option<MountOwner>,
     /// Mount-entry policy is collected from the same declaring layer as this
     /// row; it is intentionally not part of mount-row merging.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -353,6 +407,7 @@ impl TryFrom<MountPlanWire> for MountPlan {
             host: wire.host,
             guest: wire.guest,
             mode,
+            owner: wire.owner,
             policy,
             policy_file: wire.policy_file,
         })
@@ -376,9 +431,12 @@ impl Serialize for MountPlan {
     {
         use serde::ser::SerializeStruct;
         // Canonical form only: `mode` is always emitted; `read_only` is NEVER
-        // serialized. `policy`/`policy_file` stay skip-when-None so plan JSON
+        // serialized. `owner`/`policy`/`policy_file` stay skip-when-None so plan JSON
         // without them is byte-identical to the legacy form.
         let mut n = 3;
+        if self.owner.is_some() {
+            n += 1;
+        }
         if self.policy.is_some() {
             n += 1;
         }
@@ -389,6 +447,9 @@ impl Serialize for MountPlan {
         s.serialize_field("host", &self.host)?;
         s.serialize_field("guest", &self.guest)?;
         s.serialize_field("mode", &self.mode)?;
+        if let Some(owner) = &self.owner {
+            s.serialize_field("owner", owner)?;
+        }
         if let Some(policy) = &self.policy {
             s.serialize_field("policy", policy)?;
         }
@@ -816,6 +877,9 @@ impl fmt::Display for SandboxPlan {
         for m in &self.mounts {
             let ro = if m.is_read_only() { " (ro)" } else { "" };
             writeln!(f, "mount: {}:{}{}", m.host, m.guest, ro)?;
+            if let Some(owner) = m.owner {
+                writeln!(f, "  owner: uid={} gid={}", owner.uid, owner.gid)?;
+            }
             if let Some(pf) = &m.policy_file {
                 writeln!(f, "  policy_file: {}", pf.display())?;
             }
@@ -1121,6 +1185,7 @@ mod tests {
                     guest: "/mnt".to_string(),
                     mode: MountMode::Rw,
                     policy: None,
+                    owner: None,
                     policy_file: None,
                 },
                 MountPlan {
@@ -1128,6 +1193,7 @@ mod tests {
                     guest: "/etc/cfg".to_string(),
                     mode: MountMode::Ro,
                     policy: None,
+                    owner: None,
                     policy_file: None,
                 },
             ],

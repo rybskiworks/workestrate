@@ -57,7 +57,7 @@ fn interruption(reason: ExecInterruptionReason, termination: ExecTermination) ->
 fn clean() -> Cleanup {
     Cleanup {
         cancellation: Cancellation::NotNeeded,
-        stop: Ok(()),
+        stop: Ok(StopObservation::StoppedState),
         shim: Ok(()),
     }
 }
@@ -373,6 +373,77 @@ fn foreground_requested_shutdown_requires_observed_cleanup() {
 }
 
 #[test]
+fn foreground_owned_runtime_exit_confirms_only_requested_exec_cancellation() {
+    let cancelled = || {
+        Cancellation::Observed(interruption(
+            ExecInterruptionReason::Cancelled,
+            ExecTermination::Unconfirmed,
+        ))
+    };
+    let cleanup = || Cleanup {
+        cancellation: cancelled(),
+        stop: Ok(StopObservation::OwnedRuntimeExited),
+        shim: Ok(()),
+    };
+    assert!(finish("service", ServiceEnd::ShutdownRequested, cleanup()).is_ok());
+    for end in [
+        ServiceEnd::StartupTimeout,
+        ServiceEnd::Exited {
+            code: 0,
+            started: true,
+        },
+        ServiceEnd::Eof { started: true },
+        ServiceEnd::Interrupted {
+            value: interruption(
+                ExecInterruptionReason::Cancelled,
+                ExecTermination::Unconfirmed,
+            ),
+            started: true,
+        },
+    ] {
+        assert!(finish("service", end, cleanup()).is_err());
+    }
+    for cancellation in [
+        Cancellation::TimedOut,
+        Cancellation::Observed(interruption(
+            ExecInterruptionReason::TransportClosed,
+            ExecTermination::Unconfirmed,
+        )),
+    ] {
+        let mut value = cleanup();
+        value.cancellation = cancellation;
+        assert!(finish("service", ServiceEnd::ShutdownRequested, value).is_err());
+    }
+    for stop_error in ["SandboxLaunchChanged", "LaunchBindingUnsupported"] {
+        let mut value = cleanup();
+        value.stop = Err(stop_error.into());
+        let error = finish("service", ServiceEnd::ShutdownRequested, value)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("termination: Unconfirmed"));
+        assert!(error.contains(stop_error));
+    }
+    let mut value = cleanup();
+    value.shim = Err("retirement unconfirmed".into());
+    assert!(finish("service", ServiceEnd::ShutdownRequested, value).is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn foreground_owned_runtime_evidence_requires_real_successful_exit() {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    assert!(matches!(
+        owned_runtime_exit(ExitStatus::from_raw(0)),
+        Ok(StopObservation::OwnedRuntimeExited)
+    ));
+    for raw in [1 << 8, 15, 9] {
+        assert!(owned_runtime_exit(ExitStatus::from_raw(raw)).is_err());
+    }
+}
+
+#[test]
 fn foreground_primary_and_all_cleanup_failures_are_preserved() {
     let error = finish(
         "synthetic service",
@@ -413,7 +484,10 @@ fn foreground_start_request_error_is_not_lost_after_cleanup() {
 fn foreground_success_never_hides_stop_or_retirement_timeout() {
     for (stop, shim) in [
         (Err("deadline; stopped state unconfirmed".into()), Ok(())),
-        (Ok(()), Err("deadline; retirement unconfirmed".into())),
+        (
+            Ok(StopObservation::StoppedState),
+            Err("deadline; retirement unconfirmed".into()),
+        ),
     ] {
         assert!(
             finish(

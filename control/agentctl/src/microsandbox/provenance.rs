@@ -32,7 +32,7 @@
 //!    computable without filesystem I/O and parent and child compute
 //!    identically), the mount mode, plus the mount's policy fragment
 //!    canonically (sorted read/write entries with their final flags) when
-//!    present
+//!    present, and optional guest fallback owner (uid/gid)
 //! 9. `network` — NetworkPlan canonically: the egress default (`dd=1`/`dd=0`
 //!    — kept byte-identical to the retired `default_deny` bool so existing
 //!    instance records do not drift) + the ingress default (`id=1`/`id=0`,
@@ -267,6 +267,18 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
         }
     }
     s.push(REC);
+
+    // Guest owners are appended only when declared, preserving old hashes.
+    if plan.mounts.iter().any(|m| m.owner.is_some()) {
+        s.push_str("mount_owners");
+        for (index, mount) in plan.mounts.iter().enumerate() {
+            if let Some(owner) = mount.owner {
+                s.push(UNIT);
+                s.push_str(&format!("{index}:{}:{}", owner.uid, owner.gid));
+            }
+        }
+        s.push(REC);
+    }
 
     // 9. network — canonical, sorted.
     s.push_str("network");
@@ -542,12 +554,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mount_owner_identity_is_explicit_and_position_sensitive() {
+        use crate::microsandbox::plan::MountOwner;
+        let mut plan = empty_plan();
+        plan.mounts = vec![mount("/data", "/mnt", MountMode::Rw); 2];
+        let baseline = canonical_plan_bytes(&plan);
+        assert!(baseline.contains("mounts\u{1f}/mnt\u{1f}/data\u{1f}rw\u{1f}0:\u{1f}/mnt\u{1f}/data\u{1f}rw\u{1f}0:\u{1e}network"));
+        plan.mounts[0].owner = Some(MountOwner { uid: 0, gid: 0 });
+        let root = config_hash_of_plan(&plan);
+        assert_ne!(canonical_plan_bytes(&plan), baseline);
+        plan.mounts[0].owner = Some(MountOwner {
+            uid: 61040,
+            gid: 61040,
+        });
+        let worker = config_hash_of_plan(&plan);
+        assert_ne!(worker, root);
+        plan.mounts[0].owner = Some(MountOwner { uid: 61040, gid: 0 });
+        assert_ne!(config_hash_of_plan(&plan), worker);
+        plan.mounts[0].owner = None;
+        plan.mounts[1].owner = Some(MountOwner {
+            uid: 61040,
+            gid: 61040,
+        });
+        assert_ne!(config_hash_of_plan(&plan), worker);
+        plan.mounts[1].owner = None;
+        assert_eq!(canonical_plan_bytes(&plan), baseline);
+    }
+
     fn mount(host: &str, guest: &str, mode: MountMode) -> MountPlan {
         MountPlan {
             host: host.to_string(),
             guest: guest.to_string(),
             mode,
             policy: None,
+            owner: None,
             policy_file: None,
         }
     }
@@ -723,6 +764,7 @@ mod tests {
             guest: "/mnt".to_string(),
             mode: MountMode::Rw,
             policy: None,
+            owner: None,
             policy_file: Some(std::path::PathBuf::from("inst/slug.json")),
         }];
         let mut untokened = empty_plan();
