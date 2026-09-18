@@ -127,7 +127,7 @@ fn resolve_target(args: &SecretsTargetArgs) -> Result<TargetSpec> {
     // A registry load failure falls through to the cwd `.sops.yaml`
     // fallback below instead of erroring (portable directories without a
     // registry stay usable).
-    if let Ok(registry) = config::load_registry()
+    if let Ok(Some(registry)) = config::load_registry()
         && registry.configs.len() == 1
         && let Some(name) = registry.configs.keys().next().cloned()
     {
@@ -1239,5 +1239,44 @@ mod tests {
             !updated.contains("age1PLACEHOLDER"),
             "no placeholder survives: {updated}"
         );
+    }
+
+    #[test]
+    fn test_resolve_target_falls_through_when_registry_missing() {
+        // Regression: load_registry() returns Result<Option<Registry>> and
+        // yields Ok(None) on first run (no registry file). resolve_target
+        // must fall through to the cwd `.sops.yaml` fallback instead of
+        // erroring (the permanent fix for the Ok(Some(registry)) match).
+        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, uniq_dir};
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        // Empty tool home: no registry file -> Ok(None).
+        let home = uniq_dir("secrets-registry-none-home");
+        std::fs::create_dir_all(&home).unwrap();
+        // Cwd fallback dir carrying `.sops.yaml`.
+        let cwd = uniq_dir("secrets-registry-none-cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join(".sops.yaml"), "creation_rules: []\n").unwrap();
+        // SAFETY: serialized by ENV_TEST_LOCK (held above) for the guard's
+        // lifetime; restored by EnvGuard on drop.
+        unsafe {
+            std::env::set_var("WORKESTRATE_HOME", &home);
+            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+            std::env::set_var("WORKESTRATE_INVOKE_CWD", &cwd);
+        }
+        assert!(
+            config::load_registry().unwrap().is_none(),
+            "fixture must have no registry file"
+        );
+        let target = resolve_target(&SecretsTargetArgs::default()).unwrap();
+        assert_eq!(target.dir, cwd);
+        assert_eq!(target.secret_file, ".env.enc");
+        // Without the cwd marker the same state must reach the fallback and
+        // bail there (proving the Ok above came from the fallback, not from
+        // registry auto-detect).
+        std::fs::remove_file(cwd.join(".sops.yaml")).unwrap();
+        assert!(resolve_target(&SecretsTargetArgs::default()).is_err());
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }
