@@ -45,6 +45,12 @@ upgrades procedure, troubleshooting commands) that were never given any
 configured home: no beads skill exists anywhere agent-side (absent from both
 the skills repo and `~/.config/opencode/skills`).
 
+> NOTE 2026-09-18: the parenthetical tooling description is stale as written.
+> The CLI is now the pinned Beads 1.2.2 via `just beads` (see `BEADS.md` and
+> `.beads/README.md`); `nix shell nixpkgs#beads` (bd 1.0.3) must not be used.
+> The boundary point stands — mechanics belong agent-side, conventions stay
+> in-repo — but read the version/binary details as historical.
+
 ## Options considered
 
 1. **Keep everything in-repo.** REJECTED: agent-mechanics and general

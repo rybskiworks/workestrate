@@ -93,6 +93,11 @@ Troubleshooting) are extracted into a **new `beads` skill authored in the
 skills repo**, and `BEADS.md` gains a pointer to it. The tooling was never
 configured anywhere agent-side; this split gives it a real home.
 
+> NOTE 2026-09-18: the parenthetical tooling description is stale as written.
+> The CLI is now the pinned Beads 1.2.2 via `just beads` (`BEADS.md` setup
+> sections rewritten accordingly); `nix shell nixpkgs#beads` (bd 1.0.3) must
+> not be used. The split direction is unchanged.
+
 ## Pointer/redirect strategy
 
 Where staying files reference moved artifacts (knowledge `MANIFEST.md` §5a
