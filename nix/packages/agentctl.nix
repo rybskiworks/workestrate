@@ -8,6 +8,9 @@
 }:
 
 let
+  # Import the directory, not just the script: reviewed evidence is adjacent.
+  noticeHelper = "${../../scripts/licensing}/cargo_notices.py";
+
   # `src` is filtered to keep the nix build hermetic: no in-tree build
   # artifacts, no crash dumps, no locally-managed result symlinks, no stale
   # vendor directory (the preBuild hook recreates `vendor/` as a symlink to
@@ -106,7 +109,7 @@ rustPlatform.buildRustPackage {
       fi
     done
     for component in microsandbox-cli microsandbox-agentd; do
-      python3 ${../../scripts/licensing/cargo_notices.py} verify \
+      python3 ${noticeHelper} verify \
         "${microsandbox}/share/licenses/$component/rust"
     done
 
@@ -123,7 +126,7 @@ rustPlatform.buildRustPackage {
   # Generate from the exact patched Cargo source/lock and default schema features.
   # This is offline: missing original attribution is an error, not a network fetch.
   postBuild = ''
-    python3 ${../../scripts/licensing/cargo_notices.py} generate \
+    python3 ${noticeHelper} generate \
       --manifest "$PWD/Cargo.toml" --policy ${../../deny.toml} \
       --target ${pkgs.stdenv.hostPlatform.rust.rustcTarget} \
       --source-root "$PWD/../.." --source-root ${microsandboxSource} \
@@ -137,7 +140,7 @@ rustPlatform.buildRustPackage {
     install -m644 ${../../LICENSING.md} $out/share/licenses/workestrate/LICENSING.md
     install -m644 ${../../THIRD-PARTY.md} $out/share/licenses/workestrate/THIRD-PARTY.md
     cp -r "$TMPDIR/workestrate-notices" $out/share/licenses/workestrate/rust
-    python3 ${../../scripts/licensing/cargo_notices.py} verify $out/share/licenses/workestrate/rust
+    python3 ${noticeHelper} verify $out/share/licenses/workestrate/rust
 
     # sops + age are bundled on the wrapper's PATH: `workestrate secrets`
     # (init/update) shells out to sops for encrypt/decrypt and to age-keygen
