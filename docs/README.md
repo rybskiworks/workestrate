@@ -35,6 +35,7 @@ instructions, not an architectural onboarding requirement for every agent.
 | [Contributing](../CONTRIBUTING.md) | Integration, review, tests, and repository hygiene. |
 | [Security reporting](../SECURITY.md) | Vulnerability reporting and disclosure guidance. |
 | [Testing](testing.md) | Repository checks, properties, regressions, and separate VM acceptance. |
+| [Agent test environment](agent-test-env.md) | KVM, Lix, pinned CLI, and disk/PATH caveats in verification containers. |
 | [CI and release foundation](ci-release-foundation.md) | Check selection, required gates, and release boundaries. |
 | [GitHub governance](github-governance.md) | Proposed protections and their activation sequence. |
 | [Repository audit](repository-audit-2026-09-11.md) | Dated consolidation findings, fixes, and remaining work. |
