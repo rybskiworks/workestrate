@@ -419,6 +419,108 @@ pub fn foreign_namespace_record<'a>(facts: &'a ReconcileFacts, namespace: &str) 
     }
 }
 
+/// Adopt a record-less running sandbox into the port registry (recovery
+/// path for a wiped/lost registry: `workestrate clean` removes
+/// `var/run/*.json` while backend sandboxes keep running).
+///
+/// Preconditions (ALL must hold; otherwise returns `Ok(false)` and the
+/// caller keeps the current behaviour):
+///
+/// - `facts.record.is_none()` AND `facts.msb_status == Some(Running)` —
+///   the post-clean shape (a split-brain half is never adopted);
+/// - same-namespace only: `foreign_namespace_record(facts, namespace)` is
+///   `None` (a foreign record keeps the current refusal — never adopted
+///   across namespaces);
+/// - msb reachable (`!facts.msb_unavailable` — fail-closed per the
+///   `decide_chain` posture).
+///
+/// When the preconditions hold the repair writes a minimal registry record
+/// through the existing locked atomic path
+/// ([`crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle`])
+/// and returns `Ok(true)`:
+///
+/// - `instance`: the reconciled target instance name (scoped/fresh-aware —
+///   the caller passes it, never the bare slot);
+/// - `workload` = the dep name; `namespace` = the dependent's
+///   declaring-repo namespace; `context` = the active context (warned on
+///   drift by the caller, informational on the record);
+/// - ports: the dep's DECLARED host ports on the shared bind (the same
+///   fallback the reuse health probe uses) — best-effort. The port-collision
+///   check runs atomically inside the write path; on collision the repair
+///   ABORTS with the error (naming the instance + the colliding port) —
+///   never a lying record;
+/// - `created_at` = now (a fresh timestamp keeps `BOOT_GRACE` semantics
+///   honest); `source_dir` = `None` (unknown posture — never source-gone);
+///   `image_tag` / hashes = `None` (unstamped — never auto-stale, never
+///   skew-replaced).
+///
+/// Emits the stderr adoption warning naming the instance. A successful
+/// adoption means the dependent's record-only resolution
+/// ([`crate::microsandbox::discovery::resolve_depends_on_full`]) now sees
+/// the dep as running — the "reusing / required but not running"
+/// contradiction is closed before dependent construction.
+//
+// too_many_arguments: the positional tail mirrors the registry's lifecycle
+// entry point (identity, bind, ports, metadata); the repair carries the
+// dep identity + declaring namespace + active context + declared ports +
+// gathered facts. A params struct is deferred to the C2 wiring commit.
+#[allow(clippy::too_many_arguments)]
+pub fn adopt_running_record(
+    state_dir: &std::path::Path,
+    instance: &str,
+    workload: &str,
+    namespace: &str,
+    context: Option<&str>,
+    declared_ports: &[u16],
+    facts: &ReconcileFacts,
+) -> anyhow::Result<bool> {
+    if facts.record.is_some() || facts.msb_status != Some(SandboxStatus::Running) {
+        return Ok(false);
+    }
+    if facts.msb_unavailable {
+        return Ok(false);
+    }
+    // Defense-in-depth: unreachable when `record` is `None` (a foreign
+    // record requires a record), but pinned so future callers cannot adopt
+    // across namespaces. The live guard is the `decide_dep_disposition`
+    // refusal, which fires BEFORE any Reuse arm reaches this repair.
+    if foreign_namespace_record(facts, namespace).is_some() {
+        return Ok(false);
+    }
+    if !crate::microsandbox::slots::context_consistent_with_instance(instance, workload, context) {
+        return Ok(false);
+    }
+    let bind_ip = crate::microsandbox::plan::default_bind_ip();
+    let port_pairs: Vec<crate::microsandbox::plan::PortMapping> = declared_ports
+        .iter()
+        .map(|&p| crate::microsandbox::plan::PortMapping::new(p, p))
+        .collect();
+    crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
+        state_dir,
+        instance,
+        context,
+        workload,
+        bind_ip,
+        declared_ports,
+        &port_pairs,
+        &super::time::current_rfc3339_utc(),
+        namespace,
+        None,
+        None,
+        None,
+        None,
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "adopted running sandbox '{instance}' for workload '{workload}' has a port collision: {e}"
+        )
+    })?;
+    eprintln!(
+        "warning: adopted running sandbox '{instance}' with no registry record (state was cleaned          or lost); repaired minimal record — verify ports"
+    );
+    Ok(true)
+}
+
 /// The up/exec chain step with the operator's explicit `--replace` flag
 /// applied (ADR 0030 U11 precedence, locked): the flag PREEMPTS the chain —
 /// an explicit `--replace` always forces teardown + fresh create
@@ -1196,6 +1298,211 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    // ---- Adopt-and-repair on Reuse (post-clean recovery path) ----
+
+    /// Facts for the post-clean shape: NO record, msb Running.
+    fn recordless_running(msb_unavailable: bool) -> ReconcileFacts {
+        facts(
+            None,
+            Some(SandboxStatus::Running),
+            msb_unavailable,
+            false,
+            None,
+            false,
+        )
+    }
+
+    /// T1a: a record-less running sandbox in the dependent's namespace is
+    /// adopted — the repair writes a record readable by
+    /// `list_records_for_workload` in that namespace, on the dep's declared
+    /// ports, with the fresh-timestamp / unknown-source / unstamped shape
+    /// (never source-gone, never auto-stale, never skew-replaced).
+    #[test]
+    fn adopt_recordless_running_writes_minimal_record() -> Result<()> {
+        let dir = crate::config::test_support::unique_state_dir_runtime("adopt-writes");
+        let f = recordless_running(false);
+        let adopted = adopt_running_record(
+            &dir,
+            "personal-litellm",
+            "litellm",
+            "default",
+            Some("personal"),
+            &[4000],
+            &f,
+        )?;
+        assert!(adopted, "the post-clean shape must adopt");
+        let records = crate::microsandbox::port_registry::list_records_for_workload(
+            &dir, "litellm", "default",
+        )?;
+        assert_eq!(records.len(), 1, "one adopted record must be visible");
+        let r = &records[0];
+        assert_eq!(r.instance, "personal-litellm");
+        assert_eq!(r.workload, "litellm");
+        assert_eq!(r.namespace, "default");
+        assert_eq!(r.context, Some("personal".to_string()));
+        assert_eq!(r.ports, vec![4000]);
+        assert_eq!(r.port_pairs.len(), 1);
+        assert_eq!(r.port_pairs[0].host, 4000);
+        assert_eq!(r.port_pairs[0].guest, 4000);
+        assert!(
+            r.source_dir.is_none(),
+            "unknown posture — never source-gone"
+        );
+        assert!(r.image_tag.is_none(), "unstamped — never skew-replaced");
+        assert!(r.image_out_hash.is_none() && r.config_hash.is_none());
+        let reread = crate::microsandbox::port_registry::find_record(&dir, "personal-litellm")?;
+        assert!(reread.is_some(), "the adopted record must be re-readable");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// T1b: the repair is a no-op unless ALL preconditions hold — a present
+    /// record, a non-running backend, or an unreachable backend never
+    /// adopts (current behaviour preserved).
+    #[test]
+    fn adopt_noop_unless_post_clean_shape() -> Result<()> {
+        let dir = crate::config::test_support::unique_state_dir_runtime("adopt-noop");
+        // Record present → no adoption (normal operation is untouched).
+        let present = facts(
+            Some(record("2026-01-01T00:00:00Z")),
+            Some(SandboxStatus::Running),
+            false,
+            false,
+            Some(true),
+            false,
+        );
+        assert!(
+            !adopt_running_record(
+                &dir,
+                "personal-litellm",
+                "litellm",
+                "default",
+                Some("personal"),
+                &[4000],
+                &present
+            )?,
+            "a present record must never re-adopt"
+        );
+        // Backend not running → no adoption.
+        let stopped = facts(
+            None,
+            Some(SandboxStatus::Stopped),
+            false,
+            false,
+            None,
+            false,
+        );
+        assert!(
+            !adopt_running_record(
+                &dir,
+                "personal-litellm",
+                "litellm",
+                "default",
+                Some("personal"),
+                &[4000],
+                &stopped
+            )?,
+            "a stopped backend must not adopt"
+        );
+        // Backend unreachable → fail-closed, no adoption.
+        let unreachable = recordless_running(true);
+        assert!(
+            !adopt_running_record(
+                &dir,
+                "personal-litellm",
+                "litellm",
+                "default",
+                Some("personal"),
+                &[4000],
+                &unreachable
+            )?,
+            "an unreachable backend must not adopt"
+        );
+        assert!(
+            crate::microsandbox::port_registry::list_records(&dir)?.is_empty(),
+            "no-op adoptions must write nothing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// T1c: the port-collision check aborts LOUDLY instead of writing a
+    /// lying record — the error names the instance and the colliding port,
+    /// and no record is written.
+    #[test]
+    fn adopt_collision_aborts_without_record() -> Result<()> {
+        let dir = crate::config::test_support::unique_state_dir_runtime("adopt-collision");
+        // Occupy 127.0.0.1:4000 with an unrelated workload first.
+        crate::microsandbox::port_registry::check_and_register_sandbox_lifecycle(
+            &dir,
+            "personal-other",
+            Some("personal"),
+            "other",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            &[4000],
+            &[PortMapping::new(4000, 4000)],
+            "2026-01-01T00:00:00Z",
+            "default",
+            None,
+            None,
+            None,
+            None,
+        )?;
+        let f = recordless_running(false);
+        let err = adopt_running_record(
+            &dir,
+            "personal-litellm",
+            "litellm",
+            "default",
+            Some("personal"),
+            &[4000],
+            &f,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("personal-litellm"),
+            "the collision error must name the adopted instance: {msg}"
+        );
+        assert!(
+            msg.contains("4000"),
+            "the collision error must name the colliding port: {msg}"
+        );
+        assert!(
+            crate::microsandbox::port_registry::find_record(&dir, "personal-litellm")?.is_none(),
+            "a collided adoption must write no record"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// T1d: context-inconsistent triples never adopt (the A1 invariant is
+    /// fail-closed): `personal-litellm` under a bare context would mint a
+    /// record the registry refuses to hold.
+    #[test]
+    fn adopt_context_mismatch_never_writes() -> Result<()> {
+        let dir = crate::config::test_support::unique_state_dir_runtime("adopt-ctx");
+        let f = recordless_running(false);
+        assert!(
+            !adopt_running_record(
+                &dir,
+                "personal-litellm",
+                "litellm",
+                "default",
+                None,
+                &[4000],
+                &f
+            )?,
+            "a context-inconsistent triple must not adopt"
+        );
+        assert!(
+            crate::microsandbox::port_registry::list_records(&dir)?.is_empty(),
+            "a refused adoption writes nothing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 }
