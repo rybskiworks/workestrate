@@ -216,6 +216,44 @@ fn dir_listing_names() -> Vec<String> {
     out
 }
 
+/// Backend-known sandbox names for one workload that have NO registry
+/// record (R2a report-only sweep for `down --all-instances` after a wiped
+/// registry): the msb listing (SDK, degrading to the dir fallback via
+/// [`msb_sandbox_names`]), decoded to workestrate identities, filtered to
+/// slots that ARE the workload's slot in some context (bare `<workload>` or
+/// `<ctx>-<workload>`), minus every name a record already covers (raw or
+/// encoded spelling — the dual-spelling dedup from [`enumerate_targets`]).
+/// Report-only: callers surface the names so the no-op is never silent;
+/// teardown of unrecorded sandboxes stays an explicit operator action
+/// (never automatic).
+pub async fn unrecorded_workload_backend_names(
+    state_dir: &Path,
+    workload: &str,
+) -> Result<Vec<String>> {
+    let records = crate::microsandbox::port_registry::list_records(state_dir)?;
+    let mut out = Vec::new();
+    for listed in msb_sandbox_names().await {
+        let covered = records.iter().any(|r| {
+            listed == r.instance
+                || listed == crate::microsandbox::slots::msb_name_of_instance(&r.instance)
+        });
+        if covered {
+            continue;
+        }
+        let identity = crate::microsandbox::slots::instance_of_msb_name(&listed);
+        let slot = crate::microsandbox::slots::slot_of_instance(&identity);
+        let belongs = slot == workload
+            || slot
+                .strip_suffix(workload)
+                .is_some_and(|p| p.ends_with('-'));
+        if belongs && !out.contains(&listed) {
+            out.push(listed);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// The RETAINED generation homes OTHER than the currently-resolved one
 /// (msb state generations): every valid generation dir under
 /// [`generation::msb_home_root`] (per [`generation::generation_entries`] —

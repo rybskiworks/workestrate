@@ -584,6 +584,22 @@ pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<
     for r in records {
         results.push(down_instance(state_dir, &r.instance).await);
     }
+    if results.is_empty() {
+        // R2a: after a registry wipe (`workestrate clean`) there are zero
+        // records while backend sandboxes may keep running — a silent empty
+        // result would look like success. Report the backend-known names so
+        // the operator sees the teardown gap (report-only; teardown of
+        // unrecorded sandboxes stays an explicit operator action via
+        // `workestrate msb -- stop/remove` + record removal).
+        let unrecorded = down_scope::unrecorded_workload_backend_names(state_dir, workload).await?;
+        if !unrecorded.is_empty() {
+            eprintln!(
+                "note: no registry records for workload '{workload}', but {} backend                  sandbox(es) still present ({}); remove them explicitly, e.g. `workestrate msb --                  stop <name> && workestrate msb -- rm <name>`",
+                unrecorded.len(),
+                unrecorded.join(", ")
+            );
+        }
+    }
     Ok(results)
 }
 

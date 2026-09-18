@@ -1986,4 +1986,58 @@ egress = "deny"
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
     }
+
+    // ---- T2: adopted-record resolution (adopt-and-repair non-goal guards) ----
+
+    /// T2a: with the repaired (adopted) record present, required-dep
+    /// resolution succeeds with the RunningInstance source on the adopted
+    /// ports.
+    #[test]
+    fn adopted_record_resolves_required_dep() -> Result<()> {
+        let state_dir = unique_state_dir("disc-adopted-resolves");
+        // The adopted shape: singleton record on the dep's declared ports.
+        register_singleton(&state_dir, "litellm", loopback(1), 4000, 4000)?;
+        let mut config = depends_config();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .required = true;
+
+        let resolved = resolve_depends_on(&config, "pi", &state_dir, &[], "default")?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_port, 4000);
+        assert_eq!(resolved[0].address, "host.microsandbox.internal:4000");
+        assert_eq!(resolved[0].source, ResolutionSource::RunningInstance);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    /// T2b (non-goal guard): WITHOUT the record the required-dep bail text
+    /// is unchanged — the repair writes the record, resolution itself is
+    /// untouched.
+    #[test]
+    fn missing_record_required_bail_text_unchanged() -> Result<()> {
+        let state_dir = unique_state_dir("disc-adopted-bail");
+        let mut config = depends_config();
+        config
+            .workloads
+            .get_mut("pi")
+            .unwrap()
+            .depends_on
+            .get_mut("litellm")
+            .unwrap()
+            .required = true;
+
+        let err = resolve_depends_on(&config, "pi", &state_dir, &[], "default").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "dependency 'litellm' of workload 'pi' is required but not running; start it with              `workestrate workload up litellm`"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
 }
