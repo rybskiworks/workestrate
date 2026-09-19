@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sea-query-derive",
+    "version": "1.0.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "checksum": "a0b0f466921cdd3cf4b89d5c3ac2173dba89a873ab395b123a645de181ec7537"
+  },
+  "manifest_sha256": "15e4a909853b24e3d34ad18c39889a77f3ae75580a28989836590cb84bbea086",
+  "upstream": {
+    "repository": "https://github.com/SeaQL/sea-query",
+    "revision": "f4f75ea470ce25572f3d3c856d6ebf1b10d6f62f",
+    "manifest": "sea-query-derive/Cargo.toml",
+    "manifest_git_blob": "3ddce687cb375472b384aedff1beb49827b5f69f",
+    "license_git_blobs": {
+      "LICENSE-MIT": "14bf0d7d5d86d4e75f6590a6d93d5bb396710b7a",
+      "LICENSE-APACHE": "f8e5e5ea03400291957779488f5e542e6964c39d"
+    }
+  },
+  "documents": {
+    "LICENSE-MIT": "382b1ae2eb3b0eb5391c3c049e62c7170bd080906724f87c1c632d8a2967563d",
+    "LICENSE-APACHE": "769f80b5bcb42ed0af4e4d2fd74e1ac9bf843cb80c5a29219d1ef3544428a6bb"
+  },
+  "reason": "The build reported no original legal files in this registry package. Retain the upstream repository-root MIT and Apache texts without altering the vendored crate or its license expression. The approved original manifest must match byte-for-byte; the archive checksum must match Cargo.lock. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "Upstream files were fetched at this immutable revision and checked against their Git blob hashes, cross-checked against the GitHub trees API at the same commit. The registry checksum was read from rust-lang/crates.io-index. The build host verifies the published Cargo.toml.orig and lock checksum; the actual registry archive was not downloaded in the editing environment. Revision pinned to annotated tag 1.0.0 peeled to this commit (message \"Release SeaQuery 1.0.0\"); sea-query-derive/Cargo.toml at this commit declares version 1.0.0."
+}

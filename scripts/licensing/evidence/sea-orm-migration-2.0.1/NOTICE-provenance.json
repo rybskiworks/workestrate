@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sea-orm-migration",
+    "version": "2.0.1",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "checksum": "95ae369463e80e8a75e57434ba10dd9008a1010d81ec66cba5909561add7223f"
+  },
+  "manifest_sha256": "46d059c493b85995e0d1a65a4e0e1d8b4dc09dd3844382d512506041119e6b4c",
+  "upstream": {
+    "repository": "https://github.com/SeaQL/sea-orm",
+    "revision": "b194ee0c5edabf223d646af7d11ed7cb62caf277",
+    "manifest": "sea-orm-migration/Cargo.toml",
+    "manifest_git_blob": "463562e774b7fcab46eb48fdd5cff1d9be5fa4c5",
+    "license_git_blobs": {
+      "LICENSE-MIT": "719424ff8eca9a16296d9e2bb29b705298741071",
+      "LICENSE-APACHE": "f8e5e5ea03400291957779488f5e542e6964c39d"
+    }
+  },
+  "documents": {
+    "LICENSE-MIT": "b937e4dc7e279159e5e61f9360ebb516fefb622791c445cdc88f504c4b58b019",
+    "LICENSE-APACHE": "769f80b5bcb42ed0af4e4d2fd74e1ac9bf843cb80c5a29219d1ef3544428a6bb"
+  },
+  "reason": "The build reported no original legal files in this registry package. Retain the upstream repository-root MIT and Apache texts without altering the vendored crate or its license expression. The approved original manifest must match byte-for-byte; the archive checksum must match Cargo.lock. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "Upstream files were fetched at this immutable revision and checked against their Git blob hashes, cross-checked against the GitHub trees API at the same commit. The registry checksum matches Cargo.lock and crates.io. The build host verifies the published Cargo.toml.orig and lock checksum. Revision pinned to tag 2.0.1, which resolves to commit b194ee0c5edabf223d646af7d11ed7cb62caf277; sea-orm-migration/Cargo.toml at this commit declares version 2.0.1."
+}

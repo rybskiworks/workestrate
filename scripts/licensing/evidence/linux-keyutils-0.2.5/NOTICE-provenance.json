@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "linux-keyutils",
+    "version": "0.2.5",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "checksum": "83270a18e9f90d0707c41e9f35efada77b64c0e6f3f1810e71c8368a864d5590"
+  },
+  "manifest_sha256": "39c3e0c1f3d1f4605922a9cbb1ddf7d22a1f266f451334d21ab4bb91983cbbc7",
+  "upstream": {
+    "repository": "https://github.com/landhb/linux-keyutils",
+    "revision": "7b508d396669fd046136e9928283b2eca4bd7bf6",
+    "manifest": "Cargo.toml",
+    "manifest_git_blob": "f526c87ac750bc42601ea1d2f45408850f79b511",
+    "license_text": "absent",
+    "absence_review": "The recursive repository tree at tag v0.2.5 (commit 7b508d396669fd046136e9928283b2eca4bd7bf6) contains no license, copying, notice or copyright file at any path, and no commit in the repository history ever touched LICENSE, LICENSE-MIT or LICENSE-APACHE. The published manifest declares license = \"Apache-2.0 OR MIT\" and the README License section states the crate is licensed under either at the recipient's discretion, without shipping either text."
+  },
+  "canonical_text": {
+    "spdx_id": "Apache-2.0 OR MIT",
+    "source": "https://github.com/spdx/license-list-data (text/Apache-2.0.txt at b8d6af45ad2fcfed61bb85a8ad068aa4a77eadf9, text/MIT.txt at 279b7e997a87c09be00dd6bdda189519ade502cf)",
+    "note": "LICENSE-APACHE and LICENSE-MIT are the canonical SPDX license texts, retained verbatim (the MIT text keeps its placeholder copyright line). They are NOT upstream files: upstream published no texts, so no copyright holder or year is asserted here. They accompany the manifest's Apache-2.0 OR MIT declaration so the notice bundle carries both referenced permission notices."
+  },
+  "documents": {
+    "LICENSE-MIT": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+    "LICENSE-APACHE": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+  },
+  "reason": "The build reported no original legal files in this registry package because upstream never published them. The vendored manifest (hash-bound above) is the license declaration itself. Retain the canonical Apache-2.0 and MIT texts, disclosed as non-upstream, rather than fabricate an upstream attribution. The approved original manifest must match byte-for-byte; the archive checksum must match Cargo.lock. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "The crates.io 0.2.5 archive checksum 83270a18e9f90d0707c41e9f35efada77b64c0e6f3f1810e71c8368a864d5590 matches Cargo.lock. The vendored Cargo.toml.orig sha256 matches manifest_sha256 in the Nix vendor tree. Repository absence was checked against the recursive GitHub tree at v0.2.5 and the path history of LICENSE, LICENSE-MIT and LICENSE-APACHE. The SPDX text sha256 values are recorded in documents and were fetched from spdx/license-list-data at the recorded revisions."
+}

@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "httlib-huffman",
+    "version": "0.3.4",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "checksum": "1a9fcbcc408c5526c3ab80d534e5c86e7967c1fb7aa0a8c76abd1edc27deb877"
+  },
+  "manifest_sha256": "c1ab115af9c439280d623845e718cd5a96068a95a81ed20984066cf66d01a011",
+  "upstream": {
+    "repository": "https://github.com/xpepermint/httlib-rs",
+    "revision": "b7e958aa0f7e0a9a10d8b31f1a782863e85542f8",
+    "manifest": "huffman/Cargo.toml",
+    "manifest_git_blob": "889c5672a53ac1c4e5d88debb21f4df68498bf12",
+    "license_git_blobs": {
+      "LICENSE": "8c0c8a0241504494a6abf1ece67358675b7bb4cb"
+    }
+  },
+  "documents": {
+    "LICENSE": "e9c2aae5b318871e726b787374b6acc637e4ea002301e938c620d14b437fb0fe"
+  },
+  "reason": "The build reported no original legal files in this registry package. Retain the upstream repository-root MIT text without altering the vendored crate or its license expression. The approved original manifest must match byte-for-byte; the archive checksum must match Cargo.lock. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "The upstream monorepo carries no tags, so the revision was pinned via the GitHub commits API for path huffman/Cargo.toml: this commit is the change that set the crate version to 0.3.4 (from 0.3.2) and is the latest commit touching that manifest; the manifest at this revision declares version 0.3.4. The crate subdirectory has no license file of its own, so the repository-root MIT LICENSE was fetched at this immutable revision and its Git blob hash was recomputed with git hash-object and matches the GitHub tree listing at this revision. The registry checksum was taken from the lockfile-derived contract. The build host verifies the published Cargo.toml.orig and lock checksum; the actual registry archive was not downloaded in the editing environment."
+}

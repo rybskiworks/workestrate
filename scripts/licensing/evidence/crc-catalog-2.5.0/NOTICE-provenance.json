@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "crc-catalog",
+    "version": "2.5.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "checksum": "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
+  },
+  "manifest_sha256": "894917971e72d14c247425c9dde0021197d84533d7d66ad6ee0b32f9dfeb2380",
+  "upstream": {
+    "repository": "https://github.com/akhilles/crc-catalog.git",
+    "revision": "ed4ad631f22b05055c21a3a4127eb7cf6d75bb62",
+    "manifest": "Cargo.toml",
+    "manifest_git_blob": "1669ddd20fc7a10563e5aa1b76aade0387d4efa3",
+    "license_git_blobs": {
+      "LICENSE-MIT": "92cbf78947298b385d3bcb0d2a2501ec8d190928",
+      "LICENSE-APACHE": "545ca53e3050de0357fe603ca636e0e14b5ecfaa"
+    }
+  },
+  "documents": {
+    "LICENSE-MIT": "5ef8fcfb6cccec8fcae043c834099a60c8b7406408db576e026d2b7e67dc5cf5",
+    "LICENSE-APACHE": "d3cdb764b98283ee7c3a3cea8d374e2a2957322374378d1f3263f4d512741fc3"
+  },
+  "reason": "The build reported no original legal files in this registry package: the published archive carries its license texts only inside a LICENSES/ directory, which the harvester skips. Retain the upstream MIT and Apache-2.0 texts without altering the vendored crate or its license expression. The approved original manifest must match byte-for-byte; the archive checksum must match Cargo.lock. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "The upstream commit ed4ad631f22b05055c21a3a4127eb7cf6d75bb62 is the 2.5.0 publish revision (crates.io 2026-04-24; root Cargo.toml declares version 2.5.0). Upstream files LICENSES/MIT.txt and LICENSES/Apache-2.0.txt were fetched at this immutable revision and stored here as LICENSE-MIT and LICENSE-APACHE (byte-identical content, unchanged Git blob hashes) to satisfy the legal-filename convention; every blob hash was recomputed with git hash-object and matches the GitHub tree listing at this revision. The registry checksum matches Cargo.lock and crates.io. The build host verifies the published Cargo.toml.orig and lock checksum."
+}

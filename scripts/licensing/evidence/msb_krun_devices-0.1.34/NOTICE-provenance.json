@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "msb_krun_devices",
+    "version": "0.1.34",
+    "source": "git+https://github.com/rybskiworks/libkrun?rev=9c0c8b517d5685672a89a7bf6810ef9a114ec07b#9c0c8b517d5685672a89a7bf6810ef9a114ec07b",
+    "checksum": null
+  },
+  "manifest_sha256": "0401704a03192cf99dc10cf79013e49b7dc9bc90f0664de9b5b60324cb4025c2",
+  "upstream": {
+    "repository": "https://github.com/rybskiworks/libkrun",
+    "revision": "9c0c8b517d5685672a89a7bf6810ef9a114ec07b",
+    "manifest": "src/devices/Cargo.toml",
+    "manifest_git_blob": "c5ad4d91e9c2ddecb3ba150709452607a948802b",
+    "license_git_blobs": {
+      "LICENSE": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+      "AUTHORS": "2ff16279763ac9270bbc3d267d7366e8b6b5fa1d"
+    }
+  },
+  "documents": {
+    "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "AUTHORS": "8ba84ed11726f5734403ff2812d223ab8af6239c649f6d8d455011a1dd0d7716"
+  },
+  "reason": "The build reported no original legal files in this git-sourced package. Retain the upstream repository-root LICENSE (Apache License 2.0 text) and AUTHORS files without altering the vendored crate or its license expression. The approved original manifest must match byte-for-byte. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "Upstream files were copied byte-for-byte from a local checkout whose HEAD is the pinned revision 9c0c8b517d5685672a89a7bf6810ef9a114ec07b and checked against their Git blob hashes at that revision. The crate manifest src/devices/Cargo.toml at this revision declares version = \"0.1.34\", matching the lockfile, and the lockfile source pins this exact commit via the rev parameter. The build host verifies the vendored manifest against manifest_sha256; no registry archive exists for this git dependency. The Nix vendoring tool rewrites this manifest to resolve workspace-inherited dev-dependencies for the flattened source tree; the normalized bytes are hash-bound via vendored_manifest_sha256, while manifest_sha256 and manifest_git_blob continue to bind the reviewed upstream original.",
+  "vendored_manifest_sha256": "ce06f39e3e2719e6edb215d346490ee524758fdc5177a4ec5ba51ec8f430e974"
+}
