@@ -124,6 +124,37 @@ pub(crate) fn decide_remove_retry(
     }
 }
 
+/// What [`stop_and_remove`] does with a failed `remove()` beyond the
+/// still-running retry policy. Pure classification over the SDK error — split
+/// out for the same testability reason as [`decide_remove_retry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoveFailureAction {
+    /// `SandboxStillRunning`: a runtime process is observed alive — apply
+    /// the retry/kill/deadline policy.
+    RetryRunning,
+    /// `LaunchBindingUnsupported`: the handle carries run history but no
+    /// retained process, so the backend cannot prove exit through it — a
+    /// terminal record. Fall back to name-addressed removal.
+    RemoveByName,
+    /// Any other error propagates unchanged.
+    Propagate,
+}
+
+pub(crate) fn classify_remove_failure(error: &MicrosandboxError) -> RemoveFailureAction {
+    match error {
+        MicrosandboxError::SandboxStillRunning(_) => RemoveFailureAction::RetryRunning,
+        MicrosandboxError::LaunchBindingUnsupported => RemoveFailureAction::RemoveByName,
+        _ => RemoveFailureAction::Propagate,
+    }
+}
+
+/// Whether a stop/kill refusal means the backend holds no launch-bound
+/// runtime for the record at all — nothing left to stop, so teardown may
+/// proceed to removal.
+pub(crate) fn is_launch_unbound(error: &MicrosandboxError) -> bool {
+    matches!(error, MicrosandboxError::LaunchBindingUnsupported)
+}
+
 pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
     // Microsandbox 0.6.8 SDK: `SandboxHandle::status()` was removed. `refresh()`
     // returns a fresh handle whose `status_snapshot()` reflects the current DB
@@ -133,11 +164,27 @@ pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
         .await
         .map(|h| h.status_snapshot())
         .unwrap_or_else(|_| handle.status_snapshot());
+    let instance = handle.name().to_string();
     match status {
         SandboxStatus::Running | SandboxStatus::Draining | SandboxStatus::Paused => {
             if let Err(e) = handle.stop().await {
                 eprintln!("stop failed ({}), attempting kill", e);
-                handle.kill().await?;
+                match handle.kill().await {
+                    Ok(()) => {}
+                    // A crash can leave a row claiming Running/Draining while
+                    // the backend holds no launch-bound runtime for it: stop
+                    // and kill then both refuse with LaunchBindingUnsupported.
+                    // Nothing is left to stop — proceed to removal rather than
+                    // trapping teardown on a record only manual backend
+                    // surgery could clear.
+                    Err(e2) if is_launch_unbound(&e2) => {
+                        eprintln!(
+                            "warning: sandbox '{instance}' has no launch-bound runtime to stop; \
+                             proceeding to remove its terminal record"
+                        );
+                    }
+                    Err(e2) => return Err(e2.into()),
+                }
             }
         }
         _ => {}
@@ -149,38 +196,54 @@ pub async fn stop_and_remove(handle: SandboxHandle) -> Result<()> {
     // Wait for the process to actually die: poll-retry remove until
     // `REMOVE_DEADLINE`, escalating to one `kill()` at `REMOVE_KILL_THRESHOLD`.
     // Only after remove succeeds is the sandbox gone — callers' subsequent
-    // registry/policy wipes stay as-is. Non-StillRunning remove errors
-    // propagate immediately.
-    let instance = handle.name().to_string();
+    // registry/policy wipes stay as-is.
+    //
+    // `LaunchBindingUnsupported` is the terminal-record refusal: the handle
+    // observation carries run history but no retained process — exactly what
+    // `Sandbox::get` captures for a stopped sandbox with run history, e.g.
+    // after a crash. A genuinely live runtime fails with `SandboxStillRunning`
+    // and stays in the retry policy above, so this refusal can only mean no
+    // runtime is bound to the record: fall back to name-addressed removal
+    // instead of failing teardown. Any other remove error propagates.
     let started = std::time::Instant::now();
     let mut killed = false;
     loop {
         match handle.remove().await {
             Ok(()) => return Ok(()),
-            Err(MicrosandboxError::SandboxStillRunning(_)) => {
-                match decide_remove_retry(started.elapsed(), killed) {
-                    RemoveRetryDecision::Retry => {}
-                    RemoveRetryDecision::EscalateKill => {
-                        eprintln!(
-                            "warning: sandbox '{}' still running {:?} after stop; escalating to kill",
-                            instance,
-                            started.elapsed()
-                        );
-                        handle.kill().await?;
-                        killed = true;
+            Err(e) => match classify_remove_failure(&e) {
+                RemoveFailureAction::RetryRunning => {
+                    match decide_remove_retry(started.elapsed(), killed) {
+                        RemoveRetryDecision::Retry => {}
+                        RemoveRetryDecision::EscalateKill => {
+                            eprintln!(
+                                "warning: sandbox '{}' still running {:?} after stop; escalating to kill",
+                                instance,
+                                started.elapsed()
+                            );
+                            handle.kill().await?;
+                            killed = true;
+                        }
+                        RemoveRetryDecision::Fail => {
+                            anyhow::bail!(
+                                "timed out after {:?} waiting to remove sandbox '{}': \
+                                 its runtime process is still alive",
+                                REMOVE_DEADLINE,
+                                instance
+                            );
+                        }
                     }
-                    RemoveRetryDecision::Fail => {
-                        anyhow::bail!(
-                            "timed out after {:?} waiting to remove sandbox '{}': \
-                             its runtime process is still alive",
-                            REMOVE_DEADLINE,
-                            instance
-                        );
-                    }
+                    tokio::time::sleep(REMOVE_RETRY_POLL).await;
                 }
-                tokio::time::sleep(REMOVE_RETRY_POLL).await;
-            }
-            Err(e) => return Err(e.into()),
+                RemoveFailureAction::RemoveByName => {
+                    eprintln!(
+                        "warning: remove of sandbox '{instance}' refused: terminal record without \
+                         launch-bound runtime evidence; removing by name"
+                    );
+                    Sandbox::remove(&instance).await?;
+                    return Ok(());
+                }
+                RemoveFailureAction::Propagate => return Err(e.into()),
+            },
         }
     }
 }
@@ -597,10 +660,12 @@ pub async fn down_all_instances(state_dir: &Path, workload: &str) -> Result<Vec<
 #[allow(unsafe_code)]
 mod tests {
     use super::{
-        DownStatus, REMOVE_DEADLINE, REMOVE_KILL_THRESHOLD, REMOVE_RETRY_POLL, RemoveRetryDecision,
-        decide_remove_retry, down_all_instances, sandbox_dir,
+        DownStatus, REMOVE_DEADLINE, REMOVE_KILL_THRESHOLD, REMOVE_RETRY_POLL, RemoveFailureAction,
+        RemoveRetryDecision, classify_remove_failure, decide_remove_retry, down_all_instances,
+        is_launch_unbound, sandbox_dir,
     };
     use crate::config::test_support::unique_state_dir_runtime;
+    use microsandbox::MicrosandboxError;
     use std::time::Duration;
 
     // ---- stop_and_remove remove-retry policy (decide_remove_retry) ----
@@ -679,6 +744,50 @@ mod tests {
             REMOVE_DEADLINE > Duration::from_secs(30),
             "the remove deadline must outlast the fork SDK's 30s stop grace"
         );
+    }
+
+    // ---- stop_and_remove terminal-record fallback ----
+    //
+    // Same no-mock-seam split as the retry policy: the pure classification
+    // (`classify_remove_failure`, `is_launch_unbound`) is pinned here; the
+    // loop itself needs a live msb.
+
+    /// The launch-binding refusal is the ONLY remove failure routed to the
+    /// name-addressed fallback: it is the backend reporting run history
+    /// without a retained process. Still-running stays in the retry/kill
+    /// policy; everything else propagates.
+    #[test]
+    fn classify_remove_failure_routes_only_terminal_refusal_to_name_removal() {
+        assert_eq!(
+            classify_remove_failure(&MicrosandboxError::SandboxStillRunning("s".to_string())),
+            RemoveFailureAction::RetryRunning,
+            "observed-live runtimes must stay in the retry/kill policy"
+        );
+        assert_eq!(
+            classify_remove_failure(&MicrosandboxError::LaunchBindingUnsupported),
+            RemoveFailureAction::RemoveByName,
+            "terminal records without launch-bound evidence fall back to name removal"
+        );
+        assert_eq!(
+            classify_remove_failure(&MicrosandboxError::SandboxNotFound("s".to_string())),
+            RemoveFailureAction::Propagate,
+            "unrelated errors must propagate unchanged"
+        );
+    }
+
+    /// Stop/kill tolerance is equally narrow: only the no-bound-runtime
+    /// refusal lets teardown proceed past a failed stop escalation.
+    #[test]
+    fn is_launch_unbound_matches_only_launch_binding_refusal() {
+        assert!(is_launch_unbound(
+            &MicrosandboxError::LaunchBindingUnsupported
+        ));
+        assert!(!is_launch_unbound(&MicrosandboxError::SandboxStillRunning(
+            "s".to_string()
+        )));
+        assert!(!is_launch_unbound(&MicrosandboxError::SandboxNotFound(
+            "s".to_string()
+        )));
     }
 
     // ---- msb-name encoding boundary (ADR 0030 addendum 2026-08-26) ----
