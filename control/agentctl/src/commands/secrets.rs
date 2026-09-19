@@ -1009,7 +1009,8 @@ pub fn cmd_secrets_update(args: &SecretsTargetArgs) -> Result<()> {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::unwrap_in_result
+    clippy::unwrap_in_result,
+    unsafe_code
 )]
 mod tests {
     use super::*;
@@ -1165,7 +1166,7 @@ mod tests {
 
     #[test]
     fn test_stdin_update_truncates_extra_lines() {
-        let required = vec!["A".to_string(), "B".to_string()];
+        let required = ["A".to_string(), "B".to_string()];
         let stdin_text = "v1\nv2\nv3\n";
         let mut buffer = String::from("A=old1\nB=old2\n");
         for (key, line) in required.iter().zip(stdin_text.lines()) {
