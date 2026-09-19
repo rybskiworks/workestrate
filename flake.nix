@@ -13,7 +13,7 @@
 
     microsandbox-fork = {
       # Runtime packages and SDK patches must come from this same source.
-      url = "github:rybskiworks/microsandbox/251b368a868d578ead123071c3e6bc8eec013817";
+      url = "github:rybskiworks/microsandbox/fd78ad6eb1132c4132889f4e836fe5c92887c3e4";
       inputs.tooling.follows = "tooling";
     };
 

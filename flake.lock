@@ -432,17 +432,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1789114971,
-        "narHash": "sha256-urW9w6VusVS0QymKF9wXehEexamIQb7cIJ+Y22Oqj5w=",
+        "lastModified": 1789506599,
+        "narHash": "sha256-ZlNu2kWRRSrLWv/CmGhYnhMQqOiJ3eZ2ta+N3UNo0Uc=",
         "owner": "rybskiworks",
         "repo": "libkrunfw",
-        "rev": "d575b13e79368b23246be3d93d7935899dec5a3b",
+        "rev": "2fef06d47cd170cdf508d6d14cbbe655339cb19e",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "libkrunfw",
-        "rev": "d575b13e79368b23246be3d93d7935899dec5a3b",
+        "rev": "2fef06d47cd170cdf508d6d14cbbe655339cb19e",
         "type": "github"
       }
     },
@@ -487,17 +487,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1789135404,
-        "narHash": "sha256-7CVQqR6lv2lgywdA6bZr+ASxmEozaO/WahGZSO514oA=",
+        "lastModified": 1789858982,
+        "narHash": "sha256-jjdmPhQct2wzMMXx406hcb9psl4ZOCCx729lTQwucoQ=",
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "251b368a868d578ead123071c3e6bc8eec013817",
+        "rev": "fd78ad6eb1132c4132889f4e836fe5c92887c3e4",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "251b368a868d578ead123071c3e6bc8eec013817",
+        "rev": "fd78ad6eb1132c4132889f4e836fe5c92887c3e4",
         "type": "github"
       }
     },
