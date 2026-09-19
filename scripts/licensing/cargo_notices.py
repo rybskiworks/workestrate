@@ -130,10 +130,19 @@ def supplemental_originals(package: dict, directory: Path, lockfile: Path | None
               if all(entry.get(k) == approved[k] for k in ("name", "version", "source"))]
     if len(locked) != 1 or locked[0].get("checksum") != approved["checksum"]:
         raise ValueError("supplemental evidence registry checksum mismatch")
-    original_manifest = directory / "Cargo.toml.orig"
+    # Registry archives pair the rewritten Cargo.toml with the published
+    # Cargo.toml.orig. Git checkouts carry only Cargo.toml: unrewritten when
+    # the manifest stands alone, normalized by the vendoring tool when
+    # workspace inheritance must be resolved for a flattened source tree.
+    # Bind the reviewed original always and the recorded normalization too.
+    manifest_name = "Cargo.toml" if approved["source"].startswith("git+") else "Cargo.toml.orig"
+    original_manifest = directory / manifest_name
     if original_manifest.is_symlink() or not original_manifest.is_file():
-        raise ValueError("supplemental evidence requires a regular Cargo.toml.orig")
-    if digest(original_manifest) != record["manifest_sha256"]:
+        raise ValueError(f"supplemental evidence requires a regular {manifest_name}")
+    allowed = {record["manifest_sha256"]}
+    if manifest_name == "Cargo.toml" and record.get("vendored_manifest_sha256") is not None:
+        allowed.add(record["vendored_manifest_sha256"])
+    if digest(original_manifest) not in allowed:
         raise ValueError("supplemental evidence original manifest mismatch")
     documents = record["documents"]
     if not isinstance(documents, dict) or not documents:
