@@ -1174,8 +1174,14 @@ mod tests {
                 buffer = replace_key_line(&buffer, key, value);
             }
         }
-        assert!(buffer.contains("A=v1"), "first stdin line applied: {buffer}");
-        assert!(buffer.contains("B=v2"), "second stdin line applied: {buffer}");
+        assert!(
+            buffer.contains("A=v1"),
+            "first stdin line applied: {buffer}"
+        );
+        assert!(
+            buffer.contains("B=v2"),
+            "second stdin line applied: {buffer}"
+        );
         assert!(
             !buffer.contains("v3"),
             "extra stdin line is dropped by zip: {buffer}"

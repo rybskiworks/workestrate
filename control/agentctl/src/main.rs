@@ -1982,7 +1982,9 @@ mod tests {
     /// stay removed: they must fail to parse (use `secrets target/schema`).
     #[test]
     fn legacy_secrets_commands_are_removed() {
-        assert!(Cli::try_parse_from(["workestrate", "secrets-target", "personal", "--json"]).is_err());
+        assert!(
+            Cli::try_parse_from(["workestrate", "secrets-target", "personal", "--json"]).is_err()
+        );
         assert!(Cli::try_parse_from(["workestrate", "secrets-schema"]).is_err());
     }
 
