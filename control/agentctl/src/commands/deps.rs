@@ -674,12 +674,37 @@ pub async fn auto_start_dependencies(
         };
         match disposition {
             DepDisposition::Reuse { dep, slot } => {
+                // Adopt-and-repair (recovery path for a wiped/lost registry):
+                // a record-less running sandbox is adopted into the registry
+                // AFTER the Reuse decision and BEFORE dependent construction /
+                // resolution, so the record-only resolution sees the dep as
+                // running. Foreign-namespace refusals already fired in
+                // decide_dep_disposition — never adopt across namespaces.
+                let adopted = crate::microsandbox::runtime::reconcile::adopt_running_record(
+                    &state_dir,
+                    &slot,
+                    &dep,
+                    &namespace,
+                    crate::config::active_context_name().as_deref(),
+                    declared_ports_of(&action),
+                    &facts,
+                )?;
                 // A1/P3: adopting a record registered under a different
                 // context than the active one is allowed but surfaced
-                // (warn-and-proceed).
+                // (warn-and-proceed). Re-read the record only when an
+                // adoption wrote one — normal operation (record intact)
+                // reuses the gathered facts, byte-identical to before.
+                let drift_context;
+                let drift_source: Option<&str> = if adopted {
+                    drift_context =
+                        crate::microsandbox::port_registry::find_record(&state_dir, &slot)?;
+                    drift_context.as_ref().and_then(|r| r.context.as_deref())
+                } else {
+                    facts.record.as_ref().and_then(|r| r.context.as_deref())
+                };
                 crate::microsandbox::runtime::reconcile::warn_on_context_drift(
                     &slot,
-                    facts.record.as_ref().and_then(|r| r.context.as_deref()),
+                    drift_source,
                     crate::config::active_context_name().as_deref(),
                 );
                 println!("dependency '{dep}' already running (slot '{slot}') — reusing");
@@ -820,6 +845,8 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
     let context = crate::config::active_context_name();
     let state_dir = crate::config::resolve_state_dir();
     let records = list_records(&state_dir)?;
+    let provenance = crate::merge::take_provenance();
+    let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
     let (starts, skips) = plan_bare_up(&config, &records, context.as_deref())?;
 
     // ADR 0030 P0.2: parent-side reconcile pass (see the fn docs). All
@@ -840,12 +867,26 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
             BareSkip::AlreadyRunning { name, slot } => {
                 let ports = declared_host_ports(&config, &name);
                 let chain = workload_conflict_chain(&config, &name);
+                let bare_namespace = namespace_for(provenance.as_ref(), &layer_dirs, &name);
                 let facts = crate::microsandbox::runtime::reconcile::gather_facts(
                     &state_dir, &slot, &ports,
                 )
                 .await?;
                 match decide_bare_up_disposition(&chain, &facts, &slot) {
                     Ok(BareUpDisposition::Reuse) => {
+                        // Adopt-and-repair (recovery path for a wiped/lost
+                        // registry): adopt the record-less running sandbox
+                        // BEFORE the reuse message, so later batch members
+                        // and dependent resolution see the record.
+                        crate::microsandbox::runtime::reconcile::adopt_running_record(
+                            &state_dir,
+                            &slot,
+                            &name,
+                            &bare_namespace,
+                            crate::config::active_context_name().as_deref(),
+                            &ports,
+                            &facts,
+                        )?;
                         // A1/P3: adopting a record registered under a
                         // different context than the active one is allowed
                         // but surfaced (warn-and-proceed).
@@ -925,6 +966,19 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
                 .await?;
         match decide_bare_up_disposition(&chain, &facts, &s.slot) {
             Ok(BareUpDisposition::Reuse) => {
+                // Adopt-and-repair (recovery path for a wiped/lost
+                // registry): adopt the record-less running sandbox BEFORE
+                // the reuse short-circuit, so the child and dependent
+                // resolution see the record.
+                crate::microsandbox::runtime::reconcile::adopt_running_record(
+                    &state_dir,
+                    &s.slot,
+                    &s.name,
+                    &namespace_for(provenance.as_ref(), &layer_dirs, &s.name),
+                    crate::config::active_context_name().as_deref(),
+                    &s.ports,
+                    &facts,
+                )?;
                 // msb Running + healthy but NO registry record (the registry
                 // was lost): short-circuit reuse parent-side — the child
                 // would reuse anyway, but spawning it would misreport within
@@ -3238,6 +3292,86 @@ strategy = "parallel"
                 .unwrap(),
             BareUpDisposition::Fail
         );
+    }
+
+    // ---- T3: adopt-and-repair convergence (executor call-site seam) ----
+
+    /// T3a: the dep executor's Reuse arm converges after a registry wipe —
+    /// the adopted record is written in the dependent's namespace with the
+    /// dep's declared ports, so the record-only resolution then succeeds.
+    #[test]
+    fn dep_reuse_adopt_repairs_wiped_registry_for_resolution() -> Result<()> {
+        use crate::microsandbox::runtime::reconcile::adopt_running_record;
+        let state_dir = unique_state_dir("adopt-executor-converges");
+        // Post-clean shape: no record, backend Running.
+        let wiped = facts(None, Some(SandboxStatus::Running), None, false);
+        let adopted = adopt_running_record(
+            &state_dir,
+            "personal-b",
+            "b",
+            "default",
+            Some("personal"),
+            &[4000],
+            &wiped,
+        )?;
+        assert!(adopted, "executor Reuse must adopt the wiped record");
+        let records = crate::microsandbox::port_registry::list_records_for_workload(
+            &state_dir, "b", "default",
+        )?;
+        assert_eq!(records.len(), 1, "resolution must now see the dep");
+        assert_eq!(records[0].instance, "personal-b");
+        let _ = std::fs::remove_dir_all(state_dir);
+        Ok(())
+    }
+
+    /// T3b: repeated clean→adopt cycles converge — re-adopting over an
+    /// already-adopted record is a no-op (the write path is idempotent per
+    /// instance), and normal operation (record intact) never warns.
+    #[test]
+    fn repeated_adopt_cycles_converge_without_new_warnings() -> Result<()> {
+        use crate::microsandbox::runtime::reconcile::adopt_running_record;
+        let state_dir = unique_state_dir("adopt-idempotent");
+        let wiped = facts(None, Some(SandboxStatus::Running), None, false);
+        assert!(
+            adopt_running_record(
+                &state_dir,
+                "personal-b",
+                "b",
+                "default",
+                Some("personal"),
+                &[4000],
+                &wiped
+            )?,
+            "first adoption after a wipe must repair"
+        );
+        // Second cycle: the record now exists — gather-facts would carry it,
+        // so adoption is a no-op (byte-identical normal operation).
+        let record = crate::microsandbox::port_registry::find_record(&state_dir, "personal-b")?
+            .expect("adopted record must exist");
+        let intact = facts(
+            Some(record),
+            Some(SandboxStatus::Running),
+            Some(true),
+            false,
+        );
+        assert!(
+            !adopt_running_record(
+                &state_dir,
+                "personal-b",
+                "b",
+                "default",
+                Some("personal"),
+                &[4000],
+                &intact
+            )?,
+            "an intact record must never re-adopt"
+        );
+        let records = crate::microsandbox::port_registry::list_records_for_workload(
+            &state_dir, "b", "default",
+        )?;
+        assert_eq!(records.len(), 1, "exactly one record after two cycles");
+        let _ = std::fs::remove_dir_all(state_dir);
+        Ok(())
     }
 
     /// The batch chain helper mirrors `Workload::instance_conflict_chain`:
