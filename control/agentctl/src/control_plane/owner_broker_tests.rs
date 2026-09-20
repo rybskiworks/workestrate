@@ -5,7 +5,7 @@ use super::super::broker::BrokerTransport;
 use super::*;
 use microsandbox_protocol::broker as wire;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 
 struct Transport {
     socket: Mutex<Option<UnixStream>>,
@@ -142,14 +142,25 @@ async fn probe(owner: &mut HostControlOwner<Guest>, peer: &mut UnixStream) {
 
 async fn closed_without_more_requests(peer: &mut UnixStream) {
     let mut byte = [0; 1];
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), peer.read(&mut byte))
-            .await
-            .expect("original stream remained open")
-            .unwrap(),
-        0,
-        "unexpected policy, replay or other bytes preceded closure"
-    );
+    // try_read issues the syscall directly, bypassing the reactor: with
+    // paused time the runtime auto-advances to a timer the moment no task is
+    // runnable, so a timeout-wrapped `read` can lose to its own deadline
+    // while the peer's EOF sits unprocessed in the driver's event queue.
+    // Yields let any in-runtime close work complete; after the first turns a
+    // brief real sleep bounds the wait under load.
+    for attempt in 0..300 {
+        match peer.try_read(&mut byte) {
+            Ok(0) => return,
+            Ok(n) => panic!("{n} unexpected policy, replay or other bytes preceded closure"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("peer read failed before closure: {error}"),
+        }
+        tokio::task::yield_now().await;
+        if attempt >= 50 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    panic!("original stream remained open");
 }
 
 fn assert_not_used(transport: &Transport) {
