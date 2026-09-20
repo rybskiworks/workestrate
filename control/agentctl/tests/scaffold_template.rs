@@ -1,7 +1,7 @@
-//! Standing CI guard for the `workestrate config new` scaffold.
+//! Standing CI guard for the `workestrate fleet new` scaffold.
 //!
 //! Mirrors `schema_drift.rs` + `spec_examples_parse.rs`: invokes the built
-//! `workestrate` binary's `config new` command into a temp dir, then
+//! `workestrate` binary's `fleet new` command into a temp dir, then
 //! enforces:
 //!
 //! 1. The rendered skeleton passes `workestrate validate-config`.
@@ -41,7 +41,7 @@ fn tempdir_for_test() -> TempDir {
 fn render_via_subprocess(dest: &Path) -> std::process::Output {
     let bin = env!("CARGO_BIN_EXE_workestrate");
     Command::new(bin)
-        .args(["config", "new", "scaffoldtest"])
+        .args(["fleet", "new", "scaffoldtest"])
         .arg(dest)
         .args([
             "--no-register",
@@ -50,7 +50,7 @@ fn render_via_subprocess(dest: &Path) -> std::process::Output {
             "age1TESTPLACEHOLDER",
         ])
         .output()
-        .expect("failed to invoke `workestrate config new`")
+        .expect("failed to invoke `workestrate fleet new`")
 }
 
 /// Test 1: the rendered skeleton passes `workestrate validate-config`.
@@ -61,7 +61,7 @@ fn native_skeleton_passes_validate_config() {
     let output = render_via_subprocess(&dest);
     assert!(
         output.status.success(),
-        "`config new` failed: stderr=\n{}",
+        "`fleet new` failed: stderr=\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(dest.join("workestrate.toml").exists());
@@ -69,7 +69,7 @@ fn native_skeleton_passes_validate_config() {
     let bin = env!("CARGO_BIN_EXE_workestrate");
     let val = Command::new(bin)
         .args(["validate-config"])
-        .env("WORKESTRATE_CONFIG_DIR", &dest)
+        .env("WORKESTRATE_FLEET_DIR", &dest)
         .output()
         .expect("failed to invoke `workestrate validate-config`");
     assert!(
@@ -94,7 +94,7 @@ fn native_render_leaves_no_unsubstituted_tokens() {
     let output = render_via_subprocess(&dest);
     assert!(
         output.status.success(),
-        "`config new` failed: stderr=\n{}",
+        "`fleet new` failed: stderr=\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let mut offenders = Vec::new();
@@ -166,7 +166,7 @@ fn copier_template_byte_matches_native_render() {
 
     // Compare overlap files (after trimming trailing whitespace per line).
     // README is excluded — copier has a richer copier-update section; native
-    // points users at `workestrate config new`.
+    // points users at `workestrate fleet new`.
     // Schema parity (schemas/workestrate.schema.json) is guarded on the
     // native side by schema_drift.rs (schemars vs committed schema); the
     // copier-side vendored copy is a static snapshot.
@@ -217,7 +217,7 @@ fn copier_update_works_from_native_scaffold() {
     assert!(output.status.success(), "native render failed");
     assert!(
         dest.join(".copier-answers.yml").exists(),
-        ".copier-answers.yml not written by config new"
+        ".copier-answers.yml not written by fleet new"
     );
 
     // git init + commit so copier update has a baseline to diff against.

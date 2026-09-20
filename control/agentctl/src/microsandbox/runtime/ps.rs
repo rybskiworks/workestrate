@@ -154,7 +154,7 @@ pub struct PsEntry {
     /// nothing displayed). Populated by [`ps`]; consumed by the async
     /// caller's staleness computation.
     pub config_hash: Option<String>,
-    /// The record's declaring-config-repo namespace (ADR 0030 Phase 2 T1):
+    /// The record's declaring-fleet namespace (ADR 0030 Phase 2 T1):
     /// the resolution filter deciding whether the ACTIVE config view owns
     /// this row (a foreign-namespace record is never compared).
     pub namespace: String,

@@ -1,5 +1,5 @@
 //! Integration tests for `workestrate doctor` — JSON shape, check-name
-//! coverage, human report sections, overall-verdict values, and config-repo
+//! coverage, human report sections, overall-verdict values, and fleet
 //! health reporting. Uses an isolated HOME + XDG per test so the user's real
 //! registry and state are never touched. Individual check statuses are
 //! environment-dependent (KVM, nix, msb may or may not exist), so tests
@@ -121,8 +121,8 @@ fn doctor_json_has_expected_check_names() {
         "age_key_file",
         "msb",
         "generation",
-        "home",
-        "config_repos",
+        "config",
+        "fleets",
         "schemas",
     ] {
         assert!(
@@ -147,8 +147,8 @@ fn doctor_human_output_has_section_header() {
         "missing dev_kvm check; got: {stdout}"
     );
     assert!(
-        stdout.contains("config_repos"),
-        "missing config_repos check; got: {stdout}"
+        stdout.contains("fleets"),
+        "missing fleets check; got: {stdout}"
     );
 }
 
@@ -185,28 +185,28 @@ fn doctor_overall_verdict_matches_exit_code() {
     }
 }
 
-/// A registered config repo whose store clone is missing (or is not a real
-/// git clone) shows up in the config_repos check with a non-OK status.
+/// A registered fleet whose store clone is missing (or is not a real
+/// git clone) shows up in the fleets check with a non-OK status.
 #[test]
-fn doctor_config_repos_reports_registered_repo() {
+fn doctor_fleets_reports_registered_fleet() {
     let home = IsolatedHome::new("cmd-doctor");
     home.write_registry(
         r#"
-[configs.personal]
+[fleets.personal]
 url = "https://example.invalid/personal.git"
 ref = "main"
 "#,
     );
     // Create the repo dir (empty, not a git clone) where the store expects it:
-    // legacy-XDG layout → $XDG_DATA_HOME/workestrate/config-repos/<name>.
-    let repo_dir = home
+    // legacy-XDG layout → $XDG_DATA_HOME/workestrate/fleets/<name>.
+    let fleet_dir = home
         .dir
         .join(".local")
         .join("share")
         .join("workestrate")
-        .join("config-repos")
+        .join("fleets")
         .join("personal");
-    std::fs::create_dir_all(&repo_dir).expect("create fake repo dir");
+    std::fs::create_dir_all(&fleet_dir).expect("create fake fleet dir");
 
     let out = home
         .cmd()
@@ -217,17 +217,17 @@ ref = "main"
     let doc: serde_json::Value =
         serde_json::from_str(&stdout).expect("doctor --json stdout must be valid JSON");
     let checks = doc["checks"].as_array().expect("checks must be an array");
-    let config_repos = checks
+    let fleets = checks
         .iter()
-        .find(|c| c["name"] == "config_repos")
-        .expect("config_repos check must exist");
-    let repos = config_repos["repos"]
+        .find(|c| c["name"] == "fleets")
+        .expect("fleets check must exist");
+    let fleet_entries = fleets["entries"]
         .as_array()
-        .expect("config_repos must carry a repos array");
-    let personal = repos
+        .expect("fleets must carry an entries array");
+    let personal = fleet_entries
         .iter()
         .find(|r| r["name"] == "personal")
-        .expect("registered repo 'personal' must be reported");
+        .expect("registered fleet 'personal' must be reported");
     let status = personal["status"].as_str().expect("repo missing status");
     assert!(
         matches!(status, "WARN" | "FAIL"),
@@ -236,7 +236,7 @@ ref = "main"
 }
 
 /// A `schemas` row is present in the JSON report with the consumer-location
-/// summary (an isolated home with no registry and no home still resolves the
+/// summary (an isolated HOME with no registry and no config still resolves the
 /// tool-template target from the real checkout, so the row reports "consumer
 /// location(s) checked"; status is OK or WARN depending on freshness).
 #[test]
@@ -267,24 +267,24 @@ fn doctor_json_reports_schema_check_row() {
         message.contains("consumer"),
         "schemas message must mention consumer locations; got: {message}"
     );
-    let repos = schemas["repos"]
+    let entries = schemas["entries"]
         .as_array()
-        .expect("schemas must carry a repos array");
+        .expect("schemas must carry an entries array");
     assert!(
-        repos
+        entries
             .iter()
             .all(|r| r["target"].is_string() && r["path"].is_string()),
-        "every schema entry must carry target and path: {repos:?}"
+        "every schema entry must carry target and path: {entries:?}"
     );
 }
 
-/// A stale consumer copy (tool home carries a hand-written workestrate.schema.json
+/// A stale consumer copy (config carries a hand-written workestrate.schema.json
 /// and NO workload file) makes the schemas check WARN with a per-target STALE
 /// entry; the human report carries the remediation. The tool-template target
-/// uses fresh schemas in a per-test scratch root, so exactly the home copy
+/// uses fresh schemas in a per-test scratch root, so exactly the config copy
 /// is stale.
 #[test]
-fn doctor_schemas_reports_stale_home_copy() {
+fn doctor_schemas_reports_stale_config_copy() {
     let home = IsolatedHome::new("cmd-doctor");
     let root = scratch_root_with_schemas();
     let store = home.dir.join(".workestrate");
@@ -299,7 +299,7 @@ fn doctor_schemas_reports_stale_home_copy() {
     let out = home
         .cmd()
         .env("AGENTCTL_ROOT", root.path())
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args(["doctor", "--json"])
         .output()
         .expect("invoke doctor --json");
@@ -320,25 +320,25 @@ fn doctor_schemas_reports_stale_home_copy() {
         .expect("schemas missing message");
     assert!(
         message.contains("1 stale"),
-        "exactly the home copy must be stale; got: {message}"
+        "exactly the config copy must be stale; got: {message}"
     );
-    let repos = schemas["repos"]
+    let entries = schemas["entries"]
         .as_array()
-        .expect("schemas must carry a repos array");
-    let home_entry = repos
+        .expect("schemas must carry an entries array");
+    let config_entry = entries
         .iter()
         .find(|r| {
             r["target"]
                 .as_str()
-                .map(|t| t.contains("tool home"))
+                .map(|t| t.contains("config"))
                 .unwrap_or(false)
         })
-        .expect("tool home target must be reported");
+        .expect("config target must be reported");
     assert_eq!(
-        home_entry["status"], "STALE",
-        "the stale home copy must be STALE: {home_entry}"
+        config_entry["status"], "STALE",
+        "the stale config copy must be STALE: {config_entry}"
     );
-    let template_entry = repos
+    let template_entry = entries
         .iter()
         .find(|r| {
             r["target"]
@@ -356,7 +356,7 @@ fn doctor_schemas_reports_stale_home_copy() {
     let out_h = home
         .cmd()
         .env("AGENTCTL_ROOT", root.path())
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args(["doctor"])
         .output()
         .expect("invoke doctor");
@@ -367,7 +367,7 @@ fn doctor_schemas_reports_stale_home_copy() {
     );
 }
 
-/// After `schemas update` refreshes the stale home copy, the schemas check
+/// After `schemas update` refreshes the stale config copy, the schemas check
 /// reports OK.
 #[test]
 fn doctor_schemas_is_ok_after_schemas_update() {
@@ -384,7 +384,7 @@ fn doctor_schemas_is_ok_after_schemas_update() {
     let up = home
         .cmd()
         .env("AGENTCTL_ROOT", root.path())
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args(["schemas", "update"])
         .output()
         .expect("invoke schemas update");
@@ -398,7 +398,7 @@ fn doctor_schemas_is_ok_after_schemas_update() {
     let out = home
         .cmd()
         .env("AGENTCTL_ROOT", root.path())
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args(["doctor", "--json"])
         .output()
         .expect("invoke doctor --json");

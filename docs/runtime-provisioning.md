@@ -313,10 +313,10 @@ export MSB_AGENTD_PATH="${microsandbox}/libexec/agentd"
 | `MSB_BUILD_RUNTIME` | Nix build / default devshell | Explicit immutable package directory, validated by the SDK build script | Offline compilation input; never a mutable state directory |
 | `MSB_PATH` | wrapper `--set` | The packaged wrapper fixes the runtime executable rather than honoring a caller replacement | Its store-path hash segment keys the managed state generation |
 | `MSB_AGENTD_PATH` | wrapper `--set` / build preBuild / default devshell | Exact paired static guest agent | SDK filesystem prebuilt input and runtime pairing |
-| `WORKESTRATE_HOME` / `--home` | user / `workestrate --home` flag | `--home` > non-empty `WORKESTRATE_HOME` > explicit legacy XDG selectors > `~/.workestrate` | Tool home/registry; orthogonal to the MSB home |
-| `WORKESTRATE_STATE_DIR` | caller env | Non-empty env > registry `settings.state_dir` > active home's state default | Workload state, runtime registries and Workestrate image bookkeeping |
-| registry `settings.store_dir` | selected tool-home registry | Explicit setting > active home's store default | Managed config-repo and source checkouts, not the SDK runtime package |
-| `MSB_CONFIG_PATH` | caller env | Explicit backend configuration file | Selects Microsandbox backend configuration separately from Workestrate's tool home |
+| `WORKESTRATE_CONFIG` / `--config` | user / `workestrate --config` flag | `--config` > non-empty `WORKESTRATE_CONFIG` > explicit legacy XDG selectors > `~/.workestrate` | Config/registry; orthogonal to the MSB home |
+| `WORKESTRATE_STATE_DIR` | caller env | Non-empty env > registry `settings.state_dir` > active config state default | Workload state, runtime registries and Workestrate image bookkeeping |
+| registry `settings.store_dir` | selected tool-config registry | Explicit setting > active config store default | Managed fleet and source checkouts, not the SDK runtime package |
+| `MSB_CONFIG_PATH` | caller env | Explicit backend configuration file | Selects Microsandbox backend configuration separately from Workestrate's config |
 | `HOME` | user / OS | Expands at wrapper execution time for `MSB_HOME=$HOME/.microsandbox/current` | Must not be baked at nix build time |
 
 These path controls are already implemented; changing them does not migrate
@@ -327,7 +327,7 @@ persisted workload data have different owners and lifetimes.
 
 Microsandbox backend JSON may select custom roots in addition to `MSB_HOME`.
 Inspect the effective backend configuration before assuming every operation
-uses one directory; changing Workestrate's `--home` alone is not full isolation.
+uses one directory; changing Workestrate's `--config` alone is not full isolation.
 Disposable tests should supply a separate `MSB_CONFIG_PATH` containing `{}`,
 explicit tool/state/MSB roots and a scrubbed environment. Path reconciliation
 and migration/query side effects still require dedicated regression coverage.
@@ -596,20 +596,20 @@ Rust types (serde + schemars)
          │   schemas/registry.schema.json
          │
          └─► schemas update / schemas update --check
-             template, initialized tool home and qualifying registered config repos
+             template, initialized config and qualifying registered fleets
 ```
 
 All three schemas are generated and committed. `registry.schema.json` describes
-the tool-home `config.toml`, including its policy. Rust types remain the runtime
+the config `config.toml`, including its policy. Rust types remain the runtime
 validator; JSON Schemas are editor/tooling projections, not a separate source
 of policy truth.
 
 `workestrate schemas update` distributes all three artifacts idempotently to
-the tool template when available, an existing tool home, and registered config
+the tool template when available, an existing config, and registered config
 repos already carrying a `schemas/` directory. Missing/unmanaged destinations
 are skipped. `--repo <name>` selects only that registered repo, excluding the
-template and home. `--check` reports missing/stale copies without writing and
-fails on drift. Use an explicit tool home when checking deployed consumers.
+template and config. `--check` reports missing/stale copies without writing and
+fails on drift. Use an explicit config when checking deployed consumers.
 Repository `just verify` checks repository-owned schema copies separately;
 neither it nor shell entry updates live consumers.
 

@@ -10,13 +10,13 @@ Normal layered loading remains the default.
 
 ai-workbench uses [SOPS](https://github.com/getsops/sops) with an [age](https://age-encryption.org/) recipient to keep secrets out of plain text in the repo and out of plaintext at rest.
 
-Secrets live under the **single tool home** (`$WORKESTRATE_HOME`), not at
-the repo root. Each config repo holds its own `.env.enc` + `.sops.yaml`; a
+Secrets live under the **single config** (`$WORKESTRATE_CONFIG`), not at
+the repo root. Each fleet holds its own `.env.enc` + `.sops.yaml`; a
 user-global secrets layer applies per-key across all contexts.
 
-- Encrypted file: `.env.enc` (committed in each config repo; ciphertext-safe)
+- Encrypted file: `.env.enc` (committed in each fleet; ciphertext-safe)
 - Decrypted form: never committed; `workestrate run -- <cmd>` injects env vars into a child process; `write-env` writes a plaintext `.env` you must remove yourself.
-- Key file: `~/.config/sops/age/ai-workbench-secrets.txt` on the HOST (project-specific, NEVER in repo, NEVER in bundle, NEVER under `.workestrate/` or `$WORKESTRATE_HOME`)
+- Key file: `~/.config/sops/age/ai-workbench-secrets.txt` on the HOST (project-specific, NEVER in repo, NEVER in bundle, NEVER under `.workestrate/` or `$WORKESTRATE_CONFIG`)
 - The `workestrate secrets` CLI defaults the age key path itself (registry `age_key_file` override > `SOPS_AGE_KEY_FILE` env > the default path). `decrypt-env`/`write-env` export `SOPS_AGE_KEY_FILE` defaulting to that path. These run on the host (age key present); in a container the key is absent and they fail closed by design.
 
 ## The 7 secrets
@@ -39,9 +39,9 @@ consumed by the code; default paths are used regardless.
 
 | Artifact | Location | Notes |
 |---|---|---|
-| Per-config-repo `.env.enc` | `$WORKESTRATE_HOME/config-repos/<name>/.env.enc` | SOPS-encrypted; ciphertext-safe to commit in the config repo |
-| Per-config-repo `.sops.yaml` | `$WORKESTRATE_HOME/config-repos/<name>/.sops.yaml` | SOPS recipient config; no secrets in it |
-| User-global secrets | `$WORKESTRATE_HOME/secrets/.env.local.enc` | Applied per-key across all contexts |
+| Per-fleet `.env.enc` | `$WORKESTRATE_CONFIG/fleets/<name>/.env.enc` | SOPS-encrypted; ciphertext-safe to commit in the fleet |
+| Per-fleet `.sops.yaml` | `$WORKESTRATE_CONFIG/fleets/<name>/.sops.yaml` | SOPS recipient config; no secrets in it |
+| User-global secrets | `$WORKESTRATE_CONFIG/secrets/.env.local.enc` | Applied per-key across all contexts |
 | age private key | `~/.config/sops/age/ai-workbench-secrets.txt` (HOST) | NEVER in repo/bundle/`.workestrate/` |
 
 ## `workestrate secrets` flows
@@ -50,8 +50,8 @@ Secrets are provisioned with the installed CLI — no devshell, no helper
 script (the nix wrapper bundles `sops` and `age-keygen`):
 
 ```bash
-workestrate secrets init    [--config <name> | --config-dir <dir> | --global]
-workestrate secrets update  [--config <name> | --config-dir <dir> | --global]
+workestrate secrets init    [--fleet <name> | --fleet-dir <dir> | --global]
+workestrate secrets update  [--fleet <name> | --fleet-dir <dir> | --global]
 workestrate secrets target <name> [--json]   # inspect the resolved target
 workestrate secrets schema                   # required key names from config
 ```
@@ -62,39 +62,39 @@ stdin (non-TTY), or an interactive editor.
 
 The target selectors are mutually exclusive. Targeting precedence:
 
-1. `--config <name>` — registry-backed resolution (same resolver as
+1. `--fleet <name>` — registry-backed resolution (same resolver as
    `workestrate secrets target`): the managed store clone of the named
-   config repo, honoring the selected tool home, the registry store
+   fleet, honoring the selected config, the registry store
    directory, and per-repo `secrets_file`/`age_key_file` overrides (tilde
    expanded; a relative `age_key_file` keeps its invocation-cwd meaning).
    An unknown name is a hard error — it never falls back to a guessed
    directory.
-2. `--config-dir <dir>` — the directory itself. It must exist and is never
+2. `--fleet-dir <dir>` — the directory itself. It must exist and is never
    created. Relative paths resolve against the invocation directory; spaces,
    quotes, and shell metacharacters in directory names are inert (pure path
    handling, no shell).
 3. `--global` — the user-global layer
    (`${XDG_CONFIG_HOME:-~/.config}/workestrate/.env.local.enc`; the
    directory is created when missing).
-4. `WORKESTRATE_CONFIG_DIR`, when set.
-5. Auto-detect: exactly one registered config repo → resolve as `--config`.
+4. `WORKESTRATE_FLEET_DIR`, when set.
+5. Auto-detect: exactly one registered fleet → resolve as `--fleet`.
 6. A `.sops.yaml` in the current directory → the current directory.
 
-The global `--home <DIR>` flag selects the tool home the registry is read
-from and only makes sense together with `--config`.
+The global `--config <DIR>` flag selects the config the registry is read
+from and only makes sense together with `--fleet`.
 
-### `workestrate secrets init --config <name>`
+### `workestrate secrets init --fleet <name>`
 
 ```bash
-workestrate secrets init --config personal      # one-time: create .env.enc
-workestrate secrets update --config personal    # edit existing values
-workestrate --home /path/to/operator-home secrets update --config personal
+workestrate secrets init --fleet personal      # one-time: create .env.enc
+workestrate secrets update --fleet personal    # edit existing values
+workestrate --config /path/to/operator-config secrets update --fleet personal
 ```
 
 For a config directory not selected through the registry:
 
 ```bash
-workestrate secrets update --config-dir "/path/to/config repo"
+workestrate secrets update --fleet-dir "/path/to/fleet"
 ```
 
 `init`:
@@ -141,7 +141,7 @@ target's `.env.example` when the config fails to load.
 ### `workestrate secrets init|update --global`
 
 Targets the user-global secrets layer at
-`$WORKESTRATE_HOME/secrets/.env.local.enc` (XDG config dir in legacy-XDG
+`$WORKESTRATE_CONFIG/secrets/.env.local.enc` (XDG config dir in legacy-XDG
 layouts). This layer is applied per-key AFTER the context's domain layers
 and BEFORE project layers.
 
@@ -179,12 +179,12 @@ Process env is the lowest precedence. Per-key provenance is tracked for
 **Secrets layer resolution order** (lowest → highest precedence):
 
 1. **Process env** (only for defined secrets; lowest precedence)
-2. **`WORKESTRATE_CONFIG_DIR`** (single override, bypasses discovery)
+2. **`WORKESTRATE_FLEET_DIR`** (single override, bypasses discovery)
 3. **Reference config dir** (shipped with tool — no `.env.enc` expected)
 4. **Context layers in declared order**, each with its own `.env.enc`
    (per-repo `secrets_file` and `age_key_file` overrides honored from the
-   registry `[configs.<name>]`)
-5. **User-global secrets** (`$WORKESTRATE_HOME/secrets/.env.local.enc`) —
+   registry `[fleets.<name>]`)
+5. **User-global secrets** (`$WORKESTRATE_CONFIG/secrets/.env.local.enc`) —
    applied per-key AFTER the context's domain layers, BEFORE project layers
 6. **Trusted project dir** (cwd, if trusted) — may have `.env.enc`
 7. **Local overrides dir**
@@ -203,7 +203,7 @@ on the HOST.
 - NEVER in the repo (the repo is agent-reachable via `${CWD}` mounts, so a
   key inside it would be exposed to sandboxes).
 - NEVER in the bundle.
-- NEVER under `.workestrate/` or `$WORKESTRATE_HOME`.
+- NEVER under `.workestrate/` or `$WORKESTRATE_CONFIG`.
 - In a container, the key is simply absent and secret operations fail
   closed by design.
 
@@ -274,7 +274,7 @@ rm .env
 
 | Wrapper | Runs on | Purpose |
 |---|---|---|
-| `workestrate secrets init\|update` | Host (age key present) | Create/update `.env.enc` (`--config`) or `.env.local.enc` (`--global`) — the CLI subcommand, with sops+age bundled in the nix wrapper |
+| `workestrate secrets init\|update` | Host (age key present) | Create/update `.env.enc` (`--fleet`) or `.env.local.enc` (`--global`) — the CLI subcommand, with sops+age bundled in the nix wrapper |
 | `setup-secrets` (DEPRECATED) | Host | Alias delegating to `workestrate secrets` |
 | `decrypt-env` | Host | Print decrypted secrets to stdout |
 | `write-env` | Host | Write a short-lived plaintext `.env` (mode 0600) |
@@ -324,11 +324,11 @@ directory and any files it created.
 
 ## Security rules
 
-- The age private key must never be committed. Keep it at `~/.config/sops/age/ai-workbench-secrets.txt` and chmod 0600. NEVER place it under `.workestrate/` or `$WORKESTRATE_HOME` (the repo is agent-reachable via `${CWD}` mounts).
+- The age private key must never be committed. Keep it at `~/.config/sops/age/ai-workbench-secrets.txt` and chmod 0600. NEVER place it under `.workestrate/` or `$WORKESTRATE_CONFIG` (the repo is agent-reachable via `${CWD}` mounts).
 - `.sops.yaml` may be committed (no secrets in it — only the age recipient).
-- `.env.enc` is ciphertext-safe and may be committed in config repos.
+- `.env.enc` is ciphertext-safe and may be committed in fleets.
 - Do not put secrets in Nix expressions — Nix strings can leak into the world-readable Nix store.
 - Do not pass secrets as command-line arguments; `workestrate secrets` deliberately omits argv-based secret input so values cannot leak into shell history.
 - Do not paste decrypted `.env` into logs, issues, or shell history.
-- `.env` is gitignored; `.env.enc` is committed (in config repos).
+- `.env` is gitignored; `.env.enc` is committed (in fleets).
 - When using the editor flow, secret values are written to a temp file with mode 0600 and removed in a cleanup trap. They will also appear in your terminal scrollback. Clear scrollback or use a private terminal session if that is a concern.

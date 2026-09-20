@@ -14,7 +14,7 @@
 //!   gets the guest SSH policy plus a host-side divert listener.
 //!
 //! Hermetic like `golden_plans.rs`: each case points
-//! `WORKESTRATE_CONFIG_DIR` at its fixture dir (single dev layer, no
+//! `WORKESTRATE_FLEET_DIR` at its fixture dir (single dev layer, no
 //! registry/project/local layers), serialized by `ENV_TEST_LOCK`.
 //!
 //! Regenerate after an INTENDED display change with
@@ -61,10 +61,10 @@ fn golden_path(case: &str) -> PathBuf {
 #[allow(unsafe_code)]
 fn render_plan(case: &str, workload: &str) -> String {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
-    let _guard = EnvGuard::capture(&["WORKESTRATE_CONFIG_DIR"]);
+    let _guard = EnvGuard::capture(&["WORKESTRATE_FLEET_DIR"]);
     // SAFETY: serialized by ENV_TEST_LOCK (held for this function's
     // lifetime via _lock); EnvGuard restores the prior value on drop.
-    unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", case_dir(case)) };
+    unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", case_dir(case)) };
     let wl = ConfigWorkload::new(workload)
         .unwrap_or_else(|e| panic!("fixture '{case}' workload '{workload}' failed to load: {e}"));
     wl.plan().to_string()

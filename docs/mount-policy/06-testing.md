@@ -21,13 +21,13 @@ test files live under
 **Tool (config + compiler + writer + CLI):** `just verify` in the workestrate
 repo — green at the last gate round EXCEPT `schema-sync-check` inside the
 container: the host's `~/.workestrate` is bind-mounted read-only there, so the
-check needs `WORKESTRATE_HOME=../workestrate-dev-home` to pass in-container
+check needs `WORKESTRATE_CONFIG=../workestrate-dev-home` to pass in-container
 (the host-side refresh is a host step).
 
 ## Smoke check: mount-mask-auth
 
-The personal config-repo flake's prime smoke carries a `mount-mask-auth`
-check (`workestrate-dev-home/config-repos/personal/flake.nix:947-980`):
+The personal fleet flake's prime smoke carries a `mount-mask-auth`
+check (`workestrate-dev-home/fleets/personal/flake.nix:947-980`):
 
 - **What it asserts:** in-guest `cat /data/agent/auth.json` FAILS and
   `ls /data/agent/` omits the name — the prime capsule masks

@@ -4,26 +4,26 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use workestrate::cli_actions::{
-    AgentAction, ConfigAction, ContextAction, HomeAction, ImagesAction, PolicyAction,
+    AgentAction, ConfigAction, ContextAction, FleetAction, ImagesAction, PolicyAction,
     SchemasAction, SecretsAction, ServiceAction, SourceAction, WorkloadAction,
 };
 use workestrate::cli_error::{classify_exit_code, emit_error};
-use workestrate::commands::config_cmd::{
-    cmd_config, cmd_config_list_json, cmd_config_new, cmd_context,
-};
+use workestrate::commands::config_cmd::cmd_config;
 use workestrate::commands::deps::{auto_start_dependencies, cmd_workload_up_all};
 use workestrate::commands::diagnostics::{
     cmd_check, cmd_generate_env_example, cmd_generate_schema, cmd_instances, cmd_msb, cmd_ps,
     cmd_run, cmd_validate_config, cmd_workloads,
 };
 use workestrate::commands::doctor::cmd_doctor;
-use workestrate::commands::home::cmd_home;
+use workestrate::commands::fleet_cmd::{
+    cmd_context, cmd_fleet, cmd_fleet_list_json, cmd_fleet_new,
+};
 use workestrate::commands::init::{cmd_init, cmd_new};
 use workestrate::commands::lifecycle::{
     WorkloadRoute, cmd_clean, cmd_down_ladder, dispatch_agent, dispatch_service,
     resolve_dependent_instance_id, workload_route,
 };
-use workestrate::commands::migrate::cmd_migrate_home;
+use workestrate::commands::migrate::cmd_migrate_config;
 use workestrate::commands::schemas::cmd_schemas;
 use workestrate::commands::secrets_target::{cmd_secrets_schema, cmd_secrets_target};
 use workestrate::commands::source::cmd_source;
@@ -61,12 +61,12 @@ struct Cli {
         long,
         global = true,
         value_name = "DIR",
-        help = "Workestrate tool home"
+        help = "Workestrate config directory"
     )]
-    home: Option<PathBuf>,
+    config: Option<PathBuf>,
 
     /// Emit machine-readable JSON to stdout and an error envelope to stderr
-    /// on failure. Applies to: ps, plan, config list, down (per-instance
+    /// on failure. Applies to: ps, plan, fleet list, down (per-instance
     /// results), and the up/exec/down error envelope.
     #[arg(long, global = true)]
     json: bool,
@@ -90,10 +90,10 @@ enum Commands {
     },
     /// Runtime/config sanity check
     Check,
-    /// Initialize workestrate configuration (DEPRECATED: use `home init`;
-    /// the [url] dotfiles positional errors — use `home clone <src>`)
+    /// Initialize workestrate configuration (DEPRECATED: use `config init`;
+    /// the [url] dotfiles positional errors — use `config clone <src>`)
     Init {
-        /// DEPRECATED: passing a url errors; use `home clone <src>` instead
+        /// DEPRECATED: passing a url errors; use `config clone <src>` instead
         url: Option<String>,
     },
     /// Scaffold a new agent project (DEPRECATED: use `workload new <name>`)
@@ -148,14 +148,14 @@ enum Commands {
     /// Use --json for machine-readable output.
     Ps,
     /// Stop sandboxes at an explicit scope (ADR 0032 addendum §Down scope
-    /// ladder: instance < workload < context < config-ref < home <
+    /// ladder: instance < workload < context < config-ref < config <
     /// everything). Exactly ONE scope selector per invocation; bare `down`
     /// is a usage error naming the ladder. The instance/workload rungs stay
     /// on `workload <name> down [--instance|--all-instances]`.
     /// Destructive; confirms unless --yes (--everything is DOUBLE-gated).
     #[command(alias = "down-all")]
     Down {
-        /// Home scope: every workestrate-managed target (back-compat with
+        /// Config scope: every workestrate-managed target (back-compat with
         /// the former `down-all` behavior).
         #[arg(long, conflicts_with_all = ["context", "config_ref", "everything"])]
         all: bool,
@@ -179,7 +179,7 @@ enum Commands {
         #[arg(long, help = "Skip the interactive confirmation")]
         yes: bool,
     },
-    /// Remove state-dir contents (workspaces, var, run). Does not touch config-repos/sources/config.
+    /// Remove state-dir contents (workspaces, var, run). Does not touch fleets/sources/config.
     Clean {
         /// Skip the interactive confirmation.
         #[arg(long)]
@@ -209,20 +209,20 @@ enum Commands {
         /// same post-processing that matched the previous hand-derived file.
         #[arg(long, value_name = "PATH")]
         output_workload: Option<std::path::PathBuf>,
-        /// Also write the tool-home registry schema to this path (requires
+        /// Also write the config registry schema to this path (requires
         /// --output). The registry schema is derived from the Registry type.
         #[arg(long, value_name = "PATH")]
         output_registry: Option<std::path::PathBuf>,
     },
-    /// Manage config repositories and trusted projects
+    /// Manage fleets and trusted projects
+    Fleet {
+        #[command(subcommand)]
+        action: FleetAction,
+    },
+    /// Manage the workestrate config (init as a dotfiles-style git repo)
     Config {
         #[command(subcommand)]
         action: ConfigAction,
-    },
-    /// Manage the workestrate tool home (init as a dotfiles-style git repo)
-    Home {
-        #[command(subcommand)]
-        action: HomeAction,
     },
     /// Manage the generated JSON Schema artifacts (workestrate.schema.json +
     /// workestrate-workload.schema.json + registry.schema.json) at every consumer location.
@@ -236,7 +236,7 @@ enum Commands {
         #[command(subcommand)]
         action: SecretsAction,
     },
-    /// Diagnose environment and tool health (KVM, nix, sops, age, msb, config repos).
+    /// Diagnose environment and tool health (KVM, nix, sops, age, msb, fleets).
     /// Use the global --json flag for machine-readable output.
     Doctor,
     /// Print the Phase-0 observability quadruple (workestrate/msb/agentd/
@@ -249,8 +249,8 @@ enum Commands {
         action: SourceAction,
     },
     /// Migrate legacy XDG (or bundled .workestrate/{config,data,state}/workestrate/)
-    /// layout into a single WORKESTRATE_HOME (ADR 0023).
-    MigrateHome {
+    /// layout into a single WORKESTRATE_CONFIG (ADR 0023).
+    MigrateConfig {
         /// Source layout to migrate from: "xdg" (XDG_*_HOME dirs) or "bundle"
         /// (the old .workestrate/{config,data,state}/workestrate/ triplication).
         /// When omitted, auto-detect: prefer bundle if a .workestrate/config.toml
@@ -824,7 +824,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     // ref, and the context-derivation ladder
     // (config::registry::resolve_active_context step b) reads a
     // branch-shaped ref as the context-name candidate. Setting it as an env
-    // var (like --context/--home) propagates the override to detached
+    // var (like --context/--config) propagates the override to detached
     // children via spawn env inheritance.
     if let Some(ref config_ref) = cli.config_ref {
         // SAFETY: startup-phase write-once CLI override, set before any
@@ -847,14 +847,14 @@ async fn async_main(args: Vec<String>) -> Result<()> {
     // `workload up` and non-workload commands (no positional) never record.
     let invocation_name = invocation_workload_name(&cli.command);
     workestrate::config::set_pending_inline_override_from_env(invocation_name.as_deref())?;
-    // --home <DIR> populates the WORKESTRATE_HOME precedence step
-    // (paths.rs resolve_home_with_kind checks it first), so the flag becomes
+    // --config <DIR> populates the WORKESTRATE_CONFIG precedence step
+    // (paths.rs resolve_config_dir_with_kind checks it first), so the flag becomes
     // the highest-precedence override with no path-resolution change.
-    if let Some(ref h) = cli.home {
+    if let Some(ref dir) = cli.config {
         // SAFETY: startup-phase write-once CLI override, set before any
         // command flow reads it and before any spawned tasks mutate env; no
         // concurrent mutation of this key.
-        unsafe { std::env::set_var("WORKESTRATE_HOME", h) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", dir) };
     }
 
     match cli.command {
@@ -927,15 +927,15 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             output_workload.as_deref(),
             output_registry.as_deref(),
         ),
-        Commands::Config { action } => match action {
-            ConfigAction::List => {
+        Commands::Fleet { action } => match action {
+            FleetAction::List => {
                 if cli.json {
-                    cmd_config_list_json()
+                    cmd_fleet_list_json()
                 } else {
-                    cmd_config(ConfigAction::List).await
+                    cmd_fleet(FleetAction::List).await
                 }
             }
-            ConfigAction::New {
+            FleetAction::New {
                 name,
                 dest,
                 age_recipient,
@@ -947,7 +947,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                 from_reference,
                 empty,
             } => {
-                cmd_config_new(
+                cmd_fleet_new(
                     &name,
                     dest.as_deref(),
                     age_recipient.as_deref(),
@@ -962,9 +962,9 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                 )
                 .await
             }
-            other => cmd_config(other).await,
+            other => cmd_fleet(other).await,
         },
-        Commands::Home { action } => cmd_home(action),
+        Commands::Config { action } => cmd_config(action),
         Commands::Schemas { action } => cmd_schemas(action),
         #[cfg(unix)]
         Commands::Credentials { action } => {
@@ -983,11 +983,11 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::Doctor => cmd_doctor(cli.json),
         Commands::Versions => cmd_versions(cli.json),
         Commands::Source { action } => cmd_source(action).await,
-        Commands::MigrateHome {
+        Commands::MigrateConfig {
             from,
             dry_run,
             force,
-        } => cmd_migrate_home(from.as_deref(), dry_run, cli.json, force),
+        } => cmd_migrate_config(from.as_deref(), dry_run, cli.json, force),
         Commands::Workload { mut action } => {
             // `workload new` is a scaffold verb, not a lifecycle verb: it has
             // no --use/--no-deps flags and must not reach the name-verb match
@@ -996,22 +996,22 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                 return cmd_new(name, kind);
             }
             // Spec 21 phase C: `workload build` is NOT kind-routed — it is
-            // selector-driven (name / bare / --repo / --all-repos) and
+            // selector-driven (name / bare / --fleet / --all-fleets) and
             // dispatches early like `workload new`, before the name-verb
             // match below. It is also deliberately NOT in the legacy shim's
             // VERBS list: build is a new verb, verb-first only.
             if let WorkloadAction::Build {
                 name,
-                repo,
-                all_repos,
+                fleet,
+                all_fleets,
                 check,
                 force,
             } = &action
             {
                 return workestrate::images::build_cmd::cmd_workload_build(
                     name.as_deref(),
-                    repo.as_deref(),
-                    *all_repos,
+                    fleet.as_deref(),
+                    *all_fleets,
                     *check,
                     *force,
                     cli.json,
@@ -1193,7 +1193,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // A2/A5 SEAM (ADR 0032 §Image tags — DECIDED 2026-08-24): when a
             // per-workload inline override is PENDING (`workload up
             // prime:feat-x`), this ordering is REORDERED — dep auto-start
-            // (unarmed, home-scoped deps) runs first, then
+            // (unarmed, config-scoped deps) runs first, then
             // arm_inline_override(), THEN the ensure — so the ensure sees
             // the substituted config and tags/pointers under the OVERRIDE's
             // tag context (image_tag_context: `workestrate-prime:feat-x.<sha>`,
@@ -1236,7 +1236,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             )
             .await?;
             // A5 Session 3b arming point (up/exec): deps NEVER follow the
-            // override — auto_start_dependencies above saw the home-scoped
+            // override — auto_start_dependencies above saw the config-scoped
             // config — but the dependent's ConfigWorkload constructed below
             // MUST see the substituted declaration. No-op without a pending
             // override. (The detached child reaches this SAME point with the
@@ -1401,8 +1401,8 @@ mod tests {
             "msb",
             "validate-config",
             "generate-env-example",
+            "fleet",
             "config",
-            "home",
             "schemas",
             "secrets",
             "doctor",
@@ -1410,7 +1410,7 @@ mod tests {
             "clean",
             "context",
             "source",
-            "migrate-home",
+            "migrate-config",
             "workload",
             "workloads",
         ] {
@@ -1429,7 +1429,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn signing_commands_require_explicit_config_and_parse_public_json() {
+    fn signing_commands_require_explicit_fleet_and_parse_public_json() {
         use workestrate::commands::signing_keys::{CredentialAction, SigningKeyAction};
         for verb in ["generate", "public-key"] {
             assert!(
@@ -1445,7 +1445,7 @@ mod tests {
                     "signing",
                     verb,
                     "SIGNING_KEY",
-                    "--config",
+                    "--fleet",
                     "personal",
                     "unexpected-workload",
                 ])
@@ -1458,22 +1458,22 @@ mod tests {
             "signing",
             "generate",
             "SIGNING_KEY",
-            "--config",
+            "--fleet",
             "personal",
         ])
         .unwrap();
         assert!(!generated.json);
         assert!(matches!(generated.command,
             Commands::Credentials { action: CredentialAction::Signing {
-                action: SigningKeyAction::Generate { name, config }
-            }} if name == "SIGNING_KEY" && config == "personal"));
+                action: SigningKeyAction::Generate { name, fleet }
+            }} if name == "SIGNING_KEY" && fleet == "personal"));
         let public = Cli::try_parse_from([
             "workestrate",
             "credentials",
             "signing",
             "public-key",
             "SIGNING_KEY",
-            "--config",
+            "--fleet",
             "personal",
             "--json",
         ])
@@ -1481,8 +1481,8 @@ mod tests {
         assert!(public.json);
         assert!(matches!(public.command,
             Commands::Credentials { action: CredentialAction::Signing {
-                action: SigningKeyAction::PublicKey { name, config }
-            }} if name == "SIGNING_KEY" && config == "personal"));
+                action: SigningKeyAction::PublicKey { name, fleet }
+            }} if name == "SIGNING_KEY" && fleet == "personal"));
     }
 
     // ---- ADR 0030 P2.1: rewrite_action_for_resolved_instance ----
@@ -1699,7 +1699,7 @@ mod tests {
 
     /// `up prime:feat-x` → bare name + the :ref-derived parallel instance id
     /// `feat-x` (sanitize_instance_id; the instance COEXISTS with the
-    /// home-ref instance via the standard parallel machinery).
+    /// non-override instance via the standard parallel machinery).
     #[test]
     fn inline_selector_up_ref_derives_instance_id() {
         let mut action = up_action_no_new();
@@ -1881,7 +1881,7 @@ mod tests {
     // ---- secrets subcommand family ----
 
     /// `secrets init|update` accept the target selector flags AFTER the
-    /// subcommand, in both separate and `=` forms; the global --home flag is
+    /// subcommand, in both separate and `=` forms; the global --config flag is
     /// accepted at any position.
     #[test]
     fn secrets_init_update_target_flags_parse() {
@@ -1889,8 +1889,8 @@ mod tests {
             "workestrate",
             "secrets",
             "init",
-            "--home=operator home",
-            "--config=personal",
+            "--config=operator config",
+            "--fleet=personal",
         ])
         .expect("equals-form flags after init must parse");
         let Commands::Secrets {
@@ -1899,18 +1899,18 @@ mod tests {
         else {
             panic!("expected secrets init");
         };
-        assert_eq!(target.config.as_deref(), Some("personal"));
-        assert!(target.config_dir.is_none());
+        assert_eq!(target.fleet.as_deref(), Some("personal"));
+        assert!(target.fleet_dir.is_none());
         assert!(!target.global);
-        assert_eq!(cli.home, Some(PathBuf::from("operator home")));
+        assert_eq!(cli.config, Some(PathBuf::from("operator config")));
 
         let cli = Cli::try_parse_from([
             "workestrate",
-            "--home",
-            "operator home",
+            "--config",
+            "operator config",
             "secrets",
             "update",
-            "--config",
+            "--fleet",
             "personal",
         ])
         .expect("separate-form flags must parse");
@@ -1920,15 +1920,15 @@ mod tests {
         else {
             panic!("expected secrets update");
         };
-        assert_eq!(target.config.as_deref(), Some("personal"));
+        assert_eq!(target.fleet.as_deref(), Some("personal"));
 
         let cli = Cli::try_parse_from([
             "workestrate",
             "secrets",
             "update",
-            "--config-dir=fleet with spaces \"quoted\" $(touch INJECTED)",
+            "--fleet-dir=fleet with spaces \"quoted\" $(touch INJECTED)",
         ])
-        .expect("--config-dir equals form must parse");
+        .expect("--fleet-dir equals form must parse");
         let Commands::Secrets {
             action: SecretsAction::Update { target },
         } = cli.command
@@ -1936,7 +1936,7 @@ mod tests {
             panic!("expected secrets update");
         };
         assert_eq!(
-            target.config_dir.as_deref(),
+            target.fleet_dir.as_deref(),
             Some(std::path::Path::new(
                 "fleet with spaces \"quoted\" $(touch INJECTED)"
             ))
@@ -1959,9 +1959,9 @@ mod tests {
     fn secrets_target_selectors_are_mutually_exclusive() {
         for verb in ["init", "update"] {
             for extra in [
-                vec!["--config", "personal", "--global"],
-                vec!["--config-dir", "fleet", "--global"],
-                vec!["--config-dir", "fleet", "--config", "personal"],
+                vec!["--fleet", "personal", "--global"],
+                vec!["--fleet-dir", "fleet", "--global"],
+                vec!["--fleet-dir", "fleet", "--fleet", "personal"],
                 vec!["--unknown"],
             ] {
                 let argv: Vec<&str> = ["workestrate", "secrets", verb]
@@ -1989,15 +1989,15 @@ mod tests {
     }
 
     #[test]
-    fn cli_root_has_global_home_flag() {
+    fn cli_root_has_global_config_flag() {
         let cmd = Cli::command();
-        let home = cmd
+        let config = cmd
             .get_arguments()
-            .find(|a| a.get_long() == Some("home"))
-            .expect("root command must have a --home argument");
+            .find(|a| a.get_long() == Some("config"))
+            .expect("root command must have a --config argument");
         assert!(
-            home.is_global_set(),
-            "--home must be a global argument (valid on every subcommand)"
+            config.is_global_set(),
+            "--config must be a global argument (valid on every subcommand)"
         );
     }
 
@@ -2019,9 +2019,9 @@ mod tests {
             .expect("--config-ref must parse before the subcommand");
         assert_eq!(cli.config_ref.as_deref(), Some("feat-x"));
         // …and after a subcommand (global propagation), mirroring the
-        // doctor/migrate-home --json test's build()-propagation check.
+        // doctor/migrate-config --json test's build()-propagation check.
         cmd.build();
-        for name in ["ps", "workload", "config", "home"] {
+        for name in ["ps", "workload", "fleet", "config"] {
             let sub = cmd
                 .find_subcommand(name)
                 .unwrap_or_else(|| panic!("missing subcommand: {name}"));
@@ -2043,16 +2043,16 @@ mod tests {
     /// form of the per-workload override is DROPPED — the inline
     /// `name:ref[@instance]` grammar is the ONLY shape. NO command anywhere
     /// in the tree may carry a `--from` flag, with ONE grandfathered
-    /// exception: `migrate-home --from <xdg|bundle>` (the legacy layout
+    /// exception: `migrate-config --from <xdg|bundle>` (the legacy layout
     /// selector whose collision history is exactly why no NEW --from may be
-    /// added; `config new --from-reference` is a different flag and is
-    /// UNAFFECTED; the dropped `home init --from` per ADR 0025 stays
-    /// dropped, per the home_init_has_no_path_flag guard).
+    /// added; `fleet new --from-reference` is a different flag and is
+    /// UNAFFECTED; the dropped `config init --from` per ADR 0025 stays
+    /// dropped, per the config_init_has_no_path_flag guard).
     #[test]
     fn no_from_flag_anywhere_in_the_command_tree() {
         fn assert_no_from(cmd: &clap::Command, path: &str) {
             for arg in cmd.get_arguments() {
-                if path == "workestrate migrate-home" && arg.get_long() == Some("from") {
+                if path == "workestrate migrate-config" && arg.get_long() == Some("from") {
                     continue; // grandfathered legacy layout selector
                 }
                 assert_ne!(
@@ -2076,16 +2076,16 @@ mod tests {
         assert_no_from(&cmd, "workestrate");
     }
 
-    /// W1: `doctor` and `migrate-home` must NOT shadow the global --json with
+    /// W1: `doctor` and `migrate-config` must NOT shadow the global --json with
     /// a local flag — the --json they see is the propagated global, so both
     /// `workestrate --json doctor` and `workestrate doctor --json` work.
     #[test]
-    fn doctor_and_migrate_home_use_global_json_flag() {
+    fn doctor_and_migrate_config_use_global_json_flag() {
         // build() propagates global args into subcommands, mirroring what
         // happens at parse time.
         let mut cmd = Cli::command();
         cmd.build();
-        for name in ["doctor", "migrate-home"] {
+        for name in ["doctor", "migrate-config"] {
             let sub = cmd
                 .find_subcommand(name)
                 .unwrap_or_else(|| panic!("missing subcommand: {name}"));
@@ -2120,33 +2120,33 @@ mod tests {
     }
 
     #[test]
-    fn home_init_has_no_path_flag() {
+    fn config_init_has_no_path_flag() {
         let cmd = Cli::command();
         let init = cmd
-            .find_subcommand("home")
+            .find_subcommand("config")
             .and_then(|s| s.find_subcommand("init"))
-            .expect("home init must exist");
+            .expect("config init must exist");
         let long_names: Vec<String> = init
             .get_arguments()
             .filter_map(|a| a.get_long().map(|s| s.to_string()))
             .collect();
         assert!(
-            long_names.contains(&"config".to_string()),
-            "home init missing --config flag; got: {long_names:?}"
+            long_names.contains(&"fleet".to_string()),
+            "config init missing --fleet flag; got: {long_names:?}"
         );
         assert!(
             long_names.contains(&"name".to_string()),
-            "home init missing --name flag; got: {long_names:?}"
+            "config init missing --name flag; got: {long_names:?}"
         );
         assert!(
             !long_names.contains(&"path".to_string()),
-            "home init must NOT have a --path flag (spec 10 §2: operates on the \
-             resolved home only); got: {long_names:?}"
+            "config init must NOT have a --path flag (spec 10 §2: operates on the \
+             resolved config only); got: {long_names:?}"
         );
         assert!(
             !long_names.contains(&"from".to_string()),
-            "home init must NOT have a --from flag (ADR 0025: provisioning moved \
-             to 'home clone'); got: {long_names:?}"
+            "config init must NOT have a --from flag (ADR 0025: provisioning moved \
+             to 'config clone'); got: {long_names:?}"
         );
         let positionals: Vec<String> = init
             .get_positionals()
@@ -2154,18 +2154,18 @@ mod tests {
             .collect();
         assert!(
             positionals.is_empty(),
-            "home init must have NO positionals (ADR 0025: dest moved to \
-             'home clone'); got: {positionals:?}"
+            "config init must have NO positionals (ADR 0025: dest moved to \
+             'config clone'); got: {positionals:?}"
         );
     }
 
     #[test]
-    fn home_clone_cli_shape() {
+    fn config_clone_cli_shape() {
         let cmd = Cli::command();
         let clone = cmd
-            .find_subcommand("home")
+            .find_subcommand("config")
             .and_then(|s| s.find_subcommand("clone"))
-            .expect("home clone must exist (ADR 0025)");
+            .expect("config clone must exist (ADR 0025)");
         let positionals: Vec<(String, bool)> = clone
             .get_positionals()
             .map(|a| (a.get_id().to_string(), a.is_required_set()))
@@ -2173,28 +2173,28 @@ mod tests {
         assert_eq!(
             positionals,
             vec![("src".to_string(), true), ("dest".to_string(), false)],
-            "home clone must have a REQUIRED positional <src> and an OPTIONAL \
+            "config clone must have a REQUIRED positional <src> and an OPTIONAL \
              positional <dest>; got: {positionals:?}"
         );
         let long_names: Vec<String> = clone
             .get_arguments()
             .filter_map(|a| a.get_long().map(|s| s.to_string()))
             .collect();
-        for flag in ["config", "name", "from"] {
+        for flag in ["fleet", "name", "from"] {
             assert!(
                 !long_names.contains(&flag.to_string()),
-                "home clone must NOT have a --{flag} flag; got: {long_names:?}"
+                "config clone must NOT have a --{flag} flag; got: {long_names:?}"
             );
         }
     }
 
     #[test]
-    fn config_new_cli_shape() {
+    fn fleet_new_cli_shape() {
         let cmd = Cli::command();
         let new = cmd
-            .find_subcommand("config")
+            .find_subcommand("fleet")
             .and_then(|s| s.find_subcommand("new"))
-            .expect("config new must exist");
+            .expect("fleet new must exist");
         let positionals: Vec<(String, bool)> = new
             .get_positionals()
             .map(|a| (a.get_id().to_string(), a.is_required_set()))
@@ -2202,7 +2202,7 @@ mod tests {
         assert_eq!(
             positionals,
             vec![("name".to_string(), true), ("dest".to_string(), false)],
-            "config new must have a REQUIRED positional <name> and an \
+            "fleet new must have a REQUIRED positional <name> and an \
              OPTIONAL positional <dest>; got: {positionals:?}"
         );
         let long_names: Vec<String> = new
@@ -2211,12 +2211,12 @@ mod tests {
             .collect();
         assert!(
             !long_names.contains(&"path".to_string()),
-            "config new must NOT have a --path flag; got: {long_names:?}"
+            "fleet new must NOT have a --path flag; got: {long_names:?}"
         );
         for flag in ["age-recipient", "empty", "from-reference"] {
             assert!(
                 long_names.contains(&flag.to_string()),
-                "config new must keep the --{flag} flag; got: {long_names:?}"
+                "fleet new must keep the --{flag} flag; got: {long_names:?}"
             );
         }
     }
@@ -2754,18 +2754,18 @@ mod tests {
     /// Root `down` carries the ADR 0032 addendum §Down scope ladder; the
     /// former `down-all` verb survives as a HIDDEN clap alias (back-compat):
     /// `workestrate down --all` and `workestrate down-all --all` both parse
-    /// into `Commands::Down { all: true, .. }` (the home scope), and the
+    /// into `Commands::Down { all: true, .. }` (the config scope), and the
     /// other selectors parse to their own rungs.
     #[test]
     fn root_down_ladder_scopes_parse() {
-        let home_cases: [&[&str]; 4] = [
+        let config_cases: [&[&str]; 4] = [
             &["workestrate", "down", "--all"],
             &["workestrate", "down-all", "--all"],
             &["workestrate", "down", "--all", "--yes"],
             &["workestrate", "down-all", "--all", "--yes"],
         ];
-        for argv in home_cases {
-            let cli = Cli::try_parse_from(argv).expect("home-scope down must parse");
+        for argv in config_cases {
+            let cli = Cli::try_parse_from(argv).expect("config-scope down must parse");
             match cli.command {
                 Commands::Down {
                     all,
@@ -3011,15 +3011,15 @@ mod tests {
                 action:
                     WorkloadAction::Build {
                         name,
-                        repo,
-                        all_repos,
+                        fleet,
+                        all_fleets,
                         check,
                         force,
                     },
             } => {
                 assert_eq!(name, None, "bare build → batch form");
-                assert_eq!(repo, None);
-                assert!(!all_repos && !check && !force, "defaults are all off");
+                assert_eq!(fleet, None);
+                assert!(!all_fleets && !check && !force, "defaults are all off");
             }
             _ => panic!("expected workload build"),
         }
@@ -3045,42 +3045,42 @@ mod tests {
                 action:
                     WorkloadAction::Build {
                         name,
-                        repo,
-                        all_repos,
+                        fleet,
+                        all_fleets,
                         check,
                         force,
                     },
             } => {
                 assert_eq!(name.as_deref(), Some("pi"));
-                assert_eq!(repo, None);
-                assert!(!all_repos);
+                assert_eq!(fleet, None);
+                assert!(!all_fleets);
                 assert!(check && force);
             }
             _ => panic!("expected workload build"),
         }
-        let cli = Cli::try_parse_from(["workestrate", "workload", "build", "--repo", "personal"])
-            .expect("--repo form must parse");
+        let cli = Cli::try_parse_from(["workestrate", "workload", "build", "--fleet", "personal"])
+            .expect("--fleet form must parse");
         match cli.command {
             Commands::Workload {
-                action: WorkloadAction::Build { name, repo, .. },
+                action: WorkloadAction::Build { name, fleet, .. },
             } => {
                 assert_eq!(name, None);
-                assert_eq!(repo.as_deref(), Some("personal"));
+                assert_eq!(fleet.as_deref(), Some("personal"));
             }
             _ => panic!("expected workload build"),
         }
-        let cli = Cli::try_parse_from(["workestrate", "workload", "build", "--all-repos"])
-            .expect("--all-repos form must parse");
+        let cli = Cli::try_parse_from(["workestrate", "workload", "build", "--all-fleets"])
+            .expect("--all-fleets form must parse");
         match cli.command {
             Commands::Workload {
-                action: WorkloadAction::Build { all_repos, .. },
-            } => assert!(all_repos),
+                action: WorkloadAction::Build { all_fleets, .. },
+            } => assert!(all_fleets),
             _ => panic!("expected workload build"),
         }
     }
 
-    /// §5.1 selector conflicts are parse errors: name+--repo, name+--all-repos,
-    /// --repo+--all-repos.
+    /// §5.1 selector conflicts are parse errors: name+--fleet, name+--all-fleets,
+    /// --fleet+--all-fleets.
     #[test]
     fn workload_build_selector_conflicts_are_rejected() {
         for argv in [
@@ -3089,17 +3089,17 @@ mod tests {
                 "workload",
                 "build",
                 "pi",
-                "--repo",
+                "--fleet",
                 "personal",
             ],
-            vec!["workestrate", "workload", "build", "pi", "--all-repos"],
+            vec!["workestrate", "workload", "build", "pi", "--all-fleets"],
             vec![
                 "workestrate",
                 "workload",
                 "build",
-                "--repo",
+                "--fleet",
                 "a",
-                "--all-repos",
+                "--all-fleets",
             ],
         ] {
             assert!(

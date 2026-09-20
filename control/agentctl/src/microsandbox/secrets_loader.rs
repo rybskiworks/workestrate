@@ -137,7 +137,7 @@ fn load_secrets_scoped(workload: Option<&str>) -> Result<HashMap<String, String>
                  Layers tried: {}\n\
                  Remediation: run `workestrate secrets update --config <name>`,\n\
                  set the env var directly, or add an age recipient to the\n\
-                 config repo's .sops.yaml.",
+                 fleet's .sops.yaml.",
                 env_var,
                 layers_tried.join(", ")
             );
@@ -332,7 +332,7 @@ mod tests {
              Layers tried: {}\n\
              Remediation: run `workestrate secrets update --config <name>`,\n\
              set the env var directly, or add an age recipient to the\n\
-             config repo's .sops.yaml.",
+             fleet's .sops.yaml.",
             "LITELLM_MASTER_KEY", "reference, team, personal"
         );
         assert!(err_msg.contains("required secret"));
@@ -352,17 +352,17 @@ mod tests {
         let config_content = "schema_version = 1\n\n[secrets.LITELLM_MASTER_KEY]\nenv_var = \"LITELLM_MASTER_KEY\"\nrequired = true\n";
         std::fs::write(tmp.join("workestrate.toml"), config_content).unwrap();
 
-        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         let result = load_secrets();
 
         match old {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         std::fs::remove_dir_all(&tmp).unwrap();
 
@@ -382,17 +382,17 @@ mod tests {
         let tmp =
             std::env::temp_dir().join(format!("workestrate-layers-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp)?;
-        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         let layers = crate::config::resolve_secrets_layers()?;
 
         match old {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         std::fs::remove_dir_all(&tmp)?;
 
@@ -524,17 +524,17 @@ mod tests {
         );
         std::fs::write(tmp.join("workestrate.toml"), config_content).unwrap();
 
-        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         let result = load_secrets();
 
         match old {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         std::fs::remove_dir_all(&tmp).unwrap();
 

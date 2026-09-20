@@ -59,12 +59,12 @@ cd workestrate
 nix build --no-update-lock-file .#workestrate
 
 ./result/bin/workestrate --help
-WORKESTRATE_CONFIG_DIR="$PWD/config.reference" ./result/bin/workestrate validate-config
-WORKESTRATE_CONFIG_DIR="$PWD/config.reference" ./result/bin/workestrate workload plan example-service
+WORKESTRATE_FLEET_DIR="$PWD/config.reference" ./result/bin/workestrate validate-config
+WORKESTRATE_FLEET_DIR="$PWD/config.reference" ./result/bin/workestrate workload plan example-service
 ```
 
 This inspects the **synthetic reference configuration**, not your personal fleet,
-and does not launch a VM. It does not provision a tool home either; the
+and does not launch a VM. It does not provision a config either; the
 reference supports inspection only. Use `./result/bin/workestrate` until the
 CLI is on your `PATH`. `main` is the integration branch; the former migration
 line was integrated
@@ -90,33 +90,33 @@ wrapper (it runs `nix profile install .#workestrate` when the installed entry
 is stale). `nix profile install` is the portable verb: Lix provides no
 `profile add` subcommand.
 
-<a id="provision-home-config"></a>
+<a id="provision-config-fleet"></a>
 
-## provision your home and config
+## provision your config and fleet
 
 ```sh
-# Provision the tool home once per machine, with a config repo attached:
-workestrate home init --config <your-config-repo-url> --name personal
-# Second machine, provisioned from an existing home:
-# workestrate home clone <src-home-or-git-url> [dest-dir]
-# Explicit home for one invocation:
-# workestrate --home <tool-home-path> home init
+# Provision the config once per machine, with a fleet attached:
+workestrate config init --fleet <your-fleet-url> --name personal
+# Second machine, provisioned from an existing config:
+# workestrate config clone <src-config-or-git-url> [dest-dir]
+# Explicit config for one invocation:
+# workestrate --config <config-path> config init
 
-# Config names come from your fleet, not the tool:
-workestrate --home <tool-home-path> config list
-workestrate config list
+# Fleet names come from your fleet, not the tool:
+workestrate --config <config-path> fleet list
+workestrate fleet list
 workestrate context current
 workestrate validate-config
 
-# Pair --home (WHERE the registry lives) with --config (WHICH config to target):
-workestrate --home <tool-home-path> secrets update --config personal
-workestrate secrets init --config personal   # first bootstrap only; use update after
+# Pair --config (WHERE the registry lives) with --fleet (WHICH fleet to target):
+workestrate --config <config-path> secrets update --fleet personal
+workestrate secrets init --fleet personal   # first bootstrap only; use update after
 ```
 
-`--home <DIR>` selects the tool-home root (registry, overrides,
+`--config <DIR>` selects the config root (registry, overrides,
 state/store). It does not select which config layers are active, and it does
-not relocate backend runtime state (`MSB_HOME` stays separate). `--home`
-without `--config` on a `secrets` command selects no target; always pair them.
+not relocate backend runtime state (`MSB_HOME` stays separate). `--config`
+without `--fleet` on a `secrets` command selects no target; always pair them.
 Enable a project directory's local layer explicitly with
 `workestrate config trust <dir>`; never trust arbitrary checkouts.
 
@@ -150,10 +150,10 @@ workestrate down --context <ctx>
 Alternatives: `down --all`, `down --config-ref <branch>`, or the double-gated
 `down --everything --everything --yes`. The instance/workload rung stays on
 `workload <name> down [--instance <id> | --all-instances]`. The
-[flag glossary](README.agents.md#flag-glossary) states what `--home`,
+[flag glossary](README.agents.md#flag-glossary) states what `--config`,
 `--context`, `--config-ref`, and `down --context` each select.
 
-<a id="config-repos-and-the-layering-model"></a>
+<a id="fleets-and-the-layering-model"></a>
 <a id="secrets-workflow"></a>
 <a id="a-small-cli-surface-for-a-larger-system"></a>
 

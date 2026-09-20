@@ -221,9 +221,9 @@ mod tests {
     fn spawn_detached_service_fails_when_child_exits_immediately() -> anyhow::Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
-        // WORKESTRATE_STATE_DIR is not in HOME_ENV_KEYS; guard it manually.
+        // WORKESTRATE_STATE_DIR is not in CONFIG_ENV_KEYS; guard it manually.
         let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
         let state = crate::config::test_support::uniq_dir("fs8-spawn-state");
         std::fs::create_dir_all(&state)?;
@@ -379,9 +379,9 @@ mod tests {
     fn spawn_detached_service_log_file_is_created() -> anyhow::Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
-        // WORKESTRATE_STATE_DIR is not in HOME_ENV_KEYS; guard it manually.
+        // WORKESTRATE_STATE_DIR is not in CONFIG_ENV_KEYS; guard it manually.
         let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
         let state = crate::config::test_support::uniq_dir("fs8-log-state");
         std::fs::create_dir_all(&state)?;
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn detached_log_path_uses_state_dir_and_raw_identity() -> anyhow::Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        // WORKESTRATE_STATE_DIR is not in HOME_ENV_KEYS; guard it manually.
+        // WORKESTRATE_STATE_DIR is not in CONFIG_ENV_KEYS; guard it manually.
         let prior_state = std::env::var("WORKESTRATE_STATE_DIR").ok();
         let state = crate::config::test_support::uniq_dir("detached-log-path");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).

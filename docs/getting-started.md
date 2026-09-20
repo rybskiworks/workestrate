@@ -1,33 +1,33 @@
 # Getting started and configuring secrets
 
 Use the [README build commands](../README.md#start-here) first. Building is separate
-from provisioning a home, creating configuration and starting a microVM. Runtime
+from provisioning a config, creating configuration and starting a microVM. Runtime
 execution requires Linux/KVM; reading CLI help does not.
 
 ## Configuration
 
 ```sh
-# Provision the tool home once per machine, with a config repo attached:
-workestrate home init --config <your-config-repo-url> --name personal
-# Second machine from an existing home:
-# workestrate home clone <src-home-or-git-url> [dest-dir]
-# Explicit home for one invocation:
-# workestrate --home <tool-home-path> home init
-workestrate --home <tool-home-path> config list
-workestrate config list
+# Provision the config once per machine, with a fleet attached:
+workestrate config init --fleet <your-fleet-url> --name personal
+# Second machine from an existing config:
+# workestrate config clone <src-config-or-git-url> [dest-dir]
+# Explicit config for one invocation:
+# workestrate --config <config-path> config init
+workestrate --config <config-path> fleet list
+workestrate fleet list
 workestrate context current
 workestrate validate-config
 workestrate workload plan example-service
 ```
 
-`--home <DIR>` selects the tool-home root (registry, overrides,
+`--config <DIR>` selects the config root (registry, overrides,
 state/store). It does not select which config layers are active, and a
-different `--home` alone does not relocate all backend state (`MSB_HOME`
-stays separate). `home init` is idempotent; it is not a request to migrate
+different `--config` alone does not relocate all backend state (`MSB_HOME`
+stays separate). `config init` is idempotent; it is not a request to migrate
 an existing Microsandbox home.
 
 A fresh tool ships synthetic examples, not preferred agents or providers. Real
-workload names and secret schemas come from registered config repositories.
+workload names and secret schemas come from registered fleets.
 Project-layer trust is explicit via `workestrate config trust <dir>`; do not grant
 it to arbitrary agent checkouts. Run workload verbs from the intended project
 directory: `${CWD}` mounts and per-directory slots resolve against the
@@ -41,14 +41,14 @@ from the registry; the nix-installed CLI bundles `sops` and `age`, so no
 devshell is needed:
 
 ```sh
-workestrate secrets init --config personal   # first bootstrap only
-workestrate secrets update --config personal
-# Explicit directory: workestrate secrets update --config-dir /path/to/config-repo
-# Pair --home (WHERE the registry lives) with --config (WHICH config to target):
-workestrate --home <tool-home-path> secrets update --config personal
+workestrate secrets init --fleet personal   # first bootstrap only
+workestrate secrets update --fleet personal
+# Explicit directory: workestrate secrets update --fleet-dir /path/to/fleet
+# Pair --config (WHERE the registry lives) with --fleet (WHICH fleet to target):
+workestrate --config <config-path> secrets update --fleet personal
 ```
 
-`--home` without `--config` on a `secrets` command selects no target; always
+`--config` without `--fleet` on a `secrets` command selects no target; always
 pair them. `init` refuses to overwrite an existing encrypted file; use `update`
 for changes.
 Named configs resolve through the registry, without silently falling back to an

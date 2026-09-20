@@ -32,9 +32,9 @@
 ## Authority and live state
 
 - Keep secret material encrypted in repositories. Keep age private keys on the
-  host, outside repositories and the tool home. Follow [secrets.md](docs/secrets.md).
+  host, outside repositories and the config. Follow [secrets.md](docs/secrets.md).
 - Inspect the selected operator/fleet configuration before runtime changes.
-  `--home` alone does not isolate all state or override backend configuration.
+  `--config` alone does not isolate all state or override backend configuration.
   Use explicitly disposable state and synthetic credentials for runtime tests.
 - Keep live provisioning, migration, and teardown explicitly authorized and
   separate from build verification. Read [runtime provisioning](docs/runtime-provisioning.md)

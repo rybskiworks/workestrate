@@ -93,12 +93,12 @@ confusion surfaced by the 2026-07 review (finding D8).
 | 1.1 | Create `config.reference/` directory: `workestrate.toml` (sanitized copy of root `workestrate.toml` with placeholder secrets), `agents/*/config/` reference copies, `infra/litellm/` reference values. | `workestrate validate-config config.reference/workestrate.toml` passes | verifiable-here |
 | 1.2 | Implement XDG path resolution in `config.rs`: `~/.config/workestrate/config.toml` (registry), `~/.local/share/workestrate/repos/<name>/` (managed clones), `~/.local/state/workestrate/` (state). Keep root `workestrate.toml` as project-layer fallback. | `cargo test` — XDG path resolution tests pass | verifiable-here |
 | 1.3 | Implement `workestrate config add/update/list/trust` commands. `config add` clones to `~/.local/share/workestrate/repos/<name>/`, adds to registry. `config update` pulls, updates `rev`. `config trust` adds to `[trusted_projects]`. | `cargo test` — config commands work against a test repo | verifiable-here |
-| 1.4 | Implement `workestrate init <dotfiles-url>`: clone dotfiles, read registry, clone config repos, run setup-secrets for each. | `cargo test` — init creates expected XDG layout | verifiable-here |
+| 1.4 | Implement `workestrate init <dotfiles-url>`: clone dotfiles, read registry, clone fleets, run setup-secrets for each. | `cargo test` — init creates expected XDG layout | verifiable-here |
 | 1.5 | Implement `workestrate source clone/build/list/reset` commands. Store at `~/.local/share/workestrate/sources/<name>/`. `WORKESTRATE_<NAME>_BUILD` env unchanged. | `cargo test` — source commands work | verifiable-here |
-| 1.6 | Update `setup-secrets.sh` with `--config <name>` flag targeting a config repo by name. Default: active context's personal layer. | `just validate-secrets` passes | verifiable-here |
-| 1.7 | Update `workestrate check` for XDG model: report registered config repos (rev, dirty status), XDG state dirs, agent source checkouts. | `workestrate check` on fresh install reports `config.reference/` only | verifiable-here |
+| 1.6 | Update `setup-secrets.sh` with `--fleet <name>` flag targeting a fleet by name. Default: active context's personal layer. | `just validate-secrets` passes | verifiable-here |
+| 1.7 | Update `workestrate check` for XDG model: report registered fleets (rev, dirty status), XDG state dirs, agent source checkouts. | `workestrate check` on fresh install reports `config.reference/` only | verifiable-here |
 | 1.8 | Update runtime paths: `workspaces/` → `${state_dir}/workspaces/`, `var/` → `${state_dir}/var/`, `agents/<name>/repo` → `${store_dir}/sources/<name>/repo`. Update `mounts.rs:6-15` path resolution. | `cargo test` — path resolution tests pass | verifiable-here |
-| 1.9 | Create user's personal config repo: move root `workestrate.toml` + `.env.enc` + `.sops.yaml` + `infra/litellm/` + `agents/*/config/` to a new git repo. `workestrate config add <url> personal`. | `workestrate config add` works; `workestrate pi plan` uses personal config | verifiable-here |
+| 1.9 | Create user's personal fleet: move root `workestrate.toml` + `.env.enc` + `.sops.yaml` + `infra/litellm/` + `agents/*/config/` to a new git repo. `workestrate config add <url> personal`. | `workestrate config add` works; `workestrate pi plan` uses personal config | verifiable-here |
 | 1.10 | Update all path references (consequence sweep below). Update README/SPEC/docs. | `just verify` passes (uses `config.reference/`); `workestrate pi plan` uses personal config via registry | verifiable-here |
 | 1.11 | Runtime validation on KVM host. | `workestrate litellm up` + `workestrate pi exec` succeed on KVM host | **HOST-KVM** |
 
@@ -113,13 +113,13 @@ the tool repo; `config.reference/` is the synthetic fallback.
 | Step | Action | Gate | Env |
 |---|---|---|---|
 | 2.1 | Core exports `lib.*` in `flake.nix` outputs: `lib.recipes`, `lib.vocabulary`, `lib.buildWorkloadImage`, `lib.buildImagesFromConfig`, `lib.checks.validateConfig`. | `nix eval .#lib.recipes` succeeds | HOST-NIX |
-| 2.2 | Add optional `flake.nix` to config repo (inverted dependency: takes core as input). | `nix build` in config repo succeeds | HOST-NIX |
-| 2.3 | Add `checks` to config-repo flake: `workestrate validate-config` on `nix flake check`. | `nix flake check` in config repo passes | HOST-NIX |
-| 2.4 | Copier template for config repo scaffolding (includes `flake.nix` with inverted dependency). | `copier copy` produces valid config repo | HOST-NIX |
+| 2.2 | Add optional `flake.nix` to fleet (inverted dependency: takes core as input). | `nix build` in fleet succeeds | HOST-NIX |
+| 2.3 | Add `checks` to fleet flake: `workestrate validate-config` on `nix flake check`. | `nix flake check` in fleet passes | HOST-NIX |
+| 2.4 | Copier template for fleet scaffolding (includes `flake.nix` with inverted dependency). | `copier copy` produces valid fleet | HOST-NIX |
 
 **Definition of done (Phase 2)**: Core exports `lib.*`. Config repo with
 `flake.nix` builds its own nix-layered images. Copier template produces valid
-config repos. (All HOST-NIX gates.)
+fleets. (All HOST-NIX gates.)
 
 **Status**: Phase 2 core exports DONE; remaining steps are template-only / HOST-NIX.
 
@@ -134,7 +134,7 @@ config repos. (All HOST-NIX gates.)
 
 ### Step 2.2–2.4: Config-repo flake + copier template — TEMPLATE READY
 - `templates/workestrate-config/flake.nix.jinja` updated to use `workestrate.lib.${system}`.
-- Live config-repo `nix build` / `nix flake check` / `copier copy` are HOST-NIX gates and remain deferred.
+- Live fleet `nix build` / `nix flake check` / `copier copy` are HOST-NIX gates and remain deferred.
 
 ## Phase 3: Layering engine (fixtures, multi-recipient SOPS, copier)
 
@@ -142,14 +142,14 @@ config repos. (All HOST-NIX gates.)
 |---|---|---|---|
 | 3.1 | Implement merge engine: RFC 7396 for non-security fields + security-aware merge (monotonic `default_deny`, additive `deny_rules`/`egress_rules`/`secret_env`, per-recipe scoping). Layer order from registry `layers` array. | `cargo test` — fixture-repo merge tests pass (base + team + personal) | verifiable-here |
 | 3.2 | Implement `plan --show-source` (per-field provenance with layer names). | `cargo test` — source attribution tests pass | verifiable-here |
-| 3.3 | Multi-recipient `.sops.yaml` layout: per-path `creation_rules` (shared vs personal-only). Per-domain secret files in config repos. | `just validate-secrets` passes with multi-recipient config | verifiable-here |
+| 3.3 | Multi-recipient `.sops.yaml` layout: per-path `creation_rules` (shared vs personal-only). Per-domain secret files in fleets. | `just validate-secrets` passes with multi-recipient config | verifiable-here |
 | 3.4 | `workestrate config add/update` with `config.lock.json`-style rev tracking (in registry, not separate lockfile). | `workestrate config add` + `update` work with rev tracking | verifiable-here |
 | 3.5 | Copier template finalization (includes `flake.nix`, `.sops.yaml` with placeholder recipient, `workestrate.toml` skeleton). | `copier copy` + `copier update` work | HOST-NIX (copier) |
 | 3.6 | Full validation. | `just verify` + fixture-repo merge tests + copier template | verifiable-here |
 
 **Definition of done (Phase 3)**: Fixture-repo merge tests pass (base + team +
 personal → expected merged output). `plan --show-source` annotates fields.
-Multi-recipient SOPS works. Copier template produces valid config repos.
+Multi-recipient SOPS works. Copier template produces valid fleets.
 Contexts remain deferred (ship single ordered `layers` list; named contexts
 only when 3+ layers).
 
@@ -166,7 +166,7 @@ Exhaustive table of every file/tool/doc that changes under the migration.
 | `control/agentctl/src/microsandbox/secrets.rs` | `const SecretDefinition` (33-92) | Becomes config-driven (deserialized from `secrets:` section); consts move to `policy.rs` as allowlist | 0a.1, 0a.4 |
 | `control/agentctl/src/microsandbox/runtime.rs` | `apply_plan_secrets` (107-145); `build_sandbox` (335-382) | Unchanged (enforcement point); path resolution updated for XDG state | 1.8 |
 | `control/agentctl/src/microsandbox/workload.rs` | `Workload` trait (45-96); `build_path()` (80-90); `config_path()` (92-95) | One generic `ConfigWorkload` impl; `build_path` reads `local_build.env_override`; `config_path` becomes config-relative | 0a.5 |
-| `control/agentctl/src/microsandbox/secrets_loader.rs` | `load_secrets()` (16-61) | Unchanged (sops decrypt + env inject); targets config repo by path | 1.6 |
+| `control/agentctl/src/microsandbox/secrets_loader.rs` | `load_secrets()` (16-61) | Unchanged (sops decrypt + env inject); targets fleet by path | 1.6 |
 | `control/agentctl/src/microsandbox/mounts.rs` | `resolve_mount_host()` (6-15) | Updated for XDG state paths (`workspaces/` → `${state_dir}/workspaces/`) | 1.8 |
 | `control/agentctl/src/microsandbox/env.rs` | `resolve_templated_value()` (7-28) | Unchanged | — |
 | `control/agentctl/src/recipes.rs` | Does not exist | NEW: egress recipe enum + `expand()` | 0a.3 |
@@ -188,22 +188,22 @@ Exhaustive table of every file/tool/doc that changes under the migration.
 | `nix/packages/microsandbox-filesystem-patched.nix` | Patched crate | Migrate to git-fork dependency | 0b.6 |
 | `nix/packages/microsandbox-filesystem-agentd.patch` | Patch file | Removed (fork-carries-compat) | 0b.6 |
 | `nix/devshells/default.nix` | `_setup_agent_repos` (127-167); `_build_agents` (169-241); vendor link (99-125) | `_build_agents` reads `config.reference/`; `_setup_agent_repos` → `workestrate source clone`; vendor link removed | 0b.2, 0b.6, 1.5 |
-| `scripts/setup-secrets.sh` | REQUIRED_KEYS from `.env.example` grep (39-44); paths hardcoded to repo root | `--config <name>` flag; REQUIRED_KEYS from `workestrate secrets-schema`; paths XDG-relative | 0a.7, 1.6 |
+| `scripts/setup-secrets.sh` | REQUIRED_KEYS from `.env.example` grep (39-44); paths hardcoded to repo root | `--fleet <name>` flag; REQUIRED_KEYS from `workestrate secrets-schema`; paths XDG-relative | 0a.7, 1.6 |
 | `scripts/host-check.sh` | KVM/Nix/memory/disk check | Unchanged (core tooling) | — |
-| `scripts/validate-secrets-workflow.sh` | Tests secrets lifecycle | Updated for `--config` flag + XDG paths | 1.6 |
+| `scripts/validate-secrets-workflow.sh` | Tests secrets lifecycle | Updated for `--fleet` flag + XDG paths | 1.6 |
 | `justfile` | `check`, `litellm-check`, `verify`, `verify-full`, `build`, `fmt`, `clippy`, `test`, `workestrate`, `plan`, `host-check`, `setup-secrets`, `validate-secrets`, `vendor-unlock`, `vendor-lock`, `dev-build-pi`, `dev-run-pi`, `load-images` | Add `golden-check`, `golden-generate`; remove `vendor-unlock`/`vendor-lock`; `litellm-check` path updated; add `init-dev` (dogfooding) | 0a.6, 0b.6, 1.10 |
 | `.gitignore` | `agents/*/repo`, `agents/*/build`, `agents/*/.build-hash` (20-22); `!.env.enc`, `!.env.example` (4-5) | Remove `!.env.enc`/`!.env.example` (no longer at root); no `config.d/` entries expected under XDG model; remove if present from prior experiments | 1.10 |
-| `.agents/skills/validation-litellm-config-check/scripts/check_config.py` | `--config infra/litellm/config.yaml` | `--config` path resolves to active config repo's `infra/litellm/config.yaml` | 1.10 |
+| `.agents/skills/validation-litellm-config-check/scripts/check_config.py` | `--config infra/litellm/config.yaml` | `--fleet` path resolves to active fleet's `infra/litellm/config.yaml` | 1.10 |
 | `README.md` | Path references to `.env.enc`, `infra/litellm/`, `agents/*/config/`, `workspaces/`, `var/` | Updated for XDG model; quick start updated for `workestrate init`; architecture diagram updated | 1.10 |
 | `SPEC.md` | Path references; M1 acceptance criteria | Updated for XDG model; milestone criteria updated | 1.10 |
-| `docs/secrets.md` | Path references to `.env.enc`, `.sops.yaml` | Updated for XDG model + `--config` flag | 1.10 |
+| `docs/secrets.md` | Path references to `.env.enc`, `.sops.yaml` | Updated for XDG model + `--fleet` flag | 1.10 |
 | `config.reference/` | Sanitized copy of user deployment | Synthetic fixture: 3 workloads exercising all recipes/policy features | 1.1, M.10 |
 | `workestrate.toml` (root) | Does not exist (Phase 0a creates it) | Created in 0a.5; removed in M.10 (real config lives in personal repo) | 0a.5, M.10 |
-| `.env.enc` | At repo root | Removed from repo; moves to config repo | M.10 |
-| `.sops.yaml` | At repo root | Removed from repo; moves to config repo | M.10 |
+| `.env.enc` | At repo root | Removed from repo; moves to fleet | M.10 |
+| `.sops.yaml` | At repo root | Removed from repo; moves to fleet | M.10 |
 | `.env.example` | At repo root (24 lines) | Generated by `workestrate generate-env-example`; removed from repo | 0a.7, M.10 |
 | `infra/litellm/` | At repo root | Values removed from repo; reference copy in `config.reference/infra/litellm/` | M.10 |
-| `agents/*/config/` | At repo root (tracked) | Removed from repo; moves to config repo | M.10 |
+| `agents/*/config/` | At repo root (tracked) | Removed from repo; moves to fleet | M.10 |
 | `workspaces/` | At repo root (gitignored) | Moves to `~/.local/state/workestrate/workspaces/` | 1.8 |
 | `var/` | At repo root (gitignored) | Moves to `~/.local/state/workestrate/var/` | 1.8 |
 | `agents/*/repo/`, `agents/*/build/` | At repo root (gitignored) | Moves to `~/.local/share/workestrate/sources/<name>/` | 1.5, 1.8 |
@@ -221,10 +221,10 @@ tool+XDG model. Each step keeps `just verify` green.
 | M.3 | Implement `workestrate config add/update/list/trust` (Phase 1, step 1.3). | `cargo test` — config commands |
 | M.4 | Implement `workestrate init <url>` (Phase 1, step 1.4). | `cargo test` — init creates XDG layout |
 | M.5 | Implement `workestrate source clone/build/list/reset` (Phase 1, step 1.5). | `cargo test` — source commands |
-| M.6 | Update `setup-secrets.sh` with `--config` flag (Phase 1, step 1.6). | `just validate-secrets` passes |
+| M.6 | Update `setup-secrets.sh` with `--fleet` flag (Phase 1, step 1.6). | `just validate-secrets` passes |
 | M.7 | Update `workestrate check` for XDG model (Phase 1, step 1.7). | `workestrate check` on fresh install reports `config.reference/` only |
 | M.8 | Update runtime paths: `workspaces/`, `var/`, `agents/<name>/repo` → XDG state/store (Phase 1, step 1.8). | `cargo test` — path resolution |
-| M.9 | Create user's personal config repo: `git init` in a temp dir, move root `workestrate.toml` + `.env.enc` + `.sops.yaml` + `infra/litellm/` + `agents/*/config/` to it. Push to remote. `workestrate config add <url> personal`. | `workestrate config add` works; `workestrate pi plan` uses personal config |
+| M.9 | Create user's personal fleet: `git init` in a temp dir, move root `workestrate.toml` + `.env.enc` + `.sops.yaml` + `infra/litellm/` + `agents/*/config/` to it. Push to remote. `workestrate config add <url> personal`. | `workestrate config add` works; `workestrate pi plan` uses personal config |
 | M.10 | Remove migrated files from ai-workbench repo (root `workestrate.toml`, `.env.enc`, `.sops.yaml`, `.env.example`, `infra/litellm/`, `agents/*/config/`). Make `config.reference/` synthetic (fixture only). | `just verify` passes (uses synthetic `config.reference/`); golden-check passes for `example-service`, `example-agent`, `example-offensive` |
 | M.11 | Update docs (README, SPEC, docs/secrets.md) for final tool+XDG model. | docs reviewed |
 | M.12 | Runtime validation on KVM host. | `workestrate litellm up` + `workestrate pi exec` succeed | **HOST-KVM** |
@@ -248,13 +248,13 @@ committed to git.
 # justfile
 golden-generate:
 	@for name in example-service example-agent example-offensive; do \
-		WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $$name plan \
+		WORKESTRATE_FLEET_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $$name plan \
 		  > control/agentctl/tests/golden/$$name.plan.txt; \
 	done
 
 golden-check:
 	@for name in example-service example-agent example-offensive; do \
-		WORKESTRATE_CONFIG_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $$name plan \
+		WORKESTRATE_FLEET_DIR=config.reference cargo run --manifest-path control/agentctl/Cargo.toml -- $$name plan \
 		  | diff - control/agentctl/tests/golden/$$name.plan.txt \
 		  || (echo "golden mismatch for $$name; run 'just golden-generate' to update" && exit 1); \
 	done
@@ -274,7 +274,7 @@ golden-check:
 | 0a | Revert to `workloads/*.rs` (git history preserves). Golden files and config loader are additive. |
 | 0b | Revert nix recipe parameterization (git history preserves per-agent nix files). Vendor symlink restored. |
 | 1 | Root `workestrate.toml` still works as project layer (additive migration). XDG commands are additive. Revert = don't use XDG paths; use root config. |
-| 2 | Config-repo-flake is optional. Revert = remove `flake.nix` from config repo. |
+| 2 | Config-repo-flake is optional. Revert = remove `flake.nix` from fleet. |
 | 3 | Layering engine is additive. Revert = use single-layer (no `layers` in registry). |
 
 ## Definition of done per phase
@@ -303,8 +303,8 @@ not by the JSON Schema files:
   `tests/schema_drift.rs` + `tests/schema_subschema_drift.rs`.
 - **Distribution:** `workestrate schemas update` writes the binary's own
   generated artifacts to every known consumer location (tool copier template
-  `templates/workestrate-config/schemas/`, tool home `schemas/`, and each
-  registered config repo that carries a `schemas/` dir — workestrate-managed
+  `templates/workestrate-config/schemas/`, config `schemas/`, and each
+  registered fleet that carries a `schemas/` dir — workestrate-managed
   repos). Idempotent byte compare. `--check` is the CI gate wired as `just
   schema-sync-check` in `just verify`; `workestrate doctor` reports stale
   copies at provisioning time.
@@ -319,7 +319,7 @@ not by the JSON Schema files:
 - **Breaking changes** bump `schema_version`; `schema_version = 2` is already
   a hard error in validate-config (see `config/validation.rs`), so old
   binaries refuse new configs instead of misinterpreting them.
-- **Template evolution** for scaffolded config repos rides `copier update`
+- **Template evolution** for scaffolded fleets rides `copier update`
   (`.copier-answers.yml` is written by `config new`); schema copies in repos
   refresh via `schemas update`.
 - **`workestrate migrate-config --from/--to` is DEFERRED** until the first
@@ -381,9 +381,9 @@ then `just schema-sync-check` (CI gate) / `workestrate schemas update`
 
 ### HOST-GATE items for Phase 3
 - `copier copy templates/workestrate-config/ /tmp/test-config/` — verify template renders
-- `workestrate validate-config` against a copier-generated config repo
+- `workestrate validate-config` against a copier-generated fleet
 - Multi-recipient SOPS workflow with two age keys (setup-secrets + decrypt)
-- `nix build` in a config repo with the inverted-dependency flake.nix
+- `nix build` in a fleet with the inverted-dependency flake.nix
 
 ## Review and remediation (2026-07)
 

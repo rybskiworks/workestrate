@@ -2,10 +2,10 @@
 //! Session 3b — ADR 0032 addendum §Selection ladder rung 3).
 //!
 //! The inline override is a CAPSULE-ONLY substitution: the named workload's
-//! declaration is read at `<config-ref>` from its declaring config repo's
+//! declaration is read at `<config-ref>` from its declaring fleet's
 //! pinned archive while everything else stays home-scoped (or
 //! `--config-ref`-scoped when that rung is also set — the inline ref wins
-//! over `--config-ref` for THIS workload's declaring repo only).
+//! over `--config-ref` for THIS workload's declaring fleet only).
 //!
 //! ## Two-phase process state (deps NEVER follow the override in v1)
 //!

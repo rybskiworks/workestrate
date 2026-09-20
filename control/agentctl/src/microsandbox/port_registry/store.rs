@@ -128,7 +128,7 @@ fn check_port_collisions_locked(
                     "port collision: {}:{} is already in use by sandbox '{}' \
                      (workload '{}', context {}).\n\
                      Sandbox '{}' cannot use this bind:port.\n\
-                     Remediation: change the port in one of the config repos, \
+                     Remediation: change the port in one of the fleets, \
                      or stop the other sandbox with 'workestrate {} down'.",
                     bind,
                     port,

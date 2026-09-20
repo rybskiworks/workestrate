@@ -42,16 +42,16 @@ egress = "deny"
 /// `protect = [".workestrate/"]` carried protect-bucket ROUTING intent;
 /// under the unified surface the protect wire bucket is reached ONLY by an
 /// operator scope's final read.deny (spec 22 §5), so the entry moves to the
-/// isolated home registry (HomeRegistry scope) and the workload config
-/// loads as a config-repo layer through the real registry chain (the
-/// WORKESTRATE_CONFIG_DIR bypass collects no operator scope).
+/// isolated config registry (ConfigRegistry scope) and the workload config
+/// loads as a fleet layer through the real registry chain (the
+/// WORKESTRATE_FLEET_DIR bypass collects no operator scope).
 const OPERATOR_REGISTRY_TOML: &str = r#"
 layers = ["cmd-policy"]
 
 [policy.mounts.read]
 deny = [{ pattern = ".workestrate/", final = true }]
 
-[configs.cmd-policy]
+[fleets.cmd-policy]
 url = "file:///unused/cmd-policy"
 ref = "main"
 "#;
@@ -134,18 +134,18 @@ fn two_mount_fixture() -> (TempDir, PathBuf) {
 }
 
 /// Isolated home whose registry registers the fixture's workestrate.toml as
-/// the `cmd-policy` config-repo layer and declares the operator-scope
+/// the `cmd-policy` fleet layer and declares the operator-scope
 /// protect policy (OPERATOR_REGISTRY_TOML). The main fixture exercises
 /// protect routing, so it must load through the real registry chain.
 fn operator_home(fixture_dir: &std::path::Path) -> IsolatedHome {
     let home = IsolatedHome::new("cmd-policy");
     home.write_registry(OPERATOR_REGISTRY_TOML);
-    let repo = home.create_repo_dir("cmd-policy");
+    let repo = home.create_fleet_dir("cmd-policy");
     std::fs::copy(
         fixture_dir.join("workestrate.toml"),
         repo.join("workestrate.toml"),
     )
-    .expect("copy fixture config into the config-repo layer");
+    .expect("copy fixture config into the fleet layer");
     home
 }
 
@@ -187,7 +187,7 @@ fn explain_mount(
 ) -> std::process::Output {
     let home = IsolatedHome::new("cmd-policy");
     let mut cmd = home.cmd();
-    cmd.env("WORKESTRATE_CONFIG_DIR", config_dir).args([
+    cmd.env("WORKESTRATE_FLEET_DIR", config_dir).args([
         "policy",
         "mounts",
         "explain",
@@ -227,7 +227,7 @@ fn preview(config_dir: &std::path::Path, json: bool) -> std::process::Output {
 fn preview_mount(config_dir: &PathBuf, mount: &str, json: bool) -> std::process::Output {
     let home = IsolatedHome::new("cmd-policy");
     let mut cmd = home.cmd();
-    cmd.env("WORKESTRATE_CONFIG_DIR", config_dir)
+    cmd.env("WORKESTRATE_FLEET_DIR", config_dir)
         .args([
             "policy",
             "mounts",
@@ -366,7 +366,7 @@ fn policy_mounts_errors_return_one() {
         let home = IsolatedHome::new("cmd-policy-error");
         let out = home
             .cmd()
-            .env("WORKESTRATE_CONFIG_DIR", &dir)
+            .env("WORKESTRATE_FLEET_DIR", &dir)
             .args([
                 "policy",
                 "mounts",
@@ -388,7 +388,7 @@ fn policy_mounts_errors_return_one() {
     let home = IsolatedHome::new("cmd-policy-no-policy");
     let out = home
         .cmd()
-        .env("WORKESTRATE_CONFIG_DIR", &no_policy)
+        .env("WORKESTRATE_FLEET_DIR", &no_policy)
         .args([
             "policy",
             "mounts",
@@ -489,7 +489,7 @@ fn reference_config_ships_sensitive_mount_defaults() {
     let home = IsolatedHome::new("cmd-policy-reference-defaults");
     let out = home
         .cmd()
-        .env("WORKESTRATE_CONFIG_DIR", &config_reference_dir)
+        .env("WORKESTRATE_FLEET_DIR", &config_reference_dir)
         .args([
             "policy",
             "mounts",
@@ -681,7 +681,7 @@ fn old_vocabulary_is_a_hard_unknown_field_error_end_to_end() {
     let home = IsolatedHome::new("cmd-policy-old-vocab");
     let out = home
         .cmd()
-        .env("WORKESTRATE_CONFIG_DIR", &dir)
+        .env("WORKESTRATE_FLEET_DIR", &dir)
         .args(["validate-config"])
         .output()
         .expect("invoke validate-config");

@@ -1115,7 +1115,7 @@ mod tests {
         // strict_origin label edit.
         let mut origin_edited = base.clone();
         if let Some(credentials) = origin_edited.credentials.as_mut() {
-            credentials.strict_origin = Some("home-registry".to_string());
+            credentials.strict_origin = Some("config-registry".to_string());
         }
         assert_eq!(
             config_hash_of_plan(&origin_edited),

@@ -3,23 +3,23 @@
 This is the main spec of the migrated system. It is authoritative for all
 implementation work.
 
-## 1. Tool model + single tool home
+## 1. Tool model + single config
 
 `workestrate` is a **tool** (Rust CLI + nix flake), installed via
 `nix profile install github:georgrybski/ai-workbench#workestrate` or run via
 `nix run`. It is decoupled from any workspace. Configuration lives in a single
-tool home (`$WORKESTRATE_HOME`) with a flat layout (ADR 0023).
+config (`$WORKESTRATE_CONFIG`) with a flat layout (ADR 0023).
 
 ### Directory trees
 
 ```
-$WORKESTRATE_HOME/                    # default: ~/.workestrate
-├── config.toml                       # REGISTRY: tool settings + config-repo registry + layers + trusted_projects
+$WORKESTRATE_CONFIG/                    # default: ~/.workestrate
+├── config.toml                       # REGISTRY: tool settings + fleet registry + layers + trusted_projects
 ├── overrides.toml                   # user-global overrides (optional)
 ├── secrets/                          # machine-local secrets
 │   └── .env.local.enc               # SOPS-encrypted (optional; workestrate secrets --global)
-├── config-repos/                     # managed config-repo clones
-│   ├── personal/                     # personal config repo
+├── fleets/                     # managed fleet clones
+│   ├── personal/                     # personal fleet
 │   │   ├── workestrate.toml
 │   │   ├── .env.enc
 │   │   ├── .sops.yaml
@@ -32,7 +32,7 @@ $WORKESTRATE_HOME/                    # default: ~/.workestrate
 │   │   │   ├── odysseus/config/settings.json
 │   │   │   └── opencode/config/opencode.jsonc
 │   │   └── profiles/                # optional human-readable docs
-│   └── work/                         # team config repo (example)
+│   └── work/                         # team fleet (example)
 │       ├── workestrate.toml
 │       ├── .env.enc
 │       ├── .sops.yaml
@@ -60,10 +60,10 @@ $WORKESTRATE_HOME/                    # default: ~/.workestrate
 
 ### Home resolution
 
-The tool home is resolved per invocation in this order:
+The config is resolved per invocation in this order:
 
-1. `--home <path>` CLI flag (explicit per-invocation override)
-2. `WORKESTRATE_HOME` env var
+1. `--config <path>` CLI flag (explicit per-invocation override)
+2. `WORKESTRATE_CONFIG` env var
 3. Legacy XDG (read-only compat + deprecation note — reads old
    `XDG_CONFIG_HOME/workestrate/` etc. if present, does NOT write)
 4. Default: `~/.workestrate`
@@ -72,17 +72,17 @@ The trusted-ancestor auto-discovery tier (walk-up from cwd, trust-gated) is
 REMOVED — repo-local homes and discovery caused split-brain/shadow-home
 ambiguity (ADR 0023 addendum 2026-07-30).
 
-The `home_version` field in `config.toml` tracks the home layout version.
-`workestrate migrate-home` migrates a legacy XDG three-home layout
-(config/data/state split) into the single home, stamps `home_version = 2`,
+The `config_version` field in `config.toml` tracks the config layout version.
+`workestrate migrate-config` migrates a legacy XDG three-directory layout
+(config/data/state split) into the single config, stamps `config_version = 2`,
 clears `store_dir`/`state_dir`, and rewrites `configs.<name>.url` fields
-pointing into the old layout to the new `dest/config-repos/<name>` path (remote
+pointing into the old layout to the new `dest/fleets/<name>` path (remote
 URLs are left untouched). See ADR 0023.
 
-**Note:** `WORKESTRATE_CONFIG_DIR` remains as a dev/testing override that
+**Note:** `WORKESTRATE_FLEET_DIR` remains as a dev/testing override that
 bypasses config layering and loads a single config layer directly (used by
-golden-check and tests). It is separate from `WORKESTRATE_HOME`, which
-resolves the tool home (registry, config-repos, sources, state).
+golden-check and tests). It is separate from `WORKESTRATE_CONFIG`, which
+resolves the config (registry, fleets, sources, state).
 
 ### Tool repo (ai-workbench) — what stays
 
@@ -122,34 +122,34 @@ ai-workbench/
 
 ## 2. Registry file format
 
-`$WORKESTRATE_HOME/config.toml` — tracked in the user's dotfiles repo.
+`$WORKESTRATE_CONFIG/config.toml` — tracked in the user's dotfiles repo.
 
 ### Complete annotated example
 
 ```toml
 # spec-test: skip
-# $WORKESTRATE_HOME/config.toml
+# $WORKESTRATE_CONFIG/config.toml
 # This file IS the user's dotfiles entry for workestrate.
 # Tracked in the user's dotfiles repo (chezmoi/yadm/stow/etc.).
 
 [settings]
 # Tool-level settings (not workload-specific)
 default_context = "personal"        # default layer-set name (contexts deferred; this is the layers list name)
-home_version = 1                    # home layout version for future migrations (ADR 0023)
-store_dir = "$WORKESTRATE_HOME"     # managed clones + sources (home-relative by default)
-state_dir = "$WORKESTRATE_HOME/state"  # runtime state (workspaces, var; home-relative by default)
+config_version = 1                  # config layout version for future migrations (ADR 0023)
+store_dir = "$WORKESTRATE_CONFIG"     # managed clones + sources (config-relative by default)
+state_dir = "$WORKESTRATE_CONFIG/state"  # runtime state (workspaces, var; config-relative by default)
 
-# ─── Registry of config repos ───────────────────────────────────────────────
-# Each entry is a config repo that workestrate clones and consumes.
+# ─── Registry of fleets ───────────────────────────────────────────────
+# Each entry is a fleet that workestrate clones and consumes.
 # `workestrate config add <url> <name>` adds an entry here.
 # `workestrate config update <name>` pulls latest and updates `rev`.
 
-[configs.personal]
-url = "git@github.com:<your-user>/workestrate-config-personal.git"  # the private personal config repo
+[fleets.personal]
+url = "git@github.com:<your-user>/workestrate-config-personal.git"  # the private personal fleet
 ref = "main"
 rev = "abc123def456789abcdef0123456789abcdef01"  # updated by `config update`
 
-[configs.work]
+[fleets.work]
 url = "git@github.com:work-org/workestrate-config-team.git"
 ref = "main"
 rev = "789abc012def3456789abc012def456789abc012"
@@ -193,25 +193,25 @@ path = "/home/node/Development/another-project"
 | Section | Field | Type | Default | Description |
 |---|---|---|---|---|
 | `[settings]` | `default_context` | string | `"personal"` | Default layer-set name (contexts deferred) |
-| `[settings]` | `home_version` | integer | `1` | Home layout version for future migrations (ADR 0023) |
-| `[settings]` | `store_dir` | string | `$WORKESTRATE_HOME` | Managed clones + sources root (home-relative by default; overridable) |
-| `[settings]` | `state_dir` | string | `$WORKESTRATE_HOME/state` | Runtime state root (home-relative by default; overridable) |
-| `[configs.<name>]` | `url` | string | (required) | Git URL for the config repo |
-| `[configs.<name>]` | `ref` | string | `"main"` | Git ref to track |
-| `[configs.<name>]` | `rev` | string | (auto) | Pinned commit hash (updated by `config update`) |
-| `layers` | (array) | array of strings | `[]` | Ordered list of config-repo names to merge |
-| `[contexts.<name>]` | `layers` | array of strings | (required) | Ordered list of config-repo names for this context |
+| `[settings]` | `config_version` | integer | `1` | Config layout version for future migrations (ADR 0023) |
+| `[settings]` | `store_dir` | string | `$WORKESTRATE_CONFIG` | Managed clones + sources root (config-relative by default; overridable) |
+| `[settings]` | `state_dir` | string | `$WORKESTRATE_CONFIG/state` | Runtime state root (config-relative by default; overridable) |
+| `[fleets.<name>]` | `url` | string | (required) | Git URL for the fleet |
+| `[fleets.<name>]` | `ref` | string | `"main"` | Git ref to track |
+| `[fleets.<name>]` | `rev` | string | (auto) | Pinned commit hash (updated by `config update`) |
+| `layers` | (array) | array of strings | `[]` | Ordered list of fleet names to merge |
+| `[contexts.<name>]` | `layers` | array of strings | (required) | Ordered list of fleet names for this context |
 | `[[trusted_projects]]` | `path` | string | (required) | Absolute path to a trusted project directory |
 
-`store_dir` and `state_dir` are home-relative by default (`$WORKESTRATE_HOME`
-and `$WORKESTRATE_HOME/state` respectively). They remain overridable for users
-who want to point config-repos/sources or state at a different location (e.g. a
+`store_dir` and `state_dir` are config-relative by default (`$WORKESTRATE_CONFIG`
+and `$WORKESTRATE_CONFIG/state` respectively). They remain overridable for users
+who want to point fleets/sources or state at a different location (e.g. a
 separate disk). When overridden, the paths are treated as absolute.
 
 ## 3. workestrate.toml full schema
 
-The workload definition file. Lives in each config repo at
-`$WORKESTRATE_HOME/config-repos/<name>/workestrate.toml`. Also at
+The workload definition file. Lives in each fleet at
+`$WORKESTRATE_CONFIG/fleets/<name>/workestrate.toml`. Also at
 `config.reference/workestrate.toml` (tracked, sanitized) and optionally at
 `./workestrate.toml` (project layer, trust-gated).
 
@@ -629,13 +629,13 @@ fallback = "sources/tempest/build"
 | `${WORKESTRATE_<NAME>_BUILD}` | Source override path | Rust CLI at runtime (existing, `workload.rs:80-90`) |
 | `workspaces/...` | `state_dir`-relative | Rust CLI at runtime |
 | `sources/...` | `store_dir`-relative | Rust CLI at runtime |
-| `agents/...` | Config-repo-relative | Rust CLI at runtime (agent configs moved to config repo) |
+| `agents/...` | Config-repo-relative | Rust CLI at runtime (agent configs moved to fleet) |
 | `infra/...` | Config-repo-relative | Rust CLI at runtime |
 
 ### Location-independent execution (ADR 0028)
 
 `workestrate` executes correctly from ANY working directory. Flake/image-build
-roots resolve from the **declaring config repo** (registry-known path), never
+roots resolve from the **declaring fleet** (registry-known path), never
 from CWD unless the CWD IS the declaring repo; `AGENTCTL_ROOT` is an explicit
 override, not a requirement (ADR 0028, 2026-08-13). The F2 flake-root gate for
 nix-layered images / local_build / relative build-path mounts uses the
@@ -738,7 +738,7 @@ Closed vocabulary — new packages added via core review (ADR 0003).
 1. Tool built-in defaults     (compiled into workestrate binary)
 2. Reference config           (config.reference/workestrate.toml, shipped with tool)
 3. Context layers             (resolved context's `layers` array; see Context resolution below)
-4. User-global overrides      ($WORKESTRATE_HOME/overrides.toml: [global] then [configs.<name>])
+4. User-global overrides      ($WORKESTRATE_CONFIG/overrides.toml: [global] then [fleets.<name>])
 5. Trusted project config     (./workestrate.toml in cwd, IF cwd is in [trusted_projects])
 6. Local overrides             (./workestrate.local.toml in cwd, gitignored)
 7. Command-line flags         (--set key=value, if implemented)
@@ -748,16 +748,16 @@ Closed vocabulary — new packages added via core review (ADR 0003).
 
 ```rust
 fn discover_config() -> Result<Config> {
-    // 1. Resolve the tool home (ADR 0023)
-    let home = resolve_home()?;  // --home flag → WORKESTRATE_HOME env → legacy XDG (read-only) → default ~/.workestrate
+    // 1. Resolve the config (ADR 0023)
+    let config = resolve_config()?;  // --config flag → WORKESTRATE_CONFIG env → legacy XDG (read-only) → default ~/.workestrate
 
     // 2. Load registry
-    let registry = load_registry(&home.join("config.toml"))?;  // $WORKESTRATE_HOME/config.toml
+    let registry = load_registry(&config.join("config.toml"))?;  // $WORKESTRATE_CONFIG/config.toml
 
     // 3. Load + merge layers (in order)
     let mut config = load_reference_config()?;  // config.reference/workestrate.toml
     for layer_name in &registry.layers {
-        let repo_path = registry.store_dir.join("config-repos").join(layer_name);
+        let repo_path = registry.store_dir.join("fleets").join(layer_name);
         let layer_config = load_single(&repo_path)?;
         config = merge(config, layer_config)?;  // security-aware merge (§11)
     }
@@ -799,14 +799,14 @@ collisions between contexts.
 
 ### Fail-closed behavior (no config)
 
-On a fresh install with no registry, no config repos:
+On a fresh install with no registry, no fleets:
 - Falls back to `config.reference/workestrate.toml` (shipped with tool, tracked,
   **synthetic**).
 - `workestrate workload plan <name>` works (prints the synthetic reference plan, no secrets needed).
 - `workestrate validate-config` works (validates the synthetic reference config).
 - `workestrate workload exec pi` / `workestrate workload up litellm` REFUSE if the workload is not
   defined in the active config. With only the synthetic reference loaded, those
-  names do not exist; the user must add a config repo via
+  names do not exist; the user must add a fleet via
   `workestrate config add <url> personal`.
 - The synthetic reference uses placeholder secrets; if a workload is present it
   would be rejected by `reject_if_placeholder` (`runtime.rs:10-22`).
@@ -817,7 +817,7 @@ On a fresh install with no registry, no config repos:
 
 | Command | Behavior | Source |
 |---|---|---|
-| `workestrate check` | Sanity-check layout (updated for single tool home paths) | `main.rs:246-264` |
+| `workestrate check` | Sanity-check layout (updated for single config paths) | `main.rs:246-264` |
 | `workestrate new <name>` | Scaffold a new workload (appends to active config) | `main.rs:178-227` |
 | `workestrate completions <shell>` | Generate shell completions | `main.rs:236-239` |
 | `workestrate run -- <cmd>` | Run arbitrary command with decrypted secrets | `main.rs:266-297` |
@@ -871,32 +871,32 @@ enum Commands {
 
 | Command | Behavior |
 |---|---|
-| `workestrate config add <url> <name> [--ref main]` | Clone config repo to `$WORKESTRATE_HOME/config-repos/<name>/`, add to registry |
+| `workestrate config add <url> <name> [--ref main]` | Clone fleet to `$WORKESTRATE_CONFIG/fleets/<name>/`, add to registry |
 | `workestrate config update [name]` | Pull latest ref for named repo (or all), update `rev` in registry |
-| `workestrate config list` | List registered config repos with rev + dirty status |
-| `workestrate config new <name> [<dest>]` | Scaffold a new config repo (ADR 0022). Defaults to in-store `$WORKESTRATE_HOME/config-repos/<name>` and registers; an out-of-store `<dest>` scaffolds WITHOUT registering + prints guidance (ADR 0022 addendum 2026-08-01) |
-| `workestrate config remove <name>` | Remove a config repo from the registry |
+| `workestrate config list` | List registered fleets with rev + dirty status |
+| `workestrate config new <name> [<dest>]` | Scaffold a new fleet (ADR 0022). Defaults to in-store `$WORKESTRATE_CONFIG/fleets/<name>` and registers; an out-of-store `<dest>` scaffolds WITHOUT registering + prints guidance (ADR 0022 addendum 2026-08-01) |
+| `workestrate config remove <name>` | Remove a fleet from the registry |
 | `workestrate config trust <dir>` | Add project directory to `[trusted_projects]` |
 | `workestrate config untrust <dir>` | Remove a project directory from `[trusted_projects]` |
-| `workestrate init <dotfiles-url>` | Bootstrap: clone dotfiles, read registry, clone config repos, provision secrets |
-| `workestrate home init` | Initialize an empty tool home (zero positionals; explicit init, never auto-init — ADR 0025) |
-| `workestrate home clone <src> [<dest>]` | Provision a tool home from a source (url/bundle); selective copy (never `state/`); generates `workestrate.lock` (ADR 0025) |
-| `workestrate migrate-home` | Migrate a legacy XDG three-home layout into the single tool home; stamps `home_version = 2` (ADR 0023) |
+| `workestrate init <dotfiles-url>` | Bootstrap: clone dotfiles, read registry, clone fleets, provision secrets |
+| `workestrate config init` | Initialize an empty config (zero positionals; explicit init, never auto-init — ADR 0025) |
+| `workestrate config clone <src> [<dest>]` | Provision a config from a source (url/bundle); selective copy (never `state/`); generates `workestrate.lock` (ADR 0025) |
+| `workestrate migrate-config` | Migrate a legacy XDG three-directory layout into the single config; stamps `config_version = 2` (ADR 0023) |
 | `workestrate source clone <name> [<path>]` | Clone agent source to store (or user-chosen path) |
 | `workestrate source build <name>` | Build agent from source in store |
 | `workestrate source list` | List agent source checkouts with build status |
 | `workestrate source reset <name>` | Reset agent source to canonical (discard local edits) |
 | `workestrate validate-config` | Validate active config against schema + policy.rs allowlist |
-| `workestrate secrets init [--config <name> \| --config-dir <dir> \| --global]` | Bootstrap the age key + `.sops.yaml` recipient, then write the encrypted secrets file (env/stdin/editor input — never argv) |
-| `workestrate secrets update [--config <name> \| --config-dir <dir> \| --global]` | Decrypt → modify → re-encrypt; env-set schema keys are replaced in place |
-| `workestrate secrets target <name>` | Resolve a registered config repo's secrets target paths |
+| `workestrate secrets init [--fleet <name> \| --fleet-dir <dir> \| --global]` | Bootstrap the age key + `.sops.yaml` recipient, then write the encrypted secrets file (env/stdin/editor input — never argv) |
+| `workestrate secrets update [--fleet <name> \| --fleet-dir <dir> \| --global]` | Decrypt → modify → re-encrypt; env-set schema keys are replaced in place |
+| `workestrate secrets target <name>` | Resolve a registered fleet's secrets target paths |
 | `workestrate secrets schema` | Print REQUIRED_KEYS from config `secrets:` section (replaces `.env.example` grep) |
 | ~~`workestrate secrets-target` / `secrets-schema`~~ | Removed pre-launch (breaking change); use `secrets target` / `secrets schema` |
 | `workestrate generate-env-example` | Generate `.env.example` from config `secrets:` section |
 | `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes for the active context (or all contexts). `--json` emits the instance-record array (ADR 0021 §7) |
 | `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes` |
 | `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived; ADR 0021 §8). Committed copy at `schemas/workestrate.schema.json` |
-| `workestrate clean` | Remove `$WORKESTRATE_HOME/state/` contents (workspaces, var; NOT sources/repos) |
+| `workestrate clean` | Remove `$WORKESTRATE_CONFIG/state/` contents (workspaces, var; NOT sources/repos) |
 
 ## 7. Source override model
 
@@ -911,8 +911,8 @@ enum Commands {
 ### Store paths
 
 ```
-$WORKESTRATE_HOME/sources/<name>/repo/    # canonical source checkout
-$WORKESTRATE_HOME/sources/<name>/build/   # built artifact
+$WORKESTRATE_CONFIG/sources/<name>/repo/    # canonical source checkout
+$WORKESTRATE_CONFIG/sources/<name>/build/   # built artifact
 ```
 
 ### Commands
@@ -933,7 +933,7 @@ If set, the workload's `local_build.fallback` is overridden by the env value.
 
 - **"source override"** is the concept name.
 - **`workestrate source`** is the command namespace.
-- **`$WORKESTRATE_HOME/sources/<name>/`** is the store path.
+- **`$WORKESTRATE_CONFIG/sources/<name>/`** is the store path.
 - **`vendor`** is reserved for frozen third-party deps (microsandbox patched
   crate, ADR 0011).
 
@@ -981,12 +981,12 @@ internally, `pi-image.nix:35-50`).
 
 ## 9. Secrets model
 
-### Per-config-repo layout
+### Per-fleet layout
 
-Each config repo at `$WORKESTRATE_HOME/config-repos/<name>/` contains:
+Each fleet at `$WORKESTRATE_CONFIG/fleets/<name>/` contains:
 
 ```
-config-repos/personal/
+fleets/personal/
 ├── .env.enc          # SOPS-encrypted secrets (personal key)
 ├── .sops.yaml        # SOPS config (personal recipient)
 ├── .env.example      # generated by `workestrate generate-env-example`
@@ -1011,7 +1011,7 @@ the config fails to load.
 For shared secrets (team + personal access):
 
 ```yaml
-# $WORKESTRATE_HOME/config-repos/personal/.sops.yaml
+# $WORKESTRATE_CONFIG/fleets/personal/.sops.yaml
 keys:
   - &personal age1<personal-key>
   - &team age1<team-key>
@@ -1034,7 +1034,7 @@ creation_rules:
 
 ## 10. Config-repo layout + optional flake
 
-### What a config repo contains
+### What a fleet contains
 
 ```
 workestrate-config-personal/
@@ -1053,9 +1053,9 @@ workestrate-config-personal/
 └── flake.nix                 # OPTIONAL: inverted-dependency flake (Phase 2)
 ```
 
-### Directory-mode config repos (spec 17; ADR 0017)
+### Directory-mode fleets (spec 17; ADR 0017)
 
-A config repo uses **either** the single `workestrate.toml` at its root
+A fleet uses **either** the single `workestrate.toml` at its root
 (file mode, above) **or** **directory mode**: a `workestrate/` directory of
 cross-cutting files plus a `workloads/` tree of per-workload files or
 capsule directories that colocate each workload's definition with its
@@ -1081,8 +1081,8 @@ workestrate-config-personal/
 Rules:
 
 - **Either/or detection:** if both `workestrate.toml` and `workestrate/`
-  exist in the same config repo, the loader HARD-ERRORS naming both paths.
-  No precedence, no merge across modes — one config repo, one mode.
+  exist in the same fleet, the loader HARD-ERRORS naming both paths.
+  No precedence, no merge across modes — one fleet, one mode.
 - **Load order:** `default.toml` → `secrets.toml` → `workloads/` entries in
   lexicographic order (flat files and capsule directories interleaved).
 - **Filename-implied names:** a bare table (no `[workloads.<name>]` wrapper)
@@ -1100,7 +1100,7 @@ Rules:
   the `plan --show-source` surface (§11) unchanged in shape.
 
 Full semantics: spec 17
-(`docs/validation-and-improvements/06-improvements/17-config-repo-directory-mode.md`);
+(`docs/validation-and-improvements/06-improvements/17-fleet-directory-mode.md`);
 see ADR 0017 (`50-decisions/0017-synthetic-reference-and-strip-down.md`).
 
 ### Optional flake.nix (inverted dependency, Phase 2)
@@ -1142,7 +1142,7 @@ Added to `flake.nix` outputs:
 - `packages.x86_64-linux.workestrate` — the CLI binary (already exists at
   `flake.nix:207`)
 
-Dependency direction: config→core (config repo takes core as input), never
+Dependency direction: config→core (fleet takes core as input), never
 core→config.
 
 ## 11. Layering + merge semantics
@@ -1163,8 +1163,8 @@ Merge order: `config.reference/` (base) → `work` (layer 1) → `personal`
 
 | Field type | Merge rule | Rationale |
 |---|---|---|
-| `defaults.egress` | **Last-wins**: an explicit `"allow"` stands alone (no entitlement); home `final` seals veto via the policy ladder. Tightening to `"deny"` is always allowed. | A less-trusted layer cannot weaken a more-trusted layer's deny default once sealed. |
-| `defaults.ingress` | **Last-wins** (symmetric with egress): an explicit `"allow"` stands alone (no entitlement); home `final` seals veto via the policy ladder. Tightening to `"deny"` is always allowed. Absent = deny. | A less-trusted layer cannot weaken a more-trusted layer's deny default once sealed. |
+| `defaults.egress` | **Last-wins**: an explicit `"allow"` stands alone (no entitlement); config `final` seals veto via the policy ladder. Tightening to `"deny"` is always allowed. | A less-trusted layer cannot weaken a more-trusted layer's deny default once sealed. |
+| `defaults.ingress` | **Last-wins** (symmetric with egress): an explicit `"allow"` stands alone (no entitlement); config `final` seals veto via the policy ladder. Tightening to `"deny"` is always allowed. Absent = deny. | A less-trusted layer cannot weaken a more-trusted layer's deny default once sealed. |
 | `deny_rules` | **Additive-union** within the `policy/network_policy.rs` ceiling. | A less-trusted layer cannot remove a more-trusted layer's deny rule. |
 | `egress_rules` | **Additive-union** within the `policy/network_policy.rs` ceiling + per-recipe `allowed_hosts()` scoping. | A less-trusted layer cannot remove egress rules (only add, within ceiling). |
 | `env` bindings | **Additive-union by key** (later layers can add or re-bind env entries; an existing key is replaced in place). | A less-trusted layer cannot deprive a workload of required secrets or env wiring. |
@@ -1193,9 +1193,9 @@ Attribution labels: `[core]` (tool defaults), `[reference]` (config.reference/),
 
 ### overrides.toml
 
-`$WORKESTRATE_HOME/overrides.toml` (optional) provides
+`$WORKESTRATE_CONFIG/overrides.toml` (optional) provides
 machine-local config overrides that apply across all contexts or to
-specific config repos.
+specific fleets.
 
 ```toml
 # spec-test: skip
@@ -1207,16 +1207,16 @@ specific config repos.
 cpus = 4
 
 # Applied only when "team" is in the active context's layers
-[configs.team]
+[fleets.team]
 
-[configs.team.workloads.pi]
+[fleets.team.workloads.pi]
 memory_mib = 4096
 ```
 
 #### Precedence
 
 ```
-reference < context layers < [global] < [configs.<name>] < trusted project < project local
+reference < context layers < [global] < [fleets.<name>] < trusted project < project local
 ```
 
 Each section is a ConfigFile fragment merged as a layer by the same engine
@@ -1228,8 +1228,8 @@ Each section is a ConfigFile fragment merged as a layer by the same engine
 | Scenario | Behavior |
 |---|---|
 | Missing overrides.toml | Silently absent (no error) |
-| `[configs.team]` when team not in context | Skip + INFO log |
-| `[configs.team.workloads.nonexistent]` | Skip + INFO log |
+| `[fleets.team]` when team not in context | Skip + INFO log |
+| `[fleets.team.workloads.nonexistent]` | Skip + INFO log |
 | Unknown field in matched section | Loud WARNING (probable typo) |
 | Override sets `defaults.egress = "allow"` on non-entitled workload | Hard error (merge engine) |
 | Override sets `defaults.ingress = "allow"` on non-entitled workload | Hard error (merge engine) |
@@ -1237,7 +1237,7 @@ Each section is a ConfigFile fragment merged as a layer by the same engine
 
 ### .env.local.enc
 
-`$WORKESTRATE_HOME/secrets/.env.local.enc` (optional) provides
+`$WORKESTRATE_CONFIG/secrets/.env.local.enc` (optional) provides
 machine-local secret values applied per-key AFTER the context's domain
 layers, BEFORE project layers.
 
@@ -1246,7 +1246,7 @@ Secrets precedence: process env < reference < context layers < user-global .env.
 ```
 
 `workestrate secrets --global init|update` targets this file (mutually
-exclusive with `--config`).
+exclusive with `--fleet`).
 
 
 ## 13. Instance lifecycle model (ADR 0021)
@@ -1385,7 +1385,7 @@ and all sub-structs; `generate-schema` calls
   its `workestrate.toml` against the committed schema directly with any
   JSON-Schema validator.
 
-### tombi `#:schema` wiring (user's config repo)
+### tombi `#:schema` wiring (user's fleet)
 
 Add a top-level schema pointer to `workestrate.toml`. Scaffolded repos use a
 RELATIVE pointer to the vendored schema copy, so validation never fetches
@@ -1421,7 +1421,7 @@ schema-validation; supersedes the earlier taplo plan — ADR 0022 addendum
 
 - Root `tombi.toml` — strict format/lint/schema config for the tool repo.
 - `nix/packages/tombi.nix` — the pinned tombi 1.2.5 nix package.
-- `templates/workestrate-config/tombi.toml` — per-config-repo tombi config
+- `templates/workestrate-config/tombi.toml` — per-fleet tombi config
   emitted by the scaffold (plus a version-pinned `TOMBI_REQUIRED=1.2.5`
   pre-commit hook).
 - `just tombi-check` — `tombi format --check` + `tombi lint

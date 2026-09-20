@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// `(effective policy, deciding-rung origin)`.
 ///
 /// `rungs` are the collected rungs 2-4 in authority-ASCENDING order (home
-/// registry first, then config-repo layers in stack order, then the
+/// registry first, then fleet layers in stack order, then the
 /// workload capsule's rungs). Each rung's `on_violation` (when present)
 /// becomes the effective value; `final = true` is a terminal freeze — the
 /// walk stops and every lower rung, including the per-secret entry, is
@@ -79,7 +79,7 @@ pub(crate) fn build_secret_definitions(
 /// `ConfigWorkload::new` right after [`build_secret_definitions`]: the
 /// definitions built from the merged config carry rung 5 (the per-secret
 /// entry, defaulting to passthrough); this pass walks the collected rungs
-/// 2-4 (home registry, config-repo layers, this workload's capsule rungs —
+/// 2-4 (config registry, fleet layers, this workload's capsule rungs —
 /// from the process-global stored at load time) above them. An empty or
 /// absent ladder degrades to the pre-ladder behavior (per-secret entry or
 /// built-in passthrough), so synthetic/test paths without a load stay
@@ -106,7 +106,7 @@ pub(crate) fn apply_ladder(
     ladder: &crate::merge::SecretPolicyLadder,
 ) {
     let mut rungs: Vec<(String, SecretsPolicyFragment)> = Vec::new();
-    if let Some((origin, fragment)) = &ladder.home {
+    if let Some((origin, fragment)) = &ladder.config {
         rungs.push((origin.clone(), fragment.clone()));
     }
     for (origin, fragment) in &ladder.layers {
@@ -507,12 +507,12 @@ mod tests {
     /// Each authority-ascending rung overrides the previous one when no
     /// rung is final, and the per-secret entry (rung 5) — the most specific
     /// — decides last. Dropping later rungs exposes the intermediate
-    /// resolutions (home only → "home-registry"; home+layer → the layer's
+    /// resolutions (home only → "config-registry"; home+layer → the layer's
     /// origin).
     #[test]
     fn ladder_each_rung_overrides_the_previous() {
         let home = (
-            "home-registry",
+            "config-registry",
             SecretsPolicyFragment {
                 on_violation: Some(SecretViolationPolicy::Block),
                 r#final: false,
@@ -547,11 +547,11 @@ mod tests {
         assert_eq!(policy, SecretViolationPolicy::Passthrough);
         assert_eq!(origin, "personal#secrets.toml");
 
-        // Home rung only (no per-secret entry): the home rung decides.
+        // Home rung only (no per-secret entry): the config rung decides.
         let home_only = vec![(home.0, &home.1)];
         let (policy, origin) = resolve_on_violation(&home_only, None, None);
         assert_eq!(policy, SecretViolationPolicy::Block);
-        assert_eq!(origin, "home-registry");
+        assert_eq!(origin, "config-registry");
 
         // Home + layer (no per-secret entry): the layer's value and origin win.
         let home_layer = vec![(home.0, &home.1), (layer.0, &layer.1)];
@@ -569,12 +569,12 @@ mod tests {
         assert_eq!(origin, "built-in");
     }
 
-    /// A final home rung freezes the walk: config-repo layers, the workload
+    /// A final config rung freezes the walk: fleet layers, the workload
     /// capsule, and the per-secret entry are all frozen out.
     #[test]
     fn home_final_beats_config_workload_and_per_secret() {
         let home = (
-            "home-registry",
+            "config-registry",
             SecretsPolicyFragment {
                 on_violation: Some(SecretViolationPolicy::Block),
                 r#final: true,
@@ -605,15 +605,15 @@ mod tests {
             Some("personal#secrets.toml"),
         );
         assert_eq!(policy, SecretViolationPolicy::Block);
-        assert_eq!(origin, "home-registry");
+        assert_eq!(origin, "config-registry");
     }
 
-    /// A final config-repo-layer rung beats the workload capsule and the
-    /// per-secret entry, but only after the non-final home rung applied.
+    /// A final fleet-layer rung beats the workload capsule and the
+    /// per-secret entry, but only after the non-final config rung applied.
     #[test]
     fn config_final_beats_workload_and_per_secret() {
         let home = (
-            "home-registry",
+            "config-registry",
             SecretsPolicyFragment {
                 on_violation: Some(SecretViolationPolicy::Block),
                 r#final: false,
@@ -652,7 +652,7 @@ mod tests {
     #[test]
     fn workload_final_beats_per_secret() {
         let home = (
-            "home-registry",
+            "config-registry",
             SecretsPolicyFragment {
                 on_violation: Some(SecretViolationPolicy::Block),
                 r#final: false,
@@ -692,7 +692,7 @@ mod tests {
     #[test]
     fn final_without_value_freezes_the_resolved_value() {
         let home = (
-            "home-registry",
+            "config-registry",
             SecretsPolicyFragment {
                 on_violation: Some(SecretViolationPolicy::Block),
                 r#final: false,
@@ -712,7 +712,10 @@ mod tests {
             Some("personal#secrets.toml"),
         );
         assert_eq!(policy, SecretViolationPolicy::Block);
-        assert_eq!(origin, "home-registry", "the freeze keeps the home origin");
+        assert_eq!(
+            origin, "config-registry",
+            "the freeze keeps the config origin"
+        );
     }
 
     /// With nothing above final, the per-secret entry wins; its origin is
@@ -721,7 +724,7 @@ mod tests {
     #[test]
     fn per_secret_wins_when_nothing_above_is_final() {
         let home = (
-            "home-registry",
+            "config-registry",
             SecretsPolicyFragment {
                 on_violation: Some(SecretViolationPolicy::BlockAndTerminate),
                 r#final: false,
@@ -813,8 +816,8 @@ final = true
 
     // ---- secret violation-policy ladder: apply_secret_policy_ladder ----
 
-    /// End-to-end-ish: the home rung's `final` freezes out the per-secret
-    /// `block-and-terminate`, the definition carries the home value, and
+    /// End-to-end-ish: the config rung's `final` freezes out the per-secret
+    /// `block-and-terminate`, the definition carries the config value, and
     /// the deciding rung is recorded in the merge provenance under
     /// `secrets.<NAME>.on_violation.resolved`.
     ///
@@ -824,8 +827,8 @@ final = true
     #[test]
     fn apply_secret_policy_ladder_resolves_and_records_provenance() -> Result<()> {
         let ladder = crate::merge::SecretPolicyLadder {
-            home: Some((
-                "home-registry".to_string(),
+            config: Some((
+                "config-registry".to_string(),
                 SecretsPolicyFragment {
                     on_violation: Some(SecretViolationPolicy::Block),
                     r#final: true,
@@ -854,13 +857,13 @@ final = true
         assert_eq!(
             secrets["GITHUB_TOKEN"].on_violation,
             SecretViolationPolicy::Block,
-            "the home final froze out the per-secret block-and-terminate"
+            "the config final froze out the per-secret block-and-terminate"
         );
         assert_eq!(
             provenance
                 .get("secrets.GITHUB_TOKEN.on_violation.resolved")
                 .map(|s| s.as_str()),
-            Some("home-registry"),
+            Some("config-registry"),
             "the deciding rung is recorded in the provenance"
         );
 

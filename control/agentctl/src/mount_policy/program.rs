@@ -305,7 +305,7 @@ impl MountPolicyProgram {
     /// short-circuit to [`WriteDecision::Deny`] first — matching protect rules
     /// are recorded in the explain trace, but write rules cannot change the
     /// decision. Otherwise the union of `writes.allow` and `writes.deny` is
-    /// evaluated in authority-ascending order (home-registry first,
+    /// evaluated in authority-ascending order (config-registry first,
     /// mount-entry last — mirroring the read axis), with deny rules before
     /// allow rules within the same scope, then by index within the rule's own
     /// bucket. The last non-frozen match wins, in both directions: a later
@@ -520,7 +520,7 @@ mod tests {
 
     fn carve_out_program() -> MountPolicyProgram {
         compile(vec![scope(
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             "repo",
             vec![PolicyValue::relaxable("private/**".to_string())],
             vec![PolicyValue::relaxable("private/public/**".to_string())],
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn may_unmask_descendant_falls_back_to_true_for_floating_patterns() {
         let program = compile(vec![scope(
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             "repo",
             vec![PolicyValue::relaxable("a/**".to_string())],
             vec![PolicyValue::relaxable("**/x".to_string())],
@@ -595,13 +595,13 @@ mod tests {
         // provisional mask).
         let program = compile(vec![
             scope(
-                ScopeKind::HomeRegistry,
+                ScopeKind::ConfigRegistry,
                 "registry",
                 vec![PolicyValue::relaxable(".env".to_string())],
                 vec![],
             ),
             scope(
-                ScopeKind::ConfigRepoLayer,
+                ScopeKind::FleetLayer,
                 "repo",
                 vec![],
                 vec![PolicyValue::relaxable(".env".to_string())],
@@ -794,13 +794,13 @@ mod tests {
         let allow_wins = write_program(
             &[],
             &[("f.txt", ScopeKind::Workload, true)],
-            &[("f.txt", ScopeKind::HomeRegistry, true)],
+            &[("f.txt", ScopeKind::ConfigRegistry, true)],
         );
         assert_eq!(decide_write(&allow_wins, "f.txt"), WriteDecision::Allow);
 
         let deny_wins = write_program(
             &[],
-            &[("f.txt", ScopeKind::HomeRegistry, true)],
+            &[("f.txt", ScopeKind::ConfigRegistry, true)],
             &[("f.txt", ScopeKind::Workload, true)],
         );
         assert_eq!(decide_write(&deny_wins, "f.txt"), WriteDecision::Deny);
@@ -811,7 +811,7 @@ mod tests {
         let program = write_program(
             &[],
             &[("f.txt", ScopeKind::Workload, true)],
-            &[("f.txt", ScopeKind::HomeRegistry, false)],
+            &[("f.txt", ScopeKind::ConfigRegistry, false)],
         );
         let explained = program.decide_write(&LexicalPath::new("f.txt").unwrap());
         assert_eq!(explained.decision, WriteDecision::Deny);
@@ -820,7 +820,7 @@ mod tests {
             Some(RuleOrigin {
                 layer: "test".to_string(),
                 file: PathBuf::from("test.json"),
-                scope_kind: ScopeKind::HomeRegistry,
+                scope_kind: ScopeKind::ConfigRegistry,
             })
         );
         let allow_match = explained
@@ -835,7 +835,7 @@ mod tests {
     fn terminal_write_allow_cannot_be_denied_over() {
         let program = write_program(
             &[],
-            &[("f.txt", ScopeKind::HomeRegistry, false)],
+            &[("f.txt", ScopeKind::ConfigRegistry, false)],
             &[("f.txt", ScopeKind::Workload, true)],
         );
         let explained = program.decide_write(&LexicalPath::new("f.txt").unwrap());
@@ -853,7 +853,7 @@ mod tests {
         let program = write_program(
             &[".secret"],
             &[
-                (".secret", ScopeKind::HomeRegistry, true),
+                (".secret", ScopeKind::ConfigRegistry, true),
                 (".secret", ScopeKind::Workload, false),
             ],
             &[],

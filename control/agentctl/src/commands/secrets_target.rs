@@ -1,5 +1,5 @@
 //! Secrets-target resolution (`workestrate secrets-target`, `secrets-schema`)
-//! and the age-recipient / tilde helpers shared with `config new`.
+//! and the age-recipient / tilde helpers shared with `fleet new`.
 
 use std::path::PathBuf;
 
@@ -31,9 +31,9 @@ pub fn derive_age_recipient(key_file: &std::path::Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// The resolved WRITE-side secrets target of a registered config repo.
+/// The resolved WRITE-side secrets target of a registered fleet.
 ///
-/// `dir` is the managed store clone (`<store>/config-repos/<name>`), where
+/// `dir` is the managed store clone (`<store>/fleets/<name>`), where
 /// the operator commits the encrypted secrets file. `secrets_file` comes
 /// from the entry override or ".env.enc". `age_key_file` comes from the
 /// entry override (tilde-expanded; may stay RELATIVE — its meaning is
@@ -54,11 +54,11 @@ pub struct RegisteredSecretsTarget {
 /// own surface.
 pub fn resolve_registered_target(name: &str) -> Result<Option<RegisteredSecretsTarget>> {
     let registry = config::load_registry()?;
-    let Some(entry) = registry.as_ref().and_then(|r| r.configs.get(name)) else {
+    let Some(entry) = registry.as_ref().and_then(|r| r.fleets.get(name)) else {
         return Ok(None);
     };
 
-    let dir = config::resolve_store_dir().join("config-repos").join(name);
+    let dir = config::resolve_store_dir().join("fleets").join(name);
     let secrets_file = entry
         .secrets_file
         .as_deref()
@@ -82,16 +82,16 @@ pub fn resolve_registered_target(name: &str) -> Result<Option<RegisteredSecretsT
     }))
 }
 
-/// Resolve a registered config repo's secrets target paths for inspection.
+/// Resolve a registered fleet's secrets target paths for inspection.
 ///
 /// This is the WRITE-side target: `dir` is the managed store clone
-/// (`<store>/config-repos/<name>`), where the operator commits the encrypted
+/// (`<store>/fleets/<name>`), where the operator commits the encrypted
 /// `.env.enc`. A5 Session 2 changed the READ side only — consumption
 /// (`config::resolve_secrets_layers`) reads the pinned archive of the locked
 /// rev for Remote/GitFile entries, so this function deliberately no longer
 /// mirrors it: the committed file rides the archive like any other content,
 /// while new/edited secrets still land in the clone and become visible to
-/// consumption at the next `workestrate config update`. Resolution itself
+/// consumption at the next `workestrate fleet update`. Resolution itself
 /// lives in [`resolve_registered_target`].
 /// Back-compat alias: the signing-keys flow uses the `SecretsTarget` name.
 pub type SecretsTarget = RegisteredSecretsTarget;
@@ -99,12 +99,12 @@ pub type SecretsTarget = RegisteredSecretsTarget;
 /// Back-compat resolver: hard-errors on unknown names (old behavior).
 pub fn resolve_secrets_target(name: &str) -> Result<SecretsTarget> {
     resolve_registered_target(name)?
-        .ok_or_else(|| anyhow::anyhow!("config repo '{}' not registered", name))
+        .ok_or_else(|| anyhow::anyhow!("fleet '{}' not registered", name))
 }
 
 pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
     let target = resolve_registered_target(name)?
-        .ok_or_else(|| anyhow::anyhow!("config repo '{}' not registered", name))?;
+        .ok_or_else(|| anyhow::anyhow!("fleet '{}' not registered", name))?;
     let RegisteredSecretsTarget {
         dir,
         secrets_file,
@@ -121,7 +121,7 @@ pub async fn cmd_secrets_target(name: &str, json: bool) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&body)?);
     } else {
-        println!("config repo:    {}", name);
+        println!("fleet:    {}", name);
         println!("dir:            {}", dir.display());
         println!("secrets_file:   {}", secrets_file);
         println!("age_key_file:   {}", age_key_file.display());

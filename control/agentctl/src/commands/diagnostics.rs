@@ -82,7 +82,7 @@ pub struct WorkloadListEntry {
     pub kind: String,
     pub image: String,
     pub instances: Vec<String>,
-    /// The workload's declaring config-repo namespace (ADR 0030 Phase 2 T1).
+    /// The workload's declaring fleet namespace (ADR 0030 Phase 2 T1).
     pub namespace: String,
     /// The active context at listing time (G5): the same for every row —
     /// the listing is the active context's config view. None under
@@ -653,12 +653,12 @@ pub fn cmd_check() -> Result<()> {
                 all_ok = false;
             }
             Some(registry) => {
-                println!("  Config repos:");
-                if registry.configs.is_empty() {
+                println!("  Fleets:");
+                if registry.fleets.is_empty() {
                     println!("    (none)");
                 } else {
-                    for status in crate::git::collect_repo_statuses(&registry) {
-                        let entry = &registry.configs[&status.name];
+                    for status in crate::git::collect_fleet_statuses(&registry) {
+                        let entry = &registry.fleets[&status.name];
                         let (dirty_label, ok) = if status.exists {
                             if status.dirty {
                                 ("dirty", false)
@@ -710,20 +710,20 @@ pub fn cmd_check() -> Result<()> {
         }
     }
 
-    println!("\nTool home:");
-    let (home, kind) = config::resolve_home_with_kind();
-    println!("  home: {} ({:?})", home.display(), kind);
+    println!("\nConfig:");
+    let (config_dir, kind) = config::resolve_config_dir_with_kind();
+    println!("  config: {} ({:?})", config_dir.display(), kind);
     let dirs: Vec<(&str, std::path::PathBuf)> = match kind {
-        config::HomeKind::LegacyXdg => vec![
+        config::ConfigDirKind::LegacyXdg => vec![
             ("config", config::xdg_config_dir()),
             ("data", config::xdg_data_dir()),
             ("state", config::xdg_state_dir()),
         ],
         _ => vec![
             ("registry", config::registry_path()),
-            ("secrets", home.join("secrets")),
-            ("config-repos", home.join("config-repos")),
-            ("state", home.join("state")),
+            ("secrets", config_dir.join("secrets")),
+            ("fleets", config_dir.join("fleets")),
+            ("state", config_dir.join("state")),
         ],
     };
     for (label, dir) in dirs {
@@ -1011,7 +1011,7 @@ fn preflight_config_warnings(config: &crate::config::ConfigFile) -> Vec<String> 
 pub(crate) const WORKLOAD_SCHEMA_TITLE: &str = "workestrate workload capsule entry file (workestrate/workloads/<name>/workload.toml, bare table form)";
 
 /// Generate the canonical full schema (`workestrate.toml`), the
-/// bare-workload subschema (a workload capsule file), and the tool-home
+/// bare-workload subschema (a workload capsule file), and the config
 /// registry schema (`config.toml`). All three derive from the same
 /// schemars-annotated config types — the single source of truth
 /// (ADR 0021 §8); the subschema replaces the previous hand-derived jq rule.
@@ -1043,7 +1043,7 @@ pub(crate) fn generate_schema_pair() -> Result<(String, String)> {
     Ok((full, workload))
 }
 
-/// Generate the tool-home registry schema (`config.toml`) from the
+/// Generate the config registry schema (`config.toml`) from the
 /// schemars-annotated `Registry` type (single source of truth, ADR 0021 §8).
 pub(crate) fn generate_registry_schema() -> Result<String> {
     let schema = schemars::schema_for!(crate::config::Registry);
@@ -1661,7 +1661,7 @@ mod tests {
         let old_root = std::env::var("AGENTCTL_ROOT").ok();
         let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("HOME", &tmp_home) };
@@ -1690,7 +1690,7 @@ mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
 
         let result = cmd_check();
 
@@ -1701,7 +1701,7 @@ mod tests {
             ("AGENTCTL_ROOT", old_root),
             ("CARGO_MANIFEST_DIR", old_manifest),
             ("WORKESTRATE_NO_PROJECT_CONFIG", old_no_project),
-            ("WORKESTRATE_CONFIG_DIR", old_config_dir),
+            ("WORKESTRATE_FLEET_DIR", old_config_dir),
         ] {
             match v {
                 // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -2128,7 +2128,7 @@ mod tests {
 
         // The fixture's example-litellm is a registry-image service with no
         // mounts / depends_on: plan() is pure, and its declaring layer (the
-        // fixture dir) is not a registered config repo → namespace "default".
+        // fixture dir) is not a registered fleet → namespace "default".
         let wl = crate::microsandbox::workload::ConfigWorkload::new("example-litellm")?;
         let current =
             crate::microsandbox::runtime::current_config_hash_for_workload(&wl, "example-litellm");

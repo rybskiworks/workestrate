@@ -2,11 +2,11 @@
 
 A workload's configuration and image build belong together. A separate Git
 repository is optional: a fleet can keep multiple workload capsules, each with
-its own flake, or a standalone config repository can own one workload.
+its own flake, or a standalone fleet can own one workload.
 
 ## Supported layouts
 
-Standalone config repository:
+Standalone fleet:
 
 ```text
 flake.nix
@@ -76,9 +76,9 @@ explicit guest `workdir`: the default `/app` need not exist in a minimal image.
 ## Not yet implemented
 
 A fleet cannot yet import and pin standalone workload repositories. Registering
-another whole config repository is supported, but is not a fleet-level workload
+another whole fleet is supported, but is not a fleet-level workload
 import: it can change precedence, identity and dependency namespaces. A bare root
-`workload.toml` is not a standalone config-repository layout today.
+`workload.toml` is not a standalone fleetsitory layout today.
 
 The current `workload new` scaffolder still targets the older file-mode layout;
 do not use it to populate an existing directory-mode fleet. Copy/adapt the

@@ -21,8 +21,8 @@ class SecretsTargetTest(unittest.TestCase):
         self.scratch = tempfile.TemporaryDirectory(prefix="workestrate-secrets-target-")
         self.addCleanup(self.scratch.cleanup)
         self.root = Path(self.scratch.name)
-        self.home = self.root / "operator home"
-        self.fleet = self.home / "config-repos/personal"
+        self.home = self.root / "operator config"
+        self.fleet = self.home / "fleets/personal"
         self.key = self.root / "private keys/age.txt"
         self.key.parent.mkdir()
         self.env = {
@@ -64,13 +64,13 @@ class SecretsTargetTest(unittest.TestCase):
     def write_registry(self, *, settings="", overrides=""):
         (self.home / "config.toml").write_text(
             f'layers = ["personal"]\n{settings}\n'
-            '[configs.personal]\nurl = "config-repos/personal"\n'
+            '[fleets.personal]\nurl = "fleets/personal"\n'
             f"{overrides}\n"
         )
 
     def run_helper(self, command, *args, extra_env=None, success=True):
         # `workestrate secrets <init|update> [opts]`: the target-selector
-        # flags belong to the verb; --home is a global CLI flag and is
+        # flags belong to the verb; --config is a global CLI flag and is
         # accepted at any position.
         result = subprocess.run(
             [shutil.which("workestrate"), "secrets", command, *map(str, args)],
@@ -99,10 +99,10 @@ class SecretsTargetTest(unittest.TestCase):
         )
 
     def test_named_config_initializes_and_updates_only_selected_fleet(self):
-        other = self.home / "config-repos/other"
+        other = self.home / "fleets/other"
         self.make_fleet(other)
         (other / ".env.enc").write_text("untouched ciphertext fixture")
-        args = ["--home", self.home, "--config", "personal"]
+        args = ["--config", self.home, "--fleet", "personal"]
         self.run_helper("init", *args)
         self.assertIn(self.env["LITELLM_MASTER_KEY"], self.decrypt(self.fleet / ".env.enc"))
         replacement = "sk-test-updated-target-selection"
@@ -113,34 +113,34 @@ class SecretsTargetTest(unittest.TestCase):
         self.assertFalse((self.root / "unrelated xdg data").exists())
 
     def test_relative_home_and_equals_options_after_command(self):
-        self.run_helper("init", "--home=operator home", "--config=personal")
+        self.run_helper("init", "--config=operator config", "--fleet=personal")
         self.assertTrue((self.fleet / ".env.enc").is_file())
 
     def test_home_environment_and_explicit_name_override_direct_environment(self):
         other = self.root / "unselected fleet"
         self.make_fleet(other)
-        self.run_helper("init", "--config", "personal", extra_env={
-            "WORKESTRATE_HOME": str(self.home),
+        self.run_helper("init", "--fleet", "personal", extra_env={
+            "WORKESTRATE_CONFIG": str(self.home),
             "WORKESTRATE_CONFIG_DIR": str(other),
         })
         self.assertTrue((self.fleet / ".env.enc").is_file())
         self.assertFalse((other / ".env.enc").exists())
 
     def test_home_flag_overrides_home_environment(self):
-        self.run_helper("init", "--home", self.home, "--config", "personal", extra_env={
-            "WORKESTRATE_HOME": str(self.root / "wrong home"),
+        self.run_helper("init", "--config", self.home, "--fleet", "personal", extra_env={
+            "WORKESTRATE_CONFIG": str(self.root / "wrong config"),
         })
         self.assertTrue((self.fleet / ".env.enc").is_file())
 
     def test_registered_store_file_and_key_overrides(self):
         store = self.root / 'custom "store"'
-        selected = store / "config-repos/personal"
+        selected = store / "fleets/personal"
         self.make_fleet(selected)
         self.write_registry(
             settings=f"[settings]\nstore_dir = {json.dumps(str(store))}\n",
             overrides=f'secrets_file = "custom secrets.enc"\nage_key_file = {json.dumps(str(self.key))}',
         )
-        self.run_helper("init", "--home", self.home, "--config", "personal", extra_env={
+        self.run_helper("init", "--config", self.home, "--fleet", "personal", extra_env={
             "SOPS_AGE_KEY_FILE": str(self.root / "wrong key"),
             "SECRET_FILE": "wrong-file.enc",
         })
@@ -152,7 +152,7 @@ class SecretsTargetTest(unittest.TestCase):
         name = 'fleet with spaces "quoted" $(touch INJECTED)'
         selected = self.root / name
         self.make_fleet(selected)
-        self.run_helper("init", "--config-dir", name, extra_env={
+        self.run_helper("init", "--fleet-dir", name, extra_env={
             "WORKESTRATE_CONFIG_DIR": str(self.fleet),
         })
         self.assertIn(self.env["LITELLM_MASTER_KEY"], self.decrypt(selected / ".env.enc"))
@@ -161,32 +161,32 @@ class SecretsTargetTest(unittest.TestCase):
 
     def test_relative_registry_key_is_resolved_before_changing_directory(self):
         self.write_registry(overrides='age_key_file = "private keys/age.txt"')
-        self.run_helper("init", "--home", self.home, "--config", "personal")
+        self.run_helper("init", "--config", self.home, "--fleet", "personal")
         self.assertIn(self.env["LITELLM_MASTER_KEY"], self.decrypt(self.fleet / ".env.enc"))
 
     def test_direct_directory_equals(self):
-        self.run_helper("init", f"--config-dir={self.fleet}")
+        self.run_helper("init", f"--fleet-dir={self.fleet}")
         self.assertTrue((self.fleet / ".env.enc").exists())
 
     def test_unknown_name_does_not_fall_back_to_environment(self):
-        result = self.run_helper("init", "--home", self.home, "--config", "missing",
+        result = self.run_helper("init", "--config", self.home, "--fleet", "missing",
                                  extra_env={"WORKESTRATE_CONFIG_DIR": str(self.fleet)}, success=False)
         self.assertIn("could not resolve config 'missing'", result.stderr)
         self.assertFalse((self.fleet / ".env.enc").exists())
 
     def test_missing_directory_is_not_created(self):
         missing = self.root / "missing directory"
-        self.run_helper("update", "--config-dir", missing, success=False)
+        self.run_helper("update", "--fleet-dir", missing, success=False)
         self.assertFalse(missing.exists())
 
     def test_invalid_arguments_fail_before_writes(self):
         for verb in ("init", "update"):
             for args in (
-                ["--config"], ["--config="], ["--home"], ["--home="],
-                ["--config-dir"], ["--config-dir="], ["--config", "--global"],
-                ["--config", "personal", "--global"],
-                ["--config-dir", self.fleet, "--global"],
-                ["--config-dir", self.fleet, "--config", "personal"],
+                ["--fleet"], ["--fleet="], ["--config"], ["--config="],
+                ["--fleet-dir"], ["--fleet-dir="], ["--fleet", "--global"],
+                ["--fleet", "personal", "--global"],
+                ["--fleet-dir", self.fleet, "--global"],
+                ["--fleet-dir", self.fleet, "--fleet", "personal"],
                 ["--unknown"],
             ):
                 with self.subTest(verb=verb, args=args):

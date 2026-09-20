@@ -2,7 +2,7 @@
 //! verb that lists configured workloads with kind, image summary, and running
 //! status. Uses an isolated HOME + XDG per test plus the committed
 //! 5-workload fixture (`tests/fixtures/config/workestrate.toml`) via
-//! `WORKESTRATE_CONFIG_DIR`; the isolated state dir is empty, so every
+//! `WORKESTRATE_FLEET_DIR`; the isolated state dir is empty, so every
 //! workload reports "(none running)".
 
 #![allow(
@@ -31,7 +31,7 @@ fn workloads_lists_fixture_workloads_with_kinds() {
     let home = IsolatedHome::new("cmd-workloads");
     let out = home
         .cmd()
-        .env("WORKESTRATE_CONFIG_DIR", fixture_config_dir())
+        .env("WORKESTRATE_FLEET_DIR", fixture_config_dir())
         .args(["workloads"])
         .output()
         .expect("invoke workloads");
@@ -73,7 +73,7 @@ fn workloads_json_parses_and_is_sorted() {
     let home = IsolatedHome::new("cmd-workloads");
     let out = home
         .cmd()
-        .env("WORKESTRATE_CONFIG_DIR", fixture_config_dir())
+        .env("WORKESTRATE_FLEET_DIR", fixture_config_dir())
         .args(["workloads", "--json"])
         .output()
         .expect("invoke workloads --json");
@@ -137,7 +137,7 @@ fn workloads_reports_running_instances_from_registry() {
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_CONFIG_DIR", fixture_config_dir())
+        .env("WORKESTRATE_FLEET_DIR", fixture_config_dir())
         .args(["workloads"])
         .output()
         .expect("invoke workloads");

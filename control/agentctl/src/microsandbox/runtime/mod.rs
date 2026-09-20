@@ -968,7 +968,7 @@ mod tests {
     /// `#[ignore]`'d because the SDK pins its DB pool in a process-global
     /// `OnceCell` on the first *successful* `init_global`. If this test and the
     /// Error test both ran in one `cargo test` invocation, whichever
-    /// initialized first would fix the home for the whole process and the pair
+    /// initialized first would fix the config for the whole process and the pair
     /// would be non-deterministic (a writable pin makes the Error test see
     /// NotFound). Keeping this `#[ignore]`'d means:
     ///   - `cargo test`           → Error test runs alone (deterministic Error);

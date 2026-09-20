@@ -66,7 +66,7 @@ see gap 5), write admission works as follows (source: program.rs:260-355):
    explain trace but write rules cannot change the decision (source:
    program.rs:269-295; test test_mount_policy.rs:371-391).
 2. The union of `writes.allow` ∪ `writes.deny` evaluates authority-ascending
-   (home-registry first … mount-entry last); WITHIN a scope, deny rules
+   (config-registry first … mount-entry last); WITHIN a scope, deny rules
    evaluate before allow rules; then by index within the bucket (source:
    program.rs:296-315).
 3. Last non-frozen match wins: a later (lower-authority) scope relaxes an

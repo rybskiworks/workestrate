@@ -147,9 +147,9 @@ a home `final` policy seal. Additionally, trust gating means the malicious
 `./workestrate.toml` is **not loaded at all** unless the user explicitly
 trusted the project directory. This is the `direnv allow` model.
 
-## Malicious-config-repo scenario
+## Malicious-fleet scenario
 
-An attacker publishes a config repo with a `workestrate.toml` that widens
+An attacker publishes a fleet with a `workestrate.toml` that widens
 egress. The user adds it via `workestrate config add <url> team`.
 
 **Bounded by**: the core ceilings. The attacker's config can add policy
@@ -207,7 +207,7 @@ tracked, non-secret config:
 
 ### What nix never reads
 
-- User config repos (`$WORKESTRATE_HOME/config-repos/<name>/`, ADR
+- User fleets (`$WORKESTRATE_CONFIG/fleets/<name>/`, ADR
   0023/0024) — these are runtime-only, consumed by the Rust CLI, never by
   nix eval.
 - `.env.enc` (encrypted secrets) — never in nix store.
@@ -218,7 +218,7 @@ tracked, non-secret config:
 ### Pure-eval invisibility (confirmed by construction)
 
 Nix flakes in pure evaluation copy only git-tracked files to the store.
-User config repos are at `$WORKESTRATE_HOME/config-repos/` (outside the
+User fleets are at `$WORKESTRATE_CONFIG/fleets/` (outside the
 flake tree entirely). Even if they were inside the tree as gitignored paths,
 they would be invisible to pure eval. **The nix-store-leak concern is
 neutralized by construction**: nix simply cannot ingest user config at eval
@@ -240,7 +240,7 @@ repo, it's likely unnecessary. Document the risk in the migration process.
 
 | Scenario | Behavior |
 |---|---|
-| No config repos registered (fresh install) | Falls back to `config.reference/` (placeholder secrets). `plan`/`check`/`validate-config` work. `up`/`exec` refuse (placeholder secrets rejected by `reject_if_placeholder`, `microsandbox/runtime/run.rs`). |
+| No fleets registered (fresh install) | Falls back to `config.reference/` (placeholder secrets). `plan`/`check`/`validate-config` work. `up`/`exec` refuse (placeholder secrets rejected by `reject_if_placeholder`, `microsandbox/runtime/run.rs`). |
 | Config repo not cloned | `workestrate check` reports `[MISSING] (optional)`. `plan` uses reference config. `up`/`exec` refuse. |
 | Config uses the removed `network.egress` / `network.deny` / `network.ingress` fields | Parse fails with an ADR-citing message pointing to the hierarchical `policy.*` surface. |
 | Config references unknown secret | `validate-config` fails: "secret 'FOO' not defined in secrets: section." |
@@ -261,4 +261,4 @@ repo, it's likely unnecessary. Document the risk in the migration process.
 | Network policy | `plan.rs` helpers | Hierarchical policy engine in `policy/` + `plan` (recipe enum removed) |
 | Image contents | `pi-image.nix`, `tempest-image.nix` | `nix/lib/vocabulary.nix` + `buildWorkloadImage` |
 | Extra shell in images | `extraCommands` in nix files | `baked_files` + `features` (declarative, no arbitrary shell) |
-| Config repo trust | N/A (no config repos) | Bounded by core ceilings (see "Core ceilings"); provenance irrelevant to enforcement |
+| Config repo trust | N/A (no fleets) | Bounded by core ceilings (see "Core ceilings"); provenance irrelevant to enforcement |

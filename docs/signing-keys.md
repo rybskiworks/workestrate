@@ -1,18 +1,18 @@
 # Encrypted SSH signing keys
 
 Workestrate can generate an Ed25519 signing key in an existing registered
-config repository's encrypted secrets file. This provisions key material; it
+fleet's encrypted secrets file. This provisions key material; it
 does not grant any workload access to it or configure Git signing.
 
 ```sh
-workestrate --home /path/to/tool-home credentials signing generate \
-  MACHINE_GIT_SIGNING_KEY --config personal
-workestrate --home /path/to/tool-home credentials signing public-key \
-  MACHINE_GIT_SIGNING_KEY --config personal
+workestrate --config /path/to/config credentials signing generate \
+  MACHINE_GIT_SIGNING_KEY --fleet personal
+workestrate --config /path/to/config credentials signing public-key \
+  MACHINE_GIT_SIGNING_KEY --fleet personal
 ```
 
 The name is the environment key inside the SOPS document, not a GitHub username
-or an SSH authentication credential. `--config` is mandatory and selects the
+or an SSH authentication credential. `--fleet` is mandatory and selects the
 same write-side target as `workestrate secrets-target`. The encrypted file must
 already exist; initialize it through the existing secrets workflow first.
 Registry store, relative secrets-file and age-key overrides are respected.
@@ -45,7 +45,7 @@ policy: decrypted values necessarily exist in process memory during use.
 
 Standard output is the copyable public-key line. The fingerprint and target
 are printed to standard error. Global `--json` instead returns public metadata
-with `name`, `config`, `secrets_file`, `public_key`, `fingerprint` and `created`.
+with `name`, `fleet`, `secrets_file`, `public_key`, `fingerprint` and `created`.
 The `public-key` command decrypts only the selected secrets file to derive the
 public key; it never prints private material and does not change ciphertext.
 
@@ -61,7 +61,7 @@ tokens and signing-key authority separate. These commands do not edit global
 Git configuration, SSH agents, workload grants, secret definitions, config
 registry revisions, GitHub accounts or the installed Workestrate profile. A
 Git-backed config consumer must adopt its new encrypted-file revision through
-the ordinary reviewed config publication/update workflow.
+the ordinary reviewed fleet publication/update workflow.
 
 Runtime signing requires an explicit signing catalog entry, the `git`
 namespace and an authorized workload grant. Existing broker key custody

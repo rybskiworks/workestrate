@@ -17,7 +17,7 @@
 //! `config::loading::layer_content_root` resolves Remote/GitFile layers to
 //! the archive of the LOCKED rev (not the managed clone's working tree), so
 //! edits committed in a managed clone are INVISIBLE to consumers until
-//! `workestrate config update` moves the pin (commit-before-consume).
+//! `workestrate fleet update` moves the pin (commit-before-consume).
 //! Plain-path entries are the documented exception (content-as-is).
 
 use std::path::{Path, PathBuf};

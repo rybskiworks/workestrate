@@ -25,7 +25,7 @@ the mount path-policy system (spec 22:
 > Every mount can carry a **policy**: glob rules about what the guest may
 > **SEE** (the *read axis*) and what it may **TOUCH** (the *write axis*).
 > You declare intent in TOML `[policy.mounts.read]` / `[policy.mounts.write]`
-> fragments at several **scopes** (home registry → mount entry). One
+> fragments at several **scopes** (config registry → mount entry). One
 > **compiler** folds all scopes into a single ordered **program** per mount.
 > The runtime evaluates that program on every filesystem op.
 > Three defaults to memorize: an **unmentioned** path is visible and writable;

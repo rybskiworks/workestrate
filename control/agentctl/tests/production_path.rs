@@ -3,14 +3,14 @@
 //! Drives the REAL config resolution chain end-to-end by executing the
 //! compiled `workestrate` binary as a child process:
 //!
-//!   reference layer → context config-repo layers (<home>/config-repos/<name>/)
+//!   reference layer → context fleet layers (<home>/fleets/<name>/)
 //!   → user-global overrides (<home>/overrides.toml) → trusted project layer
 //!   (<cwd>/workestrate.toml) → local layer.
 //!
-//! Unlike the existing suites, these tests NEVER set `WORKESTRATE_CONFIG_DIR`
+//! Unlike the existing suites, these tests NEVER set `WORKESTRATE_FLEET_DIR`
 //! (that env var bypasses the whole layering/discovery pipeline — single dev
 //! layer, no merge, no trust, no context, no overrides). Instead each test
-//! builds a fresh `WORKESTRATE_HOME` (ADR 0023 single-home layout):
+//! builds a fresh `WORKESTRATE_CONFIG` (ADR 0023 single-config layout):
 //!
 //!   registry_path  = <home>/config.toml
 //!   overrides_path = <home>/overrides.toml
@@ -18,7 +18,7 @@
 //!   state_dir      = <home>/state
 //!
 //! and writes fixture TOML inline (registry, per-layer
-//! `<home>/config-repos/<layer>/workestrate.toml`, project `workestrate.toml`).
+//! `<home>/fleets/<layer>/workestrate.toml`, project `workestrate.toml`).
 //!
 //! The repo's `config.reference/workestrate.toml` is prepended as the
 //! "reference" base layer on every invocation — explicitly opted in via
@@ -29,7 +29,7 @@
 //! schema_version=1. Fixtures either override `example-service` fields or
 //! add fresh workloads alongside it.
 //!
-//! All tests are read-only (`plan`, `plan --show-source`, `config trust`) or
+//! All tests are read-only (`plan`, `plan --show-source`, `fleet trust`) or
 //! fail before any KVM/sandbox work (untrusted-layer skip and schema_version
 //! refusal both happen during config load, before `up` touches microsandbox).
 //! No KVM, msb daemon, sops/age keys, network, or loaded images required.
@@ -47,13 +47,13 @@ use std::process::{Command, Output};
 const BIN: &str = env!("CARGO_BIN_EXE_workestrate");
 
 // ---------------------------------------------------------------------------
-// Test harness: an isolated WORKESTRATE_HOME + scratch project dirs.
+// Test harness: an isolated WORKESTRATE_CONFIG + scratch project dirs.
 // ---------------------------------------------------------------------------
 
 /// Isolated production-path sandbox. Creates:
-///   <root>/home/            → WORKESTRATE_HOME (registry, overrides,
-///                             config-repos/)
-///   <root>/operator-home/   → HOME (kept separate from WORKESTRATE_HOME so
+///   <root>/home/            → WORKESTRATE_CONFIG (registry, overrides,
+///                             fleets/)
+///   <root>/operator-home/   → HOME (kept separate from WORKESTRATE_CONFIG so
 ///                             tilde expansion and default-home discovery can
 ///                             never leak between tests)
 ///   <root>/scratch/         → cwd for "neutral" invocations (no project toml)
@@ -106,9 +106,9 @@ impl ProdHome {
         std::fs::write(self.registry(), contents).expect("write registry");
     }
 
-    /// Write a config-repo layer at <home>/config-repos/<name>/workestrate.toml.
+    /// Write a fleet layer at <home>/fleets/<name>/workestrate.toml.
     fn write_layer(&self, name: &str, contents: &str) {
-        let dir = self.home.join("config-repos").join(name);
+        let dir = self.home.join("fleets").join(name);
         std::fs::create_dir_all(&dir).expect("create layer dir");
         std::fs::write(dir.join("workestrate.toml"), contents).expect("write layer toml");
     }
@@ -127,14 +127,14 @@ impl ProdHome {
     }
 
     /// Build a `workestrate` Command with the full production-path env:
-    /// WORKESTRATE_HOME set, bypass vars REMOVED, XDG pointed into the
+    /// WORKESTRATE_CONFIG set, bypass vars REMOVED, XDG pointed into the
     /// sandbox (defensive hermeticity), CARGO_MANIFEST_DIR forwarded plus
     /// WORKESTRATE_REFERENCE_CONFIG=1 (cleanup-phase-2 opt-in) so the
     /// reference layer resolves deterministically no matter how the test
     /// harness itself was launched.
     fn cmd(&self) -> Command {
         let mut c = Command::new(BIN);
-        c.env("WORKESTRATE_HOME", &self.home);
+        c.env("WORKESTRATE_CONFIG", &self.home);
         c.env("HOME", &self.operator_home);
         c.env("XDG_CONFIG_HOME", self.operator_home.join(".config"));
         c.env(
@@ -150,7 +150,7 @@ impl ProdHome {
         c.env("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"));
         c.env("WORKESTRATE_REFERENCE_CONFIG", "1");
         // CRITICAL: never leak the bypass/discovery vars into the child.
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
+        c.env_remove("WORKESTRATE_FLEET_DIR");
         c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
         c.env_remove("WORKESTRATE_CONTEXT");
         c.env_remove("AGENTCTL_ROOT");
@@ -196,9 +196,9 @@ fn expect_ok(out: &Output, what: &str) -> String {
 }
 
 /// A minimal registry with NO contexts (bare `layers` backward-compat) and
-/// the given config-repo entries. NOTE (TOML layout): the bare `layers` key
+/// the given fleet entries. NOTE (TOML layout): the bare `layers` key
 /// must appear BEFORE any `[table]` header, otherwise it lands inside the
-/// last `[configs.<name>]` table instead of the registry root.
+/// last `[fleets.<name>]` table instead of the registry root.
 fn registry_bare_layers(layers: &[&str]) -> String {
     let mut s = String::from("layers = [");
     s.push_str(
@@ -211,7 +211,7 @@ fn registry_bare_layers(layers: &[&str]) -> String {
     s.push_str("]\n\n[settings]\n");
     for name in layers {
         s.push_str(&format!(
-            "\n[configs.{name}]\nurl = \"file:///unused/{name}\"\nref = \"main\"\n"
+            "\n[fleets.{name}]\nurl = \"file:///unused/{name}\"\nref = \"main\"\n"
         ));
     }
     s
@@ -223,7 +223,7 @@ fn registry_bare_layers(layers: &[&str]) -> String {
 
 /// A trusted project's `./workestrate.toml` overrides a field of the
 /// reference `example-service` workload through the real chain:
-///   config trust <dir> → [[trusted_projects]] in the registry
+///   fleet trust <dir> → [[trusted_projects]] in the registry
 ///   → cwd = projdir → plan shows the override.
 #[test]
 fn production_trusted_project_layer_applies() {
@@ -239,8 +239,8 @@ fn production_trusted_project_layer_applies() {
     .expect("write project layer");
 
     // Trust the project dir via the real CLI (writes [[trusted_projects]]).
-    let out = env.run(env.cmd().args(["config", "trust"]).arg(&proj));
-    let trust_stdout = expect_ok(&out, "config trust");
+    let out = env.run(env.cmd().args(["fleet", "trust"]).arg(&proj));
+    let trust_stdout = expect_ok(&out, "fleet trust");
     assert!(
         trust_stdout.contains("Trusted:"),
         "trust should report success; got:\n{trust_stdout}"
@@ -272,8 +272,8 @@ fn production_trusted_project_layer_applies() {
 // 2. UNTRUSTED REFUSAL
 // ---------------------------------------------------------------------------
 
-/// Same setup as (1) but WITHOUT `config trust`: the project layer must be
-/// skipped (with a stderr warning naming `config trust`) and the plan shows
+/// Same setup as (1) but WITHOUT `fleet trust`: the project layer must be
+/// skipped (with a stderr warning naming `fleet trust`) and the plan shows
 /// the reference value, not the override.
 #[test]
 fn production_untrusted_project_layer_skipped() {
@@ -297,8 +297,8 @@ fn production_untrusted_project_layer_skipped() {
 
     // The gate warns and skips the layer (config.rs load_config step 4).
     assert!(
-        stderr.contains("not trusted") && stderr.contains("config trust"),
-        "stderr should carry the 'not trusted ... config trust' warning; got:\n{stderr}"
+        stderr.contains("not trusted") && stderr.contains("fleet trust"),
+        "stderr should carry the 'not trusted ... fleet trust' warning; got:\n{stderr}"
     );
     // Reference example-service has cpus = 2; the untrusted override (7)
     // must NOT appear anywhere in the plan.
@@ -409,8 +409,8 @@ fn production_context_selection_env_overrides_default() {
         "[settings]\ndefault_context = \"personal\"\n\n\
          [contexts.personal]\nlayers = [\"a\"]\n\n\
          [contexts.work]\nlayers = [\"b\"]\n\n\
-         [configs.a]\nurl = \"file:///unused/a\"\nref = \"main\"\n\n\
-         [configs.b]\nurl = \"file:///unused/b\"\nref = \"main\"\n",
+         [fleets.a]\nurl = \"file:///unused/a\"\nref = \"main\"\n\n\
+         [fleets.b]\nurl = \"file:///unused/b\"\nref = \"main\"\n",
     );
     env.write_layer(
         "a",
@@ -459,7 +459,7 @@ fn production_context_selection_env_overrides_default() {
 /// sets cpus=6. User-global overrides sit between the context layers and the
 /// project layer, so the override must win over the context layer.
 /// A second assertion covers the per-config form
-/// ([configs.<layer>.workloads.*]).
+/// ([fleets.<layer>.workloads.*]).
 #[test]
 fn production_user_global_overrides_win_over_context_layers() {
     let env = ProdHome::new("user-global-overrides");
@@ -485,7 +485,7 @@ fn production_user_global_overrides_win_over_context_layers() {
 }
 
 /// Same precedence question for the per-config override form
-/// `[configs.<layer>.workloads.<wl>]` (applies only when <layer> is in the
+/// `[fleets.<layer>.workloads.<wl>]` (applies only when <layer> is in the
 /// active context).
 #[test]
 fn production_per_config_override_applies_to_matching_layer() {
@@ -495,13 +495,13 @@ fn production_per_config_override_applies_to_matching_layer() {
         "base",
         "schema_version = 1\n\n[workloads.example-service]\ncpus = 3\n",
     );
-    env.write_overrides("[configs.base.workloads.example-service]\ncpus = 8\n");
+    env.write_overrides("[fleets.base.workloads.example-service]\ncpus = 8\n");
 
     let out = env.run(env.cmd().args(["example-service", "plan"]));
-    let stdout = expect_ok(&out, "plan with [configs.base] override");
+    let stdout = expect_ok(&out, "plan with [fleets.base] override");
     assert!(
         stdout.contains("cpus: 8"),
-        "[configs.base] override should apply (base is an active layer); got:\n{stdout}"
+        "[fleets.base] override should apply (base is an active layer); got:\n{stdout}"
     );
 
     env.cleanup();
@@ -604,8 +604,8 @@ fn production_schema_version_3_refused_from_project_layer() {
         .expect("write project layer");
 
     // Trust it so the layer actually loads (the gate must not mask the test).
-    let out = env.run(env.cmd().args(["config", "trust"]).arg(&proj));
-    expect_ok(&out, "config trust");
+    let out = env.run(env.cmd().args(["fleet", "trust"]).arg(&proj));
+    expect_ok(&out, "fleet trust");
 
     let out = env.run(
         env.cmd()
@@ -633,7 +633,7 @@ fn production_schema_version_3_refused_from_project_layer() {
 /// Two layers build up a full service workload (image, command, env, ports,
 /// mounts, network); the default `plan` Display render must contain every
 /// expected line for the merged result. This is the production-path analogue
-/// of the committed golden render (which uses the WORKESTRATE_CONFIG_DIR
+/// of the committed golden render (which uses the WORKESTRATE_FLEET_DIR
 /// bypass) — here the bytes flow through reference → context layers → merge.
 #[test]
 fn production_full_plan_render_two_layer_fixture() {

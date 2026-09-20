@@ -26,7 +26,7 @@ use crate::policy;
 /// anything above is a hard error.
 pub const EXPECTED_SCHEMA_VERSION: u32 = 1;
 
-/// Validate a config repo name for `workestrate config new`. Same safe-set
+/// Validate a fleet name for `workestrate fleet new`. Same safe-set
 /// as workload names: names flow into both filesystem paths (the registry
 /// store dir) and registry TOML keys, so the intersection `[a-z0-9-]` is
 /// the only safe charset.
@@ -42,7 +42,7 @@ pub const EXPECTED_SCHEMA_VERSION: u32 = 1;
 /// (`workestrate workload new`, commands/init.rs), and the load-time
 /// workload-key gate in [`validate_config`]. One implementation means the
 /// load-time and create-time rules cannot drift.
-pub fn validate_config_name(name: &str) -> Result<()> {
+pub fn validate_fleet_name(name: &str) -> Result<()> {
     validate_identifier(name, "config name")
 }
 
@@ -417,7 +417,7 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
     // `VirtualizationPolicyFragment`, so typos and stray keys hard-error
     // before this function ever runs), exactly like the image/binary
     // recipe vocabularies above are enforced here only because they are
-    // plain strings. Cross-rung freeze (home-final vs workload ask) is
+    // plain strings. Cross-rung freeze (config-final vs workload ask) is
     // PLAN-time, not a validate error: per-rung-legal configs validate
     // clean, `plan` reports `frozen_out` provenance, `up` refuses. Hence
     // there is deliberately NO virtualization refusal arm below.
@@ -745,14 +745,14 @@ fn egress_fragment_covers_ssh(fragment: &crate::config::EgressPolicyFragment) ->
 }
 
 /// Whether the effective egress policy for `workload_name` carries an SSH
-/// allowance: the home rung, every layer rung (global), and this workload's
+/// allowance: the config rung, every layer rung (global), and this workload's
 /// capsule rungs.
 fn effective_egress_covers_ssh(
     workload_name: &str,
     network_ladder: &crate::merge::NetworkPolicyLadder,
 ) -> bool {
     if network_ladder
-        .egress_home
+        .egress_config
         .as_ref()
         .is_some_and(|(_, f)| egress_fragment_covers_ssh(f))
     {
@@ -784,7 +784,7 @@ fn effective_ssh_strict(
     ssh_ladder: &crate::merge::SshPolicyLadder,
 ) -> (bool, String) {
     let mut rungs: Vec<(String, crate::config::SshPolicyFragment)> = Vec::new();
-    if let Some((origin, fragment)) = &ssh_ladder.home {
+    if let Some((origin, fragment)) = &ssh_ladder.config {
         rungs.push((origin.clone(), fragment.clone()));
     }
     for (origin, fragment) in &ssh_ladder.layers {
@@ -1176,17 +1176,17 @@ pub(crate) mod tests {
             tmp.join("workestrate.toml"),
             MINIMAL_VALID_TOML.replace("schema_version = 1", "schema_version = 3"),
         )?;
-        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         let result = crate::config::load_config();
 
         match old {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp);
 
@@ -1214,17 +1214,17 @@ pub(crate) mod tests {
             tmp.join("workestrate.toml"),
             MINIMAL_VALID_TOML.replace("schema_version = 1\n\n", ""),
         )?;
-        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         let result = crate::config::load_config();
 
         match old {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp);
 
@@ -2245,8 +2245,8 @@ guest = "/config"
 read_only = true
 
 [[workloads.pi.mounts]]
-host = "config-repos"
-guest = "/config/config-repos"
+host = "fleets"
+guest = "/config/fleets"
 read_only = false
 
 [workloads.pi.network.defaults]
@@ -2958,7 +2958,7 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
     // ---- ADR 0036: virtualization is static-coherent by construction ----
 
     /// Every per-rung-legal virtualization shape validates clean — including
-    /// the cross-rung freeze (home-final ban + workload require): freeze is
+    /// the cross-rung freeze (config-final ban + workload require): freeze is
     /// plan-time (`frozen_out`), NOT a validate error (ADR 0036 §4).
     #[test]
     fn validate_accepts_virtualization_shapes() {
@@ -2969,7 +2969,7 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
             "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"prefer\"\n",
             // explicit off.
             "schema_version = 1\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"off\"\n",
-            // home-final ban + workload require: per-rung legal, validates
+            // config-final ban + workload require: per-rung legal, validates
             // clean (plan reports frozen_out, up refuses).
             "schema_version = 1\n\n[policy.virtualization]\nallow_nested = false\nfinal = true\n\n[workloads.pi]\nkind = \"agent\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[workloads.pi.virtualization]\nnested = \"require\"\n",
             // home grant + workload ask.
@@ -3175,7 +3175,7 @@ port = { preferred = 4000, on_occupied = { increment = { range = [65536, 70000] 
 
     fn ssh_ladder_with(strict: Option<bool>, origin: &str) -> crate::merge::SshPolicyLadder {
         crate::merge::SshPolicyLadder {
-            home: None,
+            config: None,
             layers: vec![(
                 origin.to_string(),
                 crate::config::SshPolicyFragment {

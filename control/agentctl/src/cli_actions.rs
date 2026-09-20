@@ -2,7 +2,7 @@
 //! the library command handlers.
 //!
 //! These enums describe the per-workload / per-domain action surfaces
-//! (`ServiceAction`, `AgentAction`, `ConfigAction`, `ContextAction`,
+//! (`ServiceAction`, `AgentAction`, `FleetAction`, `ContextAction`,
 //! `SourceAction`). They live in the library (not `main.rs`) because the
 //! `commands::*` handlers pattern-match on them; `main.rs` re-exports them so
 //! the clap parser tree continues to expose the same CLI surface.
@@ -361,25 +361,24 @@ pub enum WorkloadAction {
     /// drvPath change detection + the §3.4 skew matrix; the build/load
     /// pipeline itself is phase D). Omit the name for the batch form: all
     /// nix-layered workloads in the active context (mirrors the bare-up
-    /// grammar of the ADR 0021 addendum). `--repo`/`--all-repos` widen the
-    /// scope to registered config repos. NOT kind-routed — `main.rs`
+    /// grammar of the ADR 0021 addendum). `--fleet`/`--all-fleets` widen the
+    /// scope to registered fleets. NOT kind-routed — `main.rs`
     /// dispatches it early like `workload new`.
     Build {
         /// Workload name from the merged config. Omit for the batch form
         /// (all nix-layered workloads in the active context).
-        #[arg(conflicts_with_all = ["repo", "all_repos"])]
+        #[arg(conflicts_with_all = ["fleet", "all_fleets"])]
         name: Option<String>,
 
-        /// Build all nix-layered workloads declared by one registered config
-        /// repo.
-        #[arg(long, value_name = "CONFIG", conflicts_with = "all_repos")]
-        repo: Option<String>,
+        /// Build all nix-layered workloads declared by one registered fleet.
+        #[arg(long, value_name = "FLEET", conflicts_with = "all_fleets")]
+        fleet: Option<String>,
 
-        /// Build all nix-layered workloads across ALL registered config repos
-        /// (`registry.configs`); repos without a flake.nix are skipped with a
+        /// Build all nix-layered workloads across ALL registered fleets
+        /// (`registry.fleets`); fleets without a flake.nix are skipped with a
         /// note.
         #[arg(long)]
-        all_repos: bool,
+        all_fleets: bool,
 
         /// Print the staleness matrix (spec 21 §3.4) only: build nothing,
         /// load nothing, write no records.
@@ -393,33 +392,33 @@ pub enum WorkloadAction {
     },
 }
 
-/// Actions for managing config repositories and trust.
+/// Actions for managing fleets and trust.
 #[derive(Subcommand)]
-pub enum ConfigAction {
-    /// Clone a config repo into the managed store and register it
+pub enum FleetAction {
+    /// Clone a fleet into the managed store and register it
     Add {
         url: String,
         name: String,
         #[arg(long, default_value = "main")]
         r#ref: String,
     },
-    /// Pull latest for a config repo (or all) and update rev in registry
+    /// Pull latest for a fleet (or all) and update rev in registry
     Update { name: Option<String> },
-    /// List registered config repos with rev + dirty status
+    /// List registered fleets with rev + dirty status
     List,
     /// Trust a project directory for project-layer config loading
     Trust { dir: String },
     /// Remove trust from a project directory
     Untrust { dir: String },
-    /// Scaffold a new config repo locally (minimal valid workestrate.toml,
+    /// Scaffold a new fleet locally (minimal valid workestrate.toml,
     /// SOPS, README). Replaces the copier template for the minimal-personal
     /// subset; writes a `.copier-answers.yml` sidecar so `copier update` stays
     /// usable for richer features (team keys, flake).
     New {
-        /// Name for the new config repo (e.g. "personal", "work").
+        /// Name for the new fleet (e.g. "personal", "work").
         name: String,
 
-        /// Destination directory (default: <store>/config-repos/<name>).
+        /// Destination directory (default: <store>/fleets/<name>).
         /// Outside the store the repo is scaffolded but NOT registered.
         dest: Option<String>,
 
@@ -465,9 +464,9 @@ pub enum ConfigAction {
         #[arg(long, conflicts_with = "from_reference")]
         empty: bool,
     },
-    /// Unregister a config repo from the registry
+    /// Unregister a fleet from the registry
     Remove {
-        /// Config repo name to remove.
+        /// Fleet name to remove.
         name: String,
         /// Also delete the store clone directory.
         #[arg(long)]
@@ -478,37 +477,37 @@ pub enum ConfigAction {
     },
 }
 
-/// Actions for managing the workestrate tool home itself.
+/// Actions for managing the workestrate config itself.
 #[derive(Subcommand)]
-pub enum HomeAction {
-    /// Initialize the resolved tool home as a dotfiles-style git repo
+pub enum ConfigAction {
+    /// Initialize the resolved config as a dotfiles-style git repo
     /// (git init + .gitignore + pre-commit hook). Idempotent.
     ///
-    /// Scaffolds at the RESOLVED tool home only — no positional dest. For an
-    /// empty scaffold at a custom path, use `workestrate --home <path> home
-    /// init` (the global --home flag). To provision a home from an existing
-    /// one, use `workestrate home clone <src> [dest]`.
+    /// Scaffolds at the RESOLVED config only — no positional dest. For an
+    /// empty scaffold at a custom path, use `workestrate --config <path>
+    /// config init` (the global --config flag). To provision a config from an
+    /// existing one, use `workestrate config clone <src> [dest]`.
     Init {
-        /// Clone and register this config-repo URL as config-repos/<name>
-        /// after scaffolding the home.
+        /// Clone and register this fleet URL as fleets/<name>
+        /// after scaffolding the config.
         #[arg(long)]
-        config: Option<String>,
+        fleet: Option<String>,
 
-        /// Name for the cloned config repo (only used with --config).
+        /// Name for the cloned fleet (only used with --fleet).
         #[arg(long, default_value = "personal")]
         name: String,
     },
-    /// Provision a home from an existing one (git-clone semantics, ADR 0025):
-    /// the registry layer is cloned/copied, config repos are re-cloned or
-    /// copied, and registry urls pointing into the source home are rewritten
-    /// to the dest-local `config-repos/<name>` paths.
+    /// Provision a config from an existing one (git-clone semantics, ADR
+    /// 0025): the registry layer is cloned/copied, fleets are re-cloned or
+    /// copied, and registry urls pointing into the source config are
+    /// rewritten to the dest-local `fleets/<name>` paths.
     Clone {
-        /// Source home to provision from (absolute path, relative path
+        /// Source config to provision from (absolute path, relative path
         /// resolved against cwd, or git URL).
         src: String,
 
-        /// Destination directory for the new home (default: the resolved
-        /// tool home).
+        /// Destination directory for the new config (default: the resolved
+        /// config).
         dest: Option<String>,
     },
 }
@@ -548,12 +547,12 @@ pub enum SourceAction {
 #[derive(Subcommand)]
 pub enum SchemasAction {
     /// Write the generated JSON Schema artifacts to every known consumer
-    /// location (tool-repo copier template, tool home, registered config
-    /// repos). Idempotent: files whose content already matches are skipped.
+    /// location (tool-repo copier template, the config, registered fleets).
+    /// Idempotent: files whose content already matches are skipped.
     Update {
-        /// Only update one registered config repo (by registry name).
+        /// Only update one registered fleet (by registry name).
         #[arg(long, value_name = "NAME")]
-        repo: Option<String>,
+        fleet: Option<String>,
         /// Report staleness without writing anything; exit 1 when any
         /// consumer file is stale or missing.
         #[arg(long)]
@@ -573,26 +572,26 @@ pub enum ImagesAction {
 
 /// Target selector shared by `secrets init` and `secrets update`. Exactly
 /// one of the three forms may be given; with none, resolution falls back to
-/// `WORKESTRATE_CONFIG_DIR`, then a single registered config, then a
+/// `WORKESTRATE_FLEET_DIR`, then a single registered fleet, then a
 /// `.sops.yaml` in the current directory.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct SecretsTargetArgs {
-    /// Registered config repo name to provision (resolved through the
-    /// registry; honors its store dir and per-repo secrets_file/age_key_file
-    /// overrides). The global --home flag selects the tool home the registry
-    /// is read from — --home only makes sense together with --config.
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["config_dir", "global"])]
-    pub config: Option<String>,
+    /// Registered fleet name to provision (resolved through the
+    /// registry; honors its store dir and per-fleet secrets_file/age_key_file
+    /// overrides). The global --config flag selects the config the registry
+    /// is read from — --config only makes sense together with --fleet.
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["fleet_dir", "global"])]
+    pub fleet: Option<String>,
 
-    /// Existing config directory to edit directly, without a registry
+    /// Existing fleet directory to edit directly, without a registry
     /// lookup. The directory must exist; it is never created.
-    #[arg(long, value_name = "DIR", conflicts_with_all = ["config", "global"])]
-    pub config_dir: Option<std::path::PathBuf>,
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["fleet", "global"])]
+    pub fleet_dir: Option<std::path::PathBuf>,
 
     /// Target the user-global secrets layer
     /// (${XDG_CONFIG_HOME:-~/.config}/workestrate/.env.local.enc; the
     /// directory is created when missing).
-    #[arg(long, conflicts_with_all = ["config", "config_dir"])]
+    #[arg(long, conflicts_with_all = ["fleet", "fleet_dir"])]
     pub global: bool,
 }
 
@@ -621,11 +620,11 @@ pub enum SecretsAction {
         #[command(flatten)]
         target: SecretsTargetArgs,
     },
-    /// Resolve a registered config repo's secrets target paths (dir,
+    /// Resolve a registered fleet's secrets target paths (dir,
     /// secrets_file, age_key_file). Use the global --json flag for
     /// machine-readable output.
     Target {
-        /// Config repo name to resolve.
+        /// Fleet name to resolve.
         name: String,
     },
     /// Print the env_var names of all secrets defined in config.

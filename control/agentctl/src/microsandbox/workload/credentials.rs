@@ -43,15 +43,15 @@ pub(crate) fn resolve_ssh_strict(rungs: &[(&str, &SshPolicyFragment)]) -> (bool,
 }
 
 /// Resolve the effective SSH confinement for one workload against the
-/// collected ladder rungs in authority-ascending order (home registry, then
-/// config-repo layers in stack order, then this workload's capsule rungs —
+/// collected ladder rungs in authority-ascending order (config registry, then
+/// fleet layers in stack order, then this workload's capsule rungs —
 /// from the process-global stored at load time). An empty or absent ladder
 /// degrades to the built-in default (`false`), so synthetic/test paths
 /// without a load stay correct.
 pub(crate) fn resolve_ssh_for_workload(workload_name: &str) -> (bool, String) {
     let ladder = crate::merge::get_ssh_policy_ladder().unwrap_or_default();
     let mut rungs: Vec<(String, SshPolicyFragment)> = Vec::new();
-    if let Some((origin, fragment)) = &ladder.home {
+    if let Some((origin, fragment)) = &ladder.config {
         rungs.push((origin.clone(), fragment.clone()));
     }
     for (origin, fragment) in &ladder.layers {
@@ -217,7 +217,7 @@ mod tests {
             strict: Some(true),
             r#final: false,
         };
-        let rungs = [("home-registry", &home), ("team", &layer)];
+        let rungs = [("config-registry", &home), ("team", &layer)];
         let refs: Vec<(&str, &SshPolicyFragment)> = rungs.iter().map(|(o, f)| (*o, *f)).collect();
         let (strict, origin) = resolve_ssh_strict(&refs);
         assert!(strict);
@@ -234,11 +234,11 @@ mod tests {
             strict: Some(true),
             r#final: false,
         };
-        let rungs = [("home-registry", &home), ("team", &layer)];
+        let rungs = [("config-registry", &home), ("team", &layer)];
         let refs: Vec<(&str, &SshPolicyFragment)> = rungs.iter().map(|(o, f)| (*o, *f)).collect();
         let (strict, origin) = resolve_ssh_strict(&refs);
         assert!(!strict, "home final=false freezes the later strict=true");
-        assert_eq!(origin, "home-registry");
+        assert_eq!(origin, "config-registry");
     }
 
     #[test]
@@ -256,14 +256,14 @@ mod tests {
             r#final: false,
         };
         let rungs = [
-            ("home-registry", &home),
+            ("config-registry", &home),
             ("team", &bare),
             ("capsule", &layer),
         ];
         let refs: Vec<(&str, &SshPolicyFragment)> = rungs.iter().map(|(o, f)| (*o, *f)).collect();
         let (strict, origin) = resolve_ssh_strict(&refs);
         assert!(strict, "bare final freezes the true resolved above it");
-        assert_eq!(origin, "home-registry");
+        assert_eq!(origin, "config-registry");
     }
 
     // ---- build_credential_grants: ports default, binding, signing ----

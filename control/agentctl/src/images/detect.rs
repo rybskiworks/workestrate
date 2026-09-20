@@ -10,7 +10,7 @@
 //!   fakeHash placeholders eval fine (a placeholder FOD hash perturbs neither
 //!   the derivation structure nor its drvPath — the fixture test below proves
 //!   it with a fixed-output derivation carrying a placeholder hash, and the
-//!   phase-C smoke verified it against the personal repo's `tempest` attr,
+//!   phase-C smoke verified it against the personal fleet's `tempest` attr,
 //!   which carries a HOST-GATE placeholder `npm_deps_hash`). The real backend
 //!   shells out to the `nix` CLI; [`DrvEvalError::NixAbsent`] (spawn
 //!   `NotFound`) drives the §7 "nix absent from PATH" ladder.
@@ -192,7 +192,7 @@ impl DrvEvaluator for NixCliEvaluator {
 /// PRESENCE is the freshness signal — a record under that key exists only
 /// when exactly this content was built+loaded (or D1-trusted). `Absent`
 /// when no record exists for the key (first run, changed content → a new
-/// tag, or another home loaded it — see the TRUST branch, D1); `Fresh`
+/// tag, or another config loaded it — see the TRUST branch, D1); `Fresh`
 /// otherwise. [`RecordState::Stale`] is unreachable under content-addressed
 /// tags (stale content keys under a DIFFERENT tag) and remains only in the
 /// matrix for the documented row-2 semantics.

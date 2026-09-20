@@ -40,15 +40,15 @@ pub struct DownScopeResultsJson {
     pub scope: String,
     pub results: Vec<DownResultJson>,
     /// The RETAINED-GENERATION sweeps (msb state generations): one entry
-    /// per EXTRA generation home torn down by the broad rungs (home /
+    /// per EXTRA generation home torn down by the broad rungs (config /
     /// everything), keyed by the 12-char generation key. Additive; omitted
-    /// when empty so the single-home envelope stays byte-identical.
+    /// when empty so the single-config envelope stays byte-identical.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub generations: Vec<GenerationDownResultsJson>,
 }
 
-/// One extra retained generation home's sweep results (msb state
-/// generations): the 12-char generation key plus that home's per-target
+/// One extra retained generation config's sweep results (msb state
+/// generations): the 12-char generation key plus that config's per-target
 /// results (same object shape as the top-level `results`).
 #[derive(serde::Serialize)]
 pub struct GenerationDownResultsJson {

@@ -742,17 +742,17 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let config = "schema_version = 1\n\n[secrets.WORKESTRATE_SEALED_LOAD_PROBE]\nenv_var = \"WORKESTRATE_SEALED_LOAD_PROBE\"\nrequired = false\n";
         std::fs::write(tmp.join("workestrate.toml"), config).unwrap();
-        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         let result = SopsKeyMaterial::load(probe, probe);
 
         match old {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         std::fs::remove_dir_all(&tmp).unwrap();
 

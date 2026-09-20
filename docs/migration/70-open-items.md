@@ -103,10 +103,10 @@ PUSH. Spec 09 remains the source of truth.
 These are decisions that genuinely need user input. Recommended defaults are
 provided.
 
-### 1. Personal config repo git remote
+### 1. Personal fleet git remote
 
-**Needed for**: Phase 1, step M.9 (create personal config repo).
-**Recommended**: create the private personal config repo (e.g.
+**Needed for**: Phase 1, step M.9 (create personal fleet).
+**Recommended**: create the private personal fleet (e.g.
 `workestrate-config-personal` under your own GitHub account). Matches the
 existing fork pattern (`flake.nix:7-25`).
 **User may prefer**: a different remote, or local-only initially (no remote
@@ -114,25 +114,25 @@ until ready to distribute).
 
 ### 2. Dotfiles repo for `workestrate init`
 
-**Needed for**: Phase 1, step 1.4 (`workestrate init <url>`). **(2026-08-01: `workestrate init <url>` is retired — use `workestrate home init` (scaffold) / `workestrate home clone <src>` (provision from an existing home); the dotfiles recommendation otherwise stands.)**
-**Recommended**: add `$WORKESTRATE_HOME/config.toml` to the user's
+**Needed for**: Phase 1, step 1.4 (`workestrate init <url>`). **(2026-08-01: `workestrate init <url>` is retired — use `workestrate config init` (scaffold) / `workestrate config clone <src>` (provision from an existing config); the dotfiles recommendation otherwise stands.)**
+**Recommended**: add `$WORKESTRATE_CONFIG/config.toml` to the user's
 existing dotfiles repo (chezmoi/yadm/stow). If no dotfiles repo exists,
-`$WORKESTRATE_HOME/` can be a standalone git repo.
+`$WORKESTRATE_CONFIG/` can be a standalone git repo.
 **User may prefer**: a different dotfiles tool or location.
 
 ### 3. Default layer-set name
 
 **Needed for**: Phase 1 (registry `layers` array).
-**Recommended**: `personal` (matches the default config repo name).
+**Recommended**: `personal` (matches the default fleet name).
 **User may prefer**: `default` or `home`.
 
 ### 4. State dir location
 
 **Needed for**: Phase 1, step 1.2 (home path resolution).
-**Recommended**: `$WORKESTRATE_HOME/state/` (single tool home; ADR 0023).
+**Recommended**: `$WORKESTRATE_CONFIG/state/` (single config; ADR 0023).
 **User may prefer**: a custom `state_dir` in `[settings]` pointing elsewhere
 (e.g. a separate disk). The XDG share/state split is no longer relevant —
-repos, sources, and state all live under the single home.
+repos, sources, and state all live under the single config.
 
 ## KVM gates
 
@@ -162,7 +162,7 @@ backward-compat.
 
 **Deferred until**: a second consumer (team member) exists. Phase 3 builds the
 layering engine with fixture-repo tests (base/team/personal). The actual team
-config repo, multi-recipient SOPS with a real team key, and team CI are
+fleet, multi-recipient SOPS with a real team key, and team CI are
 deferred.
 
 ### .local siblings for overrides
@@ -201,25 +201,25 @@ No current use case; revisit if orchestration scenarios emerge.
 
 ### Home restructure (ADR 0023)
 
-The single tool home model (ADR 0023) replaces the XDG three-home layout.
+The single config model (ADR 0023) replaces the XDG three-directory layout.
 Legacy XDG paths are read in compat mode (read-only + deprecation note).
-`workestrate migrate-home` provides the upgrade path. The `.workestrate/`
-directory is now the home itself (layout = home layout), not an XDG wrapper
+`workestrate migrate-config` provides the upgrade path. The `.workestrate/`
+directory is now the config itself (layout = config layout), not an XDG wrapper
 with config/data/state subdirs.
 
 ### Agent build-output relocation (sources store)
 
-**Status**: deferred — needs config-repo changes.
+**Status**: deferred — needs fleet changes.
 
 The in-tree `agents/<name>/build` outputs (pi bun binary, odysseus `.deps/`,
 opencode `node_modules/`) are being relocated out of the flake-visible
 source tree into the managed sources store
-(`$WORKESTRATE_HOME/sources/<name>/`). This removes the last
+(`$WORKESTRATE_CONFIG/sources/<name>/`). This removes the last
 impurity vector from flake evaluation (an unfiltered `src = ./.` could
 previously copy `agents/*/build/` into the store — the 29 GB-per-eval
 incident's root cause; see `docs/nix-purity.md`).
 
-Relocation requires config-repo changes (the `source build` / `source clone`
+Relocation requires fleet changes (the `source build` / `source clone`
 commands and the `WORKESTRATE_<NAME>_BUILD` resolution path must point at
 the sources store, not `agents/<name>/build`). Tracked here so the docs
 purity claim and the migration process stay aligned.
@@ -232,7 +232,7 @@ host with nix (this container has none). The `update-hashes` recipe
 ### Per-workload packs
 
 **Rejected** (ADR 0015). Workload definitions are ~20-line TOML entries in
-config repos. The recipe vocabulary (in core) is the distribution unit.
+fleets. The recipe vocabulary (in core) is the distribution unit.
 
 ## Residual risks
 
@@ -260,7 +260,7 @@ permanently erased from git.
 
 ### Schema drift
 
-Core engine v0.6 changes the `SandboxPlan` schema; config repo pinned to v0.5
+Core engine v0.6 changes the `SandboxPlan` schema; fleet pinned to v0.5
 breaks.
 
 **Mitigation**: `schema_version` field in `workestrate.toml`; `#[serde(default)]`
@@ -281,10 +281,10 @@ editors may consume it via tombi `#:schema` (taplo superseded by tombi, spec 15,
 ### lib API drift (Phase 2)
 
 Core exports `lib.*` (recipes, vocabulary, buildWorkloadImage). If the lib API
-changes, config-repo-flakes break.
+changes, fleet-flakes break.
 
-**Mitigation**: lib API versioning; CI in config repos runs against pinned core
-version; `nix flake update` in config repo updates core pin.
+**Mitigation**: lib API versioning; CI in fleets runs against pinned core
+version; `nix flake update` in fleet updates core pin.
 
 ## Verification caveats
 
@@ -334,12 +334,12 @@ per-key (later layer wins). Per-key provenance is tracked for
 `plan --show-source`. The full 7-layer resolution order is:
 
 1. **Process env** (only for defined secrets; lowest precedence)
-2. **`WORKESTRATE_CONFIG_DIR`** (single override, bypasses discovery)
+2. **`WORKESTRATE_FLEET_DIR`** (single override, bypasses discovery)
 3. **Reference config dir** (shipped with tool — no `.env.enc` expected)
 4. **Context layers in declared order**, each with its own `.env.enc`
    (per-repo `secrets_file` and `age_key_file` overrides honored from the
-   registry `[configs.<name>]`)
-5. **User-global secrets** (`$WORKESTRATE_HOME/secrets/.env.local.enc`) —
+   registry `[fleets.<name>]`)
+5. **User-global secrets** (`$WORKESTRATE_CONFIG/secrets/.env.local.enc`) —
    applied per-key AFTER the context's domain layers, BEFORE project layers
 6. **Trusted project dir** (cwd, if trusted) — may have `.env.enc`
 7. **Local overrides dir**
@@ -363,19 +363,19 @@ intermediate v2 `delivery` field are gone; `schema_version` is 1 everywhere.
 ## Environment note: container persistence
 
 > **STALE (2026-08-01):** the repo-local home described below was retired by
-> spec 08 (executed 2026-07-30) — the single tool home is the user-global
+> spec 08 (executed 2026-07-30) — the single config is the user-global
 > `~/.workestrate` (ADR 0023), never inside the checkout; the `.envrc` pin,
 > `scripts/local-xdg.sh`, `scripts/migrate-xdg-to-repo.sh`, and the
 > `.gitignore` entry were removed (commits `418530a`, `bef1c37`). The
 > age-key guidance below still holds.
 
-workestrate state (registry, config repos, encrypted secrets, runtime state)
+workestrate state (registry, fleets, encrypted secrets, runtime state)
 lives in a gitignored `.workestrate/` directory inside the repo. This
-directory IS the tool home (`$WORKESTRATE_HOME`); its layout is the flat home
+directory IS the config (`$WORKESTRATE_CONFIG`); its layout is the flat home
 layout (`config.toml`, `overrides.toml`, `secrets/`, `repos/`, `sources/`,
 `state/`, `cache/`), not an XDG wrapper with config/data/state subdirs. This
 directory is bind-mountable for container persistence. The `.envrc`
-(direnv) and `scripts/local-xdg.sh` export `WORKESTRATE_HOME` (one var) to
+(direnv) and `scripts/local-xdg.sh` export `WORKESTRATE_CONFIG` (one var) to
 point at `.workestrate/`.
 
 **The SOPS age private key is intentionally NOT placed under `.workestrate/`
@@ -385,20 +385,20 @@ It stays at `~/.config/sops/age/ai-workbench-secrets.txt` on the host.
 the container the key is absent and secret operations fail closed by design.
 
 **Warning**: `.workestrate/` contains the encrypted `.env.enc`, the registry,
-and config repos. Never commit it. The `.gitignore` entry is the guard.
+and fleets. Never commit it. The `.gitignore` entry is the guard.
 
 **Implemented:** The `.envrc`/`local-xdg.sh` collapse to
-`WORKESTRATE_HOME` (commit 6a6cece) and the `migrate-xdg-to-repo.sh` →
-`migrate-home` rename (commit 7023a47) are complete.
+`WORKESTRATE_CONFIG` (commit 6a6cece) and the `migrate-xdg-to-repo.sh` →
+`migrate-config` rename (commit 7023a47) are complete.
 
 ### setup-secrets.sh per-repo override alignment — RESOLVED
 
 **Status**: RESOLVED by WP8-1 (`619cc56`). The `workestrate secrets-target`
-command prints the resolved secrets file + age key file for a config repo,
+command prints the resolved secrets file + age key file for a fleet,
 and `setup-secrets.sh` now aligns its `TARGET_DIR`/`SECRET_FILE`/age-key-file
 resolution with the Rust `load_secrets()` per-repo override chain. Passing
-`--config <name>` resolves `team`'s `age_key_file` and `secrets_file`
-overrides from the registry `[configs.<name>]` automatically.
+`--fleet <name>` resolves `team`'s `age_key_file` and `secrets_file`
+overrides from the registry `[fleets.<name>]` automatically.
 
 ### sops+age integration tests in CI
 

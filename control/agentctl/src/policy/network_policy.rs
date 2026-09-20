@@ -1,6 +1,6 @@
 //! Hierarchical egress/ingress policy compiler (ADR 0035).
 //!
-//! Collect-and-compile network policy: rungs home-registry > config layers
+//! Collect-and-compile network policy: rungs config-registry > config layers
 //! (stack order) > workload. Each rung contributes fragments that are
 //! compiled into the ordered `NetworkPlan` (egress allow, deny, ingress
 //! allow) while enforcing finality, specificity, and on_conflict semantics.
@@ -40,7 +40,7 @@ use crate::microsandbox::plan::{
 // IDNA handling
 // ---------------------------------------------------------------------------
 
-/// Resolve effective IDNA mode via ladder (built-in reject → home → layers →
+/// Resolve effective IDNA mode via ladder (built-in reject → config → layers →
 ///
 /// workload, final seals). Returns the mode and the origin that decided it.
 pub fn resolve_idna_mode(ladder: &NetworkPolicyLadder, workload_name: &str) -> (IdnaMode, String) {
@@ -63,7 +63,7 @@ pub fn resolve_idna_mode(ladder: &NetworkPolicyLadder, workload_name: &str) -> (
         }
     };
 
-    if let Some((o, f)) = &ladder.idna_home {
+    if let Some((o, f)) = &ladder.idna_config {
         apply(o, f);
     }
     for (o, f) in &ladder.idna_layers {
@@ -390,7 +390,7 @@ fn collect_egress_entries(
         }
     };
 
-    if let Some((o, f)) = &ladder.egress_home {
+    if let Some((o, f)) = &ladder.egress_config {
         visit_fragment(o, f);
     }
     for (o, f) in &ladder.egress_layers {
@@ -480,7 +480,7 @@ fn collect_ingress_entries(
         }
     };
 
-    if let Some((o, f)) = &ladder.ingress_home {
+    if let Some((o, f)) = &ladder.ingress_config {
         visit(o, f);
     }
     for (o, f) in &ladder.ingress_layers {
@@ -696,7 +696,7 @@ pub fn compile_egress(
         // For now, if deny_all is true and any egress fragment had final, treat as frozen
         // Simplify: if deny_all is true, it's frozen if any rung had final
         let mut has_final = false;
-        if let Some((_, frag)) = &ladder.egress_home
+        if let Some((_, frag)) = &ladder.egress_config
             && (frag.deny.as_ref().map(|t| t.r#final).unwrap_or(false) || frag.r#final)
         {
             has_final = true;
@@ -757,9 +757,9 @@ pub fn compile_egress(
         let mut is_frozen = false;
         let mut frozen_by = String::new();
         // Check each deny that is higher authority than allow (origin order)
-        // We need to determine authority order: home > layers in order > workload
+        // We need to determine authority order: config > layers in order > workload
         // For simplicity, we consider any deny from a different origin that is higher
-        // We can assign authority rank: home=0, layers 1..n, workload = max+1
+        // We can assign authority rank: config=0, layers 1..n, workload = max+1
         // Allow's rank is based on its origin; deny's rank is based on its origin
         // If deny's rank < allow's rank (higher authority) and deny is final (entry/table/fragment), then allow is frozen
         // We need to compute rank
@@ -1016,7 +1016,7 @@ fn synthetic_defaults_origin(workload_name: &str) -> String {
 }
 
 fn origin_rank(ladder: &NetworkPolicyLadder, workload_name: &str, origin: &str) -> usize {
-    if origin == "home-registry" {
+    if origin == "config-registry" {
         return 0;
     }
     // E1: the synthetic `[network.defaults]` rung is the LOWEST authority —
@@ -1073,9 +1073,9 @@ fn find_all_rank(ladder: &NetworkPolicyLadder, workload_name: &str, is_egress: b
     // Find the rank of the rung that set all=true for egress or ingress
     // For egress deny_all
     if is_egress {
-        if let Some((o, _)) = &ladder.egress_home {
+        if let Some((o, _)) = &ladder.egress_config {
             // Check if that fragment had deny all
-            if let Some(frag) = &ladder.egress_home.as_ref().map(|(_, f)| f)
+            if let Some(frag) = &ladder.egress_config.as_ref().map(|(_, f)| f)
                 && frag.deny.as_ref().and_then(|t| t.all).unwrap_or(false)
             {
                 return origin_rank(ladder, workload_name, o);
@@ -1283,7 +1283,7 @@ fn egress_rungs_in_order(
     workload_name: &str,
 ) -> Vec<(String, EgressPolicyFragment)> {
     let mut rungs = Vec::new();
-    if let Some((o, f)) = &ladder.egress_home {
+    if let Some((o, f)) = &ladder.egress_config {
         rungs.push((o.clone(), f.clone()));
     }
     for (o, f) in &ladder.egress_layers {
@@ -1301,7 +1301,7 @@ fn ingress_rungs_in_order(
     workload_name: &str,
 ) -> Vec<(String, IngressPolicyFragment)> {
     let mut rungs = Vec::new();
-    if let Some((o, f)) = &ladder.ingress_home {
+    if let Some((o, f)) = &ladder.ingress_config {
         rungs.push((o.clone(), f.clone()));
     }
     for (o, f) in &ladder.ingress_layers {
@@ -1323,7 +1323,7 @@ fn ingress_rungs_in_order(
 /// E1 (defaults-axis seal): the effective `[network.defaults]` allow flip
 /// (`defaults_allow`, origin label `defaults_origin`) rides THIS walk as a
 /// synthetic LOWEST-rung allow-all. It is evaluated at the workload
-/// authority boundary — after home/layers, before the workload's own rungs
+/// authority boundary — after config/layers, before the workload's own rungs
 /// — so a higher-rung covering final deny freezes it (coarse FIX1 parity:
 /// any covering final deny, not just deny-all), while the workload's own
 /// final deny does NOT (same-rung exemption: final freezes lower rungs
@@ -1350,10 +1350,10 @@ fn effective_egress_allow_all(
     let mut frozen_by: Option<String> = None;
     let mut effective = false;
     let mut conflicts = Vec::new();
-    // Rungs strictly above the workload's own authority (home + layers).
+    // Rungs strictly above the workload's own authority (config + layers).
     // The synthetic defaults rung sits AT the workload rung (same file) and
     // is evaluated before it — see E1 doc above.
-    let higher = usize::from(ladder.egress_home.is_some()) + ladder.egress_layers.len();
+    let higher = usize::from(ladder.egress_config.is_some()) + ladder.egress_layers.len();
     let mut defaults_seen = false;
     let mut defaults_frozen_by: Option<String> = None;
     for (idx, (origin, frag)) in rungs.iter().enumerate() {
@@ -1391,7 +1391,7 @@ fn effective_egress_allow_all(
         }
     }
     // No workload rungs at all: the synthetic rung still sits below
-    // home/layers, so evaluate it against their freeze state.
+    // config/layers, so evaluate it against their freeze state.
     if !defaults_seen && defaults_allow && frozen {
         defaults_frozen_by = frozen_by.clone();
         conflicts.push(format!(
@@ -1416,7 +1416,7 @@ fn effective_ingress_allow_all(
     let mut conflicts = Vec::new();
     // E1: synthetic defaults rung at the workload boundary — see the
     // egress twin for the full rationale (symmetric semantics).
-    let higher = usize::from(ladder.ingress_home.is_some()) + ladder.ingress_layers.len();
+    let higher = usize::from(ladder.ingress_config.is_some()) + ladder.ingress_layers.len();
     let mut defaults_seen = false;
     let mut defaults_frozen_by: Option<String> = None;
     for (idx, (origin, frag)) in rungs.iter().enumerate() {
@@ -1474,7 +1474,7 @@ fn effective_ingress_allow_all(
 ///
 /// E1 (defaults-axis seal): the effective `[network.defaults]` allow flip is
 /// fed into the SAME freeze walk as a synthetic lowest-rung allow-all
-/// (origin label `workload:<name> [network.defaults]`), so a home
+/// (origin label `workload:<name> [network.defaults]`), so a config
 /// `deny.all=true final=true` — or any covering final deny (coarse FIX1
 /// parity) — FREEZES the flip and the default stays deny. The workload's own
 /// final deny does not self-freeze (same-rung exemption). Seal conflicts
@@ -1650,8 +1650,8 @@ mod tests {
     #[test]
     fn idna_uts46_mode_converts() {
         let mut ladder = test_ladder();
-        ladder.idna_home = Some((
-            "home-registry".to_string(),
+        ladder.idna_config = Some((
+            "config-registry".to_string(),
             IdnaPolicyFragment {
                 mode: Some(IdnaMode::Uts46),
                 r#final: false,
@@ -1707,7 +1707,7 @@ mod tests {
     fn cross_rung_deny_wins_without_final() {
         let mut ladder = NetworkPolicyLadder::default();
         // Home allow
-        let home = EgressPolicyFragment {
+        let config = EgressPolicyFragment {
             allow: Some(EgressAllowTable {
                 all: None,
                 r#final: false,
@@ -1721,7 +1721,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        ladder.egress_home = Some(("home-registry".to_string(), home));
+        ladder.egress_config = Some(("config-registry".to_string(), config));
         // Workload deny same coverage, no final
         let wl = EgressPolicyFragment {
             deny: Some(EgressDenyTable {
@@ -1786,9 +1786,9 @@ mod tests {
 
     #[test]
     fn all_true_frozen_by_higher_final_deny() {
-        // home deny .evil.com final + workload all=true -> default stays deny, .evil.com denied, frozen
+        // config deny .evil.com final + workload all=true -> default stays deny, .evil.com denied, frozen
         let mut ladder = NetworkPolicyLadder::default();
-        let home = EgressPolicyFragment {
+        let config = EgressPolicyFragment {
             deny: Some(EgressDenyTable {
                 all: None,
                 r#final: false,
@@ -1801,7 +1801,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        ladder.egress_home = Some(("home-registry".to_string(), home));
+        ladder.egress_config = Some(("config-registry".to_string(), config));
         let wl = EgressPolicyFragment {
             allow: Some(EgressAllowTable {
                 all: Some(true),
@@ -1841,9 +1841,9 @@ mod tests {
 
     #[test]
     fn all_true_allow_deny_all_conflict() {
-        // home deny-all final (on_conflict=fail) + workload all=true allow -> conflict per on_conflict
+        // config deny-all final (on_conflict=fail) + workload all=true allow -> conflict per on_conflict
         let mut ladder = NetworkPolicyLadder::default();
-        let home = EgressPolicyFragment {
+        let config = EgressPolicyFragment {
             on_conflict: Some(OnConflict::Fail),
             r#final: true,
             deny: Some(EgressDenyTable {
@@ -1853,7 +1853,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        ladder.egress_home = Some(("home-registry".to_string(), home));
+        ladder.egress_config = Some(("config-registry".to_string(), config));
         let wl = EgressPolicyFragment {
             allow: Some(EgressAllowTable {
                 all: Some(true),
@@ -1895,7 +1895,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        ladder2.egress_home = Some(("home-registry".to_string(), home2));
+        ladder2.egress_config = Some(("config-registry".to_string(), home2));
         let wl2 = EgressPolicyFragment {
             allow: Some(EgressAllowTable {
                 all: Some(true),
@@ -1988,9 +1988,9 @@ mod tests {
         }
     }
 
-    fn egress_home_deny_all_final(on_conflict: Option<OnConflict>) -> NetworkPolicyLadder {
+    fn egress_config_deny_all_final(on_conflict: Option<OnConflict>) -> NetworkPolicyLadder {
         let mut ladder = NetworkPolicyLadder::default();
-        let home = EgressPolicyFragment {
+        let config = EgressPolicyFragment {
             on_conflict,
             r#final: true,
             deny: Some(EgressDenyTable {
@@ -2000,26 +2000,26 @@ mod tests {
             }),
             ..Default::default()
         };
-        ladder.egress_home = Some(("home-registry".to_string(), home));
+        ladder.egress_config = Some(("config-registry".to_string(), config));
         ladder
     }
 
     #[test]
-    fn e1_defaults_egress_allow_sealed_by_home_deny_all_final() {
-        // ignore (default): home deny-all-final FREEZES the defaults flip —
+    fn e1_defaults_egress_allow_sealed_by_config_deny_all_final() {
+        // ignore (default): config deny-all-final FREEZES the defaults flip —
         // deny stands SILENTLY, provenance records frozen_out/frozen_by.
-        let ladder = egress_home_deny_all_final(None);
+        let ladder = egress_config_deny_all_final(None);
         let workload = defaults_workload(true, false);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
         assert!(
             plan.egress_default_deny,
-            "home deny-all-final must seal the [network.defaults] egress=allow flip (deny stands)"
+            "config deny-all-final must seal the [network.defaults] egress=allow flip (deny stands)"
         );
         let seal = plan
             .egress_defaults_seal
             .expect("sealed flip must carry provenance");
         assert!(seal.frozen_out);
-        assert_eq!(seal.frozen_by.as_deref(), Some("home-registry"));
+        assert_eq!(seal.frozen_by.as_deref(), Some("config-registry"));
         assert!(
             plan.ingress_defaults_seal.is_none(),
             "ingress axis untouched"
@@ -2031,11 +2031,11 @@ mod tests {
         // The synthetic rung's conflict line — warn prints it verbatim per
         // conflict, fail aggregates it — must name axis, workload defaults
         // origin, and the freezing origin.
-        let ladder = egress_home_deny_all_final(Some(OnConflict::Warn));
+        let ladder = egress_config_deny_all_final(Some(OnConflict::Warn));
         let (eff, conflicts, frozen_by) =
             effective_egress_allow_all(&ladder, "pi", true, "workload:pi [network.defaults]");
         assert!(!eff, "no ladder allow-all present");
-        assert_eq!(frozen_by.as_deref(), Some("home-registry"));
+        assert_eq!(frozen_by.as_deref(), Some("config-registry"));
         assert_eq!(
             conflicts.len(),
             1,
@@ -2052,7 +2052,7 @@ mod tests {
             conflicts[0]
         );
         assert!(
-            conflicts[0].contains("frozen by home-registry"),
+            conflicts[0].contains("frozen by config-registry"),
             "frozen-by: {}",
             conflicts[0]
         );
@@ -2061,7 +2061,7 @@ mod tests {
     #[test]
     fn e1_defaults_seal_fail_bails_naming_axis_workload_frozen_by() {
         // on_conflict=fail: aggregate bail naming axis + workload + frozen-by.
-        let ladder = egress_home_deny_all_final(Some(OnConflict::Fail));
+        let ladder = egress_config_deny_all_final(Some(OnConflict::Fail));
         let workload = defaults_workload(true, false);
         let err = compile_network_plan(&ladder, "pi", &workload)
             .unwrap_err()
@@ -2073,16 +2073,16 @@ mod tests {
             "workload named: {err}"
         );
         assert!(
-            err.contains("frozen by home-registry"),
+            err.contains("frozen by config-registry"),
             "frozen-by named: {err}"
         );
     }
 
     #[test]
-    fn e1_defaults_ingress_allow_sealed_by_home_deny_all_final_symmetric() {
-        // Ingress symmetric: home ingress deny-all final seals the flip.
+    fn e1_defaults_ingress_allow_sealed_by_config_deny_all_final_symmetric() {
+        // Ingress symmetric: config ingress deny-all final seals the flip.
         let mut ladder = NetworkPolicyLadder::default();
-        let home = IngressPolicyFragment {
+        let config = IngressPolicyFragment {
             r#final: true,
             deny: Some(IngressDenyTable {
                 all: Some(true),
@@ -2091,18 +2091,18 @@ mod tests {
             }),
             ..Default::default()
         };
-        ladder.ingress_home = Some(("home-registry".to_string(), home));
+        ladder.ingress_config = Some(("config-registry".to_string(), config));
         let workload = defaults_workload(false, true);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
         assert!(
             plan.ingress_default_deny,
-            "home ingress deny-all-final must seal the [network.defaults] ingress=allow flip"
+            "config ingress deny-all-final must seal the [network.defaults] ingress=allow flip"
         );
         let seal = plan
             .ingress_defaults_seal
             .expect("sealed ingress flip must carry provenance");
         assert!(seal.frozen_out);
-        assert_eq!(seal.frozen_by.as_deref(), Some("home-registry"));
+        assert_eq!(seal.frozen_by.as_deref(), Some("config-registry"));
     }
 
     #[test]
@@ -2110,7 +2110,7 @@ mod tests {
         // FIX1 coarse parity (adjudicated): ANY covering final deny at a
         // higher rung freezes the synthetic all — not just deny-all.
         let mut ladder = NetworkPolicyLadder::default();
-        let home = EgressPolicyFragment {
+        let config = EgressPolicyFragment {
             deny: Some(EgressDenyTable {
                 all: None,
                 r#final: false,
@@ -2123,7 +2123,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        ladder.egress_home = Some(("home-registry".to_string(), home));
+        ladder.egress_config = Some(("config-registry".to_string(), config));
         let workload = defaults_workload(true, false);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
         assert!(
@@ -2138,7 +2138,7 @@ mod tests {
         // Regression: no covering FINAL deny -> flip stands, no provenance
         // (deny-all WITHOUT final must not seal; pre-E1 behavior unchanged).
         let mut ladder = NetworkPolicyLadder::default();
-        let home = EgressPolicyFragment {
+        let config = EgressPolicyFragment {
             deny: Some(EgressDenyTable {
                 all: Some(true),
                 r#final: false,
@@ -2146,7 +2146,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        ladder.egress_home = Some(("home-registry".to_string(), home));
+        ladder.egress_config = Some(("config-registry".to_string(), config));
         let workload = defaults_workload(true, false);
         let plan = compile_network_plan(&ladder, "pi", &workload).unwrap();
         assert!(

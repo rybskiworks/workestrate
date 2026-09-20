@@ -1,7 +1,7 @@
-//! Integration tests for `workestrate home init` — home scaffolding
+//! Integration tests for `workestrate config init` — home scaffolding
 //! (dirs/.gitignore/hook), idempotency, hook behavior, and the `--config`
 //! composition with the existing clone+register machinery. Uses an isolated
-//! HOME + WORKESTRATE_HOME per test so the user's real home is never touched.
+//! HOME + WORKESTRATE_CONFIG per test so the user's real home is never touched.
 
 #![allow(
     clippy::unwrap_used,
@@ -43,26 +43,26 @@ fn git_init_repo(dir: &Path) {
 
 #[test]
 fn init_creates_structure_gitignore_and_hook() {
-    let home = IsolatedHome::new("cmd-home-init");
+    let home = IsolatedHome::new("cmd-config-init");
     let store = home.dir.join(".workestrate");
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["home", "init"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["config", "init"])
         .output()
-        .expect("invoke home init");
+        .expect("invoke config init");
     assert!(
         out.status.success(),
-        "home init failed: stderr=\n{}",
+        "config init failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     // Layout dirs + .git.
-    for dir in ["config-repos", "sources", "state", "secrets"] {
+    for dir in ["fleets", "sources", "state", "secrets"] {
         assert!(
             store.join(dir).is_dir(),
-            "expected dir {} under the home",
+            "expected dir {} under the config",
             dir
         );
     }
@@ -72,7 +72,7 @@ fn init_creates_structure_gitignore_and_hook() {
     let gitignore = std::fs::read_to_string(store.join(".gitignore")).expect("read .gitignore");
     let lines: Vec<&str> = gitignore.lines().collect();
     for entry in [
-        "/config-repos/",
+        "/fleets/",
         "/sources/",
         "/state/",
         "/cache/",
@@ -116,7 +116,7 @@ fn init_creates_structure_gitignore_and_hook() {
         hook_content
     );
     assert!(
-        hook_content.contains("config-repos"),
+        hook_content.contains("fleets"),
         "hook must reject store-dir paths:\n{}",
         hook_content
     );
@@ -145,13 +145,13 @@ fn init_creates_structure_gitignore_and_hook() {
     );
     assert!(
         hook_content.contains(
-            "home pre-commit: tombi version mismatch (found '${tombi_version:-unknown}', want $TOMBI_REQUIRED); skipping tombi gates"
+            "config pre-commit: tombi version mismatch (found '${tombi_version:-unknown}', want $TOMBI_REQUIRED); skipping tombi gates"
         ),
         "hook must announce a tombi version mismatch as an audible skip:\n{}",
         hook_content
     );
     assert!(
-        hook_content.contains("home pre-commit: tombi not found; skipping tombi gates"),
+        hook_content.contains("config pre-commit: tombi not found; skipping tombi gates"),
         "hook must announce a missing tombi as an audible skip:\n{}",
         hook_content
     );
@@ -164,19 +164,19 @@ fn init_creates_structure_gitignore_and_hook() {
     // tombi toolchain files: home tombi.toml + vendored schemas (spec 15).
     let tombi_toml = std::fs::read_to_string(store.join("tombi.toml")).expect("read tombi.toml");
     assert!(
-        tombi_toml.contains("config-repos/*/workestrate.toml"),
-        "home tombi.toml must include config-repos/*/workestrate.toml:\n{}",
+        tombi_toml.contains("fleets/*/workestrate.toml"),
+        "home tombi.toml must include fleets/*/workestrate.toml:\n{}",
         tombi_toml
     );
     assert!(
-        tombi_toml.contains("config-repos/*/workestrate/default.toml")
-            && tombi_toml.contains("config-repos/*/workestrate/secrets.toml"),
+        tombi_toml.contains("fleets/*/workestrate/default.toml")
+            && tombi_toml.contains("fleets/*/workestrate/secrets.toml"),
         "home tombi.toml must include the full-schema directory-mode entries default.toml and \
          secrets.toml:\n{}",
         tombi_toml
     );
     assert!(
-        tombi_toml.contains("config-repos/*/workestrate/workloads/**/*.toml"),
+        tombi_toml.contains("fleets/*/workestrate/workloads/**/*.toml"),
         "home tombi.toml must include the workload capsule glob:\n{}",
         tombi_toml
     );
@@ -222,18 +222,18 @@ fn init_creates_structure_gitignore_and_hook() {
 
 #[test]
 fn second_run_is_idempotent_noop() {
-    let home = IsolatedHome::new("cmd-home-init");
+    let home = IsolatedHome::new("cmd-config-init");
     let store = home.dir.join(".workestrate");
 
     let first = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["home", "init"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["config", "init"])
         .output()
-        .expect("first home init");
+        .expect("first config init");
     assert!(
         first.status.success(),
-        "first home init failed: stderr=\n{}",
+        "first config init failed: stderr=\n{}",
         String::from_utf8_lossy(&first.stderr)
     );
     let gitignore_before =
@@ -243,13 +243,13 @@ fn second_run_is_idempotent_noop() {
 
     let second = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["home", "init"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["config", "init"])
         .output()
-        .expect("second home init");
+        .expect("second config init");
     assert!(
         second.status.success(),
-        "second home init must succeed (idempotent no-op): stderr=\n{}",
+        "second config init must succeed (idempotent no-op): stderr=\n{}",
         String::from_utf8_lossy(&second.stderr)
     );
     let stdout = String::from_utf8_lossy(&second.stdout);
@@ -275,23 +275,23 @@ fn second_run_is_idempotent_noop() {
 
 #[test]
 fn hook_rejects_gitlink() {
-    let home = IsolatedHome::new("cmd-home-init");
+    let home = IsolatedHome::new("cmd-config-init");
     let store = home.dir.join(".workestrate");
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["home", "init"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["config", "init"])
         .output()
-        .expect("invoke home init");
+        .expect("invoke config init");
     assert!(
         out.status.success(),
-        "home init failed: stderr=\n{}",
+        "config init failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Create an embedded standalone repo inside the home, then stage it as a
-    // gitlink (mode 160000) in the home index.
+    // Create an embedded standalone repo inside the config, then stage it as a
+    // gitlink (mode 160000) in the config index.
     let embedded = store.join("embedded");
     git_init_repo(&embedded);
     std::fs::write(embedded.join("file.txt"), "embedded").expect("write embedded file");
@@ -329,18 +329,18 @@ fn hook_rejects_gitlink() {
 /// territory and not asserted here.)
 #[test]
 fn hook_skips_tombi_gates_audibly_when_absent_or_mismatched() {
-    let home = IsolatedHome::new("cmd-home-init");
+    let home = IsolatedHome::new("cmd-config-init");
     let store = home.dir.join(".workestrate");
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["home", "init"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["config", "init"])
         .output()
-        .expect("invoke home init");
+        .expect("invoke config init");
     assert!(
         out.status.success(),
-        "home init failed: stderr=\n{}",
+        "config init failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let hook = store.join(".git").join("hooks").join("pre-commit");
@@ -409,14 +409,14 @@ fn hook_skips_tombi_gates_audibly_when_absent_or_mismatched() {
 }
 
 #[test]
-fn config_flag_composes_registration() {
-    let home = IsolatedHome::new("cmd-home-init");
+fn fleet_flag_composes_registration() {
+    let home = IsolatedHome::new("cmd-config-init");
     let store = home.dir.join(".workestrate");
-    let src_parent = TempDir::new("cmd-home-init-src");
+    let src_parent = TempDir::new("cmd-config-init-src");
     let src = src_parent.path().join("src-repo");
 
     // A local source git repo on branch `main` holding a minimal valid
-    // workestrate.toml. `cmd_config_add` clones with `--branch main`.
+    // workestrate.toml. `cmd_fleet_add` clones with `--branch main`.
     git_init_repo(&src);
     std::fs::write(src.join("workestrate.toml"), "schema_version = 1\n").expect("write toml");
     run_git(&src, &["add", "."]);
@@ -424,39 +424,35 @@ fn config_flag_composes_registration() {
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args([
-            "home",
+            "config",
             "init",
-            "--config",
+            "--fleet",
             src.to_str().expect("utf8 src path"),
             "--name",
             "personal",
         ])
         .output()
-        .expect("invoke home init --config");
+        .expect("invoke config init --fleet");
     assert!(
         out.status.success(),
-        "home init --config failed: stderr=\n{}",
+        "config init --fleet failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // The clone landed in the home's config-repos/ as a working repo.
+    // The clone landed in the config's fleets/ as a working repo.
     assert!(
-        store
-            .join("config-repos")
-            .join("personal")
-            .join(".git")
-            .exists(),
-        "config-repos/personal must be a cloned git repo"
+        store.join("fleets").join("personal").join(".git").exists(),
+        "fleets/personal must be a cloned git repo"
     );
 
     // The registry was created by the registration path and records the
     // repo + a layers entry containing "personal".
     let registry = std::fs::read_to_string(store.join("config.toml")).expect("read registry");
     assert!(
-        registry.contains("[configs.personal]"),
-        "registry must contain [configs.personal]:\n{}",
+        registry.contains("[fleets.personal]"),
+        "registry must contain [fleets.personal]:\n{}",
         registry
     );
     let layers_line = registry
@@ -472,8 +468,8 @@ fn config_flag_composes_registration() {
     // The with-config next-steps form is printed.
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("config list"),
-        "with-config next steps must mention 'config list'; got:\n{}",
+        stdout.contains("fleet list"),
+        "with-config next steps must mention 'fleet list'; got:\n{}",
         stdout
     );
 }

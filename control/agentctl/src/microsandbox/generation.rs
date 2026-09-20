@@ -51,12 +51,12 @@ const STORE_HASH_LEN: usize = 32;
 /// store dir basename (`<hash32>-microsandbox-<ver>`).
 const STORE_NAME_MARKER: &str = "-microsandbox-";
 
-/// Name of the per-generation container directory under the msb home root.
+/// Name of the per-generation container directory under the msb config root.
 /// Crate-visible so the retained-generation down sweep
 /// (`down_scope::retained_generation_homes`) reuses the ONE spelling.
 pub(crate) const GENERATIONS_DIR_NAME: &str = "generations";
 
-/// Name of the `current` symlink at the msb home root.
+/// Name of the `current` symlink at the msb config root.
 const CURRENT_LINK_NAME: &str = "current";
 
 /// The outcome of applying the ONE home resolution rule
@@ -64,7 +64,7 @@ const CURRENT_LINK_NAME: &str = "current";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HomeResolution {
     /// Rule 1: a non-empty `MSB_HOME` — used verbatim for STATE placement
-    /// (never reinterpreted as a home), but the generation IDENTITY check
+    /// (never reinterpreted as a config), but the generation IDENTITY check
     /// canonicalizes it (through the `current` symlink) via
     /// [`generation_key_of_resolved_home`].
     Explicit(PathBuf),
@@ -169,8 +169,8 @@ fn resolve_msb_on_path() -> Option<PathBuf> {
 }
 
 /// The msb state ROOT (`$HOME/.microsandbox`, with the SDK
-/// `resolve_home`-style `.` fallback when HOME is unset) — the parent of
-/// `generations/`, the `current` symlink, and `.flip.lock`. NOT the home
+/// `resolve_config_dir`-style `.` fallback when HOME is unset) — the parent of
+/// `generations/`, the `current` symlink, and `.flip.lock`. NOT the config
 /// handed to msb (that is [`default_msb_home`]).
 pub fn msb_home_root() -> PathBuf {
     std::env::var_os("HOME")
@@ -182,7 +182,7 @@ pub fn msb_home_root() -> PathBuf {
 /// The default msb home when `MSB_HOME` is unset-or-empty:
 /// `$HOME/.microsandbox/current` — the `current` generation symlink (with
 /// the SDK-style `.` fallback via [`msb_home_root`]). msb resolves the
-/// symlink itself, so the home it uses is the target generation dir; the
+/// symlink itself, so the config it uses is the target generation dir; the
 /// 12-char key keeps that path inside the 59-char socket budget (see the
 /// module doc).
 pub fn default_msb_home() -> PathBuf {
@@ -510,7 +510,7 @@ mod tests {
 
     /// Pin HOME to a fresh temp root with MSB_HOME removed; the returned
     /// guards MUST stay alive for the test body.
-    fn pin_home(label: &str) -> (std::sync::MutexGuard<'static, ()>, EnvGuard, PathBuf) {
+    fn pin_config(label: &str) -> (std::sync::MutexGuard<'static, ()>, EnvGuard, PathBuf) {
         let lock = ENV_TEST_LOCK.lock().unwrap();
         let guard = EnvGuard::capture(&["MSB_HOME", "HOME"]);
         let home = uniq_dir(label);
@@ -526,7 +526,7 @@ mod tests {
     /// canonicalized, never required to exist).
     #[test]
     fn explicit_msb_home_is_verbatim() {
-        let (_lock, _guard, home) = pin_home("gen-resolve-explicit");
+        let (_lock, _guard, home) = pin_config("gen-resolve-explicit");
         let explicit = home.join("somewhere").join("else");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("MSB_HOME", &explicit) };
@@ -541,7 +541,7 @@ mod tests {
     /// to the enumeration rules (a fresh root here).
     #[test]
     fn empty_msb_home_is_treated_as_unset() {
-        let (_lock, _guard, home) = pin_home("gen-resolve-empty");
+        let (_lock, _guard, home) = pin_config("gen-resolve-empty");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("MSB_HOME", "") };
         match resolve_msb_home_generation() {
@@ -552,10 +552,10 @@ mod tests {
     }
 
     /// The unset-MSB_HOME default home is the `current` symlink under the
-    /// msb home root (the wrapper default change).
+    /// msb config root (the wrapper default change).
     #[test]
     fn default_home_is_current_symlink() {
-        let (_lock, _guard, home) = pin_home("gen-default-home");
+        let (_lock, _guard, home) = pin_config("gen-default-home");
         assert_eq!(
             default_msb_home(),
             home.join(".microsandbox").join("current")
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn current_symlink_resolves_to_generation() {
         use std::os::unix::fs::symlink;
-        let (_lock, _guard, home) = pin_home("gen-resolve-current");
+        let (_lock, _guard, home) = pin_config("gen-resolve-current");
         let root = home.join(".microsandbox");
         let gen_dir = root.join("generations").join(KEY12);
         std::fs::create_dir_all(&gen_dir).unwrap();
@@ -589,7 +589,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn single_generation_heals_missing_current() {
-        let (_lock, _guard, home) = pin_home("gen-resolve-heal");
+        let (_lock, _guard, home) = pin_config("gen-resolve-heal");
         let root = home.join(".microsandbox");
         let gen_dir = root.join("generations").join(KEY12);
         std::fs::create_dir_all(&gen_dir).unwrap();
@@ -609,7 +609,7 @@ mod tests {
     /// is a pre-generation home.
     #[test]
     fn legacy_root_db_is_pre_generation_home() {
-        let (_lock, _guard, home) = pin_home("gen-resolve-legacy");
+        let (_lock, _guard, home) = pin_config("gen-resolve-legacy");
         let root = home.join(".microsandbox");
         std::fs::create_dir_all(root.join("db")).unwrap();
         match resolve_msb_home_generation() {
@@ -622,7 +622,7 @@ mod tests {
     /// Rule 5: `current` missing + zero generation dirs + no `db/` is fresh.
     #[test]
     fn no_db_no_generations_is_fresh() {
-        let (_lock, _guard, home) = pin_home("gen-resolve-fresh");
+        let (_lock, _guard, home) = pin_config("gen-resolve-fresh");
         match resolve_msb_home_generation() {
             HomeResolution::Fresh(root) => assert_eq!(root, home.join(".microsandbox")),
             other => panic!("expected Fresh, got {other:?}"),
@@ -634,7 +634,7 @@ mod tests {
     /// Ambiguous, naming both keys (sorted).
     #[test]
     fn two_generations_without_current_is_ambiguous() {
-        let (_lock, _guard, home) = pin_home("gen-resolve-ambiguous");
+        let (_lock, _guard, home) = pin_config("gen-resolve-ambiguous");
         let gens = home.join(".microsandbox").join("generations");
         std::fs::create_dir_all(gens.join("bbbbbbbbbbbb")).unwrap();
         std::fs::create_dir_all(gens.join("aaaaaaaaaaaa")).unwrap();
@@ -655,7 +655,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn legacy_only_generation_heals_missing_current() {
-        let (_lock, _guard, home) = pin_home("gen-resolve-legacy-heal");
+        let (_lock, _guard, home) = pin_config("gen-resolve-legacy-heal");
         let root = home.join(".microsandbox");
         let gen_dir = root.join("generations").join(LEGACY_KEY);
         std::fs::create_dir_all(&gen_dir).unwrap();
@@ -674,7 +674,7 @@ mod tests {
     /// converge), NOT a heal — both names listed, sorted.
     #[test]
     fn legacy_and_key12_without_current_is_ambiguous() {
-        let (_lock, _guard, home) = pin_home("gen-resolve-legacy-ambiguous");
+        let (_lock, _guard, home) = pin_config("gen-resolve-legacy-ambiguous");
         let gens = home.join(".microsandbox").join("generations");
         std::fs::create_dir_all(gens.join(KEY12)).unwrap();
         std::fs::create_dir_all(gens.join(LEGACY_KEY)).unwrap();
@@ -694,7 +694,7 @@ mod tests {
     #[test]
     fn dangling_current_is_treated_as_missing() {
         use std::os::unix::fs::symlink;
-        let (_lock, _guard, home) = pin_home("gen-resolve-dangling");
+        let (_lock, _guard, home) = pin_config("gen-resolve-dangling");
         let root = home.join(".microsandbox");
         let gen_dir = root.join("generations").join(KEY12);
         std::fs::create_dir_all(&gen_dir).unwrap();

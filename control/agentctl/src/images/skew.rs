@@ -22,7 +22,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordState {
     /// No record for this key in `images.json` (first run, changed content
-    /// (a new tag), or another home / the old manual ritual loaded the tag —
+    /// (a new tag), or another config / the old manual ritual loaded the tag —
     /// see the TRUST branch, D1).
     Absent,
     /// Record present under the computed content-addressed tag.
@@ -50,7 +50,7 @@ pub enum SkewDecision {
     Rebuild,
     /// No record + tag present on a PLAIN `up`: TRUST the store tag
     /// (USER DECISION D1, §3.4 row 4) — the store may have been populated by
-    /// the old manual ritual or another home. Records are advisory, never
+    /// the old manual ritual or another config. Records are advisory, never
     /// authoritative; the tag is used as-is and a record is written so the
     /// next run has a baseline. A future tag-digest mismatch flips this
     /// branch to rebuild (§3.5, pending the msb digest surface).
@@ -147,7 +147,7 @@ mod tests {
     /// §3.4 row 4 (USER DECISION D1): record absent + tag present → **TRUST
     /// the store tag on plain `up`**, then record. The TRUST branch exists
     /// because the store may have been populated by the old manual ritual (or
-    /// another home) before this tool ever recorded it — refusing to trust it
+    /// another config) before this tool ever recorded it — refusing to trust it
     /// would force a spurious rebuild of every pre-existing tag on first run.
     #[test]
     fn row4_absent_record_present_tag_trusts_on_plain_up() {

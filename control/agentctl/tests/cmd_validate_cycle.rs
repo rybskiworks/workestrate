@@ -2,7 +2,7 @@
 //! `workestrate validate-config` (ADR 0026 addendum 2026-08-01, W4) with a
 //! non-zero exit and the `dependency cycle detected: a → b → a` message on
 //! stderr. The config fixture is written per-test into a temp dir and
-//! pointed at via `WORKESTRATE_CONFIG_DIR` (the same single-layer bypass
+//! pointed at via `WORKESTRATE_FLEET_DIR` (the same single-layer bypass
 //! `cmd_workloads.rs` uses against the committed fixture).
 
 #![allow(
@@ -46,7 +46,7 @@ fn validate_config_rejects_dependency_cycle() {
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_CONFIG_DIR", &cfg_dir)
+        .env("WORKESTRATE_FLEET_DIR", &cfg_dir)
         .args(["validate-config"])
         .output()
         .expect("invoke validate-config");

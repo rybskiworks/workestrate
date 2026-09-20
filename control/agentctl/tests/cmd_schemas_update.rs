@@ -1,6 +1,6 @@
 //! Integration tests for `workestrate schemas update` — the single-source
-//! consumer distribution command: home target (write + idempotency +
-//! --check), config-repo targets (--repo scoping, skip rules), and the
+//! consumer distribution command: config target (write + idempotency +
+//! --check), fleet targets (--fleet scoping, skip rules), and the
 //! tool-template target (AGENTCTL_ROOT pinning).
 //!
 //! Every test pins `AGENTCTL_ROOT` to a scratch workbench root (flake.nix)
@@ -35,8 +35,8 @@ fn scratch_root(with_template: bool) -> TempDir {
     root
 }
 
-/// Write a registry TOML at `<store>/config.toml` — the single-home layout
-/// path that `load_registry` reads when `WORKESTRATE_HOME=<store>` is set.
+/// Write a registry TOML at `<store>/config.toml` — the single-config layout
+/// path that `load_registry` reads when `WORKESTRATE_CONFIG=<store>` is set.
 /// (`IsolatedHome::write_registry` targets the legacy-XDG path instead.)
 fn write_store_registry(store: &Path, content: &str) {
     std::fs::create_dir_all(store).expect("create store dir");
@@ -54,7 +54,7 @@ fn committed_schema(name: &str) -> PathBuf {
 }
 
 #[test]
-fn update_writes_both_schemas_into_home() {
+fn update_writes_both_schemas_into_config() {
     let home = IsolatedHome::new("cmd-schemas");
     let _root = scratch_root(false);
     let store = home.dir.join(".workestrate");
@@ -67,7 +67,7 @@ fn update_writes_both_schemas_into_home() {
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .env("AGENTCTL_ROOT", _root.path())
         .args(["schemas", "update"])
         .output()
@@ -123,7 +123,7 @@ fn update_is_idempotent_second_run_all_skipped() {
 
     let run = || {
         home.cmd()
-            .env("WORKESTRATE_HOME", &store)
+            .env("WORKESTRATE_CONFIG", &store)
             .env("AGENTCTL_ROOT", _root.path())
             .args(["schemas", "update"])
             .output()
@@ -176,14 +176,14 @@ fn update_check_reports_stale_and_exits_1() {
 
     let check = || {
         home.cmd()
-            .env("WORKESTRATE_HOME", &store)
+            .env("WORKESTRATE_CONFIG", &store)
             .env("AGENTCTL_ROOT", _root.path())
             .args(["schemas", "update", "--check"])
             .output()
             .expect("invoke schemas update --check")
     };
 
-    // Stale home copy → --check exits 1 and names the stale file.
+    // Stale config copy → --check exits 1 and names the stale file.
     let first = check();
     assert_eq!(
         first.status.code(),
@@ -201,7 +201,7 @@ fn update_check_reports_stale_and_exits_1() {
     // Update fixes everything.
     let up = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .env("AGENTCTL_ROOT", _root.path())
         .args(["schemas", "update"])
         .output()
@@ -229,36 +229,36 @@ fn update_check_reports_stale_and_exits_1() {
 }
 
 #[test]
-fn update_repo_target_writes_only_that_repo() {
+fn update_fleet_target_writes_only_that_fleet() {
     let home = IsolatedHome::new("cmd-schemas");
     let _root = scratch_root(false);
     let store = home.dir.join(".workestrate");
 
-    // A LOCAL fixture config repo under the store: dir + schemas/ with a
+    // A LOCAL fixture fleet under the store: dir + schemas/ with a
     // stale schema.
-    let repo = home.repo_dir("personal");
+    let repo = home.fleet_dir("personal");
     std::fs::create_dir_all(repo.join("schemas")).expect("create repo schemas dir");
     std::fs::write(
         repo.join("schemas").join("workestrate.schema.json"),
         "{\"stale\": true}\n",
     )
     .expect("write stale repo schema");
-    // Register it via the single-home registry (WORKESTRATE_HOME=<store>).
+    // Register it via the single-config registry (WORKESTRATE_CONFIG=<store>).
     write_store_registry(
         &store,
-        &format!("[configs.personal]\nurl = \"{}\"\n", repo.display()),
+        &format!("[fleets.personal]\nurl = \"{}\"\n", repo.display()),
     );
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .env("AGENTCTL_ROOT", _root.path())
-        .args(["schemas", "update", "--repo", "personal"])
+        .args(["schemas", "update", "--fleet", "personal"])
         .output()
-        .expect("invoke schemas update --repo personal");
+        .expect("invoke schemas update --fleet personal");
     assert!(
         out.status.success(),
-        "schemas update --repo failed: stdout=\n{}\nstderr=\n{}",
+        "schemas update --fleet failed: stdout=\n{}\nstderr=\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -292,33 +292,33 @@ fn update_repo_target_writes_only_that_repo() {
         "repo registry schema must match the real schema byte-for-byte"
     );
 
-    // --repo scoping: the HOME target was NOT written (no <store>/schemas/).
+    // --fleet scoping: the HOME target was NOT written (no <store>/schemas/).
     assert!(
         !store.join("schemas").exists(),
-        "--repo must skip the tool-home target; <store>/schemas/ must not exist"
+        "--fleet must skip the config target; <store>/schemas/ must not exist"
     );
 }
 
 #[test]
-fn update_skips_repo_without_schemas_dir() {
+fn update_skips_fleet_without_schemas_dir() {
     let home = IsolatedHome::new("cmd-schemas");
     let _root = scratch_root(false);
     let store = home.dir.join(".workestrate");
 
-    // A hand-made config repo: the dir exists with workestrate.toml but NO
+    // A hand-made fleet: the dir exists with workestrate.toml but NO
     // schemas/ dir — the tool must not invent one there.
-    let repo = home.repo_dir("personal");
+    let repo = home.fleet_dir("personal");
     std::fs::create_dir_all(&repo).expect("create repo dir");
     std::fs::write(repo.join("workestrate.toml"), "schema_version = 1\n")
         .expect("write repo workestrate.toml");
     write_store_registry(
         &store,
-        &format!("[configs.personal]\nurl = \"{}\"\n", repo.display()),
+        &format!("[fleets.personal]\nurl = \"{}\"\n", repo.display()),
     );
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .env("AGENTCTL_ROOT", _root.path())
         .args(["schemas", "update"])
         .output()
@@ -348,7 +348,7 @@ fn update_skips_missing_git_clone() {
     // A git-URL entry whose store clone was never created.
     write_store_registry(
         &store,
-        r#"[configs.work]
+        r#"[fleets.work]
 url = "https://example.com/repo.git"
 ref = "main"
 "#,
@@ -356,7 +356,7 @@ ref = "main"
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .env("AGENTCTL_ROOT", _root.path())
         .args(["schemas", "update"])
         .output()

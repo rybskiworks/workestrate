@@ -3,9 +3,9 @@
 use anyhow::Result;
 
 use crate::config::paths::registry_path;
-use crate::config::{ActiveContext, ConfigRepoEntry, Registry};
+use crate::config::{ActiveContext, FleetEntry, Registry};
 
-/// Load the tool-home registry (`registry.toml` at [`registry_path`]).
+/// Load the config registry (`registry.toml` at [`registry_path`]).
 /// Returns `Ok(None)` when the file does not exist (normal first-run state);
 /// read/parse failures are hard errors.
 ///
@@ -90,7 +90,7 @@ const REGISTRY_LOCK_NAME: &str = "config.toml.lock";
 /// Acquires by O_EXCL-creating `config.toml.lock` next to the registry file
 /// (the create fails while another holder's file exists); [`Drop`] removes
 /// it. Holders serialize the full load → mutate → save critical section in
-/// [`register_config`], [`crate::config::trust_project`], and
+/// [`register_fleet`], [`crate::config::trust_project`], and
 /// [`crate::config::untrust_project`].
 ///
 /// This is a cooperative lock between workestrate processes (mirroring the
@@ -155,31 +155,31 @@ pub(crate) fn with_registry_lock<R>(f: impl FnOnce(&mut Registry) -> Result<R>) 
 }
 
 /// Whether a registry entry is a LOCAL-PATH repo (registered via
-/// `config new` — url is a filesystem path, ref=None, rev=None) as opposed
-/// to a GIT-URL repo (registered via `config add <url>`).
+/// `fleet new` — url is a filesystem path, ref=None, rev=None) as opposed
+/// to a GIT-URL repo (registered via `fleet add <url>`).
 ///
-/// FS-18: `cmd_config_update` previously classified `entry.rev.is_none()` as
+/// FS-18: `cmd_fleet_update` previously classified `entry.rev.is_none()` as
 /// local, which mis-skipped git-URL entries whose rev was simply unrecorded
 /// (hand-edited registry, or a clone whose rev was never written back).
 /// The explicit classifier: an entry is local-path ONLY when its url is not
 /// a git remote AND no ref/rev was ever recorded. A git-URL entry with a
 /// missing rev is NOT local — it is pulled (which re-records the rev).
-pub fn entry_is_local_path(entry: &ConfigRepoEntry) -> bool {
+pub fn entry_is_local_path(entry: &FleetEntry) -> bool {
     !looks_like_git_url(&entry.url) && entry.r#ref.is_none() && entry.rev.is_none()
 }
 
 /// Resolve the checkout directory of a LOCAL-PATH registry entry.
 ///
 /// Returns `None` for git-URL entries (those resolve to the managed store
-/// clone via [`crate::config::paths::config_repo_dir`]). For local-path
+/// clone via [`crate::config::paths::fleet_dir`]). For local-path
 /// entries: tilde-expand the url, then — if the result is RELATIVE —
-/// resolve it against the tool home (`resolve_home_with_kind().0`).
+/// resolve it against the config (`resolve_config_dir_with_kind().0`).
 ///
-/// Rationale: a shared home may be mounted at different roots (container
+/// Rationale: a shared config may be mounted at different roots (container
 /// `/home/node` vs host `/home/dev`). An absolute url breaks on the
 /// other side; a relative url resolves against each side's own mount, so
 /// one registry entry works in both worlds permanently.
-pub fn local_entry_checkout_dir(entry: &ConfigRepoEntry) -> Option<std::path::PathBuf> {
+pub fn local_entry_checkout_dir(entry: &FleetEntry) -> Option<std::path::PathBuf> {
     if !entry_is_local_path(entry) {
         return None;
     }
@@ -187,13 +187,17 @@ pub fn local_entry_checkout_dir(entry: &ConfigRepoEntry) -> Option<std::path::Pa
     if path.is_absolute() {
         Some(path)
     } else {
-        Some(crate::config::paths::resolve_home_with_kind().0.join(path))
+        Some(
+            crate::config::paths::resolve_config_dir_with_kind()
+                .0
+                .join(path),
+        )
     }
 }
 
 /// Classifier: whether `url` names a GIT remote (http(s)/ssh/git protocol or
 /// a `.git`-suffixed path) as opposed to a plain local filesystem path.
-/// Extracted from [`entry_is_local_path`] (ADR 0025): `home clone`
+/// Extracted from [`entry_is_local_path`] (ADR 0025): `config clone`
 /// reuses it to classify the provisioning source (the `<src>` positional) and each
 /// registry entry's reproducibility. NOTE: a local path ending in `.git` is
 /// classified remote — git itself treats such paths as cloneable URLs, and
@@ -270,7 +274,7 @@ fn pick_default_ref(
                 ConfigSourceKind::PlainPath => "the checkout is not a git working repo on a branch",
             };
             anyhow::bail!(
-                "cannot resolve a default ref for config repo '{}': no explicit `ref` in the \
+                "cannot resolve a default ref for fleet '{}': no explicit `ref` in the \
                  registry entry and {}; set `ref` in the registry entry",
                 name,
                 tried
@@ -290,7 +294,7 @@ fn pick_default_ref(
 /// lands with the A5 session that resolves refs through the archive store.
 pub fn resolve_default_ref(
     name: &str,
-    entry: &ConfigRepoEntry,
+    entry: &FleetEntry,
     checkout: &std::path::Path,
 ) -> Result<String> {
     let kind = source_kind(&entry.url);
@@ -318,36 +322,32 @@ pub fn resolve_default_ref(
 /// The EFFECTIVE ref of one registry entry (A5 Session 2): the entry's
 /// explicit `ref` when set, else [`resolve_default_ref`] against `checkout`.
 /// This is the ref the lock pins under `(name, effective ref)` and the ref
-/// `config update` rev-parses. Unlike [`resolve_default_ref`] it does NOT
+/// `fleet update` rev-parses. Unlike [`resolve_default_ref`] it does NOT
 /// probe git when an explicit ref is set (the probe could not change the
 /// answer — explicit wins — so skipping it is pure savings).
-pub fn effective_ref(
-    name: &str,
-    entry: &ConfigRepoEntry,
-    checkout: &std::path::Path,
-) -> Result<String> {
+pub fn effective_ref(name: &str, entry: &FleetEntry, checkout: &std::path::Path) -> Result<String> {
     match entry.r#ref.as_deref() {
         Some(r) => Ok(r.to_string()),
         None => resolve_default_ref(name, entry, checkout),
     }
 }
 
-/// Insert/replace a config repo entry in the registry. If `layers` is empty,
-/// push `name` as the default layer (mirrors cmd_config_add's behavior).
-/// Shared by `cmd_config_add` (clone + register) and `cmd_config_new`
+/// Insert/replace a fleet entry in the registry. If `layers` is empty,
+/// push `name` as the default layer (mirrors cmd_fleet_add's behavior).
+/// Shared by `cmd_fleet_add` (clone + register) and `cmd_fleet_new`
 /// (local path + register). For local-path scaffolds, pass `git_ref = None`
-/// and `rev = None` — `cmd_config_update` recognizes this as a local-path
+/// and `rev = None` — `cmd_fleet_update` recognizes this as a local-path
 /// repo and skips the pull step.
-pub fn register_config(
+pub fn register_fleet(
     name: &str,
     url: &str,
     git_ref: Option<&str>,
     rev: Option<&str>,
 ) -> Result<()> {
     with_registry_lock(|registry| {
-        registry.configs.insert(
+        registry.fleets.insert(
             name.to_string(),
-            ConfigRepoEntry {
+            FleetEntry {
                 url: url.to_string(),
                 r#ref: git_ref.map(|s| s.to_string()),
                 rev: rev.map(|s| s.to_string()),
@@ -367,7 +367,7 @@ pub fn register_config(
 /// Persist `settings.default_context = name` in the registry. Errors if no
 /// registry exists or if `name` is not a defined context (the message lists
 /// the available contexts). The load → mutate → save critical section runs
-/// under the advisory registry lock (FN-5), same as [`register_config`].
+/// under the advisory registry lock (FN-5), same as [`register_fleet`].
 pub fn set_default_context(name: &str) -> Result<()> {
     let _lock = RegistryLock::acquire()?;
     let mut registry = load_registry()?
@@ -454,12 +454,12 @@ fn config_ref_branch_candidate(registry: &Registry) -> Option<String> {
     if config_ref.is_empty() {
         return None;
     }
-    for (name, entry) in &registry.configs {
+    for (name, entry) in &registry.fleets {
         if source_kind(&entry.url) == ConfigSourceKind::PlainPath {
             continue;
         }
         let clone = crate::config::paths::resolve_store_dir()
-            .join("config-repos")
+            .join("fleets")
             .join(name);
         if !clone.join(".git").exists() {
             continue;
@@ -481,12 +481,12 @@ fn config_ref_branch_candidate(registry: &Registry) -> Option<String> {
 fn checkout_branch_candidate(registry: &Registry) -> Option<String> {
     let first = registry.layers.first()?;
     let dir = registry
-        .configs
+        .fleets
         .get(first)
         .and_then(local_entry_checkout_dir)
         .unwrap_or_else(|| {
             crate::config::paths::resolve_store_dir()
-                .join("config-repos")
+                .join("fleets")
                 .join(first)
         });
     if !dir.join(".git").exists() {
@@ -505,7 +505,7 @@ fn checkout_branch_candidate(registry: &Registry) -> Option<String> {
 ///
 /// a. `WORKESTRATE_CONTEXT` env (set by `--context` or by hand) —
 ///    UNCHANGED strict semantics: when contexts are defined the name MUST
-///    be one of them (hard error otherwise); a contexts-less home ignores
+///    be one of them (hard error otherwise); a contexts-less config ignores
 ///    the env and keeps the bare-layers shape (`name = None`), as before.
 /// b. `WORKESTRATE_CONFIG_REF` (`--config-ref`) when it names a BRANCH —
 ///    see [`config_ref_branch_candidate`]. A purely-sha ref yields NO
@@ -556,7 +556,7 @@ pub fn resolve_active_context() -> Result<ActiveContext> {
     };
 
     // (a) WORKESTRATE_CONTEXT env (set by --context flag or by user) —
-    //     unchanged strict semantics; a contexts-less home ignores it.
+    //     unchanged strict semantics; a contexts-less config ignores it.
     if let Ok(name) = std::env::var("WORKESTRATE_CONTEXT") {
         if registry.contexts.is_empty() {
             return Ok(ActiveContext {
@@ -679,7 +679,7 @@ pub(crate) mod tests {
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("HOME", &tmp_home) };
@@ -693,7 +693,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
 
         let ctx = resolve_active_context()?;
 
@@ -718,9 +718,9 @@ pub(crate) mod tests {
         }
         match old_config_dir {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -751,7 +751,7 @@ pub(crate) mod tests {
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("HOME", &tmp_home) };
@@ -765,7 +765,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
 
         let ctx = resolve_active_context()?;
 
@@ -789,9 +789,9 @@ pub(crate) mod tests {
         }
         match old_config_dir {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -822,7 +822,7 @@ pub(crate) mod tests {
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("HOME", &tmp_home) };
@@ -836,7 +836,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "work") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
 
         let ctx = resolve_active_context()?;
 
@@ -860,9 +860,9 @@ pub(crate) mod tests {
         }
         match old_config_dir {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -892,7 +892,7 @@ pub(crate) mod tests {
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("HOME", &tmp_home) };
@@ -906,7 +906,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
 
         let ctx = resolve_active_context()?;
 
@@ -930,9 +930,9 @@ pub(crate) mod tests {
         }
         match old_config_dir {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -962,7 +962,7 @@ pub(crate) mod tests {
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("HOME", &tmp_home) };
@@ -976,7 +976,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "nonexistent") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
 
         let result = resolve_active_context();
 
@@ -1000,9 +1000,9 @@ pub(crate) mod tests {
         }
         match old_config_dir {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -1037,7 +1037,7 @@ pub(crate) mod tests {
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("HOME", &tmp_home) };
@@ -1051,7 +1051,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
 
         let result = resolve_active_context();
 
@@ -1075,9 +1075,9 @@ pub(crate) mod tests {
         }
         match old_config_dir {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -1091,8 +1091,8 @@ pub(crate) mod tests {
     }
     // ---- FS-18: local-path vs git-URL registry entry classification ----
 
-    fn entry(url: &str, git_ref: Option<&str>, rev: Option<&str>) -> ConfigRepoEntry {
-        ConfigRepoEntry {
+    fn entry(url: &str, git_ref: Option<&str>, rev: Option<&str>) -> FleetEntry {
+        FleetEntry {
             url: url.to_string(),
             r#ref: git_ref.map(|s| s.to_string()),
             rev: rev.map(|s| s.to_string()),
@@ -1104,7 +1104,7 @@ pub(crate) mod tests {
     }
 
     /// The FS-18 regression: a GIT-URL entry with rev=None is NOT a local
-    /// path — `cmd_config_update` must not skip it (it gets pulled, which
+    /// path — `cmd_fleet_update` must not skip it (it gets pulled, which
     /// re-records the rev).
     #[test]
     fn git_url_entry_with_missing_rev_is_not_local_path() {
@@ -1124,7 +1124,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// Genuine local-path entries (what `config new` registers: filesystem
+    /// Genuine local-path entries (what `fleet new` registers: filesystem
     /// path url, ref=None, rev=None) ARE classified local and skip the pull.
     #[test]
     fn local_path_entry_is_classified_local() {
@@ -1140,7 +1140,7 @@ pub(crate) mod tests {
             );
         }
         // A recorded ref or rev upgrades a path-like url to "tracked" — not
-        // the `config new` shape, so not local.
+        // the `fleet new` shape, so not local.
         assert!(!entry_is_local_path(&entry(
             "/home/user/my-config",
             Some("main"),
@@ -1150,27 +1150,27 @@ pub(crate) mod tests {
 
     // ---- FN-5: atomic save + advisory lock ----
 
-    /// Set WORKESTRATE_HOME to a fresh temp dir (HomeKind::Env → registry at
+    /// Set WORKESTRATE_CONFIG to a fresh temp dir (ConfigDirKind::Env → registry at
     /// `<tmp>/config.toml`) and return the dir. Caller must hold
-    /// ENV_TEST_LOCK and an EnvGuard for HOME_ENV_KEYS.
-    fn pin_home(label: &str) -> std::path::PathBuf {
-        let home = uniq_dir(label);
-        std::fs::create_dir_all(&home).expect("create pinned home");
+    /// ENV_TEST_LOCK and an EnvGuard for CONFIG_ENV_KEYS.
+    fn pin_config(label: &str) -> std::path::PathBuf {
+        let config_dir = uniq_dir(label);
+        std::fs::create_dir_all(&config_dir).expect("create pinned config dir");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
-        home
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
+        config_dir
     }
 
     #[test]
     fn save_registry_writes_atomically_and_leaves_no_tmp() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = pin_home("fn5-atomic");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = pin_config("fn5-atomic");
 
         let mut registry = Registry::default();
-        registry.configs.insert(
+        registry.fleets.insert(
             "personal".to_string(),
-            ConfigRepoEntry {
+            FleetEntry {
                 url: "https://example.invalid/personal.git".to_string(),
                 r#ref: Some("main".to_string()),
                 rev: Some("abc123".to_string()),
@@ -1184,39 +1184,39 @@ pub(crate) mod tests {
 
         // Round-trip: output identical to the saved registry.
         let loaded = load_registry()?.expect("registry should exist after save");
-        assert_eq!(loaded.configs.len(), 1);
+        assert_eq!(loaded.fleets.len(), 1);
         assert_eq!(
-            loaded.configs["personal"].url,
+            loaded.fleets["personal"].url,
             "https://example.invalid/personal.git"
         );
-        assert_eq!(loaded.configs["personal"].rev.as_deref(), Some("abc123"));
+        assert_eq!(loaded.fleets["personal"].rev.as_deref(), Some("abc123"));
 
         // No tmp file left behind next to config.toml.
         let tmp = registry_path().with_extension("toml.tmp");
         assert!(!tmp.exists(), "tmp file must not survive the rename");
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
-    // ---- local_entry_checkout_dir (shared-home duality) ----
+    // ---- local_entry_checkout_dir (shared-config duality) ----
 
     #[test]
     fn local_entry_checkout_dir_resolves_relative_against_home() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = pin_home("local-entry-rel");
-        let e = entry("config-repos/personal", None, None);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = pin_config("local-entry-rel");
+        let e = entry("fleets/personal", None, None);
         assert_eq!(
             local_entry_checkout_dir(&e),
-            Some(home.join("config-repos/personal"))
+            Some(config_dir.join("fleets/personal"))
         );
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 
     #[test]
     fn local_entry_checkout_dir_passes_absolute_and_tilde_through() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
         // Absolute entries are returned unchanged.
         let abs = entry("/home/user/my-config", None, None);
         assert_eq!(
@@ -1241,8 +1241,8 @@ pub(crate) mod tests {
     #[test]
     fn interrupted_write_leaves_original_registry_intact() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = pin_home("fn5-interrupt");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = pin_config("fn5-interrupt");
 
         // Commit one good registry first.
         let mut good = Registry::default();
@@ -1267,17 +1267,17 @@ pub(crate) mod tests {
         let loaded = load_registry()?.expect("registry parses after save");
         assert_eq!(loaded.layers, vec!["next".to_string()]);
         assert!(!tmp.exists(), "save must consume (rename) the tmp file");
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     #[test]
-    fn register_config_removes_lock_file_and_persists_entry() -> Result<()> {
+    fn register_fleet_removes_lock_file_and_persists_entry() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = pin_home("fn5-lock");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = pin_config("fn5-lock");
 
-        register_config(
+        register_fleet(
             "personal",
             "https://example.invalid/personal.git",
             Some("main"),
@@ -1288,22 +1288,22 @@ pub(crate) mod tests {
         let lock_path = registry_path().with_file_name(REGISTRY_LOCK_NAME);
         assert!(
             !lock_path.exists(),
-            "registry lock must be released after register_config"
+            "registry lock must be released after register_fleet"
         );
 
         // The entry persisted (load → mutate → save ran under the lock).
         let loaded = load_registry()?.expect("registry should exist");
-        assert!(loaded.configs.contains_key("personal"));
+        assert!(loaded.fleets.contains_key("personal"));
         assert_eq!(loaded.layers, vec!["personal".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     #[test]
     fn trust_round_trip_releases_lock() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = pin_home("fn5-trust");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = pin_config("fn5-trust");
 
         let project = uniq_dir("fn5-trust-proj");
         std::fs::create_dir_all(&project)?;
@@ -1317,7 +1317,7 @@ pub(crate) mod tests {
             !lock_path.exists(),
             "registry lock must be released after trust/untrust"
         );
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         let _ = std::fs::remove_dir_all(&project);
         Ok(())
     }
@@ -1325,10 +1325,10 @@ pub(crate) mod tests {
     // ---- W6a: set_default_context (`workestrate context use`) ----
 
     /// Seed a registry with `personal` + `work` contexts (default:
-    /// `personal`) in the pinned home and return the home dir. Caller must
-    /// hold ENV_TEST_LOCK + an EnvGuard for HOME_ENV_KEYS.
+    /// `personal`) in the pinned config and return the config dir. Caller must
+    /// hold ENV_TEST_LOCK + an EnvGuard for CONFIG_ENV_KEYS.
     fn seed_two_context_home(label: &str) -> std::path::PathBuf {
-        let home = pin_home(label);
+        let config_dir = pin_config(label);
         let mut registry = Registry::default();
         registry.settings.default_context = Some("personal".to_string());
         registry.contexts.insert(
@@ -1344,14 +1344,14 @@ pub(crate) mod tests {
             },
         );
         save_registry(&registry).expect("seed registry");
-        home
+        config_dir
     }
 
     #[test]
     fn set_default_context_persists() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = seed_two_context_home("w6a-use-persist");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = seed_two_context_home("w6a-use-persist");
 
         set_default_context("work")?;
 
@@ -1361,15 +1361,15 @@ pub(crate) mod tests {
             Some("work"),
             "settings.default_context must persist as \"work\""
         );
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     #[test]
     fn set_default_context_then_resolves_as_active_default() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = seed_two_context_home("w6a-use-resolve");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = seed_two_context_home("w6a-use-resolve");
         // No env override may shadow the persisted default.
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -1384,7 +1384,7 @@ pub(crate) mod tests {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
             None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
         }
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
 
         assert_eq!(active.name.as_deref(), Some("work"));
         assert_eq!(active.layers, vec!["team", "personal"]);
@@ -1394,12 +1394,12 @@ pub(crate) mod tests {
     #[test]
     fn set_default_context_unknown_name_errors_and_lists_available() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = seed_two_context_home("w6a-use-unknown");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = seed_two_context_home("w6a-use-unknown");
 
         let result = set_default_context("nonexistent");
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("not defined"),
@@ -1415,12 +1415,12 @@ pub(crate) mod tests {
     #[test]
     fn set_default_context_without_registry_errors() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = pin_home("w6a-use-noreg");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = pin_config("w6a-use-noreg");
 
         let result = set_default_context("work");
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("no registry found"),
@@ -1460,8 +1460,8 @@ pub(crate) mod tests {
     #[test]
     fn load_registry_rejects_invalid_context_key() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = pin_home("g4-bad-context");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = pin_config("g4-bad-context");
         std::fs::write(
             registry_path(),
             "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[contexts.\"has space\"]\nlayers = [\"team\"]\n",
@@ -1477,7 +1477,7 @@ pub(crate) mod tests {
             msg.contains("invalid context name"),
             "error must be the G4 validation error: {msg}"
         );
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -1486,13 +1486,13 @@ pub(crate) mod tests {
     #[test]
     fn load_registry_accepts_valid_context_keys() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = seed_two_context_home("g4-ok-context");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = seed_two_context_home("g4-ok-context");
 
         let registry = load_registry()?.expect("valid registry must load");
         assert!(registry.contexts.contains_key("personal"));
         assert!(registry.contexts.contains_key("work"));
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -1704,19 +1704,19 @@ pub(crate) mod tests {
 
     // ---- A5 Session 3a: the context derivation order (ADR 0032 addendum) ----
     //
-    // Fixture conventions: pinned WORKESTRATE_HOME (HomeKind::Env: registry
-    // at <home>/config.toml, managed clones at <home>/config-repos/<name>),
+    // Fixture conventions: pinned WORKESTRATE_CONFIG (ConfigDirKind::Env: registry
+    // at <config>/config.toml, managed clones at <config>/fleets/<name>),
     // REAL temp git repos (the git.rs precedent: git on the pinned PATH),
     // ENV_TEST_LOCK + EnvGuard over the discovery vars PLUS the two ladder
     // env vars (WORKESTRATE_CONTEXT is removed by default and set per test;
     // WORKESTRATE_CONFIG_REF likewise).
 
     const A5_DERIVE_ENV_KEYS: &[&str] = &[
-        "WORKESTRATE_HOME",
+        "WORKESTRATE_CONFIG",
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
         "XDG_STATE_HOME",
-        "WORKESTRATE_CONFIG_DIR",
+        "WORKESTRATE_FLEET_DIR",
         "WORKESTRATE_NO_PROJECT_CONFIG",
         "WORKESTRATE_INVOKE_CWD",
         "HOME",
@@ -1724,15 +1724,15 @@ pub(crate) mod tests {
         "WORKESTRATE_CONFIG_REF",
     ];
 
-    /// Pin the home and neutralize the ladder env vars. Caller holds
+    /// Pin the config and neutralize the ladder env vars. Caller holds
     /// ENV_TEST_LOCK; the EnvGuard is captured by the caller BEFORE this.
-    fn a5_derive_home(label: &str) -> std::path::PathBuf {
-        let home = pin_home(label);
+    fn a5_derive_config(label: &str) -> std::path::PathBuf {
+        let config_dir = pin_config(label);
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONFIG_REF") };
-        home
+        config_dir
     }
 
     fn a5_derive_git(dir: &std::path::Path, args: &[&str]) {
@@ -1765,35 +1765,35 @@ pub(crate) mod tests {
     }
 
     /// Register a Remote entry `name` with a managed clone
-    /// (`<home>/config-repos/<name>`) on branch `checkout_branch`, in a
-    /// bare-layers home (`layers = [<name>]`, no [contexts]).
-    fn a5_derive_remote_bare_home(
+    /// (`<config>/fleets/<name>`) on branch `checkout_branch`, in a
+    /// bare-layers config (`layers = [<name>]`, no [contexts]).
+    fn a5_derive_remote_bare_config(
         label: &str,
         name: &str,
         checkout_branch: &str,
     ) -> std::path::PathBuf {
-        let home = a5_derive_home(label);
-        let clone = home.join("config-repos").join(name);
+        let config_dir = a5_derive_config(label);
+        let clone = config_dir.join("fleets").join(name);
         a5_derive_repo(&clone, checkout_branch);
         std::fs::write(
-            home.join("config.toml"),
+            config_dir.join("config.toml"),
             format!(
-                "layers = [\"{name}\"]\n\n[configs.{name}]\nurl = \"https://example.invalid/{name}.git\"\nref = \"main\"\n"
+                "layers = [\"{name}\"]\n\n[fleets.{name}]\nurl = \"https://example.invalid/{name}.git\"\nref = \"main\"\n"
             ),
         )
         .expect("write registry");
-        home
+        config_dir
     }
 
-    /// Step b: a branch-shaped --config-ref namespaces a bare-layers home —
+    /// Step b: a branch-shaped --config-ref namespaces a bare-layers config —
     /// name = Some(<branch>) over the bare layer list (the dev-model
     /// namespacing).
     #[test]
     fn config_ref_branch_namespaces_a_bare_layers_home() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let home = a5_derive_remote_bare_home("a5-derive-cfgref", "team", "main");
-        let clone = home.join("config-repos").join("team");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-cfgref", "team", "main");
+        let clone = config_dir.join("fleets").join("team");
         // The branch exists in the clone but is NOT checked out (isolating
         // step b from step c, which would report the checkout branch).
         a5_derive_git(&clone, &["branch", "feat-x"]);
@@ -1804,19 +1804,19 @@ pub(crate) mod tests {
 
         assert_eq!(ctx.name.as_deref(), Some("feat-x"));
         assert_eq!(ctx.layers, vec!["team".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     /// Step b with a purely-sha --config-ref yields NO context (shas are
     /// not branches); with no checkout-branch candidate either (detached
-    /// HEAD), the bare-layers home keeps name = None.
+    /// HEAD), the bare-layers config keeps name = None.
     #[test]
     fn sha_config_ref_yields_no_context_name() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let home = a5_derive_remote_bare_home("a5-derive-sha", "team", "main");
-        let clone = home.join("config-repos").join("team");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-sha", "team", "main");
+        let clone = config_dir.join("fleets").join("team");
         let sha = crate::git::git_rev_parse(&clone)?;
         // Detach HEAD so step c cannot name a context either — isolating
         // the sha-ref behavior at step b.
@@ -1831,7 +1831,7 @@ pub(crate) mod tests {
             "a purely-sha --config-ref must not set a context name"
         );
         assert_eq!(ctx.layers, vec!["team".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -1844,27 +1844,27 @@ pub(crate) mod tests {
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
 
         // (i) PlainPath first layer on branch wip.
-        let home = a5_derive_home("a5-derive-plain");
-        let work = home.join("my-work-config");
+        let config_dir = a5_derive_config("a5-derive-plain");
+        let work = config_dir.join("my-work-config");
         a5_derive_repo(&work, "wip");
         std::fs::write(
-            home.join("config.toml"),
+            config_dir.join("config.toml"),
             format!(
-                "layers = [\"local\"]\n\n[configs.local]\nurl = \"{}\"\n",
+                "layers = [\"local\"]\n\n[fleets.local]\nurl = \"{}\"\n",
                 work.display()
             ),
         )?;
         let ctx = resolve_active_context()?;
         assert_eq!(ctx.name.as_deref(), Some("wip"));
         assert_eq!(ctx.layers, vec!["local".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
 
         // (ii) Remote entry: the managed clone's checkout branch.
-        let home = a5_derive_remote_bare_home("a5-derive-clonebr", "team", "on-call");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-clonebr", "team", "on-call");
         let ctx = resolve_active_context()?;
         assert_eq!(ctx.name.as_deref(), Some("on-call"));
         assert_eq!(ctx.layers, vec!["team".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -1874,13 +1874,13 @@ pub(crate) mod tests {
     fn explicit_context_beats_config_ref_branch() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let home = a5_derive_remote_bare_home("a5-derive-explicit", "team", "main");
-        let clone = home.join("config-repos").join("team");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-explicit", "team", "main");
+        let clone = config_dir.join("fleets").join("team");
         a5_derive_git(&clone, &["branch", "feat-x"]);
         // Add a [contexts.work] section (layers = [team]).
         std::fs::write(
-            home.join("config.toml"),
-            "layers = [\"team\"]\n\n[configs.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
+            config_dir.join("config.toml"),
+            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
         )?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "work") };
@@ -1891,7 +1891,7 @@ pub(crate) mod tests {
 
         assert_eq!(ctx.name.as_deref(), Some("work"));
         assert_eq!(ctx.layers, vec!["team".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -1903,8 +1903,8 @@ pub(crate) mod tests {
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
         // Clone is CHECKED OUT on main (the step-c candidate) while feat-x
         // exists as a branch (the step-b candidate via --config-ref).
-        let home = a5_derive_remote_bare_home("a5-derive-b-over-c", "team", "main");
-        let clone = home.join("config-repos").join("team");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-b-over-c", "team", "main");
+        let clone = config_dir.join("fleets").join("team");
         a5_derive_git(&clone, &["branch", "feat-x"]);
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
@@ -1916,7 +1916,7 @@ pub(crate) mod tests {
             Some("feat-x"),
             "the --config-ref branch must beat the checkout branch (main)"
         );
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -1927,11 +1927,11 @@ pub(crate) mod tests {
     fn checkout_branch_beats_default_context() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let home = a5_derive_remote_bare_home("a5-derive-c-over-d", "team", "feat-wip");
-        let clone = home.join("config-repos").join("team");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-c-over-d", "team", "feat-wip");
+        let clone = config_dir.join("fleets").join("team");
         std::fs::write(
-            home.join("config.toml"),
-            "layers = [\"team\"]\n\n[configs.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[settings]\ndefault_context = \"stable\"\n\n[contexts.stable]\nlayers = [\"team\"]\n\n[contexts.dev]\nlayers = [\"other\"]\n",
+            config_dir.join("config.toml"),
+            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[settings]\ndefault_context = \"stable\"\n\n[contexts.stable]\nlayers = [\"team\"]\n\n[contexts.dev]\nlayers = [\"other\"]\n",
         )?;
 
         // Undefined candidate: name rides over the DEFAULT's layers.
@@ -1948,7 +1948,7 @@ pub(crate) mod tests {
         let ctx = resolve_active_context()?;
         assert_eq!(ctx.name.as_deref(), Some("dev"));
         assert_eq!(ctx.layers, vec!["other".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -1958,10 +1958,10 @@ pub(crate) mod tests {
     fn undefined_candidate_with_contexts_and_no_default_errors() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let home = a5_derive_remote_bare_home("a5-derive-no-default", "team", "wip");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-no-default", "team", "wip");
         std::fs::write(
-            home.join("config.toml"),
-            "layers = [\"team\"]\n\n[configs.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
+            config_dir.join("config.toml"),
+            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
         )?;
 
         let err = resolve_active_context().expect_err("undefined candidate must hard-error");
@@ -1970,7 +1970,7 @@ pub(crate) mod tests {
             msg.contains("contexts are defined but no default_context is set"),
             "the existing hard error must stand: {msg}"
         );
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -2018,23 +2018,24 @@ pub(crate) mod tests {
     }
 
     /// Step c slugifies: a checkout branch outside the context-name charset
-    /// namespaces the bare-layers home under the SLUG, not the raw name.
+    /// namespaces the bare-layers config under the SLUG, not the raw name.
     #[test]
     fn checkout_branch_candidate_is_slugified() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let home = a5_derive_remote_bare_home("a5-derive-slug-c", "team", "migration/tool-model");
+        let config_dir =
+            a5_derive_remote_bare_config("a5-derive-slug-c", "team", "migration/tool-model");
 
         let ctx = resolve_active_context()?;
         assert_eq!(ctx.name.as_deref(), Some("migration-tool-model"));
         assert_eq!(ctx.layers, vec!["team".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
 
         // A branch with `#`, uppercase, and dots.
-        let home = a5_derive_remote_bare_home("a5-derive-slug-c2", "team", "feat/Foo#1.2");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-slug-c2", "team", "feat/Foo#1.2");
         let ctx = resolve_active_context()?;
         assert_eq!(ctx.name.as_deref(), Some("feat-foo-1-2"));
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -2044,20 +2045,20 @@ pub(crate) mod tests {
     fn config_ref_branch_candidate_is_slugified() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let home = a5_derive_remote_bare_home("a5-derive-slug-b", "team", "main");
-        let clone = home.join("config-repos").join("team");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-slug-b", "team", "main");
+        let clone = config_dir.join("fleets").join("team");
         a5_derive_git(&clone, &["branch", "feat/Foo#1.2"]);
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat/Foo#1.2") };
 
         let ctx = resolve_active_context()?;
         assert_eq!(ctx.name.as_deref(), Some("feat-foo-1-2"));
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     /// An all-illegal branch slugifies to NOTHING: the ladder falls through
-    /// to step d (bare-layers home keeps name = None) rather than riding an
+    /// to step d (bare-layers config keeps name = None) rather than riding an
     /// illegal context name.
     #[test]
     fn all_illegal_branch_yields_no_candidate() -> Result<()> {
@@ -2065,7 +2066,7 @@ pub(crate) mod tests {
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
         // `###` is a valid git branch name (check-ref-format) but has no
         // usable context-name characters.
-        let home = a5_derive_remote_bare_home("a5-derive-slug-none", "team", "###");
+        let config_dir = a5_derive_remote_bare_config("a5-derive-slug-none", "team", "###");
 
         let ctx = resolve_active_context()?;
         assert_eq!(
@@ -2073,7 +2074,7 @@ pub(crate) mod tests {
             "an all-illegal checkout branch must yield NO candidate"
         );
         assert_eq!(ctx.layers, vec!["team".to_string()]);
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 //! SSH policy emission: the `ssh-divert` fixture plan compiles to the exact
 //! guest-visible policy shape the fork's network engine consumes.
 //!
-//! Hermetic like `credentials_broker.rs`: points `WORKESTRATE_CONFIG_DIR`
+//! Hermetic like `credentials_broker.rs`: points `WORKESTRATE_FLEET_DIR`
 //! at the fixture dir (single dev layer), serialized by `ENV_TEST_LOCK`.
 
 #![allow(
@@ -21,14 +21,14 @@ use workestrate::microsandbox::workload::{ConfigWorkload, Workload};
 #[allow(unsafe_code)]
 fn diverter_plan() -> workestrate::microsandbox::plan::SandboxPlan {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
-    let _guard = EnvGuard::capture(&["WORKESTRATE_CONFIG_DIR"]);
+    let _guard = EnvGuard::capture(&["WORKESTRATE_FLEET_DIR"]);
     let dir: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("credentials_broker")
         .join("ssh-divert");
     // SAFETY: serialized by ENV_TEST_LOCK (held for this function's
     // lifetime via _lock); EnvGuard restores the prior value on drop.
-    unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", dir) };
+    unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", dir) };
     ConfigWorkload::new("diverter")
         .unwrap_or_else(|e| panic!("ssh-divert fixture failed to load: {e}"))
         .plan()

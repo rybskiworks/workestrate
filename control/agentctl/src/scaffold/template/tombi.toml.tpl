@@ -1,4 +1,4 @@
-# tombi configuration for workestrate config repos.
+# tombi configuration for workestrate fleets.
 # tombi 1.2.5+ — see https://tombi-toml.github.io/tombi/
 
 toml-version = "v1.0.0"

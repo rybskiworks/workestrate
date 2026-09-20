@@ -1,4 +1,4 @@
-//! `repo_key` resolution (spec 21 §4.3, §8): the config-repo identity half of
+//! `repo_key` resolution (spec 21 §4.3, §8): the fleet identity half of
 //! the `<repo>#<tag>` record key.
 //!
 //! Rule (spec §4.3): the repo_key is the **registered-repo NAME** when the
@@ -12,11 +12,11 @@
 //! impure wrappers ([`registered_repo_checkouts`], [`resolve_repo_key`]) build
 //! those pairs from the live registry:
 //!
-//! - **local-path entries** (`config new`; [`crate::config::entry_is_local_path`]):
+//! - **local-path entries** (`fleet new`; [`crate::config::entry_is_local_path`]):
 //!   the entry `url` IS the checkout path (tilde-expanded);
-//! - **managed git clones** (`config add <url>`): the checkout is
-//!   [`crate::config::config_repo_dir`] —
-//!   `resolve_store_dir()/config-repos/<name>` — the same resolution the
+//! - **managed git clones** (`fleet add <url>`): the checkout is
+//!   [`crate::config::fleet_dir`] —
+//!   `resolve_store_dir()/fleets/<name>` — the same resolution the
 //!   `config`/`source` commands use.
 //!
 //! Containment is `Path::starts_with` on CANONICALIZED paths (symlink-safe);
@@ -72,7 +72,7 @@ pub fn repo_key_for(declaring_dir: &Path, registered: &[(String, PathBuf)]) -> S
 }
 
 /// Like [`repo_key_for`] but returns `None` when the declaring dir is NOT
-/// contained in a registered config-repo checkout (i.e. it is a synthetic /
+/// contained in a registered fleet checkout (i.e. it is a synthetic /
 /// single-file / test layer with no repo identity). Used by the ADR 0030
 /// namespace resolution: a non-repo layer has no namespace and falls back to
 /// "default".
@@ -84,9 +84,9 @@ pub fn repo_key_for_optional(
     match_registered(&declaring_canon, registered).map(|(name, _)| name)
 }
 
-/// The (name, checkout-path) pairs for every registered config repo, resolved
+/// The (name, checkout-path) pairs for every registered fleet, resolved
 /// from the live registry. Local-path entries contribute their `url` as the
-/// checkout; managed git clones contribute `config-repos/<name>` under the
+/// checkout; managed git clones contribute `fleets/<name>` under the
 /// store dir. A missing/corrupt registry yields an EMPTY list (with a stderr
 /// note on corruption) — every declaring dir then keys by canonical path,
 /// which stays truthful under the advisory-record posture (spec §3.2).
@@ -102,17 +102,17 @@ pub fn registered_repo_checkouts() -> Vec<(String, PathBuf)> {
         }
     };
     registry
-        .configs
+        .fleets
         .iter()
         .map(|(name, entry)| {
             let checkout = if let Some(dir) = crate::config::local_entry_checkout_dir(entry) {
-                // Local-path repo (`config new`): the url IS the checkout,
-                // resolved home-relative when relative (shared-home duality).
+                // Local-path repo (`fleet new`): the url IS the checkout,
+                // resolved config-relative when relative (shared-config duality).
                 dir
             } else {
-                // Managed clone (`config add <url>`): the store checkout, the
-                // same resolution config_cmd/git.rs use.
-                crate::config::config_repo_dir(name)
+                // Managed clone (`fleet add <url>`): the store checkout, the
+                // same resolution fleet_cmd/git.rs use.
+                crate::config::fleet_dir(name)
             };
             (name.clone(), checkout)
         })
@@ -165,7 +165,7 @@ pub fn repo_identity_for(
 #[allow(unsafe_code)]
 mod tests {
     use super::*;
-    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, uniq_dir};
+    use crate::config::test_support::{CONFIG_ENV_KEYS, ENV_TEST_LOCK, EnvGuard, uniq_dir};
 
     /// Fixture: a registered checkout at `<tmp>/checkout` and a declaring
     /// dir nested inside it. Returns (tmp, checkout, declaring).
@@ -293,23 +293,23 @@ mod tests {
 
     /// The impure wrapper: local-path entries contribute their `url` as the
     /// checkout; managed (git-url) clones contribute
-    /// `resolve_store_dir()/config-repos/<name>`.
+    /// `resolve_store_dir()/fleets/<name>`.
     #[test]
     fn registered_repo_checkouts_maps_local_and_managed_entries() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = uniq_dir("repokey-wrapper-home");
-        std::fs::create_dir_all(&home).unwrap();
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = uniq_dir("repokey-wrapper-config");
+        std::fs::create_dir_all(&config_dir).unwrap();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
 
-        let local_checkout = home.join("my-local-repo");
+        let local_checkout = config_dir.join("my-local-repo");
         std::fs::write(
-            home.join("config.toml"),
+            config_dir.join("config.toml"),
             format!(
                 "layers = []\n\n\
-                 [configs.local]\nurl = \"{}\"\n\n\
-                 [configs.managed]\nurl = \"https://example.invalid/managed.git\"\n\
+                 [fleets.local]\nurl = \"{}\"\n\n\
+                 [fleets.managed]\nurl = \"https://example.invalid/managed.git\"\n\
                  ref = \"main\"\nrev = \"abc123\"\n",
                 local_checkout.display()
             ),
@@ -325,11 +325,11 @@ mod tests {
         );
         assert_eq!(
             by_name.get("managed"),
-            Some(&home.join("config-repos").join("managed")),
-            "managed clone: resolve_store_dir()/config-repos/<name>"
+            Some(&config_dir.join("fleets").join("managed")),
+            "managed clone: resolve_store_dir()/fleets/<name>"
         );
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 
     /// End-to-end: a declaring dir under a registered local-path checkout
@@ -337,17 +337,17 @@ mod tests {
     #[test]
     fn resolve_repo_key_end_to_end_via_live_registry() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = uniq_dir("repokey-e2e-home");
-        let checkout = home.join("checkout");
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = uniq_dir("repokey-e2e-config");
+        let checkout = config_dir.join("checkout");
         let declaring = checkout.join("workestrate").join("workloads").join("pi");
         std::fs::create_dir_all(&declaring).unwrap();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
         std::fs::write(
-            home.join("config.toml"),
+            config_dir.join("config.toml"),
             format!(
-                "layers = []\n\n[configs.personal]\nurl = \"{}\"\n",
+                "layers = []\n\n[fleets.personal]\nurl = \"{}\"\n",
                 checkout.display()
             ),
         )
@@ -355,13 +355,13 @@ mod tests {
 
         assert_eq!(resolve_repo_key(&declaring), "personal");
         // Outside every checkout → canonical path.
-        let stray = home.join("stray");
+        let stray = config_dir.join("stray");
         std::fs::create_dir_all(&stray).unwrap();
         assert_eq!(
             resolve_repo_key(&stray),
             stray.canonicalize().unwrap().to_string_lossy()
         );
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 }

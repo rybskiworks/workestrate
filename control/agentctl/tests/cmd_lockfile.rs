@@ -1,7 +1,7 @@
 //! Integration tests for the generated `workestrate.lock` (ADR 0025(e),
-//! spec 11 §3): `config add`/`config update`/`config remove` mutate the lock,
-//! bare `home init` writes an empty-repos lock, and `home clone` pins
-//! the actual checked-out revs. Legacy tolerance (a home without a lock) is
+//! spec 11 §3): `fleet add`/`fleet update`/`fleet remove` mutate the lock,
+//! bare `config init` writes an empty-repos lock, and `config clone` pins
+//! the actual checked-out revs. Legacy tolerance (a config without a lock) is
 //! covered by the pre-existing suites, which never create one and must stay
 //! green.
 //!
@@ -76,9 +76,9 @@ fn git_source_repo(parent: &Path, name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// Extract the value lines of `[repos.<name>]` from a lock TOML string.
-fn lock_repo_section(lock: &str, name: &str) -> String {
-    let header = format!("[repos.{name}]");
+/// Extract the value lines of `[fleets.<name>]` from a lock TOML string.
+fn lock_fleet_section(lock: &str, name: &str) -> String {
+    let header = format!("[fleets.{name}]");
     let mut in_section = false;
     let mut out = String::new();
     for line in lock.lines() {
@@ -98,11 +98,11 @@ fn lock_repo_section(lock: &str, name: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// config add writes the lock
+// fleet add writes the lock
 // ---------------------------------------------------------------------------
 
 #[test]
-fn config_add_writes_lock_with_url_ref_and_actual_head_rev() {
+fn fleet_add_writes_lock_with_url_ref_and_actual_head_rev() {
     let home = IsolatedHome::new("cmd-lockfile");
     let store = home.dir.join(".workestrate");
     let scratch = TempDir::new("cmd-lockfile-src");
@@ -111,9 +111,9 @@ fn config_add_writes_lock_with_url_ref_and_actual_head_rev() {
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args([
-            "config",
+            "fleet",
             "add",
             src.to_str().expect("utf8 src path"),
             "personal",
@@ -121,28 +121,28 @@ fn config_add_writes_lock_with_url_ref_and_actual_head_rev() {
             "main",
         ])
         .output()
-        .expect("invoke config add");
+        .expect("invoke fleet add");
     assert!(
         out.status.success(),
-        "config add failed: stderr=\n{}",
+        "fleet add failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     let lock_path = store.join("workestrate.lock");
-    assert!(lock_path.exists(), "config add must write workestrate.lock");
+    assert!(lock_path.exists(), "fleet add must write workestrate.lock");
     let lock = std::fs::read_to_string(&lock_path).expect("read lock");
     assert!(
         lock.contains("version = 2"),
         "lock must carry version = 2 (the A5 ref-aware format):\n{lock}"
     );
     assert!(
-        lock.contains("home_version = 2"),
-        "lock must default home_version to 2:\n{lock}"
+        lock.contains("config_version = 2"),
+        "lock must default config_version to 2:\n{lock}"
     );
-    let section = lock_repo_section(&lock, "personal");
+    let section = lock_fleet_section(&lock, "personal");
     assert!(
         !section.is_empty(),
-        "lock must contain [repos.personal]:\n{lock}"
+        "lock must contain [fleets.personal]:\n{lock}"
     );
     assert!(
         section.contains(&format!("url = \"{}\"", src.display())),
@@ -158,14 +158,14 @@ fn config_add_writes_lock_with_url_ref_and_actual_head_rev() {
     );
     // The clone's HEAD equals the source HEAD (fresh clone of a local repo).
     let clone_head = git_stdout(
-        &store.join("config-repos").join("personal"),
+        &store.join("fleets").join("personal"),
         &["rev-parse", "HEAD"],
     );
     assert!(
         section.contains(&format!("rev = \"{clone_head}\"")),
         "lock rev must equal the checkout HEAD ({clone_head}):\n{section}"
     );
-    // A5 Session 2: `config add` also writes the v2 pin fields and produces
+    // A5 Session 2: `fleet add` also writes the v2 pin fields and produces
     // the initial content archive of the locked rev.
     assert!(
         section.contains(&format!("sha = \"{clone_head}\"")),
@@ -182,17 +182,17 @@ fn config_add_writes_lock_with_url_ref_and_actual_head_rev() {
         .join(&clone_head);
     assert!(
         archive.join("workestrate.toml").exists(),
-        "config add must produce the initial archive at {} ",
+        "fleet add must produce the initial archive at {} ",
         archive.display()
     );
 }
 
 // ---------------------------------------------------------------------------
-// config update follows the new HEAD
+// fleet update follows the new HEAD
 // ---------------------------------------------------------------------------
 
 #[test]
-fn config_update_advances_the_lock_rev_to_the_new_head() {
+fn fleet_update_advances_the_lock_rev_to_the_new_head() {
     let home = IsolatedHome::new("cmd-lockfile");
     let store = home.dir.join(".workestrate");
     let scratch = TempDir::new("cmd-lockfile-src");
@@ -200,9 +200,9 @@ fn config_update_advances_the_lock_rev_to_the_new_head() {
 
     let add = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args([
-            "config",
+            "fleet",
             "add",
             src.to_str().expect("utf8 src path"),
             "personal",
@@ -210,10 +210,10 @@ fn config_update_advances_the_lock_rev_to_the_new_head() {
             "main",
         ])
         .output()
-        .expect("invoke config add");
+        .expect("invoke fleet add");
     assert!(
         add.status.success(),
-        "config add failed: stderr=\n{}",
+        "fleet add failed: stderr=\n{}",
         String::from_utf8_lossy(&add.stderr)
     );
     let first_head = git_stdout(&src, &["rev-parse", "HEAD"]);
@@ -227,18 +227,18 @@ fn config_update_advances_the_lock_rev_to_the_new_head() {
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["config", "update", "personal"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["fleet", "update", "personal"])
         .output()
-        .expect("invoke config update");
+        .expect("invoke fleet update");
     assert!(
         out.status.success(),
-        "config update failed: stderr=\n{}",
+        "fleet update failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     let lock = std::fs::read_to_string(store.join("workestrate.lock")).expect("read lock");
-    let section = lock_repo_section(&lock, "personal");
+    let section = lock_fleet_section(&lock, "personal");
     assert!(
         section.contains(&format!("rev = \"{second_head}\"")),
         "lock rev must follow the new HEAD ({second_head}):\n{section}"
@@ -261,7 +261,7 @@ fn config_update_advances_the_lock_rev_to_the_new_head() {
     let gitv3 = store.join("state").join("cache").join("gitv3");
     assert!(
         gitv3.join(&second_head).join("notes.md").exists(),
-        "config update must refresh the archive with the new rev's content"
+        "fleet update must refresh the archive with the new rev's content"
     );
     assert!(
         gitv3.join(&first_head).join("workestrate.toml").exists(),
@@ -270,11 +270,11 @@ fn config_update_advances_the_lock_rev_to_the_new_head() {
 }
 
 // ---------------------------------------------------------------------------
-// config remove drops the lock entry
+// fleet remove drops the lock entry
 // ---------------------------------------------------------------------------
 
 #[test]
-fn config_remove_drops_the_lock_entry() {
+fn fleet_remove_drops_the_lock_entry() {
     let home = IsolatedHome::new("cmd-lockfile");
     let store = home.dir.join(".workestrate");
     let scratch = TempDir::new("cmd-lockfile-src");
@@ -282,9 +282,9 @@ fn config_remove_drops_the_lock_entry() {
 
     let add = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args([
-            "config",
+            "fleet",
             "add",
             src.to_str().expect("utf8 src path"),
             "personal",
@@ -292,32 +292,32 @@ fn config_remove_drops_the_lock_entry() {
             "main",
         ])
         .output()
-        .expect("invoke config add");
+        .expect("invoke fleet add");
     assert!(
         add.status.success(),
-        "config add failed: stderr=\n{}",
+        "fleet add failed: stderr=\n{}",
         String::from_utf8_lossy(&add.stderr)
     );
     assert!(store.join("workestrate.lock").exists());
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["config", "remove", "personal"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["fleet", "remove", "personal"])
         .output()
-        .expect("invoke config remove");
+        .expect("invoke fleet remove");
     assert!(
         out.status.success(),
-        "config remove failed: stderr=\n{}",
+        "fleet remove failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     let lock = std::fs::read_to_string(store.join("workestrate.lock")).expect("read lock");
     assert!(
-        !lock.contains("[repos.personal]"),
+        !lock.contains("[fleets.personal]"),
         "the lock entry must be dropped after remove:\n{lock}"
     );
-    // The lock itself still exists (a home that had a lock keeps one).
+    // The lock itself still exists (a config that had a lock keeps one).
     assert!(
         lock.contains("version = 2"),
         "the lock file itself must survive a remove:\n{lock}"
@@ -325,36 +325,36 @@ fn config_remove_drops_the_lock_entry() {
 }
 
 // ---------------------------------------------------------------------------
-// bare home init writes an empty-repos lock
+// bare config init writes an empty-repos lock
 // ---------------------------------------------------------------------------
 
 #[test]
-fn bare_home_init_writes_a_lock_with_empty_repos() {
+fn bare_config_init_writes_a_lock_with_empty_fleets() {
     let home = IsolatedHome::new("cmd-lockfile");
     let store = home.dir.join(".workestrate");
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["home", "init"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["config", "init"])
         .output()
-        .expect("invoke home init");
+        .expect("invoke config init");
     assert!(
         out.status.success(),
-        "home init failed: stderr=\n{}",
+        "config init failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     let lock_path = store.join("workestrate.lock");
-    assert!(lock_path.exists(), "bare home init must write the lock");
+    assert!(lock_path.exists(), "bare config init must write the lock");
     let lock = std::fs::read_to_string(&lock_path).expect("read lock");
     assert!(
         lock.contains("version = 2"),
         "lock must carry version = 2 (the A5 ref-aware format):\n{lock}"
     );
     assert!(
-        lock.contains("home_version = 2"),
-        "lock must carry home_version = 2 (registry default):\n{lock}"
+        lock.contains("config_version = 2"),
+        "lock must carry config_version = 2 (registry default):\n{lock}"
     );
     let tool_line = lock
         .lines()
@@ -365,30 +365,30 @@ fn bare_home_init_writes_a_lock_with_empty_repos() {
         "tool_version must be non-empty: {tool_line}"
     );
     assert!(
-        !lock.contains("[repos."),
-        "a bare init with no config repos writes an empty repos map:\n{lock}"
+        !lock.contains("[fleets."),
+        "a bare init with no fleets writes an empty fleets map:\n{lock}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// home clone pins the actual checked-out rev
+// config clone pins the actual checked-out rev
 // ---------------------------------------------------------------------------
 
 #[test]
-fn home_init_from_writes_dest_lock_pinning_the_checked_out_rev() {
+fn config_clone_writes_dest_lock_pinning_the_checked_out_rev() {
     let home = IsolatedHome::new("cmd-lockfile");
     let scratch = TempDir::new("cmd-lockfile-src");
 
-    // Build a SOURCE home: a git repo with a committed config.toml + a
-    // local-path config repo with TWO commits; the source registry pins the
+    // Build a SOURCE config: a git repo with a committed config.toml + a
+    // local-path fleet with TWO commits; the source registry pins the
     // FIRST commit's rev so provisioning checks out that rev (not the tip).
-    let src_home = scratch.path().join("src-home");
-    std::fs::create_dir_all(&src_home).expect("create src home");
+    let src_home = scratch.path().join("src-config");
+    std::fs::create_dir_all(&src_home).expect("create src config");
     run_git(&src_home, &["init", "-b", "main"]);
     run_git(&src_home, &["config", "user.email", "test@example.com"]);
     run_git(&src_home, &["config", "user.name", "Test"]);
 
-    let src_repo = git_source_repo(&src_home.join("config-repos"), "work");
+    let src_repo = git_source_repo(&src_home.join("fleets"), "work");
     let first_rev = git_stdout(&src_repo, &["rev-parse", "HEAD"]);
     std::fs::write(src_repo.join("notes.md"), "second commit\n").expect("write notes");
     run_git(&src_repo, &["add", "."]);
@@ -400,11 +400,11 @@ fn home_init_from_writes_dest_lock_pinning_the_checked_out_rev() {
     std::fs::write(
         src_home.join("config.toml"),
         format!(
-            "layers = [\"work\"]\n\n[settings]\nhome_version = 2\n\n[configs.work]\nurl = \"{remoteish}\"\nref = \"main\"\nrev = \"{first_rev}\"\n"
+            "layers = [\"work\"]\n\n[settings]\nconfig_version = 2\n\n[fleets.work]\nurl = \"{remoteish}\"\nref = \"main\"\nrev = \"{first_rev}\"\n"
         ),
     )
     .expect("write src registry");
-    std::fs::write(src_home.join(".gitignore"), "/config-repos/\n/state/\n").expect("gitignore");
+    std::fs::write(src_home.join(".gitignore"), "/fleets/\n/state/\n").expect("gitignore");
     run_git(&src_home, &["add", "."]);
     run_git(&src_home, &["commit", "-m", "home: initial"]);
 
@@ -434,25 +434,22 @@ fn home_init_from_writes_dest_lock_pinning_the_checked_out_rev() {
     let mirror_tip = git_stdout(&remoteish_as_path(&remoteish), &["rev-parse", "HEAD"]);
     assert_ne!(first_rev, mirror_tip);
 
-    let dest = scratch.path().join("dest-home");
+    let dest = scratch.path().join("dest-config");
     let out = home
         .cmd()
-        .args(["home", "clone"])
+        .args(["config", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home clone");
+        .expect("invoke config clone");
     assert!(
         out.status.success(),
-        "home clone failed: stderr=\n{}",
+        "config clone failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     // The dest checkout is pinned at first_rev (not the mirror tip).
-    let dest_head = git_stdout(
-        &dest.join("config-repos").join("work"),
-        &["rev-parse", "HEAD"],
-    );
+    let dest_head = git_stdout(&dest.join("fleets").join("work"), &["rev-parse", "HEAD"]);
     assert_eq!(
         dest_head, first_rev,
         "the dest checkout must be pinned at the locked rev, not the tip"
@@ -467,10 +464,10 @@ fn home_init_from_writes_dest_lock_pinning_the_checked_out_rev() {
     let lock = std::fs::read_to_string(&lock_path).expect("read dest lock");
     assert!(lock.contains("version = 2"), "lock version:\n{lock}");
     assert!(
-        lock.contains("home_version = 2"),
-        "lock home_version (src registry recorded 2):\n{lock}"
+        lock.contains("config_version = 2"),
+        "lock config_version (src registry recorded 2):\n{lock}"
     );
-    let section = lock_repo_section(&lock, "work");
+    let section = lock_fleet_section(&lock, "work");
     assert!(
         section.contains(&format!("rev = \"{first_rev}\"")),
         "dest lock must pin the actual checked-out rev ({first_rev}):\n{section}"
@@ -490,24 +487,24 @@ fn remoteish_as_path(remoteish: &str) -> std::path::PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// home clone consumes the SOURCE lock: locked rev wins over the registry
+// config clone consumes the SOURCE lock: locked rev wins over the registry
 // ---------------------------------------------------------------------------
 
-/// Build a SOURCE home whose config repo has commits R1 (older) and R2 (tip);
+/// Build a SOURCE config whose fleet has commits R1 (older) and R2 (tip);
 /// the src registry records rev R2 while the src workestrate.lock pins rev R1
 /// (the source advanced past the lock). Returns (scratch, src_home, mirror
 /// path, R1, R2).
 fn build_lock_driven_source(
     scratch: &Path,
 ) -> (std::path::PathBuf, std::path::PathBuf, String, String) {
-    let src_home = scratch.join("src-home");
-    std::fs::create_dir_all(&src_home).expect("create src home");
+    let src_home = scratch.join("src-config");
+    std::fs::create_dir_all(&src_home).expect("create src config");
     run_git(&src_home, &["init", "-b", "main"]);
     run_git(&src_home, &["config", "user.email", "test@example.com"]);
     run_git(&src_home, &["config", "user.name", "Test"]);
 
-    // The config repo: R1 then R2.
-    let src_repo = git_source_repo(&src_home.join("config-repos"), "work");
+    // The fleet: R1 then R2.
+    let src_repo = git_source_repo(&src_home.join("fleets"), "work");
     let r1 = git_stdout(&src_repo, &["rev-parse", "HEAD"]);
     std::fs::write(src_repo.join("notes.md"), "second commit\n").expect("write notes");
     run_git(&src_repo, &["add", "."]);
@@ -526,18 +523,18 @@ fn build_lock_driven_source(
     std::fs::write(
         src_home.join("config.toml"),
         format!(
-            "layers = [\"work\"]\n\n[settings]\nhome_version = 2\n\n[configs.work]\nurl = \"{remoteish}\"\nref = \"main\"\nrev = \"{r2}\"\n"
+            "layers = [\"work\"]\n\n[settings]\nconfig_version = 2\n\n[fleets.work]\nurl = \"{remoteish}\"\nref = \"main\"\nrev = \"{r2}\"\n"
         ),
     )
     .expect("write src registry");
     std::fs::write(
         src_home.join("workestrate.lock"),
         format!(
-            "version = 1\nhome_version = 2\ntool_version = \"0.1.0\"\n\n[repos.work]\nurl = \"{remoteish}\"\nref = \"main\"\nrev = \"{r1}\"\n"
+            "version = 1\nconfig_version = 2\ntool_version = \"0.1.0\"\n\n[fleets.work]\nurl = \"{remoteish}\"\nref = \"main\"\nrev = \"{r1}\"\n"
         ),
     )
     .expect("write src lock");
-    std::fs::write(src_home.join(".gitignore"), "/config-repos/\n/state/\n").expect("gitignore");
+    std::fs::write(src_home.join(".gitignore"), "/fleets/\n/state/\n").expect("gitignore");
     run_git(&src_home, &["add", "."]);
     run_git(&src_home, &["commit", "-m", "home: initial"]);
 
@@ -545,30 +542,27 @@ fn build_lock_driven_source(
 }
 
 #[test]
-fn home_init_from_lock_rev_wins_over_registry_rev() {
+fn config_clone_lock_rev_wins_over_registry_rev() {
     let home = IsolatedHome::new("cmd-lockfile");
     let scratch = TempDir::new("cmd-lockfile-src");
     let (src_home, _mirror, r1, r2) = build_lock_driven_source(scratch.path());
 
-    let dest = scratch.path().join("dest-home");
+    let dest = scratch.path().join("dest-config");
     let out = home
         .cmd()
-        .args(["home", "clone"])
+        .args(["config", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home clone");
+        .expect("invoke config clone");
     assert!(
         out.status.success(),
-        "home clone failed: stderr=\n{}",
+        "config clone failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     // The dest checkout lands on R1 (the LOCK rev), NOT R2 (registry rev/tip).
-    let dest_head = git_stdout(
-        &dest.join("config-repos").join("work"),
-        &["rev-parse", "HEAD"],
-    );
+    let dest_head = git_stdout(&dest.join("fleets").join("work"), &["rev-parse", "HEAD"]);
     assert_eq!(
         dest_head, r1,
         "the lock rev must win over the registry rev ({r2})"
@@ -576,7 +570,7 @@ fn home_init_from_lock_rev_wins_over_registry_rev() {
 
     // The dest lock pins R1 (the actual checked-out rev).
     let lock = std::fs::read_to_string(dest.join("workestrate.lock")).expect("read dest lock");
-    let section = lock_repo_section(&lock, "work");
+    let section = lock_fleet_section(&lock, "work");
     assert!(
         section.contains(&format!("rev = \"{r1}\"")),
         "dest lock must pin the locked rev ({r1}):\n{section}"
@@ -586,7 +580,7 @@ fn home_init_from_lock_rev_wins_over_registry_rev() {
         "the registry tip must NOT leak into the dest lock:\n{section}"
     );
 
-    // The summary notes the locked rev per repo line.
+    // The summary notes the locked rev per fleet line.
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("locked rev") && stdout.contains(&r1[..7]),
@@ -599,38 +593,38 @@ fn home_init_from_lock_rev_wins_over_registry_rev() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn home_init_from_src_with_newer_lock_version_fails_with_no_dest_residue() {
+fn config_clone_from_src_with_newer_lock_version_fails_with_no_dest_residue() {
     let home = IsolatedHome::new("cmd-lockfile");
     let scratch = TempDir::new("cmd-lockfile-src");
 
-    // Minimal source home: a git repo with a committed config.toml.
-    let src_home = scratch.path().join("src-home");
-    std::fs::create_dir_all(&src_home).expect("create src home");
+    // Minimal source config: a git repo with a committed config.toml.
+    let src_home = scratch.path().join("src-config");
+    std::fs::create_dir_all(&src_home).expect("create src config");
     run_git(&src_home, &["init", "-b", "main"]);
     run_git(&src_home, &["config", "user.email", "test@example.com"]);
     run_git(&src_home, &["config", "user.name", "Test"]);
     std::fs::write(
         src_home.join("config.toml"),
-        "layers = []\n\n[settings]\nhome_version = 2\n",
+        "layers = []\n\n[settings]\nconfig_version = 2\n",
     )
     .expect("write src registry");
     // A lock from the future.
     std::fs::write(
         src_home.join("workestrate.lock"),
-        "version = 99\nhome_version = 2\ntool_version = \"0.1.0\"\n",
+        "version = 99\nconfig_version = 2\ntool_version = \"0.1.0\"\n",
     )
     .expect("write too-new lock");
     run_git(&src_home, &["add", "."]);
     run_git(&src_home, &["commit", "-m", "home: initial"]);
 
-    let dest = scratch.path().join("dest-home");
+    let dest = scratch.path().join("dest-config");
     let out = home
         .cmd()
-        .args(["home", "clone"])
+        .args(["config", "clone"])
         .arg(&src_home)
         .arg(&dest)
         .output()
-        .expect("invoke home clone");
+        .expect("invoke config clone");
     assert!(
         !out.status.success(),
         "a too-new source lock must fail; stdout=\n{}",
@@ -640,7 +634,7 @@ fn home_init_from_src_with_newer_lock_version_fails_with_no_dest_residue() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let combined = format!("{stderr}\n{stdout}");
     assert!(
-        combined.contains("home created by a newer workestrate"),
+        combined.contains("config created by a newer workestrate"),
         "error must contain the exact phrase:\n{combined}"
     );
     assert!(

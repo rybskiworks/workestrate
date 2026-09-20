@@ -1,6 +1,6 @@
-# workestrate-config: {{ config_name }}
+# workestrate-fleet: {{ config_name }}
 
-This is a workestrate configuration repo, generated from the
+This is a workestrate fleet, generated from the
 `workestrate-config` copier template.
 
 ## Structure
@@ -46,12 +46,12 @@ credential (e.g. a proxy service verifying its callers). `secret` appears at a b
 
 3. Initialize secrets:
    ```bash
-   workestrate secrets init --config {{ config_name }}
+   workestrate secrets init --fleet {{ config_name }}
    ```
 
-4. Register this config repo with workestrate:
+4. Register this fleet with workestrate:
    ```bash
-   workestrate config add <path-or-url> {{ config_name }}
+   workestrate fleet add <path-or-url> {{ config_name }}
    ```
 
 5. Verify:

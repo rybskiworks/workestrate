@@ -55,7 +55,7 @@ Load this skill when:
      keeps the secret out of `/nix/store`.
 5. Never commit the age private key to git (even encrypted) — keep it at
    `~/.config/sops/age/ai-workbench-secrets.txt` (mode 0600), never under
-   `.workestrate/` or `$WORKESTRATE_HOME`.
+   `.workestrate/` or `$WORKESTRATE_CONFIG`.
    - The key decrypts every secret in the repo; committing it (even
      encrypted) defeats the entire SOPS/age model.
 6. `decrypt-env` writes to stdout only; `write-env` writes plaintext `.env`
@@ -164,7 +164,7 @@ Manual review:
 - No secret literals (sk-..., passwords, tokens) in any `.nix` file.
 - No `builtins.getEnv` interpolating secrets into derivation strings.
 - age private key at `~/.config/sops/age/ai-workbench-secrets.txt` with mode
-  0600, never under `.workestrate/` or `$WORKESTRATE_HOME`.
+  0600, never under `.workestrate/` or `$WORKESTRATE_CONFIG`.
 - `.env.enc` and `.sops.yaml` committed; `.env` gitignored.
 - Secrets injected via `with-secrets`/`run-with-secrets`, never as
   command-line arguments.

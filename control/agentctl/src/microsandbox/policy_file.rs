@@ -38,7 +38,7 @@ pub const MOUNT_POLICY_DIR_NAME: &str = "mount-policy";
 
 /// Resolve the microsandbox home directory.
 ///
-/// Mirror of `microsandbox_utils::resolve_home` (fork
+/// Mirror of `microsandbox_utils::resolve_config_dir` (fork
 /// `crates/utils/lib/lib.rs`): non-empty `MSB_HOME` verbatim (empty treated
 /// as unset), else `$HOME/.microsandbox/current` (the `current` generation
 /// symlink — see [`crate::microsandbox::generation`]), else
@@ -194,13 +194,13 @@ mod tests {
     #[test]
     fn remove_policy_dir_cleans_legacy_state_dir_layout() -> Result<()> {
         let lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::capture(&["MSB_HOME", "WORKESTRATE_HOME"]);
+        let _guard = EnvGuard::capture(&["MSB_HOME", "WORKESTRATE_CONFIG"]);
         let msb = uniq_dir("policy-file-legacy-msb");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("MSB_HOME", &msb) };
-        let home = uniq_dir("policy-file-legacy-home");
+        let config_dir = uniq_dir("policy-file-legacy-config");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
         // Pre-fix spec 22 layout: <state_dir>/policy/<instance>.
         let legacy = crate::config::resolve_state_dir()
             .join("policy")
@@ -210,7 +210,7 @@ mod tests {
         remove_policy_dir("slot@id")?;
         assert!(!legacy.exists());
         let _ = std::fs::remove_dir_all(msb);
-        let _ = std::fs::remove_dir_all(home);
+        let _ = std::fs::remove_dir_all(config_dir);
         drop(lock);
         Ok(())
     }
@@ -280,7 +280,7 @@ mod tests {
         }
     }
 
-    // ---- msb_home: SDK resolve_home mirror (non-empty verbatim) ----
+    // ---- msb_home: SDK resolve_config_dir mirror (non-empty verbatim) ----
 
     /// A set non-empty MSB_HOME is used verbatim.
     #[test]

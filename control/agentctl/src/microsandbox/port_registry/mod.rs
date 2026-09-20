@@ -44,7 +44,7 @@ pub struct SandboxInstanceRecord {
     /// parse as 127.0.0.1.
     #[serde(default = "crate::microsandbox::plan::default_bind_ip")]
     pub bind_ip: IpAddr,
-    /// The declaring config repo of the DEPENDENT workload (ADR 0030 Phase 2
+    /// The declaring fleet of the DEPENDENT workload (ADR 0030 Phase 2
     /// T1 namespace scoping). A RESOLUTION FILTER, not a slot prefix: the
     /// singleton slot stays `<context>-<workload>` and `instance` is
     /// unchanged. Legacy records without the field parse as "default".
@@ -91,7 +91,7 @@ pub struct SandboxInstanceRecord {
     pub config_hash: Option<String>,
 }
 
-/// The default namespace for a registry record: the declaring config repo of
+/// The default namespace for a registry record: the declaring fleet of
 /// the dependent workload, defaulting to "default" when no repo identity is
 /// resolvable (legacy records, synthetic layers).
 pub fn default_namespace() -> String {

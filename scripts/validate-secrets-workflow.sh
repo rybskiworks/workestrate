@@ -100,7 +100,7 @@ log "repo root: $REPO_ROOT"
 
 # Copy nothing from the repo into the workdir: provisioning runs through the
 # `workestrate secrets` CLI (sops/age are bundled in its nix wrapper). The
-# tool repo root carries NO .sops.yaml/.env.example (those are config-repo
+# tool repo root carries NO .sops.yaml/.env.example (those are fleet
 # artifacts the scaffold generates — the old cp of
 # $REPO_ROOT/.sops.yaml/.env.example died under set -e), so render
 # scaffold-true fixtures here instead.

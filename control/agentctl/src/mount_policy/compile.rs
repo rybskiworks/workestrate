@@ -140,7 +140,7 @@ impl std::error::Error for CompileError {
 /// Compile collected scopes into a [`MountPolicyProgram`] (spec 22 §8).
 ///
 /// Scopes are ordered by authority (operator scopes first, spec 22 §2); the
-/// sort is stable, so same-kind scopes (e.g. config-repo layers) keep their
+/// sort is stable, so same-kind scopes (e.g. fleet layers) keep their
 /// registry stack order. Within each scope, read.deny rules are emitted
 /// before read.allow rules (per-scope deny-then-allow, spec 22 §4), and
 /// protect-bucket entries land in the same scope/authority order.
@@ -397,7 +397,7 @@ mod tests {
                 vec![],
             ),
             scope(
-                ScopeKind::HomeRegistry,
+                ScopeKind::ConfigRegistry,
                 "registry",
                 vec![entry("registry-only")],
                 vec![],
@@ -420,12 +420,7 @@ mod tests {
                 vec![terminal_entry(".env")],
                 vec![],
             ),
-            scope(
-                ScopeKind::ConfigRepoLayer,
-                "repo",
-                vec![],
-                vec![entry(".env")],
-            ),
+            scope(ScopeKind::FleetLayer, "repo", vec![], vec![entry(".env")]),
         ])
         .unwrap();
         let explained = program.decide(&LexicalPath::new(".env").unwrap());
@@ -446,17 +441,12 @@ mod tests {
         // relaxable deny cannot re-mask it.
         let program = compile(vec![
             scope(
-                ScopeKind::HomeRegistry,
+                ScopeKind::ConfigRegistry,
                 "registry",
                 vec![],
                 vec![terminal_entry(".env")],
             ),
-            scope(
-                ScopeKind::ConfigRepoLayer,
-                "repo",
-                vec![entry(".env")],
-                vec![],
-            ),
+            scope(ScopeKind::FleetLayer, "repo", vec![entry(".env")], vec![]),
         ])
         .unwrap();
         let explained = program.decide(&LexicalPath::new(".env").unwrap());
@@ -472,7 +462,7 @@ mod tests {
     fn final_read_allow_from_a_non_operator_scope_is_a_compile_error() {
         for kind in [
             ScopeKind::ReferenceConfig,
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             ScopeKind::Workload,
             ScopeKind::MountEntry,
         ] {
@@ -512,10 +502,10 @@ mod tests {
         // scopes compile to a terminal Mask rule (routing is asserted by
         // `final_read_deny_protect_routing_is_operator_only`).
         for kind in [
-            ScopeKind::HomeRegistry,
+            ScopeKind::ConfigRegistry,
             ScopeKind::UserGlobalOverrides,
             ScopeKind::ReferenceConfig,
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             ScopeKind::Workload,
             ScopeKind::MountEntry,
         ] {
@@ -537,7 +527,7 @@ mod tests {
         // Within one scope, allow entries evaluate after deny entries
         // (spec 22 §4): the scope carves an exception to its own deny.
         let program = compile(vec![scope(
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             "repo",
             vec![entry("docs/secrets/**")],
             vec![entry("docs/secrets/README.md")],
@@ -553,7 +543,7 @@ mod tests {
     #[test]
     fn exact_duplicate_same_scope_final_deny_allow_is_a_compile_error() {
         let err = compile(vec![scope(
-            ScopeKind::HomeRegistry,
+            ScopeKind::ConfigRegistry,
             "registry",
             vec![terminal_entry(".env")],
             vec![entry(".env")],
@@ -575,7 +565,7 @@ mod tests {
         // are contradictions; a relaxable deny+allow pair for the same
         // pattern resolves by deny-then-allow ordering.
         let program = compile(vec![scope(
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             "repo",
             vec![entry(".env")],
             vec![entry(".env")],
@@ -590,17 +580,12 @@ mod tests {
         // normal precedence, not a compile error.
         let program = compile(vec![
             scope(
-                ScopeKind::HomeRegistry,
+                ScopeKind::ConfigRegistry,
                 "registry",
                 vec![terminal_entry(".env")],
                 vec![],
             ),
-            scope(
-                ScopeKind::ConfigRepoLayer,
-                "repo",
-                vec![],
-                vec![entry(".env")],
-            ),
+            scope(ScopeKind::FleetLayer, "repo", vec![], vec![entry(".env")]),
         ]);
         assert!(program.is_ok());
     }
@@ -610,7 +595,7 @@ mod tests {
         let program = compile(vec![]).unwrap();
         assert_eq!(program.case_sensitivity, CaseSensitivity::Sensitive);
         let program = compile(vec![scope_with(
-            ScopeKind::HomeRegistry,
+            ScopeKind::ConfigRegistry,
             "registry",
             vec![],
             vec![],
@@ -619,7 +604,7 @@ mod tests {
         .unwrap();
         assert_eq!(program.case_sensitivity, CaseSensitivity::Sensitive);
         let err = compile(vec![scope_with(
-            ScopeKind::HomeRegistry,
+            ScopeKind::ConfigRegistry,
             "registry",
             vec![],
             vec![],
@@ -636,7 +621,7 @@ mod tests {
     fn pattern_errors_are_compile_errors_naming_the_origin() {
         for raw in ["/absolute", "a\0b", "../escape", ""] {
             let err = compile(vec![scope(
-                ScopeKind::ConfigRepoLayer,
+                ScopeKind::FleetLayer,
                 "repo",
                 vec![entry(raw)],
                 vec![],
@@ -644,7 +629,7 @@ mod tests {
             .unwrap_err();
             let text = err.to_string();
             assert!(
-                text.contains("repo") && text.contains("config-repo-layer"),
+                text.contains("repo") && text.contains("fleet-layer"),
                 "error must name the origin for pattern {raw:?}: {text}"
             );
         }
@@ -656,7 +641,7 @@ mod tests {
         // before allow, so the relaxable allow "**" matches after the deny
         // "denied" and wins — the allow carves an exception out of the deny.
         let program = compile(vec![axis_scope(
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             "repo",
             AxisFragment::default(),
             AxisFragment {
@@ -692,7 +677,7 @@ mod tests {
     #[test]
     fn protect_bucket_forces_masked_and_write_deny() {
         let program = compile(vec![axis_scope(
-            ScopeKind::HomeRegistry,
+            ScopeKind::ConfigRegistry,
             "operator",
             AxisFragment {
                 deny: vec![terminal_entry("protected")],
@@ -733,7 +718,7 @@ mod tests {
     #[test]
     fn final_read_deny_protect_routing_is_operator_only() {
         let operator_program = compile(vec![axis_scope(
-            ScopeKind::HomeRegistry,
+            ScopeKind::ConfigRegistry,
             "operator",
             AxisFragment {
                 deny: vec![terminal_entry("secret")],
@@ -748,7 +733,7 @@ mod tests {
 
         for kind in [
             ScopeKind::ReferenceConfig,
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             ScopeKind::Workload,
             ScopeKind::MountEntry,
         ] {
@@ -777,7 +762,7 @@ mod tests {
     fn final_write_allow_from_a_non_operator_scope_is_a_compile_error() {
         for kind in [
             ScopeKind::ReferenceConfig,
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             ScopeKind::Workload,
             ScopeKind::MountEntry,
         ] {
@@ -815,7 +800,7 @@ mod tests {
 
     #[test]
     fn final_write_allow_from_an_operator_scope_compiles() {
-        for kind in [ScopeKind::HomeRegistry, ScopeKind::UserGlobalOverrides] {
+        for kind in [ScopeKind::ConfigRegistry, ScopeKind::UserGlobalOverrides] {
             let program = compile(vec![axis_scope(
                 kind,
                 "operator",
@@ -834,10 +819,10 @@ mod tests {
     #[test]
     fn final_write_deny_is_allowed_from_any_scope() {
         for kind in [
-            ScopeKind::HomeRegistry,
+            ScopeKind::ConfigRegistry,
             ScopeKind::UserGlobalOverrides,
             ScopeKind::ReferenceConfig,
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             ScopeKind::Workload,
             ScopeKind::MountEntry,
         ] {
@@ -863,7 +848,7 @@ mod tests {
     #[test]
     fn same_scope_final_read_deny_allow_duplicate_is_a_conflict_even_when_protect_routed() {
         let err = compile(vec![axis_scope(
-            ScopeKind::HomeRegistry,
+            ScopeKind::ConfigRegistry,
             "operator",
             AxisFragment {
                 deny: vec![terminal_entry(".env")],
@@ -889,7 +874,7 @@ mod tests {
     #[test]
     fn same_scope_write_deny_allow_duplicate_with_a_final_is_a_conflict() {
         let err = compile(vec![axis_scope(
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             "repo",
             AxisFragment::default(),
             AxisFragment {
@@ -914,7 +899,7 @@ mod tests {
         // ordering resolves them — the allow, evaluated last, wins (union
         // semantics, fork rev 205a7b95).
         let program = compile(vec![axis_scope(
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             "repo",
             AxisFragment::default(),
             AxisFragment {

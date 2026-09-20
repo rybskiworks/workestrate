@@ -1,7 +1,7 @@
 //! Git subprocess helpers.
 //!
-//! Thin wrappers around `git` CLI invocations used by config-repo management
-//! (`workestrate config add/update/new/remove`, `check`). Each helper runs a
+//! Thin wrappers around `git` CLI invocations used by fleet management
+//! (`workestrate fleet add/update/new/remove`, `check`). Each helper runs a
 //! single `git` command and maps a non-zero exit status to an `anyhow` error.
 
 use anyhow::Result;
@@ -20,7 +20,7 @@ pub fn git_clone(url: &str, dest: &std::path::Path, branch: Option<&str>) -> Res
 }
 
 /// Full (non-shallow) clone of `url` into `dest` on the default branch.
-/// Used by `home clone` (ADR 0025): reproducing a home needs the full
+/// Used by `config clone` (ADR 0025): reproducing a config needs the full
 /// history so a recorded registry `rev` can be checked out (a `--depth 1`
 /// clone only carries the branch tip).
 pub fn git_clone_full(url: &str, dest: &std::path::Path) -> Result<()> {
@@ -35,8 +35,8 @@ pub fn git_clone_full(url: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Check out `rev` in `repo` (detached HEAD). Used by `home clone` to
-/// pin a reproduced config repo to the source home's recorded revision.
+/// Check out `rev` in `repo` (detached HEAD). Used by `config clone` to
+/// pin a reproduced fleet to the source config's recorded revision.
 pub fn git_checkout_rev(repo: &std::path::Path, rev: &str) -> Result<()> {
     let status = std::process::Command::new("git")
         .arg("-C")
@@ -85,7 +85,7 @@ pub fn git_remote_add_or_set_url(repo: &std::path::Path, name: &str, url: &str) 
 }
 
 /// Initialize a new git repo at `dir` (no commit, mirrors `cargo new`).
-/// Used by `workestrate config new` to make the scaffold immediately
+/// Used by `workestrate fleet new` to make the scaffold immediately
 /// committable. Returns a distinct error kind when the `git` binary is
 /// absent so the caller can warn-and-continue rather than fail the whole
 /// scaffold (the files are already written and valid).
@@ -306,14 +306,14 @@ pub fn short_rev(rev: &str) -> String {
     rev.chars().take(7).collect()
 }
 
-/// On-disk status of one registered config repo. Plain-data result of
-/// [`collect_repo_statuses`]; each caller renders it (doctor → JSON, check →
+/// On-disk status of one registered fleet. Plain-data result of
+/// [`collect_fleet_statuses`]; each caller renders it (doctor → JSON, check →
 /// text). `rev` is the registry-recorded revision (or "unknown"); `short` is
 /// its 7-char prefix; `exists` is whether the clone dir is present; `dirty`
 /// is the git working-tree dirty flag (`true` when missing or undeterminable,
 /// matching both callers' prior fail-closed default).
 #[derive(Debug, Clone)]
-pub struct RepoStatus {
+pub struct FleetStatus {
     pub name: String,
     pub rev: String,
     pub short: String,
@@ -321,20 +321,20 @@ pub struct RepoStatus {
     pub dirty: bool,
 }
 
-/// Collect the on-disk status of every registered config repo. Shared by
+/// Collect the on-disk status of every registered fleet. Shared by
 /// `workestrate doctor` and `workestrate check`; behavior is identical to the
 /// two former inline copies (same dir resolution, rev fallback, dirty probe).
-pub fn collect_repo_statuses(registry: &crate::config::Registry) -> Vec<RepoStatus> {
+pub fn collect_fleet_statuses(registry: &crate::config::Registry) -> Vec<FleetStatus> {
     registry
-        .configs
+        .fleets
         .iter()
         .map(|(name, entry)| {
-            let dest = crate::config::config_repo_dir(name);
+            let dest = crate::config::fleet_dir(name);
             let rev = entry.rev.as_deref().unwrap_or("unknown").to_string();
             let short = short_rev(&rev);
             let exists = dest.exists();
             let dirty = git_is_dirty(&dest).unwrap_or(true);
-            RepoStatus {
+            FleetStatus {
                 name: name.clone(),
                 rev,
                 short,

@@ -1,8 +1,8 @@
 //! Bootstrap commands: `workestrate init` (DEPRECATED registry seed —
-//! replaced by `workestrate home init`; the legacy `[url]` dotfiles-clone
-//! positional now errors in favor of `workestrate home clone <src>`) and
+//! replaced by `workestrate config init`; the legacy `[url]` dotfiles-clone
+//! positional now errors in favor of `workestrate config clone <src>`) and
 //! `workestrate workload new` (workload scaffold), plus the
-//! reference-fixture walker shared with `config new --from-reference`.
+//! reference-fixture walker shared with `fleet new --from-reference`.
 
 use std::io::Write;
 
@@ -14,18 +14,18 @@ pub fn cmd_init(url: Option<&str>) -> Result<()> {
     if url.is_some() {
         anyhow::bail!(
             "`workestrate init <url>` (dotfiles clone) is no longer supported; \
-             use `workestrate home clone <src>` to provision a home from an existing one"
+             use `workestrate config clone <src>` to provision a config from an existing one"
         );
     }
     eprintln!(
-        "warning: `workestrate init` is deprecated; use `workestrate home init` \
-         (or `workestrate home clone <src>`)"
+        "warning: `workestrate init` is deprecated; use `workestrate config init` \
+         (or `workestrate config clone <src>`)"
     );
 
     let registry_path = config::registry_path();
     if registry_path.exists() {
         println!(
-            "Registry already exists at {}; use 'workestrate config add' to add repos",
+            "Registry already exists at {}; use 'workestrate fleet add' to add repos",
             registry_path.display()
         );
         return Ok(());
@@ -34,12 +34,12 @@ pub fn cmd_init(url: Option<&str>) -> Result<()> {
     let mut registry = config::Registry::default();
     registry.settings.default_context = Some("personal".to_string());
 
-    // Seed the store (config-repos/sources) and state roots for the active
+    // Seed the store (fleets/sources) and state roots for the active
     // layout.
     // Legacy XDG: resolve_store_dir() == xdg_data_dir(), resolve_state_dir()
     //   == xdg_state_dir() — identical to the pre-ADR-0023 mkdirs.
-    // New single-home: <home>/config-repos, <home>/sources, <home>/state.
-    std::fs::create_dir_all(config::resolve_store_dir().join("config-repos"))?;
+    // New single-config: <config>/fleets, <config>/sources, <config>/state.
+    std::fs::create_dir_all(config::resolve_store_dir().join("fleets"))?;
     std::fs::create_dir_all(config::resolve_store_dir().join("sources"))?;
     std::fs::create_dir_all(config::resolve_state_dir())?;
 
@@ -49,7 +49,7 @@ pub fn cmd_init(url: Option<&str>) -> Result<()> {
         "Initialized workestrate registry at {}",
         registry_path.display()
     );
-    println!("Run 'workestrate config add <url> personal' to add your config repo");
+    println!("Run 'workestrate fleet add <url> personal' to add your fleet");
     Ok(())
 }
 
@@ -68,7 +68,7 @@ pub fn cmd_init(url: Option<&str>) -> Result<()> {
 ///
 /// Delegates to [`crate::config::validation::validate_identifier`] — the ONE
 /// shared identifier rule also enforced at config-load time
-/// (`validate_config`'s workload-key gate) and by `validate_config_name` —
+/// (`validate_config`'s workload-key gate) and by `validate_fleet_name` —
 /// so the create-time and load-time rules cannot drift. Trailing hyphens
 /// remain allowed BY DESIGN (the pattern permits them; see the test pin).
 pub fn validate_workload_name(name: &str) -> Result<()> {
@@ -92,7 +92,7 @@ pub fn cmd_new(name: &str, kind: &str) -> Result<()> {
     validate_workload_name(name)?;
 
     // Resolve the active config directory (trusted project, registry, or env).
-    let config_dir = config::resolve_active_config_dir()?;
+    let config_dir = config::resolve_active_fleet_dir()?;
     let agent_dir = config_dir.join("agents").join(name);
 
     if agent_dir.exists() {
@@ -120,7 +120,7 @@ pub fn cmd_new(name: &str, kind: &str) -> Result<()> {
     std::fs::create_dir_all(&config_subdir)?;
     std::fs::write(config_subdir.join(".gitkeep"), "")?;
 
-    // Append a default workload entry to the config repo's workestrate.toml.
+    // Append a default workload entry to the fleet's workestrate.toml.
     let config_path = config_dir.join("workestrate.toml");
     let toml_entry = format!(
         "\n[workloads.{}]\n\
@@ -213,7 +213,7 @@ pub fn find_reference_workestrate(start: &std::path::Path) -> Result<std::path::
     }
     anyhow::bail!(
         "could not locate config.reference/workestrate.toml by walking up from '{}'; \
-         run `workestrate config new --from-reference` from inside the ai-workbench checkout",
+         run `workestrate fleet new --from-reference` from inside the ai-workbench checkout",
         start.display()
     );
 }
@@ -232,10 +232,10 @@ mod tests {
     #[test]
     fn cmd_new_resolves_active_config_dir() -> Result<()> {
         // Hold the env-mutation lock for the whole body: this test mutates
-        // HOME / WORKESTRATE_CONFIG_DIR and must not race any other env-mutating
+        // HOME / WORKESTRATE_FLEET_DIR and must not race any other env-mutating
         // test (would otherwise corrupt env reads and poison ENV_TEST_LOCK).
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        // Create a temp config repo with a minimal workestrate.toml
+        // Create a temp fleet with a minimal workestrate.toml
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-cmd-new-test-{}-{}",
             std::process::id(),
@@ -247,16 +247,16 @@ mod tests {
         std::fs::create_dir_all(&tmp)?;
         std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
 
-        // Point WORKESTRATE_CONFIG_DIR at the temp repo
-        let old = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        // Point WORKESTRATE_FLEET_DIR at the temp repo
+        let old = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
-        // Verify resolve_active_config_dir returns the temp dir
-        let config_dir = config::resolve_active_config_dir()?;
+        // Verify resolve_active_fleet_dir returns the temp dir
+        let config_dir = config::resolve_active_fleet_dir()?;
         assert_eq!(
             config_dir, tmp,
-            "resolve_active_config_dir should return the WORKESTRATE_CONFIG_DIR path"
+            "resolve_active_fleet_dir should return the WORKESTRATE_FLEET_DIR path"
         );
 
         // Simulate what cmd_new does: create agent config dir + append to workestrate.toml
@@ -276,15 +276,15 @@ mod tests {
         // Restore env
         match old {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
 
-        // Verify the agent config dir was created in the config repo
+        // Verify the agent config dir was created in the fleet
         assert!(
             agent_config.exists(),
-            "agent config dir should exist in config repo"
+            "agent config dir should exist in fleet"
         );
 
         // Verify workestrate.toml was appended
@@ -315,7 +315,7 @@ mod tests {
         std::fs::create_dir_all(&tmp_home).ok();
 
         let old_home = std::env::var("HOME").ok();
-        let old_config = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -330,11 +330,11 @@ mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("XDG_DATA_HOME", tmp_home.join(".local").join("share")) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1") };
 
-        let result = config::resolve_active_config_dir();
+        let result = config::resolve_active_fleet_dir();
 
         // Restore env
         match old_home {
@@ -345,9 +345,9 @@ mod tests {
         }
         match old_config {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
         }
         match old_no_project {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -365,8 +365,8 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("no active config repo") || err.contains("workestrate init"),
-            "error should mention 'no active config repo' or 'workestrate init'; got: {err}"
+            err.contains("no active fleet") || err.contains("workestrate init"),
+            "error should mention 'no active fleet' or 'workestrate init'; got: {err}"
         );
     }
 
@@ -375,13 +375,13 @@ mod tests {
     /// `workestrate init <url>` (the legacy dotfiles-clone flow) is removed:
     /// passing a url is a hard error that names the replacement command.
     #[test]
-    fn cmd_init_with_url_errors_and_names_home_clone() {
+    fn cmd_init_with_url_errors_and_names_config_clone() {
         let result = cmd_init(Some("https://example.invalid/dotfiles.git"));
         assert!(result.is_err(), "init <url> must error");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("home clone"),
-            "error must name `workestrate home clone`: {err}"
+            err.contains("config clone"),
+            "error must name `workestrate config clone`: {err}"
         );
         assert!(
             err.contains("no longer supported"),
@@ -390,20 +390,20 @@ mod tests {
     }
 
     /// Bare `workestrate init` (deprecated shim) still seeds a registry with
-    /// default_context "personal" in a fresh tool home.
+    /// default_context "personal" in a fresh config.
     // ENV_TEST_LOCK held for the whole body: this test mutates process env
     // and must not race any other env-mutating test.
     #[test]
     fn cmd_init_bare_seeds_registry_with_personal_default() -> Result<()> {
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
 
-        let home = crate::config::test_support::uniq_dir("w6a-init-bare");
-        std::fs::create_dir_all(&home)?;
+        let config_dir = crate::config::test_support::uniq_dir("w6a-init-bare");
+        std::fs::create_dir_all(&config_dir)?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
 
         cmd_init(None)?;
 
@@ -414,7 +414,7 @@ mod tests {
             "bare init must seed default_context = \"personal\""
         );
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
@@ -422,14 +422,14 @@ mod tests {
 
     /// FS-17: cmd_new against an EXISTING agents/<name> dir must fail — the
     /// exists-check + create_dir(fail-if-exists) pair is the race-safe
-    /// refusal. Uses WORKESTRATE_CONFIG_DIR to pin the active config repo.
+    /// refusal. Uses WORKESTRATE_FLEET_DIR to pin the active fleet.
     // ENV_TEST_LOCK held for the whole body: this test mutates process env
     // and must not race any other env-mutating test.
     #[test]
     fn cmd_new_fails_when_agent_dir_already_exists() -> Result<()> {
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
 
         let tmp = crate::config::test_support::uniq_dir("fs17-new-exists");
@@ -437,7 +437,7 @@ mod tests {
         std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
         std::fs::create_dir_all(tmp.join("agents").join("dupe"))?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         let result = cmd_new("dupe", "agent");
         assert!(result.is_err(), "existing agents/dupe must fail");
@@ -459,7 +459,7 @@ mod tests {
     fn cmd_new_appends_entry_atomically_and_leaves_no_scratch() -> Result<()> {
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
 
         let tmp = crate::config::test_support::uniq_dir("fs17-new-atomic");
@@ -469,7 +469,7 @@ mod tests {
             "schema_version = 1\n\n[workloads.existing]\nkind = \"agent\"\n",
         )?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         cmd_new("fresh-agent", "agent")?;
 
@@ -517,14 +517,14 @@ mod tests {
     fn cmd_new_with_service_kind_writes_service_entry() -> Result<()> {
         let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
 
         let tmp = crate::config::test_support::uniq_dir("w6a-new-service");
         std::fs::create_dir_all(&tmp)?;
         std::fs::write(tmp.join("workestrate.toml"), "schema_version = 1\n")?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &tmp) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &tmp) };
 
         cmd_new("svc", "service")?;
 
@@ -617,10 +617,10 @@ mod tests {
         validate_workload_name("foo-").expect("trailing hyphen is allowed");
     }
 
-    // ---- config::validate_config_name (used by `workestrate config new`) ----
+    // ---- config::validate_fleet_name (used by `workestrate fleet new`) ----
 
     #[test]
-    fn validate_config_name_accepts_legitimate_names() {
+    fn validate_fleet_name_accepts_legitimate_names() {
         for ok in [
             "personal",
             "work",
@@ -631,13 +631,13 @@ mod tests {
             "p1",
             "my-config-2",
         ] {
-            config::validate_config_name(ok)
+            config::validate_fleet_name(ok)
                 .unwrap_or_else(|e| panic!("legitimate config name '{ok}' rejected: {e}"));
         }
     }
 
     #[test]
-    fn validate_config_name_rejects_hostile_inputs() {
+    fn validate_fleet_name_rejects_hostile_inputs() {
         // Same safe-set as validate_workload_name: config names flow into
         // both filesystem paths and registry TOML keys, so the
         // intersection [a-z0-9-] is the only safe charset.
@@ -654,7 +654,7 @@ mod tests {
             &"x".repeat(64),
         ];
         for h in hostile {
-            let result = config::validate_config_name(h);
+            let result = config::validate_fleet_name(h);
             assert!(
                 result.is_err(),
                 "hostile config name '{h}' should be rejected, but was accepted"
@@ -663,11 +663,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_config_name_error_mentions_config_name() {
+    fn validate_fleet_name_error_mentions_config_name() {
         // Error label is interpolated from the validator, not hardcoded —
         // this catches a copy-paste regression where the workload-name
         // message would leak through.
-        let err = config::validate_config_name("BAD").unwrap_err().to_string();
+        let err = config::validate_fleet_name("BAD").unwrap_err().to_string();
         assert!(
             err.contains("config name"),
             "error should mention 'config name'; got: {err}"

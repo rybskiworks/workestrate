@@ -1,4 +1,4 @@
-//! Integration tests for `workestrate config remove` — unregistering,
+//! Integration tests for `workestrate fleet remove` — unregistering,
 //! optional store-clone deletion, dirty-clone refusal, and force override.
 //! Uses an isolated HOME + XDG per test so the user's real registry is never
 //! touched.
@@ -14,70 +14,70 @@ mod common;
 
 use common::IsolatedHome;
 
-/// `config remove` unregisters the repo from the registry without touching
+/// `fleet remove` unregisters the repo from the registry without touching
 /// the store clone.
 #[test]
 fn remove_unregisters_from_registry() {
     let home = IsolatedHome::new("cmd-config-remove");
     home.write_registry_entry("personal", "");
-    home.create_clean_git_repo("personal");
+    home.create_clean_git_fleet("personal");
 
     let out = home
         .cmd()
-        .args(["config", "remove", "personal"])
+        .args(["fleet", "remove", "personal"])
         .output()
-        .expect("invoke config remove");
+        .expect("invoke fleet remove");
     assert!(
         out.status.success(),
-        "config remove failed: {}",
+        "fleet remove failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     let registry = home.read_registry();
     assert!(
-        !registry.contains("[configs.personal]"),
+        !registry.contains("[fleets.personal]"),
         "registry should no longer contain the entry; got:\n{}",
         registry
     );
     // Without --delete the clone stays on disk.
     assert!(
-        home.repo_dir("personal").exists(),
+        home.fleet_dir("personal").exists(),
         "store clone should remain without --delete"
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Unregistered config repo: personal"),
+        stdout.contains("Unregistered fleet: personal"),
         "expected unregister confirmation; got: {}",
         stdout
     );
 }
 
-/// `config remove --delete` removes both the registry entry and the store
+/// `fleet remove --delete` removes both the registry entry and the store
 /// clone directory.
 #[test]
 fn remove_with_delete_removes_store_clone() {
     let home = IsolatedHome::new("cmd-config-remove");
     home.write_registry_entry("personal", "");
-    home.create_clean_git_repo("personal");
+    home.create_clean_git_fleet("personal");
 
     let out = home
         .cmd()
-        .args(["config", "remove", "personal", "--delete"])
+        .args(["fleet", "remove", "personal", "--delete"])
         .output()
-        .expect("invoke config remove --delete");
+        .expect("invoke fleet remove --delete");
     assert!(
         out.status.success(),
-        "config remove --delete failed: {}",
+        "fleet remove --delete failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     assert!(
-        !home.repo_dir("personal").exists(),
+        !home.fleet_dir("personal").exists(),
         "store clone should be deleted"
     );
     let registry = home.read_registry();
     assert!(
-        !registry.contains("[configs.personal]"),
+        !registry.contains("[fleets.personal]"),
         "registry entry should be gone; got:\n{}",
         registry
     );
@@ -94,15 +94,15 @@ fn remove_with_delete_removes_store_clone() {
 fn remove_delete_refuses_dirty_clone() {
     let home = IsolatedHome::new("cmd-config-remove");
     home.write_registry_entry("personal", "");
-    let repo = home.create_clean_git_repo("personal");
+    let repo = home.create_clean_git_fleet("personal");
     // Make it dirty: uncommitted modification to a tracked file.
     std::fs::write(repo.join("README.md"), "dirty edit").expect("dirty the repo");
 
     let out = home
         .cmd()
-        .args(["config", "remove", "personal", "--delete"])
+        .args(["fleet", "remove", "personal", "--delete"])
         .output()
-        .expect("invoke config remove --delete");
+        .expect("invoke fleet remove --delete");
     assert!(
         !out.status.success(),
         "dirty clone without --force should fail"
@@ -116,7 +116,7 @@ fn remove_delete_refuses_dirty_clone() {
     // Clone and registry entry must both still be present.
     assert!(repo.exists(), "clone must remain after refusal");
     assert!(
-        home.read_registry().contains("[configs.personal]"),
+        home.read_registry().contains("[fleets.personal]"),
         "registry entry must remain after refusal"
     );
 }
@@ -126,22 +126,22 @@ fn remove_delete_refuses_dirty_clone() {
 fn remove_delete_force_deletes_dirty_clone() {
     let home = IsolatedHome::new("cmd-config-remove");
     home.write_registry_entry("personal", "");
-    let repo = home.create_clean_git_repo("personal");
+    let repo = home.create_clean_git_fleet("personal");
     std::fs::write(repo.join("README.md"), "dirty edit").expect("dirty the repo");
 
     let out = home
         .cmd()
-        .args(["config", "remove", "personal", "--delete", "--force"])
+        .args(["fleet", "remove", "personal", "--delete", "--force"])
         .output()
-        .expect("invoke config remove --delete --force");
+        .expect("invoke fleet remove --delete --force");
     assert!(
         out.status.success(),
-        "config remove --delete --force failed: {}",
+        "fleet remove --delete --force failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(!repo.exists(), "dirty clone should be force-deleted");
     assert!(
-        !home.read_registry().contains("[configs.personal]"),
+        !home.read_registry().contains("[fleets.personal]"),
         "registry entry should be gone"
     );
 }
@@ -154,13 +154,13 @@ fn remove_unregistered_name_errors() {
 
     let out = home
         .cmd()
-        .args(["config", "remove", "ghost"])
+        .args(["fleet", "remove", "ghost"])
         .output()
-        .expect("invoke config remove");
+        .expect("invoke fleet remove");
     assert!(!out.status.success(), "unregistered name should fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("config repo 'ghost' is not registered"),
+        stderr.contains("fleet 'ghost' is not registered"),
         "expected not-registered error; got: {}",
         stderr
     );

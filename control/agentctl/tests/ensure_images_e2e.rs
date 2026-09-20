@@ -94,7 +94,7 @@ fn uniq_tmp(label: &str) -> PathBuf {
     ))
 }
 
-/// The e2e fixture flake: two TOP-LEVEL image attrs (the config-repo flake
+/// The e2e fixture flake: two TOP-LEVEL image attrs (the fleet flake
 /// shape — `image.name` is the verbatim flake attr), both zero-FOD
 /// `dockerTools.buildLayeredImage`s of a static text file. `-b` carries
 /// different content so the two tags are distinct derivations.
@@ -199,8 +199,8 @@ impl E2eFixture {
 
     /// A `workestrate` [`Command`] fully isolated from the operator's real
     /// home/msb store: temp HOME (+ XDG dirs), temp MSB_HOME, temp
-    /// WORKESTRATE_HOME, the fixture repo as the single config layer
-    /// (WORKESTRATE_CONFIG_DIR), MSB_PATH to the unwrapped msb, and every
+    /// WORKESTRATE_CONFIG, the fixture repo as the single config layer
+    /// (WORKESTRATE_FLEET_DIR), MSB_PATH to the unwrapped msb, and every
     /// project_root env tier scrubbed so the flake-less `cwd` decides.
     fn cmd(&self, msb: &str) -> Command {
         let mut c = Command::new(BIN);
@@ -209,8 +209,8 @@ impl E2eFixture {
         c.env("XDG_CONFIG_HOME", self.home.join(".config"));
         c.env("XDG_DATA_HOME", self.home.join(".local").join("share"));
         c.env("XDG_STATE_HOME", self.home.join(".local").join("state"));
-        c.env("WORKESTRATE_HOME", self.home.join("wk"));
-        c.env("WORKESTRATE_CONFIG_DIR", &self.repo);
+        c.env("WORKESTRATE_CONFIG", self.home.join("wk"));
+        c.env("WORKESTRATE_FLEET_DIR", &self.repo);
         c.env("MSB_HOME", &self.msb_home);
         c.env("MSB_PATH", msb);
         c.env_remove("AGENTCTL_ROOT");
@@ -251,8 +251,8 @@ impl E2eFixture {
     /// The detached child's log for `slot` (svc-dep/svc-top — no context).
     /// Post-074fc02 the child logs to the state dir
     /// (`<state_dir>/logs/<instance>/workestrate.log`); the fixture pins
-    /// WORKESTRATE_HOME (Env home kind), so the state dir is
-    /// `<WORKESTRATE_HOME>/state`.
+    /// WORKESTRATE_CONFIG (Env home kind), so the state dir is
+    /// `<WORKESTRATE_CONFIG>/state`.
     fn child_log(&self, slot: &str) -> String {
         let path = self
             .home
@@ -509,7 +509,7 @@ fn bare_up_rejects_name_scoped_flags_accepts_reload_images() {
 /// ```
 ///
 /// Honest fixture note: this e2e's flake is not TOML-generated (production
-/// config repos derive the image derivation from the TOML), so the "image
+/// fleets derive the image derivation from the TOML), so the "image
 /// edit" is a CONTENT edit in the fixture flake. A2 (ADR 0032 §Image tags):
 /// the capsule's declared `tag` field is INERT — editing `tag = "latest"` →
 /// `"v2"` changes NOTHING (the store tag is the computed content tag

@@ -9,7 +9,7 @@ pub(crate) struct MountRoots<'a> {
     /// Content root: plain repo-relative hosts resolve here — the directory
     /// of the config layer that DECLARED the workload's mounts (the parent
     /// dir of the layer file; e.g. the capsule dir in a directory-mode
-    /// config repo). The caller (`build_sandbox`) falls back to the flake
+    /// fleet). The caller (`build_sandbox`) falls back to the flake
     /// project root / cwd only when no declaring layer dir is knowable.
     pub content_root: &'a Path,
     /// Flake project root — present only when the workload actually requires
@@ -24,7 +24,7 @@ pub(crate) struct MountRoots<'a> {
     /// `${WORKESTRATE_<NAME>_BUILD}` host expands to exactly this string).
     /// `None` when `build_path()` is the UNDECLARED reserved default
     /// (`.workestrate-build/<name>`, spec 21 §6.1): that default is a
-    /// config-repo artifact dir resolving declaring-layer-relative (content
+    /// fleet artifact dir resolving declaring-layer-relative (content
     /// root), so it must NOT capture the flake project-root preference.
     pub flake_build_path: Option<&'a str>,
 }
@@ -1016,7 +1016,7 @@ mod tests {
         // existence preflight, and proves the resolved path is real.
         std::fs::write(capsule.join("config.yaml"), "litellm: {}\n")?;
 
-        let layers = crate::config::loading::load_config_repo_layers("testrepo", &tmp)?;
+        let layers = crate::config::loading::load_fleet_layers("testrepo", &tmp)?;
         let dirs = crate::merge::layer_dirs_from(&layers);
         let (_merged, provenance) = crate::merge::merge_layers(&layers)?;
 
@@ -1105,7 +1105,7 @@ mod tests {
             "kind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24\" }\ncommand = []\n\n[local_build]\nrecipe = \"pip-install\"\nsource = \"flake://svc\"\nfallback = \"agents/svc/build\"\n",
         )?;
 
-        let layers = crate::config::loading::load_config_repo_layers("testrepo", &tmp)?;
+        let layers = crate::config::loading::load_fleet_layers("testrepo", &tmp)?;
         let dirs = crate::merge::layer_dirs_from(&layers);
         let (_merged, provenance) = crate::merge::merge_layers(&layers)?;
 

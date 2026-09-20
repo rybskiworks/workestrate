@@ -1,5 +1,5 @@
 //! Config-domain type definitions: the `workestrate.toml` schema structs and
-//! the tool-home registry schema structs, plus the field-name tables used for
+//! the config registry schema structs, plus the field-name tables used for
 //! unknown-field detection in overrides.
 //!
 //! NOTE (WP6(e)/C10): the MAIN config structs below all carry
@@ -38,9 +38,9 @@ pub struct ImageSpec {
     pub features: Option<Vec<String>>,
     /// Keep-last-N rung for this capsule's nix-layered image (ADR 0032
     /// §Image tags, RESOLVED user decision 3): the top rung of the cascade
-    /// `crate::images::gc::DEFAULT_IMAGE_KEEP_LAST` < home settings
-    /// (`RegistrySettings.image_keep_last`) < config-repo entry
-    /// (`ConfigRepoEntry.image_keep_last`) < THIS field. First Some wins;
+    /// `crate::images::gc::DEFAULT_IMAGE_KEEP_LAST` < config settings
+    /// (`RegistrySettings.image_keep_last`) < fleet entry
+    /// (`FleetEntry.image_keep_last`) < THIS field. First Some wins;
     /// an explicit 0 is a hard error (the just-loaded tag always counts
     /// toward N). Enforced at load time by prune-on-load.
     #[schemars(range(min = 1))]
@@ -514,7 +514,7 @@ pub struct LocalBuildConfig {
 /// Default per-direction action for a workload's network policy
 /// (`[...network.defaults] egress|ingress = "allow" | "deny"`). `Deny` is
 /// the fail-closed default; `Allow` is an explicit opt-in that stands alone
-/// (absent = deny; home `final` seals still veto).
+/// (absent = deny; config `final` seals still veto).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DefaultAction {
@@ -528,7 +528,7 @@ pub enum DefaultAction {
 
 /// Per-workload network defaults (`[...network.defaults]`). `egress` and
 /// `ingress` are the per-direction fail-closed switches (absent = `deny`;
-/// explicit `allow` stands alone; home `final` seals still veto).
+/// explicit `allow` stands alone; config `final` seals still veto).
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -583,7 +583,7 @@ where
 
 /// Per-workload network policy (`workloads.<name>.network`). `defaults.egress`
 /// / `defaults.ingress` are the per-direction fail-closed switches (absent =
-/// deny; explicit `allow` stands alone, home `final` seals still veto). The rule surface has migrated to
+/// deny; explicit `allow` stands alone, config `final` seals still veto). The rule surface has migrated to
 /// hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035;
 /// `network.egress` / `network.deny` / `network.ingress` are removed and
 /// hard-error with ADR-citing messages.
@@ -1310,7 +1310,7 @@ pub struct DependsOnSpec {
 /// tri-state `nested` key (`"require"` | `"prefer"` | `"off"`, default
 /// `"off"`; an absent table — or an absent key — means off, i.e. current
 /// behavior with no device expectation and no gate beyond an explicit
-/// `nested≠off` plus the home-final seal).
+/// `nested≠off` plus the config-final seal).
 ///
 /// The tri-state IS the conflict policy (no generic `on_conflict` field —
 /// a second knob could contradict the first): `require` fails closed at
@@ -1335,7 +1335,7 @@ pub enum NestedMode {
     /// refuse at `up`).
     Prefer,
     /// Guest must have /dev/kvm + VT-x/AMD-V; absent/unreadable (or CPU
-    /// nested disabled, or a home-final ban) → fail-closed refusal at `up`.
+    /// nested disabled, or a config-final ban) → fail-closed refusal at `up`.
     Require,
 }
 
@@ -1352,10 +1352,10 @@ impl fmt::Display for NestedMode {
 
 /// `[workloads.<name>.virtualization]` — the workload's nested-virt ASK
 /// (ADR 0036 §3, ask-vs-grant: the workload asks with strength
-/// require|prefer|off, like firewall allow-rules; home grants/restricts via
+/// require|prefer|off, like firewall allow-rules; config grants/restricts via
 /// [`VirtualizationPolicyFragment`]). `None` (absent table) = omitted → Off.
 /// An explicit `nested≠off` stands alone — no entitlement gate (the
-/// entitlements mechanism was removed 2026-09-04; review + home-final
+/// entitlements mechanism was removed 2026-09-04; review + config-final
 /// suffice). Merges whole-unit like [`InstancePolicy`]: a higher layer
 /// re-declaring the table replaces it wholesale.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
@@ -1366,9 +1366,9 @@ pub struct VirtualizationConfig {
     pub nested: Option<NestedMode>,
 }
 
-/// `[policy.virtualization]` fragment — the HOME-registry operator seal
+/// `[policy.virtualization]` fragment — the config-registry operator seal
 /// (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final`
-/// seals. Collected per scope (home registry → config layers → workload
+/// seals. Collected per scope (config registry → config layers → workload
 /// capsule), NEVER merged — the same collect-never-merge idiom as the
 /// secrets/egress ladders. `final` seals, never enables: a freeze at
 /// `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban);
@@ -1469,7 +1469,7 @@ pub struct WorkloadConfig {
     /// Per-workload nested-virtualization ask
     /// (`[workloads.<name>.virtualization]`; ADR 0036 §3). `None` (absent
     /// table) = off — current behavior, no device expectation, no checks.
-    /// Merges whole-unit (last layer wins); the home `[policy.virtualization]`
+    /// Merges whole-unit (last layer wins); the config `[policy.virtualization]`
     /// seal is collected via the ladder, never merged.
     #[serde(default)]
     pub virtualization: Option<VirtualizationConfig>,
@@ -1596,7 +1596,7 @@ pub struct CredentialsConfig {
 }
 
 /// One rung of the SSH confinement-policy ladder (`[policy.ssh]`):
-/// the fragment declared at the home-registry, config-repo-layer, or
+/// the fragment declared at the config-registry, fleet-layer, or
 /// workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder
 /// pattern exactly: collected per rung (never merged — no policy field
 /// passes through `merge_layers`), resolved authority-ascending, `final`
@@ -1657,10 +1657,10 @@ pub enum SecretViolationPolicy {
 }
 
 /// One rung of the secret violation-policy ladder (`[policy.secrets]`):
-/// the fragment declared at the home-registry, config-repo-layer, or
+/// the fragment declared at the config-registry, fleet-layer, or
 /// workload-capsule rung. Resolution walks the rungs authority-ascending —
-/// built-in passthrough, then home registry (`Registry.policy.secrets` in
-/// `<home>/config.toml`, the operator scope), then each config-repo layer's
+/// built-in passthrough, then config registry (`Registry.policy.secrets` in
+/// `<config>/config.toml`, the operator scope), then each fleet layer's
 /// `[policy.secrets]` in stack order, then the workload capsule's
 /// `[workloads.<name>.policy.secrets]` — and the per-secret
 /// `[secrets.<NAME>] on_violation` entry decides last unless a higher rung
@@ -1683,7 +1683,7 @@ pub struct SecretsPolicyFragment {
     #[serde(default)]
     pub on_violation: Option<SecretViolationPolicy>,
     /// Terminal freeze (mount-policy `final` vocabulary): when true, every
-    /// lower rung — config-repo layers, workload capsules, per-secret
+    /// lower rung — fleet layers, workload capsules, per-secret
     /// entries — is frozen out and cannot override the value resolved at
     /// this rung. Defaults to false.
     #[serde(rename = "final", default)]
@@ -1756,16 +1756,16 @@ pub struct PolicyConfig {
     #[serde(default)]
     pub mounts: Option<MountsFragment>,
     /// Secret violation-policy ladder rung (`[policy.secrets]`). The SAME
-    /// sub-shape is valid at all three policy rungs: the home registry
+    /// sub-shape is valid at all three policy rungs: the config registry
     /// (`Registry.policy`, operator scope), a workestrate.toml layer
-    /// (config-repo-layer rung), and a workload declaration
+    /// (fleet-layer rung), and a workload declaration
     /// (`[workloads.<name>.policy]` — where a bare directory-mode capsule's
     /// top-level `[policy.secrets]` lands). Like `mounts`, this fragment is
     /// COLLECTED per scope, never merged (see loading.rs).
     #[serde(default)]
     pub secrets: Option<SecretsPolicyFragment>,
     /// Hierarchical egress policy fragment (`[policy.egress]`). Collected per
-    /// rung (home registry, config layers, workload) and compiled by the
+    /// rung (config registry, config layers, workload) and compiled by the
     /// network policy engine (ADR 0035). Each polarity table (`allow`/`deny`)
     /// carries `all` / `final` and array-of-tables entries.
     #[serde(default)]
@@ -1780,13 +1780,13 @@ pub struct PolicyConfig {
     #[serde(default)]
     pub idna: Option<IdnaPolicyFragment>,
     /// Nested-virtualization operator seal (`[policy.virtualization]`; ADR
-    /// 0036 §3). Collected per scope (home registry, config layers,
+    /// 0036 §3). Collected per scope (config registry, config layers,
     /// workload capsule), never merged — the same idiom as the
     /// secrets/egress ladders. `final` seals a denial, never enables.
     #[serde(default)]
     pub virtualization: Option<VirtualizationPolicyFragment>,
     /// SSH confinement-policy rung (`[policy.ssh]`). Collected per scope
-    /// (home registry, config layers, workload capsule — a bare
+    /// (config registry, config layers, workload capsule — a bare
     /// directory-mode capsule's top-level `[policy.ssh]` lands on the
     /// workload rung via the workload wrapper), never merged — the same
     /// collect-never-merge idiom as the secrets/virtualization ladders.
@@ -1965,7 +1965,7 @@ pub struct PortEntry {
 // Registry
 // ---------------------------------------------------------------------------
 
-/// Tool-wide settings section of the tool-home `registry.toml` (`[settings]`).
+/// Tool-wide settings section of the config `registry.toml` (`[settings]`).
 /// `default_context` selects the active context when none is given;
 /// `store_dir`/`state_dir` override the derived store/state locations.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
@@ -1974,27 +1974,27 @@ pub struct RegistrySettings {
     pub default_context: Option<String>,
     pub store_dir: Option<String>,
     pub state_dir: Option<String>,
-    /// Layout version of the tool home. Absent ⇒ 1 (legacy XDG-derived layout).
-    /// Set to 2 by `workestrate migrate-home` after consolidating into a single
-    /// `WORKESTRATE_HOME` (ADR 0023). Purely informational/forward-compat: the
-    /// [`HomeKind`] resolution already determines the active layout.
+    /// Layout version of the config. Absent ⇒ 1 (legacy XDG-derived layout).
+    /// Set to 2 by `workestrate migrate-config` after consolidating into a single
+    /// `WORKESTRATE_CONFIG` (ADR 0023). Purely informational/forward-compat: the
+    /// [`ConfigDirKind`] resolution already determines the active layout.
     #[serde(default)]
-    pub home_version: Option<u32>,
+    pub config_version: Option<u32>,
     /// Home-wide keep-last-N rung for nix-layered image tags (ADR 0032
     /// §Image tags, RESOLVED user decision 3): middle rung of the cascade —
-    /// beats the built-in default, loses to a config-repo entry and a
+    /// beats the built-in default, loses to a fleet entry and a
     /// workload capsule `keep_last`. `None` = not configured at this rung.
     #[serde(default)]
     pub image_keep_last: Option<u32>,
 }
 
-/// One registered config repo in the tool-home registry (`[configs.<name>]`).
-/// `url` is the clone source (git URL, or a filesystem path for `config new`
+/// One registered fleet in the config registry (`[fleets.<name>]`).
+/// `url` is the clone source (git URL, or a filesystem path for `fleet new`
 /// repos); `ref`/`rev` track the checked-out branch and commit; the
 /// `secrets*` fields locate that repo's encrypted secrets material.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ConfigRepoEntry {
+pub struct FleetEntry {
     pub url: String,
     pub r#ref: Option<String>,
     pub rev: Option<String>,
@@ -2005,7 +2005,7 @@ pub struct ConfigRepoEntry {
     #[serde(default)]
     pub age_key_file: Option<String>, // default: SOPS_AGE_KEY_FILE env or default path
     /// Per-repo keep-last-N rung for nix-layered image tags (ADR 0032
-    /// §Image tags, RESOLVED user decision 3): beats the home-settings and
+    /// §Image tags, RESOLVED user decision 3): beats the config-settings and
     /// built-in-default rungs, loses to a workload capsule `keep_last`.
     /// `None` = not configured at this rung.
     #[serde(default)]
@@ -2042,8 +2042,8 @@ pub struct Context {
     pub layers: Vec<String>,
 }
 
-/// Schema root of the tool-home `registry.toml`: global `[settings]`, the
-/// registered config repos (`configs`), the default layer stack (`layers`),
+/// Schema root of the config `registry.toml`: global `[settings]`, the
+/// registered fleets (`fleets`), the default layer stack (`layers`),
 /// named contexts (`contexts`), and the trusted-project list. Written
 /// atomically by `config::save_registry`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
@@ -2052,7 +2052,7 @@ pub struct Registry {
     #[serde(default)]
     pub settings: RegistrySettings,
     #[serde(default)]
-    pub configs: HashMap<String, ConfigRepoEntry>,
+    pub fleets: HashMap<String, FleetEntry>,
     #[serde(default)]
     pub layers: Vec<String>,
     #[serde(default)]
@@ -2138,8 +2138,8 @@ mod tests {
             "settings typo must fail: {err}"
         );
 
-        // [configs.<name>] typo.
-        let err = toml::from_str::<Registry>("[configs.personal]\nurl = \"x\"\nrevv = \"abc\"\n")
+        // [fleets.<name>] typo.
+        let err = toml::from_str::<Registry>("[fleets.personal]\nurl = \"x\"\nrevv = \"abc\"\n")
             .unwrap_err();
         assert!(
             err.to_string().contains("unknown field"),
@@ -2162,16 +2162,16 @@ mod tests {
         );
     }
 
-    /// `ConfigRepoEntry` uses a raw identifier (`r#ref`) for the TOML key
+    /// `FleetEntry` uses a raw identifier (`r#ref`) for the TOML key
     /// `ref`; verify serde sees the plain name "ref" (not "r#ref") BOTH ways:
     /// the real key still parses, and a misspelling of it is rejected.
     #[test]
     fn config_repo_entry_raw_identifier_ref_round_trips() {
-        let entry: ConfigRepoEntry =
+        let entry: FleetEntry =
             toml::from_str("url = \"https://example.invalid/x.git\"\nref = \"main\"\n").unwrap();
         assert_eq!(entry.r#ref.as_deref(), Some("main"));
 
-        let err = toml::from_str::<ConfigRepoEntry>("url = \"x\"\nreff = \"main\"\n").unwrap_err();
+        let err = toml::from_str::<FleetEntry>("url = \"x\"\nreff = \"main\"\n").unwrap_err();
         assert!(
             err.to_string().contains("unknown field"),
             "misspelled raw-identifier key must fail: {err}"
@@ -2189,9 +2189,9 @@ layers = ["personal"]
 default_context = "personal"
 store_dir = "/tmp/store"
 state_dir = "/tmp/state"
-home_version = 2
+config_version = 2
 
-[configs.personal]
+[fleets.personal]
 url = "https://example.invalid/personal.git"
 ref = "main"
 rev = "abc123"
@@ -2206,8 +2206,8 @@ layers = ["personal"]
 path = "/tmp/project"
 "#;
         let registry: Registry = toml::from_str(raw).unwrap();
-        assert_eq!(registry.settings.home_version, Some(2));
-        assert_eq!(registry.configs["personal"].r#ref.as_deref(), Some("main"));
+        assert_eq!(registry.settings.config_version, Some(2));
+        assert_eq!(registry.fleets["personal"].r#ref.as_deref(), Some("main"));
         assert_eq!(registry.trusted_projects.len(), 1);
     }
 

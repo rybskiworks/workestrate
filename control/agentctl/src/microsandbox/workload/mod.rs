@@ -79,7 +79,7 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
         crate::config::DepConflict::default_chain().0
     }
 
-    /// The workload's declaring config-repo namespace (ADR 0030 Phase 2 T1):
+    /// The workload's declaring fleet namespace (ADR 0030 Phase 2 T1):
     /// the registry-record namespace its instances register under. A
     /// RESOLUTION filter for depends_on, not a slot prefix. Default "default"
     /// (legacy/synthetic); ConfigWorkload overrides from provenance.
@@ -269,7 +269,7 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
     /// Whether `build_path()` is the UNDECLARED reserved default
     /// (`.workestrate-build/<name>`, spec 21 §6.1) rather than a declared
     /// `local_build.fallback` or an env override. The reserved default is a
-    /// config-repo artifact dir that resolves DECLARING-LAYER-relative — it
+    /// fleet artifact dir that resolves DECLARING-LAYER-relative — it
     /// must NOT trigger the flake project-root mount preference or the
     /// flake-root gate. Default impl matches the default `build_path()`
     /// above: true when the conventional env var is unset. Implementors that
@@ -285,7 +285,7 @@ pub trait Workload: Send + Sync + std::fmt::Debug {
 
     /// Content root for repo-relative mount hosts: the directory of the
     /// config layer that DECLARED this workload's mounts (spec 17 directory
-    /// mode — config content lives in config repos, not in the tool
+    /// mode — config content lives in fleets, not in the tool
     /// checkout). `None` when no declaring layer dir is knowable (synthetic
     /// layers, hand-built workloads); the caller then applies the documented
     /// fallback (flake project root, else cwd) explicitly.

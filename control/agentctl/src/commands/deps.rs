@@ -141,11 +141,11 @@ fn dep_conflict(config: &ConfigFile, dependent: &str, dep: &str) -> DepConflict 
         .unwrap_or(DepConflict::default_chain())
 }
 
-/// The declaring config-repo namespace of `workload` (ADR 0030 Phase 2 T1):
+/// The declaring fleet namespace of `workload` (ADR 0030 Phase 2 T1):
 /// resolved from the merge provenance (`workloads.<name>.<field>` → layer →
 /// layer dir → repo_key), defaulting to "default" when no repo identity is
 /// resolvable (legacy/synthetic layers, single-file mode).
-/// The declaring config-repo namespace of `workload` (ADR 0030 Phase 2 T1):
+/// The declaring fleet namespace of `workload` (ADR 0030 Phase 2 T1):
 /// resolved from the merge provenance (`workloads.<name>.<field>` → layer →
 /// layer dir → repo_key), defaulting to "default" when no repo identity is
 /// resolvable (legacy/synthetic layers, single-file mode).
@@ -164,7 +164,7 @@ pub(crate) fn namespace_for(
     };
     // The workload's declaring layer: any field's provenance names the layer
     // that declared the workload (kind/image/depends_on all resolve to the
-    // same declaring repo for a single-repo workload).
+    // same declaring fleet for a single-repo workload).
     let layer = provenance
         .get(&format!("workloads.{workload}.depends_on"))
         .or_else(|| provenance.get(&format!("workloads.{workload}.kind")))
@@ -176,7 +176,7 @@ pub(crate) fn namespace_for(
         return crate::microsandbox::port_registry::default_namespace();
     };
     // The namespace is the declaring REPO identity. A layer whose declaring
-    // dir is NOT a registered config-repo checkout (synthetic / single-file /
+    // dir is NOT a registered fleet checkout (synthetic / single-file /
     // test temp dir) has no repo identity -> the legacy "default" namespace.
     let registered = crate::images::repo_key::registered_repo_checkouts();
     crate::images::repo_key::repo_key_for_optional(dir, &registered)
@@ -307,7 +307,7 @@ pub fn decide_dep_disposition(
             "dependency '{dep}' of workload '{workload_name}' cannot reuse instance '{}': \
                  its registry record is in namespace '{found}' but the dependent requires \
                  namespace '{namespace}' — the same workload name is declared by multiple \
-                 config repos (last layer wins in the merged config). Start it in this \
+                 fleets (last layer wins in the merged config). Start it in this \
                  namespace with `workestrate workload up {dep} --replace`, or remove the \
                  foreign record.",
             target_of_action(action),
@@ -812,7 +812,7 @@ fn dep_port_auto(config: &ConfigFile, dep: &str, target_instance: &str) -> bool 
 /// Spec 21 phase E: `reload_images` is the batch-scoped `--reload-images`
 /// force (USER DECISION D3). The ensure-images pre-flight runs for EVERY
 /// start in the FINAL (post-reconcile) start set BEFORE ANY spawn — a
-/// nix-layered workload whose declaring repo lacks a flake.nix is skipped
+/// nix-layered workload whose declaring fleet lacks a flake.nix is skipped
 /// with a note (spec §7 batch row) and a hard ensure failure aborts the
 /// batch before anything starts.
 pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> {
@@ -3279,9 +3279,9 @@ command = []
     /// through the layer dirs, and keys it by the registered repo name.
     #[test]
     fn namespace_for_resolves_declaring_repo_from_provenance() -> Result<()> {
-        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, uniq_dir};
+        use crate::config::test_support::{CONFIG_ENV_KEYS, ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
         let tmp = uniq_dir("ns-for");
         let checkout = tmp.join("checkout");
         std::fs::create_dir_all(checkout.join("workestrate").join("workloads"))?;
@@ -3333,7 +3333,7 @@ command = []
             namespace_for(Some(&stray), &dirs, "pi"),
             crate::microsandbox::port_registry::default_namespace()
         );
-        // An UNREGISTERED declaring dir (not a config-repo checkout) has no
+        // An UNREGISTERED declaring dir (not a fleet checkout) has no
         // repo identity → "default" (the corrected P3 semantics: a non-repo /
         // synthetic / test layer is not a namespace).
         let mut unreg = crate::merge::Provenance::new();
@@ -3350,31 +3350,31 @@ command = []
     }
 
     /// ADR 0030 Phase 2 T1 regression pin: a STANDALONE construction under a
-    /// registered directory-mode config repo resolves the record namespace to
-    /// the declaring repo key — including right after the provenance slot is
+    /// registered directory-mode fleet resolves the record namespace to
+    /// the declaring fleet key — including right after the provenance slot is
     /// drained. `take_provenance` is one-shot, but every construction re-loads
     /// the config first (workload/config.rs `load_config` → `set_provenance`),
     /// re-filling the slot before the take.
     #[test]
     fn standalone_construction_namespace_is_declaring_repo_key() -> Result<()> {
         use crate::config::test_support::{
-            ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, PROVENANCE_STORAGE_TEST_LOCK, uniq_dir,
+            CONFIG_ENV_KEYS, ENV_TEST_LOCK, EnvGuard, PROVENANCE_STORAGE_TEST_LOCK, uniq_dir,
         };
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         // This test DRAINS the process-global provenance slot (take_provenance
         // below) and re-fills it via load_config; hold the shared storage lock
         // so it cannot steal the slot from merge.rs's storage tests mid-test.
         let _storage_lock = PROVENANCE_STORAGE_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = uniq_dir("ns-standalone");
-        std::fs::create_dir_all(&home)?;
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = uniq_dir("ns-standalone");
+        std::fs::create_dir_all(&config_dir)?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
-        // Directory-mode repo at <store>/config-repos/personal (store = the
-        // home in the single-home layout).
-        let repo = home.join("config-repos").join("personal");
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
+        // Directory-mode repo at <store>/fleets/personal (store = the
+        // config in the single-config layout).
+        let repo = config_dir.join("fleets").join("personal");
         let workloads = repo.join("workestrate").join("workloads");
         std::fs::create_dir_all(&workloads)?;
         std::fs::write(
@@ -3386,13 +3386,13 @@ command = []
             "[workloads.litellm]\nkind = \"service\"\nimage = { recipe = \"registry\", ref = \"node:24-bookworm-slim\" }\ncommand = []\n\n[workloads.litellm.network.defaults]\negress = \"deny\"\n",
         )?;
         let canonical = repo.canonicalize()?;
-        crate::config::register_config("personal", &canonical.to_string_lossy(), None, None)?;
+        crate::config::register_fleet("personal", &canonical.to_string_lossy(), None, None)?;
 
         let wl = crate::microsandbox::workload::ConfigWorkload::new("litellm")?;
         assert_eq!(
             crate::microsandbox::workload::Workload::namespace(&wl),
             "personal",
-            "a standalone construction's record namespace is the declaring repo key"
+            "a standalone construction's record namespace is the declaring fleet key"
         );
 
         // The drain pin: take_provenance empties the slot (one-shot); the
@@ -3407,10 +3407,10 @@ command = []
         assert_eq!(
             crate::microsandbox::workload::Workload::namespace(&wl),
             "personal",
-            "construction after a drained slot still resolves the declaring repo key"
+            "construction after a drained slot still resolves the declaring fleet key"
         );
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 }

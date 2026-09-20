@@ -13,13 +13,13 @@
 # to `src` (the built tree) and `to` is a destination relative to
 # $out/${installDir}. Each entry is mirrored next to the compiled binary so
 # the binary can resolve package assets relative to process.execPath (pi's
-# config.ts getPackageDir()). The personal config repo's pi capsule ports
+# config.ts getPackageDir()). The personal fleet.s pi capsule ports
 # the historical asset list (themes, assets, export-html, photon wasm,
 # package.json, docs, examples).
 # Default [] keeps the previous (asset-less) behavior for non-pi callers.
 #
 # Cleanup phase 3: optional `binaryName` (default "app") and `installDir`
-# (default "bin") let config-repo image builds choose the output layout;
+# (default "bin") let fleet image builds choose the output layout;
 # the defaults preserve the historical $out/bin/app behavior exactly.
 {
   bun,
